@@ -67,5 +67,3 @@ async def read_file(path: str) -> Union[Success, Error]:
     except FileNotFoundError as fnf_error:
         log.error(f"❌ Datei nicht gefunden: {fnf_error}", exc_info=True)
         return Error(code=-32041, message=str(fnf_error))
-        log.error(f"❌ Fehler beim Schreiben der Datei '{path}': {e}", exc_info=True)
-        return Error(code=-32040, message=f"Fehler beim Schreiben der Datei: {e}")
