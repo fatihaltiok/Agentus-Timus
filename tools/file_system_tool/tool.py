@@ -19,6 +19,13 @@ def _write_to_file_sync(full_path: Path, content: str):
     with open(full_path, 'w', encoding='utf-8') as f:
         f.write(content)
 
+def _read_file_sync(full_path: Path) -> str:
+    """
+    Diese Funktion enthält die blockierende Lese-Logik.
+    """
+    with open(full_path, 'r', encoding='utf-8') as f:
+        return f.read()
+
 # --- Asynchrone Tool-Methoden ---
 @method
 async def write_file(path: str, content: str) -> Union[Success, Error]:
