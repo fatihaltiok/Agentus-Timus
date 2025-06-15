@@ -32,9 +32,9 @@ async def list_agent_files(subfolder: str = "tools") -> Union[Success, Error]:
     """
     Listet alle relevanten .py-Dateien im Agenten-System asynchron auf.
     """
-    allowed_folders = ["tools", "agent", "server"]
-    if subfolder not in allowed_folders:
-        return Error(code=-32602, message=f"Ungültiger Ordner. Erlaubt sind: {allowed_folders}")
+    ALLOWED_FOLDERS = ["tools", "agent", "server"]
+    if subfolder not in ALLOWED_FOLDERS:
+        return Error(code=-32602, message=f"Ungültiger Ordner. Erlaubt sind: {ALLOWED_FOLDERS}")
     
     try:
         target_dir = PROJECT_ROOT / subfolder
