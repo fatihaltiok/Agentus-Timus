@@ -64,7 +64,7 @@ def call_tool(method: str, params: dict | None = None):
     payload = {"jsonrpc": "2.0", "method": method, "params": params or {}, "id": 1}
     
     try:
-        print(blue(f"🔧 Rufe auf: {method}({params or {}})"))
+        logging.info(blue(f"🔧 Rufe auf: {method}({params or {}})"))
         response = requests.post(MCP_URL, json=payload, timeout=30)
         response.raise_for_status()
         data = response.json()
@@ -109,10 +109,10 @@ def decide_action(user_input: str):
         return json.loads(text)
         
     except json.JSONDecodeError as e:
-        print(red(f"❌ LLM gab kein gültiges JSON zurück: {text[:100]}..."))
+        logging.error(red(f"❌ LLM gab kein gültiges JSON zurück: {text[:100]}..."))
         return None
     except Exception as e:
-        print(red(f"❌ LLM-Fehler: {e}"))
+        logging.error(red(f"❌ LLM-Fehler: {e}"))
         return None
 
 def test_connection():
@@ -121,13 +121,13 @@ def test_connection():
         response = requests.get(f"{MCP_URL}/health", timeout=5)
         if response.status_code == 200:
             data = response.json()
-            print(green(f"✅ MCP-Server läuft: {data.get('status')}"))
+            logging.info(green(f"✅ MCP-Server läuft: {data.get('status')}"))
             return True
         else:
-            print(red(f"⚠️ Server antwortet mit Status {response.status_code}"))
+            logging.warning(red(f"⚠️ Server antwortet mit Status {response.status_code}"))
             return False
     except Exception as e:
-        print(red(f"❌ Server nicht erreichbar: {e}"))
+        logging.error(red(f"❌ Server nicht erreichbar: {e}"))
         return False
 
 def format_search_results(results):
@@ -171,25 +171,25 @@ def format_links(links):
 # ─── Interaktive Shell ────────────────────────
 def shell():
     """Hauptinteraktionsschleife."""
-    print(yellow("🤖 Timus - Einfacher Web-Agent"))
-    print(f"🔌 MCP-Server: {MCP_URL}")
+    logging.info(yellow("🤖 Timus - Einfacher Web-Agent"))
+    logging.info(f"🔌 MCP-Server: {MCP_URL}")
     
     # Verbindung testen
     if not test_connection():
-        print(red("\n❌ Kann nicht ohne MCP-Server fortfahren."))
-        print("Starte den Server: cd server && python mcp_server.py")
+        logging.error(red("\n❌ Kann nicht ohne MCP-Server fortfahren."))
+        logging.info("Starte den Server: cd server && python mcp_server.py")
         return
     
-    print(green("\n📖 Verfügbare Befehle:"))
-    print("  open URL       - Seite laden")
-    print("  search QUERY   - Web-Suche")
-    print("  links          - Links der aktuellen Seite")
-    print("  click IDX/TEXT - Link anklicken")
-    print("  text           - Seitentext anzeigen")
-    print("  summary        - Artikel zusammenfassen")
-    print("  dismiss        - Popups schließen")
-    print("  quit           - Beenden")
-    print("  ODER: Natürliche Sprache für automatische Tool-Auswahl")
+    logging.info(green("\n📖 Verfügbare Befehle:"))
+    logging.info("  open URL       - Seite laden")
+    logging.info("  search QUERY   - Web-Suche")
+    logging.info("  links          - Links der aktuellen Seite")
+    logging.info("  click IDX/TEXT - Link anklicken")
+    logging.info("  text           - Seitentext anzeigen")
+    logging.info("  summary        - Artikel zusammenfassen")
+    logging.info("  dismiss        - Popups schließen")
+    logging.info("  quit           - Beenden")
+    logging.info("  ODER: Natürliche Sprache für automatische Tool-Auswahl")
     
     last_llm_call = 0.0
     
@@ -198,7 +198,7 @@ def shell():
             cmd = input(f"\n{blue('Timus>')} ").strip()
             
             if cmd.lower() in {"quit", "exit", "q"}:
-                print(yellow("👋 Auf Wiedersehen!"))
+                logging.info(yellow("👋 Auf Wiedersehen!"))
                 break
             
             if not cmd:
@@ -223,8 +223,8 @@ def shell():
                 if query:
                     result = call_tool("search_web", {"query": query, "max_results": 5})
                     if isinstance(result, list):
-                        print(green("🔍 Suchergebnisse:"))
-                        print(format_search_results(result))
+                        logging.info(green("🔍 Suchergebnisse:"))
+                        logging.info(format_search_results(result))
                     else:
                         print(result)
                 else:
@@ -296,29 +296,29 @@ def shell():
                     
                     # Intelligente Ausgabe je nach Tool
                     if method == "search_web" and isinstance(result, list):
-                        print(green("🔍 Suchergebnisse:"))
-                        print(format_search_results(result))
+                        logging.info(green("🔍 Suchergebnisse:"))
+                        logging.info(format_search_results(result))
                     elif method == "list_links" and isinstance(result, list):
-                        print(green("🔗 Links:"))
-                        print(format_links(result))
+                        logging.info(green("🔗 Links:"))
+                        logging.info(format_links(result))
                     elif method == "get_text" and isinstance(result, dict) and "text" in result:
                         text = result["text"]
-                        print(green("📄 Seitentext:"))
-                        print(textwrap.fill(text[:800], width=80))
+                        logging.info(green("📄 Seitentext:"))
+                        logging.info(textwrap.fill(text[:800], width=80))
                         if len(text) > 800:
-                            print(f"\n... ({len(text)-800} weitere Zeichen)")
+                            logging.info(f"\n... ({len(text)-800} weitere Zeichen)")
                     elif method == "summarize_article" and isinstance(result, dict) and "summary" in result:
-                        print(green("📋 Zusammenfassung:"))
-                        print(textwrap.fill(result["summary"], width=80))
+                        logging.info(green("📋 Zusammenfassung:"))
+                        logging.info(textwrap.fill(result["summary"], width=80))
                     else:
                         print(f"🔧 {result}")
                 else:
-                    print(red("❌ Konnte keine passende Aktion bestimmen"))
+                    logging.error(red("❌ Konnte keine passende Aktion bestimmen"))
                     
         except KeyboardInterrupt:
-            print(yellow("\n⚠️ Unterbrochen. 'quit' zum Beenden."))
+            logging.warning(yellow("\n⚠️ Unterbrochen. 'quit' zum Beenden."))
         except Exception as e:
-            print(red(f"\n❌ Unerwarteter Fehler: {e}"))
+            logging.error(red(f"\n❌ Unerwarteter Fehler: {e}"))
 
 if __name__ == "__main__":
     shell()
