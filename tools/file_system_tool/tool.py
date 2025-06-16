@@ -27,6 +27,31 @@ def _read_file_sync(full_path: Path) -> str:
         return f.read()
 
 # --- Asynchrone Tool-Methoden ---
+
+@method
+async def list_directory(path: str) -> Union[Success, Error]:
+    """
+    Listet den Inhalt eines Verzeichnisses asynchron auf und gibt eine Liste der Dateien und Unterverzeichnisse zurück.
+    """
+    try:
+        project_root = Path(__file__).resolve().parent.parent.parent
+        full_path = project_root / path
+
+        if not full_path.exists() or not full_path.is_dir():
+            raise FileNotFoundError(f"Das Verzeichnis '{path}' existiert nicht oder ist kein Verzeichnis.")
+
+        # Führe die synchrone Verzeichnisauflistung in einem separaten Thread aus
+        directory_contents = await asyncio.to_thread(lambda: [item.name for item in full_path.iterdir()])
+        
+        log.info(f"✅ Verzeichnisinhalt erfolgreich von '{full_path}' aufgelistet.")
+        return Success({"status": "success", "path": path, "contents": directory_contents})
+
+    except FileNotFoundError as fnf_error:
+        log.error(f"❌ Verzeichnis nicht gefunden: {fnf_error}", exc_info=True)
+        return Error(code=-32042, message=str(fnf_error))
+    except Exception as e:
+        log.error(f"❌ Fehler beim Auflisten des Verzeichnisses '{path}': {e}", exc_info=True)
+        return Error(code=-32043, message=f"Fehler beim Auflisten des Verzeichnisses: {e}")
 @method
 async def write_file(path: str, content: str) -> Union[Success, Error]:
     """
