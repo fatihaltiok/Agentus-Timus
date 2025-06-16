@@ -188,8 +188,10 @@ def extract_json_safely(text: str) -> tuple[dict | None, str | None]:
     """
     # 1. Finde den JSON-String mit robusten Mustern
     patterns = [
-        r'Action:\s*```json\s*({[\s\S]*?})\s*```',
-        r'Action:\s*({[\s\S]*?})$'
+        r'Action:\s*```json\s*({[\s\S]*?})\s*```',  # JSON in Markdown-Codeblöcken
+        r'Action:\s*({[\s\S]*?})$',  # JSON am Ende der Nachricht
+        r'Action:\s*```.*?\s*({[\s\S]*?})\s*```',  # JSON in beliebigen Markdown-Codeblöcken
+        r'Action:\s*({[\s\S]*?})\s*(?:\n|$)',  # JSON gefolgt von Zeilenumbruch oder Ende
     ]
     match = None
     for pattern in patterns:
