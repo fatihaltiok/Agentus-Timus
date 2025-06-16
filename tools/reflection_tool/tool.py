@@ -33,7 +33,7 @@ def log_learning_entry(
     Erstellt einen strukturierten Eintrag im Logbuch.
     """
     if not LEARNING_LOG_FILE:
-        return Error(code=-32070, message="Pfad zum Lerntagebuch ist nicht konfiguriert.")
+        return Error(code=-32070, message="Pfad zum Logbuch ist nicht konfiguriert.")
 
     try:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
