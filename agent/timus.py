@@ -1,5 +1,6 @@
 import os
 import json
+import logging
 import textwrap
 import time
 import requests
@@ -8,7 +9,8 @@ import re
 from openai import OpenAI
 from dotenv import load_dotenv
 
-# Konfiguration
+# Logging-Konfiguration
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 MCP_URL = "http://127.0.0.1:5000"
 load_dotenv()
 
