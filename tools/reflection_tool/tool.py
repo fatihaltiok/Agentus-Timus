@@ -11,13 +11,13 @@ from jsonrpcserver import method, Success, Error
 
 log = logging.getLogger(__name__)
 
-# Definiere den Pfad zum Lerntagebuch
+# Definiere den Pfad zum Logbuch
 try:
     PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
     LOG_DIR = PROJECT_ROOT / "logs"
     LOG_DIR.mkdir(exist_ok=True)
-    LEARNING_LOG_FILE = LOG_DIR / "lerntagebuch.md"
-    log.info(f"Lerntagebuch wird nach '{LEARNING_LOG_FILE}' geschrieben.")
+    LEARNING_LOG_FILE = LOG_DIR / "logbuch.md"
+    log.info(f"Logbuch wird nach '{LEARNING_LOG_FILE}' geschrieben.")
 except Exception as e:
     log.error(f"Konnte Log-Verzeichnis nicht erstellen: {e}")
     LEARNING_LOG_FILE = None
@@ -30,7 +30,7 @@ def log_learning_entry(
     learning: str
 ) -> Union[Success, Error]:
     """
-    Erstellt einen strukturierten Eintrag im Lerntagebuch.
+    Erstellt einen strukturierten Eintrag im Logbuch.
     """
     if not LEARNING_LOG_FILE:
         return Error(code=-32070, message="Pfad zum Lerntagebuch ist nicht konfiguriert.")
@@ -41,7 +41,7 @@ def log_learning_entry(
         # KORREKTUR: Verwende textwrap.dedent für einen sauberen, mehrzeiligen String
         entry = textwrap.dedent(f"""
         ---
-        ### Lerntagebuch-Eintrag: {timestamp}
+        ### Logbuch-Eintrag: {timestamp}
 
         **🎯 Ziel:**
         {goal}
@@ -61,9 +61,9 @@ def log_learning_entry(
         with open(LEARNING_LOG_FILE, "a", encoding="utf-8") as f:
             f.write("\n" + entry.strip() + "\n") # Füge eine Leerzeile hinzu und entferne überflüssige Whitespaces
             
-        log.info("Eintrag ins Lerntagebuch erfolgreich geschrieben.")
+        log.info("Eintrag ins Logbuch erfolgreich geschrieben.")
         return Success({"status": "logged"})
 
     except Exception as e:
-        log.error(f"Fehler beim Schreiben ins Lerntagebuch: {e}", exc_info=True)
-        return Error(code=-32071, message=f"Fehler beim Schreiben ins Lerntagebuch: {e}")
+        log.error(f"Fehler beim Schreiben ins Logbuch: {e}", exc_info=True)
+        return Error(code=-32071, message=f"Fehler beim Schreiben ins Logbuch: {e}")
