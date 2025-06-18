@@ -1,4 +1,5 @@
 import pyautogui
+import logging
 import openai
 
 
@@ -18,10 +19,18 @@ def click_element_on_screen(element_description: str):
 
         # Extract coordinates from the response
         coordinates = response.choices[0].text.strip()
-        x, y = map(int, coordinates.split(','))
-
-        # Click at the coordinates
-        pyautogui.click(x, y)
+        
+        try:
+            x, y = map(int, coordinates.split(','))
+            # Click at the coordinates
+            pyautogui.click(x, y)
+        except ValueError:
+            logging.error("Invalid coordinates received: %s", coordinates)
+            print("Error: Could not find valid coordinates for the element.")
+        except pyautogui.FailSafeException:
+            logging.error("FailSafeException triggered at coordinates: (%d, %d)", x, y)
+            print("Error: FailSafeException triggered, mouse moved to a corner.")
 
     except Exception as e:
-        print(f'An error occurred: {e}')
+        logging.error("An error occurred: %s", e)
+        print(f"An error occurred: {e}")
