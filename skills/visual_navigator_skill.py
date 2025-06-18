@@ -1,6 +1,7 @@
 import pyautogui
 import logging
 import openai
+import base64
 
 
 def click_element_on_screen(element_description: str):
@@ -10,11 +11,30 @@ def click_element_on_screen(element_description: str):
         screenshot_path = 'screenshot.png'
         screenshot.save(screenshot_path)
 
-        # Send the screenshot and description to the multimodal LLM
-        response = openai.Completion.create(
-            engine='text-davinci-002',
-            prompt=f'Find the coordinates of the element described as "{element_description}" in the image.',
-            max_tokens=50
+        # Encode the screenshot in Base64
+        with open(screenshot_path, "rb") as image_file:
+            encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
+
+        # Create the messages payload
+        messages = [
+            {
+                "role": "system",
+                "content": "You are a multimodal LLM that can analyze images and text."
+            },
+            {
+                "role": "user",
+                "content": f"Find the coordinates of the element described as '{element_description}' in the image."
+            },
+            {
+                "role": "user",
+                "content": f"data:image/png;base64,{encoded_image}"
+            }
+        ]
+
+        # Send the messages to the multimodal LLM
+        response = openai.ChatCompletion.create(
+            model='gpt-4',
+            messages=messages
         )
 
         # Extract coordinates from the response
