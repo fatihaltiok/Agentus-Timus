@@ -1,6 +1,6 @@
 import pyautogui
 import logging
-import openai
+from openai import client
 import base64
 
 
@@ -32,8 +32,8 @@ def click_element_on_screen(element_description: str):
         ]
 
         # Send the messages to the multimodal LLM
-        response = openai.ChatCompletion.create(
-            model='gpt-4',
+        response = client.chat.completions.create(
+            model='gpt-4o',
             messages=messages
         )
 
