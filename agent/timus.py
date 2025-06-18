@@ -29,7 +29,7 @@ VERFÜGBARE TOOLS:
 • open_url(url) - Öffnet eine Webseite
 • list_links() - Zeigt Links der aktuellen Seite
 • click_link(index) - Klickt auf einen Link (niedrige Indizes verwenden!)
-• click_by_text(text) - Klickt auf Element mit Text  
+• click_by_text(description) - Klickt auf ein Element basierend auf einer textuellen Beschreibung  
 • get_text() - Gibt Seitentext zurück
 • dismiss_overlays() - Entfernt Cookie-Banner/Popups
 • summarize_article() - Fasst Artikel zusammen
@@ -243,7 +243,7 @@ def shell():
                 if arg.isdigit():
                     result = call_tool("click_link", {"index": int(arg)})
                 else:
-                    result = call_tool("click_by_text", {"text": arg})
+                    result = call_tool("click_by_text", {"description": arg})
                 print(green(f"👆 {result}"))
                 
             elif cmd == "text":
@@ -322,3 +322,34 @@ def shell():
 
 if __name__ == "__main__":
     shell()
+def click_by_text(description):
+    """Klickt auf ein Element basierend auf einer textuellen Beschreibung."""
+    
+    # Einfache NLP-Analyse der Beschreibung
+    position_keywords = {
+        "oben": "top",
+        "unten": "bottom",
+        "rechts": "right",
+        "links": "left",
+        "mitte": "center"
+    }
+    
+    # Beispiel für die Extraktion von Position und Typ
+    position = None
+    element_type = None
+    
+    for keyword, pos in position_keywords.items():
+        if keyword in description:
+            position = pos
+            break
+    
+    if "button" in description:
+        element_type = "button"
+    elif "feld" in description:
+        element_type = "field"
+    
+    # Erstellen der Parameter für den Tool-Aufruf
+    params = {"description": description, "position": position, "type": element_type}
+    
+    result = call_tool("click_by_text", params)
+    print(green(f"👆 {result}"))
