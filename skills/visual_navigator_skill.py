@@ -1,31 +1,27 @@
-import cv2
 import pyautogui
-import numpy as np
+import openai
+
 
 def click_element_on_screen(element_description: str):
-    # Lade das Bild des zu findenden Elements
-    template = cv2.imread(element_description, cv2.IMREAD_GRAYSCALE)
-    if template is None:
-        raise ValueError(f"Bild {element_description} konnte nicht geladen werden.")
+    try:
+        # Take a screenshot
+        screenshot = pyautogui.screenshot()
+        screenshot_path = 'screenshot.png'
+        screenshot.save(screenshot_path)
 
-    # Screenshot des Bildschirms
-    screenshot = pyautogui.screenshot()
-    screen = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2GRAY)
+        # Send the screenshot and description to the multimodal LLM
+        response = openai.Completion.create(
+            engine='text-davinci-002',
+            prompt=f'Find the coordinates of the element described as "{element_description}" in the image.',
+            max_tokens=50
+        )
 
-    # Template Matching
-    result = cv2.matchTemplate(screen, template, cv2.TM_CCOEFF_NORMED)
-    min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+        # Extract coordinates from the response
+        coordinates = response.choices[0].text.strip()
+        x, y = map(int, coordinates.split(','))
 
-    # Definiere einen Schwellenwert für die Erkennung
-    threshold = 0.8
-    if max_val >= threshold:
-        # Finde die Position des besten Matches
-        top_left = max_loc
-        h, w = template.shape
-        center_x = top_left[0] + w // 2
-        center_y = top_left[1] + h // 2
+        # Click at the coordinates
+        pyautogui.click(x, y)
 
-        # Klicke auf die Mitte des erkannten Elements
-        pyautogui.click(center_x, center_y)
-    else:
-        raise ValueError("Element konnte nicht auf dem Bildschirm gefunden werden.")
+    except Exception as e:
+        print(f'An error occurred: {e}')
