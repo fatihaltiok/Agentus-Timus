@@ -1,11 +1,25 @@
-import os
-import psutil
 import logging
-from typing import Tuple, Dict
+from tools.system_monitor_tool import SystemMonitorTool
 
-# Logger konfigurieren
-logging.basicConfig(level=logging.INFO)
+# Konfiguriere den Logger
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+handler = logging.StreamHandler()
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
+
+class SystemMonitorToolSkill:
+    def __init__(self):
+        self.tool = SystemMonitorTool()
+
+    def run(self):
+        logger.info("Starting System Monitor Tool Skill")
+        self.tool.run()
+
+if __name__ == "__main__":
+    skill = SystemMonitorToolSkill()
+    skill.run()
 
 async def get_system_usage() -> Dict[str, float]:
     """
