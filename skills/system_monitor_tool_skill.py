@@ -1,4 +1,6 @@
 import logging
+from typing import Dict
+import psutil
 from tools.system_monitor_tool import SystemMonitorTool
 
 # Konfiguriere den Logger
