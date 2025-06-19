@@ -22,6 +22,19 @@ except Exception as e:
     client = None
 
 # Der @method-Decorator registriert diese Funktion beim Server.
+
+@method
+async def move_mouse_to_position(x: int, y: int):
+    """
+    Bewegt die Maus zu den angegebenen Bildschirmkoordinaten (x, y).
+    """
+    try:
+        await asyncio.to_thread(pyautogui.moveTo, x, y)
+        log.info(f"Maus erfolgreich zu Position ({x}, {y}) bewegt.")
+        return Success({"status": "success", "message": f"Maus zu Position ({x}, {y}) bewegt."})
+    except Exception as e:
+        log.error(f"Fehler beim Bewegen der Maus: {e}", exc_info=True)
+        return Error(code=-32003, message=f"Fehler beim Bewegen der Maus: {str(e)}", data=traceback.format_exc())
 # Wir machen die Funktion 'async', damit sie sich korrekt in den Server einfügt.
 @method
 async def click_element_on_screen(element_description: str):
