@@ -1,56 +1,93 @@
+# skills/visual_navigator_skill.py
+
 import pyautogui
 import logging
-from openai import client
 import base64
+import os
+import json
+import traceback
+import asyncio
+from openai import OpenAI
+from jsonrpcserver import method, Success, Error # Wichtig: Success und Error sind jetzt importiert
 
+# --- Konfiguration ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+log = logging.getLogger(__name__)
 
-def click_element_on_screen(element_description: str):
+# Initialisiere den OpenAI-Client
+try:
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+except Exception as e:
+    log.error(f"Fehler bei der Initialisierung des OpenAI-Clients: {e}")
+    client = None
+
+# Der @method-Decorator registriert diese Funktion beim Server.
+# Wir machen die Funktion 'async', damit sie sich korrekt in den Server einfügt.
+@method
+async def click_element_on_screen(element_description: str):
+    """
+    Nimmt einen Screenshot auf, sendet ihn mit einer Beschreibung an GPT-4o,
+    um Koordinaten zu erhalten, und klickt dann auf diese Stelle.
+    """
+    if not client:
+        log.error("OpenAI-Client ist nicht initialisiert.")
+        return Error(code=-32001, message="OpenAI-Client ist nicht initialisiert. API-Key prüfen.")
+
     try:
-        # Take a screenshot
-        screenshot = pyautogui.screenshot()
-        screenshot_path = 'screenshot.png'
-        screenshot.save(screenshot_path)
+        # Führe alle blockierenden Operationen in einem Thread aus, um den Server nicht anzuhalten.
+        def sync_operations_part1():
+            # 1. Screenshot
+            screenshot = pyautogui.screenshot()
+            screenshot_path = "temp_screenshot.png"
+            screenshot.save(screenshot_path)
 
-        # Encode the screenshot in Base64
-        with open(screenshot_path, "rb") as image_file:
-            encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
+            # 2. Base64 Kodierung
+            with open(screenshot_path, "rb") as image_file:
+                base64_image = base64.b64encode(image_file.read()).decode('utf-8')
+            os.remove(screenshot_path)
+            return base64_image
 
-        # Create the messages payload
+        base64_image = await asyncio.to_thread(sync_operations_part1)
+
+        # 3. API Payload (bleibt unverändert)
         messages = [
             {
                 "role": "system",
-                "content": "You are a multimodal LLM that can analyze images and text."
+                "content": "Du bist ein präziser visueller Assistent. Deine Aufgabe ist es, die X/Y-Koordinaten eines beschriebenen Elements in einem Bild zu finden. Antworte ausschließlich mit einem JSON-Objekt im Format: {\"x\": <number>, \"y\": <number>}. Wenn du das Element nicht finden kannst, antworte mit {\"error\": \"Element nicht gefunden\"}."
             },
             {
                 "role": "user",
-                "content": f"Find the coordinates of the element described as '{element_description}' in the image."
-            },
-            {
-                "role": "user",
-                "content": f"data:image/png;base64,{encoded_image}"
+                "content": [
+                    {"type": "text", "text": f"Finde die Mitte des folgenden Elements in diesem Bild: '{element_description}'"},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_image}"}}
+                ]
             }
         ]
-
-        # Send the messages to the multimodal LLM
-        response = client.chat.completions.create(
-            model='gpt-4o',
-            messages=messages
-        )
-
-        # Extract coordinates from the response
-        coordinates = response.choices[0].text.strip()
         
-        try:
-            x, y = map(int, coordinates.split(','))
-            # Click at the coordinates
-            pyautogui.click(x, y)
-        except ValueError:
-            logging.error("Invalid coordinates received: %s", coordinates)
-            print("Error: Could not find valid coordinates for the element.")
-        except pyautogui.FailSafeException:
-            logging.error("FailSafeException triggered at coordinates: (%d, %d)", x, y)
-            print("Error: FailSafeException triggered, mouse moved to a corner.")
+        # 4. API Aufruf
+        response = await asyncio.to_thread(
+            client.chat.completions.create,
+            model="gpt-4o", messages=messages, max_tokens=100
+        )
+        response_content = response.choices[0].message.content
+
+        # 5. Koordinaten parsen
+        data = json.loads(response_content)
+        if "error" in data:
+            log.error(f"LLM konnte Element nicht finden: {data['error']}")
+            return Error(code=-32002, message=f"LLM konnte Element nicht finden: {data['error']}")
+        
+        x, y = int(data['x']), int(data['y'])
+        log.info(f"Koordinaten erfolgreich extrahiert: ({x}, {y})")
+
+        # 6. Mausklick (ebenfalls blockierend)
+        await asyncio.to_thread(pyautogui.click, x, y)
+        log.info(f"Mausklick bei ({x}, {y}) ausgeführt.")
+
+        # KORREKTUR: Gib ein Success-Objekt zurück
+        return Success({"status": "success", "message": f"Klick bei ({x}, {y}) ausgeführt."})
 
     except Exception as e:
-        logging.error("An error occurred: %s", e)
-        print(f"An error occurred: {e}")
+        log.error(f"Ein unerwarteter Fehler ist im Visual Navigator aufgetreten: {e}", exc_info=True)
+        # KORREKTUR: Gib ein Error-Objekt zurück
+        return Error(code=-32000, message=f"Internal error in visual_navigator: {str(e)}", data=traceback.format_exc())
