@@ -23,4 +23,12 @@ class SystemMonitorTool:
         except Exception as e:
             print(f"An error occurred: {e}")
             return None
-        logging.info("System Monitor Tool is running")
+if __name__ == "__main__":
+    tool = SystemMonitorTool()
+    usage = tool.get_system_usage()
+    if usage:
+        print(f"CPU Usage: {usage['cpu_usage']}%")
+        print(f"Memory Usage: {usage['memory_usage']}%")
+        print(f"Disk Usage: {usage['disk_usage']}%")
+    else:
+        print("Failed to retrieve system usage.")
