@@ -35,7 +35,19 @@ async def move_mouse_to_position(x: int, y: int):
     except Exception as e:
         log.error(f"Fehler beim Bewegen der Maus: {e}", exc_info=True)
         return Error(code=-32003, message=f"Fehler beim Bewegen der Maus: {str(e)}", data=traceback.format_exc())
-# Wir machen die Funktion 'async', damit sie sich korrekt in den Server einfügt.
+@method
+async def open_context_menu(x: int, y: int):
+    """
+    Öffnet das Kontextmenü durch einen Rechtsklick an den angegebenen Bildschirmkoordinaten (x, y).
+    """
+    try:
+        await asyncio.to_thread(pyautogui.moveTo, x, y)
+        await asyncio.to_thread(pyautogui.click, button='right')
+        log.info(f"Kontextmenü bei Position ({x}, {y}) geöffnet.")
+        return Success({"status": "success", "message": f"Kontextmenü bei ({x}, {y}) geöffnet."})
+    except Exception as e:
+        log.error(f"Fehler beim Öffnen des Kontextmenüs: {e}", exc_info=True)
+        return Error(code=-32004, message=f"Fehler beim Öffnen des Kontextmenüs: {str(e)}", data=traceback.format_exc())
 @method
 async def click_element_on_screen(element_description: str):
     """
