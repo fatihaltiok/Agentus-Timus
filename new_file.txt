@@ -1,0 +1,59 @@
+
+import logging
+import asyncio
+from typing import Union
+from pathlib import Path
+
+# Drittanbieter-Bibliotheken
+from jsonrpcserver import method, Success, Error
+
+# Interne Imports
+# Annahme: universal_tool_caller ist relativ zum Projekt-Root oder im PYTHONPATH.
+# Dieser Import stammt aus der bereitgestellten Vorlage.
+from tools.universal_tool_caller import register_tool
+
+# Logger für dieses Modul
+log = logging.getLogger(__name__)
+
+# --- Synchrone Hilfsfunktionen ---
+def _write_text_to_file_sync(file_path: str, content: str):
+    """Schreibt Textinhalt synchron in eine Datei und überschreibt sie, falls sie existiert."""
+    path_obj = Path(file_path)
+    # Stelle sicher, dass das übergeordnete Verzeichnis existiert, falls nicht, wird ein Fehler ausgelöst.
+    # Für eine robustere Lösung könnte path_obj.parent.mkdir(parents=True, exist_ok=True) verwendet werden,
+    # aber das geht über die direkte Umsetzung des Rohcodes und der Vorlage hinaus.
+    with open(path_obj, 'w', encoding='utf-8') as f:
+        f.write(content)
+
+# --- Asynchrone RPC-Methoden ---
+
+@method
+async def write_text_file(path: str, content: str) -> Union[Success, Error]:
+    """
+    Schreibt den angegebenen Textinhalt in eine Datei unter dem angegebenen Pfad.
+    Wenn die Datei bereits existiert, wird ihr Inhalt überschrieben.
+    Wenn die Datei nicht existiert, wird sie erstellt.
+    """
+    log.info(f"Versuche, Text in Datei zu schreiben: '{path}'")
+    try:
+        await asyncio.to_thread(_write_text_to_file_sync, path, content)
+        log.info(f"Text erfolgreich in Datei '{path}' geschrieben.")
+        return Success({"status": "file_written", "path": path, "content_length": len(content)})
+    except FileNotFoundError:
+        # Dieser Fehler tritt normalerweise auf, wenn ein Teil des Pfades nicht existiert.
+        log.error(f"Fehler beim Schreiben der Datei: Pfad nicht gefunden oder ungültig '{path}'.", exc_info=True)
+        return Error(code=-32041, message=f"Pfad nicht gefunden oder ungültig: '{path}'")
+    except PermissionError:
+        log.error(f"Fehler beim Schreiben der Datei: Keine Berechtigung für '{path}'.", exc_info=True)
+        return Error(code=-32042, message=f"Keine Berechtigung für Dateioperationen unter '{path}'.")
+    except IOError as e:
+        log.error(f"E/A-Fehler beim Schreiben der Datei '{path}': {e}", exc_info=True)
+        return Error(code=-32040, message=f"E/A-Fehler beim Schreiben der Datei '{path}': {e}")
+    except Exception as e:
+        log.error(f"Allgemeiner Fehler beim Schreiben der Datei '{path}': {e}", exc_info=True)
+        return Error(code=-32001, message=f"Allgemeiner Fehler beim Schreiben der Datei '{path}': {e}")
+
+# --- Registrierung der neuen Tools ---
+register_tool("write_text_file", write_text_file)
+
+log.info("✅ Text File Write Tool (write_text_file) registriert.")
