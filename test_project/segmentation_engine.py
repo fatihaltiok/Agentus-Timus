@@ -48,8 +48,22 @@ async def create_empty_file(directory: str, file_name: str) -> Union[Success, Er
         log.error(f"Fehler beim Erstellen der Datei: {e}", exc_info=True)
         return Error(code=-32030, message=f"Dateierstellung fehlgeschlagen: {e}")
 
+@method
+async def create_empty_segmentation_file(file_name: str = 'segmentation_engine.txt') -> Union[Success, Error]:
+    """
+    Erstellt eine leere Datei mit dem Namen 'segmentation_engine.txt'.
+    """
+    log.info(f"Erstelle leere Datei: {file_name}")
+    try:
+        await asyncio.to_thread(_create_empty_file_sync, file_name)
+        return Success({"status": "file_created", "file_name": file_name})
+    except Exception as e:
+        log.error(f"Fehler beim Erstellen der Datei: {e}", exc_info=True)
+        return Error(code=-32031, message=f"Dateierstellung fehlgeschlagen: {e}")
+
 # --- Registrierung der neuen Tools ---
 register_tool("create_directory", create_directory)
 register_tool("create_empty_file", create_empty_file)
+register_tool("create_empty_segmentation_file", create_empty_segmentation_file)
 
-log.info("✅ Directory & File Creation Tools (create_directory, create_empty_file) registriert.")
+log.info("✅ Directory & File Creation Tools (create_directory, create_empty_file, create_empty_segmentation_file) registriert.")
