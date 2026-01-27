@@ -87,19 +87,20 @@ def gather_project_context(dest_folder: str) -> str:
 
     try:
         # 1. Projektstruktur
-        structure = call_tool("list_agent_files", {
-            "path": dest_folder,
-            "pattern": "*.py",
-            "max_depth": 2
-        })
+        # list_agent_files nimmt nur 'subfolder' Parameter (tools/agent/server/skills)
+        # Versuche mehrere Ordner für besseren Kontext
+        all_files = []
+        for folder in ["agent", "tools", "skills"]:
+            structure = call_tool("list_agent_files", {"subfolder": folder})
+            if isinstance(structure, dict) and not structure.get("error"):
+                files = structure.get("files", [])
+                all_files.extend(files)
 
-        if isinstance(structure, dict) and not structure.get("error"):
-            files = structure.get("files", [])
-            if files:
-                context_parts.append(f"## Projektstruktur ({len(files)} Python-Dateien):")
-                context_parts.append("\n".join(f"  - {f}" for f in files[:10]))
-                if len(files) > 10:
-                    context_parts.append(f"  ... und {len(files) - 10} weitere")
+        if all_files:
+            context_parts.append(f"## Projektstruktur ({len(all_files)} Python-Dateien):")
+            context_parts.append("\n".join(f"  - {f}" for f in all_files[:10]))
+            if len(all_files) > 10:
+                context_parts.append(f"  ... und {len(all_files) - 10} weitere")
 
         # 2. Dependencies (requirements.txt)
         req_path = f"{dest_folder}/requirements.txt"
@@ -343,6 +344,12 @@ CODING STYLE: {coding_style}
 VERFÜGBARE TOOLS:
 {tools_list}
 
+TOOL-PARAMETER WICHTIG:
+- list_agent_files: Nimmt nur "subfolder" Parameter (Werte: "tools", "agent", "server", "skills")
+  Beispiel: {{"method": "list_agent_files", "params": {{"subfolder": "agent"}}}}
+- read_file_content: Nimmt nur "path" Parameter (relativer Pfad zum Projekt-Root)
+  Beispiel: {{"method": "read_file_content", "params": {{"path": "agent/developer_agent.py"}}}}
+
 WICHTIGE REGELN:
 1. Sammle IMMER zuerst Kontext (read_file_content, list_agent_files)
 2. Validiere Code BEVOR du schreibst (du bekommst Validation-Feedback)
@@ -382,9 +389,9 @@ Final Answer: <Zusammenfassung was gemacht wurde>
 
 BEISPIEL-WORKFLOW:
 ```
-# Schritt 1: Kontext
-Thought: Ich prüfe zunächst die Projektstruktur und ähnliche Dateien
-Action: {{"method": "list_agent_files", "params": {{"path": "{dest_folder}", "pattern": "*.py"}}}}
+# Schritt 1: Kontext - Projektstruktur
+Thought: Ich prüfe zunächst die Projektstruktur
+Action: {{"method": "list_agent_files", "params": {{"subfolder": "agent"}}}}
 
 # Schritt 2: Verwandte Dateien lesen (für context_files)
 Thought: Ich lese verwandte Dateien um besseren Kontext zu haben
