@@ -164,6 +164,77 @@ def detect_coding_style(dest_folder: str) -> str:
     return "PEP8 + " + " + ".join(style_indicators)
 
 
+def find_related_files(dest_folder: str, target_file: str, max_files: int = 3) -> List[str]:
+    """
+    Findet verwandte Dateien im Projekt für besseren Kontext.
+
+    Strategie:
+    1. Dateien im gleichen Verzeichnis (gleicher Modul-Kontext)
+    2. __init__.py im gleichen Package
+    3. Dateien mit ähnlichem Namen
+    4. Häufig importierte Module (utils, base, config)
+
+    Args:
+        dest_folder: Projekt-Ordner
+        target_file: Ziel-Datei für die Code generiert wird
+        max_files: Maximale Anzahl Context-Dateien
+
+    Returns:
+        Liste von Dateipfaden (relativ zum dest_folder)
+    """
+    related = []
+    target_path = Path(target_file)
+
+    try:
+        # 1. __init__.py im gleichen Verzeichnis (wichtig für Package-Struktur)
+        if target_path.parent != Path("."):
+            init_file = str(target_path.parent / "__init__.py")
+            init_full = Path(dest_folder) / init_file
+            if init_full.exists() and init_file != target_file:
+                related.append(init_file)
+
+        # 2. Dateien im gleichen Verzeichnis
+        if target_path.parent != Path("."):
+            sibling_dir = Path(dest_folder) / target_path.parent
+            if sibling_dir.exists() and sibling_dir.is_dir():
+                for sibling in sibling_dir.glob("*.py"):
+                    rel_path = str(sibling.relative_to(dest_folder))
+                    if rel_path != target_file and rel_path not in related:
+                        related.append(rel_path)
+                        if len(related) >= max_files:
+                            break
+
+        # 3. Häufig genutzte Module (utils, base, config, constants)
+        if len(related) < max_files:
+            common_names = ["utils.py", "base.py", "config.py", "constants.py", "settings.py"]
+            for common in common_names:
+                common_path = Path(dest_folder) / common
+                if common_path.exists() and common != target_file and common not in related:
+                    related.append(common)
+                    if len(related) >= max_files:
+                        break
+
+        # 4. Dateien mit ähnlichem Präfix (z.B. user_model.py für user_controller.py)
+        if len(related) < max_files:
+            target_stem = target_path.stem
+            prefix = target_stem.split("_")[0] if "_" in target_stem else target_stem[:4]
+
+            for py_file in Path(dest_folder).rglob("*.py"):
+                if len(related) >= max_files:
+                    break
+                rel_path = str(py_file.relative_to(dest_folder))
+                if rel_path != target_file and rel_path not in related:
+                    if py_file.stem.startswith(prefix):
+                        related.append(rel_path)
+
+        logger.info(f"📚 Context-Dateien gefunden: {related}")
+        return related[:max_files]
+
+    except Exception as e:
+        logger.warning(f"Fehler bei find_related_files: {e}")
+        return []
+
+
 # -----------------------------------------------------------------------------
 # Code-Validierung
 # -----------------------------------------------------------------------------
@@ -282,10 +353,24 @@ WICHTIGE REGELN:
 WORKFLOW (schrittweise!):
 1. **Kontext sammeln**: read_file_content für ähnliche Dateien, list_agent_files für Struktur
 2. **Code generieren**: implement_feature mit vollständiger Spezifikation
+   - WICHTIG: Nutze "context_files" Parameter für verwandte Dateien!
+   - Format: {{"instruction": "...", "file_paths": ["target.py"], "context_files": ["related.py", "utils.py"]}}
 3. **Validierung erhalten**: System validiert automatisch (Syntax, Style)
 4. **Bei Validation OK**: Nutze write_file zum Speichern
 5. **Bei Validation Fehler**: Überarbeite basierend auf Feedback
 6. **Finalisieren**: Nach erfolgreichem Schreiben
+
+IMPLEMENT_FEATURE TOOL DETAILS:
+- Parameter:
+  * instruction: Detaillierte Code-Anweisung
+  * file_paths: Liste der Ziel-Dateien (wird generiert)
+  * context_files: [OPTIONAL] Liste verwandter Dateien für besseren Kontext
+- Beispiel:
+  {{"method": "implement_feature", "params": {{
+    "instruction": "Create User model with email validation",
+    "file_paths": ["models/user.py"],
+    "context_files": ["models/__init__.py", "utils/validators.py"]
+  }}}}
 
 ANTWORTFORMAT (exakt eins pro Runde):
 Thought: <kurzer Plan, was du als nächstes tust>
@@ -301,17 +386,25 @@ BEISPIEL-WORKFLOW:
 Thought: Ich prüfe zunächst die Projektstruktur und ähnliche Dateien
 Action: {{"method": "list_agent_files", "params": {{"path": "{dest_folder}", "pattern": "*.py"}}}}
 
-# Schritt 2: Code generieren
-Thought: Ich generiere den Code basierend auf dem Kontext
-Action: {{"method": "implement_feature", "params": {{"instruction": "...", "file_paths": ["..."]}}}}
+# Schritt 2: Verwandte Dateien lesen (für context_files)
+Thought: Ich lese verwandte Dateien um besseren Kontext zu haben
+Action: {{"method": "read_file_content", "params": {{"path": "models/__init__.py"}}}}
 
-# Schritt 3: Validierung OK → Schreiben
+# Schritt 3: Code generieren MIT context_files
+Thought: Ich generiere den Code mit Kontext aus verwandten Dateien
+Action: {{"method": "implement_feature", "params": {{
+  "instruction": "Create User model with email validation",
+  "file_paths": ["models/user.py"],
+  "context_files": ["models/__init__.py", "utils/validators.py"]
+}}}}
+
+# Schritt 4: Validierung OK → Schreiben
 Thought: Validation erfolgreich, ich schreibe die Datei
 Action: {{"method": "write_file", "params": {{"path": "...", "content": "..."}}}}
 
-# Schritt 4: Fertig
+# Schritt 5: Fertig
 Thought: Aufgabe abgeschlossen
-Final Answer: Datei 'xyz.py' wurde erfolgreich erstellt und validiert.
+Final Answer: Datei 'models/user.py' wurde erfolgreich erstellt mit Kontext aus __init__.py und validators.py.
 ```
 
 WICHTIG:
@@ -576,6 +669,19 @@ def run_developer_task(user_query: str, dest_folder: str = ".", max_steps: int =
             messages.append({"role": "user", "content": f"Observation: {json.dumps(error_obs)}"})
             continue
 
+        # Intelligente Context-Files für implement_feature
+        if method == "implement_feature" and "context_files" not in params:
+            file_paths = params.get("file_paths", [])
+            if isinstance(file_paths, str):
+                file_paths = [file_paths]
+
+            if file_paths:
+                target_file = file_paths[0]
+                context_files = find_related_files(dest_folder, target_file, max_files=3)
+                if context_files:
+                    params["context_files"] = context_files
+                    logger.info(f"📚 Auto-Context hinzugefügt: {context_files}")
+
         # Tool ausführen
         logger.info(f"🔧 Führe aus: {method}({list(params.keys())})")
         obs = call_tool(method, params, timeout=420)
@@ -680,6 +786,41 @@ def run_developer_task(user_query: str, dest_folder: str = ".", max_steps: int =
         "learning": "Max steps erreicht, Aufgabe evtl. zu komplex oder mehr Schritte nötig."
     })
     return "⚠️ Maximale Anzahl an Schritten erreicht, ohne finale Antwort."
+
+
+# -----------------------------------------------------------------------------
+# Async Wrapper für Integration mit main_dispatcher
+# -----------------------------------------------------------------------------
+class DeveloperAgentV2:
+    """
+    Async-kompatible Wrapper-Klasse für developer_agent_v2.
+
+    Ermöglicht Integration mit main_dispatcher.py, der async agents erwartet.
+    """
+    def __init__(self, tools_description_string: str, dest_folder: str = ".", max_steps: int = 12):
+        self.tools_description = tools_description_string
+        self.dest_folder = dest_folder
+        self.max_steps = max_steps
+
+    async def run(self, query: str) -> str:
+        """
+        Führt den Developer-Agenten aus (async wrapper).
+
+        Args:
+            query: Entwicklungsaufgabe
+
+        Returns:
+            Finale Antwort des Agenten
+        """
+        import asyncio
+        # Führe sync Funktion in thread pool aus
+        result = await asyncio.to_thread(
+            run_developer_task,
+            query,
+            dest_folder=self.dest_folder,
+            max_steps=self.max_steps
+        )
+        return result
 
 
 # -----------------------------------------------------------------------------
