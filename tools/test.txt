@@ -1,0 +1,33 @@
+# --- Hauptmethode ---  developertool
+@method
+async def implement_feature(
+    file_paths: list[str],
+    instruction: str,
+    strategy: str = "inception_then_aider_with_template",
+    refactoring_engine: str = "gemini", # Standard-Engine bleibt 'gemini'
+    refactoring_model: Optional[str] = None # Erlaubt weiterhin das Überschreiben
+) -> Union[Success, Error]:
+    """
+    Implementiert ein Feature. Nutzt `gemini-exp` als Standard-Refactoring-Modell für Aider.
+    - refactoring_engine: Wählt die KI für die Aider-Anpassungsphase ('openai' oder 'gemini').
+    """
+    strategy = strategy.lower()
+    
+    # Modell basierend auf der Engine auswählen
+    if refactoring_engine == "openai":
+        model_for_aider = refactoring_model or "gpt-4o"
+        if not os.getenv("OPENAI_API_KEY"): return Error(code=-32039, message="OPENAI_API_KEY für Aider nicht gefunden.")
+    elif refactoring_engine == "gemini":
+        # KORREKTUR: Wir verwenden jetzt den einfachen und leistungsstarken 'gemini-exp' Alias.
+        model_for_aider = refactoring_model or "gemini-exp"
+        if not os.getenv("GEMINI_API_KEY"): return Error(code=-32040, message="GEMINI_API_KEY für Aider nicht gefunden.")
+    else:
+        return Error(code=-32602, message=f"Unbekannte Refactoring-Engine: '{refactoring_engine}'. Unterstützt: 'openai', 'gemini'.")
+
+    log.info(f"🚀 Starte Implementierung mit Strategie: '{strategy}' und Aider-Modell: '{model_for_aider}'")
+
+    # Inception-Client-Prüfung für die entsprechenden Strategien
+    if "inception" in strategy:
+        if not inception_client:
+            return Error(code=-32035, message="Inception Client ist nicht konfiguriert.")
+

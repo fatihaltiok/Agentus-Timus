@@ -1,0 +1,56 @@
+# tools/fact_corroborator/__init__.py
+"""
+Fact Corroborator Tool - Automatische Faktenverifizierung durch Web-Recherche
+"""
+
+from .tool import (
+    verify_fact,
+    verify_multiple_facts,
+    clear_fact_cache,
+    get_fact_verification_stats
+)
+
+__all__ = [
+    "verify_fact",
+    "verify_multiple_facts", 
+    "clear_fact_cache",
+    "get_fact_verification_stats"
+]
+
+# Tool-Metadaten
+TOOL_INFO = {
+    "name": "Fact Corroborator",
+    "version": "1.0.0",
+    "description": "Verifiziert Fakten automatisch durch gezielte Web-Recherchen",
+    "methods": [
+        {
+            "name": "verify_fact",
+            "description": "Verifiziert einen einzelnen Fakt durch Websuche",
+            "params": {
+                "fact": "Der zu verifizierende Fakt",
+                "context": "Optionaler Kontext für bessere Suche",
+                "search_depth": "Anzahl der Suchanfragen (Standard: 2)",
+                "require_multiple_sources": "Ob mehrere Quellen nötig sind (Standard: True)"
+            }
+        },
+        {
+            "name": "verify_multiple_facts",
+            "description": "Verifiziert mehrere Fakten gleichzeitig",
+            "params": {
+                "facts": "Liste von zu verifizierenden Fakten",
+                "context": "Gemeinsamer Kontext",
+                "parallel": "Parallele Verarbeitung (Standard: True)"
+            }
+        },
+        {
+            "name": "clear_fact_cache",
+            "description": "Leert den Cache verifizierter Fakten",
+            "params": {}
+        },
+        {
+            "name": "get_fact_verification_stats",
+            "description": "Zeigt Statistiken über bisherige Verifikationen",
+            "params": {}
+        }
+    ]
+}

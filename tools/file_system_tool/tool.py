@@ -1,67 +1,77 @@
 # tools/file_system_tool/tool.py
-import os
+
+# Standard-Bibliotheken
 import logging
+import asyncio
 from pathlib import Path
 from typing import Union
-import asyncio  # <--- Wichtig: asyncio importieren
 
+# Drittanbieter-Bibliotheken
 from jsonrpcserver import method, Success, Error
 
+# --- ANPASSUNG: Logging wird jetzt zentral konfiguriert ---
 log = logging.getLogger(__name__)
-# --- Interne, synchrone Hilfsfunktion ---
+
+# --- Interne, synchrone Hilfsfunktionen (unverändert) ---
+# Diese sind bereits gut strukturiert, um in einem Thread zu laufen.
+
+def _get_project_root() -> Path:
+    """Gibt den Root-Pfad des Projekts zurück."""
+    return Path(__file__).resolve().parent.parent.parent
+
 def _write_to_file_sync(full_path: Path, content: str):
-    """
-    Diese Funktion enthält die blockierende Schreib-Logik.
-    """
-    # Erstelle übergeordnete Verzeichnisse, falls sie nicht existieren
+    """Blockierende Schreib-Logik."""
     full_path.parent.mkdir(parents=True, exist_ok=True)
-    # Schreibe den Inhalt in die Datei
     with open(full_path, 'w', encoding='utf-8') as f:
         f.write(content)
 
 def _read_file_sync(full_path: Path) -> str:
-    """
-    Diese Funktion enthält die blockierende Lese-Logik.
-    """
+    """Blockierende Lese-Logik."""
     with open(full_path, 'r', encoding='utf-8') as f:
         return f.read()
 
-# --- Asynchrone Tool-Methoden ---
+# --- Asynchrone Tool-Methoden (jetzt mit vereinfachter Pfad-Logik) ---
 
 @method
 async def list_directory(path: str) -> Union[Success, Error]:
     """
-    Listet den Inhalt eines Verzeichnisses asynchron auf und gibt eine Liste der Dateien und Unterverzeichnisse zurück.
+    Listet den Inhalt eines Verzeichnisses asynchron auf.
     """
     try:
-        project_root = Path(__file__).resolve().parent.parent.parent
-        full_path = project_root / path
+        project_root = _get_project_root()
+        # Path.is_relative_to() in Python 3.9+ wäre noch sicherer,
+        # aber resolve() und startswith() ist ein guter Kompromiss.
+        full_path = (project_root / path).resolve()
+        if not str(full_path).startswith(str(project_root)):
+             return Error(code=-32044, message="Zugriff außerhalb des Projektverzeichnisses verweigert.")
 
-        if not full_path.exists() or not full_path.is_dir():
+        if not full_path.is_dir():
             raise FileNotFoundError(f"Das Verzeichnis '{path}' existiert nicht oder ist kein Verzeichnis.")
 
         # Führe die synchrone Verzeichnisauflistung in einem separaten Thread aus
         directory_contents = await asyncio.to_thread(lambda: [item.name for item in full_path.iterdir()])
         
-        log.info(f"✅ Verzeichnisinhalt erfolgreich von '{full_path}' aufgelistet.")
+        log.info(f"✅ Verzeichnisinhalt von '{full_path}' aufgelistet.")
         return Success({"status": "success", "path": path, "contents": directory_contents})
 
-    except FileNotFoundError as fnf_error:
-        log.error(f"❌ Verzeichnis nicht gefunden: {fnf_error}", exc_info=True)
-        return Error(code=-32042, message=str(fnf_error))
+    except FileNotFoundError as e:
+        log.warning(f"Verzeichnis nicht gefunden: {e}")
+        return Error(code=-32042, message=str(e))
     except Exception as e:
-        log.error(f"❌ Fehler beim Auflisten des Verzeichnisses '{path}': {e}", exc_info=True)
+        log.error(f"Fehler beim Auflisten des Verzeichnisses '{path}': {e}", exc_info=True)
         return Error(code=-32043, message=f"Fehler beim Auflisten des Verzeichnisses: {e}")
+
 @method
 async def write_file(path: str, content: str) -> Union[Success, Error]:
     """
-    Schreibt Inhalt asynchron in eine Datei. Erstellt die Datei und Verzeichnisse, wenn sie nicht existieren.
+    Schreibt Inhalt asynchron in eine Datei.
     """
     try:
-        project_root = Path(__file__).resolve().parent.parent.parent
-        full_path = project_root / path
-
-        # Führe die synchrone Schreib-Operation in einem separaten Thread aus
+        project_root = _get_project_root()
+        full_path = (project_root / path).resolve()
+        if not str(full_path).startswith(str(project_root)):
+             return Error(code=-32044, message="Zugriff außerhalb des Projektverzeichnisses verweigert.")
+             
         await asyncio.to_thread(_write_to_file_sync, full_path, content)
         
         log.info(f"✅ Datei erfolgreich nach '{full_path}' geschrieben.")
@@ -74,21 +84,25 @@ async def write_file(path: str, content: str) -> Union[Success, Error]:
 @method
 async def read_file(path: str) -> Union[Success, Error]:
     """
-    Liest den Inhalt einer Datei asynchron und gibt ihn als String zurück.
+    Liest den Inhalt einer Datei asynchron.
     """
     try:
-        project_root = Path(__file__).resolve().parent.parent.parent
-        full_path = project_root / path
+        project_root = _get_project_root()
+        full_path = (project_root / path).resolve()
+        if not str(full_path).startswith(str(project_root)):
+             return Error(code=-32044, message="Zugriff außerhalb des Projektverzeichnisses verweigert.")
 
-        if not full_path.exists():
+        if not full_path.is_file():
             raise FileNotFoundError(f"Die Datei '{path}' existiert nicht.")
 
-        # Führe die synchrone Lese-Operation in einem separaten Thread aus
         content = await asyncio.to_thread(_read_file_sync, full_path)
         
         log.info(f"✅ Datei erfolgreich von '{full_path}' gelesen.")
         return Success({"status": "success", "path": path, "content": content})
 
-    except FileNotFoundError as fnf_error:
-        log.error(f"❌ Datei nicht gefunden: {fnf_error}", exc_info=True)
-        return Error(code=-32041, message=str(fnf_error))
+    except FileNotFoundError as e:
+        log.warning(f"Datei nicht gefunden: {e}")
+        return Error(code=-32041, message=str(e))
+    except Exception as e:
+        log.error(f"❌ Fehler beim Lesen der Datei '{path}': {e}", exc_info=True)
+        return Error(code=-32045, message=f"Allgemeiner Fehler beim Lesen der Datei: {e}")

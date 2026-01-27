@@ -1,0 +1,60 @@
+# requirements.txt
+# Version: FINAL STABLE (Aider-Prioritized)
+# Datum: 21. Juni 2025
+# Anmerkung: Versionen sind so gepinnt, dass sie mit `aider-chat` kompatibel sind.
+
+# --- Core ---
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+python-multipart==0.0.9
+jsonrpcserver==5.0.9
+
+# --- AI & Language Models ---
+# Versionen werden durch `aider-chat` bestimmt, wir entfernen explizite Pins
+openai
+httpx
+python-dotenv==1.0.1
+tiktoken
+tokenizers
+
+# --- Web & Document Tools ---
+playwright==1.44.0
+beautifulsoup4==4.12.3
+lxml==5.2.2
+pypdfium2==4.30.0
+requests==2.32.3
+fuzzywuzzy==0.18.0
+
+
+# --- Developer Tools ---
+# Dies ist unser Ankerpaket, das die Versionen für openai, httpx, tokenizers, scipy etc. vorgibt
+
+google-generativeai==0.7.1
+
+# --- DATABASE & NUMPY (KRITISCHER BLOCK) ---
+# Pinne ChromaDB und NumPy auf Versionen, die mit den Aider-Abhängigkeiten funktionieren
+chromadb==0.4.24
+numpy==1.26.4
+
+# --- YAML ---
+PyYAML==6.0.1
+
+# --- VISUAL TOOLS (Hugging Face-basiert) ---
+pyautogui
+mss
+Pillow
+opencv-python-headless==4.9.0.80
+# Wir verwenden eine `transformers`-Version, die mit den Aider-Abhängigkeiten kompatibel ist
+transformers
+timm==0.9.16
+sentencepiece
+
+# --- OCR TOOLS (Multi-Backend) ---
+pytesseract==0.3.13
+easyocr==1.7.2
+paddlepaddle
+paddleocr
+
+
+# --- System Monitoring ---
+psutil
