@@ -15,7 +15,7 @@ v3.1 ÄNDERUNGEN:
 - Dispatcher-Prompt erweitert
 
 AGENTEN-ÜBERSICHT:
-- executor: Schnelle einfache Tasks (gpt-4o-mini)
+- executor: Schnelle einfache Tasks (gpt-5-mini)
 - research: Tiefenrecherche (deepseek-reasoner)
 - reasoning: Komplexe Analyse, Debugging, Architektur (Nemotron)
 - creative: Bilder, kreative Texte (gpt-5.2)
@@ -283,7 +283,7 @@ async def get_agent_decision(user_query: str) -> str:
     try:
         response = await asyncio.to_thread(
             client.chat.completions.create,
-            model="gpt-4o-mini",  # Schneller für Routing
+            model=os.getenv("DISPATCHER_MODEL", "gpt-5-mini"),  # Schneller für Routing
             messages=[
                 {"role": "system", "content": DISPATCHER_PROMPT},
                 {"role": "user", "content": user_query},
