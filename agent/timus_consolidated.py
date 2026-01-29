@@ -350,13 +350,41 @@ ODER: Final Answer: [Beschreibung]
 """ + SINGLE_ACTION_WARNING
 
 CREATIVE_SYSTEM_PROMPT = """
-Du bist C.L.A.I.R.E. (Creative). 
-TOOLS: {tools_description}
-Bildmodell: """ + IMAGE_MODEL_NAME + """
-Size: "1024x1024", Quality: "high"
+Du bist C.L.A.I.R.E. - Kreativ-Agent für Bilder, Code, Texte.
 
-ANTWORT:
-{{ "thought": "...", "action": {{ "method": "Image Generation", "params": {{ "prompt": "..." }} }} }}
+# TOOLS
+{tools_description}
+
+# ⚠️ ABSOLUT KRITISCH - FORMAT ⚠️
+DEINE ANTWORT MUSS EXAKT SO AUSSEHEN (MIT "Thought:" und "Action:" Labels!):
+
+Thought: [Kurze Analyse der Anfrage]
+Action: {{"method": "generate_image", "params": {{"prompt": "detailed english description", "size": "1024x1024", "quality": "hd"}}}}
+
+⚠️ STOPP! NICHTS MEHR NACH "Action:" SCHREIBEN!
+⚠️ KEIN "Final Answer", KEIN zusätzlicher Text!
+⚠️ DAS SYSTEM WIRD DIR EINE "Observation:" SENDEN!
+
+Erst NACHDEM du "Observation:" erhältst, darfst du "Final Answer:" senden!
+
+# BEISPIEL (GENAU SO MACHEN!)
+User: male einen hund
+
+DEINE ERSTE ANTWORT (ohne Final Answer!):
+Thought: Ich erstelle ein Hundebild mit DALL-E.
+Action: {{"method": "generate_image", "params": {{"prompt": "friendly golden retriever dog, sunny park, realistic photo", "size": "1024x1024", "quality": "hd"}}}}
+
+[SYSTEM]: Observation: {{"status": "success", "saved_as": "results/dog.png"}}
+
+DEINE ZWEITE ANTWORT (nachdem Observation da ist):
+Thought: Bild erfolgreich generiert.
+Final Answer: Hundebild erstellt! Gespeichert unter: results/dog.png
+
+# REGELN
+- Bildprompts auf Englisch!
+- Quality="hd" für Details
+- Verwende IMMER "Thought:" und "Action:" Labels!
+- NIEMALS "Final Answer" in erster Antwort!
 
 """ + SINGLE_ACTION_WARNING
 
@@ -715,7 +743,50 @@ class ReasoningAgent(BaseAgent):
 
 class CreativeAgent(BaseAgent):
     def __init__(self, tools_description_string: str):
-        super().__init__(CREATIVE_SYSTEM_PROMPT, tools_description_string, 5, "creative")
+        super().__init__(CREATIVE_SYSTEM_PROMPT, tools_description_string, 8, "creative")
+
+    async def run(self, task: str) -> str:
+        """Überschriebene run() mit Prüfung: Kein Final Answer ohne Tool-Call."""
+        log.info(f"▶️ {self.__class__.__name__} ({self.provider.value})")
+
+        messages = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": task}
+        ]
+
+        tool_was_called = False
+
+        for step in range(1, self.max_iterations + 1):
+            reply = await self._call_llm(messages)
+
+            if reply.startswith("Error"):
+                return reply
+
+            # Prüfe auf Final Answer
+            if "Final Answer:" in reply:
+                if not tool_was_called:
+                    # ABLEHNEN! Tool muss zuerst aufgerufen werden
+                    messages.append({"role": "assistant", "content": reply})
+                    messages.append({"role": "user", "content": "FEHLER: Du MUSST zuerst ein Tool aufrufen (z.B. generate_image)! KEINE Final Answer ohne vorherigen Tool-Aufruf!"})
+                    continue
+                else:
+                    # OK, Tool wurde aufgerufen
+                    return reply.split("Final Answer:")[1].strip()
+
+            action, err = self._parse_action(reply)
+            messages.append({"role": "assistant", "content": reply})
+
+            if not action:
+                messages.append({"role": "user", "content": f"Fehler: {err}. Korrektes JSON mit 'Thought:' und 'Action:' Labels senden."})
+                continue
+
+            # Tool aufrufen
+            obs = await self._call_tool(action.get("method", ""), action.get("params", {}))
+            tool_was_called = True  # Markieren dass Tool aufgerufen wurde
+            self._handle_file_artifacts(obs)
+            messages.append({"role": "user", "content": f"Observation: {json.dumps(self._sanitize_observation(obs), ensure_ascii=False)}"})
+
+        return "Limit erreicht."
 
 
 class DeveloperAgent(BaseAgent):
