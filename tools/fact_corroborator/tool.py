@@ -14,6 +14,7 @@ from tools.universal_tool_caller import register_tool
 from tools.planner.planner_helpers import call_tool_internal
 
 from openai import OpenAI
+from utils.openai_compat import prepare_openai_params
 from dotenv import load_dotenv
 import os
 

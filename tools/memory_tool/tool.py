@@ -70,6 +70,7 @@ def _init_chromadb_fallback():
         import chromadb
         from chromadb.utils import embedding_functions
         from openai import OpenAI
+from utils.openai_compat import prepare_openai_params
         
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:

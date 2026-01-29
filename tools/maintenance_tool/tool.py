@@ -16,6 +16,7 @@ from tools.shared_context import memory_collection, openai_client
 from tools.planner.planner_helpers import call_tool_internal
 
 # Logger für dieses Modul
+from utils.openai_compat import prepare_openai_params
 log = logging.getLogger(__name__)
 
 # Prompt für die Zusammenfassung von Erinnerungen

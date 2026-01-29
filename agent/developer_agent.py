@@ -23,6 +23,7 @@ if str(PROJECT_ROOT) not in sys.path:
 # -----------------------------------------------------------------------------
 from dotenv import load_dotenv
 from openai import OpenAI
+from utils.openai_compat import prepare_openai_params
 
 load_dotenv(dotenv_path=PROJECT_ROOT / ".env")
 

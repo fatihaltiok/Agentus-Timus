@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass, field, asdict
 from openai import OpenAI
+from utils.openai_compat import prepare_openai_params
 from dotenv import load_dotenv
 
 load_dotenv()

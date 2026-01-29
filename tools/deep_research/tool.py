@@ -28,6 +28,7 @@ from enum import Enum
 from dotenv import load_dotenv
 from jsonrpcserver import method, Success, Error
 from openai import OpenAI, RateLimitError
+from utils.openai_compat import prepare_openai_params
 
 # Interne Imports
 from tools.planner.planner_helpers import call_tool_internal
@@ -211,18 +212,19 @@ research_sessions: Dict[str, DeepResearchSession] = {}
 # ==============================================================================
 
 async def _call_llm_for_facts(messages: List[Dict[str, Any]], use_json: bool = True, max_tokens: int = 2000) -> Any:
-    """Wrapper für LLM-Aufrufe mit Retry-Logik."""
-    token_param = _get_token_param_name(SMART_MODEL)
-
+    """Wrapper für LLM-Aufrufe mit Retry-Logik und automatischer API-Kompatibilität."""
     kwargs = {
         "model": SMART_MODEL,
         "messages": messages,
         "temperature": 0.0,
-        token_param: max_tokens,
+        "max_tokens": max_tokens,
     }
 
     if use_json:
         kwargs["response_format"] = {"type": "json_object"}
+
+    # Automatische API-Kompatibilität (max_tokens vs max_completion_tokens, temperature)
+    kwargs = prepare_openai_params(kwargs)
 
     try:
         response = await asyncio.to_thread(client.chat.completions.create, **kwargs)
@@ -232,15 +234,6 @@ async def _call_llm_for_facts(messages: List[Dict[str, Any]], use_json: bool = T
         await asyncio.sleep(30)
         response = await asyncio.to_thread(client.chat.completions.create, **kwargs)
         return response
-    except Exception as e:
-        if "max_tokens" in str(e) or "max_completion_tokens" in str(e):
-            alt_param = "max_completion_tokens" if token_param == "max_tokens" else "max_tokens"
-            logger.warning(f"Token-Parameter-Fehler, versuche {alt_param}")
-            kwargs.pop(token_param)
-            kwargs[alt_param] = max_tokens
-            response = await asyncio.to_thread(client.chat.completions.create, **kwargs)
-            return response
-        raise
 
 
 # ==============================================================================

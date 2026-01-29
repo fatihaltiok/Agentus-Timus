@@ -10,6 +10,7 @@ from typing import Union
 from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI
+from utils.openai_compat import prepare_openai_params
 from jsonrpcserver import method, Success, Error
 
 from tools.universal_tool_caller import register_tool

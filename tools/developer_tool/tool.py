@@ -9,6 +9,7 @@ from typing import Union, List, Optional
 # Drittanbieter
 from jsonrpcserver import method, Success, Error
 from openai import AsyncOpenAI
+from utils.openai_compat import prepare_openai_params
 
 # Interne
 from tools.universal_tool_caller import register_tool

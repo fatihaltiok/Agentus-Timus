@@ -529,21 +529,21 @@ class BaseAgent:
             return f"Error: {e}"
 
     async def _call_openai_compatible(self, messages: List[Dict]) -> str:
-        """OpenAI-kompatible APIs."""
+        """OpenAI-kompatible APIs mit automatischer Kompatibilität."""
         client = self.provider_client.get_client(self.provider)
-        
-        kwargs = {"model": self.model, "messages": messages, "temperature": 0.3}
-        
-        if any(x in self.model.lower() for x in ["gpt-5", "gpt-4", "o1", "o3"]):
-            kwargs["max_completion_tokens"] = 2000
-        else:
-            kwargs["max_tokens"] = 2000
-        
+
+        kwargs = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0.3,
+            "max_tokens": 2000
+        }
+
         # Mercury Diffusing
         if self.provider == ModelProvider.INCEPTION:
             if os.getenv("MERCURY_DIFFUSING", "false").lower() == "true":
                 kwargs["extra_body"] = {"diffusing": True}
-        
+
         # Nemotron enable_thinking
         if "nemotron" in self.model.lower():
             enable = os.getenv("NEMOTRON_ENABLE_THINKING", "true").lower() == "true"
@@ -554,7 +554,10 @@ class BaseAgent:
             else:
                 kwargs["temperature"] = 1.0
                 kwargs["top_p"] = 1.0
-        
+
+        # Automatische API-Kompatibilität (max_tokens vs max_completion_tokens, temperature)
+        kwargs = prepare_openai_params(kwargs)
+
         resp = await asyncio.to_thread(client.chat.completions.create, **kwargs)
         return resp.choices[0].message.content.strip()
 

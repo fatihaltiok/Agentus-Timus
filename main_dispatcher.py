@@ -35,6 +35,7 @@ from typing import Optional
 import httpx
 from openai import OpenAI
 from dotenv import load_dotenv
+from utils.openai_compat import prepare_openai_params
 
 # --- Modulpfad-Korrektur ---
 try:
@@ -281,15 +282,22 @@ async def get_agent_decision(user_query: str) -> str:
     
     # LLM-basierte Entscheidung
     try:
-        response = await asyncio.to_thread(
-            client.chat.completions.create,
-            model=os.getenv("DISPATCHER_MODEL", "gpt-5-mini"),  # Schneller für Routing
-            messages=[
+        model = os.getenv("DISPATCHER_MODEL", "gpt-5-mini-2025-08-07")
+
+        # Nutze Compatibility Helper für automatische API-Anpassung
+        api_params = prepare_openai_params({
+            "model": model,
+            "messages": [
                 {"role": "system", "content": DISPATCHER_PROMPT},
                 {"role": "user", "content": user_query},
             ],
-            temperature=0,
-            max_tokens=20
+            "temperature": 0,
+            "max_tokens": 20
+        })
+
+        response = await asyncio.to_thread(
+            client.chat.completions.create,
+            **api_params
         )
         decision = response.choices[0].message.content.strip().lower().replace('.', '')
         

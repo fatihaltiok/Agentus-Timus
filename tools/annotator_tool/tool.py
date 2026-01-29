@@ -13,6 +13,7 @@ from pathlib import Path
 
 # --- DRITTANBIETER-BIBLIOTHEKEN ---
 from openai import OpenAI
+from utils.openai_compat import prepare_openai_params
 from jsonrpcserver import method, Success, Error
 import mss
 from PIL import Image

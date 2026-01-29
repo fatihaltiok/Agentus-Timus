@@ -12,6 +12,7 @@ from jsonrpcserver import method, Success, Error
 from tools.universal_tool_caller import register_tool
 from tools.shared_context import log, openai_client, segmentation_engine_instance
 
+from utils.openai_compat import prepare_openai_params
 @method
 async def find_element_by_description(description: str) -> Union[Success, Error]:
     """

@@ -8,6 +8,7 @@ import asyncio
 
 from jsonrpcserver import method, Success, Error
 from openai import OpenAI
+from utils.openai_compat import prepare_openai_params
 from dotenv import load_dotenv
 
 # Interne Imports
