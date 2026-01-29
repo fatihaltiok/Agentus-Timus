@@ -359,7 +359,7 @@ Du bist C.L.A.I.R.E. - Kreativ-Agent für Bilder, Code, Texte.
 DEINE ANTWORT MUSS EXAKT SO AUSSEHEN (MIT "Thought:" und "Action:" Labels!):
 
 Thought: [Kurze Analyse der Anfrage]
-Action: {{"method": "generate_image", "params": {{"prompt": "detailed english description", "size": "1024x1024", "quality": "hd"}}}}
+Action: {{"method": "generate_image", "params": {{"prompt": "detailed english description", "size": "1024x1024", "quality": "high"}}}}
 
 ⚠️ STOPP! NICHTS MEHR NACH "Action:" SCHREIBEN!
 ⚠️ KEIN "Final Answer", KEIN zusätzlicher Text!
@@ -372,7 +372,7 @@ User: male einen hund
 
 DEINE ERSTE ANTWORT (ohne Final Answer!):
 Thought: Ich erstelle ein Hundebild mit DALL-E.
-Action: {{"method": "generate_image", "params": {{"prompt": "friendly golden retriever dog, sunny park, realistic photo", "size": "1024x1024", "quality": "hd"}}}}
+Action: {{"method": "generate_image", "params": {{"prompt": "friendly golden retriever dog, sunny park, realistic photo", "size": "1024x1024", "quality": "high"}}}}
 
 [SYSTEM]: Observation: {{"status": "success", "saved_as": "results/dog.png"}}
 
@@ -382,7 +382,7 @@ Final Answer: Hundebild erstellt! Gespeichert unter: results/dog.png
 
 # REGELN
 - Bildprompts auf Englisch!
-- Quality="hd" für Details
+- Quality="high" für Details (Werte: "low", "medium", "high", "auto")
 - Verwende IMMER "Thought:" und "Action:" Labels!
 - NIEMALS "Final Answer" in erster Antwort!
 
@@ -744,49 +744,174 @@ class ReasoningAgent(BaseAgent):
 class CreativeAgent(BaseAgent):
     def __init__(self, tools_description_string: str):
         super().__init__(CREATIVE_SYSTEM_PROMPT, tools_description_string, 8, "creative")
+        # Speichere tools_description für später
+        self.tools_description = tools_description_string
+        # Nemotron Client für strukturierte Tool-Calls
+        self.nemotron_client = None
+        openrouter_key = os.getenv("OPENROUTER_API_KEY")
+        if openrouter_key:
+            from openai import OpenAI as OpenRouterClient
+            self.nemotron_client = OpenRouterClient(
+                api_key=openrouter_key,
+                base_url="https://openrouter.ai/api/v1"
+            )
 
-    async def run(self, task: str) -> str:
-        """Überschriebene run() mit Prüfung: Kein Final Answer ohne Tool-Call."""
-        log.info(f"▶️ {self.__class__.__name__} ({self.provider.value})")
+    async def _generate_image_prompt_with_gpt(self, user_request: str) -> str:
+        """Phase 1: GPT-5.1 generiert ausführlichen, kreativen Bildprompt."""
+        log.info("🎨 Phase 1: GPT-5.1 generiert detaillierten Bildprompt")
 
-        messages = [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": task}
-        ]
+        prompt = f"""Du bist ein Experte für DALL-E Bildprompts.
+Erstelle einen DETAILLIERTEN, AUSFÜHRLICHEN englischen Bildprompt für folgende Anfrage:
 
-        tool_was_called = False
+"{user_request}"
 
-        for step in range(1, self.max_iterations + 1):
-            reply = await self._call_llm(messages)
+ANFORDERUNGEN:
+- Mindestens 20-30 Wörter
+- Beschreibe: Hauptmotiv, Stil, Beleuchtung, Komposition, Details, Stimmung
+- Sei spezifisch und inspirierend
+- Nutze visuelle Adjektive (z.B. "soft golden lighting", "elegant composition")
+- Auf ENGLISCH!
 
-            if reply.startswith("Error"):
-                return reply
+BEISPIEL:
+Input: "male eine Katze"
+Output: "elegant grey tabby cat sitting on a sunlit windowsill, soft natural lighting streaming through white curtains, detailed fur texture, peaceful expression, minimalist modern interior, shallow depth of field, professional photography style, warm and cozy atmosphere"
 
-            # Prüfe auf Final Answer
-            if "Final Answer:" in reply:
-                if not tool_was_called:
-                    # ABLEHNEN! Tool muss zuerst aufgerufen werden
-                    messages.append({"role": "assistant", "content": reply})
-                    messages.append({"role": "user", "content": "FEHLER: Du MUSST zuerst ein Tool aufrufen (z.B. generate_image)! KEINE Final Answer ohne vorherigen Tool-Aufruf!"})
-                    continue
-                else:
-                    # OK, Tool wurde aufgerufen
-                    return reply.split("Final Answer:")[1].strip()
+NUR DEN PROMPT AUSGEBEN, KEINE ERKLÄRUNGEN!"""
 
-            action, err = self._parse_action(reply)
-            messages.append({"role": "assistant", "content": reply})
+        try:
+            response = await asyncio.to_thread(
+                self.provider_client.get_client(ModelProvider.OPENAI).chat.completions.create,
+                model="gpt-5.1",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=1.0,
+                max_completion_tokens=200
+            )
+            generated_prompt = response.choices[0].message.content.strip()
+            log.info(f"✓ GPT-5.1 Prompt: {generated_prompt[:80]}...")
+            return generated_prompt
+        except Exception as e:
+            log.error(f"❌ GPT-5.1 Prompt-Generierung fehlgeschlagen: {e}")
+            # Fallback: Nutze User-Request direkt
+            return f"detailed image of {user_request}, high quality, professional"
+
+    async def _execute_with_nemotron(self, image_prompt: str, size: str = "1024x1024", quality: str = "high") -> dict:
+        """Phase 2: Nemotron strukturiert Tool-Call und führt aus."""
+        log.info("🔧 Phase 2: Nemotron strukturiert Tool-Call")
+
+        if not self.nemotron_client:
+            log.warning("Nemotron nicht verfügbar, Fallback auf direkte Tool-Ausführung")
+            return await self._call_tool("generate_image", {
+                "prompt": image_prompt,
+                "size": size,
+                "quality": quality
+            })
+
+        nemotron_system = f"""Du bist ein präziser Tool-Executor.
+
+DEINE AUFGABE:
+Führe generate_image mit den gegebenen Parametern aus.
+
+VERFÜGBARE TOOLS:
+{self.tools_description}
+
+FORMAT (EXAKT):
+Thought: Ich führe generate_image aus.
+Action: {{"method": "generate_image", "params": {{"prompt": "...", "size": "...", "quality": "..."}}}}
+
+WICHTIG: NUR das Action-JSON ausgeben, KEINE zusätzlichen Erklärungen!"""
+
+        user_message = f"""Führe generate_image aus mit:
+- prompt: "{image_prompt}"
+- size: "{size}"
+- quality: "{quality}"
+
+Gib NUR das Action-JSON zurück!"""
+
+        try:
+            # Nemotron API-Call
+            response = await asyncio.to_thread(
+                self.nemotron_client.chat.completions.create,
+                model="nvidia/nemotron-3-nano-30b-a3b",
+                messages=[
+                    {"role": "system", "content": nemotron_system},
+                    {"role": "user", "content": user_message}
+                ],
+                temperature=0.0,
+                max_tokens=500
+            )
+
+            nemotron_reply = response.choices[0].message.content.strip()
+            log.info(f"🧠 Nemotron: {nemotron_reply[:100]}...")
+
+            # Parse Action aus Nemotron Response
+            action, err = self._parse_action(nemotron_reply)
 
             if not action:
-                messages.append({"role": "user", "content": f"Fehler: {err}. Korrektes JSON mit 'Thought:' und 'Action:' Labels senden."})
-                continue
+                log.warning(f"Nemotron Action-Parse fehlgeschlagen: {err}, Fallback zu direktem Call")
+                return await self._call_tool("generate_image", {
+                    "prompt": image_prompt,
+                    "size": size,
+                    "quality": quality
+                })
 
-            # Tool aufrufen
+            # Tool ausführen
+            log.info(f"✓ Tool-Call: {action.get('method')} mit params")
             obs = await self._call_tool(action.get("method", ""), action.get("params", {}))
-            tool_was_called = True  # Markieren dass Tool aufgerufen wurde
-            self._handle_file_artifacts(obs)
-            messages.append({"role": "user", "content": f"Observation: {json.dumps(self._sanitize_observation(obs), ensure_ascii=False)}"})
+            return obs
 
-        return "Limit erreicht."
+        except Exception as e:
+            log.error(f"❌ Nemotron-Ausführung fehlgeschlagen: {e}")
+            # Fallback: Direkter Tool-Call
+            return await self._call_tool("generate_image", {
+                "prompt": image_prompt,
+                "size": size,
+                "quality": quality
+            })
+
+    async def run(self, task: str) -> str:
+        """HYBRID: GPT-5.1 (Kreativität) → Nemotron (Struktur) → Tool-Ausführung."""
+        log.info(f"▶️ {self.__class__.__name__} - HYBRID MODE (GPT-5.1 + Nemotron)")
+
+        # Prüfe ob es eine Bildgenerierungs-Anfrage ist
+        task_lower = task.lower()
+        is_image_request = any(kw in task_lower for kw in ["mal", "bild", "generiere bild", "erstelle bild", "zeichne", "image"])
+
+        if not is_image_request:
+            # Fallback auf normale Logik für nicht-Bild-Anfragen
+            log.info("Keine Bild-Anfrage, nutze Standard-Logik")
+            return await super().run(task)
+
+        # === HYBRID WORKFLOW FÜR BILDER ===
+
+        # Phase 1: GPT-5.1 generiert ausführlichen Prompt
+        detailed_prompt = await self._generate_image_prompt_with_gpt(task)
+
+        # Phase 2: Nemotron strukturiert und führt Tool aus
+        observation = await self._execute_with_nemotron(detailed_prompt, size="1024x1024", quality="high")
+
+        # Handle File Artifacts
+        self._handle_file_artifacts(observation)
+
+        # Erstelle finale Antwort
+        if isinstance(observation, dict):
+            if "error" in observation:
+                return f"Fehler bei der Bildgenerierung: {observation['error']}"
+
+            saved_path = observation.get("saved_as", "")
+            image_url = observation.get("image_url", "")
+
+            final_answer = "Ich habe das Bild erfolgreich generiert!"
+            if saved_path:
+                final_answer += f"\n\n📁 Gespeichert unter: {saved_path}"
+            if image_url:
+                final_answer += f"\n🔗 URL: {image_url}"
+
+            # Detaillierter Prompt-Info (optional)
+            final_answer += f"\n\n🎨 Verwendeter Prompt: {detailed_prompt[:100]}..."
+
+            return final_answer
+
+        return "Bildgenerierung abgeschlossen, aber unerwartetes Antwortformat."
 
 
 class DeveloperAgent(BaseAgent):
