@@ -850,7 +850,7 @@ Gib NUR das Action-JSON zurück!"""
                     {"role": "user", "content": user_message}
                 ],
                 temperature=0.0,
-                max_tokens=500
+                max_tokens=1500  # Erhöht von 500: Für vollständige JSON-Responses mit langen Prompts
             )
 
             nemotron_reply = response.choices[0].message.content.strip() if response.choices[0].message.content else ""
