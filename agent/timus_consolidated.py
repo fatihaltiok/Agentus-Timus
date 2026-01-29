@@ -633,8 +633,21 @@ class BaseAgent:
 
     def _parse_action(self, text: str) -> Tuple[Optional[dict], Optional[str]]:
         """Extrahiert Action (FIX: Nur erste bei multiple JSON)."""
-        # Zeilenweise suchen
-        for line in text.strip().split('\n'):
+        text = text.strip()
+
+        # PRIORITÄT 1: Versuche direktes JSON-Parsing für mehrzeiliges/verschachteltes JSON (Nemotron)
+        if text.startswith('{') and text.endswith('}'):
+            try:
+                data = json.loads(text)
+                if "action" in data:
+                    return data["action"], None
+                if "method" in data:
+                    return data, None
+            except json.JSONDecodeError:
+                pass  # Fallback zu anderen Methoden
+
+        # PRIORITÄT 2: Zeilenweise suchen (einzeiliges JSON)
+        for line in text.split('\n'):
             line = line.strip()
             if line.startswith('{') and line.endswith('}'):
                 try:
@@ -645,15 +658,15 @@ class BaseAgent:
                         return data, None
                 except json.JSONDecodeError:
                     continue
-        
-        # Regex Fallback
+
+        # PRIORITÄT 3: Regex Fallback für komplexere Fälle
         patterns = [
             r'```json\s*([\s\S]*?)\s*```',
             r'Action:\s*(\{[\s\S]*?\})\s*(?:\n|$)',
             r'(\{[^{}]*"method"[^{}]*\})',
             r'(\{[^{}]+\})'
         ]
-        
+
         for pattern in patterns:
             match = re.search(pattern, text, re.DOTALL)
             if match:
@@ -666,7 +679,7 @@ class BaseAgent:
                         return data, None
                 except:
                     continue
-        
+
         return None, "Kein JSON gefunden"
 
     async def run(self, task: str) -> str:
@@ -840,14 +853,25 @@ Gib NUR das Action-JSON zurück!"""
                 max_tokens=500
             )
 
-            nemotron_reply = response.choices[0].message.content.strip()
-            log.info(f"🧠 Nemotron: {nemotron_reply[:100]}...")
+            nemotron_reply = response.choices[0].message.content.strip() if response.choices[0].message.content else ""
+
+            if not nemotron_reply:
+                log.warning("⚠️ Nemotron gab leeren Response zurück (möglicherweise OpenRouter Rate Limit). Fallback zu direktem Call.")
+                return await self._call_tool("generate_image", {
+                    "prompt": image_prompt,
+                    "size": size,
+                    "quality": quality
+                })
+
+            log.info(f"🧠 Nemotron Output ({len(nemotron_reply)} chars):\n{nemotron_reply[:500]}")
 
             # Parse Action aus Nemotron Response
             action, err = self._parse_action(nemotron_reply)
 
             if not action:
-                log.warning(f"Nemotron Action-Parse fehlgeschlagen: {err}, Fallback zu direktem Call")
+                log.warning(f"❌ Nemotron Action-Parse fehlgeschlagen: {err}")
+                log.debug(f"Nemotron vollständiger Output: {nemotron_reply}")
+                log.info("→ Fallback zu direktem Tool-Call")
                 return await self._call_tool("generate_image", {
                     "prompt": image_prompt,
                     "size": size,
