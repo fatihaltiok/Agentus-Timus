@@ -8,9 +8,9 @@ from bs4 import BeautifulSoup
 from jsonrpcserver import method, Success, Error
 
 from tools.universal_tool_caller import register_tool
+from utils.openai_compat import prepare_openai_params
 # KORREKTUR: Wir importieren nicht mehr `browser_session_manager`, sondern nur noch die Helferfunktion.
 from tools.shared_context import (
-from utils.openai_compat import prepare_openai_params
     openai_client,
     ensure_browser_initialized,
     log

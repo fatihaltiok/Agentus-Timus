@@ -42,6 +42,7 @@ except NameError:
     PROJECT_ROOT = Path.cwd()
 
 from dotenv import load_dotenv
+from utils.openai_compat import prepare_openai_params
 
 # [PERSONALITY_PATCH] - Import
 try:
