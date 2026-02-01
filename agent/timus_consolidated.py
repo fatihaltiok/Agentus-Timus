@@ -482,6 +482,10 @@ class BaseAgent:
         self.cached_screen_state: Optional[Dict] = None
         self.last_screen_analysis_time: float = 0
 
+        # ROI (Region of Interest) Support (v2.0)
+        self.roi_stack: List[Dict] = []  # Stack für verschachtelte ROIs
+        self.current_roi: Optional[Dict] = None
+
         if self.use_screen_change_gate:
             log.info(f"✅ Screen-Change-Gate AKTIV für {self.__class__.__name__}")
 
@@ -715,6 +719,317 @@ class BaseAgent:
             log.error(f"Screen-State Fehler: {e}")
             return None
 
+    # ==================================================================
+    # STRUKTURIERTE NAVIGATION (v2.0)
+    # ==================================================================
+
+    async def _analyze_current_screen(self) -> Optional[Dict]:
+        """
+        Analysiert den aktuellen Screen und gibt Elemente zurück.
+
+        Nutzt Auto-Discovery:
+        1. OCR für Text-Elemente
+        2. SOM für interaktive Elemente (Buttons, Links, etc.)
+
+        Returns:
+            Dict mit {"screen_id": str, "elements": List[Dict]} oder None
+        """
+        try:
+            elements = []
+
+            # 1. OCR: Alle Text-Elemente finden
+            ocr_result = await self._call_tool("get_all_screen_text", {})
+            if ocr_result and ocr_result.get("texts"):
+                for i, text_item in enumerate(ocr_result["texts"][:20]):  # Max 20 Text-Elemente
+                    if isinstance(text_item, dict):
+                        elements.append({
+                            "name": f"text_{i}",
+                            "type": "text",
+                            "text": text_item.get("text", ""),
+                            "x": text_item.get("x", 0),
+                            "y": text_item.get("y", 0),
+                            "confidence": text_item.get("confidence", 0.0)
+                        })
+
+            # 2. SOM: Interaktive Elemente finden (Buttons, Links, etc.)
+            # TODO: Wenn SOM-Tool verfügbar ist, hier nutzen
+            # som_result = await self._call_tool("get_clickable_elements", {})
+
+            if not elements:
+                log.debug("📋 Screen-Analyse: Keine Elemente gefunden")
+                return None
+
+            log.info(f"📋 Screen-Analyse: {len(elements)} Elemente gefunden")
+
+            return {
+                "screen_id": "current_screen",
+                "elements": elements,
+                "anchors": []
+            }
+
+        except Exception as e:
+            log.error(f"❌ Screen-Analyse fehlgeschlagen: {e}")
+            return None
+
+    async def _create_navigation_plan_with_llm(self, task: str, screen_state: Dict) -> Optional[Dict]:
+        """
+        Erstellt einen ActionPlan basierend auf Task und Screen-State mit LLM.
+
+        Args:
+            task: Die zu erfüllende Aufgabe
+            screen_state: Der analysierte Screen-State mit Elementen
+
+        Returns:
+            ActionPlan Dict oder None bei Fehler
+        """
+        try:
+            # Extrahiere verfügbare Elemente
+            elements = screen_state.get("elements", [])
+            if not elements:
+                log.warning("⚠️ Keine Elemente für ActionPlan verfügbar")
+                return None
+
+            # Erstelle Element-Liste mit Text-Content
+            element_list = []
+            for i, elem in enumerate(elements[:15]):  # Max 15 Elemente
+                text = elem.get("text", "").strip()
+                if text:  # Nur Elemente mit Text
+                    element_list.append({
+                        "name": elem.get("name", f"elem_{i}"),
+                        "text": text[:50],  # Kürze lange Texte
+                        "x": elem.get("x", 0),
+                        "y": elem.get("y", 0),
+                        "type": elem.get("type", "unknown")
+                    })
+
+            if not element_list:
+                log.warning("⚠️ Keine Elemente mit Text gefunden")
+                return None
+
+            # Vereinfachtes Prompt (weniger komplex)
+            element_summary = "\n".join([
+                f"{i+1}. {e['name']}: \"{e['text']}\" at ({e['x']}, {e['y']})"
+                for i, e in enumerate(element_list)
+            ])
+
+            prompt = f"""Erstelle einen ACTION-PLAN für diese Aufgabe:
+
+AUFGABE: {task}
+
+VERFÜGBARE ELEMENTE:
+{element_summary}
+
+BEISPIEL ACTION-PLAN:
+{{
+  "task_id": "search_task",
+  "description": "Google suchen nach Python",
+  "steps": [
+    {{"op": "type", "target": "elem_2", "value": "Python", "retries": 2}},
+    {{"op": "click", "target": "elem_5", "retries": 2}}
+  ]
+}}
+
+Antworte NUR mit JSON (keine Markdown, keine Erklärung):"""
+
+            # LLM-Call (ohne Vision) - nutze Nemotron für ActionPlan
+            # Nemotron ist speziell für strukturierte JSON-Outputs trainiert!
+            old_model = self.model
+            old_provider = self.provider
+
+            # Temporär auf Nemotron wechseln (bestes Modell für JSON-Generation)
+            self.model = os.getenv("REASONING_MODEL", "nvidia/nemotron-3-nano-30b-a3b")
+            self.provider = ModelProvider.OPENROUTER
+
+            # Aktiviere Reasoning für bessere ActionPlan-Qualität
+            old_thinking = os.environ.get("NEMOTRON_ENABLE_THINKING")
+            os.environ["NEMOTRON_ENABLE_THINKING"] = "true"
+
+            try:
+                response = await self._call_llm([
+                    {"role": "user", "content": prompt}
+                ])
+            finally:
+                # Stelle Original-Modell wieder her
+                self.model = old_model
+                self.provider = old_provider
+                if old_thinking is not None:
+                    os.environ["NEMOTRON_ENABLE_THINKING"] = old_thinking
+                else:
+                    os.environ.pop("NEMOTRON_ENABLE_THINKING", None)
+
+            # Extrahiere JSON (robuster)
+            import re
+
+            # Entferne Markdown-Code-Blocks
+            response = re.sub(r'```json\s*', '', response)
+            response = re.sub(r'```\s*', '', response)
+
+            # Finde JSON
+            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response, re.DOTALL)
+            if not json_match:
+                log.warning(f"⚠️ Kein JSON gefunden in Response: {response[:200]}")
+                return None
+
+            plan = json.loads(json_match.group(0))
+
+            # Validiere Plan
+            if not plan.get("steps") or not isinstance(plan["steps"], list):
+                log.warning("⚠️ ActionPlan hat keine Steps")
+                return None
+
+            # Konvertiere zu kompatiblem Format
+            # Tool erwartet: {"goal": str, "screen_id": str, "steps": [...]}
+            compatible_plan = {
+                "goal": plan.get("description", task),
+                "screen_id": screen_state.get("screen_id", "current_screen"),
+                "steps": []
+            }
+
+            for step in plan["steps"]:
+                # Konvertiere Step zu kompatiblem Format
+                compatible_step = {
+                    "op": step.get("op", "click"),
+                    "target": step.get("target", ""),
+                    "params": {},
+                    "verify_before": [],
+                    "verify_after": [],
+                    "retries": step.get("retries", 2)
+                }
+
+                # Füge value zu params hinzu (für type-operation)
+                if "value" in step:
+                    compatible_step["params"]["text"] = step["value"]
+
+                compatible_plan["steps"].append(compatible_step)
+
+            log.info(f"📝 ActionPlan erstellt: {compatible_plan['goal']} ({len(compatible_plan['steps'])} Steps)")
+            return compatible_plan
+
+        except json.JSONDecodeError as e:
+            log.error(f"❌ JSON-Parsing fehlgeschlagen: {e}")
+            return None
+        except Exception as e:
+            log.error(f"❌ ActionPlan-Erstellung fehlgeschlagen: {e}")
+            return None
+
+    async def _try_structured_navigation(self, task: str) -> Optional[Dict]:
+        """
+        Versucht strukturierte Navigation mit Screen-Contract-Tool.
+
+        Strategie:
+        1. Analysiere aktuellen Screen (Screen-State holen)
+        2. Erstelle ActionPlan mit LLM basierend auf Screen-State + Task
+        3. Führe ActionPlan aus
+        4. Bei Fehler → None (Agent nutzt regulären Flow)
+
+        Returns:
+            Dict mit {"success": bool, "result": str, "state": Dict} oder None bei Fehler
+        """
+        try:
+            log.info("📋 Versuche strukturierte Navigation...")
+
+            # 1. Screen-State analysieren
+            screen_state = await self._analyze_current_screen()
+            if not screen_state or not screen_state.get("elements"):
+                log.info("⚠️ Keine Elemente gefunden - nutze regulären Flow")
+                return None
+
+            # 2. ActionPlan mit LLM erstellen
+            action_plan = await self._create_navigation_plan_with_llm(task, screen_state)
+            if not action_plan:
+                log.info("⚠️ ActionPlan-Erstellung fehlgeschlagen - nutze regulären Flow")
+                return None
+
+            # 3. ActionPlan ausführen
+            log.info(f"🎯 Führe ActionPlan aus: {action_plan.get('goal', 'N/A')}")
+            result = await self._call_tool("execute_action_plan", {"plan_dict": action_plan})
+
+            if result and result.get("success"):
+                return {
+                    "success": True,
+                    "result": action_plan.get("goal", "Aufgabe erfolgreich"),
+                    "state": screen_state
+                }
+            else:
+                log.warning(f"⚠️ ActionPlan fehlgeschlagen: {result.get('error', 'Unknown')}")
+                return None
+
+        except Exception as e:
+            log.error(f"❌ Strukturierte Navigation fehlgeschlagen: {e}")
+            return None
+
+    # ==================================================================
+    # ROI (REGION OF INTEREST) MANAGEMENT (v2.0)
+    # ==================================================================
+
+    def _set_roi(self, x: int, y: int, width: int, height: int, name: str = "custom"):
+        """
+        Setzt eine Region of Interest für Screen-Change-Gate.
+
+        Args:
+            x, y: Top-left Koordinaten
+            width, height: Dimensionen
+            name: ROI-Name für Debugging
+        """
+        roi = {"x": x, "y": y, "width": width, "height": height, "name": name}
+        self.current_roi = roi
+        log.info(f"🔲 ROI gesetzt: {name} ({x},{y} {width}x{height})")
+
+    def _clear_roi(self):
+        """Löscht die aktuelle ROI."""
+        self.current_roi = None
+        log.info("🔲 ROI gelöscht")
+
+    def _push_roi(self, x: int, y: int, width: int, height: int, name: str = "custom"):
+        """Fügt eine ROI zum Stack hinzu (für verschachtelte ROIs)."""
+        if self.current_roi:
+            self.roi_stack.append(self.current_roi)
+        self._set_roi(x, y, width, height, name)
+
+    def _pop_roi(self):
+        """Entfernt die aktuelle ROI und stellt die vorherige wieder her."""
+        if self.roi_stack:
+            self.current_roi = self.roi_stack.pop()
+            log.info(f"🔲 ROI wiederhergestellt: {self.current_roi['name']}")
+        else:
+            self._clear_roi()
+
+    async def _detect_dynamic_ui_and_set_roi(self, task: str) -> bool:
+        """
+        Erkennt dynamische UIs und setzt automatisch passende ROI.
+
+        Args:
+            task: Die aktuelle Aufgabe
+
+        Returns:
+            True wenn ROI gesetzt wurde, False sonst
+        """
+        task_lower = task.lower()
+
+        # Google-Erkennung
+        if "google" in task_lower and ("such" in task_lower or "search" in task_lower):
+            # ROI auf Suchleiste beschränken (nicht Suchergebnisse/Ads)
+            self._set_roi(x=200, y=100, width=800, height=150, name="google_searchbar")
+            log.info("🔍 Dynamische UI erkannt: Google Search - ROI auf Suchleiste gesetzt")
+            return True
+
+        # Booking.com-Erkennung
+        elif "booking" in task_lower:
+            # ROI auf Haupt-Suchformular
+            self._set_roi(x=100, y=150, width=1000, height=400, name="booking_search_form")
+            log.info("🏨 Dynamische UI erkannt: Booking.com - ROI auf Suchformular gesetzt")
+            return True
+
+        # Amazon-Erkennung
+        elif "amazon" in task_lower:
+            self._set_roi(x=200, y=50, width=900, height=200, name="amazon_search_bar")
+            log.info("🛒 Dynamische UI erkannt: Amazon - ROI auf Suchleiste gesetzt")
+            return True
+
+        # Weitere dynamische UIs können hier hinzugefügt werden
+
+        return False
+
     async def _call_llm(self, messages: List[Dict]) -> str:
         """Routet zum richtigen Provider."""
         try:
@@ -858,18 +1173,46 @@ class BaseAgent:
     async def run(self, task: str) -> str:
         """Führt Agent aus."""
         log.info(f"▶️ {self.__class__.__name__} ({self.provider.value})")
-        
+
+        # ROI-Management: Erkenne dynamische UIs und setze ROI
+        roi_set = await self._detect_dynamic_ui_and_set_roi(task)
+
+        # Versuche strukturierte Navigation ZUERST (nur für Screen-Tasks)
+        # Erkenne ob Task Screen-Navigation erfordert
+        task_lower = task.lower()
+        is_navigation_task = any(keyword in task_lower for keyword in [
+            "browser", "website", "url", "klick", "click", "such", "search",
+            "booking", "google", "amazon", "navigate", "öffne", "gehe zu"
+        ])
+
+        if is_navigation_task:
+            structured_result = await self._try_structured_navigation(task)
+            if structured_result and structured_result.get("success"):
+                log.info(f"✅ Strukturierte Navigation erfolgreich: {structured_result['result']}")
+                # Clear ROI nach erfolgreichem Task
+                if roi_set:
+                    self._clear_roi()
+                return structured_result["result"]
+            else:
+                log.info("📋 Strukturierte Navigation nicht möglich - nutze regulären Flow")
+
         messages = [
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": task}
         ]
-        
+
         for step in range(1, self.max_iterations + 1):
             reply = await self._call_llm(messages)
             
             if reply.startswith("Error"):
+                # Clear ROI bei Error
+                if roi_set:
+                    self._clear_roi()
                 return reply
             if "Final Answer:" in reply:
+                # Clear ROI bei Success
+                if roi_set:
+                    self._clear_roi()
                 return reply.split("Final Answer:")[1].strip()
             
             action, err = self._parse_action(reply)
@@ -882,7 +1225,11 @@ class BaseAgent:
             obs = await self._call_tool(action.get("method", ""), action.get("params", {}))
             self._handle_file_artifacts(obs)
             messages.append({"role": "user", "content": f"Observation: {json.dumps(self._sanitize_observation(obs), ensure_ascii=False)}"})
-        
+
+        # Clear ROI am Ende (auch bei Max Iterations)
+        if roi_set:
+            self._clear_roi()
+
         return "Limit erreicht."
 
 
@@ -1405,10 +1752,31 @@ BEISPIEL ACTION-PLAN:
 
 Antworte NUR mit JSON (keine Markdown, keine Erklärung):"""
 
-            # LLM-Call (ohne Vision)
-            response = await self._call_llm([
-                {"role": "user", "content": prompt}
-            ])
+            # LLM-Call (ohne Vision) - nutze Nemotron für ActionPlan
+            # Nemotron ist speziell für strukturierte JSON-Outputs trainiert!
+            old_model = self.model
+            old_provider = self.provider
+
+            # Temporär auf Nemotron wechseln (bestes Modell für JSON-Generation)
+            self.model = os.getenv("REASONING_MODEL", "nvidia/nemotron-3-nano-30b-a3b")
+            self.provider = ModelProvider.OPENROUTER
+
+            # Aktiviere Reasoning für bessere ActionPlan-Qualität
+            old_thinking = os.environ.get("NEMOTRON_ENABLE_THINKING")
+            os.environ["NEMOTRON_ENABLE_THINKING"] = "true"
+
+            try:
+                response = await self._call_llm([
+                    {"role": "user", "content": prompt}
+                ])
+            finally:
+                # Stelle Original-Modell wieder her
+                self.model = old_model
+                self.provider = old_provider
+                if old_thinking is not None:
+                    os.environ["NEMOTRON_ENABLE_THINKING"] = old_thinking
+                else:
+                    os.environ.pop("NEMOTRON_ENABLE_THINKING", None)
 
             # Extrahiere JSON (robuster)
             import re
