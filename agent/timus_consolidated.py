@@ -454,28 +454,36 @@ class BaseAgent:
     """Basisklasse für alle Agenten mit Multi-Provider Support."""
     
     def __init__(
-        self, 
-        system_prompt_template: str, 
-        tools_description_string: str, 
-        max_iterations: int = 30, 
+        self,
+        system_prompt_template: str,
+        tools_description_string: str,
+        max_iterations: int = 30,
         agent_type: str = "executor"
     ):
         self.max_iterations = max_iterations
         self.agent_type = agent_type
         self.http_client = httpx.AsyncClient(timeout=300.0)
         self.recent_actions = []
-        
+
         # Multi-Provider Setup
         self.provider_client = get_provider_client()
         self.model, self.provider = AgentModelConfig.get_model_and_provider(agent_type)
-        
+
         log.info(f"🔹 {self.__class__.__name__} | {self.model} | {self.provider.value}")
-        
+
         self.system_prompt = (
             system_prompt_template
             .replace("{current_date}", datetime.now().strftime("%d.%m.%Y"))
             .replace("{tools_description}", tools_description_string)
         )
+
+        # Screen-Change-Gate Support (v1.0)
+        self.use_screen_change_gate = os.getenv("USE_SCREEN_CHANGE_GATE", "false").lower() == "true"
+        self.cached_screen_state: Optional[Dict] = None
+        self.last_screen_analysis_time: float = 0
+
+        if self.use_screen_change_gate:
+            log.info(f"✅ Screen-Change-Gate AKTIV für {self.__class__.__name__}")
 
     def _sanitize_observation(self, obs: Any) -> Any:
         """Kürzt lange Observations."""
@@ -491,17 +499,43 @@ class BaseAgent:
             return obs[:2000] + "..."
         return obs
 
-    def should_skip_action(self, action_name: str, params: dict) -> bool:
-        """Loop-Detection."""
+    def should_skip_action(self, action_name: str, params: dict) -> Tuple[bool, Optional[str]]:
+        """
+        Loop-Detection mit verbessertem Handling.
+
+        Returns:
+            Tuple[bool, str]: (should_skip, reason)
+                - should_skip: True wenn Action übersprungen werden soll
+                - reason: Grund für Skip (z.B. "Loop detected 3x")
+        """
         action_key = f"{action_name}:{json.dumps(params, sort_keys=True)}"
         count = self.recent_actions.count(action_key)
+
+        # Count ist: Wie oft ist dieser Key BEREITS in der Liste
+        # count=0: Erster Call
+        # count=1: Zweiter Call (Loop-Warnung)
+        # count=2: Dritter Call (Kritisch)
+
         if count >= 2:
-            log.warning(f"⚠️ Loop ({count}x): {action_name}")
-            return True
+            # Kritischer Loop (3. Call): Action überspringen
+            reason = f"Loop detected: {action_name} wurde bereits {count+1}x aufgerufen mit denselben Parametern. KRITISCH: Aktion wird übersprungen. Versuche anderen Ansatz!"
+            log.error(f"❌ Kritischer Loop ({count+1}x): {action_name} - Aktion wird übersprungen")
+            # NICHT appenden - Action wird nicht ausgeführt
+            return True, reason
+
+        elif count >= 1:
+            # Loop-Warnung (2. Call): Action ausführen, aber warnen
+            reason = f"Loop detected: {action_name} wurde bereits {count+1}x aufgerufen mit denselben Parametern. Versuche andere Parameter oder anderen Ansatz."
+            log.warning(f"⚠️ Loop ({count+1}x): {action_name} - Warnung an Agent")
+            self.recent_actions.append(action_key)
+            return False, reason
+
+        # Kein Loop (1. Call)
         self.recent_actions.append(action_key)
         if len(self.recent_actions) > 20:
             self.recent_actions.pop(0)
-        return False
+
+        return False, None
 
     def _refine_tool_call(self, method: str, params: dict) -> Tuple[str, dict]:
         """Korrigiert Tool-Aufrufe."""
@@ -551,24 +585,135 @@ class BaseAgent:
     async def _call_tool(self, method: str, params: dict) -> dict:
         """Ruft Tool via MCP auf."""
         method, params = self._refine_tool_call(method, params)
-        if self.should_skip_action(method, params):
-            return {"skipped": True, "reason": "Loop"}
-        
+
+        # Loop-Detection mit Reason
+        should_skip, loop_reason = self.should_skip_action(method, params)
+
+        if should_skip:
+            # Kritischer Loop → Aktion überspringen
+            log.error(f"❌ Tool-Call übersprungen: {method} (Loop)")
+            return {"skipped": True, "reason": loop_reason or "Loop detected"}
+
+        if loop_reason:
+            # Warnung (aber Action wird ausgeführt)
+            log.warning(f"⚠️ Loop-Warnung für {method}: {loop_reason}")
+
         log.info(f"📡 {method} -> {str(params)[:100]}")
-        
+
         try:
             resp = await self.http_client.post(
                 MCP_URL,
                 json={"jsonrpc": "2.0", "method": method, "params": params, "id": "1"}
             )
             data = resp.json()
+
             if "result" in data:
-                return data["result"]
+                result = data["result"]
+
+                # Füge Loop-Warnung zur Response hinzu
+                if loop_reason:
+                    if isinstance(result, dict):
+                        result["_loop_warning"] = loop_reason
+                    else:
+                        # Wenn result kein Dict ist, wrappen wir es
+                        result = {
+                            "value": result,
+                            "_loop_warning": loop_reason
+                        }
+
+                return result
+
             if "error" in data:
                 return {"error": str(data["error"])}
             return {"error": "Invalid response"}
         except Exception as e:
             return {"error": str(e)}
+
+    async def _should_analyze_screen(self, roi: Optional[Dict] = None, force: bool = False) -> bool:
+        """
+        Screen-Change-Gate: Prüft ob Screen-Analyse nötig ist.
+
+        Args:
+            roi: Optional - Region of Interest (nur bestimmten Bereich prüfen)
+            force: Analyse erzwingen (Gate überspringen)
+
+        Returns:
+            True wenn Analyse nötig, False wenn Cache genutzt werden kann
+        """
+        if not self.use_screen_change_gate or force:
+            return True  # Immer analysieren wenn Gate deaktiviert oder force=True
+
+        try:
+            # Screen-Change-Check
+            params = {}
+            if roi:
+                params["roi"] = roi
+
+            result = await self._call_tool("should_analyze_screen", params)
+
+            if result and result.get("changed"):
+                log.debug(f"🔄 Screen geändert - {result.get('info', {}).get('reason', 'unknown')}")
+                return True
+            else:
+                log.debug(f"⏭️ Screen unverändert - Cache nutzen")
+                return False
+
+        except Exception as e:
+            log.warning(f"Screen-Change-Gate Fehler: {e}, analysiere sicherheitshalber")
+            return True  # Bei Fehler sicherheitshalber analysieren
+
+    async def _get_screen_state(
+        self,
+        screen_id: str = "current",
+        anchor_specs: Optional[List[Dict]] = None,
+        element_specs: Optional[List[Dict]] = None,
+        force_analysis: bool = False
+    ) -> Optional[Dict]:
+        """
+        Holt ScreenState (mit Screen-Change-Gate Optimization).
+
+        Args:
+            screen_id: Screen-Identifikator
+            anchor_specs: Anker-Spezifikationen
+            element_specs: Element-Spezifikationen
+            force_analysis: Analyse erzwingen (Cache überspringen)
+
+        Returns:
+            ScreenState als Dict oder None bei Fehler
+        """
+        # Prüfe ob Analyse nötig
+        if not force_analysis and not await self._should_analyze_screen():
+            # Cache nutzen
+            if self.cached_screen_state:
+                log.debug("✅ Nutze gecachten ScreenState")
+                return self.cached_screen_state
+
+        # Screen analysieren
+        try:
+            import time
+            self.last_screen_analysis_time = time.time()
+
+            params = {
+                "screen_id": screen_id,
+                "anchor_specs": anchor_specs or [],
+                "element_specs": element_specs or [],
+                "extract_ocr": False
+            }
+
+            result = await self._call_tool("analyze_screen_state", params)
+
+            if result and not result.get("error"):
+                # Cache aktualisieren
+                self.cached_screen_state = result
+                log.debug(f"✅ ScreenState analysiert: {len(result.get('elements', []))} Elemente")
+                return result
+            else:
+                log.warning(f"Screen-Analyse fehlgeschlagen: {result.get('error', 'unknown')}")
+                return None
+
+        except Exception as e:
+            log.error(f"Screen-State Fehler: {e}")
+            return None
 
     async def _call_llm(self, messages: List[Dict]) -> str:
         """Routet zum richtigen Provider."""
@@ -978,10 +1123,10 @@ class MetaAgent(BaseAgent):
 
 class VisualAgent(BaseAgent):
     """Visual Agent mit Screenshot-Analyse."""
-    
+
     def __init__(self, tools_description_string: str):
         super().__init__(VISUAL_SYSTEM_PROMPT, tools_description_string, 30, "visual")
-        
+
         try:
             import mss
             from PIL import Image
@@ -990,9 +1135,13 @@ class VisualAgent(BaseAgent):
         except ImportError:
             self.mss = None
             self.Image = None
-        
+
         self.history = []
         self.last_clicked_element_type = None
+
+        # ROI (Region of Interest) für dynamische UIs
+        self.roi_stack: List[Dict] = []  # Stack für verschachtelte ROIs
+        self.current_roi: Optional[Dict] = None
 
     def _get_screenshot_as_base64(self) -> str:
         if not self.mss or not self.Image:
@@ -1084,15 +1233,333 @@ class VisualAgent(BaseAgent):
                 )
                 return resp.json()["content"][0]["text"].strip()
 
+    def _set_roi(self, x: int, y: int, width: int, height: int, name: str = "custom"):
+        """
+        Setzt eine Region of Interest für Screen-Change-Gate.
+
+        Args:
+            x, y: Top-left Koordinaten
+            width, height: Dimensionen
+            name: ROI-Name für Debugging
+        """
+        roi = {"x": x, "y": y, "width": width, "height": height, "name": name}
+        self.current_roi = roi
+        log.info(f"🔲 ROI gesetzt: {name} ({x},{y} {width}x{height})")
+
+    def _clear_roi(self):
+        """Löscht die aktuelle ROI."""
+        self.current_roi = None
+        log.info("🔲 ROI gelöscht")
+
+    def _push_roi(self, x: int, y: int, width: int, height: int, name: str = "custom"):
+        """Fügt eine ROI zum Stack hinzu (für verschachtelte ROIs)."""
+        if self.current_roi:
+            self.roi_stack.append(self.current_roi)
+        self._set_roi(x, y, width, height, name)
+
+    def _pop_roi(self):
+        """Entfernt die aktuelle ROI und stellt die vorherige wieder her."""
+        if self.roi_stack:
+            self.current_roi = self.roi_stack.pop()
+            log.info(f"🔲 ROI wiederhergestellt: {self.current_roi['name']}")
+        else:
+            self._clear_roi()
+
+    async def _detect_dynamic_ui_and_set_roi(self, task: str) -> bool:
+        """
+        Erkennt dynamische UIs und setzt automatisch passende ROI.
+
+        Args:
+            task: Die aktuelle Aufgabe
+
+        Returns:
+            True wenn ROI gesetzt wurde, False sonst
+        """
+        task_lower = task.lower()
+
+        # Google-Erkennung
+        if "google" in task_lower and ("such" in task_lower or "search" in task_lower):
+            # ROI auf Suchleiste beschränken (nicht Suchergebnisse/Ads)
+            # Typische Google-Suchleiste: zentriert, obere Hälfte
+            self._set_roi(x=200, y=100, width=800, height=150, name="google_searchbar")
+            log.info("🔍 Dynamische UI erkannt: Google Search - ROI auf Suchleiste gesetzt")
+            return True
+
+        # Booking.com-Erkennung
+        elif "booking" in task_lower:
+            # ROI auf Haupt-Suchformular
+            self._set_roi(x=100, y=150, width=1000, height=400, name="booking_search_form")
+            log.info("🏨 Dynamische UI erkannt: Booking.com - ROI auf Suchformular gesetzt")
+            return True
+
+        # Weitere dynamische UIs können hier hinzugefügt werden
+        # z.B. Amazon, Twitter, etc.
+
+        return False
+
+    async def _analyze_current_screen(self) -> Optional[Dict]:
+        """
+        Analysiert den aktuellen Screen und gibt Elemente zurück.
+
+        Nutzt Auto-Discovery:
+        1. OCR für Text-Elemente
+        2. SOM für interaktive Elemente (Buttons, Links, etc.)
+
+        Returns:
+            Dict mit {"screen_id": str, "elements": List[Dict]} oder None
+        """
+        try:
+            elements = []
+
+            # 1. OCR: Alle Text-Elemente finden
+            ocr_result = await self._call_tool("get_all_screen_text", {})
+            if ocr_result and ocr_result.get("texts"):
+                for i, text_item in enumerate(ocr_result["texts"][:20]):  # Max 20 Text-Elemente
+                    if isinstance(text_item, dict):
+                        elements.append({
+                            "name": f"text_{i}",
+                            "type": "text",
+                            "text": text_item.get("text", ""),
+                            "x": text_item.get("x", 0),
+                            "y": text_item.get("y", 0),
+                            "confidence": text_item.get("confidence", 0.0)
+                        })
+
+            # 2. SOM: Interaktive Elemente finden (Buttons, Links, etc.)
+            # TODO: Wenn SOM-Tool verfügbar ist, hier nutzen
+            # som_result = await self._call_tool("get_clickable_elements", {})
+
+            if not elements:
+                log.debug("📋 Screen-Analyse: Keine Elemente gefunden")
+                return None
+
+            log.info(f"📋 Screen-Analyse: {len(elements)} Elemente gefunden")
+
+            return {
+                "screen_id": "current_screen",
+                "elements": elements,
+                "anchors": []
+            }
+
+        except Exception as e:
+            log.error(f"❌ Screen-Analyse fehlgeschlagen: {e}")
+            return None
+
+    async def _create_navigation_plan_with_llm(self, task: str, screen_state: Dict) -> Optional[Dict]:
+        """
+        Erstellt einen ActionPlan basierend auf Task und Screen-State mit LLM.
+
+        Args:
+            task: Die zu erfüllende Aufgabe
+            screen_state: Der analysierte Screen-State mit Elementen
+
+        Returns:
+            ActionPlan Dict oder None bei Fehler
+        """
+        try:
+            # Extrahiere verfügbare Elemente
+            elements = screen_state.get("elements", [])
+            if not elements:
+                log.warning("⚠️ Keine Elemente für ActionPlan verfügbar")
+                return None
+
+            # Erstelle Element-Liste mit Text-Content
+            element_list = []
+            for i, elem in enumerate(elements[:15]):  # Max 15 Elemente
+                text = elem.get("text", "").strip()
+                if text:  # Nur Elemente mit Text
+                    element_list.append({
+                        "name": elem.get("name", f"elem_{i}"),
+                        "text": text[:50],  # Kürze lange Texte
+                        "x": elem.get("x", 0),
+                        "y": elem.get("y", 0),
+                        "type": elem.get("type", "unknown")
+                    })
+
+            if not element_list:
+                log.warning("⚠️ Keine Elemente mit Text gefunden")
+                return None
+
+            # Vereinfachtes Prompt (weniger komplex)
+            element_summary = "\n".join([
+                f"{i+1}. {e['name']}: \"{e['text']}\" at ({e['x']}, {e['y']})"
+                for i, e in enumerate(element_list)
+            ])
+
+            prompt = f"""Erstelle einen ACTION-PLAN für diese Aufgabe:
+
+AUFGABE: {task}
+
+VERFÜGBARE ELEMENTE:
+{element_summary}
+
+BEISPIEL ACTION-PLAN:
+{{
+  "task_id": "search_task",
+  "description": "Google suchen nach Python",
+  "steps": [
+    {{"op": "type", "target": "elem_2", "value": "Python", "retries": 2}},
+    {{"op": "click", "target": "elem_5", "retries": 2}}
+  ]
+}}
+
+Antworte NUR mit JSON (keine Markdown, keine Erklärung):"""
+
+            # LLM-Call (ohne Vision)
+            response = await self._call_llm([
+                {"role": "user", "content": prompt}
+            ])
+
+            # Extrahiere JSON (robuster)
+            import re
+
+            # Entferne Markdown-Code-Blocks
+            response = re.sub(r'```json\s*', '', response)
+            response = re.sub(r'```\s*', '', response)
+
+            # Finde JSON
+            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response, re.DOTALL)
+            if not json_match:
+                log.warning(f"⚠️ Kein JSON gefunden in Response: {response[:200]}")
+                return None
+
+            plan = json.loads(json_match.group(0))
+
+            # Validiere Plan
+            if not plan.get("steps") or not isinstance(plan["steps"], list):
+                log.warning("⚠️ ActionPlan hat keine Steps")
+                return None
+
+            # Konvertiere zu kompatiblem Format
+            # Tool erwartet: {"goal": str, "screen_id": str, "steps": [...]}
+            compatible_plan = {
+                "goal": plan.get("description", task),
+                "screen_id": screen_state.get("screen_id", "current_screen"),
+                "steps": []
+            }
+
+            for step in plan["steps"]:
+                # Konvertiere Step zu kompatiblem Format
+                compatible_step = {
+                    "op": step.get("op", "click"),
+                    "target": step.get("target", ""),
+                    "params": {},
+                    "verify_before": [],
+                    "verify_after": [],
+                    "retries": step.get("retries", 2)
+                }
+
+                # Füge value zu params hinzu (für type-operation)
+                if "value" in step:
+                    compatible_step["params"]["text"] = step["value"]
+
+                compatible_plan["steps"].append(compatible_step)
+
+            log.info(f"📝 ActionPlan erstellt: {compatible_plan['goal']} ({len(compatible_plan['steps'])} Steps)")
+            return compatible_plan
+
+        except json.JSONDecodeError as e:
+            log.error(f"❌ JSON-Parsing fehlgeschlagen: {e}")
+            return None
+        except Exception as e:
+            log.error(f"❌ ActionPlan-Erstellung fehlgeschlagen: {e}")
+            return None
+
+    async def _try_structured_navigation(self, task: str) -> Optional[Dict]:
+        """
+        Versucht strukturierte Navigation mit Screen-Contract-Tool.
+
+        Strategie:
+        1. Analysiere aktuellen Screen (Screen-State holen)
+        2. Erstelle ActionPlan mit LLM basierend auf Screen-State + Task
+        3. Führe ActionPlan aus
+        4. Bei Fehler → Fallback zu Vision
+
+        Returns:
+            Dict mit {"success": bool, "result": str, "state": Dict} oder None bei Fehler
+        """
+        try:
+            log.info("📋 Versuche strukturierte Navigation...")
+
+            # 1. Screen-State analysieren
+            screen_state = await self._analyze_current_screen()
+            if not screen_state or not screen_state.get("elements"):
+                log.info("⚠️ Keine Elemente gefunden, Fallback zu Vision")
+                return None
+
+            # 2. ActionPlan mit LLM erstellen
+            action_plan = await self._create_navigation_plan_with_llm(task, screen_state)
+            if not action_plan:
+                log.info("⚠️ ActionPlan-Erstellung fehlgeschlagen, Fallback zu Vision")
+                return None
+
+            # 3. ActionPlan ausführen
+            log.info(f"🎯 Führe ActionPlan aus: {action_plan.get('description', 'N/A')}")
+            result = await self._call_tool("execute_action_plan", {"plan_dict": action_plan})
+
+            if result and result.get("success"):
+                return {
+                    "success": True,
+                    "result": action_plan.get("description", "Aufgabe erfolgreich"),
+                    "state": screen_state
+                }
+            else:
+                log.warning(f"⚠️ ActionPlan fehlgeschlagen: {result.get('error', 'Unknown')}")
+                return None
+
+        except Exception as e:
+            log.error(f"❌ Strukturierte Navigation fehlgeschlagen: {e}")
+            return None
+
     async def run(self, task: str) -> str:
         log.info(f"▶️ VisualAgent: {task}")
         self.history = [{"role": "system", "content": self.system_prompt}, {"role": "user", "content": f"AUFGABE: {task}"}]
-        
-        for _ in range(self.max_iterations):
+
+        # ROI-Management: Erkenne dynamische UIs und setze ROI
+        roi_set = await self._detect_dynamic_ui_and_set_roi(task)
+
+        # Loop-Recovery: Tracke consecutive Loops
+        consecutive_loops = 0
+        force_vision_mode = False
+
+        # NEU: Versuche strukturierte Navigation ZUERST
+        structured_result = await self._try_structured_navigation(task)
+        if structured_result and structured_result.get("success"):
+            log.info(f"✅ Strukturierte Navigation erfolgreich: {structured_result['result']}")
+            # Clear ROI nach erfolgreichem Task
+            if roi_set:
+                self._clear_roi()
+            return structured_result["result"]
+        else:
+            log.info("📸 Fallback zu Vision-basierter Navigation")
+
+        for iteration in range(self.max_iterations):
+            # Loop-Recovery: Bei zu vielen Loops → Strategy wechseln
+            if consecutive_loops >= 2:
+                log.warning(f"⚠️ Loop-Recovery: {consecutive_loops} consecutive Loops - forciere Vision-Mode")
+                force_vision_mode = True
+                consecutive_loops = 0  # Reset nach Recovery
+
+            # Screen-Change-Gate: Prüfe ob Screenshot nötig (mit ROI falls gesetzt)
+            # (nur ab 2. Iteration - erster Screenshot immer nötig)
+            if iteration > 0 and self.use_screen_change_gate and not force_vision_mode:
+                should_analyze = await self._should_analyze_screen(roi=self.current_roi)
+                if not should_analyze:
+                    log.debug(f"⏭️ Iteration {iteration+1}: Screen unverändert, überspringe Screenshot")
+                    # Nutze letzten Screenshot aus History
+                    # Kurze Pause und weiter
+                    await asyncio.sleep(0.2)
+                    continue
+
+            # Force-Vision-Mode: Überschreibe Screen-Change-Gate
+            if force_vision_mode:
+                log.info("🔄 Force-Vision-Mode: Screenshot erzwingen trotz Screen-Change-Gate")
+                force_vision_mode = False  # Nur einmal forcieren
+
             screenshot = await asyncio.to_thread(self._get_screenshot_as_base64)
             if not screenshot:
                 return "Screenshot-Fehler"
-            
+
             messages = self.history + [{
                 "role": "user",
                 "content": [
@@ -1100,40 +1567,59 @@ class VisualAgent(BaseAgent):
                     {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{screenshot}"}}
                 ]
             }]
-            
+
             reply = await self._call_llm(messages)
-            
+
             if "Final Answer:" in reply:
+                # Clear ROI bei Success
+                if roi_set:
+                    self._clear_roi()
                 return reply.split("Final Answer:")[1].strip()
-            
+
             action, err = self._parse_action(reply)
             if not action:
                 self.history.append({"role": "user", "content": f"Fehler: {err}"})
                 continue
-            
+
             method = action.get("method", "")
             params = action.get("params", {})
-            
+
             if method == "finish_task":
+                # Clear ROI bei Success
+                if roi_set:
+                    self._clear_roi()
                 return params.get("message", "Fertig")
-            
+
             if method in ["click_at", "type_text", "start_visual_browser", "open_application"]:
                 await self._capture_before()
-            
+
             obs = await self._call_tool(method, params)
-            
+
+            # Loop-Detection: Prüfe ob Loop-Warnung in Observation
+            if isinstance(obs, dict) and "_loop_warning" in obs:
+                consecutive_loops += 1
+                log.warning(f"⚠️ Loop-Warnung erhalten ({consecutive_loops}x): {obs['_loop_warning']}")
+                # Füge Warnung zur History hinzu
+                obs["_info"] = f"⚠️ LOOP-WARNUNG: {obs['_loop_warning']} Versuche anderen Ansatz!"
+            else:
+                consecutive_loops = 0  # Reset bei erfolgreichem Call
+
             if method in ["click_at", "type_text", "start_visual_browser", "open_application"]:
                 if not await self._verify_action(method):
                     self.history.append({"role": "assistant", "content": reply})
                     self.history.append({"role": "user", "content": "⚠️ Nicht verifiziert. Anderen Ansatz versuchen."})
                     continue
                 await self._wait_stable()
-            
+
             self._handle_file_artifacts(obs)
             self.history.append({"role": "assistant", "content": reply})
             self.history.append({"role": "user", "content": f"Observation: {json.dumps(self._sanitize_observation(obs), ensure_ascii=False)}"})
             await asyncio.sleep(0.5)
-        
+
+        # Clear ROI am Ende (auch bei Max Iterationen)
+        if roi_set:
+            self._clear_roi()
+
         return "Max Iterationen."
 
 

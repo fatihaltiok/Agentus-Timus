@@ -545,12 +545,24 @@ async def get_all_screen_text() -> Union[Success, Error]:
         )
         
         blocks = _extract_text_blocks(ocr_data)
-        
-        texts = [b['text'] for b in blocks if len(b['text']) > 2]
-        
+
+        # Filtere kurze Texte und bereite Daten mit Koordinaten auf
+        text_elements = []
+        for b in blocks:
+            text = b.get('text', '').strip()
+            if len(text) > 2:  # Nur Texte mit >2 Zeichen
+                text_elements.append({
+                    "text": text,
+                    "x": b.get('x', 0),
+                    "y": b.get('y', 0),
+                    "width": b.get('width', 0),
+                    "height": b.get('height', 0),
+                    "confidence": b.get('confidence', 0.0)
+                })
+
         return Success({
-            "text_count": len(texts),
-            "texts": texts[:50]  # Limit für Response-Größe
+            "text_count": len(text_elements),
+            "texts": text_elements[:50]  # Limit für Response-Größe
         })
         
     except Exception as e:
