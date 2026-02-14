@@ -35,6 +35,10 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from utils.openai_compat import prepare_openai_params
 
+# Shared Utilities
+from agent.shared.mcp_client import MCPClient as _SharedMCPClient
+from agent.shared.action_parser import parse_action as _shared_parse_action
+
 load_dotenv(dotenv_path=PROJECT_ROOT / ".env")
 
 MCP_URL = os.getenv("MCP_URL", "http://127.0.0.1:5000")
@@ -425,19 +429,11 @@ WICHTIG:
 # -----------------------------------------------------------------------------
 # Tool-Call Helper
 # -----------------------------------------------------------------------------
+_mcp = _SharedMCPClient()
+
 def call_tool(method: str, params: Optional[dict] = None, timeout: int = 300) -> dict:
-    """RPC-Call zum MCP-Server."""
-    params = params or {}
-    payload = {"jsonrpc": "2.0", "method": method, "params": params, "id": os.urandom(4).hex()}
-    try:
-        resp = requests.post(MCP_URL, json=payload, timeout=timeout)
-        resp.raise_for_status()
-        data = resp.json()
-        if "error" in data:
-            return {"error": data.get("error", "Unbekannter Tool-Fehler")}
-        return data.get("result", {})
-    except Exception as e:
-        return {"error": f"RPC/HTTP-Fehler: {e}"}
+    """RPC-Call zum MCP-Server (delegiert an agent.shared.mcp_client)."""
+    return _mcp.call_sync(method, params, timeout=timeout)
 
 
 def inception_ready() -> Tuple[bool, str]:
@@ -485,28 +481,9 @@ def chat(messages: List[Dict[str, Any]], temperature: float = 1.0, token_budget:
 # -----------------------------------------------------------------------------
 # Parsing-Helfer
 # -----------------------------------------------------------------------------
-ACTION_PATTERNS = [
-    r'Action:\s*```json\s*({[\s\S]*?})\s*```',
-    r'Action:\s*({[\s\S]*?})\s*(?:\n|$)',
-]
-
 def extract_action_json(text: str) -> Tuple[Optional[dict], Optional[str]]:
-    """Extrahiert Action-JSON aus LLM-Antwort."""
-    for pat in ACTION_PATTERNS:
-        m = re.search(pat, text, re.DOTALL)
-        if not m:
-            continue
-        raw = m.group(1).strip()
-        try:
-            # Trailing commas entfernen
-            raw = re.sub(r',\s*([\}\]])', r'\1', raw)
-            data = json.loads(raw)
-            if isinstance(data, dict) and "method" in data:
-                return data, None
-            return None, "Action-Objekt ohne 'method'."
-        except json.JSONDecodeError as je:
-            return None, f"JSON-Fehler in Action: {je}"
-    return None, "Keine 'Action:' gefunden."
+    """Extrahiert Action-JSON aus LLM-Antwort (delegiert an agent.shared.action_parser)."""
+    return _shared_parse_action(text)
 
 
 # -----------------------------------------------------------------------------

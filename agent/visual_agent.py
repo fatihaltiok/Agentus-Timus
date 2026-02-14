@@ -44,6 +44,13 @@ if str(PROJECT_ROOT) not in sys.path:
 # --- Imports ---
 from dotenv import load_dotenv
 import httpx
+from openai import OpenAI
+from utils.openai_compat import prepare_openai_params
+
+# Shared Utilities
+from agent.shared.screenshot import capture_screenshot_base64 as _shared_screenshot_b64
+from agent.shared.mcp_client import MCPClient as _SharedMCPClient
+from agent.shared.action_parser import parse_action as _shared_parse_action
 
 # Screenshot Libraries
 try:
@@ -62,16 +69,27 @@ ACTIVE_MONITOR = int(os.getenv("ACTIVE_MONITOR", "1"))
 
 # Claude Konfiguration
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-VISION_MODEL = os.getenv("VISION_MODEL", "claude-sonnet-4-5-20250929")
+VISION_MODEL = os.getenv("VISION_MODEL", "moondream-local")
+USE_MOONDREAM = VISION_MODEL.lower().startswith("moondream")
+
+# OpenAI Planung (für Moondream-Backend)
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+VISUAL_PLANNING_MODEL = os.getenv("VISUAL_PLANNING_MODEL", "gpt-5-mini")
 
 # Mouse Feedback Konfiguration
 USE_MOUSE_FEEDBACK = os.getenv("USE_MOUSE_FEEDBACK", "1") == "1"
 REFINE_RADIUS = int(os.getenv("MOUSE_REFINE_RADIUS", "80"))
 
-if not ANTHROPIC_API_KEY:
+if not USE_MOONDREAM and not ANTHROPIC_API_KEY:
     raise RuntimeError(
         "ANTHROPIC_API_KEY fehlt in der Umgebung.\n"
         "Setze ANTHROPIC_API_KEY in .env"
+    )
+
+if USE_MOONDREAM and not OPENAI_API_KEY:
+    raise RuntimeError(
+        "OPENAI_API_KEY fehlt in der Umgebung (Moondream-Backend).\n"
+        "Setze OPENAI_API_KEY in .env"
     )
 
 # --- Logging ---
@@ -83,7 +101,8 @@ if not log.hasHandlers():
     log.addHandler(handler)
     log.setLevel(logging.DEBUG if DEBUG else logging.INFO)
 
-log.info(f"👁️ VisualAgent v2.1 | Modell: {VISION_MODEL}")
+backend_label = "moondream" if USE_MOONDREAM else "anthropic"
+log.info(f"👁️ VisualAgent v2.1 | Modell: {VISION_MODEL} | Backend: {backend_label}")
 log.info(f"   Monitor: {ACTIVE_MONITOR} | Mouse Feedback: {USE_MOUSE_FEEDBACK}")
 
 # --- System Prompt ---
@@ -245,6 +264,12 @@ Schritt 4:
 {"thought": "Text eingegeben. Fertig!", "action": {"method": "finish_task", "params": {"message": "Hallo wurde in das Gemini Chat-Feld eingegeben."}}}
 """
 
+VISUAL_SYSTEM_PROMPT_TEXT = (
+    VISUAL_SYSTEM_PROMPT
+    + "\n\nDu erhältst statt eines Bildes eine Textbeschreibung des Screens (Moondream). "
+      "Nutze die Beschreibung und die bisherigen Observations, um den nächsten Tool-Schritt zu wählen."
+)
+
 
 # --- Claude Vision Client ---
 class ClaudeVisionClient:
@@ -365,69 +390,68 @@ class ClaudeVisionClient:
             return f'{{"thought": "Error", "action": {{"method": "finish_task", "params": {{"message": "{e}"}}}}}}'
 
 
+class OpenAIPlannerClient:
+    """Text-basierter Planner für Moondream-Backend."""
+
+    def __init__(self):
+        self.model = VISUAL_PLANNING_MODEL
+        self.client = OpenAI(api_key=OPENAI_API_KEY)
+
+    async def chat(self, messages: List[Dict[str, Any]], system: str = "") -> str:
+        payload_messages: List[Dict[str, str]] = []
+        if system:
+            payload_messages.append({"role": "system", "content": system})
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                content = " ".join([str(item.get("text", "")) for item in content if item.get("type") == "text"])
+            payload_messages.append({"role": msg.get("role", "user"), "content": str(content)})
+
+        params = prepare_openai_params({
+            "model": self.model,
+            "messages": payload_messages,
+            "temperature": 0.1,
+            "max_tokens": 1500,
+            "response_format": {"type": "json_object"}
+        })
+
+        response = await asyncio.to_thread(self.client.chat.completions.create, **params)
+        return (response.choices[0].message.content or "").strip()
+
+
 # Globaler Client
 claude_client = ClaudeVisionClient()
+openai_planner_client = OpenAIPlannerClient() if USE_MOONDREAM else None
 
 
-# --- Screenshot ---
+# --- Screenshot (delegiert an shared utility) ---
 def get_screenshot_base64() -> str:
-    """Erstellt Screenshot als Base64."""
-    if not MSS_AVAILABLE:
-        log.error("mss/PIL nicht verfügbar")
-        return ""
-    
-    try:
-        with mss.mss() as sct:
-            monitors = sct.monitors
-            if ACTIVE_MONITOR < len(monitors):
-                monitor = monitors[ACTIVE_MONITOR]
-            else:
-                monitor = monitors[1] if len(monitors) > 1 else monitors[0]
-            
-            sct_img = sct.grab(monitor)
-            img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
-        
-        img.thumbnail((1280, 720))
-        buffer = io.BytesIO()
-        img.save(buffer, format="PNG")
-        b64 = base64.b64encode(buffer.getvalue()).decode()
-        
-        log.debug(f"Screenshot: {img.size[0]}x{img.size[1]}")
-        return b64
-        
-    except Exception as e:
-        log.error(f"Screenshot-Fehler: {e}")
-        return ""
+    """Erstellt Screenshot als Base64 (delegiert an agent.shared.screenshot)."""
+    return _shared_screenshot_b64(monitor_index=ACTIVE_MONITOR, fmt="PNG")
 
 
-# --- Tool-Aufruf ---
+# --- Tool-Aufruf (delegiert an shared MCPClient) ---
+_mcp_client = _SharedMCPClient(timeout=60.0)
+
 async def call_tool(method: str, params: Optional[dict] = None, timeout: int = 60) -> dict:
-    """Async RPC zum MCP-Server."""
+    """Async RPC zum MCP-Server (delegiert an agent.shared.mcp_client)."""
     params = params or {}
-    log.info(f"🔧 Tool: {method} | {str(params)[:100]}")
-    
-    payload = {
-        "jsonrpc": "2.0",
-        "method": method,
-        "params": params,
-        "id": os.urandom(4).hex()
-    }
-    
-    try:
-        async with httpx.AsyncClient(timeout=float(timeout)) as client:
-            response = await client.post(MCP_URL, json=payload)
-            response.raise_for_status()
-            data = response.json()
-            
-            if "error" in data:
-                error = data["error"]
-                msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-                return {"error": msg}
-            
-            return data.get("result", {})
-            
-    except Exception as e:
-        return {"error": f"RPC-Fehler: {e}"}
+    log.info(f"Tool: {method} | {str(params)[:100]}")
+    return await _mcp_client.call(method, params)
+
+
+async def get_moondream_screen_description(task: str) -> str:
+    """Erstellt eine Textbeschreibung des aktuellen Screens via Moondream."""
+    question = (
+        "Describe the visible UI for this task: '" + task + "'. "
+        "List interactive elements (buttons, links, input fields) with their labels and approximate positions "
+        "(top/middle/bottom, left/center/right). Keep it concise."
+    )
+    result = await call_tool("describe_ui_with_moondream", {"question": question})
+    if result.get("error"):
+        log.error(f"Moondream Beschreibung fehlgeschlagen: {result['error']}")
+        return ""
+    return str(result.get("description", "")).strip()
 
 
 # --- Refine and Click (NEU!) ---
@@ -623,54 +647,10 @@ async def wait_stable():
     await call_tool("wait_until_stable", {"timeout": 3.0})
 
 
-# --- Parsing ---
+# --- Parsing (delegiert an shared utility) ---
 def parse_action(text: str) -> Tuple[Optional[dict], Optional[str]]:
-    """Extrahiert Action aus LLM-Antwort."""
-    
-    # Zeilenweise nach JSON suchen
-    for line in text.strip().split('\n'):
-        line = line.strip()
-        if line.startswith('{') and line.endswith('}'):
-            try:
-                data = json.loads(line)
-                if "action" in data:
-                    return data["action"], None
-                if "method" in data:
-                    return data, None
-            except json.JSONDecodeError:
-                continue
-    
-    # Regex Patterns
-    patterns = [
-        r'```json\s*({[\s\S]*?})\s*```',
-        r'"action"\s*:\s*({[^{}]*"method"[^{}]*})',
-        r'({[^{}]*"method"[^{}]*})',
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, text, re.DOTALL)
-        if match:
-            try:
-                json_str = re.sub(r',\s*([\}\]])', r'\1', match.group(1).strip())
-                data = json.loads(json_str)
-                if "action" in data:
-                    return data["action"], None
-                if "method" in data:
-                    return data, None
-            except json.JSONDecodeError:
-                continue
-    
-    # Versuche gesamten Text als JSON
-    try:
-        data = json.loads(text.strip())
-        if "action" in data:
-            return data["action"], None
-        if "method" in data:
-            return data, None
-    except:
-        pass
-    
-    return None, "Kein gültiges JSON gefunden"
+    """Extrahiert Action aus LLM-Antwort (delegiert an agent.shared.action_parser)."""
+    return _shared_parse_action(text)
 
 
 # --- Loop Detection ---
@@ -755,10 +735,16 @@ async def run_visual_task(task: str, max_iterations: int = 30) -> str:
         log.info(f"Iteration {iteration + 1}/{max_iterations}")
         log.info(f"{'='*60}")
         
-        # Screenshot machen
-        screenshot = await asyncio.to_thread(get_screenshot_base64)
-        if not screenshot:
-            return "Fehler: Screenshot nicht möglich"
+        screen_description = ""
+        if USE_MOONDREAM:
+            screen_description = await get_moondream_screen_description(task)
+            if not screen_description:
+                return "Fehler: Moondream Screen-Beschreibung fehlgeschlagen"
+        else:
+            # Screenshot machen
+            screenshot = await asyncio.to_thread(get_screenshot_base64)
+            if not screenshot:
+                return "Fehler: Screenshot nicht möglich"
         
         # Kontext-Hinweise für LLM
         context_hints = []
@@ -769,28 +755,42 @@ async def run_visual_task(task: str, max_iterations: int = 30) -> str:
         
         context_text = "\n".join(context_hints) if context_hints else ""
         
-        # Aktuelle Nachricht mit Screenshot
+        # Aktuelle Nachricht
         user_content = "Aktueller Screenshot. Nächster Schritt?"
+        if USE_MOONDREAM:
+            user_content = "Aktuelle Screen-Beschreibung. Nächster Schritt?"
         if context_text:
             user_content = f"{context_text}\n\n{user_content}"
-        
-        current_msg = {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": user_content},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{screenshot}"}}
-            ]
-        }
+
+        if USE_MOONDREAM:
+            current_msg = {
+                "role": "user",
+                "content": f"{user_content}\n\nSCREEN:\n{screen_description}"
+            }
+        else:
+            current_msg = {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": user_content},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{screenshot}"}}
+                ]
+            }
         
         messages = history + [current_msg]
         
-        # Claude Vision aufrufen
-        reply = await claude_client.chat_with_image(
-            messages=messages,
-            system=VISUAL_SYSTEM_PROMPT,
-            max_tokens=1500,
-            temperature=0.1
-        )
+        # Planner aufrufen
+        if USE_MOONDREAM:
+            reply = await openai_planner_client.chat(
+                messages=messages,
+                system=VISUAL_SYSTEM_PROMPT_TEXT
+            )
+        else:
+            reply = await claude_client.chat_with_image(
+                messages=messages,
+                system=VISUAL_SYSTEM_PROMPT,
+                max_tokens=1500,
+                temperature=0.1
+            )
         
         log.debug(f"🧠 Antwort: {reply[:300]}...")
         
