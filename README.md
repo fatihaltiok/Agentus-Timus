@@ -1,4 +1,3 @@
-[README.md](https://github.com/user-attachments/files/25323761/README.md)
 # Timus - Autonomous Multi-Agent Desktop AI
 
 Timus ist ein autonomes Multi-Agent-System fuer Desktop-Automatisierung, Web-Recherche, Code-Generierung und kreative Aufgaben. Es kombiniert 7 spezialisierte KI-Agenten mit 50+ Tools ueber einen zentralen MCP-Server.
