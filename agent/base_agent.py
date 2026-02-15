@@ -138,7 +138,23 @@ class BaseAgent(DynamicToolMixin):
     # Loop-Detection
     # ------------------------------------------------------------------
 
+    # System-Tools die Agenten NICHT direkt aufrufen sollen
+    # (werden vom Dispatcher/System verwaltet)
+    SYSTEM_ONLY_TOOLS = {
+        "add_interaction", "end_session", "get_memory_stats",
+    }
+
     def should_skip_action(self, action_name: str, params: dict) -> Tuple[bool, Optional[str]]:
+        # System-Tools sofort blockieren
+        if action_name in self.SYSTEM_ONLY_TOOLS:
+            reason = (
+                f"'{action_name}' ist ein System-Tool und darf nicht direkt aufgerufen werden. "
+                f"Konzentriere dich auf die eigentliche Aufgabe. "
+                f"Wenn du fertig bist: Final Answer: [deine Antwort]"
+            )
+            log.warning(f"System-Tool blockiert: {action_name}")
+            return True, reason
+
         action_key = f"{action_name}:{json.dumps(params, sort_keys=True)}"
         count = self.recent_actions.count(action_key)
 

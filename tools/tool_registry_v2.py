@@ -32,6 +32,7 @@ from functools import wraps
 # JSON-RPC Bridge Imports
 from jsonrpcserver import Success, Error
 from jsonrpcserver.methods import global_methods
+from oslash.either import Right, Left
 
 log = logging.getLogger("ToolRegistryV2")
 
@@ -227,16 +228,17 @@ class ToolRegistryV2:
             if name not in self._category_index[cat_key]:
                 self._category_index[cat_key].append(name)
 
-            # 2. JSON-RPC Bridge: Wrapper der dict -> Success konvertiert
+            # 2. JSON-RPC Bridge: Wrapper der Ergebnisse in Success() konvertiert
+            #    Unterstuetzt dict, list, str, int, None etc. — nicht nur dict!
             if is_async:
                 @wraps(fn)
                 async def jsonrpc_wrapper(*args, **kwargs):
                     try:
                         result = await fn(*args, **kwargs)
-                        if isinstance(result, dict):
-                            return Success(result)
-                        # Bereits ein Success/Error Objekt (Hybrid-Modus)
-                        return result
+                        # Bereits ein Success/Error (Right/Left) Objekt
+                        if isinstance(result, (Right, Left)):
+                            return result
+                        return Success(result)
                     except Exception as e:
                         log.error(f"Tool {name} error: {e}")
                         return Error(code=-32000, message=str(e))
@@ -245,9 +247,9 @@ class ToolRegistryV2:
                 def jsonrpc_wrapper(*args, **kwargs):
                     try:
                         result = fn(*args, **kwargs)
-                        if isinstance(result, dict):
-                            return Success(result)
-                        return result
+                        if isinstance(result, (Right, Left)):
+                            return result
+                        return Success(result)
                     except Exception as e:
                         log.error(f"Tool {name} error: {e}")
                         return Error(code=-32000, message=str(e))
