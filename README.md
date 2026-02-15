@@ -20,6 +20,10 @@ Benutzer-Input
  │ Developer│   Meta   │  Visual  │ Visual-Nemotron   │
  └────┬─────┴────┬─────┴────┬─────┴───────────────────┘
       │          │          │
+      │    ┌─────┴──────┐   │
+      │    │ Delegation │   │  <-- Agenten koennen sich
+      │    │   (MCP)    │   │      gegenseitig delegieren
+      │    └─────┬──────┘   │
       v          v          v
  ┌─────────────────────────────────────┐
  │     MCP-Server (Port 5000)         │
@@ -27,7 +31,7 @@ Benutzer-Input
  ├─────────────────────────────────────┤
  │ OCR | Vision | Browser | Mouse     │
  │ Search | Files | Memory | Voice    │
- │ Creative | Developer | System      │
+ │ Creative | Developer | Delegation  │
  └─────────────────────────────────────┘
       │          │          │
       v          v          v
@@ -84,6 +88,28 @@ Benutzer-Input
 - **Modell:** Nemotron + Qwen2-VL / GPT-4 Vision
 - **Aufgabe:** Komplexe mehrstufige Desktop-Automatisierung
 - **Tech:** PyAutoGUI + SoM fuer echte Maus-Klicks auf dem ganzen Desktop
+
+---
+
+## Agent-zu-Agent Delegation
+
+Agenten koennen zur Laufzeit andere Agenten um Hilfe bitten — als normalen MCP-Tool-Call ueber `delegate_to_agent`. Ein MetaAgent kann z.B. den ResearchAgent fuer Recherche und den DeveloperAgent fuer Code-Generierung delegieren.
+
+```
+Beispiel: "Recherchiere KI-Sicherheit und erstelle einen Plan"
+
+1. Dispatcher         -> MetaAgent
+2. MetaAgent          -> delegate_to_agent(research, "Recherchiere KI-Sicherheit")
+3.   Registry         -> Lazy-erstellt DeepResearchAgent (holt tools_description)
+4.   DeepResearchAgent-> Ergebnis zurueck an MetaAgent
+5. MetaAgent          -> nutzt Ergebnis fuer Plan -> Final Answer
+```
+
+**Features:**
+- **Lazy-Instantiierung:** Agenten werden erst bei erster Delegation erstellt (Factory-Pattern)
+- **Loop-Prevention:** Delegation-Stack verhindert zirkulaere Aufrufe (A->B->A)
+- **Max Tiefe:** Maximal 3 verschachtelte Delegationen
+- **Capability-Suche:** `find_agent_by_capability("vision")` findet den VisualAgent
 
 ---
 
@@ -166,6 +192,7 @@ Benutzer-Input
 
 | Tool | Funktionen |
 |------|-----------|
+| **delegation_tool** | Agent-zu-Agent Delegation (`delegate_to_agent`, `find_agent_by_capability`) |
 | **planner** | Task-Planung (`add_task`, `list_available_skills`) |
 | **skill_manager_tool** | Skill-Verwaltung (`run_skill`, `list_available_skills`) |
 | **skill_recorder** | Skill-Aufzeichnung (`get_recording_status`, `list_recordings`) |
@@ -339,6 +366,7 @@ timus/
 ├── agent/
 │   ├── shared/              # Shared Utilities (MCP Client, Screenshot, Parser)
 │   ├── agents/              # 7 spezialisierte Agenten
+│   ├── agent_registry.py    # Agent-Registry mit Factory-Pattern + Delegation
 │   ├── base_agent.py        # BaseAgent mit Multi-Provider Support
 │   ├── providers.py         # LLM Provider-Infrastruktur
 │   ├── prompts.py           # System Prompts
@@ -354,6 +382,7 @@ timus/
 │   ├── search_tool/
 │   ├── creative_tool/
 │   ├── developer_tool/
+│   ├── delegation_tool/     # Agent-zu-Agent Delegation (MCP-Tool)
 │   ├── memory_tool/
 │   └── ...
 ├── server/

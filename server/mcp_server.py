@@ -62,6 +62,8 @@ TOOL_MODULES = [
     "tools.skill_recorder.tool", "tools.mouse_feedback_tool.tool",
     "tools.hybrid_detection_tool.tool", "tools.visual_agent_tool.tool",
     "tools.cookie_banner_tool.tool",
+    # NEU: Agent-zu-Agent Delegation
+    "tools.delegation_tool.tool",
     # NEU: Vision Stability System v1.0 (GPT-5.2 Empfehlungen)
     "tools.screen_change_detector.tool",
     "tools.screen_contract_tool.tool",
@@ -233,7 +235,15 @@ async def lifespan(app: FastAPI):
     _initialize_hardware_and_engines()
     _initialize_shared_clients()
     loaded, failed = _load_all_tools_and_skills()
-    
+
+    # Agent-Registry: Alle Agenten als Specs registrieren (Lazy-Instantiierung)
+    try:
+        from agent.agent_registry import register_all_agents
+        register_all_agents()
+        log.info("✅ Agent-Registry: Alle Agenten-Specs registriert.")
+    except Exception as e:
+        log.warning(f"⚠️ Agent-Registry konnte nicht initialisiert werden: {e}")
+
     # Inception-Status ermitteln & loggen
     inception_env_url = os.getenv("INCEPTION_URL") or os.getenv("INCEPTION_API_URL") or ""
     inception_registered = _detect_inception_registered()
