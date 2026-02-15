@@ -4,14 +4,11 @@ import logging
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import Union, Dict, Any
+from typing import Dict, Any
 import textwrap
-import asyncio  # NEU: Importiere asyncio
+import asyncio
 
-from jsonrpcserver import method, Success, Error
-
-# Interne Imports, um sicherzustellen, dass die Registrierung korrekt funktioniert
-from tools.universal_tool_caller import register_tool
+from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 
 log = logging.getLogger(__name__)
 
@@ -34,27 +31,37 @@ def _write_log_sync(entry_content: str):
     """
     if not LEARNING_LOG_FILE:
         raise IOError("Pfad zum Logbuch ist nicht konfiguriert.")
-    
+
     with open(LEARNING_LOG_FILE, "a", encoding="utf-8") as f:
         f.write("\n" + entry_content.strip() + "\n")
 
-# KORREKTUR: Die Methode ist jetzt asynchron (async def)
-@method
+@tool(
+    name="log_learning_entry",
+    description="Erstellt einen strukturierten Eintrag im Logbuch asynchron.",
+    parameters=[
+        P("goal", "string", "Das Ziel des Eintrags", required=True),
+        P("outcome", "string", "Das Ergebnis (z.B. SUCCESS, FAILURE)", required=True),
+        P("details", "object", "Details als Dictionary", required=True),
+        P("learning", "string", "Erkenntnis / Gelerntes", required=True),
+    ],
+    capabilities=["memory", "reflection", "learning"],
+    category=C.MEMORY
+)
 async def log_learning_entry(
-    goal: str, 
-    outcome: str, 
-    details: Dict[str, Any], 
+    goal: str,
+    outcome: str,
+    details: Dict[str, Any],
     learning: str
-) -> Union[Success, Error]:
+) -> dict:
     """
     Erstellt einen strukturierten Eintrag im Logbuch asynchron.
     """
     if not LEARNING_LOG_FILE:
-        return Error(code=-32070, message="Pfad zum Logbuch ist nicht konfiguriert.")
+        raise Exception("Pfad zum Logbuch ist nicht konfiguriert.")
 
     try:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
+
         entry = textwrap.dedent(f"""
         ---
         ### Logbuch-Eintrag: {timestamp}
@@ -73,16 +80,12 @@ async def log_learning_entry(
         {learning}
         """)
 
-        # KORREKTUR: Führe die blockierende Schreiboperation in einem Thread aus
+        # Führe die blockierende Schreiboperation in einem Thread aus
         await asyncio.to_thread(_write_log_sync, entry)
-            
+
         log.info("Eintrag ins Logbuch erfolgreich geschrieben.")
-        return Success({"status": "logged"})
+        return {"status": "logged"}
 
     except Exception as e:
         log.error(f"Fehler beim Schreiben ins Logbuch: {e}", exc_info=True)
-        return Error(code=-32071, message=f"Fehler beim Schreiben ins Logbuch: {e}")
-
-# Registriere das Tool explizit, um sicherzugehen
-register_tool("log_learning_entry", log_learning_entry)
-log.info("✅ Reflection Tool 'log_learning_entry' registriert.")
+        return {"status": "error", "message": f"Fehler beim Schreiben ins Logbuch: {e}"}

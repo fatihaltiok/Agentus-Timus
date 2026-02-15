@@ -21,11 +21,10 @@ import logging
 import sys
 import os
 from pathlib import Path
-from typing import Union, Optional
+from typing import Optional
 import asyncio
 
-from jsonrpcserver import method, Success, Error
-from tools.universal_tool_caller import register_tool
+from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 
 # --- Setup ---
 log = logging.getLogger(__name__)
@@ -41,29 +40,30 @@ except ImportError as e:
     log.warning(f"⚠️ Visual Agent nicht verfügbar: {e}")
 
 
-@method
-async def visual_agent_health() -> Union[Success, Error]:
+@tool(
+    name="visual_agent_health",
+    description="Health-Check für das Visual Agent Tool. Prüft ob der Visual Agent verfügbar ist.",
+    parameters=[],
+    capabilities=["vision", "automation"],
+    category=C.VISION
+)
+async def visual_agent_health() -> dict:
     """
     Health-Check für das Visual Agent Tool.
     Prüft ob der Visual Agent verfügbar ist.
 
     Returns:
-        Success mit Status-Info oder Error
+        dict mit Status-Info
     """
     try:
         if not VISUAL_AGENT_AVAILABLE:
-            return Error(
-                code=-32091,
-                message="Visual Agent nicht verfügbar. Import fehlgeschlagen."
-            )
+            raise Exception("Visual Agent nicht verfügbar. Import fehlgeschlagen.")
 
-        # Prüfe notwendige Umgebungsvariablen
+        vision_model = os.getenv("VISION_MODEL", "claude-sonnet")
+
         anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
         if not anthropic_key:
-            return Error(
-                code=-32092,
-                message="ANTHROPIC_API_KEY nicht gesetzt"
-            )
+            raise Exception("ANTHROPIC_API_KEY nicht gesetzt")
 
         # Prüfe MCP-Server
         mcp_url = os.getenv("MCP_URL", "http://127.0.0.1:5000")
@@ -74,10 +74,7 @@ async def visual_agent_health() -> Union[Success, Error]:
         # Prüfe Mouse Feedback
         use_mouse_feedback = os.getenv("USE_MOUSE_FEEDBACK", "1") == "1"
 
-        # Prüfe Vision Model
-        vision_model = os.getenv("VISION_MODEL", "claude-sonnet-4-5-20250929")
-
-        return Success({
+        return {
             "status": "healthy",
             "visual_agent_available": True,
             "vision_model": vision_model,
@@ -86,6 +83,7 @@ async def visual_agent_health() -> Union[Success, Error]:
             "mouse_feedback": use_mouse_feedback,
             "features": [
                 "Claude Vision API",
+                "Qwen-VL Fallback",
                 "SoM Tool Integration",
                 "Mouse Feedback",
                 "Loop Detection",
@@ -93,23 +91,32 @@ async def visual_agent_health() -> Union[Success, Error]:
                 "Multi-Step Workflows"
             ],
             "dependencies": {
-                "anthropic_api": "✅" if anthropic_key else "❌",
+                "anthropic_api": "✅" if os.getenv("ANTHROPIC_API_KEY", "") else "❌",
                 "mcp_server": mcp_url,
-                "mss": "verfügbar (Screenshots)",
-                "PIL": "verfügbar (Bildverarbeitung)"
+                "mss": "verfuegbar (Screenshots)",
+                "PIL": "verfuegbar (Bildverarbeitung)"
             }
-        })
+        }
 
     except Exception as e:
         log.error(f"Visual Agent Health-Check fehlgeschlagen: {e}", exc_info=True)
-        return Error(code=-32093, message=f"Health-Check fehlgeschlagen: {e}")
+        raise Exception(f"Health-Check fehlgeschlagen: {e}")
 
 
-@method
+@tool(
+    name="execute_visual_task",
+    description="Führt eine visuelle Automatisierungs-Aufgabe aus. Nutzt Claude Vision + SoM + Mouse Feedback für komplexe UI-Aufgaben.",
+    parameters=[
+        P("task", "string", "Die auszuführende Aufgabe (z.B. 'Schreibe Hallo in das Chat-Feld')", required=True),
+        P("max_iterations", "integer", "Maximale Anzahl an Iterationen (Standard: 30)", required=False, default=30),
+    ],
+    capabilities=["vision", "automation"],
+    category=C.VISION
+)
 async def execute_visual_task(
     task: str,
     max_iterations: Optional[int] = 30
-) -> Union[Success, Error]:
+) -> dict:
     """
     Führt eine visuelle Automatisierungs-Aufgabe aus.
 
@@ -125,7 +132,7 @@ async def execute_visual_task(
         max_iterations: Maximale Anzahl an Iterationen (Standard: 30)
 
     Returns:
-        Success mit Ergebnis-Nachricht oder Error
+        dict mit Ergebnis-Nachricht
 
     Beispiele:
         - "Öffne Firefox und gehe zu google.com"
@@ -135,16 +142,10 @@ async def execute_visual_task(
     """
     try:
         if not VISUAL_AGENT_AVAILABLE:
-            return Error(
-                code=-32094,
-                message="Visual Agent nicht verfügbar. Modul konnte nicht importiert werden."
-            )
+            raise Exception("Visual Agent nicht verfügbar. Modul konnte nicht importiert werden.")
 
         if not task or not task.strip():
-            return Error(
-                code=-32095,
-                message="Task-Parameter fehlt oder ist leer"
-            )
+            raise Exception("Task-Parameter fehlt oder ist leer")
 
         log.info(f"👁️ Visual Agent startet Task: {task}")
         log.info(f"   Max Iterations: {max_iterations}")
@@ -154,23 +155,28 @@ async def execute_visual_task(
 
         log.info(f"✅ Visual Agent abgeschlossen: {result[:100]}...")
 
-        return Success({
+        return {
             "status": "completed",
             "task": task,
             "result": result,
             "message": result
-        })
+        }
 
     except Exception as e:
         log.error(f"Fehler beim Ausführen des Visual Agents: {e}", exc_info=True)
-        return Error(
-            code=-32099,
-            message=f"Visual Agent Fehler: {str(e)}"
-        )
+        raise Exception(f"Visual Agent Fehler: {str(e)}")
 
 
-@method
-async def execute_visual_task_quick(task: str) -> Union[Success, Error]:
+@tool(
+    name="execute_visual_task_quick",
+    description="Schnelle Version von execute_visual_task mit weniger Iterationen (10 statt 30).",
+    parameters=[
+        P("task", "string", "Die auszuführende Aufgabe", required=True),
+    ],
+    capabilities=["vision", "automation"],
+    category=C.VISION
+)
+async def execute_visual_task_quick(task: str) -> dict:
     """
     Schnelle Version von execute_visual_task mit weniger Iterationen.
 
@@ -180,14 +186,6 @@ async def execute_visual_task_quick(task: str) -> Union[Success, Error]:
         task: Die auszuführende Aufgabe
 
     Returns:
-        Success mit Ergebnis oder Error
+        dict mit Ergebnis
     """
     return await execute_visual_task(task, max_iterations=10)
-
-
-# --- Registrierung ---
-register_tool("visual_agent_health", visual_agent_health)
-register_tool("execute_visual_task", execute_visual_task)
-register_tool("execute_visual_task_quick", execute_visual_task_quick)
-
-log.info("✅ Visual Agent Tool (visual_agent_health, execute_visual_task, execute_visual_task_quick) registriert.")

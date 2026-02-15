@@ -6,10 +6,11 @@ import asyncio
 # Drittanbieter-Bibliotheken
 from openai import OpenAI
 from utils.openai_compat import prepare_openai_params
-from jsonrpcserver import method, Success, Error
 from dotenv import load_dotenv
-from typing import Union 
 import os
+
+# V2 Tool Registry
+from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 
 # Interne Tool-Aufrufe
 # Wichtig: Stellt sicher, dass planner_helpers existiert und die async-Version von call_tool_internal hat.
@@ -67,16 +68,24 @@ Output:
 }
 """
 
-@method
-# KORREKTUR: Ersetze '|' durch 'Union[Success, Error]'
-async def curate_and_remember(text: str, source: str) -> Union[Success, Error]:
+@tool(
+    name="curate_and_remember",
+    description="Laesst eine KI entscheiden, ob eine Information wichtig ist und speichert sie dann im Langzeitgedaechtnis.",
+    parameters=[
+        P("text", "string", "Die potentielle Erinnerung / der zu bewertende Text", required=True),
+        P("source", "string", "Die Quelle der Information", required=True),
+    ],
+    capabilities=["memory", "curation"],
+    category=C.SYSTEM
+)
+async def curate_and_remember(text: str, source: str) -> dict:
     """
     Lässt eine KI entscheiden, ob eine Information wichtig ist und speichert sie dann im Langzeitgedächtnis.
     Args:
         text (str): Die potentielle Erinnerung.
         source (str): Die Quelle der Information.
     """
-    log.info(f"🧠 Kuratiere potenzielle Erinnerung: '{text[:60]}...'")
+    log.info(f"Kuratiere potenzielle Erinnerung: '{text[:60]}...'")
     try:
         # Schritt 1: Lasse den Kurator-Geist entscheiden
         response = await asyncio.to_thread(
@@ -89,10 +98,10 @@ async def curate_and_remember(text: str, source: str) -> Union[Success, Error]:
             temperature=0.0,
             response_format={"type": "json_object"}
         )
-        
+
         decision_str = response.choices[0].message.content
         decision = json.loads(decision_str)
-        
+
         is_memorable = decision.get("is_memorable", False)
         reason = decision.get("reason", "Keine Begründung.")
         memory_text = decision.get("memory_text", "")
@@ -103,28 +112,28 @@ async def curate_and_remember(text: str, source: str) -> Union[Success, Error]:
         if is_memorable and memory_text:
             # call_tool_internal ist async, also rufen wir es direkt mit await auf
             remember_result = await call_tool_internal(
-                "remember", 
+                "remember",
                 {"text": memory_text, "source": source}
             )
-            
+
             # Prüfen, ob der interne Aufruf selbst ein Fehler-Dict zurückgab
             if isinstance(remember_result, dict) and remember_result.get("error"):
                  error_msg = remember_result["error"].get("message", str(remember_result["error"]))
-                 return Error(code=-32011, message=f"Kurator entschied zu speichern, aber Speichern schlug fehl: {error_msg}")
-            
-            return Success({
+                 raise Exception(f"Kurator entschied zu speichern, aber Speichern schlug fehl: {error_msg}")
+
+            return {
                 "status": "success",
                 "decision": "saved",
                 "memory_id": remember_result.get("memory_id"),
                 "message": "Information wurde als wichtig eingestuft und gespeichert."
-            })
+            }
         else:
-            return Success({
+            return {
                 "status": "success",
                 "decision": "discarded",
                 "message": "Information wurde als nicht wichtig genug eingestuft und verworfen."
-            })
+            }
 
     except Exception as e:
-        log.error(f"❌ Fehler im Kurationsprozess: {e}", exc_info=True)
-        return Error(code=-32000, message=f"Interner Fehler im Kurator-Tool: {e}")
+        log.error(f"Fehler im Kurationsprozess: {e}", exc_info=True)
+        raise Exception(f"Interner Fehler im Kurator-Tool: {e}")

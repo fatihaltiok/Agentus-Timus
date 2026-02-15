@@ -22,7 +22,7 @@ sys.path.insert(0, str(project_root))
 
 # --- Lokale Module und Kontext importieren ---
 import tools.shared_context as shared_context
-from tools.universal_tool_caller import tool_caller_instance
+from tools.tool_registry_v2 import registry_v2
 
 # --- Logging-Konfiguration ---
 logging.basicConfig(
@@ -53,14 +53,20 @@ TOOL_MODULES = [
     "tools.ocr_tool.tool", "tools.visual_grounding_tool.tool", "tools.mouse_tool.tool",
     "tools.visual_segmentation_tool.tool", "tools.debug_tool.tool", "tools.inception_tool.tool",
     "tools.icon_recognition_tool.tool", "tools.engines.object_detection_engine",
-    "tools.annotator_tool.tool", "tools.moondream_tool.tool",
+    "tools.annotator_tool.tool",
     "tools.application_launcher.tool", "tools.visual_browser_tool.tool",
     "tools.text_finder_tool.tool", "tools.smart_navigation_tool.tool",
     "tools.som_tool.tool", "tools.verification_tool.tool",
-    "tools.voice_tool.tool","tools.memory_tool.tool",
+    "tools.verified_vision_tool.tool", "tools.qwen_vl_tool.tool",
+    "tools.voice_tool.tool",
     "tools.skill_recorder.tool", "tools.mouse_feedback_tool.tool",
     "tools.hybrid_detection_tool.tool", "tools.visual_agent_tool.tool",
     "tools.cookie_banner_tool.tool",
+    # NEU: Vision Stability System v1.0 (GPT-5.2 Empfehlungen)
+    "tools.screen_change_detector.tool",
+    "tools.screen_contract_tool.tool",
+    # NEU: DOM-First Browser Controller v2.0 (2026-02-10)
+    "tools.browser_controller.tool",
 ]
 
 # --- Hilfsfunktionen für den Lifespan-Manager ---
@@ -97,6 +103,23 @@ def _initialize_hardware_and_engines():
     except Exception as e:
         log.error(f"❌ Fehler bei der Initialisierung der OCR-Engine: {e}", exc_info=True)
 
+    # Qwen2.5-VL Vision Language Model Engine initialisieren
+    try:
+        from tools.engines.qwen_vl_engine import qwen_vl_engine_instance
+        if os.getenv("QWEN_VL_ENABLED", "0") == "1":  # Default OFF für schnelleren Start
+            qwen_vl_engine_instance.initialize()
+            if qwen_vl_engine_instance.is_initialized():
+                log.info("✅ Qwen-VL Engine erfolgreich initialisiert.")
+                shared_context.qwen_vl_engine = qwen_vl_engine_instance
+            else:
+                log.warning("⚠️ Qwen-VL Engine Initialisierung fehlgeschlagen.")
+        else:
+            log.info("ℹ️ Qwen-VL Engine ist deaktiviert (QWEN_VL_ENABLED=0).")
+    except ImportError:
+        log.warning("⚠️ Qwen-VL Engine-Modul nicht gefunden.")
+    except Exception as e:
+        log.error(f"❌ Fehler bei der Initialisierung der Qwen-VL Engine: {e}", exc_info=True)
+
 def _initialize_shared_clients():
     """
     Initialisiert softwareseitige Clients (APIs, DBs).
@@ -114,7 +137,10 @@ def _initialize_shared_clients():
         from chromadb.utils import embedding_functions
         if shared_context.openai_client:
             db_path = project_root / "memory_db"
-            chroma_db_client = chromadb.PersistentClient(path=str(db_path))
+            chroma_db_client = chromadb.PersistentClient(
+                path=str(db_path),
+                settings=chromadb.config.Settings(anonymized_telemetry=False)
+            )
             openai_ef = embedding_functions.OpenAIEmbeddingFunction(
                 api_key=shared_context.openai_client.api_key, model_name="text-embedding-3-small"
             )
@@ -188,8 +214,8 @@ async def _rpc_call_local(method: str, params: dict | None = None) -> dict:
 
 def _detect_inception_registered() -> bool:
     try:
-        methods = tool_caller_instance.list_registered_tools()
-        return any(m in methods for m in ("generate_and_integrate", "implement_feature", "inception_health"))
+        tools = registry_v2.list_all_tools()
+        return any(m in tools for m in ("generate_and_integrate", "implement_feature", "inception_health"))
     except Exception:
         return False
 
@@ -221,7 +247,7 @@ async def lifespan(app: FastAPI):
     if inception_env_url: log.info(f"🔗 Inception-URL aus ENV: {inception_env_url}")
     else: log.warning("⚠️ Keine INCEPTION_URL/INCEPTION_API_URL in ENV gesetzt.")
 
-    if "inception_health" in tool_caller_instance.list_registered_tools():
+    if "inception_health" in registry_v2.list_all_tools():
         try:
             probe = await _rpc_call_local("inception_health", {})
             if isinstance(probe, dict) and not probe.get("error"):
@@ -244,9 +270,9 @@ async def lifespan(app: FastAPI):
         for mod, err in failed:
             log.warning(f"  -> {mod}: {err}")
     
-    registered_tools_list = tool_caller_instance.list_registered_tools()
-    log.info(f"🔧 {len(registered_tools_list)} RPC-Methoden registriert:")
-    for tool_name in sorted(registered_tools_list.keys()):
+    registered_tools = registry_v2.list_all_tools()
+    log.info(f"🔧 {len(registered_tools)} RPC-Methoden registriert:")
+    for tool_name in sorted(registered_tools.keys()):
         log.info(f"  - {tool_name}")
     log.info("="*50)
     
@@ -265,10 +291,12 @@ app.add_middleware(
 # --- API Endpoints ---
 @app.get("/health", summary="Health Check")
 async def health_check():
+    tools = registry_v2.list_all_tools()
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "total_rpc_methods": len(tool_caller_instance.list_registered_tools()),
+        "total_rpc_methods": len(tools),
+        "registry": "v2",
         "inception": getattr(app.state, "inception", {
             "registered": False, "env_url": None, "health": {"ok": None, "detail": "n/a"}
         }),
@@ -277,14 +305,13 @@ async def health_check():
 @app.get("/get_tool_descriptions", summary="Get Tool Descriptions for Agents")
 async def get_tool_descriptions():
     try:
-        descriptions = tool_caller_instance.get_formatted_tool_descriptions()
-        
+        descriptions = registry_v2.get_tool_manifest()
+
         # === SKILLS HINZUFÜGEN ===
         skills_section = "\n\n# VERFÜGBARE SKILLS (Wiederverwendbare Workflows)\n"
         skills_section += "Nutze 'run_skill' um einen Skill auszuführen.\n\n"
-        
+
         try:
-            # Skills vom Planner laden
             skills_result = await async_dispatch('{"jsonrpc":"2.0","method":"list_available_skills","id":99}')
             import json
             skills_data = json.loads(skills_result)
@@ -294,13 +321,13 @@ async def get_tool_descriptions():
                 skills_section += "\nBeispiel: Action: {\"method\": \"run_skill\", \"params\": {\"name\": \"search_google\", \"params\": {\"query\": \"Suchbegriff\"}}}\n"
         except Exception as e:
             log.warning(f"Skills konnten nicht geladen werden: {e}")
-        
+
         descriptions += skills_section
         # === ENDE SKILLS ===
-        
+
         return {
             "status": "success", "descriptions": descriptions,
-            "tool_count": len(tool_caller_instance.list_registered_tools()),
+            "tool_count": len(registry_v2.list_all_tools()),
             "timestamp": datetime.now().isoformat()
         }
     except Exception as e:
@@ -309,6 +336,46 @@ async def get_tool_descriptions():
             "status": "error", "descriptions": "Fehler beim Laden der Tool-Beschreibungen",
             "error": str(e), "tool_count": 0
         })
+
+@app.get("/get_tool_schemas/openai", summary="Get OpenAI-compatible Tool Schemas")
+async def get_tool_schemas_openai():
+    try:
+        return {
+            "status": "success",
+            "tools": registry_v2.get_openai_tools_schema(),
+            "tool_count": len(registry_v2.list_all_tools()),
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        log.error(f"Fehler beim Abrufen der OpenAI-Schemas: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+@app.get("/get_tool_schemas/anthropic", summary="Get Anthropic-compatible Tool Schemas")
+async def get_tool_schemas_anthropic():
+    try:
+        return {
+            "status": "success",
+            "tools": registry_v2.get_anthropic_tools_schema(),
+            "tool_count": len(registry_v2.list_all_tools()),
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        log.error(f"Fehler beim Abrufen der Anthropic-Schemas: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+@app.get("/get_tools_by_capability/{capability}", summary="Get Tools by Capability")
+async def get_tools_by_capability(capability: str):
+    try:
+        tools = registry_v2.get_tools_by_capability(capability)
+        return {
+            "status": "success",
+            "capability": capability,
+            "tools": [{"name": t.name, "description": t.description, "category": t.category.value} for t in tools],
+            "count": len(tools)
+        }
+    except Exception as e:
+        log.error(f"Fehler bei Capability-Abfrage: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
 @app.post("/", summary="JSON-RPC Endpoint")
 async def handle_jsonrpc(request: Request):

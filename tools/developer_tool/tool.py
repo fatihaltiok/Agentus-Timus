@@ -4,15 +4,14 @@ import logging
 import os
 import asyncio
 from pathlib import Path
-from typing import Union, List, Optional
+from typing import List, Optional
 
 # Drittanbieter
-from jsonrpcserver import method, Success, Error
 from openai import AsyncOpenAI
 from utils.openai_compat import prepare_openai_params
 
-# Interne
-from tools.universal_tool_caller import register_tool
+# V2 Registry
+from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 
 # --- Setup & Konfiguration ---
 log = logging.getLogger("developer_tool")
@@ -24,15 +23,15 @@ INCEPTION_KEY = os.getenv("INCEPTION_API_KEY")
 # 2. URL aus Anleitung (Fallback auf .env, sonst Default)
 INCEPTION_URL = os.getenv("INCEPTION_API_URL", "https://api.inceptionlabs.ai/v1")
 
-# 3. Modell aus Anleitung (Fallback auf .env, sonst 'mercury')
-# Wir bevorzugen hier 'mercury', da es das spezialisierte Coding-Modell ist.
-MODEL_NAME = os.getenv("INCEPTION_MODEL", "mercury")
+# 3. Modell aus Anleitung (Fallback auf .env, sonst 'mercury-coder')
+# Wir bevorzugen hier 'mercury-coder', da es das spezialisierte Coding-Modell ist.
+MODEL_NAME = os.getenv("INCEPTION_MODEL", "mercury-coder")
 
 try:
     if INCEPTION_KEY:
         # Wir nutzen AsyncOpenAI, da die Signatur kompatibel ist, aber besser für den Server
         client = AsyncOpenAI(
-            api_key=INCEPTION_KEY, 
+            api_key=INCEPTION_KEY,
             base_url=INCEPTION_URL
         )
         log.info(f"✅ Developer-Tool verbunden mit {INCEPTION_URL}")
@@ -59,17 +58,27 @@ def _write_file_safe(path_str: str, content: str):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
 
-@method
+@tool(
+    name="implement_feature",
+    description="Schreibt Code mit der Inception Labs 'mercury-coder' Engine.",
+    parameters=[
+        P("instruction", "string", "Anweisung, was implementiert werden soll", required=True),
+        P("file_paths", "string", "Dateipfad(e) als String oder Liste von Strings", required=True),
+        P("context_files", "array", "Optionale Liste von Kontext-Dateien", required=False, default=None),
+    ],
+    capabilities=["code", "development"],
+    category=C.CODE
+)
 async def implement_feature(
     instruction: str,
-    file_paths: Union[str, List[str]],
+    file_paths,
     context_files: Optional[List[str]] = None
-) -> Union[Success, Error]:
+) -> dict:
     """
-    Schreibt Code mit der Inception Labs 'Mercury' Engine.
+    Schreibt Code mit der Inception Labs 'mercury-coder' Engine.
     """
     if not client:
-        return Error(code=-32031, message="Inception API Key fehlt.")
+        raise Exception("Inception API Key fehlt.")
 
     if isinstance(file_paths, str):
         file_paths = [file_paths]
@@ -92,7 +101,7 @@ async def implement_feature(
     system_msg = """
     You are an expert software engineer utilizing the Mercury engine.
     Your task is to implement the requested features into the provided files.
-    
+
     OUTPUT RULES:
     1. Output the FULL, compilable code for each target file.
     2. Separate multiple files using the delimiter: `### FILE: path/to/file.py`
@@ -124,13 +133,13 @@ async def implement_feature(
         }
 
         response = await client.chat.completions.create(**kwargs)
-        
+
         raw_output = response.choices[0].message.content.strip()
-        
+
         # 4. Parsing & Schreiben
         segments = raw_output.split("### FILE:")
         modified = []
-        
+
         # Fallback: Wenn Mercury keine Header gesetzt hat und es nur eine Datei ist
         if len(file_paths) == 1 and len(segments) < 2:
             clean_code = raw_output.replace("```python", "").replace("```", "").strip()
@@ -141,27 +150,25 @@ async def implement_feature(
                 if not seg.strip(): continue
                 lines = seg.strip().splitlines()
                 if not lines: continue
-                
+
                 path = lines[0].strip()
                 code = "\n".join(lines[1:])
                 # Bereinigung von Markdown-Artefakten
                 code = code.replace("```python", "").replace("```", "").strip()
-                
+
                 if path and code:
                     _write_file_safe(path, code)
                     modified.append(path)
 
         log.info(f"✅ Mercury hat Code für {len(modified)} Dateien generiert.")
-        
-        return Success({
+
+        return {
             "status": "success",
             "modified_files": modified,
             "engine": MODEL_NAME,
             "message": "Code erfolgreich implementiert."
-        })
+        }
 
     except Exception as e:
         log.error(f"Inception/Mercury Error: {e}", exc_info=True)
-        return Error(code=-32032, message=f"Fehler bei Code-Generierung: {e}")
-
-register_tool("implement_feature", implement_feature)
+        return {"status": "error", "message": f"Fehler bei Code-Generierung: {e}"}

@@ -6,29 +6,27 @@ Erkennt UI-Elemente auf dem Bildschirm, nummeriert sie und gibt
 präzise Klick-Koordinaten zurück.
 
 Features:
-- Nutzt Moondream /v1/detect für Objekterkennung
-- Kombiniert mit OCR für Text-Elemente
+- Nutzt Qwen-VL (Qwen2-VL-7B-Instruct) für UI-Element-Erkennung
+- Ein einziger VLM-Call für alle Element-Typen (statt N API-Calls)
 - Nummeriert Elemente [1], [2], [3]...
 - Berechnet Klick-Koordinaten (Mitte des Elements)
 - Multi-Monitor Support mit Offset-Tracking
-- Erweiterte Chat-Interface-Erkennung
 
-Version: 1.1 (Merged)
+Version: 2.0 (Qwen-VL)
 """
 
 import logging
 import asyncio
+import json
+import re
 import os
-import base64
-import httpx
 import mss
 from PIL import Image, ImageDraw, ImageFont
-import io
-from typing import List, Dict, Optional, Tuple, Union, Any
+from typing import List, Dict, Optional, Tuple, Any
 from dataclasses import dataclass, field
-from jsonrpcserver import method, Success, Error
 
-from tools.universal_tool_caller import register_tool
+from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
+from tools.engines.qwen_vl_engine import qwen_vl_engine_instance
 from dotenv import load_dotenv
 
 # --- Setup ---
@@ -36,12 +34,9 @@ load_dotenv()
 log = logging.getLogger("som_tool")
 
 # Konfiguration
-MOONDREAM_BASE_URL = os.getenv("MOONDREAM_API_BASE", "http://localhost:2021/v1")
 ACTIVE_MONITOR = int(os.getenv("ACTIVE_MONITOR", "1"))
-TIMEOUT = 120.0  # Erhöht auf 120s für GPU-Modelle (besonders bei RTX 3090)
 
-# Erweiterte UI-Element-Typen (Merged aus beiden Versionen)
-# Standard-Elemente + Chat-Interface-spezifische Typen
+# Erweiterte UI-Element-Typen
 UI_ELEMENT_TYPES = [
     # Standard UI
     "button",
@@ -53,7 +48,7 @@ UI_ELEMENT_TYPES = [
     "menu",
     "checkbox",
     "dropdown",
-    # Chat-Interface spezifisch (aus tool.py fixed)
+    # Chat-Interface spezifisch
     "chat input",
     "message box",
     "textbox",
@@ -62,16 +57,30 @@ UI_ELEMENT_TYPES = [
     "submit button",
 ]
 
-# HTTP Client (global, wiederverwendbar)
-http_client: Optional[httpx.AsyncClient] = None
+# Qwen-VL Prompt für UI-Element-Erkennung (kein Action-Planning!)
+SOM_DETECTION_PROMPT = """Du bist ein UI-Element-Detektor. Deine EINZIGE Aufgabe: Alle sichtbaren UI-Elemente im Screenshot auflisten.
 
+AUFLÖSUNG: 1920x1080 Pixel (Full HD)
 
-def get_http_client() -> httpx.AsyncClient:
-    """Lazy-initialisierter HTTP Client."""
-    global http_client
-    if http_client is None or http_client.is_closed:
-        http_client = httpx.AsyncClient(timeout=TIMEOUT)
-    return http_client
+Gib ALLE klickbaren/interaktiven Elemente als JSON-Array zurück.
+Jedes Element hat: type, x, y (Center-Koordinaten in Pixeln), text (sichtbarer Text).
+
+Erlaubte Typen: {element_types}
+
+FORMAT (NUR JSON, KEINE Erklärungen):
+[
+  {{"type": "button", "x": 960, "y": 50, "text": "Search"}},
+  {{"type": "text field", "x": 960, "y": 540, "text": ""}},
+  {{"type": "link", "x": 200, "y": 300, "text": "About"}}
+]
+
+REGELN:
+1. Koordinaten sind Pixel (0-1919 für x, 0-1079 für y)
+2. x,y = CENTER des Elements
+3. Liste ALLE sichtbaren interaktiven Elemente auf
+4. NUR die erlaubten Typen verwenden
+5. KEIN Action-Planning - NUR Element-Auflistung!
+6. Maximal 20 Elemente"""
 
 
 @dataclass
@@ -96,11 +105,11 @@ class UIElement:
 class SetOfMarkEngine:
     """
     Engine für Set-of-Mark UI-Erkennung.
-    
-    Scannt den Bildschirm, erkennt UI-Elemente via Moondream,
+
+    Scannt den Bildschirm, erkennt UI-Elemente via Qwen-VL,
     nummeriert sie und berechnet Klick-Koordinaten.
     """
-    
+
     def __init__(self):
         self.elements: List[UIElement] = []
         self.screenshot: Optional[Image.Image] = None
@@ -109,7 +118,7 @@ class SetOfMarkEngine:
         self.monitor_offset_x: int = 0
         self.monitor_offset_y: int = 0
         self._last_scan_types: List[str] = []
-    
+
     def _capture_screenshot(self) -> Image.Image:
         """Macht einen Screenshot des aktiven Monitors."""
         with mss.mss() as sct:
@@ -118,168 +127,111 @@ class SetOfMarkEngine:
                 monitor = sct.monitors[ACTIVE_MONITOR]
             else:
                 monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
-            
+
             # Dimensionen und Offset speichern
             self.screen_width = monitor["width"]
             self.screen_height = monitor["height"]
             self.monitor_offset_x = monitor["left"]
             self.monitor_offset_y = monitor["top"]
-            
+
             # Screenshot erstellen
             sct_img = sct.grab(monitor)
             img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
-            
+
             log.debug(
                 f"Screenshot: {self.screen_width}x{self.screen_height} "
                 f"von Monitor {ACTIVE_MONITOR} (Offset: {self.monitor_offset_x}, {self.monitor_offset_y})"
             )
             return img
-    
-    def _image_to_base64(self, img: Image.Image, max_size: Tuple[int, int] = (800, 600), quality: int = 85) -> str:
+
+    def _detect_all_elements(self, img: Image.Image, element_types: List[str]) -> List[Dict]:
         """
-        Konvertiert PIL Image zu Base64 (optional verkleinert für API).
-
-        Args:
-            img: PIL Image
-            max_size: Maximale Größe (None = keine Verkleinerung)
-            quality: JPEG Qualität (85 = gut, 95 = sehr gut)
+        Erkennt alle UI-Elemente mit einem einzigen Qwen-VL Call.
         """
-        img_copy = img.copy()
+        types_str = ", ".join(element_types)
+        prompt = SOM_DETECTION_PROMPT.format(element_types=types_str)
 
-        # Nur verkleinern wenn max_size angegeben
-        if max_size:
-            img_copy.thumbnail(max_size, Image.Resampling.LANCZOS)
+        log.info(f"Qwen-VL SoM-Erkennung: {types_str}")
 
-        buffer = io.BytesIO()
-        img_copy.save(buffer, format="JPEG", quality=quality)
-        return base64.b64encode(buffer.getvalue()).decode()
-    
-    def _smart_crop_regions(self, img: Image.Image) -> List[Tuple[str, Image.Image, Tuple[int, int]]]:
+        result = qwen_vl_engine_instance.analyze_screenshot(
+            image=img,
+            task=f"Finde alle UI-Elemente: {types_str}",
+            system_prompt=prompt,
+            max_tokens=1024
+        )
+
+        if not result.get("success"):
+            log.error(f"Qwen-VL Fehler: {result.get('error', 'unbekannt')}")
+            return []
+
+        raw_response = result.get("raw_response", "")
+        log.debug(f"Qwen-VL Raw: {raw_response[:300]}")
+
+        return self._parse_qwen_elements(raw_response)
+
+    def _parse_qwen_elements(self, raw_response: str) -> List[Dict]:
         """
-        Erstellt intelligente Crop-Regionen für bessere Erkennung.
-
-        Returns:
-            Liste von (region_name, cropped_image, (offset_x, offset_y))
+        Parst die Qwen-VL JSON-Antwort und konvertiert Pixel-Koordinaten
+        zu normalisierten 0-1 Werten.
         """
-        width, height = img.size
-        regions = []
+        elements = []
 
-        # Region 1: Bottom half (für Chat-Eingabefelder, Formulare)
-        bottom_half = img.crop((0, height // 2, width, height))
-        regions.append(("bottom_half", bottom_half, (0, height // 2)))
+        # JSON aus Response extrahieren
+        json_match = re.search(r'```json\s*(\[.*?\])\s*```', raw_response, re.DOTALL)
+        if not json_match:
+            json_match = re.search(r'(\[.*?\])', raw_response, re.DOTALL)
 
-        # Region 2: Center (für Hauptinhalte)
-        center_y_start = height // 4
-        center_y_end = 3 * height // 4
-        center = img.crop((0, center_y_start, width, center_y_end))
-        regions.append(("center", center, (0, center_y_start)))
+        if not json_match:
+            log.warning("Keine JSON-Elemente in Qwen-VL Antwort gefunden")
+            return []
 
-        # Region 3: Full (als Fallback, verkleinert)
-        regions.append(("full_reduced", img, (0, 0)))
+        try:
+            data = json.loads(json_match.group(1))
+            if not isinstance(data, list):
+                data = [data]
+        except json.JSONDecodeError as e:
+            log.warning(f"JSON Parse Error: {e}")
+            return []
 
-        return regions
+        for item in data:
+            if not isinstance(item, dict):
+                continue
 
-    async def _detect_elements(self, img: Image.Image, element_type: str, use_zoom: bool = True) -> List[Dict]:
-        """
-        Ruft Moondream detect für einen Element-Typ auf.
+            elem_type = item.get("type", "unknown")
+            px = item.get("x")
+            py = item.get("y")
+            text = item.get("text", "")
 
-        Args:
-            img: Screenshot
-            element_type: Element-Typ zum Suchen
-            use_zoom: Multi-Resolution + Smart Crop verwenden
-        """
-        client = get_http_client()
-        all_objects = []
+            if px is None or py is None:
+                continue
 
-        if use_zoom:
-            # Multi-Resolution Strategie mit Smart Crop
-            regions = self._smart_crop_regions(img)
+            # Pixel -> Normalisiert (0-1)
+            norm_cx = float(px) / 1920.0
+            norm_cy = float(py) / 1080.0
 
-            for region_name, region_img, (offset_x, offset_y) in regions:
-                # Volle Auflösung für crops, verkleinert für full
-                if region_name == "full_reduced":
-                    b64 = self._image_to_base64(region_img, max_size=(800, 600), quality=85)
-                    log.debug(f"  Scanne {region_name} (verkleinert)")
-                else:
-                    b64 = self._image_to_base64(region_img, max_size=None, quality=90)
-                    log.debug(f"  Scanne {region_name} (volle Auflösung)")
+            # Clamp to valid range
+            norm_cx = max(0.0, min(1.0, norm_cx))
+            norm_cy = max(0.0, min(1.0, norm_cy))
 
-                try:
-                    response = await client.post(
-                        f"{MOONDREAM_BASE_URL}/detect",
-                        json={
-                            "image_url": f"data:image/jpeg;base64,{b64}",
-                            "object": element_type
-                        },
-                        timeout=TIMEOUT
-                    )
-                    response.raise_for_status()
-                    result = response.json()
+            # Bounding Box um Center (5% Umkreis)
+            box_size = 0.05
+            elements.append({
+                "x_min": max(0.0, norm_cx - box_size),
+                "y_min": max(0.0, norm_cy - box_size),
+                "x_max": min(1.0, norm_cx + box_size),
+                "y_max": min(1.0, norm_cy + box_size),
+                "center_x": norm_cx,
+                "center_y": norm_cy,
+                "element_type": elem_type,
+                "text": text,
+                "_method": "qwen_vl"
+            })
 
-                    if "objects" in result and result["objects"]:
-                        objects = result["objects"]
-
-                        # Koordinaten zurückrechnen (relativ zum Crop)
-                        region_width, region_height = region_img.size
-                        for obj in objects:
-                            # Von Region-Koordinaten zu Full-Screen
-                            obj["x_min"] = (obj["x_min"] * region_width + offset_x) / self.screen_width
-                            obj["y_min"] = (obj["y_min"] * region_height + offset_y) / self.screen_height
-                            obj["x_max"] = (obj["x_max"] * region_width + offset_x) / self.screen_width
-                            obj["y_max"] = (obj["y_max"] * region_height + offset_y) / self.screen_height
-                            obj["_source_region"] = region_name
-
-                        all_objects.extend(objects)
-                        log.debug(f"    → {len(objects)} in {region_name} gefunden")
-
-                        # Wenn in hochauflösenden Regionen gefunden, stoppe (keine Redundanz)
-                        if region_name in ["bottom_half", "center"] and len(objects) > 0:
-                            break
-
-                except Exception as e:
-                    log.debug(f"    → Fehler in {region_name}: {e}")
-                    continue
-        else:
-            # Legacy: Einzelnes verkleinertes Bild
-            b64 = self._image_to_base64(img, max_size=(800, 600))
-            try:
-                response = await client.post(
-                    f"{MOONDREAM_BASE_URL}/detect",
-                    json={
-                        "image_url": f"data:image/jpeg;base64,{b64}",
-                        "object": element_type
-                    },
-                    timeout=TIMEOUT
-                )
-                response.raise_for_status()
-                result = response.json()
-
-                if "objects" in result:
-                    all_objects = result["objects"]
-                elif "error" in result:
-                    log.warning(f"Moondream Fehler für '{element_type}': {result['error']}")
-
-            except httpx.TimeoutException:
-                log.warning(f"Timeout bei Detect für '{element_type}'")
-            except httpx.HTTPStatusError as e:
-                log.warning(f"HTTP Fehler bei Detect für '{element_type}': {e.response.status_code}")
-            except Exception as e:
-                log.error(f"Fehler bei Detect für '{element_type}': {e}")
-
-        # Deduplizierung (falls mehrere Regionen gleiches Element fanden)
-        all_objects = self._deduplicate_objects(all_objects)
-
-        # Filter: Zu große Boxen entfernen
-        filtered = self._filter_oversized_boxes(all_objects)
-        log.debug(f"  {element_type}: {len(all_objects)} erkannt, {len(filtered)} nach Filterung")
-
-        return filtered
+        log.info(f"{len(elements)} Elemente aus Qwen-VL geparst")
+        return elements
 
     def _deduplicate_objects(self, objects: List[Dict], iou_threshold: float = 0.5) -> List[Dict]:
-        """
-        Entfernt doppelte Erkennungen (gleiche Elemente in verschiedenen Regionen).
-        Verwendet IoU (Intersection over Union) für Vergleich.
-        """
+        """Entfernt doppelte Erkennungen."""
         if len(objects) <= 1:
             return objects
 
@@ -287,7 +239,6 @@ class SetOfMarkEngine:
         for obj in objects:
             is_duplicate = False
             for existing in unique:
-                # IoU berechnen
                 x_min = max(obj["x_min"], existing["x_min"])
                 y_min = max(obj["y_min"], existing["y_min"])
                 x_max = min(obj["x_max"], existing["x_max"])
@@ -307,19 +258,11 @@ class SetOfMarkEngine:
             if not is_duplicate:
                 unique.append(obj)
 
-        log.debug(f"  Deduplizierung: {len(objects)} → {len(unique)} unique")
+        log.debug(f"  Deduplizierung: {len(objects)} -> {len(unique)} unique")
         return unique
 
     def _filter_oversized_boxes(self, objects: List[Dict]) -> List[Dict]:
-        """
-        Filtert Bounding Boxes die zu groß sind (wahrscheinlich falsch erkannt).
-
-        Filterkriterien:
-        - Fläche > 40% vom Bildschirm = zu groß
-        - Breite > 80% vom Bildschirm = zu breit
-        - Höhe > 70% vom Bildschirm = zu hoch
-        - Absolute Größe > 800x600px = zu groß
-        """
+        """Filtert Bounding Boxes die zu groß sind."""
         filtered = []
         for obj in objects:
             x_min = obj.get("x_min", 0)
@@ -327,172 +270,136 @@ class SetOfMarkEngine:
             x_max = obj.get("x_max", 0)
             y_max = obj.get("y_max", 0)
 
-            # Berechne relative Größe (0-1)
             width = x_max - x_min
             height = y_max - y_min
             area = width * height
 
-            # Berechne absolute Pixel-Größe
             pixel_width = int(width * self.screen_width)
             pixel_height = int(height * self.screen_height)
 
-            # Filter 1: Zu große Fläche (> 40% vom Bildschirm)
             if area > 0.40:
-                log.debug(f"  ✂️ Zu große Fläche: {width:.2f}x{height:.2f} = {area:.1%} vom Bildschirm")
                 continue
-
-            # Filter 2: Zu breit (> 80% vom Bildschirm)
             if width > 0.80:
-                log.debug(f"  ✂️ Zu breit: {width:.1%} vom Bildschirm")
                 continue
-
-            # Filter 3: Zu hoch (> 70% vom Bildschirm)
             if height > 0.70:
-                log.debug(f"  ✂️ Zu hoch: {height:.1%} vom Bildschirm")
                 continue
-
-            # Filter 4: Absolute Größe zu groß (> 800x600px)
             if pixel_width > 800 or pixel_height > 600:
-                log.debug(f"  ✂️ Absolute Größe zu groß: {pixel_width}x{pixel_height}px")
                 continue
-
-            # Filter 5: Zu klein
             if width <= 0.01 or height <= 0.01:
-                log.debug(f"  ✂️ Zu klein: {width:.2f}x{height:.2f}")
                 continue
 
-            # Box ist OK
-            log.debug(f"  ✅ OK: {width:.1%}x{height:.1%} ({pixel_width}x{pixel_height}px)")
             filtered.append(obj)
 
         return filtered
-    
+
     def _normalized_to_pixels(
-        self, 
-        x_min: float, 
-        y_min: float, 
-        x_max: float, 
-        y_max: float
+        self,
+        x_min: float,
+        y_min: float,
+        x_max: float,
+        y_max: float,
+        center_x: Optional[float] = None,
+        center_y: Optional[float] = None
     ) -> Tuple[int, int, int, int, int, int]:
-        """
-        Konvertiert normalisierte Koordinaten (0-1) zu absoluten Pixeln.
-        
-        Returns: 
-            (pixel_x, pixel_y, width, height, center_x, center_y)
-            center_x/y sind absolute Koordinaten für PyAutoGUI (inkl. Monitor-Offset)
-        """
-        # Relative Pixel auf dem Monitor
-        pixel_x = int(x_min * self.screen_width)
-        pixel_y = int(y_min * self.screen_height)
-        pixel_x_max = int(x_max * self.screen_width)
-        pixel_y_max = int(y_max * self.screen_height)
-        
-        width = pixel_x_max - pixel_x
-        height = pixel_y_max - pixel_y
-        
-        # Absolute Koordinaten für PyAutoGUI (mit Monitor-Offset)
-        center_x = self.monitor_offset_x + pixel_x + width // 2
-        center_y = self.monitor_offset_y + pixel_y + height // 2
-        
-        return pixel_x, pixel_y, width, height, center_x, center_y
-    
+        """Konvertiert normalisierte Koordinaten (0-1) zu absoluten Pixeln."""
+        relative_pixel_x = int(x_min * self.screen_width)
+        relative_pixel_y = int(y_min * self.screen_height)
+        relative_pixel_x_max = int(x_max * self.screen_width)
+        relative_pixel_y_max = int(y_max * self.screen_height)
+
+        width = relative_pixel_x_max - relative_pixel_x
+        height = relative_pixel_y_max - relative_pixel_y
+
+        if center_x is not None and center_y is not None:
+            pixel_center_x = self.monitor_offset_x + int(center_x * self.screen_width)
+            pixel_center_y = self.monitor_offset_y + int(center_y * self.screen_height)
+        else:
+            pixel_center_x = self.monitor_offset_x + relative_pixel_x + width // 2
+            pixel_center_y = self.monitor_offset_y + relative_pixel_y + height // 2
+
+        return relative_pixel_x, relative_pixel_y, width, height, pixel_center_x, pixel_center_y
+
     async def scan_screen(self, element_types: Optional[List[str]] = None, use_zoom: bool = True) -> List[UIElement]:
-        """
-        Scannt den Bildschirm nach UI-Elementen.
-
-        Args:
-            element_types: Liste von Element-Typen zum Suchen (default: wichtigste Typen)
-            use_zoom: Multi-Resolution + Smart Crop verwenden (empfohlen für kleine Elemente)
-
-        Returns:
-            Liste von erkannten UIElements
-        """
+        """Scannt den Bildschirm nach UI-Elementen via Qwen-VL."""
         self.elements = []
 
-        # DEFAULT: Nur die wichtigsten Element-Typen scannen (für Performance)
         default_priority_types = [
-            "text field", "input field", "textbox", "chat input",  # Eingabefelder
-            "button", "send button",  # Buttons
+            "text field", "input field", "textbox", "chat input",
+            "button", "send button",
         ]
 
         types_to_scan = element_types or default_priority_types
         self._last_scan_types = types_to_scan
 
-        # Screenshot machen
         self.screenshot = self._capture_screenshot()
 
-        zoom_status = "mit Zoom/Crop" if use_zoom else "Standard"
-        log.info(f"🔍 Scanne nach {len(types_to_scan)} Element-Typen ({zoom_status}): {', '.join(types_to_scan[:3])}...")
+        log.info(f"Scanne nach {len(types_to_scan)} Element-Typen via Qwen-VL: {', '.join(types_to_scan[:3])}...")
+
+        detected = self._detect_all_elements(self.screenshot, types_to_scan)
+        detected = self._deduplicate_objects(detected)
+        detected = self._filter_oversized_boxes(detected)
 
         element_id = 1
+        for obj in detected:
+            x_min = obj.get("x_min", 0)
+            y_min = obj.get("y_min", 0)
+            x_max = obj.get("x_max", 0)
+            y_max = obj.get("y_max", 0)
+            point_center_x = obj.get("center_x")
+            point_center_y = obj.get("center_y")
+            elem_type = obj.get("element_type", "unknown")
+            elem_text = obj.get("text", "")
 
-        # Für jeden Element-Typ Moondream aufrufen
-        for elem_type in types_to_scan:
-            detected = await self._detect_elements(self.screenshot, elem_type, use_zoom=use_zoom)
+            if x_max <= x_min or y_max <= y_min:
+                continue
 
-            for obj in detected:
-                x_min = obj.get("x_min", 0)
-                y_min = obj.get("y_min", 0)
-                x_max = obj.get("x_max", 0)
-                y_max = obj.get("y_max", 0)
+            px, py, w, h, cx, cy = self._normalized_to_pixels(
+                x_min, y_min, x_max, y_max,
+                center_x=point_center_x, center_y=point_center_y
+            )
 
-                # Validierung: Überspringe ungültige Bounding Boxes
-                if x_max <= x_min or y_max <= y_min:
-                    log.debug(f"Überspringe ungültiges Element: {obj}")
-                    continue
+            element = UIElement(
+                id=element_id,
+                element_type=elem_type,
+                x_min=x_min,
+                y_min=y_min,
+                x_max=x_max,
+                y_max=y_max,
+                pixel_x=px,
+                pixel_y=py,
+                pixel_width=w,
+                pixel_height=h,
+                center_x=cx,
+                center_y=cy,
+                confidence=obj.get("confidence", 1.0),
+                text=elem_text
+            )
 
-                # Zu Pixeln konvertieren
-                px, py, w, h, cx, cy = self._normalized_to_pixels(x_min, y_min, x_max, y_max)
+            self.elements.append(element)
+            element_id += 1
 
-                # Element erstellen
-                element = UIElement(
-                    id=element_id,
-                    element_type=elem_type,
-                    x_min=x_min,
-                    y_min=y_min,
-                    x_max=x_max,
-                    y_max=y_max,
-                    pixel_x=px,
-                    pixel_y=py,
-                    pixel_width=w,
-                    pixel_height=h,
-                    center_x=cx,
-                    center_y=cy,
-                    confidence=obj.get("confidence", 1.0)
-                )
-
-                self.elements.append(element)
-                element_id += 1
-
-                source = obj.get("_source_region", "unknown")
-                log.debug(f"  [{element.id}] {elem_type} @ ({cx}, {cy}) from {source}")
-
-        log.info(f"✅ {len(self.elements)} Elemente erkannt")
+        log.info(f"{len(self.elements)} Elemente erkannt")
         return self.elements
-    
+
     def get_element_by_id(self, element_id: int) -> Optional[UIElement]:
         """Gibt ein Element anhand seiner ID zurück."""
         for elem in self.elements:
             if elem.id == element_id:
                 return elem
         return None
-    
+
     def get_elements_by_type(self, element_type: str) -> List[UIElement]:
         """Gibt alle Elemente eines bestimmten Typs zurück."""
         return [e for e in self.elements if e.element_type == element_type]
-    
+
     def create_annotated_screenshot(self) -> Optional[Image.Image]:
-        """
-        Erstellt einen Screenshot mit nummerierten Markierungen.
-        Nützlich für Debugging und Visualisierung.
-        """
+        """Erstellt einen Screenshot mit nummerierten Markierungen."""
         if not self.screenshot:
             return None
-        
+
         img = self.screenshot.copy()
         draw = ImageDraw.Draw(img)
-        
-        # Versuche eine Schrift zu laden
+
         try:
             font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
         except:
@@ -500,8 +407,7 @@ class SetOfMarkEngine:
                 font = ImageFont.truetype("/usr/share/fonts/TTF/DejaVuSans-Bold.ttf", 16)
             except:
                 font = ImageFont.load_default()
-        
-        # Farben für verschiedene Element-Typen
+
         type_colors = {
             "button": "red",
             "text field": "blue",
@@ -511,40 +417,37 @@ class SetOfMarkEngine:
             "link": "purple",
             "icon": "orange",
         }
-        
+
         for elem in self.elements:
             color = type_colors.get(elem.element_type, "red")
-            
-            # Rechteck zeichnen
+
             draw.rectangle(
-                [elem.pixel_x, elem.pixel_y, 
+                [elem.pixel_x, elem.pixel_y,
                  elem.pixel_x + elem.pixel_width, elem.pixel_y + elem.pixel_height],
                 outline=color,
                 width=2
             )
-            
-            # Label-Hintergrund
+
             label = f"[{elem.id}]"
             label_width = len(label) * 8 + 4
             draw.rectangle(
                 [elem.pixel_x, elem.pixel_y - 20, elem.pixel_x + label_width, elem.pixel_y],
                 fill=color
             )
-            
-            # Label-Text
+
             draw.text((elem.pixel_x + 2, elem.pixel_y - 18), label, fill="white", font=font)
-        
+
         return img
-    
+
     def to_dict_list(self) -> List[Dict[str, Any]]:
-        """Konvertiert alle Elemente zu einer Liste von Dicts für JSON-RPC."""
+        """Konvertiert alle Elemente zu einer Liste von Dicts."""
         return [
             {
                 "id": e.id,
                 "type": e.element_type,
-                "x": e.center_x,  # Direkt nutzbar für click_at
+                "x": e.center_x,
                 "y": e.center_y,
-                "click_x": e.center_x,  # Alias für Kompatibilität
+                "click_x": e.center_x,
                 "click_y": e.center_y,
                 "bounds": {
                     "x": e.pixel_x,
@@ -567,223 +470,203 @@ som_engine = SetOfMarkEngine()
 # RPC METHODEN
 # ==============================================================================
 
-@method
-async def scan_ui_elements(element_types: Optional[List[str]] = None, use_zoom: bool = True) -> Union[Success, Error]:
+@tool(
+    name="scan_ui_elements",
+    description="Scannt den Bildschirm nach klickbaren UI-Elementen via Qwen-VL. Gibt IDs und Koordinaten zurück.",
+    parameters=[
+        P("element_types", "array", "Liste von Element-Typen (z.B. button, text field, search bar, chat input)", required=False, default=None),
+        P("use_zoom", "boolean", "Multi-Resolution Erkennung", required=False, default=True),
+    ],
+    capabilities=["vision", "ui", "som"],
+    category=C.UI
+)
+async def scan_ui_elements(element_types: Optional[List[str]] = None, use_zoom: bool = True) -> dict:
     """
     Scannt den Bildschirm nach klickbaren UI-Elementen.
-
-    Args:
-        element_types: Optional - Liste von Element-Typen
-                       (z.B. ["button", "text field", "search bar", "chat input"])
-                       Default: Wichtigste Typen
-        use_zoom: Multi-Resolution Erkennung (empfohlen für kleine Elemente)
-                  Default: True
-
-    Returns:
-        Liste von erkannten Elementen mit IDs und Koordinaten.
-        Nutze die x/y Koordinaten direkt mit click_at(x, y).
-
-    Beispiel:
-        scan_ui_elements(["button", "text field"], use_zoom=True)
-        → {"count": 5, "elements": [{"id": 1, "type": "button", "x": 500, "y": 300}, ...]}
     """
     try:
         elements = await som_engine.scan_screen(element_types, use_zoom=use_zoom)
 
         if not elements:
-            return Success({
+            return {
                 "count": 0,
                 "elements": [],
                 "message": "Keine UI-Elemente erkannt. Versuche anderen Element-Typ oder prüfe ob App im Fokus ist."
-            })
+            }
 
         zoom_msg = " (mit Zoom-Erkennung)" if use_zoom else ""
-        return Success({
+        return {
             "count": len(elements),
             "elements": som_engine.to_dict_list(),
             "message": f"{len(elements)} Elemente erkannt{zoom_msg}. Verwende click_at(x, y) mit den angegebenen Koordinaten."
-        })
+        }
 
     except Exception as e:
         log.error(f"Fehler beim Scannen: {e}", exc_info=True)
-        return Error(code=-32000, message=str(e))
+        raise Exception(str(e))
 
 
-@method
-async def get_element_coordinates(element_id: int) -> Union[Success, Error]:
+@tool(
+    name="get_element_coordinates",
+    description="Gibt die Klick-Koordinaten für ein Element zurück (aus scan_ui_elements).",
+    parameters=[
+        P("element_id", "integer", "Die ID des Elements (aus scan_ui_elements)"),
+    ],
+    capabilities=["vision", "ui", "som"],
+    category=C.UI
+)
+async def get_element_coordinates(element_id: int) -> dict:
     """
     Gibt die Klick-Koordinaten für ein Element zurück.
-    
-    Args:
-        element_id: Die ID des Elements (aus scan_ui_elements)
-    
-    Returns:
-        x, y Koordinaten für click_at
     """
     element = som_engine.get_element_by_id(element_id)
-    
+
     if not element:
-        return Error(
-            code=-32001, 
-            message=f"Element [{element_id}] nicht gefunden. Führe zuerst scan_ui_elements aus."
+        raise Exception(
+            f"Element [{element_id}] nicht gefunden. Führe zuerst scan_ui_elements aus."
         )
-    
-    return Success({
+
+    return {
         "id": element.id,
         "type": element.element_type,
         "x": element.center_x,
         "y": element.center_y,
         "instruction": f"Nutze click_at(x={element.center_x}, y={element.center_y})"
-    })
+    }
 
 
-@method
-async def find_and_click_element(element_type: str) -> Union[Success, Error]:
+@tool(
+    name="find_and_click_element",
+    description="Sucht ein Element eines bestimmten Typs und gibt Klick-Koordinaten zurück. Kombiniert scan + get_coordinates.",
+    parameters=[
+        P("element_type", "string", "z.B. button, search bar, text field, chat input"),
+    ],
+    capabilities=["vision", "ui", "som"],
+    category=C.UI
+)
+async def find_and_click_element(element_type: str) -> dict:
     """
     Sucht ein Element eines bestimmten Typs und gibt Klick-Koordinaten zurück.
-    Kombiniert scan + get_coordinates in einem Aufruf.
-    
-    Args:
-        element_type: z.B. "button", "search bar", "text field", "chat input"
-    
-    Returns:
-        Koordinaten des ersten gefundenen Elements
     """
     try:
         elements = await som_engine.scan_screen([element_type])
-        
+
         if not elements:
-            return Error(
-                code=-32002,
-                message=f"Kein '{element_type}' auf dem Bildschirm gefunden. "
-                        f"Verfügbare Typen: {', '.join(UI_ELEMENT_TYPES[:5])}..."
+            raise Exception(
+                f"Kein '{element_type}' auf dem Bildschirm gefunden. "
+                f"Verfügbare Typen: {', '.join(UI_ELEMENT_TYPES[:5])}..."
             )
-        
-        # Erstes Element zurückgeben
+
         elem = elements[0]
-        
-        return Success({
+
+        return {
             "found": True,
             "type": element_type,
             "x": elem.center_x,
             "y": elem.center_y,
             "total_found": len(elements),
             "instruction": f"Nutze click_at(x={elem.center_x}, y={elem.center_y})"
-        })
-        
+        }
+
     except Exception as e:
         log.error(f"Fehler bei find_and_click: {e}", exc_info=True)
-        return Error(code=-32000, message=str(e))
+        raise Exception(str(e))
 
 
-@method
-async def describe_screen_elements() -> Union[Success, Error]:
+@tool(
+    name="describe_screen_elements",
+    description="Scannt alle UI-Elemente und gibt eine Beschreibung zurück. Nützlich für den Agent um zu verstehen was auf dem Bildschirm ist.",
+    parameters=[],
+    capabilities=["vision", "ui", "som"],
+    category=C.UI
+)
+async def describe_screen_elements() -> dict:
     """
     Scannt alle UI-Elemente und gibt eine Beschreibung zurück.
-    Nützlich für den Agent um zu verstehen was auf dem Bildschirm ist.
-    
-    Scannt nur wichtige Element-Typen für schnellere Antwort.
-    
-    Returns:
-        Textuelle Beschreibung aller Elemente
     """
     try:
-        # Wichtigste Element-Typen scannen (schneller)
         priority_types = [
-            "button", "text field", "search bar", "chat input", 
+            "button", "text field", "search bar", "chat input",
             "link", "input field", "send button"
         ]
         elements = await som_engine.scan_screen(priority_types)
-        
+
         if not elements:
-            return Success({
+            return {
                 "description": "Keine klickbaren Elemente erkannt.",
                 "elements": []
-            })
-        
-        # Beschreibung erstellen
+            }
+
         lines = [f"Erkannte UI-Elemente ({len(elements)}):"]
         for e in elements:
             lines.append(f"  [{e.id}] {e.element_type} bei ({e.center_x}, {e.center_y})")
-        
-        return Success({
+
+        return {
             "description": "\n".join(lines),
             "elements": som_engine.to_dict_list()
-        })
-        
+        }
+
     except Exception as e:
         log.error(f"Fehler bei describe_screen: {e}", exc_info=True)
-        return Error(code=-32000, message=str(e))
+        raise Exception(str(e))
 
 
-@method  
-async def save_annotated_screenshot(filename: str = "som_screenshot.png") -> Union[Success, Error]:
+@tool(
+    name="save_annotated_screenshot",
+    description="Speichert einen Screenshot mit markierten UI-Elementen. Nützlich für Debugging.",
+    parameters=[
+        P("filename", "string", "Dateiname für den Screenshot", required=False, default="som_screenshot.png"),
+    ],
+    capabilities=["vision", "ui", "som"],
+    category=C.UI
+)
+async def save_annotated_screenshot(filename: str = "som_screenshot.png") -> dict:
     """
     Speichert einen Screenshot mit markierten UI-Elementen.
-    Nützlich für Debugging.
-    
-    Args:
-        filename: Dateiname für den Screenshot
     """
     try:
         if not som_engine.elements:
-            # Erst scannen falls keine Elemente vorhanden
             await som_engine.scan_screen()
-        
+
         img = som_engine.create_annotated_screenshot()
-        
+
         if not img:
-            return Error(code=-32003, message="Kein Screenshot verfügbar")
-        
-        # Speichern
+            raise Exception("Kein Screenshot verfügbar")
+
         save_dir = os.path.expanduser("~/dev/timus/results")
         os.makedirs(save_dir, exist_ok=True)
         save_path = os.path.join(save_dir, filename)
         img.save(save_path)
-        
-        log.info(f"📸 Screenshot gespeichert: {save_path}")
-        
-        return Success({
+
+        log.info(f"Screenshot gespeichert: {save_path}")
+
+        return {
             "saved": True,
             "path": save_path,
             "elements_marked": len(som_engine.elements)
-        })
-        
+        }
+
     except Exception as e:
         log.error(f"Fehler beim Speichern: {e}", exc_info=True)
-        return Error(code=-32000, message=str(e))
+        raise Exception(str(e))
 
 
-@method
-async def get_supported_element_types() -> Success:
+@tool(
+    name="get_supported_element_types",
+    description="Gibt alle unterstützten UI-Element-Typen zurück.",
+    parameters=[],
+    capabilities=["vision", "ui", "som"],
+    category=C.UI
+)
+async def get_supported_element_types() -> dict:
     """
     Gibt alle unterstützten UI-Element-Typen zurück.
-    
-    Returns:
-        Liste der Element-Typen die gescannt werden können
     """
-    return Success({
+    return {
         "types": UI_ELEMENT_TYPES,
         "count": len(UI_ELEMENT_TYPES),
         "categories": {
             "standard": ["button", "text field", "input field", "search bar", "icon", "link", "menu", "checkbox", "dropdown"],
             "chat_interface": ["chat input", "message box", "textbox", "textarea", "send button", "submit button"]
         }
-    })
-
-
-# ==============================================================================
-# REGISTRIERUNG
-# ==============================================================================
-
-register_tool("scan_ui_elements", scan_ui_elements)
-register_tool("get_element_coordinates", get_element_coordinates)
-register_tool("find_and_click_element", find_and_click_element)
-register_tool("describe_screen_elements", describe_screen_elements)
-register_tool("save_annotated_screenshot", save_annotated_screenshot)
-register_tool("get_supported_element_types", get_supported_element_types)
-
-log.info("✅ Set-of-Mark Tool v1.1 (Merged) registriert")
-log.info(f"   Unterstützte Typen: {len(UI_ELEMENT_TYPES)}")
-log.info("   Tools: scan_ui_elements, get_element_coordinates, find_and_click_element, "
-         "describe_screen_elements, save_annotated_screenshot, get_supported_element_types")
+    }

@@ -20,19 +20,20 @@ import json
 import logging
 import os
 import re
-from typing import Dict, List, Any, Optional, Tuple, Union
+from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 from urllib.parse import urljoin, urlparse, urlunparse, parse_qs, urlencode
 from dataclasses import dataclass, field
 from enum import Enum
 from dotenv import load_dotenv
-from jsonrpcserver import method, Success, Error
 from openai import OpenAI, RateLimitError
 from utils.openai_compat import prepare_openai_params
 
+# V2 Tool-Registry
+from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
+
 # Interne Imports
 from tools.planner.planner_helpers import call_tool_internal
-from tools.universal_tool_caller import register_tool
 
 # Numpy für Embeddings - optional
 try:
@@ -1681,13 +1682,24 @@ def _create_text_report(session: DeepResearchSession, include_methodology: bool 
 # ÖFFENTLICHE RPC-METHODEN (erweitert für v5.0)
 # ==============================================================================
 
-@method
+@tool(
+    name="start_deep_research",
+    description="Startet eine akademische Tiefenrecherche (v5.0) mit Quellenqualitätsbewertung, These-Antithese-Synthese Analyse und erweiterter Fakten-Verifikation.",
+    parameters=[
+        P("query", "string", "Die Hauptsuchanfrage"),
+        P("focus_areas", "array", "Optionale Liste von Fokusthemen", required=False),
+        P("max_depth", "integer", "Maximale Tiefe der Recherche (1-5)", required=False),
+        P("verification_mode", "string", "Verifikationsmodus: strict, moderate oder light", required=False, default="strict"),
+    ],
+    capabilities=["research", "deep_research"],
+    category=C.RESEARCH
+)
 async def start_deep_research(
     query: str,
     focus_areas: Optional[List[str]] = None,
     max_depth: Optional[int] = None,
     verification_mode: str = "strict"
-) -> Union[Success, Error]:
+) -> dict:
     """
     Startet eine akademische Tiefenrecherche (v5.0).
 
@@ -1726,11 +1738,11 @@ async def start_deep_research(
         initial_sources = await _perform_initial_search(query, current_session)
 
         if not initial_sources:
-            return Success({
+            return {
                 "session_id": session_id,
                 "status": "no_results",
                 "message": "Keine Suchergebnisse gefunden."
-            })
+            }
 
         # PHASE 2: RELEVANZ-BEWERTUNG
         logger.info("⚖️ Phase 2: Relevanz-Bewertung...")
@@ -1742,11 +1754,11 @@ async def start_deep_research(
         )
 
         if not relevant_sources:
-            return Success({
+            return {
                 "session_id": session_id,
                 "status": "no_relevant_sources",
                 "message": "Keine relevanten Quellen gefunden."
-            })
+            }
 
         # PHASE 3: DEEP DIVE MIT QUALITÄTSBEWERTUNG
         logger.info(f"🏊 Phase 3: Deep Dive in {len(relevant_sources)} Quellen (mit Qualitätsbewertung)...")
@@ -1832,7 +1844,7 @@ async def start_deep_research(
         except Exception as e:
             logger.error(f"❌ Fehler beim Report-Erstellen: {e}")
 
-        return Success({
+        return {
             "session_id": session_id,
             "status": "completed",
             "version": "5.0",
@@ -1849,36 +1861,56 @@ async def start_deep_research(
             "report_filepath": filepath,
             "methodology_notes": current_session.methodology_notes,
             "limitations": current_session.limitations
-        })
+        }
 
     except Exception as e:
-        logger.error(f"❌ Fehler in Session {session_id}: {e}", exc_info=True)
-        return Error(code=-32000, message=f"Recherche-Fehler: {str(e)}")
+        logger.error(f"Fehler in Session {session_id}: {e}", exc_info=True)
+        raise Exception(f"Recherche-Fehler: {str(e)}")
 
 
-@method
-async def get_research_status(session_id: str) -> Union[Success, Error]:
+@tool(
+    name="get_research_status",
+    description="Gibt den Status einer laufenden oder abgeschlossenen Tiefenrecherche-Session zurück.",
+    parameters=[
+        P("session_id", "string", "Die Session-ID der Recherche"),
+    ],
+    capabilities=["research", "deep_research"],
+    category=C.RESEARCH
+)
+async def get_research_status(session_id: str) -> dict:
     """Gibt den Status einer Recherche zurück."""
     session = research_sessions.get(session_id)
 
     if not session:
-        return Error(code=-32602, message=f"Session '{session_id}' nicht gefunden.")
+        raise Exception(f"Session '{session_id}' nicht gefunden.")
 
-    return Success({
+    return {
         "session_id": session_id,
         "query": session.query,
         "summary": _get_research_metadata_summary(session)
-    })
+    }
 
 
-@method
+@tool(
+    name="generate_research_report",
+    description="Erstellt einen druckreifen akademischen Bericht (v5.0) mit Executive Summary, Methodik, These-Antithese-Synthese und Quellenqualitäts-Tabellen.",
+    parameters=[
+        P("session_id", "string", "Die Session-ID der Recherche", required=False),
+        P("session_id_to_report", "string", "Alternative Session-ID (Alias)", required=False),
+        P("format", "string", "Report-Format: markdown oder text", required=False, default="markdown"),
+        P("report_format_type", "string", "Alternatives Format-Feld (Alias)", required=False),
+        P("include_methodology", "boolean", "Ob Methodik-Sektion enthalten sein soll", required=False, default="true"),
+    ],
+    capabilities=["research", "deep_research"],
+    category=C.RESEARCH
+)
 async def generate_research_report(
     session_id: Optional[str] = None,
     session_id_to_report: Optional[str] = None,
     format: str = "markdown",
     report_format_type: Optional[str] = None,
     include_methodology: bool = True
-) -> Union[Success, Error]:
+) -> dict:
     """
     Erstellt einen druckreifen akademischen Bericht (v5.0).
 
@@ -1902,12 +1934,12 @@ async def generate_research_report(
     actual_format = report_format_type or format
 
     if not actual_session_id:
-        return Error(code=-32602, message="session_id ist erforderlich.")
+        raise Exception("session_id ist erforderlich.")
 
     session = research_sessions.get(actual_session_id)
 
     if not session:
-        return Error(code=-32602, message=f"Session '{actual_session_id}' nicht gefunden.")
+        raise Exception(f"Session '{actual_session_id}' nicht gefunden.")
 
     # Report erstellen
     logger.info(f"📄 Erstelle akademischen Report für {actual_session_id}...")
@@ -1953,7 +1985,7 @@ async def generate_research_report(
         logger.error(f"Report-Speicherung fehlgeschlagen: {e}")
 
     if filepath:
-        return Success({
+        return {
             "session_id": actual_session_id,
             "status": "report_created",
             "format": actual_format,
@@ -1961,10 +1993,10 @@ async def generate_research_report(
             "message": "Akademischer Bericht erfolgreich erstellt.",
             "summary": _get_research_metadata_summary(session),
             "version": "5.0"
-        })
+        }
     else:
         # Fallback: Content im Response
-        return Success({
+        return {
             "session_id": actual_session_id,
             "status": "report_created_not_saved",
             "format": actual_format,
@@ -1972,16 +2004,7 @@ async def generate_research_report(
             "message": "Bericht erstellt, aber Speichern fehlgeschlagen. Content im Response.",
             "summary": _get_research_metadata_summary(session),
             "version": "5.0"
-        })
+        }
 
 
-# ==============================================================================
-# REGISTRIERUNG
-# ==============================================================================
-
-register_tool("start_deep_research", start_deep_research)
-register_tool("get_research_status", get_research_status)
-register_tool("generate_research_report", generate_research_report)
-
-logger.info("✅ Deep Research Tool v5.0 - Academic Excellence Edition registriert.")
 

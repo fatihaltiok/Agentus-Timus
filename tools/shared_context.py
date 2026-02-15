@@ -55,6 +55,12 @@ try:
 except ImportError:
     object_detection_engine_instance = None
 
+# Qwen2.5-VL Vision Language Model Engine für UI-Automation
+try:
+    from tools.engines.qwen_vl_engine import qwen_vl_engine_instance
+except ImportError:
+    qwen_vl_engine_instance = None
+
 # --- Globaler Logger ---
 # Der Logger wird im mcp_server konfiguriert. Hier wird nur der Zugriffspunkt definiert.
 log = logging.getLogger("timus.context")

@@ -1,0 +1,6 @@
+terminal_control:
+  file: "skills/terminal_control_skill.py"
+  description: "Skill to execute shell commands with safety checks"
+image_loader:
+  file: "skills/image_loader_skill.py"
+  description: "Skill to load images from path or bytes"

@@ -14,11 +14,10 @@ import logging
 import asyncio
 import os
 import httpx
-from typing import List, Dict, Optional, Union, Tuple
+from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
-from jsonrpcserver import method, Success, Error
 
-from tools.universal_tool_caller import register_tool
+from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 from dotenv import load_dotenv
 
 # --- Setup ---
@@ -77,13 +76,9 @@ class HybridDetectionEngine:
             return None
 
     async def find_by_text(self, text: str) -> Optional[DetectedElement]:
-        """
-        Findet ein Element anhand seines Textes (sehr präzise).
-        Nutzt OCR + Visual Grounding.
-        """
-        log.info(f"🔍 Text-Suche: '{text}'")
+        """Findet ein Element anhand seines Textes (sehr präzise)."""
+        log.info(f"Text-Suche: '{text}'")
 
-        # Visual Grounding Tool nutzen
         result = await self._call_tool("find_text_coordinates", {"text_to_find": text})
 
         if result and result.get("found"):
@@ -91,7 +86,7 @@ class HybridDetectionEngine:
             x = coords.get("center_x", coords.get("x", 0))
             y = coords.get("center_y", coords.get("y", 0))
 
-            log.info(f"✅ Text gefunden bei ({x}, {y})")
+            log.info(f"Text gefunden bei ({x}, {y})")
 
             return DetectedElement(
                 method="ocr",
@@ -104,7 +99,7 @@ class HybridDetectionEngine:
                 metadata=result
             )
 
-        log.warning(f"⚠️ Text '{text}' nicht gefunden")
+        log.warning(f"Text '{text}' nicht gefunden")
         return None
 
     async def find_by_object_detection(
@@ -112,13 +107,9 @@ class HybridDetectionEngine:
         element_type: str,
         prefer_index: int = 0
     ) -> Optional[DetectedElement]:
-        """
-        Findet ein Element via Object Detection (SoM Tool).
-        Gut für Icons, Buttons ohne Text.
-        """
-        log.info(f"🔍 Object Detection: '{element_type}'")
+        """Findet ein Element via Object Detection (SoM Tool)."""
+        log.info(f"Object Detection: '{element_type}'")
 
-        # SoM Tool nutzen
         result = await self._call_tool("scan_ui_elements", {"element_types": [element_type]})
 
         if result and result.get("count", 0) > 0:
@@ -126,7 +117,7 @@ class HybridDetectionEngine:
             if prefer_index < len(elements):
                 elem = elements[prefer_index]
 
-                log.info(f"✅ {element_type} gefunden bei ({elem['x']}, {elem['y']})")
+                log.info(f"{element_type} gefunden bei ({elem['x']}, {elem['y']})")
 
                 return DetectedElement(
                     method="som",
@@ -138,7 +129,7 @@ class HybridDetectionEngine:
                     metadata={"total_found": len(elements), "index": prefer_index}
                 )
 
-        log.warning(f"⚠️ {element_type} nicht gefunden")
+        log.warning(f"{element_type} nicht gefunden")
         return None
 
     async def refine_with_mouse_feedback(
@@ -148,16 +139,9 @@ class HybridDetectionEngine:
         target_cursor: str = "ibeam",
         radius: int = 80
     ) -> Optional[Tuple[int, int, str]]:
-        """
-        Verfeinert Koordinaten mit Mouse Feedback Tool.
-        Sucht in der Umgebung nach dem richtigen Cursor-Typ.
+        """Verfeinert Koordinaten mit Mouse Feedback Tool."""
+        log.info(f"Mouse Feedback Verfeinerung um ({x}, {y}), Ziel: {target_cursor}")
 
-        Returns:
-            (refined_x, refined_y, cursor_type) oder None
-        """
-        log.info(f"🔍 Mouse Feedback Verfeinerung um ({x}, {y}), Ziel: {target_cursor}")
-
-        # Mouse Feedback Tool nutzen
         result = await self._call_tool(
             "find_text_field_nearby" if target_cursor == "ibeam" else "search_for_element",
             {
@@ -172,10 +156,10 @@ class HybridDetectionEngine:
             refined_y = result.get("y", y)
             cursor = result.get("cursor_type", "arrow")
 
-            log.info(f"✅ Verfeinert: ({refined_x}, {refined_y}), Cursor: {cursor}")
+            log.info(f"Verfeinert: ({refined_x}, {refined_y}), Cursor: {cursor}")
             return refined_x, refined_y, cursor
 
-        log.warning("⚠️ Mouse Feedback Verfeinerung fehlgeschlagen")
+        log.warning("Mouse Feedback Verfeinerung fehlgeschlagen")
         return None
 
     async def smart_find_element(
@@ -185,23 +169,7 @@ class HybridDetectionEngine:
         refine: bool = True,
         target_cursor: Optional[str] = None
     ) -> Optional[DetectedElement]:
-        """
-        Intelligente Element-Suche mit Hybrid-Ansatz.
-
-        Strategie:
-        1. Wenn Text gegeben: OCR-basierte Suche (sehr präzise)
-        2. Wenn element_type: Object Detection (SoM)
-        3. Optional: Mouse Feedback Verfeinerung
-
-        Args:
-            text: Text des Elements (höchste Priorität)
-            element_type: Typ des Elements ("button", "text field", etc.)
-            refine: Mit Mouse Feedback verfeinern?
-            target_cursor: Erwarteter Cursor-Typ für Verfeinerung
-
-        Returns:
-            DetectedElement oder None
-        """
+        """Intelligente Element-Suche mit Hybrid-Ansatz."""
         element = None
 
         # 1. Text-basierte Suche (wenn Text gegeben)
@@ -214,7 +182,6 @@ class HybridDetectionEngine:
 
         # 3. Mouse Feedback Verfeinerung
         if element and refine:
-            # Standard-Cursor für Element-Typ ableiten
             if not target_cursor:
                 if "text" in element.element_type.lower() or "input" in element.element_type.lower():
                     target_cursor = "ibeam"
@@ -231,7 +198,6 @@ class HybridDetectionEngine:
 
             if refined:
                 refined_x, refined_y, cursor = refined
-                # Element-Koordinaten aktualisieren
                 old_x, old_y = element.x, element.y
                 element.x = refined_x
                 element.y = refined_y
@@ -242,7 +208,7 @@ class HybridDetectionEngine:
                     "refinement_offset": (refined_x - old_x, refined_y - old_y),
                     "cursor_type": cursor
                 })
-                log.info(f"✅ Verfeinert: ({old_x},{old_y}) → ({refined_x},{refined_y})")
+                log.info(f"Verfeinert: ({old_x},{old_y}) -> ({refined_x},{refined_y})")
 
         return element
 
@@ -255,38 +221,27 @@ hybrid_engine = HybridDetectionEngine()
 # RPC METHODEN
 # ==============================================================================
 
-@method
+@tool(
+    name="hybrid_find_element",
+    description="Intelligente Element-Suche mit Hybrid-Ansatz. Kombiniert OCR (für Text), Object Detection (für Icons/Buttons) und Mouse Feedback (für Feinabstimmung).",
+    parameters=[
+        P("text", "string", "Text des Elements (höchste Priorität)", required=False, default=None),
+        P("element_type", "string", "Typ des Elements (button, text field, icon, etc.)", required=False, default=None),
+        P("refine", "boolean", "Mit Mouse Feedback verfeinern?", required=False, default=True),
+        P("target_cursor", "string", "Erwarteter Cursor-Typ (ibeam, hand, arrow)", required=False, default=None),
+    ],
+    capabilities=["vision", "detection"],
+    category=C.VISION
+)
 async def hybrid_find_element(
     text: Optional[str] = None,
     element_type: Optional[str] = None,
     refine: bool = True,
     target_cursor: Optional[str] = None
-) -> Union[Success, Error]:
-    """
-    Intelligente Element-Suche mit Hybrid-Ansatz.
-
-    Kombiniert OCR (für Text), Object Detection (für Icons/Buttons)
-    und Mouse Feedback (für Feinabstimmung).
-
-    Args:
-        text: Text des Elements (höchste Priorität, z.B. "Anmelden", "Suchen")
-        element_type: Typ des Elements ("button", "text field", "icon", etc.)
-        refine: Mit Mouse Feedback verfeinern? (default: True)
-        target_cursor: Erwarteter Cursor-Typ ("ibeam", "hand", "arrow")
-
-    Returns:
-        Success mit Element-Daten oder Error
-
-    Beispiele:
-        hybrid_find_element(text="Anmelden")  # Sucht Button/Link mit Text "Anmelden"
-        hybrid_find_element(element_type="text field", refine=True)  # Findet Textfeld
-        hybrid_find_element(text="Suchen", element_type="search bar", refine=True)
-    """
+) -> dict:
+    """Intelligente Element-Suche mit Hybrid-Ansatz."""
     if not text and not element_type:
-        return Error(
-            code=-32602,
-            message="Mindestens 'text' oder 'element_type' muss angegeben sein"
-        )
+        raise Exception("Mindestens 'text' oder 'element_type' muss angegeben sein")
 
     try:
         element = await hybrid_engine.smart_find_element(
@@ -297,12 +252,11 @@ async def hybrid_find_element(
         )
 
         if not element:
-            return Error(
-                code=-32001,
-                message=f"Element nicht gefunden (text='{text}', type='{element_type}')"
+            raise Exception(
+                f"Element nicht gefunden (text='{text}', type='{element_type}')"
             )
 
-        return Success({
+        return {
             "found": True,
             "method": element.method,
             "element_type": element.element_type,
@@ -313,34 +267,33 @@ async def hybrid_find_element(
             "bounds": element.bounds,
             "metadata": element.metadata,
             "instruction": f"Nutze click_at(x={element.x}, y={element.y})"
-        })
+        }
 
     except Exception as e:
         log.error(f"Hybrid-Fehler: {e}", exc_info=True)
-        return Error(code=-32000, message=str(e))
+        raise Exception(str(e))
 
 
-@method
+@tool(
+    name="hybrid_find_and_click",
+    description="Findet ein Element mit Hybrid-Ansatz und klickt darauf.",
+    parameters=[
+        P("text", "string", "Text des Elements", required=False, default=None),
+        P("element_type", "string", "Typ des Elements", required=False, default=None),
+        P("refine", "boolean", "Mit Mouse Feedback verfeinern?", required=False, default=True),
+        P("verify", "boolean", "Cursor vor dem Klick überprüfen?", required=False, default=True),
+    ],
+    capabilities=["vision", "detection"],
+    category=C.VISION
+)
 async def hybrid_find_and_click(
     text: Optional[str] = None,
     element_type: Optional[str] = None,
     refine: bool = True,
     verify: bool = True
-) -> Union[Success, Error]:
-    """
-    Findet ein Element mit Hybrid-Ansatz und klickt darauf.
-
-    Args:
-        text: Text des Elements
-        element_type: Typ des Elements
-        refine: Mit Mouse Feedback verfeinern?
-        verify: Cursor vor dem Klick überprüfen?
-
-    Returns:
-        Success mit Klick-Ergebnis oder Error
-    """
+) -> dict:
+    """Findet ein Element mit Hybrid-Ansatz und klickt darauf."""
     try:
-        # 1. Element finden
         element = await hybrid_engine.smart_find_element(
             text=text,
             element_type=element_type,
@@ -348,12 +301,10 @@ async def hybrid_find_and_click(
         )
 
         if not element:
-            return Error(
-                code=-32001,
-                message=f"Element nicht gefunden (text='{text}', type='{element_type}')"
+            raise Exception(
+                f"Element nicht gefunden (text='{text}', type='{element_type}')"
             )
 
-        # 2. Klicken
         click_method = "click_with_verification" if verify else "click_at"
         click_result = await hybrid_engine._call_tool(
             click_method,
@@ -363,11 +314,11 @@ async def hybrid_find_and_click(
         success = click_result.get("success", False) if click_result else False
 
         if success:
-            log.info(f"✅ Erfolgreich geklickt bei ({element.x}, {element.y})")
+            log.info(f"Erfolgreich geklickt bei ({element.x}, {element.y})")
         else:
-            log.warning(f"⚠️ Klick möglicherweise fehlgeschlagen")
+            log.warning(f"Klick möglicherweise fehlgeschlagen")
 
-        return Success({
+        return {
             "clicked": True,
             "success": success,
             "method": element.method,
@@ -379,41 +330,33 @@ async def hybrid_find_and_click(
                 "confidence": element.confidence
             },
             "click_result": click_result
-        })
+        }
 
     except Exception as e:
         log.error(f"Hybrid-Klick-Fehler: {e}", exc_info=True)
-        return Error(code=-32000, message=str(e))
+        raise Exception(str(e))
 
 
-@method
+@tool(
+    name="hybrid_find_text_field_and_type",
+    description="Findet ein Textfeld und tippt Text hinein.",
+    parameters=[
+        P("text", "string", "Text zum Eintippen"),
+        P("field_text", "string", "Text im/beim Textfeld (Placeholder, Label)", required=False, default=None),
+        P("field_type", "string", "Element-Typ: text field, input field, chat input, search bar", required=False, default="text field"),
+        P("press_enter", "boolean", "Enter-Taste nach dem Tippen drücken?", required=False, default=False),
+    ],
+    capabilities=["vision", "detection"],
+    category=C.VISION
+)
 async def hybrid_find_text_field_and_type(
     text: str,
     field_text: Optional[str] = None,
     field_type: str = "text field",
     press_enter: bool = False
-) -> Union[Success, Error]:
-    """
-    Findet ein Textfeld und tippt Text hinein.
-
-    Args:
-        text: Text zum Eintippen
-        field_text: Text im/beim Textfeld (z.B. Placeholder, Label)
-        field_type: Element-Typ ("text field", "input field", "chat input", "search bar")
-        press_enter: Enter-Taste nach dem Tippen drücken?
-
-    Returns:
-        Success mit Ergebnis oder Error
-
-    Beispiel:
-        hybrid_find_text_field_and_type(
-            text="Hallo Welt",
-            field_text="Nachricht eingeben",
-            press_enter=True
-        )
-    """
+) -> dict:
+    """Findet ein Textfeld und tippt Text hinein."""
     try:
-        # 1. Textfeld finden
         element = await hybrid_engine.smart_find_element(
             text=field_text,
             element_type=field_type,
@@ -422,18 +365,15 @@ async def hybrid_find_text_field_and_type(
         )
 
         if not element:
-            return Error(
-                code=-32001,
-                message=f"Textfeld nicht gefunden (field_text='{field_text}', type='{field_type}')"
+            raise Exception(
+                f"Textfeld nicht gefunden (field_text='{field_text}', type='{field_type}')"
             )
 
-        # 2. Klicken (mit Verifikation dass Cursor = ibeam)
         click_result = await hybrid_engine._call_tool(
             "click_with_verification",
             {"x": element.x, "y": element.y}
         )
 
-        # 3. Text tippen
         type_result = await hybrid_engine._call_tool(
             "type_text",
             {"text": text, "press_enter": press_enter}
@@ -444,7 +384,7 @@ async def hybrid_find_text_field_and_type(
             type_result and type_result.get("success", False)
         )
 
-        return Success({
+        return {
             "success": success,
             "typed": text,
             "method": element.method,
@@ -452,21 +392,8 @@ async def hybrid_find_text_field_and_type(
             "pressed_enter": press_enter,
             "click_result": click_result,
             "type_result": type_result
-        })
+        }
 
     except Exception as e:
         log.error(f"Hybrid-Type-Fehler: {e}", exc_info=True)
-        return Error(code=-32000, message=str(e))
-
-
-# ==============================================================================
-# REGISTRIERUNG
-# ==============================================================================
-
-register_tool("hybrid_find_element", hybrid_find_element)
-register_tool("hybrid_find_and_click", hybrid_find_and_click)
-register_tool("hybrid_find_text_field_and_type", hybrid_find_text_field_and_type)
-
-log.info("✅ Hybrid Detection Tool v1.0 registriert")
-log.info("   Kombiniert: OCR + Object Detection + Mouse Feedback")
-log.info("   Tools: hybrid_find_element, hybrid_find_and_click, hybrid_find_text_field_and_type")
+        raise Exception(str(e))

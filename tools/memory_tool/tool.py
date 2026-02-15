@@ -9,7 +9,7 @@ Features:
 - Entitäts-Tracking ("er", "sie" → wer ist gemeint)
 - Automatische Fakten-Extraktion
 - Konversations-Zusammenfassung
-- MCP-Integration (jsonrpcserver)
+- MCP-Integration (V2 Registry)
 
 Ersetzt das alte memory_tool komplett.
 """
@@ -24,10 +24,10 @@ import uuid
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, List, Dict, Any
 from dataclasses import dataclass, field
 
-from jsonrpcserver import method, Success, Error
+from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -49,23 +49,15 @@ try:
 except ImportError:
     pass
 
-try:
-    from tools.universal_tool_caller import register_tool
-    MCP_AVAILABLE = True
-except ImportError:
-    MCP_AVAILABLE = False
-    def register_tool(name, func):
-        pass
-
 
 # === CHROMADB FALLBACK INITIALISIERUNG ===
 def _init_chromadb_fallback():
     """Initialisiert ChromaDB selbst, falls nicht über MCP Server geladen."""
     global memory_collection, openai_client, CHROMADB_AVAILABLE
-    
+
     if memory_collection is not None:
         return  # Schon über shared_context initialisiert
-    
+
     try:
         import chromadb
         from chromadb.utils import embedding_functions
@@ -76,15 +68,15 @@ def _init_chromadb_fallback():
         if not api_key:
             log.warning("⚠️ OPENAI_API_KEY fehlt - ChromaDB deaktiviert")
             return
-        
+
         # OpenAI Client erstellen falls nicht vorhanden
         if openai_client is None:
             openai_client = OpenAI(api_key=api_key)
-        
+
         # ChromaDB initialisieren
         db_path = Path.home() / "dev" / "timus" / "memory_db"
         db_path.mkdir(parents=True, exist_ok=True)
-        
+
         chroma_client = chromadb.PersistentClient(path=str(db_path))
         openai_ef = embedding_functions.OpenAIEmbeddingFunction(
             api_key=api_key,
@@ -96,7 +88,7 @@ def _init_chromadb_fallback():
         )
         CHROMADB_AVAILABLE = True
         log.info(f"✅ ChromaDB Fallback initialisiert: {db_path}")
-        
+
     except ImportError as e:
         log.warning(f"⚠️ ChromaDB nicht installiert: {e}")
         CHROMADB_AVAILABLE = False
@@ -133,7 +125,7 @@ class Message:
     content: str
     timestamp: datetime = field(default_factory=datetime.now)
     entities_mentioned: List[str] = field(default_factory=list)
-    
+
     def to_dict(self) -> dict:
         return {
             "role": self.role,
@@ -155,7 +147,7 @@ class Fact:
     last_used: datetime = field(default_factory=datetime.now)
 
 
-@dataclass 
+@dataclass
 class Entity:
     """Eine Entität für Referenz-Tracking."""
     name: str
@@ -171,47 +163,47 @@ class SessionMemory:
     Kurzzeit-Gedächtnis für die aktuelle Sitzung.
     Hält die letzten N Nachrichten und trackt Entitäten.
     """
-    
+
     def __init__(self, max_messages: int = MAX_SESSION_MESSAGES):
         self.messages: List[Message] = []
         self.max_messages = max_messages
         self.session_start = datetime.now()
         self.session_id = hashlib.md5(datetime.now().isoformat().encode()).hexdigest()[:12]
-        
+
         # Entitäts-Tracking
         self.entities: Dict[str, Entity] = {}
         self.current_topic: Optional[str] = None
-        
+
         # Pronomen → Entität Mapping
         self.pronoun_map: Dict[str, str] = {}
-    
+
     def add_message(self, role: str, content: str) -> Message:
         """Fügt eine Nachricht hinzu und extrahiert Entitäten."""
         # Entitäten aus der Nachricht extrahieren
         entities = self._extract_entities(content)
-        
+
         msg = Message(
-            role=role, 
+            role=role,
             content=content,
             entities_mentioned=entities
         )
         self.messages.append(msg)
-        
+
         # Pronomen-Mapping aktualisieren
         if entities:
             last_entity = entities[-1]
             self._update_pronoun_map(last_entity, content)
-        
+
         # Alte Nachrichten entfernen
         if len(self.messages) > self.max_messages:
             self.messages = self.messages[-self.max_messages:]
-        
+
         return msg
-    
+
     def _extract_entities(self, text: str) -> List[str]:
         """Extrahiert benannte Entitäten aus Text."""
         entities = []
-        
+
         # Einfache Heuristik: Großgeschriebene Wörter (nicht am Satzanfang)
         words = text.split()
         for i, word in enumerate(words):
@@ -224,13 +216,13 @@ class SessionMemory:
                         type="unknown",
                         context=text[:100]
                     )
-        
+
         return entities
-    
+
     def _update_pronoun_map(self, entity: str, context: str):
         """Aktualisiert das Pronomen-Mapping basierend auf Kontext."""
         context_lower = context.lower()
-        
+
         # Heuristik für Geschlecht/Typ
         if any(word in context_lower for word in ["er ", "sein", "ihm"]):
             self.pronoun_map["er"] = entity
@@ -239,16 +231,16 @@ class SessionMemory:
         elif any(word in context_lower for word in ["sie ", "ihr", "ihre"]):
             self.pronoun_map["sie"] = entity
             self.pronoun_map["ihr"] = entity
-        
+
         # Generisches "es"/"das" für Themen
         self.pronoun_map["es"] = entity
         self.pronoun_map["das"] = entity
         self.pronoun_map["davon"] = entity
-    
+
     def resolve_reference(self, text: str) -> str:
         """Löst Pronomen-Referenzen im Text auf."""
         resolved = text
-        
+
         for pronoun, entity in self.pronoun_map.items():
             # Nur ersetzen wenn es ein isoliertes Pronomen ist
             pattern = rf'\b{pronoun}\b'
@@ -256,26 +248,26 @@ class SessionMemory:
                 # Füge Kontext hinzu statt zu ersetzen
                 resolved = f"[Bezug: {entity}] {text}"
                 break
-        
+
         return resolved
-    
+
     def get_context_string(self, n: int = 10) -> str:
         """Gibt die letzten N Nachrichten als String zurück."""
         if not self.messages:
             return ""
-        
+
         lines = []
         for msg in self.messages[-n:]:
             role = "User" if msg.role == "user" else "Timus"
             lines.append(f"{role}: {msg.content}")
-        
+
         return "\n".join(lines)
-    
+
     def get_active_entities(self) -> List[Entity]:
         """Gibt kürzlich erwähnte Entitäten zurück."""
         cutoff = datetime.now() - timedelta(minutes=5)
         return [e for e in self.entities.values() if e.last_mentioned > cutoff]
-    
+
     def clear(self):
         """Löscht die Session."""
         self.messages = []
@@ -290,12 +282,12 @@ class SessionMemory:
 
 class FactStore:
     """SQLite-basierter Speicher für strukturierte Fakten."""
-    
+
     def __init__(self, db_path: Path = MEMORY_DB_PATH):
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
-    
+
     def _init_db(self):
         """Initialisiert die Datenbank."""
         with sqlite3.connect(self.db_path) as conn:
@@ -311,7 +303,7 @@ class FactStore:
                     last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(category, key)
                 );
-                
+
                 CREATE TABLE IF NOT EXISTS summaries (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id TEXT NOT NULL,
@@ -321,18 +313,18 @@ class FactStore:
                     message_count INTEGER,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
-                
+
                 CREATE TABLE IF NOT EXISTS conversations (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id TEXT NOT NULL,
                     messages TEXT NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
-                
+
                 CREATE INDEX IF NOT EXISTS idx_facts_category ON facts(category);
                 CREATE INDEX IF NOT EXISTS idx_facts_key ON facts(key);
             """)
-    
+
     def store_fact(self, fact: Fact) -> bool:
         """Speichert oder aktualisiert einen Fakt."""
         try:
@@ -352,7 +344,7 @@ class FactStore:
         except Exception as e:
             log.error(f"Fehler beim Speichern von Fakt: {e}")
             return False
-    
+
     def get_fact(self, category: str, key: str) -> Optional[Fact]:
         """Holt einen spezifischen Fakt."""
         with sqlite3.connect(self.db_path) as conn:
@@ -360,11 +352,11 @@ class FactStore:
                 "SELECT category, key, value, confidence, source FROM facts WHERE category = ? AND key = ?",
                 (category, key)
             ).fetchone()
-            
+
             if row:
                 return Fact(category=row[0], key=row[1], value=row[2], confidence=row[3], source=row[4])
         return None
-    
+
     def get_all_facts(self) -> List[Fact]:
         """Holt alle Fakten."""
         facts = []
@@ -375,7 +367,7 @@ class FactStore:
             for row in rows:
                 facts.append(Fact(category=row[0], key=row[1], value=row[2], confidence=row[3], source=row[4]))
         return facts
-    
+
     def get_facts_by_category(self, category: str) -> List[Fact]:
         """Holt alle Fakten einer Kategorie."""
         facts = []
@@ -387,7 +379,7 @@ class FactStore:
             for row in rows:
                 facts.append(Fact(category=row[0], key=row[1], value=row[2], confidence=row[3], source=row[4]))
         return facts
-    
+
     def delete_fact(self, category: str, key: str) -> bool:
         """Löscht einen Fakt."""
         try:
@@ -396,7 +388,7 @@ class FactStore:
             return True
         except:
             return False
-    
+
     def store_summary(self, session_id: str, summary: str, topics: List[str], facts: List[str], msg_count: int):
         """Speichert eine Konversations-Zusammenfassung."""
         with sqlite3.connect(self.db_path) as conn:
@@ -404,7 +396,7 @@ class FactStore:
                 INSERT INTO summaries (session_id, summary, topics, facts_extracted, message_count)
                 VALUES (?, ?, ?, ?, ?)
             """, (session_id, summary, json.dumps(topics), json.dumps(facts), msg_count))
-    
+
     def get_recent_summaries(self, n: int = 5) -> List[Dict]:
         """Holt die letzten N Zusammenfassungen."""
         summaries = []
@@ -421,7 +413,7 @@ class FactStore:
                     "created_at": row[3]
                 })
         return summaries
-    
+
     def store_conversation(self, session_id: str, messages: List[Message]):
         """Speichert eine Konversation."""
         with sqlite3.connect(self.db_path) as conn:
@@ -438,40 +430,40 @@ class MemoryManager:
     Zentrale Klasse für das gesamte Memory-System.
     Kombiniert Session Memory, ChromaDB und SQLite.
     """
-    
+
     _instance = None
-    
+
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
         return cls._instance
-    
+
     def __init__(self):
         if self._initialized:
             return
-        
+
         self.session = SessionMemory()
         self.facts = FactStore()
         self.chromadb_available = CHROMADB_AVAILABLE
-        
+
         log.info(f"🧠 MemoryManager initialisiert. ChromaDB: {'✅' if self.chromadb_available else '❌'}")
         self._initialized = True
-    
+
     # === KURZZEIT-MEMORY ===
-    
+
     def add_interaction(self, user_input: str, assistant_response: str):
         """Fügt eine Interaktion hinzu."""
         self.session.add_message("user", user_input)
         self.session.add_message("assistant", assistant_response)
-        
+
         # Fakten extrahieren
         self._extract_and_store_facts(user_input)
-    
+
     def _extract_and_store_facts(self, text: str):
         """Extrahiert Fakten aus Text mittels Regex-Patterns."""
         text_lower = text.lower()
-        
+
         for pattern, category, key in FACT_EXTRACTION_PATTERNS:
             match = re.search(pattern, text_lower)
             if match:
@@ -480,28 +472,28 @@ class MemoryManager:
                     fact = Fact(category=category, key=key, value=value, source="auto_extracted")
                     self.facts.store_fact(fact)
                     log.info(f"📝 Fakt extrahiert: {category}/{key} = {value}")
-    
+
     def get_session_context(self) -> str:
         """Gibt den aktuellen Session-Kontext zurück."""
         return self.session.get_context_string()
-    
+
     def resolve_references(self, text: str) -> str:
         """Löst Referenzen im Text auf."""
         return self.session.resolve_reference(text)
-    
+
     # === LANGZEIT-MEMORY (ChromaDB) ===
-    
+
     async def remember_long_term(self, text: str, source: str = "user_interaction") -> Dict:
         """Speichert im Langzeit-Gedächtnis (ChromaDB)."""
         if not self.chromadb_available:
             return {"status": "error", "message": "ChromaDB nicht verfügbar"}
-        
+
         if not text or len(text.strip()) < 10:
             return {"status": "error", "message": "Text zu kurz"}
-        
+
         try:
             memory_id = str(uuid.uuid4())
-            
+
             await asyncio.to_thread(
                 memory_collection.add,
                 documents=[text.strip()],
@@ -512,19 +504,19 @@ class MemoryManager:
                 }],
                 ids=[memory_id]
             )
-            
+
             log.info(f"🧠 Langzeit-Erinnerung gespeichert: {memory_id[:8]}...")
             return {"status": "success", "memory_id": memory_id}
-            
+
         except Exception as e:
             log.error(f"Fehler bei Langzeit-Speicherung: {e}")
             return {"status": "error", "message": str(e)}
-    
+
     async def recall_long_term(self, query: str, n_results: int = 3) -> Dict:
         """Sucht im Langzeit-Gedächtnis (semantische Suche)."""
         if not self.chromadb_available:
             return {"status": "error", "memories": [], "message": "ChromaDB nicht verfügbar"}
-        
+
         try:
             results = await asyncio.to_thread(
                 memory_collection.query,
@@ -532,34 +524,34 @@ class MemoryManager:
                 n_results=n_results,
                 include=["metadatas", "documents", "distances"]
             )
-            
+
             memories = []
             if results and results.get("documents"):
                 for i, doc in enumerate(results["documents"][0]):
                     distance = results["distances"][0][i]
                     relevance = max(0, 1 - (distance / 2))
-                    
+
                     memories.append({
                         "id": results["ids"][0][i],
                         "text": doc,
                         "metadata": results["metadatas"][0][i],
                         "relevance_score": round(relevance, 2)
                     })
-            
+
             log.info(f"🔍 Recall für '{query[:30]}...' → {len(memories)} Treffer")
             return {"status": "success", "memories": memories}
-            
+
         except Exception as e:
             log.error(f"Fehler bei Recall: {e}")
             return {"status": "error", "memories": [], "message": str(e)}
-    
+
     # === FAKTEN-MANAGEMENT ===
-    
+
     def remember_fact(self, key: str, value: str, category: str = "user_stated") -> bool:
         """Speichert einen Fakt explizit."""
         fact = Fact(category=category, key=key, value=value, source="explicit")
         return self.facts.store_fact(fact)
-    
+
     def recall_fact(self, key: str) -> Optional[str]:
         """Ruft einen Fakt ab."""
         for cat in ["user_stated", "name", "preference", "info", "auto_extracted"]:
@@ -567,7 +559,7 @@ class MemoryManager:
             if fact:
                 return fact.value
         return None
-    
+
     def forget_fact(self, key: str) -> bool:
         """Löscht einen Fakt."""
         deleted = False
@@ -575,65 +567,65 @@ class MemoryManager:
             if self.facts.delete_fact(cat, key):
                 deleted = True
         return deleted
-    
+
     def get_all_known_facts(self) -> List[Dict]:
         """Gibt alle bekannten Fakten zurück."""
         facts = self.facts.get_all_facts()
         return [{"category": f.category, "key": f.key, "value": f.value} for f in facts]
-    
+
     # === KONTEXT-BUILDING ===
-    
+
     def build_context_for_prompt(self) -> str:
         """Baut den kompletten Memory-Kontext für Prompts."""
         context_parts = []
-        
+
         # 1. Bekannte Fakten
         facts = self.facts.get_all_facts()
         if facts:
             fact_lines = [f"- {f.key}: {f.value}" for f in facts[:10]]
             context_parts.append("BEKANNTE FAKTEN ÜBER DEN BENUTZER:\n" + "\n".join(fact_lines))
-        
+
         # 2. Letzte Zusammenfassungen
         summaries = self.facts.get_recent_summaries(2)
         if summaries:
             summary_text = "\n".join([s["summary"] for s in summaries])
             context_parts.append(f"FRÜHERE GESPRÄCHE:\n{summary_text}")
-        
+
         # 3. Aktuelle Session
         session = self.session.get_context_string()
         if session:
             context_parts.append(f"AKTUELLE KONVERSATION:\n{session}")
-        
+
         # 4. Aktive Entitäten
         entities = self.session.get_active_entities()
         if entities:
             entity_lines = [f"- {e.name} ({e.type})" for e in entities]
             context_parts.append("KÜRZLICH ERWÄHNTE ENTITÄTEN:\n" + "\n".join(entity_lines))
-        
+
         # 5. Pronomen-Referenzen
         if self.session.pronoun_map:
             ref_lines = [f"- '{k}' → {v}" for k, v in self.session.pronoun_map.items()]
             context_parts.append("AKTUELLE REFERENZEN:\n" + "\n".join(ref_lines))
-        
+
         return "\n\n".join(context_parts)
-    
+
     # === SESSION-MANAGEMENT ===
-    
+
     async def summarize_and_end_session(self) -> Optional[Dict]:
         """Fasst die Session zusammen und speichert sie."""
         if len(self.session.messages) < 4:
             self.session.clear()
             return None
-        
+
         if not openai_client:
             # Ohne OpenAI einfach speichern
             self.facts.store_conversation(self.session.session_id, self.session.messages)
             self.session.clear()
             return None
-        
+
         try:
             messages_text = self.session.get_context_string()
-            
+
             response = await asyncio.to_thread(
                 openai_client.chat.completions.create,
                 model="gpt-4o-mini",
@@ -648,9 +640,9 @@ Antworte NUR mit JSON:
                 ],
                 max_tokens=500
             )
-            
+
             result = json.loads(response.choices[0].message.content)
-            
+
             # Zusammenfassung speichern
             self.facts.store_summary(
                 self.session.session_id,
@@ -659,7 +651,7 @@ Antworte NUR mit JSON:
                 result.get("user_facts", []),
                 len(self.session.messages)
             )
-            
+
             # Extrahierte Fakten speichern
             for fact_text in result.get("user_facts", []):
                 fact = Fact(
@@ -669,20 +661,20 @@ Antworte NUR mit JSON:
                     source="summarization"
                 )
                 self.facts.store_fact(fact)
-            
+
             # Konversation speichern
             self.facts.store_conversation(self.session.session_id, self.session.messages)
-            
+
             log.info(f"📝 Session zusammengefasst: {len(self.session.messages)} Nachrichten")
-            
+
             self.session.clear()
             return result
-            
+
         except Exception as e:
             log.error(f"Fehler bei Zusammenfassung: {e}")
             self.session.clear()
             return None
-    
+
     def get_stats(self) -> Dict:
         """Gibt Memory-Statistiken zurück."""
         return {
@@ -701,209 +693,276 @@ memory_manager = MemoryManager()
 
 # === MCP TOOL METHODS ===
 
-@method
-async def remember(text: str, source: str = "user_interaction") -> Union[Success, Error]:
+@tool(
+    name="remember",
+    description="Speichert eine Information im Langzeit-Gedächtnis.",
+    parameters=[
+        P("text", "string", "Der zu speichernde Text"),
+        P("source", "string", "Quelle der Information (z.B. user_interaction, web_search)", required=False, default="user_interaction"),
+    ],
+    capabilities=["memory"],
+    category=C.MEMORY
+)
+async def remember(text: str, source: str = "user_interaction") -> dict:
     """
     Speichert eine Information im Langzeit-Gedächtnis.
-    
+
     Args:
         text: Der zu speichernde Text
         source: Quelle der Information (z.B. "user_interaction", "web_search")
-    
+
     Returns:
-        Success mit memory_id oder Error
+        Dict mit memory_id oder Fehler
     """
     if not text or len(text.strip()) < 10:
-        return Error(code=-32602, message="Text muss mindestens 10 Zeichen haben.")
-    
+        raise Exception("Text muss mindestens 10 Zeichen haben.")
+
     result = await memory_manager.remember_long_term(text, source)
-    
+
     if result["status"] == "success":
-        return Success(result)
+        return result
     else:
-        return Error(code=-32000, message=result.get("message", "Unbekannter Fehler"))
+        raise Exception(result.get("message", "Unbekannter Fehler"))
 
 
-@method
-async def recall(query: str, n_results: int = 3) -> Union[Success, Error]:
+@tool(
+    name="recall",
+    description="Sucht relevante Informationen im Gedächtnis (semantische Suche).",
+    parameters=[
+        P("query", "string", "Suchanfrage"),
+        P("n_results", "integer", "Maximale Anzahl Ergebnisse (1-10)", required=False, default=3),
+    ],
+    capabilities=["memory"],
+    category=C.MEMORY
+)
+async def recall(query: str, n_results: int = 3) -> dict:
     """
     Sucht relevante Informationen im Gedächtnis (semantische Suche).
-    
+
     Args:
         query: Suchanfrage
         n_results: Maximale Anzahl Ergebnisse (1-10)
-    
+
     Returns:
-        Success mit Liste von Erinnerungen oder Error
+        Dict mit Liste von Erinnerungen
     """
     if not query:
-        return Error(code=-32602, message="Query darf nicht leer sein.")
-    
+        raise Exception("Query darf nicht leer sein.")
+
     n_results = max(1, min(10, n_results))
     result = await memory_manager.recall_long_term(query, n_results)
-    
-    return Success(result)
+
+    return result
 
 
-@method
-async def remember_fact(key: str, value: str, category: str = "user_stated") -> Union[Success, Error]:
+@tool(
+    name="remember_fact",
+    description="Speichert einen strukturierten Fakt.",
+    parameters=[
+        P("key", "string", "Schlüssel (z.B. name, favorite_color)"),
+        P("value", "string", "Wert (z.B. Fatih, blau)"),
+        P("category", "string", "Kategorie (name, preference, info, user_stated)", required=False, default="user_stated"),
+    ],
+    capabilities=["memory"],
+    category=C.MEMORY
+)
+async def remember_fact(key: str, value: str, category: str = "user_stated") -> dict:
     """
     Speichert einen strukturierten Fakt.
-    
+
     Args:
         key: Schlüssel (z.B. "name", "favorite_color")
         value: Wert (z.B. "Fatih", "blau")
         category: Kategorie ("name", "preference", "info", "user_stated")
-    
+
     Returns:
-        Success oder Error
+        Dict mit Status
     """
     if not key or not value:
-        return Error(code=-32602, message="Key und Value sind erforderlich.")
-    
+        raise Exception("Key und Value sind erforderlich.")
+
     success = memory_manager.remember_fact(key, value, category)
-    
+
     if success:
         log.info(f"✅ Fakt gespeichert: {category}/{key} = {value}")
-        return Success({"status": "success", "key": key, "value": value})
+        return {"status": "success", "key": key, "value": value}
     else:
-        return Error(code=-32000, message="Fehler beim Speichern des Fakts.")
+        raise Exception("Fehler beim Speichern des Fakts.")
 
 
-@method
-async def recall_fact(key: str) -> Union[Success, Error]:
+@tool(
+    name="recall_fact",
+    description="Ruft einen gespeicherten Fakt ab.",
+    parameters=[
+        P("key", "string", "Der Schlüssel des Fakts"),
+    ],
+    capabilities=["memory"],
+    category=C.MEMORY
+)
+async def recall_fact(key: str) -> dict:
     """
     Ruft einen gespeicherten Fakt ab.
-    
+
     Args:
         key: Der Schlüssel des Fakts
-    
+
     Returns:
-        Success mit Wert oder Error wenn nicht gefunden
+        Dict mit Wert oder not_found
     """
     value = memory_manager.recall_fact(key)
-    
+
     if value:
-        return Success({"status": "success", "key": key, "value": value})
+        return {"status": "success", "key": key, "value": value}
     else:
-        return Success({"status": "not_found", "key": key, "value": None})
+        return {"status": "not_found", "key": key, "value": None}
 
 
-@method
-async def forget_fact(key: str) -> Union[Success, Error]:
+@tool(
+    name="forget_fact",
+    description="Löscht einen gespeicherten Fakt.",
+    parameters=[
+        P("key", "string", "Der Schlüssel des zu löschenden Fakts"),
+    ],
+    capabilities=["memory"],
+    category=C.MEMORY
+)
+async def forget_fact(key: str) -> dict:
     """
     Löscht einen gespeicherten Fakt.
-    
+
     Args:
         key: Der Schlüssel des zu löschenden Fakts
-    
+
     Returns:
-        Success oder Error
+        Dict mit Status
     """
     success = memory_manager.forget_fact(key)
-    
+
     if success:
         log.info(f"🗑️ Fakt gelöscht: {key}")
-        return Success({"status": "success", "key": key})
+        return {"status": "success", "key": key}
     else:
-        return Success({"status": "not_found", "key": key})
+        return {"status": "not_found", "key": key}
 
 
-@method
-async def get_memory_context() -> Union[Success, Error]:
+@tool(
+    name="get_memory_context",
+    description="Gibt den kompletten Memory-Kontext für Prompts zurück.",
+    parameters=[],
+    capabilities=["memory"],
+    category=C.MEMORY
+)
+async def get_memory_context() -> dict:
     """
     Gibt den kompletten Memory-Kontext für Prompts zurück.
-    
+
     Returns:
-        Success mit Kontext-String
+        Dict mit Kontext-String
     """
     context = memory_manager.build_context_for_prompt()
-    return Success({"context": context})
+    return {"context": context}
 
 
-@method
-async def get_known_facts() -> Union[Success, Error]:
+@tool(
+    name="get_known_facts",
+    description="Gibt alle bekannten Fakten über den Benutzer zurück.",
+    parameters=[],
+    capabilities=["memory"],
+    category=C.MEMORY
+)
+async def get_known_facts() -> dict:
     """
     Gibt alle bekannten Fakten über den Benutzer zurück.
-    
+
     Returns:
-        Success mit Liste von Fakten
+        Dict mit Liste von Fakten
     """
     facts = memory_manager.get_all_known_facts()
-    return Success({"facts": facts, "count": len(facts)})
+    return {"facts": facts, "count": len(facts)}
 
 
-@method
-async def add_interaction(user_input: str, assistant_response: str) -> Union[Success, Error]:
+@tool(
+    name="add_interaction",
+    description="Fügt eine Interaktion zum Session-Memory hinzu.",
+    parameters=[
+        P("user_input", "string", "Die Benutzereingabe"),
+        P("assistant_response", "string", "Die Assistenten-Antwort"),
+    ],
+    capabilities=["memory"],
+    category=C.MEMORY
+)
+async def add_interaction(user_input: str, assistant_response: str) -> dict:
     """
     Fügt eine Interaktion zum Session-Memory hinzu.
-    
+
     Args:
         user_input: Die Benutzereingabe
         assistant_response: Die Assistenten-Antwort
-    
+
     Returns:
-        Success
+        Dict mit Status
     """
     memory_manager.add_interaction(user_input, assistant_response)
-    return Success({"status": "success", "session_messages": len(memory_manager.session.messages)})
+    return {"status": "success", "session_messages": len(memory_manager.session.messages)}
 
 
-@method
-async def end_session() -> Union[Success, Error]:
+@tool(
+    name="end_session",
+    description="Beendet die aktuelle Session, erstellt Zusammenfassung und speichert.",
+    parameters=[],
+    capabilities=["memory"],
+    category=C.MEMORY
+)
+async def end_session() -> dict:
     """
     Beendet die aktuelle Session, erstellt Zusammenfassung und speichert.
-    
+
     Returns:
-        Success mit Zusammenfassung oder None
+        Dict mit Zusammenfassung
     """
     result = await memory_manager.summarize_and_end_session()
-    return Success({"status": "success", "summary": result})
+    return {"status": "success", "summary": result}
 
 
-@method
-async def get_memory_stats() -> Union[Success, Error]:
+@tool(
+    name="get_memory_stats",
+    description="Gibt Statistiken über das Memory-System zurück.",
+    parameters=[],
+    capabilities=["memory"],
+    category=C.MEMORY
+)
+async def get_memory_stats() -> dict:
     """
     Gibt Statistiken über das Memory-System zurück.
-    
+
     Returns:
-        Success mit Stats
+        Dict mit Stats
     """
     stats = memory_manager.get_stats()
-    return Success(stats)
+    return stats
 
 
-@method
-async def resolve_reference(text: str) -> Union[Success, Error]:
+@tool(
+    name="resolve_reference",
+    description="Löst Pronomen-Referenzen im Text auf.",
+    parameters=[
+        P("text", "string", "Text mit möglichen Referenzen (z.B. Wie alt ist er?)"),
+    ],
+    capabilities=["memory"],
+    category=C.MEMORY
+)
+async def resolve_reference(text: str) -> dict:
     """
     Löst Pronomen-Referenzen im Text auf.
-    
+
     Args:
         text: Text mit möglichen Referenzen ("Wie alt ist er?")
-    
+
     Returns:
-        Success mit aufgelöstem Text
+        Dict mit aufgelöstem Text
     """
     resolved = memory_manager.resolve_references(text)
-    return Success({"original": text, "resolved": resolved})
-
-
-# === TOOL REGISTRIERUNG ===
-
-if MCP_AVAILABLE:
-    register_tool("remember", remember)
-    register_tool("recall", recall)
-    register_tool("remember_fact", remember_fact)
-    register_tool("recall_fact", recall_fact)
-    register_tool("forget_fact", forget_fact)
-    register_tool("get_memory_context", get_memory_context)
-    register_tool("get_known_facts", get_known_facts)
-    register_tool("add_interaction", add_interaction)
-    register_tool("end_session", end_session)
-    register_tool("get_memory_stats", get_memory_stats)
-    register_tool("resolve_reference", resolve_reference)
-    
-    log.info("✅ Memory Tool v2.0 registriert (11 Funktionen)")
+    return {"original": text, "resolved": resolved}
 
 
 # === HELPER FUNCTIONS FÜR DIREKTEN IMPORT ===

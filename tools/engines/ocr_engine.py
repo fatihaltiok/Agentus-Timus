@@ -32,6 +32,10 @@ try:
 except ImportError:
     EASYOCR_AVAILABLE = False
     log.warning("⚠️ EasyOCR nicht installiert. 'pip install easyocr'")
+except RuntimeError as e:
+    # Fix für torchvision/torch Inkompatibilität (z.B. operator torchvision::nms does not exist)
+    EASYOCR_AVAILABLE = False
+    log.warning(f"⚠️ EasyOCR kann nicht geladen werden (torch/torchvision Inkompatibilität): {e}")
 
 # Tesseract
 try:

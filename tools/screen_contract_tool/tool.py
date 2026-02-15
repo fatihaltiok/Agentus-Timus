@@ -2,7 +2,7 @@
 """
 Screen Contract Tool - JSON-basiertes Vertragssystem für stabile Navigation.
 
-Basiert auf GPT-5.2's Empfehlung: "Locate → Verify → Act → Verify"
+Basiert auf GPT-5.2's Empfehlung: "Locate -> Verify -> Act -> Verify"
 
 Hauptkonzepte:
 1. ScreenState: Was ist auf dem Screen? (Anker, Elemente, Text)
@@ -20,8 +20,7 @@ from typing import List, Dict, Optional, Union, Any
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 
-from jsonrpcserver import method, Success, Error
-from tools.universal_tool_caller import register_tool
+from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 from dotenv import load_dotenv
 
 # --- Setup ---
@@ -510,7 +509,7 @@ class ScreenContractEngine:
             text = step.params.get("text", "")
             press_enter = step.params.get("press_enter", False)
 
-            result = await self._call_tool("type_text", {"text": text, "press_enter": press_enter})
+            result = await self._call_tool("type_text", {"text_to_type": text, "press_enter_after": press_enter})
             if not result or not result.get("success", False):
                 return False, "Tippen fehlgeschlagen"
 
@@ -629,13 +628,24 @@ contract_engine = ScreenContractEngine()
 # RPC METHODEN
 # ==============================================================================
 
-@method
+@tool(
+    name="analyze_screen_state",
+    description="Analysiert den aktuellen Screen und gibt ScreenState zurück (Anker, Elemente, OCR-Text).",
+    parameters=[
+        P("screen_id", "string", "Screen-ID (z.B. 'login_screen', 'search_form')", required=True),
+        P("anchor_specs", "array", "Liste von Anker-Specs [{'name': 'logo', 'type': 'text', 'text': 'MyApp'}]", required=True),
+        P("element_specs", "array", "Liste von Element-Specs (optional)", required=False, default=None),
+        P("extract_ocr", "boolean", "Gesamten Text extrahieren?", required=False, default=False),
+    ],
+    capabilities=["vision", "ui", "automation"],
+    category=C.UI
+)
 async def analyze_screen_state(
     screen_id: str,
     anchor_specs: List[Dict],
     element_specs: Optional[List[Dict]] = None,
     extract_ocr: bool = False
-) -> Union[Success, Error]:
+) -> dict:
     """
     Analysiert den aktuellen Screen und gibt ScreenState zurück.
 
@@ -648,7 +658,7 @@ async def analyze_screen_state(
         extract_ocr: Gesamten Text extrahieren?
 
     Returns:
-        Success mit ScreenState (als dict)
+        dict mit ScreenState
 
     Beispiel:
         state = await analyze_screen_state(
@@ -672,84 +682,109 @@ async def analyze_screen_state(
             extract_ocr=extract_ocr
         )
 
-        return Success(asdict(state))
+        return asdict(state)
 
     except Exception as e:
         log.error(f"Screen-Analyse fehlgeschlagen: {e}", exc_info=True)
-        return Error(code=-32000, message=str(e))
+        raise Exception(str(e))
 
 
-@method
-async def execute_action_plan(plan_dict: Dict) -> Union[Success, Error]:
+@tool(
+    name="execute_action_plan",
+    description="Führt einen ActionPlan aus (ROBUST VERSION). Akzeptiert sowohl komplexes als auch vereinfachtes Format.",
+    parameters=[
+        P("plan_dict", "object", "ActionPlan als Dict mit goal, screen_id, steps", required=True),
+    ],
+    capabilities=["vision", "ui", "automation"],
+    category=C.UI
+)
+async def execute_action_plan(plan_dict: Dict) -> dict:
     """
-    Führt einen ActionPlan aus.
+    Führt einen ActionPlan aus (ROBUST VERSION).
 
     Args:
-        plan_dict: ActionPlan als Dict
-                  {"goal": "Login durchführen",
-                   "screen_id": "login_screen",
-                   "steps": [...]}
+        plan_dict: ActionPlan als Dict - akzeptiert sowohl komplexes Format
+                  als auch vereinfachtes Format vom ExecutorAgent
 
     Returns:
-        Success mit ExecutionResult
-
-    Beispiel:
-        result = await execute_action_plan({
-            "goal": "Login durchführen",
-            "screen_id": "login_screen",
-            "steps": [
-                {
-                    "op": "click",
-                    "target": "username",
-                    "verify_before": [{"type": "element_found", "target": "username"}],
-                    "verify_after": [{"type": "cursor_type", "target": "ibeam"}]
-                },
-                {
-                    "op": "type",
-                    "params": {"text": "test@example.com"},
-                    "target": "username"
-                }
-            ]
-        })
+        dict mit ExecutionResult
     """
     try:
+        # ROBUST: Input-Validierung
+        if not plan_dict:
+            raise Exception("Empty plan_dict received")
+
+        if not isinstance(plan_dict, dict):
+            raise Exception(f"Expected dict, got {type(plan_dict)}")
+
         # Dict zu ActionPlan konvertieren (vereinfacht)
         goal = plan_dict.get("goal", "unknown")
         screen_id = plan_dict.get("screen_id", "unknown")
         steps_data = plan_dict.get("steps", [])
 
-        # Steps konvertieren
+        # ROBUST: Steps-Validierung
+        if not steps_data:
+            raise Exception("No steps in plan")
+
+        if not isinstance(steps_data, list):
+            raise Exception(f"Steps must be list, got {type(steps_data)}")
+
+        # Steps konvertieren (ROBUST)
         steps = []
-        for step_data in steps_data:
-            verify_before = [
-                VerifyCondition(
-                    type=VerificationType(v["type"]),
-                    target=v["target"],
-                    params=v.get("params", {}),
-                    min_confidence=v.get("min_confidence", 0.8)
-                )
-                for v in step_data.get("verify_before", [])
-            ]
+        for i, step_data in enumerate(steps_data):
+            # ROBUST: Safe key access mit Defaults
+            op = step_data.get("op") or step_data.get("action") or step_data.get("type", "unknown")
+            target = step_data.get("target") or step_data.get("element") or step_data.get("selector", "")
+            params = step_data.get("params", {})
 
-            verify_after = [
-                VerifyCondition(
-                    type=VerificationType(v["type"]),
-                    target=v["target"],
-                    params=v.get("params", {}),
-                    min_confidence=v.get("min_confidence", 0.8)
-                )
-                for v in step_data.get("verify_after", [])
-            ]
+            # ROBUST: Verification Conditions (optional)
+            verify_before = []
+            verify_after = []
 
+            try:
+                verify_before = [
+                    VerifyCondition(
+                        type=VerificationType(v.get("type", "element_found")),
+                        target=v.get("target", target),
+                        params=v.get("params", {}),
+                        min_confidence=v.get("min_confidence", 0.8)
+                    )
+                    for v in step_data.get("verify_before", [])
+                    if isinstance(v, dict) and "type" in v
+                ]
+            except Exception as ve:
+                log.warning(f"Step {i}: verify_before parsing failed: {ve}")
+
+            try:
+                verify_after = [
+                    VerifyCondition(
+                        type=VerificationType(v.get("type", "element_found")),
+                        target=v.get("target", target),
+                        params=v.get("params", {}),
+                        min_confidence=v.get("min_confidence", 0.8)
+                    )
+                    for v in step_data.get("verify_after", [])
+                    if isinstance(v, dict) and "type" in v
+                ]
+            except Exception as ve:
+                log.warning(f"Step {i}: verify_after parsing failed: {ve}")
+
+            # ROBUST: ActionStep erstellen (immer, auch bei unvollständigen Daten)
             steps.append(ActionStep(
-                op=step_data["op"],
-                target=step_data["target"],
-                params=step_data.get("params", {}),
+                op=op,
+                target=target,
+                params=params,
                 verify_before=verify_before,
                 verify_after=verify_after,
                 retries=step_data.get("retries", 2),
                 timeout_ms=step_data.get("timeout_ms", 5000)
             ))
+
+            log.debug(f"Step {i}: op={op}, target={target}")
+
+        # ROBUST: Warnung wenn keine Steps erstellt wurden
+        if not steps:
+            raise Exception("No valid steps could be parsed from plan")
 
         # Abort-Conditions (optional)
         abort_conditions = [
@@ -773,18 +808,27 @@ async def execute_action_plan(plan_dict: Dict) -> Union[Success, Error]:
         # Plan ausführen
         result = await contract_engine.execute_plan(plan)
 
-        return Success(asdict(result))
+        return asdict(result)
 
     except Exception as e:
         log.error(f"Plan-Ausführung fehlgeschlagen: {e}", exc_info=True)
-        return Error(code=-32000, message=str(e))
+        raise Exception(str(e))
 
 
-@method
+@tool(
+    name="verify_screen_condition",
+    description="Verifiziert eine einzelne Bedingung auf dem aktuellen Screen.",
+    parameters=[
+        P("condition_dict", "object", "VerifyCondition als Dict", required=True),
+        P("screen_state_dict", "object", "Optional - ScreenState als Dict", required=False, default=None),
+    ],
+    capabilities=["vision", "ui", "automation"],
+    category=C.UI
+)
 async def verify_screen_condition(
     condition_dict: Dict,
     screen_state_dict: Optional[Dict] = None
-) -> Union[Success, Error]:
+) -> dict:
     """
     Verifiziert eine einzelne Bedingung.
 
@@ -793,7 +837,7 @@ async def verify_screen_condition(
         screen_state_dict: Optional - ScreenState als Dict
 
     Returns:
-        Success mit {"verified": bool}
+        dict mit {"verified": bool}
     """
     try:
         condition = VerifyCondition(
@@ -816,21 +860,8 @@ async def verify_screen_condition(
 
         verified = await contract_engine.verify_condition(condition, screen_state)
 
-        return Success({"verified": verified})
+        return {"verified": verified}
 
     except Exception as e:
         log.error(f"Verifikation fehlgeschlagen: {e}", exc_info=True)
-        return Error(code=-32000, message=str(e))
-
-
-# ==============================================================================
-# REGISTRIERUNG
-# ==============================================================================
-
-register_tool("analyze_screen_state", analyze_screen_state)
-register_tool("execute_action_plan", execute_action_plan)
-register_tool("verify_screen_condition", verify_screen_condition)
-
-log.info("✅ Screen Contract Tool v1.0 registriert")
-log.info("   Prinzip: Locate → Verify → Act → Verify")
-log.info("   Tools: analyze_screen_state, execute_action_plan, verify_screen_condition")
+        raise Exception(str(e))

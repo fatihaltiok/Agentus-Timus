@@ -1,0 +1,72 @@
+# agent/skills.yml
+
+
+
+click_element_by_description:
+  meta:
+    description: "Findet ein UI-Element anhand seiner Textbeschreibung, berechnet seine Mitte und klickt darauf."
+    params:
+      element_description: "Der auf dem Bildschirm sichtbare Text des zu klickenden Elements."
+      
+  steps:
+    - method: find_text_coordinates
+      params:
+        # KORREKTUR: Der Parameter für das Tool heißt 'text_to_find'
+        text_to_find: "{{element_description}}"
+      register_result_as: "coords"
+
+    # Die Berechnung erfolgt jetzt wieder direkt hier, der Planner wertet das aus.
+    - method: click_at
+      params:
+        x: "{{ (coords.x1 + coords.x2) // 2 }}"
+        y: "{{ (coords.y1 + coords.y2) // 2 }}"
+
+
+
+
+
+# -----------------------------------------------------------------
+
+login_to_app:
+  meta:
+    description: "Führt einen Login-Prozess durch, indem Textfelder gefunden und ausgefüllt werden."
+    params:
+      username_label: "Der sichtbare Text des Benutzername-Feldes (z.B. 'Benutzername:')."
+      username_value: "Der einzutippende Benutzername."
+      password_label: "Der sichtbare Text des Passwort-Feldes."
+      password_value: "Das einzutippende Passwort."
+      login_button_text: "Der Text auf dem Login-Button (z.B. 'Anmelden')."
+      
+  steps:
+    - method: find_text_coordinates
+      params: { text_to_find: "{{username_label}}" }
+      register_result_as: "username_field"
+      
+    - method: click_at
+      params:
+        x: "{{ username_field.x2 + 50 }}" 
+        y: "{{ (username_field.y1 + username_field.y2) // 2 }}"
+        
+    - method: type_text
+      params: { text_to_type: "{{username_value}}" }
+      
+    - method: find_text_coordinates
+      params: { text_to_find: "{{password_label}}" }
+      register_result_as: "password_field"
+      
+    - method: click_at
+      params:
+        x: "{{ password_field.x2 + 50 }}"
+        y: "{{ (password_field.y1 + password_field.y2) // 2 }}"
+        
+    - method: type_text
+      params: { text_to_type: "{{password_value}}" }
+      
+    - method: find_text_coordinates
+      params: { text_to_find: "{{login_button_text}}" }
+      register_result_as: "login_button"
+        
+    - method: click_at
+      params:
+        x: "{{ (login_button.x1 + login_button.x2) // 2 }}"
+        y: "{{ (login_button.y1 + login_button.y2) // 2 }}"

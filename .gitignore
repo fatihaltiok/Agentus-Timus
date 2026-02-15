@@ -1,2 +1,66 @@
-.aider*
+# Environment / Secrets
 .env
+.env.*
+!.env.example
+.envalt*.txt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Node
+node_modules/
+package-lock.json
+
+# IDE
+.aider*
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+claudeglm-log
+som_test_*.log
+
+# Caches
+.pytest_cache/
+.mypy_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated / Temp
+results/
+output.mp3
+test_inworld_output.mp3
+wav2vec2_checkpoints/
+test_project/wav2vec2_checkpoints/
+test_project/output.mp3
+test_project/screenshot.png
+test_project/screenshot.json
+memory_db/
+data/
+path/
+
+# Versehentlich erstellte Dateien (keine Python-Module)
+zai
+textwrap
+re
+os
+logging
+json
+httpx
+asyncio
+genai
+sys
+=1.0.0
+Öffne

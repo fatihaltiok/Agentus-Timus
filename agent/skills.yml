@@ -1,0 +1,1005 @@
+click_element_by_description:
+  meta:
+    description: Findet ein UI-Element anhand seiner Textbeschreibung, berechnet seine
+      Mitte und klickt darauf.
+    params:
+      element_description: Der auf dem Bildschirm sichtbare Text des zu klickenden
+        Elements.
+  steps:
+  - method: find_text_coordinates
+    params:
+      text_to_find: '{{element_description}}'
+    register_result_as: coords
+  - method: click_at
+    params:
+      x: '{{ (coords.bbox.x1 + coords.bbox.x2) // 2 }}'
+      y: '{{ (coords.bbox.y1 + coords.bbox.y2) // 2 }}'
+login_to_app:
+  meta:
+    description: Führt einen Login-Prozess durch, indem Textfelder gefunden und ausgefüllt
+      werden.
+    params:
+      username_label: Der sichtbare Text des Benutzername-Feldes.
+      username_value: Der einzutippende Benutzername.
+      password_label: Der sichtbare Text des Passwort-Feldes.
+      password_value: Das einzutippende Passwort.
+      login_button_text: Der Text auf dem Login-Button.
+  steps:
+  - method: find_text_coordinates
+    params:
+      text_to_find: '{{username_label}}'
+    register_result_as: username_field
+  - method: click_at
+    params:
+      x: '{{ username_field.bbox.x2 + 50 }}'
+      y: '{{ (username_field.bbox.y1 + username_field.bbox.y2) // 2 }}'
+  - method: type_text
+    params:
+      text_to_type: '{{username_value}}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: '{{password_label}}'
+    register_result_as: password_field
+  - method: click_at
+    params:
+      x: '{{ password_field.bbox.x2 + 50 }}'
+      y: '{{ (password_field.bbox.y1 + password_field.bbox.y2) // 2 }}'
+  - method: type_text
+    params:
+      text_to_type: '{{password_value}}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: '{{login_button_text}}'
+    register_result_as: login_button
+  - method: click_at
+    params:
+      x: '{{ (login_button.bbox.x1 + login_button.bbox.x2) // 2 }}'
+      y: '{{ (login_button.bbox.y1 + login_button.bbox.y2) // 2 }}'
+open_website:
+  meta:
+    description: Öffnet eine URL im Browser.
+    params:
+      url: Die zu öffnende URL
+  steps:
+  - method: open_application
+    params:
+      app_name: firefox
+  - method: wait_until_stable
+    params:
+      timeout: 3
+  - method: hotkey
+    params:
+      keys:
+      - ctrl
+      - l
+  - method: type_text
+    params:
+      text_to_type: '{{url}}'
+      press_enter_after: true
+search_google:
+  meta:
+    description: Führt eine Google-Suche durch.
+    params:
+      query: Der Suchbegriff
+  steps:
+  - method: open_application
+    params:
+      app_name: firefox
+  - method: wait_until_stable
+    params:
+      timeout: 3
+  - method: hotkey
+    params:
+      keys:
+      - ctrl
+      - l
+  - method: type_text
+    params:
+      text_to_type: https://google.com/search?q={{query}}
+      press_enter_after: true
+type_in_field:
+  meta:
+    description: Findet ein Eingabefeld und tippt Text ein.
+    params:
+      field_label: Der sichtbare Text des Feldes
+      text_to_enter: Der einzugebende Text
+  steps:
+  - method: find_text_coordinates
+    params:
+      text_to_find: '{{field_label}}'
+    register_result_as: field
+  - method: click_at
+    params:
+      x: '{{ field.bbox.x2 + 30 }}'
+      y: '{{ (field.bbox.y1 + field.bbox.y2) // 2 }}'
+  - method: type_text
+    params:
+      text_to_type: '{{text_to_enter}}'
+close_active_window:
+  meta:
+    description: Schließt das aktive Fenster mit Alt+F4.
+    params: {}
+  steps:
+  - method: hotkey
+    params:
+      keys:
+      - alt
+      - F4
+take_screenshot:
+  meta:
+    description: Macht einen Screenshot. Filename ist optional.
+    params:
+      filename: 'Der Dateiname (optional, default: auto-generiert)'
+  steps:
+  - method: save_screenshot
+    params: {}
+test_skill:
+  meta:
+    description: Test-Aufzeichnung
+    params:
+      input_5: 'Eingabe (aufgezeichnet: ''v...'')'
+      input_20: 'Eingabe (aufgezeichnet: ''V...'')'
+      input_26: 'Eingabe (aufgezeichnet: ''v...'')'
+      input_35: 'Eingabe (aufgezeichnet: ''CV...'')'
+    learned_at: '2025-12-31T12:52:21.376733'
+    auto_generated: true
+  steps:
+  - method: click_at
+    params:
+      x: 2687
+      y: 1183
+  - method: click_at
+    params:
+      x: 2074
+      y: 745
+  - method: click_at
+    params:
+      x: 2143
+      y: 768
+  - method: click_at
+    params:
+      x: 1966
+      y: 643
+  - method: click_at
+    params:
+      x: 2763
+      y: 1101
+  - method: type_text
+    params:
+      text_to_type: '{{input_5}}'
+      press_enter_after: false
+  - method: click_at
+    params:
+      x: 3239
+      y: 1140
+  - method: click_at
+    params:
+      x: 3521
+      y: 618
+  - method: click_at
+    params:
+      x: 1952
+      y: 519
+  - method: click_at
+    params:
+      x: 1949
+      y: 640
+  - method: click_at
+    params:
+      x: 1960
+      y: 197
+  - method: click_at
+    params:
+      x: 1953
+      y: 200
+  - method: click_at
+    params:
+      x: 1951
+      y: 651
+  - method: click_at
+    params:
+      x: 1977
+      y: 332
+  - method: click_at
+    params:
+      x: 2835
+      y: 1186
+  - method: click_at
+    params:
+      x: 1957
+      y: 652
+  - method: click_at
+    params:
+      x: 2808
+      y: 880
+  - method: click_at
+    params:
+      x: 3234
+      y: 557
+  - method: click_at
+    params:
+      x: 1934
+      y: 315
+  - method: click_at
+    params:
+      x: 2749
+      y: 1199
+  - method: type_text
+    params:
+      text_to_type: '{{input_20}}'
+      press_enter_after: true
+  - method: click_at
+    params:
+      x: 2715
+      y: 1199
+  - method: click_at
+    params:
+      x: 2161
+      y: 857
+  - method: click_at
+    params:
+      x: 2189
+      y: 874
+  - method: click_at
+    params:
+      x: 1942
+      y: 649
+  - method: click_at
+    params:
+      x: 2693
+      y: 1107
+  - method: type_text
+    params:
+      text_to_type: '{{input_26}}'
+      press_enter_after: false
+  - method: click_at
+    params:
+      x: 3231
+      y: 1142
+  - method: click_at
+    params:
+      x: 3288
+      y: 888
+  - method: click_at
+    params:
+      x: 2791
+      y: 754
+  - method: click_at
+    params:
+      x: 2624
+      y: 452
+  - method: click_at
+    params:
+      x: 3204
+      y: 464
+  - method: click_at
+    params:
+      x: 3204
+      y: 595
+  - method: click_at
+    params:
+      x: 3233
+      y: 424
+  - method: click_at
+    params:
+      x: 1976
+      y: 313
+  - method: type_text
+    params:
+      text_to_type: '{{input_35}}'
+      press_enter_after: true
+test_ocr3:
+  meta:
+    description: Test mit OCR
+    params:
+      input_29: 'Eingabe (Standard: ''v'')'
+      input_39: 'Eingabe (Standard: ''V'')'
+    learned_at: '2025-12-31T19:38:31.516017'
+    auto_generated: true
+  steps:
+  - method: find_text_coordinates
+    params:
+      text_to_find: '1-Product-Name: ~Idev/timus'
+    register_result_as: coords_0
+  - method: click_at
+    params:
+      x: '{{ (coords_0.bbox.x1 + coords_0.bbox.x2) // 2 }}'
+      y: '{{ (coords_0.bbox.y1 + coords_0.bbox.y2) // 2 }}'
+  - method: click_at
+    params:
+      x: 3403
+      y: 1079
+  - method: click_at
+    params:
+      x: 3230
+      y: 1189
+  - method: find_text_coordinates
+    params:
+      text_to_find: naned
+    register_result_as: coords_3
+  - method: click_at
+    params:
+      x: '{{ (coords_3.bbox.x1 + coords_3.bbox.x2) // 2 }}'
+      y: '{{ (coords_3.bbox.y1 + coords_3.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: '025'
+    register_result_as: coords_4
+  - method: click_at
+    params:
+      x: '{{ (coords_4.bbox.x1 + coords_4.bbox.x2) // 2 }}'
+      y: '{{ (coords_4.bbox.y1 + coords_4.bbox.y2) // 2 }}'
+  - method: click_at
+    params:
+      x: 1441
+      y: 352
+  - method: click_at
+    params:
+      x: 908
+      y: 441
+  - method: find_text_coordinates
+    params:
+      text_to_find: image
+    register_result_as: coords_7
+  - method: click_at
+    params:
+      x: '{{ (coords_7.bbox.x1 + coords_7.bbox.x2) // 2 }}'
+      y: '{{ (coords_7.bbox.y1 + coords_7.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: 2025-12-31 19:27:38,481
+    register_result_as: coords_8
+  - method: click_at
+    params:
+      x: '{{ (coords_8.bbox.x1 + coords_8.bbox.x2) // 2 }}'
+      y: '{{ (coords_8.bbox.y1 + coords_8.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: 2025-12-31 19:27:38,481
+    register_result_as: coords_9
+  - method: click_at
+    params:
+      x: '{{ (coords_9.bbox.x1 + coords_9.bbox.x2) // 2 }}'
+      y: '{{ (coords_9.bbox.y1 + coords_9.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: 'ne:'
+    register_result_as: coords_10
+  - method: click_at
+    params:
+      x: '{{ (coords_10.bbox.x1 + coords_10.bbox.x2) // 2 }}'
+      y: '{{ (coords_10.bbox.y1 + coords_10.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: '19: 21 : 38'
+    register_result_as: coords_11
+  - method: click_at
+    params:
+      x: '{{ (coords_11.bbox.x1 + coords_11.bbox.x2) // 2 }}'
+      y: '{{ (coords_11.bbox.y1 + coords_11.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: 'Product-Name:'
+    register_result_as: coords_12
+  - method: click_at
+    params:
+      x: '{{ (coords_12.bbox.x1 + coords_12.bbox.x2) // 2 }}'
+      y: '{{ (coords_12.bbox.y1 + coords_12.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: (tinus)
+    register_result_as: coords_13
+  - method: click_at
+    params:
+      x: '{{ (coords_13.bbox.x1 + coords_13.bbox.x2) // 2 }}'
+      y: '{{ (coords_13.bbox.y1 + coords_13.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: <> Get code
+    register_result_as: coords_14
+  - method: click_at
+    params:
+      x: '{{ (coords_14.bbox.x1 + coords_14.bbox.x2) // 2 }}'
+      y: '{{ (coords_14.bbox.y1 + coords_14.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: 2025-12-31 19.31:43,371
+    register_result_as: coords_15
+  - method: click_at
+    params:
+      x: '{{ (coords_15.bbox.x1 + coords_15.bbox.x2) // 2 }}'
+      y: '{{ (coords_15.bbox.y1 + coords_15.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: grep
+    register_result_as: coords_16
+  - method: click_at
+    params:
+      x: '{{ (coords_16.bbox.x1 + coords_16.bbox.x2) // 2 }}'
+      y: '{{ (coords_16.bbox.y1 + coords_16.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: fatih-ubuntu@fatih-ub
+    register_result_as: coords_17
+  - method: click_at
+    params:
+      x: '{{ (coords_17.bbox.x1 + coords_17.bbox.x2) // 2 }}'
+      y: '{{ (coords_17.bbox.y1 + coords_17.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: 'roduct-Name: ~/dev/timus'
+    register_result_as: coords_18
+  - method: click_at
+    params:
+      x: '{{ (coords_18.bbox.x1 + coords_18.bbox.x2) // 2 }}'
+      y: '{{ (coords_18.bbox.y1 + coords_18.bbox.y2) // 2 }}'
+  - method: click_at
+    params:
+      x: 3156
+      y: 1199
+  - method: find_text_coordinates
+    params:
+      text_to_find: 12-31 19:36:04,448
+    register_result_as: coords_20
+  - method: click_at
+    params:
+      x: '{{ (coords_20.bbox.x1 + coords_20.bbox.x2) // 2 }}'
+      y: '{{ (coords_20.bbox.y1 + coords_20.bbox.y2) // 2 }}'
+  - method: click_at
+    params:
+      x: 3404
+      y: 624
+  - method: find_text_coordinates
+    params:
+      text_to_find: 2025-12-31 19:36:01,604
+    register_result_as: coords_22
+  - method: click_at
+    params:
+      x: '{{ (coords_22.bbox.x1 + coords_22.bbox.x2) // 2 }}'
+      y: '{{ (coords_22.bbox.y1 + coords_22.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: schirm
+    register_result_as: coords_23
+  - method: click_at
+    params:
+      x: '{{ (coords_23.bbox.x1 + coords_23.bbox.x2) // 2 }}'
+      y: '{{ (coords_23.bbox.y1 + coords_23.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: chirmfoto aufnehmen
+    register_result_as: coords_24
+  - method: click_at
+    params:
+      x: '{{ (coords_24.bbox.x1 + coords_24.bbox.x2) // 2 }}'
+      y: '{{ (coords_24.bbox.y1 + coords_24.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: t nicrosoftltracr
+    register_result_as: coords_25
+  - method: click_at
+    params:
+      x: '{{ (coords_25.bbox.x1 + coords_25.bbox.x2) // 2 }}'
+      y: '{{ (coords_25.bbox.y1 + coords_25.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: OCR
+    register_result_as: coords_26
+  - method: click_at
+    params:
+      x: '{{ (coords_26.bbox.x1 + coords_26.bbox.x2) // 2 }}'
+      y: '{{ (coords_26.bbox.y1 + coords_26.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: 2025-12-31 19:36:06,744
+    register_result_as: coords_27
+  - method: click_at
+    params:
+      x: '{{ (coords_27.bbox.x1 + coords_27.bbox.x2) // 2 }}'
+      y: '{{ (coords_27.bbox.y1 + coords_27.bbox.y2) // 2 }}'
+  - method: click_at
+    params:
+      x: 2691
+      y: 1105
+  - method: type_text
+    params:
+      text_to_type: '{{input_29}}'
+      press_enter_after: false
+  - method: find_text_coordinates
+    params:
+      text_to_find: Opus 4.5
+    register_result_as: coords_30
+  - method: click_at
+    params:
+      x: '{{ (coords_30.bbox.x1 + coords_30.bbox.x2) // 2 }}'
+      y: '{{ (coords_30.bbox.y1 + coords_30.bbox.y2) // 2 }}'
+  - method: click_at
+    params:
+      x: 1723
+      y: 547
+  - method: click_at
+    params:
+      x: 1697
+      y: 672
+  - method: click_at
+    params:
+      x: 1566
+      y: 828
+  - method: click_at
+    params:
+      x: 1960
+      y: 335
+  - method: find_text_coordinates
+    params:
+      text_to_find: 2025-12-31 19.36:24,110
+    register_result_as: coords_35
+  - method: click_at
+    params:
+      x: '{{ (coords_35.bbox.x1 + coords_35.bbox.x2) // 2 }}'
+      y: '{{ (coords_35.bbox.y1 + coords_35.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: Kopleren
+    register_result_as: coords_36
+  - method: click_at
+    params:
+      x: '{{ (coords_36.bbox.x1 + coords_36.bbox.x2) // 2 }}'
+      y: '{{ (coords_36.bbox.y1 + coords_36.bbox.y2) // 2 }}'
+  - method: click_at
+    params:
+      x: 1951
+      y: 309
+  - method: find_text_coordinates
+    params:
+      text_to_find: ubuntu@fatih-ubuntu-System-Product-Namez
+    register_result_as: coords_38
+  - method: click_at
+    params:
+      x: '{{ (coords_38.bbox.x1 + coords_38.bbox.x2) // 2 }}'
+      y: '{{ (coords_38.bbox.y1 + coords_38.bbox.y2) // 2 }}'
+  - method: type_text
+    params:
+      text_to_type: '{{input_39}}'
+      press_enter_after: true
+skill_1767276151:
+  meta:
+    description: 'Aufgezeichneter Skill: skill_1767276151'
+    params: {}
+    learned_at: '2026-01-01T15:02:56.262461'
+    auto_generated: true
+  steps:
+  - method: click_at
+    params:
+      x: 1302
+      y: 534
+  - method: click_at
+    params:
+      x: 1083
+      y: 298
+  - method: click_at
+    params:
+      x: 792
+      y: 321
+  - method: find_text_coordinates
+    params:
+      text_to_find: 'ct-Name: ~Idev timus'
+    register_result_as: coords_3
+  - method: click_at
+    params:
+      x: '{{ (coords_3.bbox.x1 + coords_3.bbox.x2) // 2 }}'
+      y: '{{ (coords_3.bbox.y1 + coords_3.bbox.y2) // 2 }}'
+  - method: click_at
+    params:
+      x: 1225
+      y: 618
+  - method: click_at
+    params:
+      x: 1590
+      y: 880
+  - method: click_at
+    params:
+      x: 1394
+      y: 677
+  - method: find_text_coordinates
+    params:
+      text_to_find: fatih-ubuntu@fatih-u
+    register_result_as: coords_7
+  - method: click_at
+    params:
+      x: '{{ (coords_7.bbox.x1 + coords_7.bbox.x2) // 2 }}'
+      y: '{{ (coords_7.bbox.y1 + coords_7.bbox.y2) // 2 }}'
+skill_1767533318:
+  meta:
+    description: 'Aufgezeichneter Skill: skill_1767533318'
+    params:
+      input_5: 'Eingabe (Standard: ''hi gemini ich bin ti'')'
+      input_8: 'Eingabe (Standard: ''ja hebe ich '')'
+      input_10: 'Eingabe (Standard: ''a'')'
+      input_16: 'Eingabe (Standard: ''aufzeichnung stoppen'')'
+    learned_at: '2026-01-04T14:30:42.103065'
+    auto_generated: true
+  steps:
+  - method: find_text_coordinates
+    params:
+      text_to_find: Neuer Tab
+    register_result_as: coords_0
+  - method: click_at
+    params:
+      x: '{{ (coords_0.bbox.x1 + coords_0.bbox.x2) // 2 }}'
+      y: '{{ (coords_0.bbox.y1 + coords_0.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: Neuer Tab
+    register_result_as: coords_1
+  - method: click_at
+    params:
+      x: '{{ (coords_1.bbox.x1 + coords_1.bbox.x2) // 2 }}'
+      y: '{{ (coords_1.bbox.y1 + coords_1.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: Alle Fenster
+    register_result_as: coords_2
+  - method: click_at
+    params:
+      x: '{{ (coords_2.bbox.x1 + coords_2.bbox.x2) // 2 }}'
+      y: '{{ (coords_2.bbox.y1 + coords_2.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: Otto
+    register_result_as: coords_3
+  - method: click_at
+    params:
+      x: '{{ (coords_3.bbox.x1 + coords_3.bbox.x2) // 2 }}'
+      y: '{{ (coords_3.bbox.y1 + coords_3.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: Frag Gemini 3
+    register_result_as: coords_4
+  - method: click_at
+    params:
+      x: '{{ (coords_4.bbox.x1 + coords_4.bbox.x2) // 2 }}'
+      y: '{{ (coords_4.bbox.y1 + coords_4.bbox.y2) // 2 }}'
+  - method: type_text
+    params:
+      text_to_type: '{{input_5}}'
+      press_enter_after: false
+  - method: find_text_coordinates
+    params:
+      text_to_find: Pro
+    register_result_as: coords_6
+  - method: click_at
+    params:
+      x: '{{ (coords_6.bbox.x1 + coords_6.bbox.x2) // 2 }}'
+      y: '{{ (coords_6.bbox.y1 + coords_6.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: Frag Gemini 3
+    register_result_as: coords_7
+  - method: click_at
+    params:
+      x: '{{ (coords_7.bbox.x1 + coords_7.bbox.x2) // 2 }}'
+      y: '{{ (coords_7.bbox.y1 + coords_7.bbox.y2) // 2 }}'
+  - method: type_text
+    params:
+      text_to_type: '{{input_8}}'
+      press_enter_after: false
+  - method: find_text_coordinates
+    params:
+      text_to_find: ja hebe ich
+    register_result_as: coords_9
+  - method: click_at
+    params:
+      x: '{{ (coords_9.bbox.x1 + coords_9.bbox.x2) // 2 }}'
+      y: '{{ (coords_9.bbox.y1 + coords_9.bbox.y2) // 2 }}'
+  - method: type_text
+    params:
+      text_to_type: '{{input_10}}'
+      press_enter_after: false
+  - method: find_text_coordinates
+    params:
+      text_to_find: Pro
+    register_result_as: coords_11
+  - method: click_at
+    params:
+      x: '{{ (coords_11.bbox.x1 + coords_11.bbox.x2) // 2 }}'
+      y: '{{ (coords_11.bbox.y1 + coords_11.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: le Gemini
+    register_result_as: coords_12
+  - method: click_at
+    params:
+      x: '{{ (coords_12.bbox.x1 + coords_12.bbox.x2) // 2 }}'
+      y: '{{ (coords_12.bbox.y1 + coords_12.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: rTab
+    register_result_as: coords_13
+  - method: click_at
+    params:
+      x: '{{ (coords_13.bbox.x1 + coords_13.bbox.x2) // 2 }}'
+      y: '{{ (coords_13.bbox.y1 + coords_13.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: gle
+    register_result_as: coords_14
+  - method: click_at
+    params:
+      x: '{{ (coords_14.bbox.x1 + coords_14.bbox.x2) // 2 }}'
+      y: '{{ (coords_14.bbox.y1 + coords_14.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: pgle Gemini
+    register_result_as: coords_15
+  - method: click_at
+    params:
+      x: '{{ (coords_15.bbox.x1 + coords_15.bbox.x2) // 2 }}'
+      y: '{{ (coords_15.bbox.y1 + coords_15.bbox.y2) // 2 }}'
+  - method: type_text
+    params:
+      text_to_type: '{{input_16}}'
+      press_enter_after: true
+skill_1767534490:
+  meta:
+    description: 'Aufgezeichneter Skill: skill_1767534490'
+    params:
+      input_3: 'Eingabe (Standard: ''hi gemini'')'
+      input_6: 'Eingabe (Standard: ''was geht '')'
+      input_12: 'Eingabe (Standard: ''ok aufzeichnung been'')'
+    learned_at: '2026-01-04T14:49:40.233662'
+    auto_generated: true
+  steps:
+  - method: find_text_coordinates
+    params:
+      text_to_find: Firefox
+    register_result_as: coords_0
+  - method: click_at
+    params:
+      x: '{{ (coords_0.bbox.x1 + coords_0.bbox.x2) // 2 }}'
+      y: '{{ (coords_0.bbox.y1 + coords_0.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: chel
+    register_result_as: coords_1
+  - method: click_at
+    params:
+      x: '{{ (coords_1.bbox.x1 + coords_1.bbox.x2) // 2 }}'
+      y: '{{ (coords_1.bbox.y1 + coords_1.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: g Gemini 3
+    register_result_as: coords_2
+  - method: click_at
+    params:
+      x: '{{ (coords_2.bbox.x1 + coords_2.bbox.x2) // 2 }}'
+      y: '{{ (coords_2.bbox.y1 + coords_2.bbox.y2) // 2 }}'
+  - method: type_text
+    params:
+      text_to_type: '{{input_3}}'
+      press_enter_after: false
+  - method: find_text_coordinates
+    params:
+      text_to_find: Pro
+    register_result_as: coords_4
+  - method: click_at
+    params:
+      x: '{{ (coords_4.bbox.x1 + coords_4.bbox.x2) // 2 }}'
+      y: '{{ (coords_4.bbox.y1 + coords_4.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: Gemini 3
+    register_result_as: coords_5
+  - method: click_at
+    params:
+      x: '{{ (coords_5.bbox.x1 + coords_5.bbox.x2) // 2 }}'
+      y: '{{ (coords_5.bbox.y1 + coords_5.bbox.y2) // 2 }}'
+  - method: type_text
+    params:
+      text_to_type: '{{input_6}}'
+      press_enter_after: false
+  - method: find_text_coordinates
+    params:
+      text_to_find: Pro
+    register_result_as: coords_7
+  - method: click_at
+    params:
+      x: '{{ (coords_7.bbox.x1 + coords_7.bbox.x2) // 2 }}'
+      y: '{{ (coords_7.bbox.y1 + coords_7.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: Termina
+    register_result_as: coords_8
+  - method: click_at
+    params:
+      x: '{{ (coords_8.bbox.x1 + coords_8.bbox.x2) // 2 }}'
+      y: '{{ (coords_8.bbox.y1 + coords_8.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: 'ntu@fatih-ubuntu-System-Product-Name:'
+    register_result_as: coords_9
+  - method: click_at
+    params:
+      x: '{{ (coords_9.bbox.x1 + coords_9.bbox.x2) // 2 }}'
+      y: '{{ (coords_9.bbox.y1 + coords_9.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: fatih-ubuntu@fatih-ubuntu-Syste
+    register_result_as: coords_10
+  - method: click_at
+    params:
+      x: '{{ (coords_10.bbox.x1 + coords_10.bbox.x2) // 2 }}'
+      y: '{{ (coords_10.bbox.y1 + coords_10.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: fatih-ubuntu@
+    register_result_as: coords_11
+  - method: click_at
+    params:
+      x: '{{ (coords_11.bbox.x1 + coords_11.bbox.x2) // 2 }}'
+      y: '{{ (coords_11.bbox.y1 + coords_11.bbox.y2) // 2 }}'
+  - method: type_text
+    params:
+      text_to_type: '{{input_12}}'
+      press_enter_after: true
+skill_1767538844:
+  meta:
+    description: 'Aufgezeichneter Skill: skill_1767538844'
+    params:
+      input_1: 'Eingabe (Standard: ''op'')'
+      input_15: 'Eingabe (Standard: ''hi'')'
+      input_18: 'Eingabe (Standard: ''beende aufzeichnung'')'
+    learned_at: '2026-01-04T16:02:07.159776'
+    auto_generated: true
+  steps:
+  - method: find_text_coordinates
+    params:
+      text_to_find: fatih-ubuntu@fatih-ubur
+    register_result_as: coords_0
+  - method: click_at
+    params:
+      x: '{{ (coords_0.bbox.x1 + coords_0.bbox.x2) // 2 }}'
+      y: '{{ (coords_0.bbox.y1 + coords_0.bbox.y2) // 2 }}'
+  - method: type_text
+    params:
+      text_to_type: '{{input_1}}'
+      press_enter_after: false
+  - method: find_text_coordinates
+    params:
+      text_to_find: enal com
+    register_result_as: coords_2
+  - method: click_at
+    params:
+      x: '{{ (coords_2.bbox.x1 + coords_2.bbox.x2) // 2 }}'
+      y: '{{ (coords_2.bbox.y1 + coords_2.bbox.y2) // 2 }}'
+  - method: click_at
+    params:
+      x: 3735
+      y: 206
+  - method: find_text_coordinates
+    params:
+      text_to_find: Anmelden
+    register_result_as: coords_4
+  - method: click_at
+    params:
+      x: '{{ (coords_4.bbox.x1 + coords_4.bbox.x2) // 2 }}'
+      y: '{{ (coords_4.bbox.y1 + coords_4.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: E-Mail-Adresse
+    register_result_as: coords_5
+  - method: click_at
+    params:
+      x: '{{ (coords_5.bbox.x1 + coords_5.bbox.x2) // 2 }}'
+      y: '{{ (coords_5.bbox.y1 + coords_5.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: elden oder registrie
+    register_result_as: coords_6
+  - method: click_at
+    params:
+      x: '{{ (coords_6.bbox.x1 + coords_6.bbox.x2) // 2 }}'
+      y: '{{ (coords_6.bbox.y1 + coords_6.bbox.y2) // 2 }}'
+  - method: click_at
+    params:
+      x: 2282
+      y: 56
+  - method: find_text_coordinates
+    params:
+      text_to_find: Neuer Tab
+    register_result_as: coords_8
+  - method: click_at
+    params:
+      x: '{{ (coords_8.bbox.x1 + coords_8.bbox.x2) // 2 }}'
+      y: '{{ (coords_8.bbox.y1 + coords_8.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: nAI
+    register_result_as: coords_9
+  - method: click_at
+    params:
+      x: '{{ (coords_9.bbox.x1 + coords_9.bbox.x2) // 2 }}'
+      y: '{{ (coords_9.bbox.y1 + coords_9.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: er Tab
+    register_result_as: coords_10
+  - method: click_at
+    params:
+      x: '{{ (coords_10.bbox.x1 + coords_10.bbox.x2) // 2 }}'
+      y: '{{ (coords_10.bbox.y1 + coords_10.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: Google Chrome
+    register_result_as: coords_11
+  - method: click_at
+    params:
+      x: '{{ (coords_11.bbox.x1 + coords_11.bbox.x2) // 2 }}'
+      y: '{{ (coords_11.bbox.y1 + coords_11.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: claudeailcha
+    register_result_as: coords_12
+  - method: click_at
+    params:
+      x: '{{ (coords_12.bbox.x1 + coords_12.bbox.x2) // 2 }}'
+      y: '{{ (coords_12.bbox.y1 + coords_12.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: Neuer Chat
+    register_result_as: coords_13
+  - method: click_at
+    params:
+      x: '{{ (coords_13.bbox.x1 + coords_13.bbox.x2) // 2 }}'
+      y: '{{ (coords_13.bbox.y1 + coords_13.bbox.y2) // 2 }}'
+  - method: find_text_coordinates
+    params:
+      text_to_find: '|telle irgendeine Frage'
+    register_result_as: coords_14
+  - method: click_at
+    params:
+      x: '{{ (coords_14.bbox.x1 + coords_14.bbox.x2) // 2 }}'
+      y: '{{ (coords_14.bbox.y1 + coords_14.bbox.y2) // 2 }}'
+  - method: type_text
+    params:
+      text_to_type: '{{input_15}}'
+      press_enter_after: false
+  - method: click_at
+    params:
+      x: 3309
+      y: 638
+  - method: find_text_coordinates
+    params:
+      text_to_find: Codex
+    register_result_as: coords_17
+  - method: click_at
+    params:
+      x: '{{ (coords_17.bbox.x1 + coords_17.bbox.x2) // 2 }}'
+      y: '{{ (coords_17.bbox.y1 + coords_17.bbox.y2) // 2 }}'
+  - method: type_text
+    params:
+      text_to_type: '{{input_18}}'
+      press_enter_after: true
+skill_1768075994:
+  meta:
+    description: 'Aufgezeichneter Skill: skill_1768075994'
+    params:
+      input_3: 'Eingabe (Standard: ''beende aufzeichnung'')'
+    learned_at: '2026-01-10T21:13:47.245629'
+    auto_generated: true
+  steps:
+  - method: click_at
+    params:
+      x: 1414
+      y: 970
+  - method: click_at
+    params:
+      x: 1038
+      y: 973
+  - method: click_at
+    params:
+      x: 770
+      y: 946
+  - method: type_text
+    params:
+      text_to_type: '{{input_3}}'
+      press_enter_after: true

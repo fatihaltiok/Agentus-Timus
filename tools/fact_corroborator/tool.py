@@ -6,11 +6,10 @@ Tool zur aktiven Korrelation und Verifizierung von Fakten durch gezielte Websuch
 import asyncio # Import für asyncio.sleep und asyncio.to_thread
 import json
 import logging
-from typing import Dict, List, Any, Optional, Union # Union bereits vorhanden
+from typing import Dict, List, Any, Optional
 from urllib.parse import urlparse
 from datetime import datetime
-from jsonrpcserver import method, Success, Error
-from tools.universal_tool_caller import register_tool
+from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 from tools.planner.planner_helpers import call_tool_internal
 
 from openai import OpenAI
@@ -62,13 +61,24 @@ class FactVerificationResult:
             "timestamp": self.timestamp
         }
 
-@method
+@tool(
+    name="verify_fact",
+    description="Verifiziert einen einzelnen Fakt durch gezielte Websuchen.",
+    parameters=[
+        P("fact", "string", "Der zu verifizierende Fakt"),
+        P("context", "string", "Optionaler Kontext der Recherche", required=False),
+        P("search_depth", "integer", "Anzahl der Suchanfragen (Standard: 2)", required=False, default=2),
+        P("require_multiple_sources", "boolean", "Erfordert mehrere Quellen zur Verifikation", required=False, default=True),
+    ],
+    capabilities=["analysis", "fact_check"],
+    category=C.ANALYSIS
+)
 async def verify_fact(
     fact: str,
     context: Optional[str] = None,
     search_depth: int = 2, # Standardmäßig 2 Suchanfragen versuchen
     require_multiple_sources: bool = True
-) -> Success:
+) -> dict:
     """
     Verifiziert einen einzelnen Fakt durch gezielte Websuchen.
     """
@@ -77,7 +87,7 @@ async def verify_fact(
         cache_key = f"{fact}_{context or ''}" # Stelle sicher, dass context nie None im Key ist
         if cache_key in verified_facts_cache:
             logger.info(f"✅ Fakt '{fact[:50]}...' aus Cache geladen.")
-            return Success(verified_facts_cache[cache_key])
+            return verified_facts_cache[cache_key]
 
         verification_result_obj = FactVerificationResult(fact)
         corroboration_queries = await _generate_corroboration_queries(fact, context or "")
@@ -87,7 +97,7 @@ async def verify_fact(
             # Gib das Ergebnisobjekt mit Fehlerstatus zurück, anstatt nur ein einfaches Dict
             verification_result_obj.status = "error"
             verification_result_obj.analysis = "Fehler: Keine Suchanfragen konnten generiert werden."
-            return Success(verification_result_obj.to_dict())
+            return verification_result_obj.to_dict()
 
         logger.info(f"📋 Generierte {len(corroboration_queries)} Suchanfragen für Fakt '{fact[:50]}...'.")
         all_found_sources = []
@@ -103,7 +113,7 @@ async def verify_fact(
         tasks_for_analysis = []
         for source_item in unique_relevant_sources[:MAX_CORROBORATION_SOURCES_PER_FACT]: # Limitiere Anzahl analysierter Quellen
             tasks_for_analysis.append(_analyze_source_for_fact(source_item, fact, context))
-        
+
         # Parallele Analyse der Quellen
         if tasks_for_analysis:
             analysis_outputs = await asyncio.gather(*tasks_for_analysis, return_exceptions=True)
@@ -112,11 +122,19 @@ async def verify_fact(
                     source_analysis_results.append(output)
                 elif isinstance(output, Exception):
                     logger.error(f"Fehler bei paralleler Quellenanalyse: {output}")
-        
+
         final_verification_dict = _evaluate_verification_results(verification_result_obj, source_analysis_results, require_multiple_sources)
+
+        # Evidence Pack anfuegen
+        try:
+            from utils.evidence_pack import EvidencePack
+            final_verification_dict["evidence_pack"] = EvidencePack.from_fact_verification(final_verification_dict).to_dict()
+        except Exception as ep_err:
+            logger.warning(f"Evidence Pack konnte nicht erstellt werden: {ep_err}")
+
         verified_facts_cache[cache_key] = final_verification_dict # Cache das Ergebnis
         logger.info(f"🏁 Faktenverifizierung für '{fact[:50]}...' abgeschlossen. Status: {final_verification_dict.get('status')}")
-        return Success(final_verification_dict)
+        return final_verification_dict
 
     except Exception as e:
         logger.error(f"❌ Schwerwiegender Fehler bei Faktenverifizierung für '{fact[:50]}...': {e}", exc_info=True)
@@ -124,14 +142,24 @@ async def verify_fact(
         error_result = FactVerificationResult(fact)
         error_result.status = "error"
         error_result.analysis = f"Interner Fehler: {str(e)}"
-        return Success(error_result.to_dict()) # Gib immer noch Success zurück, aber mit Fehler im Payload
+        return error_result.to_dict() # Gib immer noch dict zurück, aber mit Fehler im Payload
 
-@method
+@tool(
+    name="verify_multiple_facts",
+    description="Verifiziert mehrere Fakten gleichzeitig.",
+    parameters=[
+        P("facts", "array", "Liste von Fakten-Strings zur Verifikation"),
+        P("context", "string", "Optionaler Kontext", required=False),
+        P("parallel", "boolean", "Parallel verarbeiten (Standard: true)", required=False, default=True),
+    ],
+    capabilities=["analysis", "fact_check"],
+    category=C.ANALYSIS
+)
 async def verify_multiple_facts(
     facts: List[str],
     context: Optional[str] = None,
     parallel: bool = True # Standardmäßig parallel
-) -> Success:
+) -> dict:
     """
     Verifiziert mehrere Fakten gleichzeitig.
     """
@@ -155,8 +183,8 @@ async def verify_multiple_facts(
                 error_res.status = "error"
                 error_res.analysis = f"Fehler während der Verifizierung: {str(output_item)}"
                 individual_results.append(error_res.to_dict())
-            elif isinstance(output_item, Success) and isinstance(output_item.result, dict):
-                individual_results.append(output_item.result)
+            elif isinstance(output_item, dict):
+                individual_results.append(output_item)
             else: # Unerwarteter Rückgabetyp
                 logger.warning(f"Unerwarteter Rückgabetyp für Fakt {i}: {type(output_item)}")
                 error_res = FactVerificationResult(facts[i])
@@ -165,15 +193,15 @@ async def verify_multiple_facts(
                 individual_results.append(error_res.to_dict())
 
         overall_summary = _create_verification_summary(individual_results)
-        logger.info(f"🏁 Mehrfach-Faktenverifizierung abgeschlossen. Verifiziert: {overall_summary.get('verified')}, Bestritten: {overall_summary.get('disputed')}")
-        return Success({
+        logger.info(f"🏁 Mehrfach-Faktenverifizierung abgeschlossen. Verifiziert: {overall_summary.get('verified_count')}, Bestritten: {overall_summary.get('disputed_count')}")
+        return {
             "facts_results": individual_results, # Umbenannt für Klarheit
             "summary": overall_summary
-        })
+        }
 
     except Exception as e:
         logger.error(f"❌ Schwerwiegender Fehler bei Mehrfach-Faktenverifizierung: {e}", exc_info=True)
-        return Error(-32000, f"Interner Fehler bei Mehrfach-Verifizierung: {str(e)}")
+        raise Exception(f"Interner Fehler bei Mehrfach-Verifizierung: {str(e)}")
 
 
 async def _generate_corroboration_queries(fact_to_verify: str, main_query_context: str) -> List[str]:
@@ -225,7 +253,7 @@ async def _generate_corroboration_queries(fact_to_verify: str, main_query_contex
         await asyncio.sleep(0.5) # Kleine Pause nach dem API-Aufruf, um Rate Limits zu respektieren
 
         content = response.choices[0].message.content.strip() if response.choices and response.choices[0].message else "{}"
-        
+
         # Versuche, JSON zu parsen
         # In _generate_corroboration_queries
 
@@ -281,7 +309,7 @@ async def _search_and_extract_sources(query: str) -> List[Dict[str, Any]]:
         if isinstance(search_result_payload, dict) and search_result_payload.get("error"):
             logger.warning(f"Fehler vom search_web Tool für Query '{query}': {search_result_payload['error']}")
             return []
-        
+
         if not isinstance(search_result_payload, list):
             logger.warning(f"Unerwartetes Suchergebnisformat für Query '{query}': {type(search_result_payload)}")
             return []
@@ -337,7 +365,7 @@ async def _analyze_source_for_fact(source_details: Dict[str, Any], fact_to_check
         if isinstance(open_result, dict) and open_result.get("error"):
             logger.warning(f"Fehler beim Öffnen von {source_url}: {open_result['error']}")
             return None
-        
+
         # Gehe davon aus, dass open_result erfolgreich war, auch wenn es kein "error" hat
         # und nicht notwendigerweise ein 'status' Feld im Erfolgsfall (abhängig vom Tool).
 
@@ -373,7 +401,7 @@ async def _analyze_source_for_fact(source_details: Dict[str, Any], fact_to_check
         else:
             logger.warning(f"Kein OpenAI Key, verwende einfache Inhaltsanalyse für {source_url}.")
             analysis_output = _simple_content_analysis(content_for_analysis, fact_to_check, source_details)
-        
+
         return analysis_output
 
     except Exception as e:
@@ -446,7 +474,7 @@ def _simple_content_analysis(content: str, fact: str, source_info: Dict[str, Any
     content_lower = content.lower()
     fact_lower = fact.lower()
     keywords = [word for word in fact_lower.split() if len(word) > 3 and word not in ["der", "die", "das", "ist", "sind", "und", "oder"]] # Stopwörter
-    
+
     if not keywords: # Falls Fakt zu kurz oder nur Stopwörter enthält
         return {"stance": "neutral", "confidence": 0.2, "evidence_quote": source_info.get("snippet","")[:150], "reasoning": "Fakt zu kurz für Keyword-Analyse.", "source": source_info}
 
@@ -470,7 +498,7 @@ def _simple_content_analysis(content: str, fact: str, source_info: Dict[str, Any
         confidence = min(0.7, match_ratio * 0.8) # Skaliere Konfidenz
     elif match_ratio > 0.3:
         confidence = 0.4 # Leichte Tendenz, aber noch neutral
-    
+
     return {
         "stance": stance, "confidence": round(confidence,2),
         "evidence_quote": source_info.get("snippet", "")[:150], # Nutze Snippet als "Beweis"
@@ -487,7 +515,7 @@ def _evaluate_verification_results(
     Bewertet alle Quellenanalysen und erstellt ein Gesamtergebnis.
     """
     valid_analyses = [ana for ana in source_analyses if isinstance(ana, dict)] # Filtert None-Werte heraus
-    
+
     supporting = [ana for ana in valid_analyses if ana.get("stance") == "supports"]
     contradicting = [ana for ana in valid_analyses if ana.get("stance") == "contradicts"]
 
@@ -532,7 +560,7 @@ def _create_verification_summary(results_list: List[Dict[str, Any]]) -> Dict[str
     disputed_count = sum(1 for r in results_list if r.get("status") == "disputed")
     unverified_count = sum(1 for r in results_list if r.get("status") == "unverified")
     error_count = sum(1 for r in results_list if r.get("status") == "error")
-    
+
     confidences = [r.get("confidence", 0.0) for r in results_list if isinstance(r.get("confidence"), (float, int)) and r.get("status") != "error"]
     avg_conf = sum(confidences) / len(confidences) if confidences else 0.0
 
@@ -545,17 +573,29 @@ def _create_verification_summary(results_list: List[Dict[str, Any]]) -> Dict[str
         "average_confidence_of_non_error": round(avg_conf, 2),
     }
 
-@method
-async def clear_fact_cache() -> Success:
+@tool(
+    name="clear_fact_cache",
+    description="Leert den Cache für verifizierte Fakten.",
+    parameters=[],
+    capabilities=["analysis", "fact_check"],
+    category=C.ANALYSIS
+)
+async def clear_fact_cache() -> dict:
     """ Leert den Cache für verifizierte Fakten. """
     global verified_facts_cache
     count = len(verified_facts_cache)
     verified_facts_cache.clear() # Verwende clear() für Dictionaries
     logger.info(f"Fakten-Cache mit {count} Einträgen geleert.")
-    return Success({"status": "cache_cleared", "cleared_items": count})
+    return {"status": "cache_cleared", "cleared_items": count}
 
-@method
-async def get_fact_verification_stats() -> Success:
+@tool(
+    name="get_fact_verification_stats",
+    description="Gibt Statistiken über bisherige Verifikationen zurück.",
+    parameters=[],
+    capabilities=["analysis", "fact_check"],
+    category=C.ANALYSIS
+)
+async def get_fact_verification_stats() -> dict:
     """ Gibt Statistiken über bisherige Verifikationen zurück. """
     # Diese Funktion bleibt im Wesentlichen gleich, aber die Logik
     # zum Zählen der Domains und Konfidenzen wird durch die Struktur
@@ -583,19 +623,11 @@ async def get_fact_verification_stats() -> Success:
         for source_ana in fact_data.get("contradicting_sources", []):
             domain = source_ana.get("source", {}).get("domain")
             if domain: contradicting_domains_count[domain] = contradicting_domains_count.get(domain, 0) + 1
-    
+
     if all_confidences_in_cache:
         stats["average_confidence_in_cache"] = round(sum(all_confidences_in_cache) / len(all_confidences_in_cache), 2)
-    
+
     stats["top_supporting_domains"] = dict(sorted(supporting_domains_count.items(), key=lambda item: item[1], reverse=True)[:5])
     stats["top_contradicting_domains"] = dict(sorted(contradicting_domains_count.items(), key=lambda item: item[1], reverse=True)[:5])
-    
-    return Success(stats)
 
-# Registriere Tools
-register_tool("verify_fact", verify_fact)
-register_tool("verify_multiple_facts", verify_multiple_facts)
-register_tool("clear_fact_cache", clear_fact_cache)
-register_tool("get_fact_verification_stats", get_fact_verification_stats)
-
-logger.info("✅ Fact Corroborator Tools (mit asyncio.to_thread und Fehlerbehandlung) registriert.")
+    return stats

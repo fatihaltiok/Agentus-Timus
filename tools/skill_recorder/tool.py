@@ -11,8 +11,8 @@ import time
 import os
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, List, Optional, Union
-from jsonrpcserver import method, Success, Error
+from typing import Dict, Any, List, Optional
+from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 
 log = logging.getLogger("skill_recorder")
 
@@ -38,10 +38,6 @@ try:
 except ImportError:
     MSS_AVAILABLE = False
 
-def register_tool(name, func):
-    """Registriert ein Tool."""
-    pass
-
 # =============================================================================
 # GLOBALER ZUSTAND
 # =============================================================================
@@ -64,7 +60,7 @@ recording_state = {
 
 class ActionRecorder:
     """Zeichnet Maus- und Tastaturaktionen auf mit OCR-Kontext."""
-    
+
     def __init__(self):
         self.mouse_listener = None
         self.keyboard_listener = None
@@ -72,11 +68,11 @@ class ActionRecorder:
         self.text_buffer = ""
         self.last_click_time = 0
         self.pressed_keys = set()
-        
+
         # OCR Engine
         self.ocr_engine = None
         self._init_ocr()
-        
+
     def _init_ocr(self):
         """Initialisiert die OCR-Engine."""
         try:
@@ -96,66 +92,66 @@ class ActionRecorder:
             except:
                 self.ocr_reader = None
                 log.warning("⚠️ Keine OCR verfügbar - Kontext wird nicht erfasst")
-        
+
     def start(self):
         """Startet die Listener."""
         if not PYNPUT_AVAILABLE:
             log.error("pynput nicht verfügbar!")
             return False
-            
+
         self.running = True
         self.text_buffer = ""
         self.pressed_keys = set()
-        
+
         # Maus-Listener
         self.mouse_listener = mouse.Listener(
             on_click=self._on_click
         )
-        
+
         # Tastatur-Listener
         self.keyboard_listener = keyboard.Listener(
             on_press=self._on_key_press,
             on_release=self._on_key_release
         )
-        
+
         self.mouse_listener.start()
         self.keyboard_listener.start()
         log.info("🎤 Event-Listener gestartet (mit OCR-Kontext)")
         return True
-        
+
     def stop(self):
         """Stoppt die Listener."""
         self.running = False
-        
+
         # Flush remaining text buffer
         if self.text_buffer:
             self._flush_text_buffer()
-        
+
         if self.mouse_listener:
             self.mouse_listener.stop()
         if self.keyboard_listener:
             self.keyboard_listener.stop()
-            
+
         log.info("🛑 Event-Listener gestoppt")
-        
+
     def _on_click(self, x, y, button, pressed):
         """Mausklick aufzeichnen mit OCR-Kontext."""
         if not self.running or not pressed:
             return
-            
+
         # Debounce - ignoriere Doppelklicks < 100ms
         now = time.time()
         if now - self.last_click_time < 0.1:
             return
         self.last_click_time = now
-        
+
         # Flush Text-Buffer vor Klick
         if self.text_buffer:
             self._flush_text_buffer()
-        
+
         # OCR-Kontext erfassen
         context, nearby_text = self._get_click_context_with_ocr(int(x), int(y))
-        
+
         action = {
             "type": "click",
             "params": {
@@ -167,23 +163,23 @@ class ActionRecorder:
             "nearby_text": nearby_text,  # Für intelligente Skill-Generierung
             "timestamp": datetime.now().isoformat()
         }
-        
+
         recording_state["actions"].append(action)
         log.info(f"🖱️ Klick: ({x}, {y}) - '{context}'")
-        
+
     def _on_key_press(self, key):
         """Tastendruck aufzeichnen."""
         if not self.running:
             return
-            
+
         self.pressed_keys.add(key)
-        
+
         # Check für Stop-Kombination (Ctrl+Shift+S)
         if self._check_stop_combo():
             log.info("⏹️ Stop-Kombination erkannt!")
             recording_state["stop_requested"] = True
             return
-        
+
         try:
             char = key.char
             if char:
@@ -198,15 +194,15 @@ class ActionRecorder:
             elif key == Key.tab:
                 self._flush_text_buffer()
                 self._record_hotkey(["tab"])
-                
+
     def _on_key_release(self, key):
         """Taste losgelassen."""
         if key in self.pressed_keys:
             self.pressed_keys.discard(key)
-            
+
         # Hotkey erkennen
         if key in (Key.ctrl_l, Key.ctrl_r) and self.pressed_keys:
-            remaining = [k for k in self.pressed_keys 
+            remaining = [k for k in self.pressed_keys
                         if k not in (Key.ctrl_l, Key.ctrl_r, Key.shift, Key.alt_l, Key.alt_r)]
             if remaining:
                 self._flush_text_buffer()
@@ -219,12 +215,12 @@ class ActionRecorder:
                     except:
                         hotkey.append(k.name if hasattr(k, 'name') else str(k))
                 self._record_hotkey(hotkey)
-                
+
     def _check_stop_combo(self):
         """Prüft ob Ctrl+Shift+S gedrückt wurde."""
         has_ctrl = Key.ctrl_l in self.pressed_keys or Key.ctrl_r in self.pressed_keys
         has_shift = Key.shift in self.pressed_keys
-        
+
         for key in self.pressed_keys:
             try:
                 if hasattr(key, 'char') and key.char == 's':
@@ -233,13 +229,13 @@ class ActionRecorder:
             except:
                 pass
         return False
-        
+
     def _flush_text_buffer(self, enter_pressed=False):
         """Speichert gesammelten Text als Aktion."""
         if not self.text_buffer.strip():
             self.text_buffer = ""
             return
-            
+
         action = {
             "type": "type",
             "params": {
@@ -249,11 +245,11 @@ class ActionRecorder:
             "context": f"Text: {self.text_buffer[:30]}",
             "timestamp": datetime.now().isoformat()
         }
-        
+
         recording_state["actions"].append(action)
         log.info(f"⌨️ Text: '{self.text_buffer[:50]}'")
         self.text_buffer = ""
-        
+
     def _record_hotkey(self, keys: List[str]):
         """Zeichnet eine Tastenkombination auf."""
         action = {
@@ -272,15 +268,15 @@ class ActionRecorder:
         """
         if not MSS_AVAILABLE:
             return f"Klick bei ({x}, {y})", []
-            
+
         try:
             import mss
             from PIL import Image
-            
+
             # Screenshot eines Bereichs um den Klick (200x100 Pixel)
             region_width = 300
             region_height = 100
-            
+
             with mss.mss() as sct:
                 # Bestimme Monitor
                 monitor = None
@@ -289,10 +285,10 @@ class ActionRecorder:
                         if m["top"] <= y < m["top"] + m["height"]:
                             monitor = m
                             break
-                
+
                 if not monitor:
                     monitor = sct.monitors[1]
-                
+
                 # Region um Klickpunkt
                 region = {
                     "left": max(monitor["left"], x - region_width // 2),
@@ -300,27 +296,27 @@ class ActionRecorder:
                     "width": region_width,
                     "height": region_height
                 }
-                
+
                 screenshot = sct.grab(region)
                 img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
-            
+
             # OCR durchführen
             nearby_texts = []
-            
+
             if self.ocr_engine:
                 # Nutze zentrale OCR-Engine
                 import numpy as np
                 img_array = np.array(img)
                 results = self.ocr_engine.reader.readtext(img_array)
                 nearby_texts = [r[1] for r in results if r[2] > 0.5]  # Confidence > 50%
-                
+
             elif hasattr(self, 'ocr_reader') and self.ocr_reader:
                 # Fallback EasyOCR
                 import numpy as np
                 img_array = np.array(img)
                 results = self.ocr_reader.readtext(img_array)
                 nearby_texts = [r[1] for r in results if r[2] > 0.5]
-            
+
             # Besten Kontext wählen
             if nearby_texts:
                 # Finde Text der am nächsten zum Klickpunkt ist
@@ -328,7 +324,7 @@ class ActionRecorder:
                 return context, nearby_texts
             else:
                 return f"Klick bei ({x}, {y})", []
-                
+
         except Exception as e:
             log.debug(f"OCR-Kontext fehlgeschlagen: {e}")
             return f"Klick bei ({x}, {y})", []
@@ -341,28 +337,37 @@ recorder = ActionRecorder()
 # RPC METHODEN
 # =============================================================================
 
-@method
-async def start_skill_recording(skill_name: str, description: str = "") -> Union[Success, Error]:
+@tool(
+    name="start_skill_recording",
+    description="Startet die Aufzeichnung eines neuen Skills. Zum Stoppen: Ctrl+Shift+S oder stop_skill_recording aufrufen.",
+    parameters=[
+        P("skill_name", "string", "Name des zu erstellenden Skills (z.B. github_login)"),
+        P("description", "string", "Beschreibung was der Skill tut", required=False, default=""),
+    ],
+    capabilities=["automation", "recording"],
+    category=C.AUTOMATION
+)
+async def start_skill_recording(skill_name: str, description: str = "") -> dict:
     """
     Startet die Aufzeichnung eines neuen Skills.
-    
+
     Args:
         skill_name: Name des zu erstellenden Skills (z.B. "github_login")
         description: Beschreibung was der Skill tut
-        
+
     Zum Stoppen: Drücke Ctrl+Shift+S oder rufe stop_skill_recording auf.
     """
     global recording_state, recorder
-    
+
     if not PYNPUT_AVAILABLE:
-        return Error(code=-32010, message="pynput nicht installiert. Führe aus: pip install pynput")
-    
+        raise Exception("pynput nicht installiert. Führe aus: pip install pynput")
+
     if recording_state["active"]:
-        return Error(code=-32001, message=f"Aufzeichnung läuft bereits für '{recording_state['skill_name']}'")
-    
+        raise Exception(f"Aufzeichnung läuft bereits für '{recording_state['skill_name']}'")
+
     # Validiere Skill-Name
     skill_name = skill_name.lower().replace(" ", "_").replace("-", "_")
-    
+
     recording_state = {
         "active": True,
         "skill_name": skill_name,
@@ -371,43 +376,51 @@ async def start_skill_recording(skill_name: str, description: str = "") -> Union
         "start_time": datetime.now().isoformat(),
         "stop_requested": False
     }
-    
+
     # Starte Event-Listener in separatem Thread
     success = recorder.start()
-    
+
     if not success:
         recording_state["active"] = False
-        return Error(code=-32011, message="Event-Listener konnten nicht gestartet werden")
-    
+        raise Exception("Event-Listener konnten nicht gestartet werden")
+
     log.info(f"🎬 Skill-Aufzeichnung gestartet: '{skill_name}'")
-    
-    return Success({
+
+    return {
         "status": "recording_started",
         "skill_name": skill_name,
         "message": "Aufzeichnung läuft! Führe jetzt die Aktionen aus. Drücke Ctrl+Shift+S zum Beenden."
-    })
+    }
 
 
-@method
-async def stop_skill_recording(save: bool = True) -> Union[Success, Error]:
+@tool(
+    name="stop_skill_recording",
+    description="Beendet die Aufzeichnung und generiert optional den Skill.",
+    parameters=[
+        P("save", "boolean", "Wenn True, wird der Skill gespeichert", required=False, default=True),
+    ],
+    capabilities=["automation", "recording"],
+    category=C.AUTOMATION
+)
+async def stop_skill_recording(save: bool = True) -> dict:
     """
     Beendet die Aufzeichnung und generiert optional den Skill.
-    
+
     Args:
         save: Wenn True, wird der Skill gespeichert
     """
     global recording_state, recorder
-    
+
     if not recording_state["active"]:
-        return Error(code=-32002, message="Keine Aufzeichnung aktiv")
-    
+        raise Exception("Keine Aufzeichnung aktiv")
+
     # Stoppe Listener
     recorder.stop()
-    
+
     skill_name = recording_state["skill_name"]
     actions = recording_state["actions"].copy()
     description = recording_state["description"]
-    
+
     # Reset state
     recording_state = {
         "active": False,
@@ -417,10 +430,10 @@ async def stop_skill_recording(save: bool = True) -> Union[Success, Error]:
         "start_time": None,
         "stop_requested": False
     }
-    
+
     if not actions:
-        return Error(code=-32003, message="Keine Aktionen aufgezeichnet")
-    
+        raise Exception("Keine Aktionen aufgezeichnet")
+
     # Speichere Rohdaten als JSON
     raw_file = RECORDINGS_DIR / f"{skill_name}_raw_{datetime.now().strftime('%Y%m%d_%H%M%S')}.yaml"
     with open(raw_file, 'w', encoding='utf-8') as f:
@@ -431,47 +444,67 @@ async def stop_skill_recording(save: bool = True) -> Union[Success, Error]:
             "actions": actions
         }, f, allow_unicode=True)
     log.info(f"📁 Rohdaten gespeichert: {raw_file}")
-    
+
     if save:
         # Generiere und speichere Skill
         result = await _generate_skill_from_actions(skill_name, description, actions)
         return result
-    
-    return Success({
+
+    return {
         "status": "recording_stopped",
         "skill_name": skill_name,
         "action_count": len(actions),
         "raw_file": str(raw_file),
         "saved": False
-    })
+    }
 
 
-@method
-async def get_recording_status() -> Union[Success, Error]:
+@tool(
+    name="get_recording_status",
+    description="Gibt den aktuellen Aufzeichnungsstatus zurück.",
+    parameters=[],
+    capabilities=["automation", "recording"],
+    category=C.AUTOMATION
+)
+async def get_recording_status() -> dict:
     """Gibt den aktuellen Aufzeichnungsstatus zurück."""
-    return Success({
+    return {
         "active": recording_state["active"],
         "skill_name": recording_state.get("skill_name"),
         "action_count": len(recording_state.get("actions", [])),
         "last_actions": recording_state.get("actions", [])[-5:],
         "pynput_available": PYNPUT_AVAILABLE
-    })
+    }
 
 
-@method
-async def list_recordings() -> Union[Success, Error]:
+@tool(
+    name="list_recordings",
+    description="Listet alle gespeicherten Aufzeichnungen.",
+    parameters=[],
+    capabilities=["automation", "recording"],
+    category=C.AUTOMATION
+)
+async def list_recordings() -> dict:
     """Listet alle gespeicherten Aufzeichnungen."""
     recordings = list(RECORDINGS_DIR.glob("*.yaml"))
-    return Success({
+    return {
         "recordings": [
             {"name": r.stem, "path": str(r), "size": r.stat().st_size}
             for r in sorted(recordings, reverse=True)
         ]
-    })
+    }
 
 
-@method
-async def replay_recording_to_skill(recording_name: str) -> Union[Success, Error]:
+@tool(
+    name="replay_recording_to_skill",
+    description="Konvertiert eine gespeicherte Aufzeichnung nachträglich zu einem Skill.",
+    parameters=[
+        P("recording_name", "string", "Name der Aufzeichnung"),
+    ],
+    capabilities=["automation", "recording"],
+    category=C.AUTOMATION
+)
+async def replay_recording_to_skill(recording_name: str) -> dict:
     """
     Konvertiert eine gespeicherte Aufzeichnung nachträglich zu einem Skill.
     """
@@ -482,11 +515,11 @@ async def replay_recording_to_skill(recording_name: str) -> Union[Success, Error
         if matches:
             recording_file = matches[0]
         else:
-            return Error(code=-32004, message=f"Aufzeichnung '{recording_name}' nicht gefunden")
-    
+            raise Exception(f"Aufzeichnung '{recording_name}' nicht gefunden")
+
     with open(recording_file, 'r', encoding='utf-8') as f:
         data = yaml.safe_load(f)
-    
+
     result = await _generate_skill_from_actions(
         data["skill_name"],
         data["description"],
@@ -499,13 +532,13 @@ async def replay_recording_to_skill(recording_name: str) -> Union[Success, Error
 # SKILL GENERIERUNG
 # =============================================================================
 
-async def _generate_skill_from_actions(skill_name: str, description: str, actions: List[Dict]) -> Union[Success, Error]:
+async def _generate_skill_from_actions(skill_name: str, description: str, actions: List[Dict]) -> dict:
     """Generiert einen Skill aus aufgezeichneten Aktionen."""
-    
+
     try:
         steps = []
         params_needed = {}
-        
+
         for i, action in enumerate(actions):
             step = _convert_action_to_step(action, params_needed, i)
             if step:
@@ -513,10 +546,10 @@ async def _generate_skill_from_actions(skill_name: str, description: str, action
                     steps.extend(step)
                 else:
                     steps.append(step)
-        
+
         if not steps:
-            return Error(code=-32004, message="Keine gültigen Schritte generiert")
-        
+            raise Exception("Keine gültigen Schritte generiert")
+
         # Erstelle Skill-Definition
         skill_def = {
             "meta": {
@@ -527,48 +560,48 @@ async def _generate_skill_from_actions(skill_name: str, description: str, action
             },
             "steps": steps
         }
-        
+
         # Lade existierende Skills
         if SKILLS_FILE.exists():
             with open(SKILLS_FILE, 'r', encoding='utf-8') as f:
                 skills = yaml.safe_load(f) or {}
         else:
             skills = {}
-        
+
         # Füge neuen Skill hinzu
         skills[skill_name] = skill_def
-        
+
         # Speichere
         with open(SKILLS_FILE, 'w', encoding='utf-8') as f:
             yaml.dump(skills, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-        
+
         log.info(f"✅ Skill '{skill_name}' gespeichert mit {len(steps)} Schritten")
-        
-        return Success({
+
+        return {
             "status": "skill_created",
             "skill_name": skill_name,
             "steps_count": len(steps),
             "params": list(params_needed.keys()),
             "message": f"Skill '{skill_name}' erfolgreich erstellt! Nutze: run_skill('{skill_name}', ...)"
-        })
-        
+        }
+
     except Exception as e:
         log.error(f"Fehler beim Generieren des Skills: {e}", exc_info=True)
-        return Error(code=-32005, message=f"Skill-Generierung fehlgeschlagen: {e}")
+        raise Exception(f"Skill-Generierung fehlgeschlagen: {e}")
 
 
-def _convert_action_to_step(action: Dict, params_needed: Dict, index: int) -> Optional[Union[Dict, List[Dict]]]:
+def _convert_action_to_step(action: Dict, params_needed: Dict, index: int) -> Optional[Dict | List[Dict]]:
     """Konvertiert eine aufgezeichnete Aktion in einen Skill-Step."""
-    
+
     action_type = action.get("type", "")
     params = action.get("params", {})
     context = action.get("context", "")
     nearby_text = action.get("nearby_text", [])
-    
+
     if action_type == "click":
         x = params.get("x", 0)
         y = params.get("y", 0)
-        
+
         # Wenn OCR-Text gefunden wurde, nutze text-basiertes Klicken
         if nearby_text and len(nearby_text) > 0 and nearby_text[0] != f"Klick bei ({x}, {y})":
             click_text = nearby_text[0]
@@ -592,11 +625,11 @@ def _convert_action_to_step(action: Dict, params_needed: Dict, index: int) -> Op
                 "method": "click_at",
                 "params": {"x": x, "y": y}
             }
-    
+
     elif action_type == "type":
         text = params.get("text", "")
         enter = params.get("enter", False)
-        
+
         # Kurzer Text = wahrscheinlich ein Parameter
         if len(text) < 50:
             param_name = f"input_{index}"
@@ -616,25 +649,12 @@ def _convert_action_to_step(action: Dict, params_needed: Dict, index: int) -> Op
                     "press_enter_after": enter
                 }
             }
-    
+
     elif action_type == "hotkey":
         keys = params.get("keys", [])
         return {
             "method": "hotkey",
             "params": {"keys": keys}
         }
-    
+
     return None
-
-
-# =============================================================================
-# REGISTRIERUNG
-# =============================================================================
-
-register_tool("start_skill_recording", start_skill_recording)
-register_tool("stop_skill_recording", stop_skill_recording)
-register_tool("get_recording_status", get_recording_status)
-register_tool("list_recordings", list_recordings)
-register_tool("replay_recording_to_skill", replay_recording_to_skill)
-
-log.info("✅ Skill Recorder Tool (mit Event-Listening) registriert")

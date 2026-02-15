@@ -1,0 +1,75 @@
+agent timus 
+
+
+
+ Hier die Anleitung:                                                                                                                                                                         
+   
+  Timus starten - Kurzanleitung                                                                                                                                                               
+                                                                                                                                                                                            
+  Schritt 1: MCP Server starten                                                                                                                                                               
+                                                                                                                                                                                              
+  cd /home/fatih-ubuntu/dev/timus/server                                                                                                                                                      
+  python mcp_server.py
+
+  Das startet den FastAPI-Server auf http://127.0.0.1:5000. Beim Start passiert automatisch:
+  - GPU/CUDA-Pruefung (RTX 3090)
+  - OCR-Engine Initialisierung
+  - Qwen-VL Engine laden (weil QWEN_VL_ENABLED=1 in .env)
+  - Alle 49 Tool-Module importieren (156 RPC-Methoden registrieren)
+
+  Warte bis du siehst:
+  🌐 TIMUS MCP SERVER IST BEREIT FÜR ANFRAGEN
+  🔧 156 RPC-Methoden registriert
+
+  Schritt 2: Dispatcher starten (neues Terminal)
+
+  cd /home/fatih-ubuntu/dev/timus
+  python main_dispatcher.py
+
+  Das ist die interaktive Chat-Schleife. Der Dispatcher:
+  1. Holt Tool-Beschreibungen vom Server (/get_tool_descriptions)
+  2. Analysiert deine Eingabe (Keyword + LLM)
+  3. Routet zum richtigen Agenten
+
+  Schritt 3: Benutzen
+
+  Du> Wie ist das Wetter in Berlin?          → EXECUTOR (schnell)
+  Du> asyncio vs threading?                   → REASONING (Nemotron)
+  Du> Recherchiere KI-Sicherheit 2026         → RESEARCH (DeepSeek)
+  Du> Öffne Firefox und gehe zu google.com    → VISUAL_NEMOTRON (v4)
+  Du> Schreibe ein Python-Skript für...       → DEVELOPMENT (Mercury)
+  Du> Male ein Bild von einer Katze           → CREATIVE (GPT-5.2)
+  Du> exit                                    → Beenden
+
+  Pruefen ob alles laeuft
+
+  # Health-Check
+  curl http://localhost:5000/health
+
+  # Tool-Liste
+  curl http://localhost:5000/get_tool_descriptions
+
+  # OpenAI-kompatible Schemas (NEU)
+  curl http://localhost:5000/get_tool_schemas/openai
+
+  # Tools nach Capability filtern (NEU)
+  curl http://localhost:5000/get_tools_by_capability/browser
+
+  Voraussetzungen (.env)
+
+  Die .env ist bereits konfiguriert. Die wichtigsten Keys:
+  - OPENAI_API_KEY - Fuer GPT-Modelle + Embeddings
+  - DISPATCHER_MODEL=gpt-5-mini - Fuer Intent-Erkennung
+  - QWEN_VL_ENABLED=1 - Qwen-VL Vision Engine aktiv
+  - LOG_LEVEL=INFO
+
+  Bei Problemen
+
+  # Server-Log pruefen
+  cat /home/fatih-ubuntu/dev/timus/timus_server.log
+
+  # Einzelnen JSON-RPC Call testen
+  curl -X POST http://localhost:5000/ \
+    -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","method":"search_web","params":{"query":"test"},"id":1}'
+

@@ -3,18 +3,25 @@
 import logging
 import asyncio
 import json
-from typing import Union
 from PIL import Image
 import mss
 
-from jsonrpcserver import method, Success, Error
+from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 
-from tools.universal_tool_caller import register_tool
 from tools.shared_context import log, openai_client, segmentation_engine_instance
 
 from utils.openai_compat import prepare_openai_params
-@method
-async def find_element_by_description(description: str) -> Union[Success, Error]:
+
+@tool(
+    name="find_element_by_description",
+    description="Findet das beste UI-Element basierend auf einer Beschreibung und gibt seine Daten (inkl. Mittelpunkt) zurueck.",
+    parameters=[
+        P("description", "string", "Beschreibung des gesuchten UI-Elements", required=True),
+    ],
+    capabilities=["vision", "ui"],
+    category=C.VISION
+)
+async def find_element_by_description(description: str) -> dict:
     """
     Findet das beste UI-Element basierend auf einer Beschreibung und gibt seine Daten (inkl. Mittelpunkt) zurück.
     Diese Funktion führt KEINEN Klick aus, sondern liefert nur die Zieldaten für eine nachfolgende Aktion.
@@ -23,8 +30,8 @@ async def find_element_by_description(description: str) -> Union[Success, Error]
     log.info(f"Suche Element anhand der Beschreibung: '{description}'")
 
     if not segmentation_engine_instance or not segmentation_engine_instance.initialized:
-         return Error(code=-32025, message="Die Segmentation Engine ist nicht für die Elementsuche verfügbar.")
-    
+         raise Exception("Die Segmentation Engine ist nicht für die Elementsuche verfügbar.")
+
     try:
         # Schritt 1: Screenshot direkt hier machen
         with mss.mss() as sct:
@@ -35,9 +42,9 @@ async def find_element_by_description(description: str) -> Union[Success, Error]
 
         # Schritt 2: Elemente über die Engine finden
         elements = await asyncio.to_thread(segmentation_engine_instance.get_ui_elements_from_image, image)
-        
+
         if not elements:
-            return Success({"status": "no_elements_found", "message": "Keine UI-Elemente auf dem Bildschirm erkannt."})
+            return {"status": "no_elements_found", "message": "Keine UI-Elemente auf dem Bildschirm erkannt."}
 
         # Schritt 3: LLM zur Auswahl des besten Elements befragen
         prompt = f"""
@@ -63,7 +70,7 @@ async def find_element_by_description(description: str) -> Union[Success, Error]
 
             if not hasattr(response, 'choices') or not response.choices:
                 log.error("Response hat keine 'choices' oder choices ist leer")
-                return Success({"status": "api_error", "message": "API Antwort hat keine 'choices'"})
+                return {"status": "api_error", "message": "API Antwort hat keine 'choices'"}
 
             choice = response.choices[0]
             log.info(f"Choice object: {choice}")
@@ -71,7 +78,7 @@ async def find_element_by_description(description: str) -> Union[Success, Error]
 
             if not hasattr(choice, 'message'):
                 log.error("Choice hat keine 'message'")
-                return Success({"status": "api_error", "message": "API Antwort-Choice hat keine 'message'"})
+                return {"status": "api_error", "message": "API Antwort-Choice hat keine 'message'"}
 
             message = choice.message
             log.info(f"Message object: {message}")
@@ -79,35 +86,31 @@ async def find_element_by_description(description: str) -> Union[Success, Error]
 
             if not hasattr(message, 'content'):
                 log.error("Message hat keine 'content'")
-                return Success({"status": "api_error", "message": "API Antwort-Message hat keine 'content'"})
+                return {"status": "api_error", "message": "API Antwort-Message hat keine 'content'"}
 
             response_content = message.content
             log.info(f"Response content: {response_content[:200]}...")
 
             if not response_content:
-                return Success({"status": "no_response", "message": "Keine Antwort von OpenAI"})
+                return {"status": "no_response", "message": "Keine Antwort von OpenAI"}
 
             chosen_element = json.loads(response_content)
         except Exception as e:
             log.error(f"Fehler bei OpenAI Response-Verarbeitung: {e}", exc_info=True)
-            return Success({"status": "parse_error", "message": f"Fehler beim Parsen der API-Antwort: {e}"})
+            return {"status": "parse_error", "message": f"Fehler beim Parsen der API-Antwort: {e}"}
 
         if not chosen_element or "bbox" not in chosen_element:
-            return Success({"status": "element_not_found", "message": "Kein passendes Element für die Beschreibung gefunden."})
+            return {"status": "element_not_found", "message": "Kein passendes Element für die Beschreibung gefunden."}
 
         # Schritt 4: Zieldaten berechnen und zurückgeben
         bbox = chosen_element["bbox"]
         center_x = bbox[0] + bbox[2] / 2
         center_y = bbox[1] + bbox[3] / 2
-        
+
         chosen_element["center"] = {"x": int(center_x), "y": int(center_y)}
 
-        return Success({"status": "element_found", "element_data": chosen_element})
+        return {"status": "element_found", "element_data": chosen_element}
 
     except Exception as e:
         log.error(f"Fehler in find_element_by_description: {e}", exc_info=True)
-        return Error(code=-32000, message=f"Allgemeiner Fehler im Visual Find Tool: {e}")
-
-# Das alte Tool entfernen wir nicht, aber registrieren das neue, bessere.
-register_tool("find_element_by_description", find_element_by_description)
-log.info("✅ Visual Find Tool (refactored) registriert.")
+        raise Exception(f"Allgemeiner Fehler im Visual Find Tool: {e}")

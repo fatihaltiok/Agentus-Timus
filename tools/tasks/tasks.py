@@ -5,11 +5,10 @@ import json
 import uuid
 from pathlib import Path
 from datetime import datetime
-from typing import Union, List, Optional
+from typing import List, Optional
 import asyncio
 
-from jsonrpcserver import method, Success, Error
-from tools.universal_tool_caller import register_tool
+from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 
 log = logging.getLogger(__name__)
 
@@ -38,9 +37,19 @@ def _write_tasks_sync(tasks_data: dict):
             json.dump(tasks_data, f, indent=2, ensure_ascii=False)
 
 # --- Asynchrone Tool-Methoden ---
-@method
-async def add_task(description: str, priority: int = 2, target_agent: str = "research") -> Union[Success, Error]:
-    if not TASKS_FILE: return Error(code=-32090, message="Task-Datei nicht konfiguriert.")
+@tool(
+    name="add_task",
+    description="Fügt eine neue Aufgabe zur Task-Liste hinzu.",
+    parameters=[
+        P("description", "string", "Beschreibung der Aufgabe", required=True),
+        P("priority", "integer", "Priorität (1=hoch, 2=mittel, 3=niedrig)", required=False, default=2),
+        P("target_agent", "string", "Ziel-Agent für die Aufgabe", required=False, default="research"),
+    ],
+    capabilities=["automation", "tasks"],
+    category=C.AUTOMATION
+)
+async def add_task(description: str, priority: int = 2, target_agent: str = "research") -> dict:
+    if not TASKS_FILE: raise Exception("Task-Datei nicht konfiguriert.")
     try:
         tasks_data = await asyncio.to_thread(_read_tasks_sync)
         new_task = {
@@ -53,23 +62,29 @@ async def add_task(description: str, priority: int = 2, target_agent: str = "res
         tasks_data["tasks"].append(new_task)
         await asyncio.to_thread(_write_tasks_sync, tasks_data)
         log.info(f"✅ Neue Aufgabe hinzugefügt: '{description[:50]}...'")
-        return Success({"status": "task_added", "task": new_task})
+        return {"status": "task_added", "task": new_task}
     except Exception as e:
-        return Error(code=-32091, message=f"Fehler beim Hinzufügen der Aufgabe: {e}")
+        return {"status": "error", "message": f"Fehler beim Hinzufügen der Aufgabe: {e}"}
 
-@method
-async def get_next_task() -> Union[Success, Error]:
+@tool(
+    name="get_next_task",
+    description="Holt die nächste ausstehende Aufgabe mit höchster Priorität.",
+    parameters=[],
+    capabilities=["automation", "tasks"],
+    category=C.AUTOMATION
+)
+async def get_next_task() -> dict:
     """
     Holt die nächste ausstehende Aufgabe. Ist robust gegenüber fehlerhaften
     oder inkonsistenten Daten in tasks.json.
     """
-    if not TASKS_FILE: return Success({"task": None, "message": "Task-Datei nicht konfiguriert."})
+    if not TASKS_FILE: return {"task": None, "message": "Task-Datei nicht konfiguriert."}
     try:
         tasks_data = await asyncio.to_thread(_read_tasks_sync)
         all_tasks = tasks_data.get("tasks", [])
-        
+
         pending_tasks = [t for t in all_tasks if isinstance(t, dict) and t.get("status") == "pending"]
-        if not pending_tasks: return Success({"task": None})
+        if not pending_tasks: return {"task": None}
 
         def sort_key(task):
             # --- Robuste Prioritäts-Ermittlung ---
@@ -86,25 +101,35 @@ async def get_next_task() -> Union[Success, Error]:
                     if "high" in p_lower or "hoch" in p_lower: priority_val = 1
                     elif "medium" in p_lower or "mittel" in p_lower: priority_val = 2
                     elif "low" in p_lower or "niedrig" in p_lower: priority_val = 3
-            
+
             # --- Robuste Datums-Ermittlung ---
             # Gib ein sehr altes Datum zurück, wenn der Zeitstempel fehlt,
             # damit diese Aufgaben nicht bevorzugt werden.
             created_at = task.get("created_at", "1970-01-01T00:00:00.000000")
-            
+
             return (priority_val, created_at)
 
         pending_tasks.sort(key=sort_key)
-        
-        return Success({"task": pending_tasks[0]})
+
+        return {"task": pending_tasks[0]}
 
     except Exception as e:
         log.error(f"Unerwarteter Fehler in get_next_task: {e}", exc_info=True)
-        return Error(code=-32094, message=f"Fehler beim Abrufen der nächsten Aufgabe: {e}")
+        return {"status": "error", "message": f"Fehler beim Abrufen der nächsten Aufgabe: {e}"}
 
-@method
-async def update_task_status(task_id: str, status: str, result_summary: Optional[str] = None) -> Union[Success, Error]:
-    if not TASKS_FILE: return Error(code=-32090, message="Task-Datei nicht konfiguriert.")
+@tool(
+    name="update_task_status",
+    description="Aktualisiert den Status einer Aufgabe.",
+    parameters=[
+        P("task_id", "string", "ID der Aufgabe", required=True),
+        P("status", "string", "Neuer Status (z.B. completed, failed, in_progress)", required=True),
+        P("result_summary", "string", "Optionale Zusammenfassung des Ergebnisses", required=False, default=None),
+    ],
+    capabilities=["automation", "tasks"],
+    category=C.AUTOMATION
+)
+async def update_task_status(task_id: str, status: str, result_summary: Optional[str] = None) -> dict:
+    if not TASKS_FILE: raise Exception("Task-Datei nicht konfiguriert.")
     try:
         tasks_data = await asyncio.to_thread(_read_tasks_sync)
         task_found = False
@@ -115,20 +140,9 @@ async def update_task_status(task_id: str, status: str, result_summary: Optional
                 if result_summary: task["result_summary"] = result_summary
                 task_found = True
                 break
-        if not task_found: return Error(code=-32092, message=f"Aufgabe mit ID '{task_id}' nicht gefunden.")
+        if not task_found: raise Exception(f"Aufgabe mit ID '{task_id}' nicht gefunden.")
         await asyncio.to_thread(_write_tasks_sync, tasks_data)
         log.info(f"🔄 Status von Aufgabe '{task_id}' auf '{status}' aktualisiert.")
-        return Success({"status": "updated", "task_id": task_id, "new_status": status})
+        return {"status": "updated", "task_id": task_id, "new_status": status}
     except Exception as e:
-        return Error(code=-32093, message=f"Fehler beim Aktualisieren der Aufgabe: {e}")
-
-# --- Registrierung ---
-# Annahme: Sie haben eine register_tool-Funktion. Falls nicht, entfernen Sie diese Zeilen.
-try:
-    from tools.universal_tool_caller import register_tool
-    register_tool("add_task", add_task)
-    register_tool("get_next_task", get_next_task)
-    register_tool("update_task_status", update_task_status)
-    log.info("✅ Task-Management-Tools registriert.")
-except ImportError:
-    log.warning("Konnte `register_tool` nicht importieren. Task-Tools sind möglicherweise nicht für alle Agenten verfügbar.")
+        return {"status": "error", "message": f"Fehler beim Aktualisieren der Aufgabe: {e}"}

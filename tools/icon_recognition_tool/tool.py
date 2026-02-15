@@ -2,14 +2,10 @@
 
 import logging
 import asyncio
-# import pyautogui # Nicht hier benötigt, da es in _find_icon_sync verwendet wird
-# import cv2 # Nicht hier benötigt, da es in _find_icon_sync verwendet wird
-# import numpy as np # Nicht hier benötigt, da es in _find_icon_sync verwendet wird
-from typing import Union, Optional, Dict # <--- HIER IST DIE KORREKTUR
+from typing import Optional, Dict
 from pathlib import Path
 
-from jsonrpcserver import method, Success, Error
-from tools.universal_tool_caller import register_tool
+from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 
 
 log = logging.getLogger(__name__)
@@ -86,21 +82,27 @@ def _find_icon_sync(template_name: str, threshold: float = 0.8) -> Optional[Dict
 
     return None
 
-@method
-async def find_icon_by_template(template_name: str, threshold: float = 0.8) -> Union[Success, Error]:
+@tool(
+    name="find_icon_by_template",
+    description="Findet ein Icon auf dem Bildschirm mittels Template Matching.",
+    parameters=[
+        P("template_name", "string", "Name des Icon-Templates (ohne Dateiendung)", required=True),
+        P("threshold", "number", "Schwellenwert für die Erkennung (0.0-1.0)", required=False, default=0.8),
+    ],
+    capabilities=["vision", "icon"],
+    category=C.VISION
+)
+async def find_icon_by_template(template_name: str, threshold: float = 0.8) -> dict:
     try:
         location = await asyncio.to_thread(_find_icon_sync, template_name, threshold)
         if location:
-            return Success({"status": "icon_found", "location": location})
+            return {"status": "icon_found", "location": location}
         else:
-            return Success({"status": "icon_not_found",
+            return {"status": "icon_not_found",
                             "message": f"Icon '{template_name}' nicht sicher gefunden.",
-                            "threshold": threshold})
+                            "threshold": threshold}
     except FileNotFoundError as e:
-        return Error(code=-32070, message=str(e))
+        raise Exception(str(e))
     except Exception as e:
         log.error(f"Fehler beim Template Matching: {e}", exc_info=True)
-        return Error(code=-32071, message=f"Unerwarteter Fehler: {e}")
-
-register_tool("find_icon_by_template", find_icon_by_template)
-log.info("✅ Icon Recognition Tool registriert.")
+        return {"status": "error", "message": f"Unerwarteter Fehler: {e}"}

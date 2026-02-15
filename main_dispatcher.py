@@ -63,6 +63,21 @@ from agent.developer_agent_v2 import DeveloperAgentV2
 # QUICK FIX: Importiere den präzisen VisualAgent (mit SoM + Mouse Feedback)
 from agent.visual_agent import run_visual_task as run_visual_task_precise
 
+# NEU: VisionExecutorAgent mit Qwen-VL für präzise Koordinaten
+try:
+    from agent.vision_executor_agent import run_vision_task
+    VISION_QWEN_AVAILABLE = True
+except ImportError:
+    VISION_QWEN_AVAILABLE = False
+    log.warning("⚠️ VisionExecutorAgent nicht verfügbar")
+
+# VisualNemotronAgent v4 - Desktop Edition mit echten Maus-Tools
+try:
+    from agent.visual_nemotron_agent_v4 import run_desktop_task
+    VISUAL_NEMOTRON_V4_AVAILABLE = True
+except ImportError as e:
+    VISUAL_NEMOTRON_V4_AVAILABLE = False
+
 # --- Initialisierung ---
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -120,7 +135,24 @@ Du bist der zentrale Dispatcher für Timus. Analysiere die INTENTION des Nutzers
      - "Klicke auf..."
      - "Starte Programm X"
 
-6. **development**: Der CODER
+6. **vision_qwen**: Der PRÄZISE OPERATOR (Qwen2-VL lokal)
+   - Zuständigkeit: Web-Automation mit PIXEL-GENAUEN Koordinaten
+   - Wähle 'vision_qwen' bei einfachen Web-Automation Tasks
+
+7. **visual_nemotron**: Der STRUKTURIERTE VISION AGENT (NEU - Nemotron + Qwen-VL)
+   - Zuständigkeit: Komplexe Web-Automation mit Multi-Step Planung
+   - Wähle 'visual_nemotron' bei:
+     - "Starte Browser, gehe zu grok.com, akzeptiere Cookies, starte Chat"
+     - "Mehrstufige Web-Automation mit Cookie-Bannern und Formularen"
+     - "Suche auf Google, klicke Ergebnis, extrahiere Text"
+     - Tasks die STRUKTURIERTE JSON-Aktionen + Vision brauchen
+   - VORTEILE:
+     - Nemotron generiert strikte JSON-Aktionen
+     - Qwen2-VL (8-bit 7B) für Vision
+     - Automatische Fallbacks (GPT-4 Vision bei OOM)
+     - Robuste Fehlerbehandlung bei Seiten-Navigation
+
+8. **development**: Der CODER
    - Zuständigkeit: Code schreiben, Skripte erstellen
    - Wähle 'development' bei:
      - "Schreibe ein Python-Skript"
@@ -149,7 +181,9 @@ AGENT_CLASS_MAP = {
     "reasoning": ReasoningAgent,    # NEU v3.1
     "research": DeepResearchAgent,
     "executor": ExecutorAgent,
-    "visual": "SPECIAL_VISUAL",     # QUICK FIX: Spezielle Behandlung
+    "visual": "SPECIAL_VISION_QWEN",  # Nutzt Qwen-VL (statt altem Executor)
+    "vision_qwen": "SPECIAL_VISION_QWEN",  # Qwen-VL basierter Vision Agent
+    "visual_nemotron": "SPECIAL_VISUAL_NEMOTRON",  # NEU: Nemotron + Qwen-VL
     "meta": MetaAgent,
     "development": DeveloperAgentV2,  # AKTUALISIERT v3.2: Developer Agent v2
     "creative": CreativeAgent,
@@ -160,6 +194,11 @@ AGENT_CLASS_MAP = {
     "thinker": ReasoningAgent,      # NEU
     "deep_research": DeepResearchAgent,
     "researcher": DeepResearchAgent,
+    "vision": "SPECIAL_VISION_QWEN",  # Alias für vision_qwen
+    "qwen": "SPECIAL_VISION_QWEN",    # Kurzform
+    "visual_nemotron": "SPECIAL_VISUAL_NEMOTRON",
+    "nemotron_vision": "SPECIAL_VISUAL_NEMOTRON",
+    "web_automation": "SPECIAL_VISUAL_NEMOTRON",
     "task_agent": ExecutorAgent,
     "visual_agent": "SPECIAL_VISUAL",  # QUICK FIX: Spezielle Behandlung
     "meta_agent": MetaAgent,
@@ -202,6 +241,21 @@ VISUAL_KEYWORDS = [
     "minimiere", "maximiere", "screenshot", "bildschirm"
 ]
 
+# NEU: Keywords für VisualNemotronAgent (Multi-Step Web-Automation)
+VISUAL_NEMOTRON_KEYWORDS = [
+    # Multi-Step Sequenzen
+    "und dann", "dann", "danach", "anschließend",
+    "zuerst", "zuerst...dann", "schritt für schritt",
+    # Web-Automation mit Cookies/Formularen
+    "cookie", "cookies akzeptieren", "cookie banner",
+    "formular", "login", "anmelden", "eingeben und absenden",
+    "suche nach...und klicke", "gehe zu...und dann",
+    # Komplexe Navigation
+    "starte browser", "browser starten", "gehe zu webseite",
+    "öffne webseite", "navigiere zu", "chat starten",
+    "unterhaltung", "nachricht senden", "warte auf antwort"
+]
+
 CREATIVE_KEYWORDS = [
     "male", "zeichne", "bild von", "generiere bild", "erstelle bild",
     "gedicht", "song", "lied", "geschichte schreiben", "kreativ"
@@ -228,6 +282,93 @@ EXECUTOR_KEYWORDS = [
 ]
 
 
+def _structure_task(task: str, url: str) -> str:
+    """
+    Wandelt komplexe natürlichsprachige Anfragen in strukturierte Tasks um.
+    
+    Beispiele:
+    - "starte browser und gehe zu amazon.de und schau nach grafikkarten" 
+      → "1. Navigiere zu amazon.de\n2. Akzeptiere Cookies falls vorhanden\n3. Suche nach 'grafikkarten'\n4. Extrahiere Ergebnisse"
+    """
+    import re
+    
+    task_lower = task.lower()
+    structured_steps = []
+    step_num = 1
+    
+    # Extrahiere Aktionen aus dem Task
+    actions_map = {
+        r'\b(?:starte|öffne)\s+(?:den\s+)?browser\b': 'browser_start',
+        r'\bgehe\s+(?:zu|auf)\b': 'navigate',
+        r'\bschau\s+(?:nach|auf)\b': 'search',
+        r'\bsuche\s+(?:nach)?\b': 'search',
+        r'\bfinde\b': 'search',
+        r'\bzeige\s+(?:mir)?\b': 'extract',
+        r'\bextrahiere\b': 'extract',
+        r'\bklicke\s+(?:auf)?\b': 'click',
+        r'\bfülle\s+(?:aus)?\b': 'fill',
+        r'\bgib\s+(?:ein)?\b': 'type',
+        r'\b(?:akzeptiere|schließe)\s+(?:cookies?|banner)\b': 'handle_cookies',
+        r'\bwarte\b': 'wait',
+        r'\bund\s+dann\b': 'next_step',
+        r'\bdanach\b': 'next_step',
+        r'\banschließend\b': 'next_step',
+    }
+    
+    # Analysiere den Task
+    found_actions = []
+    for pattern, action_type in actions_map.items():
+        matches = list(re.finditer(pattern, task_lower))
+        for match in matches:
+            found_actions.append((match.start(), action_type, match.group()))
+    
+    # Sortiere nach Position
+    found_actions.sort(key=lambda x: x[0])
+    
+    # Wenn keine spezifischen Aktionen gefunden, nutze generischen Plan
+    if not found_actions:
+        return f"1. Navigiere zu {url}\n2. Analysiere Seite\n3. Führe aus: {task}"
+    
+    # Baue strukturierten Task
+    # Immer als erstes: Navigation
+    if url:
+        domain = url.replace('https://', '').replace('http://', '').split('/')[0]
+        structured_steps.append(f"{step_num}. Navigiere zu {domain}")
+        step_num += 1
+        structured_steps.append(f"{step_num}. Warte auf Seitenladung und akzeptiere Cookies falls nötig")
+        step_num += 1
+    
+    # Füge gefundene Aktionen hinzu
+    for _, action_type, original in found_actions:
+        if action_type == 'search':
+            # Extrahiere Suchbegriff (alles nach "suche nach" oder "schau nach")
+            search_terms = re.findall(r'(?:suche nach|schau nach|finde)\s+([\w\s]+?)(?:\s+und|\s+auf|\s+von|\s+bei|$)', task_lower)
+            if search_terms:
+                term = search_terms[0].strip()
+                structured_steps.append(f"{step_num}. Suche nach '{term}' in das Suchfeld")
+                step_num += 1
+                structured_steps.append(f"{step_num}. Drücke Enter um Suche zu starten")
+                step_num += 1
+                structured_steps.append(f"{step_num}. Warte auf Ergebnisse")
+                step_num += 1
+        
+        elif action_type == 'extract' or action_type == 'click':
+            # Extrahiere Ziel
+            targets = re.findall(r'(?:zeige|extrahiere|klicke auf)\s+([\w\s]+?)(?:\s+und|\s+dann|$)', task_lower)
+            if targets:
+                target = targets[0].strip()
+                if 'erste' in target or 'ersten' in target or 'top' in target:
+                    structured_steps.append(f"{step_num}. Extrahiere die ersten 3 Ergebnisse")
+                else:
+                    structured_steps.append(f"{step_num}. Interagiere mit: {target}")
+                step_num += 1
+    
+    # Abschluss
+    structured_steps.append(f"{step_num}. Beende Task und berichte Ergebnisse")
+    
+    return "\n".join(structured_steps)
+
+
 def quick_intent_check(query: str) -> Optional[str]:
     """Schnelle Keyword-basierte Intent-Erkennung."""
     query_lower = query.lower()
@@ -247,7 +388,12 @@ def quick_intent_check(query: str) -> Optional[str]:
         if keyword in query_lower:
             return "research"
     
-    # Visual-Keywords
+    # VisualNemotron-Keywords (Multi-Step Web-Automation)
+    for keyword in VISUAL_NEMOTRON_KEYWORDS:
+        if keyword in query_lower:
+            return "visual_nemotron"
+    
+    # Visual-Keywords (einfache UI-Tasks)
     for keyword in VISUAL_KEYWORDS:
         if keyword in query_lower:
             return "visual"
@@ -322,11 +468,31 @@ async def get_agent_decision(user_query: str) -> str:
 
 async def run_agent(agent_name: str, query: str, tools_description: str):
     """Instanziiert den Agenten und führt ihn aus."""
+    from utils.audit_logger import AuditLogger
+    from utils.policy_gate import check_query_policy
+
+    audit = AuditLogger()
+    audit.log_start(query, agent_name)
+
     AgentClass = AGENT_CLASS_MAP.get(agent_name)
 
     if not AgentClass:
         log.error(f"❌ Agent '{agent_name}' nicht gefunden.")
+        audit.log_end("Agent nicht gefunden", "error")
         return
+
+    # Policy Gate: Destruktive Anfragen pruefen
+    safe, warning = check_query_policy(query)
+    if not safe:
+        log.warning(f"[policy] {warning}")
+        print(f"\n⚠️  {warning}")
+        try:
+            confirm = await asyncio.to_thread(input, "Fortfahren? (ja/nein): ")
+            if confirm.strip().lower() not in ["ja", "j", "yes", "y"]:
+                audit.log_end(f"Abgebrochen: {warning}", "cancelled")
+                return f"Abgebrochen: {warning}"
+        except Exception:
+            pass  # Non-interactive: weitermachen
 
     log.info(f"\n🚀 Starte Agent: {agent_name.upper()}")
 
@@ -341,7 +507,186 @@ async def run_agent(agent_name: str, query: str, tools_description: str):
             print("=" * 80)
             print(textwrap.fill(str(final_answer), width=80))
             print("=" * 80)
+            audit.log_end(str(final_answer)[:200], "completed")
             return final_answer
+
+        # NEU: Spezielle Behandlung für Vision Qwen Agent - NUTZT MCP-TOOL!
+        if AgentClass == "SPECIAL_VISION_QWEN":
+            log.info("🎯 Nutze Qwen-VL via MCP-Server Tool (kein neuer Prozess!)")
+            log.info("   Vorteile: Nutzt bereits geladenes Modell, kein Doppel-Laden")
+            
+            # Extrahiere URL und Task
+            import re
+            url = None
+            task = query
+            
+            url_match = re.search(r'https?://[^\s]+', query)
+            if url_match:
+                url = url_match.group(0)
+                task = query.replace(url, "").strip()
+            else:
+                domain_match = re.search(r'([a-zA-Z0-9.-]+\.(de|com|org|net|io))', query)
+                if domain_match:
+                    url = f"https://{domain_match.group(1)}"
+                    task = query.replace(domain_match.group(1), "").strip()
+            
+            if not url:
+                log.warning("⚠️ Keine URL gefunden, verwende google.com als Default")
+                url = "https://www.google.com"
+            
+            log.info(f"   URL: {url}")
+            log.info(f"   Task: {task[:50]}{'...' if len(task) > 50 else ''}")
+            
+            # WICHTIG: Nutze MCP-Tool statt neuen Prozess!
+            try:
+                import httpx
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        "http://localhost:5000",
+                        json={
+                            "jsonrpc": "2.0",
+                            "method": "qwen_web_automation",
+                            "params": {
+                                "url": url,
+                                "task": task,
+                                "headless": False,
+                                "max_iterations": 10,
+                                "wait_between_actions": 2.0
+                            },
+                            "id": 1
+                        },
+                        timeout=300.0  # 5 Minuten Timeout für komplexe Tasks
+                    )
+                    result = response.json()
+                    
+                    if "result" in result:
+                        r = result["result"]
+                        success = r.get("success", False)
+                        steps = r.get("steps", [])
+                        final_url = r.get("final_url", "")
+                        
+                        final_answer = f"""🎯 Vision Qwen Automation Ergebnis (via MCP):
+
+Status: {'✅ ERFOLGREICH' if success else '❌ NICHT VOLLSTÄNDIG'}
+URL: {final_url}
+Schritte: {len(steps)}
+
+Durchgeführte Aktionen:
+"""
+                        for i, step in enumerate(steps, 1):
+                            actions_str = ", ".join([
+                                f"{a.get('action')}({a.get('x','')},{a.get('y','')})" if a.get('x') 
+                                else a.get('action') 
+                                for a in step.get('actions', [])
+                            ])
+                            final_answer += f"  {i}. {actions_str[:60]}{'...' if len(actions_str) > 60 else ''}\n"
+                        
+                        print("\n" + "=" * 80)
+                        print(f"💡 FINALE ANTWORT ({agent_name.upper()}):")
+                        print("=" * 80)
+                        print(final_answer)
+                        print("=" * 80)
+                        audit.log_end(str(final_answer)[:200], "completed")
+                        return final_answer
+                    else:
+                        error_msg = result.get("error", {}).get("message", "Unbekannter Fehler")
+                        log.error(f"❌ MCP Tool Fehler: {error_msg}")
+                        audit.log_end(error_msg, "error")
+                        return f"Fehler: {error_msg}"
+
+            except Exception as e:
+                log.error(f"❌ Fehler beim MCP-Tool Aufruf: {e}")
+                audit.log_end(str(e), "error")
+                return f"Fehler: {e}"
+
+        # VisualNemotronAgent v4 für Desktop-Automatisierung (mit echten Maus-Tools)
+        if AgentClass == "SPECIAL_VISUAL_NEMOTRON":
+            if not VISUAL_NEMOTRON_V4_AVAILABLE:
+                log.error("❌ VisualNemotronAgent v4 nicht verfügbar")
+                audit.log_end("VisualNemotronAgent v4 nicht verfügbar", "error")
+                return "Fehler: VisualNemotronAgent v4 nicht verfügbar"
+
+            log.info("🎯 Nutze VisualNemotronAgent v4 (Desktop Edition)")
+            log.info("   Features: PyAutoGUI | SoM UI-Scan | Echte Maus-Klicks")
+
+            # Extrahiere URL und Task
+            import re
+            url = None
+            task = query
+
+            url_match = re.search(r'https?://[^\s]+', query)
+            if url_match:
+                url = url_match.group(0)
+                task = query.replace(url, "").strip()
+            else:
+                domain_match = re.search(r'([a-zA-Z0-9.-]+\.(de|com|org|net|io|ai))', query)
+                if domain_match:
+                    url = f"https://{domain_match.group(1)}"
+                    task = query.replace(domain_match.group(1), "").strip()
+
+            if not url:
+                log.warning("⚠️ Keine URL gefunden, verwende google.com als Default")
+                url = "https://www.google.com"
+
+            structured_task = _structure_task(task, url)
+
+            log.info(f"   URL: {url}")
+            log.info(f"   Task: {structured_task[:80]}{'...' if len(structured_task) > 80 else ''}")
+
+            try:
+                log.info("   🚀 Starte v4 (Desktop Edition mit PyAutoGUI)")
+                result = await run_desktop_task(
+                    task=structured_task,
+                    url=url if url else None,
+                    max_steps=15
+                )
+                version = "v4"
+
+                success = result.get("success", False)
+                steps_executed = result.get("steps_executed", result.get("steps", 0))
+                steps_planned = result.get("total_steps_planned", 0)
+                unique_states = result.get("unique_states", 0)
+                error = result.get("error")
+                
+                final_answer = f"""🎯 Visual Nemotron Automation {version} Ergebnis:
+
+Status: {'✅ ERFOLGREICH' if success else '❌ FEHLER' if error else '⚠️ UNVOLLSTÄNDIG'}
+Schritte: {steps_executed} ausgeführt{f' ({steps_planned} geplant)' if steps_planned else ''}
+Unique States: {unique_states if unique_states else 'N/A'} (Loop-Erkennung)
+"""
+                if error:
+                    final_answer += f"\nFehler: {error}\n"
+                
+                # Zeige durchgeführte Aktionen
+                results = result.get("results", result.get("history", []))
+                if results:
+                    final_answer += "\nDurchgeführte Aktionen:\n"
+                    for r in results[:10]:  # Max 10 Schritte anzeigen
+                        if isinstance(r, dict):
+                            act = r.get("action", {})
+                            if isinstance(act, dict):
+                                act_type = act.get("action", "unknown")
+                                target = act.get("target", {}).get("description", "") if isinstance(act.get("target"), dict) else ""
+                            else:
+                                act_type = str(act)
+                                target = ""
+                            status = "✅" if r.get("success") else "❌"
+                            final_answer += f"  {status} {act_type} → {target[:30]}\n"
+                
+                print("\n" + "=" * 80)
+                print(f"💡 FINALE ANTWORT ({agent_name.upper()}):")
+                print("=" * 80)
+                print(final_answer)
+                print("=" * 80)
+                audit.log_end(str(final_answer)[:200], "completed")
+                return final_answer
+
+            except Exception as e:
+                log.error(f"❌ VisualNemotronAgent Fehler: {e}")
+                import traceback
+                log.error(traceback.format_exc())
+                audit.log_end(str(e), "error")
+                return f"Fehler bei Visual Automation: {e}"
 
         # Normale Agenten
         # ReasoningAgent braucht enable_thinking Parameter
@@ -367,12 +712,14 @@ async def run_agent(agent_name: str, query: str, tools_description: str):
         print("=" * 80)
         print(textwrap.fill(str(final_answer), width=80))
         print("=" * 80)
+        audit.log_end(str(final_answer)[:200], "completed")
         return final_answer
 
     except Exception as e:
         import traceback
         log.error(f"❌ Fehler beim Ausführen des Agenten '{agent_name}': {e}")
         log.error(traceback.format_exc())
+        audit.log_end(str(e), "error")
         return None
 
 

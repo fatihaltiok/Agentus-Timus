@@ -15,6 +15,7 @@ import json
 import sqlite3
 import logging
 import hashlib
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
@@ -31,6 +32,8 @@ MEMORY_DB_PATH = Path.home() / "dev" / "timus" / "data" / "timus_memory.db"
 MAX_SESSION_MESSAGES = 20  # Letzte N Nachrichten im Kontext
 MAX_CONTEXT_TOKENS = 2000  # Max Tokens für Memory-Kontext
 SUMMARIZE_THRESHOLD = 10  # Nach N Nachrichten zusammenfassen
+SELF_MODEL_MIN_MESSAGES = 6
+SELF_MODEL_UPDATE_INTERVAL_HOURS = 12
 
 
 @dataclass
@@ -68,6 +71,20 @@ class ConversationSummary:
     facts_extracted: List[str]
     message_count: int
     created_at: datetime = field(default_factory=datetime.now)
+
+
+@dataclass
+class MemoryItem:
+    """Strukturiertes Langzeit-Gedächtnis."""
+    category: str  # user_profile, working_memory, relationships, decisions, patterns
+    key: str
+    value: Any
+    importance: float = 0.5
+    confidence: float = 1.0
+    reason: str = ""
+    source: str = ""
+    created_at: datetime = field(default_factory=datetime.now)
+    last_used: datetime = field(default_factory=datetime.now)
 
 
 class SessionMemory:
@@ -183,10 +200,26 @@ class PersistentMemory:
                     messages TEXT NOT NULL,  -- JSON array
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
+
+                CREATE TABLE IF NOT EXISTS memory_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    category TEXT NOT NULL,
+                    key TEXT NOT NULL,
+                    value TEXT NOT NULL,  -- JSON
+                    importance REAL DEFAULT 0.5,
+                    confidence REAL DEFAULT 1.0,
+                    reason TEXT,
+                    source TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(category, key)
+                );
                 
                 CREATE INDEX IF NOT EXISTS idx_facts_category ON facts(category);
                 CREATE INDEX IF NOT EXISTS idx_facts_key ON facts(key);
                 CREATE INDEX IF NOT EXISTS idx_summaries_created ON summaries(created_at);
+                CREATE INDEX IF NOT EXISTS idx_memory_category ON memory_items(category);
+                CREATE INDEX IF NOT EXISTS idx_memory_key ON memory_items(key);
             """)
     
     # === FACTS ===
@@ -267,6 +300,78 @@ class PersistentMemory:
                     source=row[5]
                 ))
         return facts
+
+    # === MEMORY ITEMS ===
+
+    def store_memory_item(self, item: MemoryItem):
+        """Speichert oder aktualisiert ein MemoryItem."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                INSERT INTO memory_items (
+                    category, key, value, importance, confidence, reason, source, created_at, last_used
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(category, key) DO UPDATE SET
+                    value = excluded.value,
+                    importance = excluded.importance,
+                    confidence = excluded.confidence,
+                    reason = excluded.reason,
+                    source = excluded.source,
+                    last_used = excluded.last_used
+            """, (
+                item.category,
+                item.key,
+                json.dumps(item.value, ensure_ascii=False),
+                item.importance,
+                item.confidence,
+                item.reason,
+                item.source,
+                item.created_at.isoformat(),
+                item.last_used.isoformat()
+            ))
+
+    def get_memory_items(self, category: str) -> List[MemoryItem]:
+        """Holt MemoryItems einer Kategorie."""
+        items = []
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT * FROM memory_items WHERE category = ? ORDER BY last_used DESC",
+                (category,)
+            ).fetchall()
+            for row in rows:
+                items.append(MemoryItem(
+                    category=row[1],
+                    key=row[2],
+                    value=self._safe_json(row[3]) or row[3],
+                    importance=row[4],
+                    confidence=row[5],
+                    reason=row[6] or "",
+                    source=row[7] or "",
+                    created_at=self._safe_datetime(row[8]),
+                    last_used=self._safe_datetime(row[9])
+                ))
+        return items
+
+    def get_all_memory_items(self) -> List[MemoryItem]:
+        """Holt alle MemoryItems."""
+        items = []
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT * FROM memory_items ORDER BY category, last_used DESC"
+            ).fetchall()
+            for row in rows:
+                items.append(MemoryItem(
+                    category=row[1],
+                    key=row[2],
+                    value=self._safe_json(row[3]) or row[3],
+                    importance=row[4],
+                    confidence=row[5],
+                    reason=row[6] or "",
+                    source=row[7] or "",
+                    created_at=self._safe_datetime(row[8]),
+                    last_used=self._safe_datetime(row[9])
+                ))
+        return items
     
     def delete_fact(self, category: str, key: str):
         """Löscht einen Fakt."""
@@ -356,49 +461,383 @@ class MemoryManager:
         self.session_id = hashlib.md5(
             datetime.now().isoformat().encode()
         ).hexdigest()[:12]
+        self.self_model_last_updated: Optional[datetime] = None
+        self.self_model_dirty = False
+        self._load_self_model_state()
+
+    def _create_chat_completion(self, params: Dict[str, Any]):
+        return self.client.chat.completions.create(**prepare_openai_params(params))
+
+    def _parse_json_response(self, raw: Optional[str]) -> Optional[Dict[str, Any]]:
+        if not raw or not raw.strip():
+            return None
+
+        text = raw.strip()
+
+        fenced = re.search(r"```json\s*([\s\S]*?)\s*```", text, re.DOTALL)
+        if not fenced:
+            fenced = re.search(r"```([\s\S]*?)```", text, re.DOTALL)
+        if fenced:
+            text = fenced.group(1).strip()
+
+        candidates = [text]
+        match = re.search(r"(\{[\s\S]*\})", text, re.DOTALL)
+        if match and match.group(1) not in candidates:
+            candidates.append(match.group(1))
+
+        for candidate in candidates:
+            cleaned = re.sub(r",\s*([\}\]])", r"\1", candidate)
+            try:
+                data = json.loads(cleaned)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(data, dict):
+                return data
+
+        return None
     
     def add_interaction(self, user_input: str, assistant_response: str):
         """Fügt eine Interaktion hinzu und extrahiert Fakten."""
         self.session.add_message("user", user_input)
         self.session.add_message("assistant", assistant_response)
         
-        # Asynchron Fakten extrahieren (optional)
-        self._extract_facts_from_message(user_input)
+        # Selektive Memory-Extraktion
+        self._process_memory_candidates(user_input)
     
-    def _extract_facts_from_message(self, message: str):
-        """Extrahiert Fakten aus einer Nachricht."""
-        # Einfache Muster-Erkennung
-        patterns = [
-            ("name", "ich heiße", "name"),
-            ("name", "mein name ist", "name"),
-            ("preference", "ich mag", "likes"),
-            ("preference", "ich bevorzuge", "prefers"),
-            ("info", "ich bin", "identity"),
-            ("info", "ich wohne in", "location"),
-            ("info", "ich arbeite", "work"),
-        ]
-        
-        message_lower = message.lower()
-        
-        for category, pattern, key in patterns:
-            if pattern in message_lower:
-                # Extrahiere den Wert nach dem Muster
-                idx = message_lower.find(pattern)
-                value = message[idx + len(pattern):].strip()
-                # Bis zum nächsten Satzzeichen oder Ende
-                for end in [".", ",", "!", "?", "\n"]:
-                    if end in value:
-                        value = value[:value.index(end)]
-                
-                if value:
-                    fact = Fact(
-                        category=category,
-                        key=key,
-                        value=value.strip(),
-                        source="user_message"
-                    )
-                    self.persistent.store_fact(fact)
-                    log.info(f"📝 Fakt gespeichert: {category}/{key} = {value}")
+    def _process_memory_candidates(self, message: str):
+        """Erstellt Memory-Kandidaten und speichert selektiv."""
+        for candidate in self._rule_based_candidates(message):
+            decision = self._should_store_memory(candidate, message)
+            if not decision.get("keep"):
+                continue
+
+            item = MemoryItem(
+                category=candidate["category"],
+                key=candidate["key"],
+                value=candidate["value"],
+                importance=decision.get("importance", candidate.get("importance", 0.6)),
+                confidence=decision.get("confidence", candidate.get("confidence", 0.8)),
+                reason=decision.get("reason", candidate.get("reason", "")),
+                source="user_message"
+            )
+            self.persistent.store_memory_item(item)
+            self._store_legacy_fact(item)
+            self._mark_self_model_dirty(item)
+            log.info(f"🧠 Memory gespeichert: {item.category}/{item.key}")
+
+    def _load_self_model_state(self) -> None:
+        item = self._get_self_model_item()
+        if item:
+            self.self_model_last_updated = item.last_used
+
+    def _mark_self_model_dirty(self, item: MemoryItem) -> None:
+        if item.category in {"user_profile", "relationships", "decisions", "patterns"}:
+            self.self_model_dirty = True
+
+    def _rule_based_candidates(self, message: str) -> List[Dict[str, Any]]:
+        """Regelbasierte Kandidaten-Erkennung."""
+        candidates: List[Dict[str, Any]] = []
+        text = message.strip()
+        lower = text.lower()
+
+        def extract_after(pattern: str) -> Optional[str]:
+            if pattern not in lower:
+                return None
+            idx = lower.find(pattern)
+            value = text[idx + len(pattern):].strip()
+            for end in [".", ",", "!", "?", "\n"]:
+                if end in value:
+                    value = value[:value.index(end)]
+            return value.strip() or None
+
+        name = extract_after("ich heiße") or extract_after("mein name ist")
+        if name:
+            candidates.append({
+                "category": "user_profile",
+                "key": "name",
+                "value": name,
+                "reason": "identity",
+                "importance": 0.9
+            })
+
+        location = extract_after("ich wohne in")
+        if location:
+            candidates.append({
+                "category": "user_profile",
+                "key": "location",
+                "value": location,
+                "reason": "identity",
+                "importance": 0.7
+            })
+
+        work = extract_after("ich arbeite")
+        if work:
+            candidates.append({
+                "category": "user_profile",
+                "key": "work",
+                "value": work,
+                "reason": "identity",
+                "importance": 0.7
+            })
+
+        preference = extract_after("ich mag") or extract_after("ich bevorzuge")
+        if preference:
+            candidates.append({
+                "category": "user_profile",
+                "key": "preference",
+                "value": preference,
+                "reason": "preference",
+                "importance": 0.6
+            })
+
+        goal = extract_after("mein ziel ist") or extract_after("ich will")
+        if goal:
+            candidates.append({
+                "category": "user_profile",
+                "key": "goal",
+                "value": goal,
+                "reason": "goal",
+                "importance": 0.8
+            })
+
+        if "merke dir" in lower or "bitte merke" in lower:
+            after = extract_after("merke dir") or extract_after("bitte merke")
+            if after:
+                candidates.append({
+                    "category": "user_profile",
+                    "key": f"explicit_note_{hashlib.md5(after.encode()).hexdigest()[:8]}",
+                    "value": after,
+                    "reason": "explicit_request",
+                    "importance": 0.9
+                })
+
+        return candidates
+
+    def _should_store_memory(self, candidate: Dict[str, Any], message: str) -> Dict[str, Any]:
+        """Kombiniert Rule-Checks mit optionalem LLM-Gate."""
+        explicit = candidate.get("reason") == "explicit_request"
+        high_importance = candidate.get("importance", 0.0) >= 0.8
+
+        if explicit or high_importance:
+            return {"keep": True, "confidence": 0.95, "importance": candidate.get("importance", 0.8)}
+
+        # LLM-Gate für unsichere Kandidaten
+        try:
+            prompt = {
+                "message": message,
+                "candidate": {
+                    "category": candidate.get("category"),
+                    "key": candidate.get("key"),
+                    "value": candidate.get("value"),
+                    "reason": candidate.get("reason", "")
+                }
+            }
+
+            response = self._create_chat_completion({
+                "model": "gpt-4o-mini",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Du entscheidest, ob eine Information langfristig gespeichert werden soll. "
+                            "Speichere nur, wenn sie stabil, nützlich und zukunftsrelevant ist. "
+                            "Antworte nur als JSON: {\"keep\": true/false, \"confidence\": 0-1, "
+                            "\"importance\": 0-1, \"reason\": \"...\"}."
+                        )
+                    },
+                    {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)}
+                ],
+                "max_tokens": 200,
+                "temperature": 0.2,
+                "response_format": {"type": "json_object"}
+            })
+
+            raw = response.choices[0].message.content or ""
+            decision = self._parse_json_response(raw)
+            if not decision:
+                log.warning("Memory-Gate Fehler: Ungültiges JSON")
+                return {"keep": False}
+            return {
+                "keep": bool(decision.get("keep")),
+                "confidence": float(decision.get("confidence", 0.5)),
+                "importance": float(decision.get("importance", 0.5)),
+                "reason": str(decision.get("reason", ""))
+            }
+        except Exception as e:
+            log.warning(f"Memory-Gate Fehler: {e}")
+            return {"keep": False}
+
+    def _store_legacy_fact(self, item: MemoryItem):
+        """Kompatibilität: speichert zentrale Fakten auch im alten Fakt-Format."""
+        legacy_map = {
+            "name": ("name", "name"),
+            "location": ("info", "location"),
+            "work": ("info", "work"),
+            "preference": ("preference", "likes"),
+            "goal": ("info", "goal")
+        }
+        if item.key not in legacy_map:
+            return
+
+        category, key = legacy_map[item.key]
+        fact = Fact(
+            category=category,
+            key=key,
+            value=str(item.value),
+            confidence=item.confidence,
+            source="memory_schema"
+        )
+        self.persistent.store_fact(fact)
+
+    def _get_self_model_item(self) -> Optional[MemoryItem]:
+        items = self.persistent.get_memory_items("self_model")
+        for item in items:
+            if item.key == "prompt":
+                return item
+        return None
+
+    def _format_memory_items(self, items: List[MemoryItem], limit: int = 8) -> List[str]:
+        lines = []
+        for item in items[:limit]:
+            lines.append(f"{item.key}: {item.value}")
+        return lines
+
+    def get_self_model_prompt(self) -> str:
+        item = self._get_self_model_item()
+        if not item:
+            return ""
+
+        data = item.value if isinstance(item.value, dict) else None
+        if not data:
+            return str(item.value)
+
+        parts = []
+        summary = data.get("summary")
+        if summary:
+            parts.append(summary)
+
+        preferences = data.get("preferences") or []
+        if preferences:
+            parts.append("Präferenzen: " + ", ".join(preferences))
+
+        goals = data.get("goals") or []
+        if goals:
+            parts.append("Ziele: " + ", ".join(goals))
+
+        constraints = data.get("constraints") or []
+        if constraints:
+            parts.append("Constraints: " + ", ".join(constraints))
+
+        return "\n".join(parts).strip()
+
+    def get_behavior_hooks(self) -> List[str]:
+        item = self._get_self_model_item()
+        if item and isinstance(item.value, dict):
+            hooks = item.value.get("behavior_hooks") or []
+            return [str(h) for h in hooks if str(h).strip()]
+
+        hooks: List[str] = []
+        user_profile = self.persistent.get_memory_items("user_profile")
+        patterns = self.persistent.get_memory_items("patterns")
+
+        def add_hook(text: str):
+            if text and text not in hooks:
+                hooks.append(text)
+
+        for item in user_profile:
+            text = str(item.value).lower()
+            if "json" in text or "struktur" in text:
+                add_hook("Antworten strukturiert (JSON/Listen).")
+            if "kurz" in text or "knapp" in text or "prägnant" in text:
+                add_hook("Antworten kurz und präzise.")
+            if "deutsch" in text:
+                add_hook("Auf Deutsch antworten.")
+            if "quelle" in text or "beleg" in text:
+                add_hook("Wichtige Aussagen mit Quellen belegen.")
+            if "halluz" in text or "verif" in text:
+                add_hook("Keine Vermutungen; nur verifizierte Aussagen.")
+            if item.key == "goal" and item.value:
+                add_hook(f"Aktives Ziel beachten: {item.value}")
+
+        for item in patterns:
+            text = f"{item.key} {item.value}".lower()
+            if "halluz" in text or "falsche" in text:
+                add_hook("Antworten müssen prüfbar und belegt sein.")
+            if "struktur" in text:
+                add_hook("Strukturiert antworten.")
+
+        return hooks
+
+    def _should_update_self_model(self) -> bool:
+        if not self.self_model_last_updated:
+            return True
+        if not self.self_model_dirty and len(self.session.messages) < SELF_MODEL_MIN_MESSAGES:
+            return False
+
+        min_interval = timedelta(hours=SELF_MODEL_UPDATE_INTERVAL_HOURS)
+        return datetime.now() - self.self_model_last_updated >= min_interval
+
+    async def update_self_model(self, force: bool = False) -> Optional[Dict[str, Any]]:
+        if not force and not self._should_update_self_model():
+            return None
+
+        payload = {
+            "user_profile": self._format_memory_items(self.persistent.get_memory_items("user_profile"), 10),
+            "relationships": self._format_memory_items(self.persistent.get_memory_items("relationships"), 5),
+            "decisions": self._format_memory_items(self.persistent.get_memory_items("decisions"), 5),
+            "patterns": self._format_memory_items(self.persistent.get_memory_items("patterns"), 5),
+            "recent_summaries": [s.summary for s in self.persistent.get_recent_summaries(3)],
+            "recent_messages": [m.to_dict() for m in self.session.get_recent_messages(6)]
+        }
+
+        try:
+            response = self._create_chat_completion({
+                "model": "gpt-4o-mini",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Erstelle ein kurzes, stabiles Self-Model über den Nutzer. "
+                            "Antworte als JSON mit Feldern: summary (max 4 Sätze), preferences (Liste), "
+                            "goals (Liste), constraints (Liste), behavior_hooks (Liste konkreter Regeln). "
+                            "Schreibe auf Deutsch und füge nur belastbare Infos ein."
+                        )
+                    },
+                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}
+                ],
+                "max_tokens": 400,
+                "temperature": 0.2,
+                "response_format": {"type": "json_object"}
+            })
+
+            raw = response.choices[0].message.content or ""
+            data = self._parse_json_response(raw)
+            if not data:
+                log.warning("Self-Model Update fehlgeschlagen: Ungültiges JSON")
+                return None
+            item = MemoryItem(
+                category="self_model",
+                key="prompt",
+                value={
+                    "summary": data.get("summary", ""),
+                    "preferences": data.get("preferences", []),
+                    "goals": data.get("goals", []),
+                    "constraints": data.get("constraints", []),
+                    "behavior_hooks": data.get("behavior_hooks", []),
+                    "updated_at": datetime.now().isoformat()
+                },
+                importance=1.0,
+                confidence=0.9,
+                reason="self_model_update",
+                source="self_model"
+            )
+            self.persistent.store_memory_item(item)
+            self.self_model_last_updated = datetime.now()
+            self.self_model_dirty = False
+            return item.value
+        except Exception as e:
+            log.warning(f"Self-Model Update fehlgeschlagen: {e}")
+            return None
     
     def get_memory_context(self) -> str:
         """
@@ -406,8 +845,43 @@ class MemoryManager:
         Kombiniert Session Memory und relevante Fakten.
         """
         context_parts = []
+
+        # 0. Self-Model + Hooks
+        self_model = self.get_self_model_prompt()
+        if self_model:
+            context_parts.append("SELF_MODEL:\n" + self_model)
+
+        hooks = self.get_behavior_hooks()
+        if hooks:
+            hook_lines = "\n".join([f"- {hook}" for hook in hooks])
+            context_parts.append("BEHAVIOR_HOOKS:\n" + hook_lines)
+
+        # 1. Strukturierte MemoryItems
+        structured = []
+        user_profile = self.persistent.get_memory_items("user_profile")
+        if user_profile:
+            lines = [f"- {item.key}: {item.value}" for item in user_profile[:8]]
+            structured.append("USER_PROFILE:\n" + "\n".join(lines))
+
+        relationships = self.persistent.get_memory_items("relationships")
+        if relationships:
+            lines = [f"- {item.key}: {item.value}" for item in relationships[:5]]
+            structured.append("RELATIONSHIPS:\n" + "\n".join(lines))
+
+        decisions = self.persistent.get_memory_items("decisions")
+        if decisions:
+            lines = [f"- {item.key}: {item.value}" for item in decisions[:5]]
+            structured.append("DECISIONS:\n" + "\n".join(lines))
+
+        patterns = self.persistent.get_memory_items("patterns")
+        if patterns:
+            lines = [f"- {item.key}: {item.value}" for item in patterns[:5]]
+            structured.append("PATTERNS:\n" + "\n".join(lines))
+
+        if structured:
+            context_parts.append("STRUKTURIERTE MEMORY:\n" + "\n\n".join(structured))
         
-        # 1. Benutzer-Fakten
+        # 2. Benutzer-Fakten
         facts = self.persistent.get_all_facts()
         if facts:
             fact_lines = []
@@ -418,7 +892,7 @@ class MemoryManager:
                 "BEKANNTE FAKTEN ÜBER DEN BENUTZER:\n" + "\n".join(fact_lines)
             )
         
-        # 2. Letzte Zusammenfassungen
+        # 3. Letzte Zusammenfassungen
         summaries = self.persistent.get_recent_summaries(2)
         if summaries:
             summary_text = "\n".join([s.summary for s in summaries])
@@ -426,14 +900,14 @@ class MemoryManager:
                 f"FRÜHERE GESPRÄCHE:\n{summary_text}"
             )
         
-        # 3. Aktuelle Session
+        # 4. Aktuelle Session
         session_context = self.session.get_context_string()
         if session_context:
             context_parts.append(
                 f"AKTUELLE KONVERSATION:\n{session_context}"
             )
         
-        # 4. Entitäts-Kontext
+        # 5. Entitäts-Kontext
         if self.session.entities:
             entity_lines = [f"- '{k}' bezieht sich auf '{v}'" 
                           for k, v in self.session.entities.items()]
@@ -451,9 +925,9 @@ class MemoryManager:
         messages_text = self.session.get_context_string()
         
         try:
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
+            response = self._create_chat_completion({
+                "model": "gpt-4o-mini",
+                "messages": [
                     {
                         "role": "system",
                         "content": """Fasse das folgende Gespräch kurz zusammen.
@@ -471,10 +945,14 @@ Antworte im JSON-Format:
                         "content": messages_text
                     }
                 ],
-                max_tokens=500
-            )
+                "max_tokens": 500,
+                "response_format": {"type": "json_object"}
+            })
             
-            result = json.loads(response.choices[0].message.content)
+            result = self._parse_json_response(response.choices[0].message.content or "")
+            if not result:
+                log.error("Fehler bei Zusammenfassung: Ungültiges JSON")
+                return None
             
             summary = ConversationSummary(
                 summary=result.get("summary", ""),
@@ -516,6 +994,9 @@ Antworte im JSON-Format:
         
         # Zusammenfassen
         asyncio.run(self.summarize_session())
+
+        # Self-Model aktualisieren
+        asyncio.run(self.update_self_model())
         
         # Speichern
         self.save_session()
@@ -583,6 +1064,16 @@ memory_manager = MemoryManager()
 def get_memory_context() -> str:
     """Shortcut für Memory-Kontext."""
     return memory_manager.get_memory_context()
+
+
+def get_self_model_prompt() -> str:
+    """Shortcut für Self-Model Prompt."""
+    return memory_manager.get_self_model_prompt()
+
+
+def get_behavior_hooks() -> List[str]:
+    """Shortcut für Behavior Hooks."""
+    return memory_manager.get_behavior_hooks()
 
 
 def add_to_memory(user_input: str, response: str):

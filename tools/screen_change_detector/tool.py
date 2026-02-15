@@ -15,7 +15,7 @@ import asyncio
 import os
 import hashlib
 import time
-from typing import Union, Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple
 from dataclasses import dataclass, asdict
 
 import cv2
@@ -23,8 +23,7 @@ import numpy as np
 from PIL import Image
 import mss
 
-from jsonrpcserver import method, Success, Error
-from tools.universal_tool_caller import register_tool
+from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 from dotenv import load_dotenv
 
 # --- Setup ---
@@ -70,13 +69,11 @@ class ScreenChangeDetector:
     def _get_screenshot(self, roi: Optional[Dict] = None) -> Image.Image:
         """Macht einen Screenshot vom konfigurierten Monitor."""
         with mss.mss() as sct:
-            # Monitor wählen
             if ACTIVE_MONITOR < len(sct.monitors):
                 monitor = sct.monitors[ACTIVE_MONITOR]
             else:
                 monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
 
-            # ROI wenn gegeben
             if roi:
                 grab_region = {
                     "left": monitor["left"] + roi.get("x", 0),
@@ -97,29 +94,17 @@ class ScreenChangeDetector:
         return hashlib.md5(img.tobytes()).hexdigest()
 
     def _create_thumbnail(self, img: Image.Image, size: int = 32) -> np.ndarray:
-        """
-        Erstellt Thumbnail für schnellen Diff-Vergleich.
-        Reduziert z.B. 1920x1080 auf 32x18 (~99.97% weniger Pixel).
-        """
-        # Behalte Aspect Ratio
-        img.thumbnail((size, size), Image.Resampling.NEAREST)  # NEAREST ist schneller als LANCZOS
+        """Erstellt Thumbnail für schnellen Diff-Vergleich."""
+        img.thumbnail((size, size), Image.Resampling.NEAREST)
         return np.array(img)
 
     def _calculate_pixel_diff(self, img1: np.ndarray, img2: np.ndarray) -> float:
-        """
-        Berechnet prozentuale Pixeldifferenz zwischen zwei Bildern.
-
-        Returns:
-            float zwischen 0.0 (identisch) und 1.0 (komplett unterschiedlich)
-        """
+        """Berechnet prozentuale Pixeldifferenz zwischen zwei Bildern."""
         if img1.shape != img2.shape:
             log.warning(f"Shape-Mismatch: {img1.shape} vs {img2.shape}")
-            return 1.0  # Komplett unterschiedlich
+            return 1.0
 
-        # Absolute Differenz
         diff = np.abs(img1.astype(int) - img2.astype(int))
-
-        # Normalisieren auf 0-1
         max_diff = img1.shape[0] * img1.shape[1] * 255 * 3  # RGB
         ratio = diff.sum() / max_diff
 
@@ -130,27 +115,14 @@ class ScreenChangeDetector:
         roi: Optional[Dict] = None,
         force_pixel_diff: bool = False
     ) -> Tuple[bool, Dict]:
-        """
-        Prüft ob sich der Screen geändert hat.
-
-        Args:
-            roi: Region of Interest (dict mit x, y, width, height)
-            force_pixel_diff: Hash überspringen, direkt Pixel-Diff machen
-
-        Returns:
-            (changed: bool, info: dict)
-        """
+        """Prüft ob sich der Screen geändert hat."""
         start_time = time.perf_counter()
 
         self.stats["total_checks"] += 1
 
-        # Screenshot machen
         img = self._get_screenshot(roi)
-
-        # Hash berechnen
         current_hash = self._calculate_hash(img)
 
-        # Erstes Mal - immer als "geändert" markieren
         if self.last_snapshot is None:
             thumbnail = self._create_thumbnail(img)
             self.last_snapshot = ScreenSnapshot(
@@ -171,7 +143,7 @@ class ScreenChangeDetector:
                 "check_time_ms": round(check_time, 2)
             }
 
-        # Level 1: Hash-Vergleich (schnellste Methode)
+        # Level 1: Hash-Vergleich
         if not force_pixel_diff and current_hash == self.last_snapshot.hash:
             self.stats["cache_hits"] += 1
 
@@ -184,20 +156,18 @@ class ScreenChangeDetector:
                 "check_time_ms": round(check_time, 2)
             }
 
-        # Level 2: Pixel-Diff (wenn Hash unterschiedlich)
+        # Level 2: Pixel-Diff
         thumbnail = self._create_thumbnail(img)
         diff_ratio = self._calculate_pixel_diff(
             self.last_snapshot.thumbnail,
             thumbnail
         )
 
-        # Prüfe ob Änderung signifikant genug
         changed = diff_ratio >= self.threshold
 
         if changed:
             self.stats["changes_detected"] += 1
 
-            # Update Snapshot
             self.last_snapshot = ScreenSnapshot(
                 timestamp=time.time(),
                 hash=current_hash,
@@ -206,7 +176,6 @@ class ScreenChangeDetector:
                 thumbnail=thumbnail
             )
 
-            # Hash History pflegen
             self.hash_history.append(current_hash)
             if len(self.hash_history) > HASH_CACHE_SIZE:
                 self.hash_history.pop(0)
@@ -227,16 +196,15 @@ class ScreenChangeDetector:
         current_avg = self.stats["avg_check_time_ms"]
         total = self.stats["total_checks"]
 
-        # Rolling average
         self.stats["avg_check_time_ms"] = (
             (current_avg * (total - 1) + new_time_ms) / total
         )
 
     def reset(self):
-        """Setzt Detector zurück (für Tests oder nach Screen-Wechsel)."""
+        """Setzt Detector zurück."""
         self.last_snapshot = None
         self.hash_history.clear()
-        log.info("🔄 Detector zurückgesetzt")
+        log.info("Detector zurückgesetzt")
 
     def get_stats(self) -> Dict:
         """Gibt Performance-Statistiken zurück."""
@@ -261,37 +229,22 @@ detector_instance = ScreenChangeDetector()
 # RPC METHODEN
 # ==============================================================================
 
-@method
+@tool(
+    name="should_analyze_screen",
+    description="Prüft ob eine Screen-Analyse nötig ist. Spart massiv Vision-Calls (70-95%), indem nur bei echter Änderung analysiert wird.",
+    parameters=[
+        P("roi", "object", "Region of Interest: {x, y, width, height}", required=False, default=None),
+        P("force_pixel_diff", "boolean", "Hash überspringen, direkt Pixel-Diff machen", required=False, default=False),
+    ],
+    capabilities=["vision", "screen"],
+    category=C.UI
+)
 async def should_analyze_screen(
     roi: Optional[Dict] = None,
     force_pixel_diff: bool = False
-) -> Union[Success, Error]:
-    """
-    Prüft ob eine Screen-Analyse nötig ist.
-
-    Spart massiv Vision-Calls (70-95%), indem nur bei echter Änderung analysiert wird.
-
-    Args:
-        roi: Region of Interest - nur diesen Bereich prüfen
-             Format: {"x": 0, "y": 0, "width": 800, "height": 600}
-        force_pixel_diff: Hash überspringen, direkt Pixel-Diff machen
-
-    Returns:
-        Success mit:
-        - changed (bool): True wenn Analyse nötig
-        - info (dict): Details über die Prüfung
-        - stats (dict): Performance-Statistiken
-
-    Beispiel:
-        # Ganzer Screen
-        result = await should_analyze_screen()
-        if result["changed"]:
-            # Vision-Analyse durchführen...
-
-        # Nur bestimmter Bereich (z.B. Formular)
-        result = await should_analyze_screen(roi={"x": 100, "y": 200, "width": 600, "height": 400})
-    """
-    log.debug(f"🔍 Screen-Change-Check" + (f" (ROI: {roi})" if roi else ""))
+) -> dict:
+    """Prüft ob eine Screen-Analyse nötig ist."""
+    log.debug(f"Screen-Change-Check" + (f" (ROI: {roi})" if roi else ""))
 
     try:
         changed, info = await asyncio.to_thread(
@@ -303,66 +256,56 @@ async def should_analyze_screen(
         stats = detector_instance.get_stats()
 
         if changed:
-            log.info(f"✅ Screen geändert - {info['reason']} ({info['check_time_ms']}ms)")
+            log.info(f"Screen geändert - {info['reason']} ({info['check_time_ms']}ms)")
         else:
-            log.debug(f"⏭️ Keine Änderung - {info['reason']} ({info['check_time_ms']}ms)")
+            log.debug(f"Keine Änderung - {info['reason']} ({info['check_time_ms']}ms)")
 
-        return Success({
+        return {
             "changed": changed,
             "info": info,
             "stats": stats,
             "recommendation": "analyze" if changed else "skip"
-        })
+        }
 
     except Exception as e:
         log.error(f"Screen-Change-Check fehlgeschlagen: {e}", exc_info=True)
-        return Error(code=-32000, message=str(e))
+        raise Exception(str(e))
 
 
-@method
-async def reset_screen_detector() -> Union[Success, Error]:
-    """
-    Setzt den Screen-Detector zurück.
-
-    Nützlich:
-    - Nach Screen-Wechsel (z.B. neues Fenster geöffnet)
-    - Nach Auflösungsänderung
-    - Bei Tests
-
-    Returns:
-        Success mit Bestätigung
-    """
+@tool(
+    name="reset_screen_detector",
+    description="Setzt den Screen-Detector zurück. Nützlich nach Screen-Wechsel, Auflösungsänderung oder bei Tests.",
+    parameters=[],
+    capabilities=["vision", "screen"],
+    category=C.UI
+)
+async def reset_screen_detector() -> dict:
+    """Setzt den Screen-Detector zurück."""
     try:
         detector_instance.reset()
 
-        return Success({
+        return {
             "status": "reset",
             "message": "Screen-Detector zurückgesetzt"
-        })
+        }
 
     except Exception as e:
         log.error(f"Reset fehlgeschlagen: {e}", exc_info=True)
-        return Error(code=-32000, message=str(e))
+        raise Exception(str(e))
 
 
-@method
-async def get_screen_change_stats() -> Union[Success, Error]:
-    """
-    Gibt Performance-Statistiken des Screen-Detectors zurück.
-
-    Returns:
-        Success mit:
-        - total_checks: Anzahl Prüfungen
-        - changes_detected: Anzahl erkannter Änderungen
-        - cache_hits: Anzahl Cache-Treffer (keine Pixel-Analyse nötig)
-        - avg_check_time_ms: Durchschnittliche Prüfzeit in ms
-        - cache_hit_rate: Prozent der Cache-Treffer
-        - change_rate: Prozent der erkannten Änderungen
-    """
+@tool(
+    name="get_screen_change_stats",
+    description="Gibt Performance-Statistiken des Screen-Detectors zurück.",
+    parameters=[],
+    capabilities=["vision", "screen"],
+    category=C.UI
+)
+async def get_screen_change_stats() -> dict:
+    """Gibt Performance-Statistiken des Screen-Detectors zurück."""
     try:
         stats = detector_instance.get_stats()
 
-        # Performance-Bewertung
         if stats["avg_check_time_ms"] < 5:
             performance = "excellent"
         elif stats["avg_check_time_ms"] < 15:
@@ -370,63 +313,45 @@ async def get_screen_change_stats() -> Union[Success, Error]:
         else:
             performance = "slow"
 
-        return Success({
+        return {
             **stats,
             "performance": performance,
             "savings_estimate": f"{int(stats.get('cache_hit_rate', 0) * 100)}% Vision-Calls gespart"
-        })
+        }
 
     except Exception as e:
         log.error(f"Stats-Abfrage fehlgeschlagen: {e}", exc_info=True)
-        return Error(code=-32000, message=str(e))
+        raise Exception(str(e))
 
 
-@method
-async def set_change_threshold(threshold: float) -> Union[Success, Error]:
-    """
-    Setzt den Schwellwert für Änderungserkennung.
-
-    Args:
-        threshold: Wert zwischen 0.0 und 1.0
-                  - 0.0001 = sehr sensitiv (kleinste Änderungen)
-                  - 0.001 = normal (empfohlen)
-                  - 0.01 = weniger sensitiv (nur große Änderungen)
-
-    Returns:
-        Success mit neuem Schwellwert
-    """
+@tool(
+    name="set_change_threshold",
+    description="Setzt den Schwellwert für Änderungserkennung (0.0 bis 1.0).",
+    parameters=[
+        P("threshold", "number", "Schwellwert: 0.0001=sehr sensitiv, 0.001=normal, 0.01=weniger sensitiv"),
+    ],
+    capabilities=["vision", "screen"],
+    category=C.UI
+)
+async def set_change_threshold(threshold: float) -> dict:
+    """Setzt den Schwellwert für Änderungserkennung."""
     if not 0.0 <= threshold <= 1.0:
-        return Error(
-            code=-32602,
-            message=f"Threshold muss zwischen 0.0 und 1.0 liegen, nicht {threshold}"
+        raise Exception(
+            f"Threshold muss zwischen 0.0 und 1.0 liegen, nicht {threshold}"
         )
 
     try:
         old_threshold = detector_instance.threshold
         detector_instance.threshold = threshold
 
-        log.info(f"🔧 Threshold geändert: {old_threshold} → {threshold}")
+        log.info(f"Threshold geändert: {old_threshold} -> {threshold}")
 
-        return Success({
+        return {
             "old_threshold": old_threshold,
             "new_threshold": threshold,
             "message": f"Threshold auf {threshold} gesetzt"
-        })
+        }
 
     except Exception as e:
         log.error(f"Threshold-Änderung fehlgeschlagen: {e}", exc_info=True)
-        return Error(code=-32000, message=str(e))
-
-
-# ==============================================================================
-# REGISTRIERUNG
-# ==============================================================================
-
-register_tool("should_analyze_screen", should_analyze_screen)
-register_tool("reset_screen_detector", reset_screen_detector)
-register_tool("get_screen_change_stats", get_screen_change_stats)
-register_tool("set_change_threshold", set_change_threshold)
-
-log.info("✅ Screen-Change-Detector v1.0 registriert")
-log.info(f"   Threshold: {DIFF_THRESHOLD} | Monitor: {ACTIVE_MONITOR}")
-log.info("   Tools: should_analyze_screen, reset_screen_detector, get_screen_change_stats, set_change_threshold")
+        raise Exception(str(e))

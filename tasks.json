@@ -1,0 +1,54 @@
+{
+  "tasks": [
+    {
+      "id": "defbf2e0-0775-441a-979a-dc0d139a4659",
+      "description": "Google-Suche nach 'KI News' ausführen und Screenshot erstellen (bereits erledigt). Ergebnis: /home/fatih-ubuntu/dev/timus/results/screenshot_20251231_112611.png",
+      "priority": 1,
+      "target_agent": "research",
+      "status": "completed",
+      "created_at": "2025-12-31T11:26:28.928184",
+      "completed_at": "2025-12-31T20:09:34.841425",
+      "result_summary": "Aufgabe war laut Beschreibung bereits erledigt; Screenshot liegt vor: /home/fatih-ubuntu/dev/timus/results/screenshot_20251231_112611.png"
+    },
+    {
+      "id": "61cdf07b-615b-46c9-9a70-e059c7bd498e",
+      "description": "Erstelle die Datei 'woerter_raten.py' mit folgendem Python-Code (Wörter-Erraten/Hangman) und gib danach den Befehl zum Starten aus: python woerter_raten.py\n\nCODE:\nimport random\nimport os\nimport sys\nfrom typing import List, Set\n\nWORDS_DE = [\n    \"python\", \"programmieren\", \"computer\", \"terminal\", \"variable\",\n    \"funktion\", \"schleife\", \"liste\", \"tastatur\", \"bildschirm\",\n    \"algorithmus\", \"debuggen\", \"speicher\", \"internet\", \"projekt\",\n    \"klasse\", \"objekt\", \"modul\", \"paket\", \"datei\"\n]\n\nHANGMAN_PICS = [\n    r\"\"\"\n  +---+\n  |   |\n      |\n      |\n      |\n      |\n=========\"\"\",\n    r\"\"\"\n  +---+\n  |   |\n  O   |\n      |\n      |\n      |\n=========\"\"\",\n    r\"\"\"\n  +---+\n  |   |\n  O   |\n  |   |\n      |\n      |\n=========\"\"\",\n    r\"\"\"\n  +---+\n  |   |\n  O   |\n /|   |\n      |\n      |\n=========\"\"\",\n    r\"\"\"\n  +---+\n  |   |\n  O   |\n /|\\\\  |\n      |\n      |\n=========\"\"\",\n    r\"\"\"\n  +---+\n  |   |\n  O   |\n /|\\\\  |\n /    |\n      |\n=========\"\"\",\n    r\"\"\"\n  +---+\n  |   |\n  O   |\n /|\\\\  |\n / \\\\  |\n      |\n=========\"\"\",\n]\n\n\ndef clear_screen() -> None:\n    os.system(\"cls\" if os.name == \"nt\" else \"clear\")\n\n\ndef normalize_guess(s: str) -> str:\n    return s.strip().lower()\n\n\ndef choose_word(words: List[str]) -> str:\n    return random.choice(words).lower()\n\n\ndef masked_word(word: str, guessed: Set[str]) -> str:\n    return \" \".join([ch if ch in guessed else \"_\" for ch in word])\n\n\ndef is_word_solved(word: str, guessed: Set[str]) -> bool:\n    return all(ch in guessed for ch in word)\n\n\ndef prompt_guess() -> str:\n    return normalize_guess(input(\"Rate einen Buchstaben (oder das ganze Wort): \"))\n\n\ndef main() -> None:\n    clear_screen()\n    print(\"WÖRTER ERRATEN (Hangman)\")\n    print(\"-\" * 30)\n    print(\"Regeln: Rate Buchstaben oder das ganze Wort. Zu viele Fehler = verloren.\\n\")\n\n    word = choose_word(WORDS_DE)\n    guessed_letters: Set[str] = set()\n    wrong_letters: Set[str] = set()\n    max_wrong = len(HANGMAN_PICS) - 1\n\n    while True:\n        clear_screen()\n        wrong_count = len(wrong_letters)\n\n        print(HANGMAN_PICS[wrong_count])\n        print()\n        print(\"Wort: \", masked_word(word, guessed_letters))\n        print(f\"Falsche Buchstaben ({wrong_count}/{max_wrong}): \", \" \".join(sorted(wrong_letters)) or \"-\")\n        print(\"Geratene Buchstaben: \", \" \".join(sorted(guessed_letters)) or \"-\")\n        print()\n\n        if is_word_solved(word, guessed_letters):\n            print(f\"Gewonnen! Das Wort war: {word}\")\n            break\n\n        if wrong_count >= max_wrong:\n            print(f\"Verloren! Das Wort war: {word}\")\n            break\n\n        guess = prompt_guess()\n\n        if not guess:\n            continue\n\n        if len(guess) > 1:\n            if guess == word:\n                clear_screen()\n                print(\"Richtig! Du hast das ganze Wort erraten.\")\n                print(f\"Das Wort war: {word}\")\n                break\n            else:\n                wrong_letters.add(f\"[{guess}]\")\n                continue\n\n        ch = guess\n        if not ch.isalpha():\n            continue\n\n        if ch in guessed_letters or ch in wrong_letters:\n            continue\n\n        if ch in word:\n            guessed_letters.add(ch)\n        else:\n            wrong_letters.add(ch)\n\n    print(\"\\nNochmal spielen? (j/n)\")\n    again = normalize_guess(input(\"> \"))\n    if again == \"j\":\n        main()\n    else:\n        print(\"Bis zum nächsten Mal!\")\n        sys.exit(0)\n\n\nif __name__ == \"__main__\":\n    main()\n",
+      "priority": 2,
+      "target_agent": "research",
+      "status": "completed",
+      "created_at": "2025-12-31T19:55:10.732823",
+      "completed_at": "2025-12-31T19:55:15.589032",
+      "result_summary": "Datei 'woerter_raten.py' wie beschrieben anlegen. Starten mit: python woerter_raten.py"
+    },
+    {
+      "id": "edd791a5-5c4e-453e-ab81-3a6af772a061",
+      "description": "In Google Cloud Shell ein kleines Kalkulationsprogramm erstellen: Python-CLI-Rechner (Grundrechenarten, Klammern), Datei calculator.py anlegen, kurze Nutzung/Startanleitung und optional einfache Tests.",
+      "priority": 1,
+      "target_agent": "developer",
+      "status": "pending",
+      "created_at": "2026-01-04T15:29:45.205036",
+      "completed_at": null,
+      "result_summary": null
+    },
+    {
+      "id": "ae7c9a6e-9847-475d-a993-7d6d4006e504",
+      "description": "Liedtext (Deutsch), moderner Pop/Indie, Thema Neuanfang nach schwerer Zeit; 2 Strophen, Refrain, Bridge, Outro; optional Akkorde.",
+      "priority": 2,
+      "target_agent": "research",
+      "status": "pending",
+      "created_at": "2026-02-06T23:36:48.629762",
+      "completed_at": null,
+      "result_summary": null
+    },
+    {
+      "id": "6d28475b-c596-43ec-8457-5e21d17e60fc",
+      "description": "Audit und Test des Skills 'terminal_control': 1) Vollständigen Code reviewen auf Sicherheitslücken (Injection, sudo-Handling, fehlende Timeouts); 2) Unit-Tests/Beispiele ausführen oder erstellen; 3) Konkrete Fix-Vorschläge und minimal notwendige Berechtigungen dokumentieren; 4) Sicherheits-README und Warnhinweise ergänzen; 5) Ergebnisbericht mit empfohlener Nutzung und möglichen Risiken erstellen.",
+      "priority": 50,
+      "target_agent": "security_audit",
+      "status": "pending",
+      "created_at": "2026-02-15T12:26:34.894923",
+      "completed_at": null,
+      "result_summary": null
+    }
+  ]
+}

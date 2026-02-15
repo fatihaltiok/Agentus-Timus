@@ -6,14 +6,13 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Union, List, Optional
+from typing import List, Optional
 import requests
 import asyncio
 import sys
 import importlib
 
-from jsonrpcserver import method, Success, Error
-from tools.universal_tool_caller import register_tool
+from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 from tools.file_system_tool.tool import read_file
 
 log = logging.getLogger(__name__)
@@ -28,7 +27,7 @@ PYTHON_EXECUTABLE = sys.executable
 async def _build_inception_prompt(instruction: str, dest_folder: str, context_code: Optional[str]) -> str:
     """Baut einen hoch-kontextuellen Prompt für die Inception-API."""
     read_result = await read_file("tools/mouse_tool/tool.py")
-    template_content = read_result.data.get("content", "# Vorlage konnte nicht geladen werden.")
+    template_content = read_result.get("content", "# Vorlage konnte nicht geladen werden.")
 
     return f"""
     You are an expert Python software engineer for the 'Timus' project.
@@ -38,7 +37,7 @@ async def _build_inception_prompt(instruction: str, dest_folder: str, context_co
     --- USER INSTRUCTION ---
     {instruction}
     ---
-    
+
     --- ARCHITECTURAL TEMPLATE (mouse_tool.py) ---
     You MUST follow the structure, style, and principles of this template file exactly.
     ```python
@@ -49,13 +48,13 @@ async def _build_inception_prompt(instruction: str, dest_folder: str, context_co
     --- ADDITIONAL CONTEXT CODE (Optional) ---
     {context_code or "No additional context provided."}
     ---
-    
+
     CRITICAL REQUIREMENTS:
     1.  Return a JSON object with a "files" key: `{{"files": [{{"path": "relative/path/to/file.py", "code": "..."}}]}}`.
     2.  If the user requests tests, create a corresponding `test_*.py` file in the same JSON structure.
     3.  All code must be formatted with `black` and pass a `ruff` lint check.
     4.  All public-facing functions in a 'tool' must be `@method` decorated `async def` functions.
-    
+
     Generate the required file(s) now.
     """
 
@@ -119,8 +118,14 @@ def _reload_modules(integrated_files: List[str]):
             except Exception as e:
                 log.error(f"Konnte Modul '{module_path}' nicht dynamisch laden: {e}.")
 
-@method
-async def inception_health() -> Union[Success, Error]:
+@tool(
+    name="inception_health",
+    description="Health-Check für das Inception-Tool. Prüft ob die API erreichbar ist.",
+    parameters=[],
+    capabilities=["code", "inception"],
+    category=C.CODE
+)
+async def inception_health() -> dict:
     """
     Health-Check für das Inception-Tool.
     Prüft ob die API erreichbar ist.
@@ -128,10 +133,7 @@ async def inception_health() -> Union[Success, Error]:
     try:
         # Prüfe ob INCEPTION_URL gesetzt ist
         if not INCEPTION_URL:
-            return Error(
-                code=-32091,
-                message="INCEPTION_URL nicht konfiguriert"
-            )
+            raise Exception("INCEPTION_URL nicht konfiguriert")
 
         # Teste einfachen Ping zur API (ohne echte Anfrage)
         log.info(f"Health-Check: Prüfe Inception API unter {INCEPTION_URL}")
@@ -141,12 +143,9 @@ async def inception_health() -> Union[Success, Error]:
             import requests
             import subprocess
         except ImportError as e:
-            return Error(
-                code=-32092,
-                message=f"Fehlende Abhängigkeiten: {e}"
-            )
+            raise Exception(f"Fehlende Abhängigkeiten: {e}")
 
-        return Success({
+        return {
             "status": "healthy",
             "inception_url": INCEPTION_URL,
             "project_root": str(PROJECT_ROOT),
@@ -158,19 +157,29 @@ async def inception_health() -> Union[Success, Error]:
                 "ruff": "verfügbar" if shutil.which("ruff") else "nicht installiert",
                 "pytest": "verfügbar" if shutil.which("pytest") else "nicht installiert"
             }
-        })
+        }
 
     except Exception as e:
         log.error(f"Inception Health-Check fehlgeschlagen: {e}", exc_info=True)
-        return Error(code=-32093, message=f"Health-Check fehlgeschlagen: {e}")
+        return {"status": "error", "message": f"Health-Check fehlgeschlagen: {e}"}
 
 
-@method
+@tool(
+    name="generate_and_integrate",
+    description="Generiert, validiert, integriert und lädt neuen Code vollautomatisch.",
+    parameters=[
+        P("instruction", "string", "Anweisung zur Code-Generierung", required=True),
+        P("dest_folder", "string", "Zielordner für die generierten Dateien", required=True),
+        P("context_file_path", "string", "Optionaler Pfad zu einer Kontext-Datei", required=False, default=None),
+    ],
+    capabilities=["code", "inception"],
+    category=C.CODE
+)
 async def generate_and_integrate(
     instruction: str,
     dest_folder: str,
     context_file_path: Optional[str] = None
-) -> Union[Success, Error]:
+) -> dict:
     """
     Generiert, validiert, integriert und lädt neuen Code vollautomatisch.
     """
@@ -181,9 +190,9 @@ async def generate_and_integrate(
         context_code = None
         if context_file_path:
             read_result = await read_file(context_file_path)
-            if "error" in read_result.data:
-                return Error(code=-32090, message=f"Konnte Kontext-Datei nicht lesen: {context_file_path}")
-            context_code = read_result.data.get("content")
+            if isinstance(read_result, dict) and "error" in read_result:
+                raise Exception(f"Konnte Kontext-Datei nicht lesen: {context_file_path}")
+            context_code = read_result.get("content") if isinstance(read_result, dict) else None
 
         prompt = await _build_inception_prompt(instruction, dest_folder, context_code)
         code_json = await asyncio.to_thread(_call_inception, prompt)
@@ -191,30 +200,24 @@ async def generate_and_integrate(
         await asyncio.to_thread(_validate_code, tmp_dir)
         integrated_files = await asyncio.to_thread(_integrate_code, tmp_dir, dest_folder)
         await asyncio.to_thread(_reload_modules, integrated_files)
-        
+
         log.info(f"🎉 Erfolgreich {len(integrated_files)} Datei(en) integriert und neu geladen.")
         was_successful = True
-        
-        return Success({
+
+        return {
             "status": "success",
             "message": "Code wurde erfolgreich generiert, validiert, integriert und neu geladen.",
             "integrated_files": integrated_files,
             "next_step": "Die neue Fähigkeit ist jetzt sofort verfügbar."
-        })
+        }
 
     except Exception as e:
         log.error(f"Fehler im 'generate_and_integrate'-Prozess: {e}", exc_info=True)
         if tmp_dir:
             log.info(f"Temporäres Verzeichnis zur Fehleranalyse erhalten unter: {tmp_dir}")
-        return Error(code=-32099, message=f"Code-Generierung fehlgeschlagen: {e}")
+        return {"status": "error", "message": f"Code-Generierung fehlgeschlagen: {e}"}
     finally:
         # Räume das temporäre Verzeichnis NUR bei Erfolg auf.
         if tmp_dir and was_successful:
             shutil.rmtree(tmp_dir, ignore_errors=True)
             log.info(f"Temporäres Verzeichnis {tmp_dir} erfolgreich aufgeräumt.")
-
-# --- Registrierung ---
-# KORREKTUR: Die Registrierung gehört auf die oberste Ebene, außerhalb jeder Funktion.
-register_tool("inception_health", inception_health)
-register_tool("generate_and_integrate", generate_and_integrate)
-log.info("✅ Inception Tool (inception_health, generate_and_integrate) registriert.")

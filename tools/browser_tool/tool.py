@@ -6,9 +6,12 @@ Methoden:
   • dismiss_overlays()
   • get_text()
   • list_links()
-  • click_link(idx)
+  • click_by_href(href)
   • click_by_text(text)
-Alle Rückgaben: Success / Error (jsonrpcserver v6)
+  • click_by_selector(selector)
+  • get_page_content()
+  • type_text(selector, text_to_type)
+Alle Rückgaben: dict (V2 Registry)
 """
 # --- Standard-Bibliotheken ---
 import logging
@@ -30,9 +33,8 @@ from playwright.async_api import (
     Browser as PlaywrightBrowser,
     Playwright
 )
-from jsonrpcserver import method, Success, Error
 
-from tools.universal_tool_caller import register_tool
+from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 
 # --- Globale Konfiguration & Logging ---
 CONSENT_SELECTORS = [
@@ -95,7 +97,7 @@ class BrowserSession:
             raise RuntimeError(f"Playwright konnte nicht initialisiert werden: {e}")
 
     async def close(self):
-        if self.context: 
+        if self.context:
             try: await self.context.close()
             except Exception as e_ctx: log.debug(f"Fehler beim Schließen des Browser-Kontexts: {e_ctx}")
             self.context = None
@@ -148,14 +150,22 @@ def _adaptive_timeout(host: str, default_ms: int = 30000) -> int:
 
 # --- Überarbeitete Tool-Methoden ---
 
-@method
-async def open_url(url: str) -> Union[Success, Error]:
+@tool(
+    name="open_url",
+    description="Öffnet eine URL im Browser, behandelt Blocker und gibt klaren Status zurück.",
+    parameters=[
+        P("url", "string", "Die zu öffnende URL", required=True),
+    ],
+    capabilities=["browser", "navigation", "interaction"],
+    category=C.BROWSER
+)
+async def open_url(url: str) -> dict:
     """Öffnet eine URL, behandelt Blocker und gibt klaren Status zurück."""
     try:
         page = await ensure_browser_initialized()
     except RuntimeError as e_init:
         log.error(f"Kritischer Fehler bei Browser-Initialisierung: {e_init}", exc_info=True)
-        return Error(code=-32020, message=f"Browser konnte nicht initialisiert werden: {e_init}")
+        raise Exception(f"Browser konnte nicht initialisiert werden: {e_init}")
 
     log.info(f"🌐 Öffne URL: {url}")
     try:
@@ -165,7 +175,7 @@ async def open_url(url: str) -> Union[Success, Error]:
         page_content = await page.content()
         if "Checking if the site connection is secure" in page_content or "DDoS protection by Cloudflare" in page_content:
             log.warning(f"Seite {url} wird durch Blocker geschützt.")
-            return Success({"status": "blocked_by_security", "url": url, "title": await page.title()})
+            return {"status": "blocked_by_security", "url": url, "title": await page.title()}
 
         status = response.status if response else "unbekannt"
         title = await page.title()
@@ -173,20 +183,28 @@ async def open_url(url: str) -> Union[Success, Error]:
 
         await dismiss_overlays()
 
-        return Success({"status": "opened", "url": page.url, "title": title, "http_status": status})
+        return {"status": "opened", "url": page.url, "title": title, "http_status": status}
 
     except PlaywrightTimeoutError:
         log.error(f"Timeout beim Laden von {url}.")
-        return Success({"status": "failed_timeout", "url": url, "message": "Seite konnte nicht innerhalb des Zeitlimits geladen werden."})
+        return {"status": "failed_timeout", "url": url, "message": "Seite konnte nicht innerhalb des Zeitlimits geladen werden."}
     except Exception as e:
         log.error(f"Allgemeiner Fehler beim Öffnen von {url}: {e}", exc_info=True)
-        return Error(code=-32000, message=f"Unerwarteter Browser-Fehler: {str(e)}")
+        raise Exception(f"Unerwarteter Browser-Fehler: {str(e)}")
 
-@method
-async def dismiss_overlays(max_secs: int = 5) -> Union[Success, Error]:
+@tool(
+    name="dismiss_overlays",
+    description="Schließt Cookie-Banner, Consent-Overlays und andere Popup-Elemente auf der aktuellen Seite.",
+    parameters=[
+        P("max_secs", "integer", "Maximale Dauer in Sekunden für das Schließen", required=False, default=5),
+    ],
+    capabilities=["browser", "navigation", "interaction"],
+    category=C.BROWSER
+)
+async def dismiss_overlays(max_secs: int = 5) -> dict:
     page = await ensure_browser_initialized()
     if not page:
-        return Error(code=-32001, message="Seite nicht geladen oder Browser nicht initialisiert.")
+        raise Exception("Seite nicht geladen oder Browser nicht initialisiert.")
 
     start_time = time.time()
     patterns = [
@@ -200,9 +218,9 @@ async def dismiss_overlays(max_secs: int = 5) -> Union[Success, Error]:
     removed_iframes_js_count = 0
     max_frames = 10
 
-    async def try_page_interactions(target_element: Union[Page, Any]): 
+    async def try_page_interactions(target_element: Union[Page, Any]):
         nonlocal found_interactions_count, clicked_buttons_count
-        if time.time() - start_time > max_secs: return True 
+        if time.time() - start_time > max_secs: return True
 
         for sel in CONSENT_SELECTORS:
             if time.time() - start_time > max_secs: return True
@@ -217,13 +235,13 @@ async def dismiss_overlays(max_secs: int = 5) -> Union[Success, Error]:
                             await element_to_click.click(timeout=1000, force=True)
                             clicked_buttons_count += 1
                             log.debug(f"Button via CSS '{sel}' (Element {i+1}) geklickt.")
-                            await asyncio.sleep(0.7) 
-                            return True 
+                            await asyncio.sleep(0.7)
+                            return True
                     except Exception as e_click_css:
                         log.debug(f"Klick auf CSS '{sel}' (Element {i+1}) fehlgeschlagen: {str(e_click_css)[:100]}")
             except Exception as e_loc_css:
                  log.debug(f"Fehler beim Finden von Elementen für CSS '{sel}': {str(e_loc_css)[:100]}")
-        
+
         for pat in patterns:
             if time.time() - start_time > max_secs: return True
             try:
@@ -231,7 +249,7 @@ async def dismiss_overlays(max_secs: int = 5) -> Union[Success, Error]:
                 count = await buttons.count()
                 if count > 0:
                     found_interactions_count += count
-                    for i in range(count): 
+                    for i in range(count):
                         if time.time() - start_time > max_secs: return True
                         try:
                             button_to_click = buttons.nth(i)
@@ -240,12 +258,12 @@ async def dismiss_overlays(max_secs: int = 5) -> Union[Success, Error]:
                                 clicked_buttons_count += 1
                                 log.debug(f"Button via Text '{pat}' (Element {i+1}) geklickt.")
                                 await asyncio.sleep(0.7)
-                                return True 
+                                return True
                         except Exception as e_click_text:
                             log.debug(f"Klick auf Button mit Text '{pat}' (Element {i+1}) fehlgeschlagen: {str(e_click_text)[:100]}")
             except Exception as e_get_btn:
                 log.debug(f"Fehler beim Suchen von Buttons mit Text '{pat}': {str(e_get_btn)[:100]}")
-        
+
         try:
             # Prüfe auf sichtbaren Dialog, bevor ESC gesendet wird
             # Verwende einen allgemeineren Selektor für Dialoge
@@ -256,17 +274,17 @@ async def dismiss_overlays(max_secs: int = 5) -> Union[Success, Error]:
                 await asyncio.sleep(0.3)
         except Exception as e_esc_key:
             log.debug(f"Fehler bei ESC-Tastendruck oder Dialogprüfung: {str(e_esc_key)[:100]}")
-        return False 
+        return False
 
     if await try_page_interactions(page):
-        pass 
+        pass
 
     if clicked_buttons_count == 0 and time.time() - start_time <= max_secs:
         try:
             page_frames = page.frames
             sorted_page_frames = sorted(
                 page_frames,
-                key=lambda fr: ('cmp' in fr.name.lower() or 'consent' in fr.url.lower() or 
+                key=lambda fr: ('cmp' in fr.name.lower() or 'consent' in fr.url.lower() or
                                 'banner' in fr.name.lower() or 'google_ads' in fr.url.lower() or
                                 'onetrust' in fr.url.lower() or 'sp_message' in fr.name.lower()),
                 reverse=True
@@ -275,16 +293,16 @@ async def dismiss_overlays(max_secs: int = 5) -> Union[Success, Error]:
                 if time.time() - start_time > max_secs: break
                 log.debug(f"Prüfe Frame {i+1}/{len(sorted_page_frames[:max_frames])}: Name='{current_frame.name}', URL='{current_frame.url[:60]}...'")
                 if await try_page_interactions(current_frame):
-                    if clicked_buttons_count > 0: 
+                    if clicked_buttons_count > 0:
                         log.info(f"Consent-Aktion in Frame '{current_frame.name}' erfolgreich.")
-                        break 
+                        break
         except Exception as e_frame_iter:
             log.warning(f"Fehler beim Iterieren/Zugriff auf Frames: {e_frame_iter}")
 
     if clicked_buttons_count == 0 and time.time() - start_time <= max_secs :
         try:
             removed_iframes_js_count = await page.evaluate("""
-                () => { /* ... JavaScript code ... */ } 
+                () => { /* ... JavaScript code ... */ }
             """) # JavaScript Code wie in vorheriger Version
             if removed_iframes_js_count > 0:
                 log.info(f"{removed_iframes_js_count} potenzielle Overlays/iFrames via JavaScript entfernt.")
@@ -293,73 +311,85 @@ async def dismiss_overlays(max_secs: int = 5) -> Union[Success, Error]:
 
     total_duration_secs = round(time.time() - start_time, 2)
     log.info(f"dismiss_overlays: {found_interactions_count} potenzielle Interaktionen, {clicked_buttons_count} Klicks, {removed_iframes_js_count} JS-Entfernungen. Dauer: {total_duration_secs}s")
-    return Success({
+    return {
         "found_potential_elements": found_interactions_count,
         "clicked_elements": clicked_buttons_count,
         "elements_removed_by_script": removed_iframes_js_count,
         "processing_duration_seconds": total_duration_secs
-    })
+    }
 
-@method
-async def get_text() -> Union[Success, Error]:
+@tool(
+    name="get_text",
+    description="Extrahiert den sichtbaren Textinhalt der aktuellen Seite (bereinigt von Scripts, Styles, Navigation etc.).",
+    parameters=[],
+    capabilities=["browser", "navigation", "interaction"],
+    category=C.BROWSER
+)
+async def get_text() -> dict:
     page = await ensure_browser_initialized()
-    if not page: 
-        return Error(code=-32001, message="Seite nicht geladen oder Browser nicht initialisiert.")
-    
+    if not page:
+        raise Exception("Seite nicht geladen oder Browser nicht initialisiert.")
+
     try:
         html_content = await page.content()
         soup = BeautifulSoup(html_content, "lxml")
-        
+
         # KORREKTUR: Die Liste der Selektoren wird einer Variable zugewiesen
         unwanted_selectors = [
-            "script", "style", "nav", "header", "footer", "aside", "form", "iframe", 
+            "script", "style", "nav", "header", "footer", "aside", "form", "iframe",
             ".ad", "[class*='advert']", "[id*='advert']", "[class*='cookie']", "[class*='banner']",
             "noscript", "link", "meta"
         ]
-        
+
         # KORREKTUR: Die for-Schleife iteriert über die definierte Liste
         for selector in unwanted_selectors:
-            for tag in soup.select(selector): 
+            for tag in soup.select(selector):
                 tag.decompose()
-                
+
         # Der Rest der Logik ist jetzt korrekt eingerückt
         main_content_area = soup.find("article") or soup.find("main") or soup.find("div", role="main") or soup.body
-        if not main_content_area: 
-            main_content_area = soup 
-            
+        if not main_content_area:
+            main_content_area = soup
+
         text_parts = []
         # Wir durchlaufen nur die direkten Kinder des Haupt-Content-Bereichs, um die Struktur zu erhalten
-        for element in main_content_area.find_all(recursive=False): 
+        for element in main_content_area.find_all(recursive=False):
             # Nutze .get_text() um den Text aus jedem Block zu holen
             block_text = element.get_text(separator=" ", strip=True)
-            if block_text: 
+            if block_text:
                 text_parts.append(block_text)
-                
+
         # Füge die Textblöcke mit doppelten Zeilenumbrüchen zusammen
-        text_content = "\n\n".join(text_parts) 
+        text_content = "\n\n".join(text_parts)
         # Entferne überflüssige Leerzeichen, aber behalte die Absätze
-        text_content = ' '.join(text_content.split()) 
-        
-        max_text_length = 20000 
+        text_content = ' '.join(text_content.split())
+
+        max_text_length = 20000
         if len(text_content) > max_text_length:
             log.info(f"Seitentext auf {max_text_length} Zeichen gekürzt (Original: {len(text_content)}).")
             text_content = text_content[:max_text_length] + "..."
-            
-        return Success({"text": text_content, "length": len(text_content)})
-    
+
+        return {"text": text_content, "length": len(text_content)}
+
     except Exception as e:
         log.error(f"Fehler beim Extrahieren von Text: {e}", exc_info=True)
-        return Error(code=-32000, message=f"Fehler beim Extrahieren von Text: {str(e)}")
-    
-@method
-async def list_links() -> Union[Success, Error]:
+        raise Exception(f"Fehler beim Extrahieren von Text: {str(e)}")
+
+@tool(
+    name="list_links",
+    description="Listet alle relevanten Links auf der Seite auf, bewertet ihre Relevanz und filtert unwichtige Links heraus.",
+    parameters=[],
+    capabilities=["browser", "navigation", "interaction"],
+    category=C.BROWSER
+)
+async def list_links() -> dict:
     """
     Listet alle relevanten Links auf der Seite auf, bewertet ihre Relevanz
     und filtert unwichtige Links heraus. Verwendet die moderne Playwright-API.
     """
     page = await ensure_browser_initialized()
     if not page:
-        return Error(code=-32001, message="Seite nicht geladen.")
+        raise Exception("Seite nicht geladen.")
 
     try:
         # Schlüsselwörter für irrelevante Links (alles in Kleinbuchstaben)
@@ -367,7 +397,7 @@ async def list_links() -> Union[Success, Error]:
             'anmelden', 'login', 'registrieren', 'sign in', 'register',
             'datenschutz', 'privacy', 'impressum', 'legal', 'agb', 'terms',
             'kontakt', 'contact', 'hilfe', 'help', 'faq', 'karriere', 'jobs',
-            'warenkorb', 'cart', 'kasse', 'checkout', 'facebook', 'twitter', 
+            'warenkorb', 'cart', 'kasse', 'checkout', 'facebook', 'twitter',
             'instagram', 'linkedin', 'youtube', 'pinterest', 'rss'
         ]
 
@@ -393,11 +423,11 @@ async def list_links() -> Union[Success, Error]:
         found_links_data = []
         for i, link_data in enumerate(links_from_page):
             link_text_lower = link_data['text'].lower()
-            
+
             # 1. Grundlegende Filterung
             if not link_data['text'] or any(keyword in link_text_lower for keyword in noise_keywords):
                 continue
-            
+
             # 2. Relevanz-Scoring
             score = 100
             # Links in Nav/Footer werden abgewertet
@@ -411,7 +441,7 @@ async def list_links() -> Union[Success, Error]:
                 score -= 10
             if len(link_data['text']) > 100: # Sehr lange Link-Texte sind oft ganze Sätze
                 score -= 10
-            
+
             # 3. "Action"-Links identifizieren
             is_action_link = any(keyword in link_text_lower for keyword in action_keywords)
 
@@ -425,22 +455,30 @@ async def list_links() -> Union[Success, Error]:
 
         # Sortiere die Links nach Relevanz (höchste zuerst)
         sorted_links = sorted(found_links_data, key=lambda x: x['relevance'], reverse=True)
-        
+
         # Gib nur die Top 50 relevantesten Links zurück, um den Agenten nicht zu überfordern
         top_links = sorted_links[:50]
-        
+
         log.info(f"{len(top_links)} relevante Links gefunden und nach Relevanz sortiert (von {len(links_from_page)} ursprünglich).")
 
-        return Success(top_links)
+        return {"links": top_links}
 
     except Exception as e:
         log.error(f"Fehler beim Auflisten der Links: {e}", exc_info=True)
-        return Error(code=-32000, message=f"Fehler beim Auflisten der Links: {str(e)}")
+        raise Exception(f"Fehler beim Auflisten der Links: {str(e)}")
 
 # Ersetze die alten click-Funktionen in tools/browser_tool/tool.py
 
-@method
-async def click_by_href(href: str) -> Union[Success, Error]:
+@tool(
+    name="click_by_href",
+    description="Klickt auf einen Link, der durch seine exakte URL (href) identifiziert wird. Dies ist die zuverlässigste Klick-Methode.",
+    parameters=[
+        P("href", "string", "Die exakte URL (href-Attribut) des zu klickenden Links", required=True),
+    ],
+    capabilities=["browser", "navigation", "interaction"],
+    category=C.BROWSER
+)
+async def click_by_href(href: str) -> dict:
     """
     Klickt auf einen Link, der durch seine exakte URL (href) identifiziert wird.
     Dies ist die zuverlässigste Klick-Methode.
@@ -448,7 +486,8 @@ async def click_by_href(href: str) -> Union[Success, Error]:
         href (str): Die exakte URL (href-Attribut) des zu klickenden Links.
     """
     page = await ensure_browser_initialized()
-    if not page: return Error(code=-32001, message="Seite nicht geladen.")
+    if not page:
+        raise Exception("Seite nicht geladen.")
 
     log.info(f"Versuche Klick auf Link mit exaktem href: '{href}'")
     try:
@@ -456,10 +495,10 @@ async def click_by_href(href: str) -> Union[Success, Error]:
         link_locator = page.locator(f'a[href="{href}"]')
         count = await link_locator.count()
         if count == 0:
-            return Error(code=-32001, message=f"Link mit href '{href}' nicht gefunden.")
-        
+            raise Exception(f"Link mit href '{href}' nicht gefunden.")
+
         target_link = link_locator.first
-        
+
         # Hole den Text nur für Logging-Zwecke
         link_text_content = (await target_link.text_content(timeout=1000) or "[Kein Text]").strip()
         log.info(f"Link gefunden: '{link_text_content[:60]}'. Führe Klick aus.")
@@ -474,25 +513,34 @@ async def click_by_href(href: str) -> Union[Success, Error]:
         new_url = page.url
         new_title = await page.title()
         log.info(f"Klick auf Link mit href '{href}' erfolgreich. Neue URL: {new_url}")
-        return Success({
-            "status": "clicked_by_href", 
+        return {
+            "status": "clicked_by_href",
             "href_clicked": href,
-            "new_url": new_url, 
+            "new_url": new_url,
             "new_title": new_title
-        })
+        }
 
     except PlaywrightTimeoutError as e:
         log.warning(f"Timeout beim Klick auf href '{href}' oder der nachfolgenden Navigation. Fehler: {e}")
-        return Error(code=-32000, message=f"Timeout beim Klick auf Link mit href '{href}'.")
+        raise Exception(f"Timeout beim Klick auf Link mit href '{href}'.")
     except Exception as exc:
         log.error(f"Fehler beim Klick auf href '{href}': {exc}", exc_info=True)
-        return Error(code=-32000, message=f"Allgemeiner Fehler beim Klick auf Link mit href '{href}': {str(exc)}")
+        raise Exception(f"Allgemeiner Fehler beim Klick auf Link mit href '{href}': {str(exc)}")
 
 
 # Ersetze den Block ab @method click_by_text bis zum Ende der Datei
 
-@method
-async def click_by_text(text: str, exact: bool = False) -> Union[Success, Error]:
+@tool(
+    name="click_by_text",
+    description="Klickt auf ein interaktives Element (Link, Button etc.) basierend auf seinem sichtbaren Text.",
+    parameters=[
+        P("text", "string", "Der exakte oder ein Teil des Textes des Elements", required=True),
+        P("exact", "boolean", "Ob der Text exakt übereinstimmen muss", required=False, default=False),
+    ],
+    capabilities=["browser", "navigation", "interaction"],
+    category=C.BROWSER
+)
+async def click_by_text(text: str, exact: bool = False) -> dict:
     """
     Klickt auf ein interaktives Element (Link, Button etc.) basierend auf seinem sichtbaren Text.
     Args:
@@ -501,7 +549,7 @@ async def click_by_text(text: str, exact: bool = False) -> Union[Success, Error]
     """
     page = await ensure_browser_initialized()
     if not page:
-        return Error(code=-32001, message="Seite nicht geladen.")
+        raise Exception("Seite nicht geladen.")
 
     log.info(f"Versuche Klick auf Element mit Text: '{text}' (exact={exact})")
     try:
@@ -509,7 +557,7 @@ async def click_by_text(text: str, exact: bool = False) -> Union[Success, Error]
 
         count = await element_locator.count()
         if count == 0:
-            return Error(code=-32001, message=f"Kein klickbares Element mit Text '{text}' gefunden.")
+            raise Exception(f"Kein klickbares Element mit Text '{text}' gefunden.")
 
         target_element = None
         for i in range(count):
@@ -519,7 +567,7 @@ async def click_by_text(text: str, exact: bool = False) -> Union[Success, Error]
                 break
 
         if not target_element:
-            return Error(code=-32001, message=f"Element mit Text '{text}' gefunden, aber keines davon ist sichtbar.")
+            raise Exception(f"Element mit Text '{text}' gefunden, aber keines davon ist sichtbar.")
 
         await target_element.scroll_into_view_if_needed(timeout=5000)
 
@@ -536,17 +584,174 @@ async def click_by_text(text: str, exact: bool = False) -> Union[Success, Error]
         new_url = page.url
         new_title = await page.title()
 
-        return Success({
+        return {
             "status": "clicked_by_text",
             "text_used": text,
             "current_url": new_url,
             "current_title": new_title,
             "message": f"Klick auf Element mit Text '{text}' wurde ausgeführt."
-        })
+        }
 
     except Exception as exc:
         log.error(f"Fehler beim Klick auf Text '{text}': {exc}", exc_info=True)
-        return Error(code=-32000, message=f"Allgemeiner Fehler beim Klick auf Text '{text}': {str(exc)}")
+        raise Exception(f"Allgemeiner Fehler beim Klick auf Text '{text}': {str(exc)}")
+
+@tool(
+    name="click_by_selector",
+    description="Klickt auf ein Element via CSS-Selector (DOM-First Methode).",
+    parameters=[
+        P("selector", "string", "CSS-Selector (z.B. 'button.submit', '#login-btn', 'input[name=q]')", required=True),
+    ],
+    capabilities=["browser", "navigation", "interaction"],
+    category=C.BROWSER
+)
+async def click_by_selector(selector: str) -> dict:
+    """
+    Klickt auf ein Element via CSS-Selector (DOM-First Methode).
+
+    Args:
+        selector: CSS-Selector (z.B. "button.submit", "#login-btn", "input[name='q']")
+
+    Returns:
+        dict mit Status-Informationen
+    """
+    try:
+        log.info(f"🎯 Klicke auf Element via Selector: {selector}")
+
+        if not browser_session_manager.is_initialized:
+            await browser_session_manager.initialize()
+
+        page = browser_session_manager.page
+
+        # Element finden
+        element = await page.query_selector(selector)
+        if not element:
+            raise Exception(f"Element mit Selector '{selector}' nicht gefunden.")
+
+        # In Viewport scrollen
+        await element.scroll_into_view_if_needed(timeout=5000)
+
+        # Klicken
+        await element.click(timeout=5000)
+
+        # Warten auf DOM-Änderung
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=15000)
+            log.info(f"✅ Klick auf '{selector}' löste DOM-Änderung aus.")
+        except PlaywrightTimeoutError:
+            log.info(f"✅ Klick auf '{selector}' ohne DOM-Änderung.")
+
+        return {
+            "status": "clicked_by_selector",
+            "selector": selector,
+            "current_url": page.url,
+            "current_title": await page.title(),
+            "message": f"Element '{selector}' wurde geklickt."
+        }
+
+    except Exception as exc:
+        log.error(f"❌ Fehler beim Klick auf Selector '{selector}': {exc}", exc_info=True)
+        raise Exception(f"Fehler beim Klick: {str(exc)}")
+
+
+@tool(
+    name="get_page_content",
+    description="Holt den kompletten HTML-Inhalt der aktuellen Seite (für DOM-Parsing).",
+    parameters=[],
+    capabilities=["browser", "navigation", "interaction"],
+    category=C.BROWSER
+)
+async def get_page_content() -> dict:
+    """
+    Holt den kompletten HTML-Inhalt der aktuellen Seite (für DOM-Parsing).
+
+    Returns:
+        dict mit HTML-Content
+    """
+    try:
+        log.info("📄 Hole Seiten-HTML für DOM-Parsing...")
+
+        if not browser_session_manager.is_initialized:
+            await browser_session_manager.initialize()
+
+        page = browser_session_manager.page
+
+        # HTML-Content holen
+        html_content = await page.content()
+
+        # URL und Title für Kontext
+        url = page.url
+        title = await page.title()
+
+        return {
+            "status": "page_content_retrieved",
+            "html": html_content,
+            "url": url,
+            "title": title,
+            "content_length": len(html_content),
+            "message": f"HTML-Content ({len(html_content)} Zeichen) abgerufen."
+        }
+
+    except Exception as exc:
+        log.error(f"❌ Fehler beim Abrufen des Seiten-Contents: {exc}", exc_info=True)
+        raise Exception(f"Fehler beim Abrufen: {str(exc)}")
+
+
+@tool(
+    name="type_text",
+    description="Gibt Text in ein Input-Element ein (via CSS-Selector).",
+    parameters=[
+        P("selector", "string", "CSS-Selector des Input-Elements (z.B. 'input[name=search]', '#email')", required=True),
+        P("text_to_type", "string", "Text zum Eingeben", required=True),
+    ],
+    capabilities=["browser", "navigation", "interaction"],
+    category=C.BROWSER
+)
+async def type_text(selector: str, text_to_type: str) -> dict:
+    """
+    Gibt Text in ein Input-Element ein (via CSS-Selector).
+
+    Args:
+        selector: CSS-Selector des Input-Elements (z.B. "input[name='search']", "#email")
+        text_to_type: Text zum Eingeben
+
+    Returns:
+        dict mit Status-Informationen
+    """
+    try:
+        log.info(f"⌨️  Tippe Text in Element: {selector}")
+
+        if not browser_session_manager.is_initialized:
+            await browser_session_manager.initialize()
+
+        page = browser_session_manager.page
+
+        # Element finden
+        element = await page.query_selector(selector)
+        if not element:
+            raise Exception(f"Input-Element mit Selector '{selector}' nicht gefunden.")
+
+        # In Viewport scrollen
+        await element.scroll_into_view_if_needed(timeout=5000)
+
+        # Erst leeren, dann tippen
+        await element.click()  # Fokussieren
+        await element.fill(text_to_type)  # Schneller als type()
+
+        log.info(f"✅ Text '{text_to_type}' in '{selector}' eingegeben.")
+
+        return {
+            "status": "text_typed",
+            "selector": selector,
+            "text": text_to_type,
+            "current_url": page.url,
+            "message": f"Text in Element '{selector}' eingegeben."
+        }
+
+    except Exception as exc:
+        log.error(f"❌ Fehler beim Tippen in '{selector}': {exc}", exc_info=True)
+        raise Exception(f"Fehler beim Tippen: {str(exc)}")
+
 
 async def shutdown_browser_tool():
     """Fährt die Playwright-Session sauber herunter."""
@@ -561,12 +766,3 @@ if __name__ == '__main__':
         finally:
             await shutdown_browser_tool()
     asyncio.run(main_test())
-
-register_tool("open_url", open_url)
-register_tool("dismiss_overlays", dismiss_overlays)
-register_tool("get_text", get_text)
-register_tool("list_links", list_links)
-register_tool("click_by_href", click_by_href)
-register_tool("click_by_text", click_by_text)
-
-log.info("✅ Browser Tool (Final v4) registriert.")

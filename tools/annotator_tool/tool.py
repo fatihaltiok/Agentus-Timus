@@ -8,13 +8,11 @@ import sys
 import os
 import io
 import base64
-from typing import Union
 from pathlib import Path
 
 # --- DRITTANBIETER-BIBLIOTHEKEN ---
 from openai import OpenAI
 from utils.openai_compat import prepare_openai_params
-from jsonrpcserver import method, Success, Error
 import mss
 from PIL import Image
 
@@ -23,8 +21,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-# --- INTERNE IMPORTS ---
-from tools.universal_tool_caller import register_tool
+# --- V2 Tool Registry ---
+from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 
 # --- Setup ---
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -55,26 +53,32 @@ def _capture_screen_base64() -> str:
         monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
         sct_img = sct.grab(monitor)
         img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
-        
+
         # Resize für Performance (Full HD reicht für GPT-5 meist aus und spart Token)
         img.thumbnail((1920, 1080))
-        
+
         buffered = io.BytesIO()
         img.save(buffered, format="PNG", quality=85)
         return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
-@method
-async def annotate_screenshot() -> Union[Success, Error]:
+@tool(
+    name="annotate_screenshot",
+    description="Nimmt einen Screenshot auf und laesst das SMART_MODEL alle UI-Elemente darauf mit Labels und Koordinaten annotieren.",
+    parameters=[],
+    capabilities=["vision", "annotation"],
+    category=C.UI
+)
+async def annotate_screenshot() -> dict:
     """
     Nimmt einen Screenshot auf und lässt das SMART_MODEL (GPT-5.2) alle UI-Elemente
     darauf mit Labels und Koordinaten annotieren.
     """
-    logger.info(f"📸 Starte Annotation mit Modell: {MODEL_NAME}")
-    
+    logger.info(f"Starte Annotation mit Modell: {MODEL_NAME}")
+
     try:
         # 1. Screenshot machen (im Thread, um Server nicht zu blockieren)
         b64_image = await asyncio.to_thread(_capture_screen_base64)
-        
+
         # 2. KI-Analyse mit GPT-5.2
         response = await asyncio.to_thread(
             client.chat.completions.create,
@@ -90,27 +94,24 @@ async def annotate_screenshot() -> Union[Success, Error]:
             max_completion_tokens=2000, # GPT-5 Parameter
             temperature=0.0
         )
-        
+
         content = response.choices[0].message.content
-        
+
         # 3. Parsing
         elements_data = json.loads(content or "{}")
         elements = elements_data.get("elements", [])
-        
-        if not isinstance(elements, list):
-            return Error(code=-32002, message="KI-Antwort enthielt kein gültiges 'elements'-Array.")
 
-        logger.info(f"✅ {len(elements)} UI-Elemente erfolgreich annotiert.")
-        return Success({
+        if not isinstance(elements, list):
+            raise Exception("KI-Antwort enthielt kein gültiges 'elements'-Array.")
+
+        logger.info(f"{len(elements)} UI-Elemente erfolgreich annotiert.")
+        return {
             "status": "success",
             "model_used": MODEL_NAME,
             "element_count": len(elements),
             "elements": elements
-        })
-        
+        }
+
     except Exception as e:
         logger.error(f"Fehler bei der Annotation: {e}", exc_info=True)
-        return Error(code=-32000, message=str(e))
-
-register_tool("annotate_screenshot", annotate_screenshot)
-logger.info("✅ Annotator-Tool (GPT-5.2 Powered) registriert.")
+        raise
