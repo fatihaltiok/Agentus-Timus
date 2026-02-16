@@ -1,6 +1,11 @@
-# main_dispatcher.py (VERSION v3.2)
+# main_dispatcher.py (VERSION v3.3)
 """
 Verbesserter Dispatcher mit Developer Agent v2 und ReasoningAgent Support.
+
+v3.3 ÄNDERUNGEN (2026-02):
+- Lane-Manager Integration (Default serial, explicit parallel)
+- Session-basierte Tool-Isolation
+- Queue-Status Ueberwachung
 
 v3.2 ÄNDERUNGEN (2026-01-27):
 - Developer Agent v2 integriert (mit context_files Support)
@@ -29,6 +34,7 @@ import sys
 import asyncio
 import textwrap
 import logging
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -36,6 +42,9 @@ import httpx
 from openai import OpenAI
 from dotenv import load_dotenv
 from utils.openai_compat import prepare_openai_params
+
+from orchestration.lane_manager import lane_manager, LaneStatus
+from tools.tool_registry_v2 import registry_v2
 
 # --- Modulpfad-Korrektur ---
 try:
@@ -54,7 +63,7 @@ from agent.timus_consolidated import (
     CreativeAgent,
     MetaAgent,
     DeepResearchAgent,
-    ReasoningAgent  # NEU v3.1
+    ReasoningAgent,  # NEU v3.1
 )
 
 # Developer Agent v2 (verbessert mit context_files Support)
@@ -66,6 +75,7 @@ from agent.visual_agent import run_visual_task as run_visual_task_precise
 # NEU: VisionExecutorAgent mit Qwen-VL für präzise Koordinaten
 try:
     from agent.vision_executor_agent import run_vision_task
+
     VISION_QWEN_AVAILABLE = True
 except ImportError:
     VISION_QWEN_AVAILABLE = False
@@ -74,6 +84,7 @@ except ImportError:
 # VisualNemotronAgent v4 - Desktop Edition mit echten Maus-Tools
 try:
     from agent.visual_nemotron_agent_v4 import run_desktop_task
+
     VISUAL_NEMOTRON_V4_AVAILABLE = True
 except ImportError as e:
     VISUAL_NEMOTRON_V4_AVAILABLE = False
@@ -82,8 +93,8 @@ except ImportError as e:
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 logging.basicConfig(
-    level=logging.INFO, 
-    format='%(asctime)s | %(levelname)-7s | %(name)-20s | %(message)s'
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)-7s | %(name)-20s | %(message)s",
 )
 log = logging.getLogger("MainDispatcher")
 
@@ -178,7 +189,7 @@ Antworte NUR mit einem Wort: 'reasoning', 'research', 'executor', 'meta', 'visua
 # --- Mapping (AKTUALISIERT v3.2 - Developer Agent v2) ---
 AGENT_CLASS_MAP = {
     # Primäre Agenten
-    "reasoning": ReasoningAgent,    # NEU v3.1
+    "reasoning": ReasoningAgent,  # NEU v3.1
     "research": DeepResearchAgent,
     "executor": ExecutorAgent,
     "visual": "SPECIAL_VISION_QWEN",  # Nutzt Qwen-VL (statt altem Executor)
@@ -187,15 +198,14 @@ AGENT_CLASS_MAP = {
     "meta": MetaAgent,
     "development": DeveloperAgentV2,  # AKTUALISIERT v3.2: Developer Agent v2
     "creative": CreativeAgent,
-
     # Aliase
-    "analyst": ReasoningAgent,      # NEU
-    "debugger": ReasoningAgent,     # NEU
-    "thinker": ReasoningAgent,      # NEU
+    "analyst": ReasoningAgent,  # NEU
+    "debugger": ReasoningAgent,  # NEU
+    "thinker": ReasoningAgent,  # NEU
     "deep_research": DeepResearchAgent,
     "researcher": DeepResearchAgent,
     "vision": "SPECIAL_VISION_QWEN",  # Alias für vision_qwen
-    "qwen": "SPECIAL_VISION_QWEN",    # Kurzform
+    "qwen": "SPECIAL_VISION_QWEN",  # Kurzform
     "visual_nemotron": "SPECIAL_VISUAL_NEMOTRON",
     "nemotron_vision": "SPECIAL_VISUAL_NEMOTRON",
     "web_automation": "SPECIAL_VISUAL_NEMOTRON",
@@ -205,274 +215,396 @@ AGENT_CLASS_MAP = {
     "development_agent": DeveloperAgentV2,  # AKTUALISIERT v3.2
     "creative_agent": CreativeAgent,
     "architekt": MetaAgent,
-    "coder": DeveloperAgentV2  # AKTUALISIERT v3.2
+    "coder": DeveloperAgentV2,  # AKTUALISIERT v3.2
 }
 
 # Keywords für schnelle Erkennung (ohne LLM)
 REASONING_KEYWORDS = [
     # Vergleiche
-    "vs", "versus", "oder", "vergleiche", "vergleich", "unterschied zwischen",
-    "was ist besser", "welches ist besser", "a oder b",
+    "vs",
+    "versus",
+    "oder",
+    "vergleiche",
+    "vergleich",
+    "unterschied zwischen",
+    "was ist besser",
+    "welches ist besser",
+    "a oder b",
     # Debugging
-    "warum", "wieso", "weshalb", "funktioniert nicht", "fehler", "bug",
-    "problem mit", "geht nicht", "klappt nicht", "debugge", "debug",
+    "warum",
+    "wieso",
+    "weshalb",
+    "funktioniert nicht",
+    "fehler",
+    "bug",
+    "problem mit",
+    "geht nicht",
+    "klappt nicht",
+    "debugge",
+    "debug",
     # Analyse
-    "analysiere", "analyse", "erkläre schritt", "schritt für schritt",
-    "pro und contra", "vor- und nachteile", "vorteile und nachteile",
-    "trade-off", "tradeoff", "abwägung",
+    "analysiere",
+    "analyse",
+    "erkläre schritt",
+    "schritt für schritt",
+    "pro und contra",
+    "vor- und nachteile",
+    "vorteile und nachteile",
+    "trade-off",
+    "tradeoff",
+    "abwägung",
     # Architektur
-    "soll ich", "sollte ich", "welche technologie", "welches framework",
-    "architektur", "design entscheidung", "beste lösung", "best practice",
+    "soll ich",
+    "sollte ich",
+    "welche technologie",
+    "welches framework",
+    "architektur",
+    "design entscheidung",
+    "beste lösung",
+    "best practice",
     # Reasoning-Trigger
-    "denke nach", "überlege", "reasoning", "logik", "logisch"
+    "denke nach",
+    "überlege",
+    "reasoning",
+    "logik",
+    "logisch",
 ]
 
 RESEARCH_KEYWORDS = [
-    "recherchiere", "recherche", "recherchier",
-    "finde heraus", "fakten", "quellen",
-    "tiefenrecherche", "deep research",
-    "aktuelle entwicklungen", "neueste erkenntnisse",
-    "sammle informationen", "informiere mich über",
-    "was gibt es neues", "news zu", "nachrichten"
+    "recherchiere",
+    "recherche",
+    "recherchier",
+    "finde heraus",
+    "fakten",
+    "quellen",
+    "tiefenrecherche",
+    "deep research",
+    "aktuelle entwicklungen",
+    "neueste erkenntnisse",
+    "sammle informationen",
+    "informiere mich über",
+    "was gibt es neues",
+    "news zu",
+    "nachrichten",
 ]
 
 VISUAL_KEYWORDS = [
-    "öffne", "starte", "klicke", "klick auf", "schließe",
-    "minimiere", "maximiere", "screenshot", "bildschirm"
+    "öffne",
+    "starte",
+    "klicke",
+    "klick auf",
+    "schließe",
+    "minimiere",
+    "maximiere",
+    "screenshot",
+    "bildschirm",
 ]
 
 # NEU: Keywords für VisualNemotronAgent (Multi-Step Web-Automation)
 VISUAL_NEMOTRON_KEYWORDS = [
     # Multi-Step Sequenzen
-    "und dann", "dann", "danach", "anschließend",
-    "zuerst", "zuerst...dann", "schritt für schritt",
+    "und dann",
+    "dann",
+    "danach",
+    "anschließend",
+    "zuerst",
+    "zuerst...dann",
+    "schritt für schritt",
     # Web-Automation mit Cookies/Formularen
-    "cookie", "cookies akzeptieren", "cookie banner",
-    "formular", "login", "anmelden", "eingeben und absenden",
-    "suche nach...und klicke", "gehe zu...und dann",
+    "cookie",
+    "cookies akzeptieren",
+    "cookie banner",
+    "formular",
+    "login",
+    "anmelden",
+    "eingeben und absenden",
+    "suche nach...und klicke",
+    "gehe zu...und dann",
     # Komplexe Navigation
-    "starte browser", "browser starten", "gehe zu webseite",
-    "öffne webseite", "navigiere zu", "chat starten",
-    "unterhaltung", "nachricht senden", "warte auf antwort"
+    "starte browser",
+    "browser starten",
+    "gehe zu webseite",
+    "öffne webseite",
+    "navigiere zu",
+    "chat starten",
+    "unterhaltung",
+    "nachricht senden",
+    "warte auf antwort",
 ]
 
 CREATIVE_KEYWORDS = [
-    "male", "zeichne", "bild von", "generiere bild", "erstelle bild",
-    "gedicht", "song", "lied", "geschichte schreiben", "kreativ"
+    "male",
+    "zeichne",
+    "bild von",
+    "generiere bild",
+    "erstelle bild",
+    "gedicht",
+    "song",
+    "lied",
+    "geschichte schreiben",
+    "kreativ",
 ]
 
 DEVELOPMENT_KEYWORDS = [
-    "schreibe code", "programmiere", "skript erstellen",
-    "funktion schreiben", "klasse erstellen", "implementiere"
+    "schreibe code",
+    "programmiere",
+    "skript erstellen",
+    "funktion schreiben",
+    "klasse erstellen",
+    "implementiere",
 ]
 
 META_KEYWORDS = [
-    "plane", "erstelle einen plan", "koordiniere",
-    "automatisiere", "workflow", "mehrere schritte",
-    "und dann", "danach", "anschließend", "als nächstes",
-    "zuerst", "zum schluss", "abschließend"
+    "plane",
+    "erstelle einen plan",
+    "koordiniere",
+    "automatisiere",
+    "workflow",
+    "mehrere schritte",
+    "und dann",
+    "danach",
+    "anschließend",
+    "als nächstes",
+    "zuerst",
+    "zum schluss",
+    "abschließend",
 ]
 
 EXECUTOR_KEYWORDS = [
-    "ich heiße", "mein name", "ich bin", "ich mag",
-    "was weißt du", "wer bin ich", "kennst du mich",
-    "hallo", "hi ", "guten tag", "wie geht", "danke", "bitte",
-    "wie spät", "uhrzeit", "datum", "wetter",
-    "hauptstadt von", "was ist ein", "definiere"
+    "ich heiße",
+    "mein name",
+    "ich bin",
+    "ich mag",
+    "was weißt du",
+    "wer bin ich",
+    "kennst du mich",
+    "hallo",
+    "hi ",
+    "guten tag",
+    "wie geht",
+    "danke",
+    "bitte",
+    "wie spät",
+    "uhrzeit",
+    "datum",
+    "wetter",
+    "hauptstadt von",
+    "was ist ein",
+    "definiere",
 ]
 
 
 def _structure_task(task: str, url: str) -> str:
     """
     Wandelt komplexe natürlichsprachige Anfragen in strukturierte Tasks um.
-    
+
     Beispiele:
-    - "starte browser und gehe zu amazon.de und schau nach grafikkarten" 
+    - "starte browser und gehe zu amazon.de und schau nach grafikkarten"
       → "1. Navigiere zu amazon.de\n2. Akzeptiere Cookies falls vorhanden\n3. Suche nach 'grafikkarten'\n4. Extrahiere Ergebnisse"
     """
     import re
-    
+
     task_lower = task.lower()
     structured_steps = []
     step_num = 1
-    
+
     # Extrahiere Aktionen aus dem Task
     actions_map = {
-        r'\b(?:starte|öffne)\s+(?:den\s+)?browser\b': 'browser_start',
-        r'\bgehe\s+(?:zu|auf)\b': 'navigate',
-        r'\bschau\s+(?:nach|auf)\b': 'search',
-        r'\bsuche\s+(?:nach)?\b': 'search',
-        r'\bfinde\b': 'search',
-        r'\bzeige\s+(?:mir)?\b': 'extract',
-        r'\bextrahiere\b': 'extract',
-        r'\bklicke\s+(?:auf)?\b': 'click',
-        r'\bfülle\s+(?:aus)?\b': 'fill',
-        r'\bgib\s+(?:ein)?\b': 'type',
-        r'\b(?:akzeptiere|schließe)\s+(?:cookies?|banner)\b': 'handle_cookies',
-        r'\bwarte\b': 'wait',
-        r'\bund\s+dann\b': 'next_step',
-        r'\bdanach\b': 'next_step',
-        r'\banschließend\b': 'next_step',
+        r"\b(?:starte|öffne)\s+(?:den\s+)?browser\b": "browser_start",
+        r"\bgehe\s+(?:zu|auf)\b": "navigate",
+        r"\bschau\s+(?:nach|auf)\b": "search",
+        r"\bsuche\s+(?:nach)?\b": "search",
+        r"\bfinde\b": "search",
+        r"\bzeige\s+(?:mir)?\b": "extract",
+        r"\bextrahiere\b": "extract",
+        r"\bklicke\s+(?:auf)?\b": "click",
+        r"\bfülle\s+(?:aus)?\b": "fill",
+        r"\bgib\s+(?:ein)?\b": "type",
+        r"\b(?:akzeptiere|schließe)\s+(?:cookies?|banner)\b": "handle_cookies",
+        r"\bwarte\b": "wait",
+        r"\bund\s+dann\b": "next_step",
+        r"\bdanach\b": "next_step",
+        r"\banschließend\b": "next_step",
     }
-    
+
     # Analysiere den Task
     found_actions = []
     for pattern, action_type in actions_map.items():
         matches = list(re.finditer(pattern, task_lower))
         for match in matches:
             found_actions.append((match.start(), action_type, match.group()))
-    
+
     # Sortiere nach Position
     found_actions.sort(key=lambda x: x[0])
-    
+
     # Wenn keine spezifischen Aktionen gefunden, nutze generischen Plan
     if not found_actions:
         return f"1. Navigiere zu {url}\n2. Analysiere Seite\n3. Führe aus: {task}"
-    
+
     # Baue strukturierten Task
     # Immer als erstes: Navigation
     if url:
-        domain = url.replace('https://', '').replace('http://', '').split('/')[0]
+        domain = url.replace("https://", "").replace("http://", "").split("/")[0]
         structured_steps.append(f"{step_num}. Navigiere zu {domain}")
         step_num += 1
-        structured_steps.append(f"{step_num}. Warte auf Seitenladung und akzeptiere Cookies falls nötig")
+        structured_steps.append(
+            f"{step_num}. Warte auf Seitenladung und akzeptiere Cookies falls nötig"
+        )
         step_num += 1
-    
+
     # Füge gefundene Aktionen hinzu
     for _, action_type, original in found_actions:
-        if action_type == 'search':
+        if action_type == "search":
             # Extrahiere Suchbegriff (alles nach "suche nach" oder "schau nach")
-            search_terms = re.findall(r'(?:suche nach|schau nach|finde)\s+([\w\s]+?)(?:\s+und|\s+auf|\s+von|\s+bei|$)', task_lower)
+            search_terms = re.findall(
+                r"(?:suche nach|schau nach|finde)\s+([\w\s]+?)(?:\s+und|\s+auf|\s+von|\s+bei|$)",
+                task_lower,
+            )
             if search_terms:
                 term = search_terms[0].strip()
-                structured_steps.append(f"{step_num}. Suche nach '{term}' in das Suchfeld")
+                structured_steps.append(
+                    f"{step_num}. Suche nach '{term}' in das Suchfeld"
+                )
                 step_num += 1
                 structured_steps.append(f"{step_num}. Drücke Enter um Suche zu starten")
                 step_num += 1
                 structured_steps.append(f"{step_num}. Warte auf Ergebnisse")
                 step_num += 1
-        
-        elif action_type == 'extract' or action_type == 'click':
+
+        elif action_type == "extract" or action_type == "click":
             # Extrahiere Ziel
-            targets = re.findall(r'(?:zeige|extrahiere|klicke auf)\s+([\w\s]+?)(?:\s+und|\s+dann|$)', task_lower)
+            targets = re.findall(
+                r"(?:zeige|extrahiere|klicke auf)\s+([\w\s]+?)(?:\s+und|\s+dann|$)",
+                task_lower,
+            )
             if targets:
                 target = targets[0].strip()
-                if 'erste' in target or 'ersten' in target or 'top' in target:
-                    structured_steps.append(f"{step_num}. Extrahiere die ersten 3 Ergebnisse")
+                if "erste" in target or "ersten" in target or "top" in target:
+                    structured_steps.append(
+                        f"{step_num}. Extrahiere die ersten 3 Ergebnisse"
+                    )
                 else:
                     structured_steps.append(f"{step_num}. Interagiere mit: {target}")
                 step_num += 1
-    
+
     # Abschluss
     structured_steps.append(f"{step_num}. Beende Task und berichte Ergebnisse")
-    
+
     return "\n".join(structured_steps)
 
 
 def quick_intent_check(query: str) -> Optional[str]:
     """Schnelle Keyword-basierte Intent-Erkennung."""
     query_lower = query.lower()
-    
+
     # REASONING zuerst prüfen (höchste Priorität für komplexe Fragen)
     for keyword in REASONING_KEYWORDS:
         if keyword in query_lower:
             return "reasoning"
-    
+
     # META-Keywords (mehrstufige Aufgaben)
     for keyword in META_KEYWORDS:
         if keyword in query_lower:
             return "meta"
-    
+
     # Research-Keywords
     for keyword in RESEARCH_KEYWORDS:
         if keyword in query_lower:
             return "research"
-    
+
     # VisualNemotron-Keywords (Multi-Step Web-Automation)
     for keyword in VISUAL_NEMOTRON_KEYWORDS:
         if keyword in query_lower:
             return "visual_nemotron"
-    
+
     # Visual-Keywords (einfache UI-Tasks)
     for keyword in VISUAL_KEYWORDS:
         if keyword in query_lower:
             return "visual"
-    
+
     # Creative-Keywords
     for keyword in CREATIVE_KEYWORDS:
         if keyword in query_lower:
             return "creative"
-    
+
     # Development-Keywords
     for keyword in DEVELOPMENT_KEYWORDS:
         if keyword in query_lower:
             return "development"
-    
+
     # Executor-Keywords (einfache Fragen)
     for keyword in EXECUTOR_KEYWORDS:
         if keyword in query_lower:
             return "executor"
-    
+
     return None  # LLM entscheiden lassen
 
 
 async def get_agent_decision(user_query: str) -> str:
     """Bestimmt welcher Agent für die Anfrage zuständig ist."""
     log.info(f"🧠 Analysiere Intention: '{user_query}'")
-    
+
     # Schnelle Keyword-Erkennung zuerst
     quick_result = quick_intent_check(user_query)
     if quick_result:
         log.info(f"✅ Schnell-Entscheidung (Keyword): {quick_result}")
         return quick_result
-    
+
     # LLM-basierte Entscheidung
     try:
         model = os.getenv("DISPATCHER_MODEL", "gpt-5-mini-2025-08-07")
 
         # Nutze Compatibility Helper für automatische API-Anpassung
-        api_params = prepare_openai_params({
-            "model": model,
-            "messages": [
-                {"role": "system", "content": DISPATCHER_PROMPT},
-                {"role": "user", "content": user_query},
-            ],
-            "temperature": 0,
-            "max_tokens": 20
-        })
-
-        response = await asyncio.to_thread(
-            client.chat.completions.create,
-            **api_params
+        api_params = prepare_openai_params(
+            {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": DISPATCHER_PROMPT},
+                    {"role": "user", "content": user_query},
+                ],
+                "temperature": 0,
+                "max_tokens": 20,
+            }
         )
-        decision = response.choices[0].message.content.strip().lower().replace('.', '')
-        
+
+        response = await asyncio.to_thread(client.chat.completions.create, **api_params)
+        decision = response.choices[0].message.content.strip().lower().replace(".", "")
+
         # Direkter Treffer
         if decision in AGENT_CLASS_MAP:
             log.info(f"✅ Entscheidung: {decision}")
             return decision
-        
+
         # Suche im Text
         for key in AGENT_CLASS_MAP.keys():
             if key in decision:
                 log.info(f"✅ Entscheidung (extrahiert): {key}")
                 return key
-        
+
         log.warning(f"⚠️ Unsicher ({decision}). Fallback auf 'executor'.")
         return "executor"
-        
+
     except Exception as e:
         log.error(f"❌ Dispatcher-Fehler: {e}")
         return "executor"
 
 
-async def run_agent(agent_name: str, query: str, tools_description: str):
+async def run_agent(
+    agent_name: str, query: str, tools_description: str, session_id: str = None
+):
     """Instanziiert den Agenten und führt ihn aus."""
     from utils.audit_logger import AuditLogger
-    from utils.policy_gate import check_query_policy
+    from utils.policy_gate import check_query_policy, audit_tool_call
 
     audit = AuditLogger()
     audit.log_start(query, agent_name)
+    audit_tool_call("dispatcher_start", {"agent": agent_name, "query": query[:100]})
+
+    effective_session_id = session_id or str(uuid.uuid4())[:8]
+
+    lane_manager.set_registry(registry_v2)
+    lane = await lane_manager.get_or_create_lane(effective_session_id)
+    log.info(f"Lane {effective_session_id} status: {lane.status.value}")
 
     AgentClass = AGENT_CLASS_MAP.get(agent_name)
 
@@ -514,32 +646,80 @@ async def run_agent(agent_name: str, query: str, tools_description: str):
         if AgentClass == "SPECIAL_VISION_QWEN":
             log.info("🎯 Nutze Qwen-VL via MCP-Server Tool (kein neuer Prozess!)")
             log.info("   Vorteile: Nutzt bereits geladenes Modell, kein Doppel-Laden")
-            
-            # Extrahiere URL und Task
-            import re
-            url = None
-            task = query
-            
-            url_match = re.search(r'https?://[^\s]+', query)
-            if url_match:
-                url = url_match.group(0)
-                task = query.replace(url, "").strip()
-            else:
-                domain_match = re.search(r'([a-zA-Z0-9.-]+\.(de|com|org|net|io))', query)
-                if domain_match:
-                    url = f"https://{domain_match.group(1)}"
-                    task = query.replace(domain_match.group(1), "").strip()
-            
+
+            # ═══════════════════════════════════════════════════════════════════
+            # NEU: Meta-Agent Planung vor Visual-Ausführung
+            # ═══════════════════════════════════════════════════════════════════
+            log.info("🧠 Meta-Agent: Erstelle strukturierten Plan...")
+
+            try:
+                meta_agent = MetaAgent(tools_description)
+                visual_plan = await meta_agent.create_visual_plan(query)
+
+                log.info(f"✅ Plan erstellt: {visual_plan.get('goal', 'N/A')}")
+                log.info(f"   URL: {visual_plan.get('url', 'N/A')}")
+                log.info(f"   Schritte: {len(visual_plan.get('steps', []))}")
+
+                # Zeige Plan in UI
+                print("\n" + "─" * 60)
+                print("📋 META-AGENT PLAN:")
+                print("─" * 60)
+                for step in visual_plan.get('steps', []):
+                    print(f"  {step.get('step_number')}. {step.get('action').upper()}: {step.get('description')}")
+                    if step.get('verification'):
+                        print(f"     ✓ Verify: {step.get('verification')}")
+                print("─" * 60)
+
+                # Nutze geplante URL falls vorhanden
+                url = visual_plan.get('url')
+                task = visual_plan.get('goal', query)
+
+            except Exception as e:
+                log.warning(f"⚠️ Meta-Agent Planung fehlgeschlagen: {e}, nutze Fallback")
+                # Fallback: Manuelle URL-Extraktion
+                import re
+                url_match = re.search(r"https?://[^\s]+", query)
+                domain_match = re.search(r"([a-zA-Z0-9.-]+\.(de|com|org|net|io))", query)
+                url = url_match.group(0) if url_match else (
+                    f"https://{domain_match.group(1)}" if domain_match else "https://www.google.com"
+                )
+                task = query
+                visual_plan = None
+
             if not url:
                 log.warning("⚠️ Keine URL gefunden, verwende google.com als Default")
                 url = "https://www.google.com"
-            
+
             log.info(f"   URL: {url}")
             log.info(f"   Task: {task[:50]}{'...' if len(task) > 50 else ''}")
-            
+
+            # ═══════════════════════════════════════════════════════════════════
+            # Erweitere Task um Plan-Kontext (falls Plan vorhanden)
+            # ═══════════════════════════════════════════════════════════════════
+            enhanced_task = task
+            if visual_plan and visual_plan.get('steps'):
+                import json
+                plan_context = f"""
+FOLGE DIESEM PLAN SCHLITT FÜR SCHLITT:
+"""
+                for step in visual_plan.get('steps', []):
+                    plan_context += f"""
+Schritt {step.get('step_number')}: {step.get('action').upper()}
+- Beschreibung: {step.get('description')}
+- Überprüfung: {step.get('verification')}
+- Fallback: {step.get('fallback')}
+"""
+                plan_context += f"""
+ZIEL: {visual_plan.get('goal')}
+ERFOLGSKRITERIEN: {', '.join(visual_plan.get('success_criteria', []))}
+"""
+                enhanced_task = task + plan_context
+                log.info(f"   Task erweitert mit Plan-Kontext ({len(plan_context)} chars)")
+
             # WICHTIG: Nutze MCP-Tool statt neuen Prozess!
             try:
                 import httpx
+
                 async with httpx.AsyncClient() as client:
                     response = await client.post(
                         "http://localhost:5000",
@@ -548,39 +728,42 @@ async def run_agent(agent_name: str, query: str, tools_description: str):
                             "method": "qwen_web_automation",
                             "params": {
                                 "url": url,
-                                "task": task,
+                                "task": enhanced_task,
                                 "headless": False,
-                                "max_iterations": 10,
-                                "wait_between_actions": 2.0
+                                "max_iterations": 15,
+                                "wait_between_actions": 2.0,
                             },
-                            "id": 1
+                            "id": 1,
                         },
-                        timeout=300.0  # 5 Minuten Timeout für komplexe Tasks
+                        timeout=300.0,  # 5 Minuten Timeout für komplexe Tasks
                     )
                     result = response.json()
-                    
+
                     if "result" in result:
                         r = result["result"]
                         success = r.get("success", False)
                         steps = r.get("steps", [])
                         final_url = r.get("final_url", "")
-                        
+
                         final_answer = f"""🎯 Vision Qwen Automation Ergebnis (via MCP):
 
-Status: {'✅ ERFOLGREICH' if success else '❌ NICHT VOLLSTÄNDIG'}
+Status: {"✅ ERFOLGREICH" if success else "❌ NICHT VOLLSTÄNDIG"}
 URL: {final_url}
 Schritte: {len(steps)}
 
 Durchgeführte Aktionen:
 """
                         for i, step in enumerate(steps, 1):
-                            actions_str = ", ".join([
-                                f"{a.get('action')}({a.get('x','')},{a.get('y','')})" if a.get('x') 
-                                else a.get('action') 
-                                for a in step.get('actions', [])
-                            ])
+                            actions_str = ", ".join(
+                                [
+                                    f"{a.get('action')}({a.get('x', '')},{a.get('y', '')})"
+                                    if a.get("x")
+                                    else a.get("action")
+                                    for a in step.get("actions", [])
+                                ]
+                            )
                             final_answer += f"  {i}. {actions_str[:60]}{'...' if len(actions_str) > 60 else ''}\n"
-                        
+
                         print("\n" + "=" * 80)
                         print(f"💡 FINALE ANTWORT ({agent_name.upper()}):")
                         print("=" * 80)
@@ -589,7 +772,9 @@ Durchgeführte Aktionen:
                         audit.log_end(str(final_answer)[:200], "completed")
                         return final_answer
                     else:
-                        error_msg = result.get("error", {}).get("message", "Unbekannter Fehler")
+                        error_msg = result.get("error", {}).get(
+                            "message", "Unbekannter Fehler"
+                        )
                         log.error(f"❌ MCP Tool Fehler: {error_msg}")
                         audit.log_end(error_msg, "error")
                         return f"Fehler: {error_msg}"
@@ -611,15 +796,18 @@ Durchgeführte Aktionen:
 
             # Extrahiere URL und Task
             import re
+
             url = None
             task = query
 
-            url_match = re.search(r'https?://[^\s]+', query)
+            url_match = re.search(r"https?://[^\s]+", query)
             if url_match:
                 url = url_match.group(0)
                 task = query.replace(url, "").strip()
             else:
-                domain_match = re.search(r'([a-zA-Z0-9.-]+\.(de|com|org|net|io|ai))', query)
+                domain_match = re.search(
+                    r"([a-zA-Z0-9.-]+\.(de|com|org|net|io|ai))", query
+                )
                 if domain_match:
                     url = f"https://{domain_match.group(1)}"
                     task = query.replace(domain_match.group(1), "").strip()
@@ -631,14 +819,14 @@ Durchgeführte Aktionen:
             structured_task = _structure_task(task, url)
 
             log.info(f"   URL: {url}")
-            log.info(f"   Task: {structured_task[:80]}{'...' if len(structured_task) > 80 else ''}")
+            log.info(
+                f"   Task: {structured_task[:80]}{'...' if len(structured_task) > 80 else ''}"
+            )
 
             try:
                 log.info("   🚀 Starte v4 (Desktop Edition mit PyAutoGUI)")
                 result = await run_desktop_task(
-                    task=structured_task,
-                    url=url if url else None,
-                    max_steps=15
+                    task=structured_task, url=url if url else None, max_steps=15
                 )
                 version = "v4"
 
@@ -647,16 +835,16 @@ Durchgeführte Aktionen:
                 steps_planned = result.get("total_steps_planned", 0)
                 unique_states = result.get("unique_states", 0)
                 error = result.get("error")
-                
+
                 final_answer = f"""🎯 Visual Nemotron Automation {version} Ergebnis:
 
-Status: {'✅ ERFOLGREICH' if success else '❌ FEHLER' if error else '⚠️ UNVOLLSTÄNDIG'}
-Schritte: {steps_executed} ausgeführt{f' ({steps_planned} geplant)' if steps_planned else ''}
-Unique States: {unique_states if unique_states else 'N/A'} (Loop-Erkennung)
+Status: {"✅ ERFOLGREICH" if success else "❌ FEHLER" if error else "⚠️ UNVOLLSTÄNDIG"}
+Schritte: {steps_executed} ausgeführt{f" ({steps_planned} geplant)" if steps_planned else ""}
+Unique States: {unique_states if unique_states else "N/A"} (Loop-Erkennung)
 """
                 if error:
                     final_answer += f"\nFehler: {error}\n"
-                
+
                 # Zeige durchgeführte Aktionen
                 results = result.get("results", result.get("history", []))
                 if results:
@@ -666,13 +854,17 @@ Unique States: {unique_states if unique_states else 'N/A'} (Loop-Erkennung)
                             act = r.get("action", {})
                             if isinstance(act, dict):
                                 act_type = act.get("action", "unknown")
-                                target = act.get("target", {}).get("description", "") if isinstance(act.get("target"), dict) else ""
+                                target = (
+                                    act.get("target", {}).get("description", "")
+                                    if isinstance(act.get("target"), dict)
+                                    else ""
+                                )
                             else:
                                 act_type = str(act)
                                 target = ""
                             status = "✅" if r.get("success") else "❌"
                             final_answer += f"  {status} {act_type} → {target[:30]}\n"
-                
+
                 print("\n" + "=" * 80)
                 print(f"💡 FINALE ANTWORT ({agent_name.upper()}):")
                 print("=" * 80)
@@ -684,6 +876,7 @@ Unique States: {unique_states if unique_states else 'N/A'} (Loop-Erkennung)
             except Exception as e:
                 log.error(f"❌ VisualNemotronAgent Fehler: {e}")
                 import traceback
+
                 log.error(traceback.format_exc())
                 audit.log_end(str(e), "error")
                 return f"Fehler bei Visual Automation: {e}"
@@ -693,14 +886,14 @@ Unique States: {unique_states if unique_states else 'N/A'} (Loop-Erkennung)
         if agent_name == "reasoning":
             agent_instance = AgentClass(
                 tools_description_string=tools_description,
-                enable_thinking=True  # Nemotron Reasoning aktiviert
+                enable_thinking=True,  # Nemotron Reasoning aktiviert
             )
         # DeveloperAgentV2 braucht dest_folder und max_steps
         elif agent_name == "development":
             agent_instance = AgentClass(
                 tools_description_string=tools_description,
                 dest_folder=".",  # Standard: aktuelles Verzeichnis
-                max_steps=15      # Genug Steps für komplexe Tasks
+                max_steps=15,  # Genug Steps für komplexe Tasks
             )
         else:
             agent_instance = AgentClass(tools_description_string=tools_description)
@@ -717,6 +910,7 @@ Unique States: {unique_states if unique_states else 'N/A'} (Loop-Erkennung)
 
     except Exception as e:
         import traceback
+
         log.error(f"❌ Fehler beim Ausführen des Agenten '{agent_name}': {e}")
         log.error(traceback.format_exc())
         audit.log_end(str(e), "error")
@@ -726,17 +920,17 @@ Unique States: {unique_states if unique_states else 'N/A'} (Loop-Erkennung)
 async def fetch_tool_descriptions_from_server() -> Optional[str]:
     """Holt die Tool-Liste vom Server."""
     server_url = "http://127.0.0.1:5000/get_tool_descriptions"
-    
+
     try:
         async with httpx.AsyncClient() as http_client:
             response = await http_client.get(server_url, timeout=5.0)
-            
+
             if response.status_code != 200:
                 log.error(f"❌ Server antwortet mit Status {response.status_code}")
                 return None
-            
+
             return response.json().get("descriptions")
-            
+
     except httpx.ConnectError:
         log.fatal(f"FATAL: Keine Verbindung zum Server ({server_url}).")
         log.fatal("Starte den MCP Server mit: python server/mcp_server.py")
@@ -751,38 +945,38 @@ async def main_loop():
     print("\n" + "=" * 60)
     print("🤖 TIMUS MASTER DISPATCHER (v3.2 - Dev Agent v2) 🤖")
     print("=" * 60)
-    
+
     tools_desc = await fetch_tool_descriptions_from_server()
     if not tools_desc:
         return
-    
+
     print("\nBereit. Beispiele:")
     print("  • 'asyncio vs threading für 100 API-Calls?' → REASONING (Nemotron)")
     print("  • 'Recherchiere KI-Sicherheit' → RESEARCH")
     print("  • 'Öffne Firefox' → VISUAL")
     print("  • 'Wie spät ist es?' → EXECUTOR")
     print("\nTipp: 'exit' zum Beenden\n")
-    
+
     while True:
         try:
             q = await asyncio.to_thread(input, "\n\033[32mDu> \033[0m")
-            
+
             if not q.strip():
                 continue
-            
+
             if q.lower() in ["exit", "quit", "q"]:
                 break
-            
+
             print("   🤔 Timus denkt...")
             agent = await get_agent_decision(q.strip())
             print(f"   📌 Agent: {agent.upper()}")
             await run_agent(agent, q.strip(), tools_desc)
-            
+
         except (KeyboardInterrupt, EOFError):
             break
         except Exception as e:
             log.error(f"Fehler: {e}")
-    
+
     print("\n👋 Bye!")
 
 

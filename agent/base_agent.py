@@ -22,7 +22,9 @@ from typing import Dict, Any, List, Optional, Tuple
 import httpx
 
 from agent.providers import (
-    ModelProvider, AgentModelConfig, get_provider_client,
+    ModelProvider,
+    AgentModelConfig,
+    get_provider_client,
 )
 from agent.shared.mcp_client import MCPClient
 from agent.shared.screenshot import capture_screenshot_base64
@@ -30,7 +32,11 @@ from agent.shared.action_parser import parse_action
 from agent.shared.vision_formatter import build_openai_vision_message
 
 from utils.openai_compat import prepare_openai_params
+from utils.policy_gate import check_tool_policy
 from agent.dynamic_tool_mixin import DynamicToolMixin
+from tools.tool_registry_v2 import registry_v2, ValidationError
+from orchestration.lane_manager import lane_manager, Lane, LaneStatus
+from utils.context_guard import ContextGuard, ContextStatus
 
 log = logging.getLogger("TimusAgent-v4.4")
 
@@ -58,13 +64,18 @@ class BaseAgent(DynamicToolMixin):
         tools_description_string: str,
         max_iterations: int = 30,
         agent_type: str = "executor",
+        lane_id: Optional[str] = None,
     ):
         self.max_iterations = max_iterations
         self.agent_type = agent_type
+        self.lane_id = lane_id
+        self._lane: Optional[Lane] = None
 
         # DynamicToolMixin initialisieren
         capabilities = AGENT_CAPABILITY_MAP.get(agent_type)
-        self.init_dynamic_tools(capabilities=capabilities, max_iterations=max_iterations)
+        self.init_dynamic_tools(
+            capabilities=capabilities, max_iterations=max_iterations
+        )
         self.http_client = httpx.AsyncClient(timeout=300.0)
         self.recent_actions: List[str] = []
         self.last_skip_times: Dict[str, float] = {}
@@ -75,14 +86,17 @@ class BaseAgent(DynamicToolMixin):
 
         log.info(f"{self.__class__.__name__} | {self.model} | {self.provider.value}")
 
-        self.system_prompt = (
-            system_prompt_template
-            .replace("{current_date}", datetime.now().strftime("%d.%m.%Y"))
-            .replace("{tools_description}", tools_description_string)
-        )
+        self.system_prompt = system_prompt_template.replace(
+            "{current_date}", datetime.now().strftime("%d.%m.%Y")
+        ).replace("{tools_description}", tools_description_string)
+
+        # Lane-Manager initialisieren
+        lane_manager.set_registry(registry_v2)
 
         # Screen-Change-Gate Support (v1.0)
-        self.use_screen_change_gate = os.getenv("USE_SCREEN_CHANGE_GATE", "false").lower() == "true"
+        self.use_screen_change_gate = (
+            os.getenv("USE_SCREEN_CHANGE_GATE", "false").lower() == "true"
+        )
         self.cached_screen_state: Optional[Dict] = None
         self.last_screen_analysis_time: float = 0
         self._last_screen_check_time: float = 0.0
@@ -91,11 +105,18 @@ class BaseAgent(DynamicToolMixin):
         self.roi_stack: List[Dict] = []
         self.current_roi: Optional[Dict] = None
 
+        # Context-Window-Guard (v3.0)
+        self._context_guard = ContextGuard(
+            max_tokens=int(os.getenv('MAX_CONTEXT_TOKENS', '128000')),
+            max_output_tokens=int(os.getenv('MAX_OUTPUT_TOKENS', '8000')),
+        )
+
         # Multimodal Vision Support
         self._vision_enabled = False
         try:
             import mss as _mss
             from PIL import Image as _PILImage
+
             self._vision_enabled = True
         except ImportError:
             pass
@@ -128,7 +149,7 @@ class BaseAgent(DynamicToolMixin):
                 if isinstance(v, str) and len(v) > 500:
                     clean[k] = f"<{len(v)} chars>"
                 elif isinstance(v, list) and len(v) > 10:
-                    clean[k] = v[:10] + [f"... +{len(v)-10}"]
+                    clean[k] = v[:10] + [f"... +{len(v) - 10}"]
             return clean
         elif isinstance(obs, str) and len(obs) > 2000:
             return obs[:2000] + "..."
@@ -141,10 +162,14 @@ class BaseAgent(DynamicToolMixin):
     # System-Tools die Agenten NICHT direkt aufrufen sollen
     # (werden vom Dispatcher/System verwaltet)
     SYSTEM_ONLY_TOOLS = {
-        "add_interaction", "end_session", "get_memory_stats",
+        "add_interaction",
+        "end_session",
+        "get_memory_stats",
     }
 
-    def should_skip_action(self, action_name: str, params: dict) -> Tuple[bool, Optional[str]]:
+    def should_skip_action(
+        self, action_name: str, params: dict
+    ) -> Tuple[bool, Optional[str]]:
         # System-Tools sofort blockieren
         if action_name in self.SYSTEM_ONLY_TOOLS:
             reason = (
@@ -178,7 +203,7 @@ class BaseAgent(DynamicToolMixin):
 
         if action_name in LOW_VALUE_ACTIONS and count >= 2:
             reason = (
-                f"Low-value tool '{action_name}' already used {count+1}x. "
+                f"Low-value tool '{action_name}' already used {count + 1}x. "
                 f"Switch to higher-signal tools (search_web, open_url, analyze_screen_verified)."
             )
             log.warning(reason)
@@ -187,20 +212,22 @@ class BaseAgent(DynamicToolMixin):
 
         if count >= 2:
             reason = (
-                f"Loop detected: {action_name} wurde bereits {count+1}x aufgerufen "
+                f"Loop detected: {action_name} wurde bereits {count + 1}x aufgerufen "
                 f"mit denselben Parametern. KRITISCH: Aktion wird uebersprungen. "
                 f"Versuche anderen Ansatz!"
             )
-            log.error(f"Kritischer Loop ({count+1}x): {action_name} - Aktion wird uebersprungen")
+            log.error(
+                f"Kritischer Loop ({count + 1}x): {action_name} - Aktion wird uebersprungen"
+            )
             self.last_skip_times[action_key] = now
             return True, reason
 
         elif count >= 1:
             reason = (
-                f"Loop detected: {action_name} wurde bereits {count+1}x aufgerufen "
+                f"Loop detected: {action_name} wurde bereits {count + 1}x aufgerufen "
                 f"mit denselben Parametern. Versuche andere Parameter oder anderen Ansatz."
             )
-            log.warning(f"Loop ({count+1}x): {action_name} - Warnung an Agent")
+            log.warning(f"Loop ({count + 1}x): {action_name} - Warnung an Agent")
             self.recent_actions.append(action_key)
             return False, reason
 
@@ -266,11 +293,36 @@ class BaseAgent(DynamicToolMixin):
                 log.warning(f"Oeffnen fehlgeschlagen: {e}")
 
     # ------------------------------------------------------------------
-    # MCP Tool Call (mit Loop-Detection)
+    # Lane Management
+    # ------------------------------------------------------------------
+
+    async def _get_lane(self) -> Lane:
+        """Holt oder erstellt die Lane fuer diesen Agenten."""
+        if self._lane is None:
+            self._lane = await lane_manager.get_or_create_lane(
+                self.lane_id or f"{self.agent_type}_{id(self)}"
+            )
+        return self._lane
+
+    # ------------------------------------------------------------------
+    # MCP Tool Call (mit Loop-Detection und Lane-Integration)
     # ------------------------------------------------------------------
 
     async def _call_tool(self, method: str, params: dict) -> dict:
         method, params = self._refine_tool_call(method, params)
+
+        allowed, policy_reason = check_tool_policy(method, params)
+        if not allowed:
+            log.error(f"Tool-Call durch Policy blockiert: {method}")
+            return {"error": policy_reason, "blocked_by_policy": True}
+
+        try:
+            registry_v2.validate_tool_call(method, **params)
+        except ValidationError as e:
+            log.error(f"Parameter-Validierungsfehler fuer {method}: {e}")
+            return {"error": f"Validierungsfehler: {e}", "validation_failed": True}
+        except ValueError as e:
+            log.warning(f"Tool '{method}' nicht in Registry - nutze direkten RPC-Call")
 
         should_skip, loop_reason = self.should_skip_action(method, params)
 
@@ -282,6 +334,11 @@ class BaseAgent(DynamicToolMixin):
             log.warning(f"Loop-Warnung fuer {method}: {loop_reason}")
 
         log.info(f"{method} -> {str(params)[:100]}")
+
+        lane = await self._get_lane()
+        log.debug(
+            f"Lane {lane.lane_id}: Executing {method} (status={lane.status.value})"
+        )
 
         try:
             resp = await self.http_client.post(
@@ -309,7 +366,9 @@ class BaseAgent(DynamicToolMixin):
     # Screen-Change-Gate
     # ------------------------------------------------------------------
 
-    async def _should_analyze_screen(self, roi: Optional[Dict] = None, force: bool = False) -> bool:
+    async def _should_analyze_screen(
+        self, roi: Optional[Dict] = None, force: bool = False
+    ) -> bool:
         if not self.use_screen_change_gate or force:
             return True
 
@@ -326,7 +385,9 @@ class BaseAgent(DynamicToolMixin):
             result = await self._call_tool("should_analyze_screen", params)
 
             if result and result.get("changed"):
-                log.debug(f"Screen geaendert - {result.get('info', {}).get('reason', 'unknown')}")
+                log.debug(
+                    f"Screen geaendert - {result.get('info', {}).get('reason', 'unknown')}"
+                )
                 self._last_screen_check_time = now
                 return True
             else:
@@ -363,10 +424,14 @@ class BaseAgent(DynamicToolMixin):
 
             if result and not result.get("error"):
                 self.cached_screen_state = result
-                log.debug(f"ScreenState analysiert: {len(result.get('elements', []))} Elemente")
+                log.debug(
+                    f"ScreenState analysiert: {len(result.get('elements', []))} Elemente"
+                )
                 return result
             else:
-                log.warning(f"Screen-Analyse fehlgeschlagen: {result.get('error', 'unknown')}")
+                log.warning(
+                    f"Screen-Analyse fehlgeschlagen: {result.get('error', 'unknown')}"
+                )
                 return None
 
         except Exception as e:
@@ -385,14 +450,16 @@ class BaseAgent(DynamicToolMixin):
             if ocr_result and ocr_result.get("texts"):
                 for i, text_item in enumerate(ocr_result["texts"][:20]):
                     if isinstance(text_item, dict):
-                        elements.append({
-                            "name": f"text_{i}",
-                            "type": "text",
-                            "text": text_item.get("text", ""),
-                            "x": text_item.get("x", 0),
-                            "y": text_item.get("y", 0),
-                            "confidence": text_item.get("confidence", 0.0),
-                        })
+                        elements.append(
+                            {
+                                "name": f"text_{i}",
+                                "type": "text",
+                                "text": text_item.get("text", ""),
+                                "x": text_item.get("x", 0),
+                                "y": text_item.get("y", 0),
+                                "confidence": text_item.get("confidence", 0.0),
+                            }
+                        )
 
             if not elements:
                 log.debug("Screen-Analyse: Keine Elemente gefunden")
@@ -410,7 +477,9 @@ class BaseAgent(DynamicToolMixin):
             log.error(f"Screen-Analyse fehlgeschlagen: {e}")
             return None
 
-    async def _create_navigation_plan_with_llm(self, task: str, screen_state: Dict) -> Optional[Dict]:
+    async def _create_navigation_plan_with_llm(
+        self, task: str, screen_state: Dict
+    ) -> Optional[Dict]:
         import re as _re
 
         try:
@@ -423,22 +492,26 @@ class BaseAgent(DynamicToolMixin):
             for i, elem in enumerate(elements[:15]):
                 text = elem.get("text", "").strip()
                 if text:
-                    element_list.append({
-                        "name": elem.get("name", f"elem_{i}"),
-                        "text": text[:50],
-                        "x": elem.get("x", 0),
-                        "y": elem.get("y", 0),
-                        "type": elem.get("type", "unknown"),
-                    })
+                    element_list.append(
+                        {
+                            "name": elem.get("name", f"elem_{i}"),
+                            "text": text[:50],
+                            "x": elem.get("x", 0),
+                            "y": elem.get("y", 0),
+                            "type": elem.get("type", "unknown"),
+                        }
+                    )
 
             if not element_list:
                 log.warning("Keine Elemente mit Text gefunden")
                 return None
 
-            element_summary = "\n".join([
-                f"{i+1}. {e['name']}: \"{e['text']}\" at ({e['x']}, {e['y']})"
-                for i, e in enumerate(element_list)
-            ])
+            element_summary = "\n".join(
+                [
+                    f'{i + 1}. {e["name"]}: "{e["text"]}" at ({e["x"]}, {e["y"]})'
+                    for i, e in enumerate(element_list)
+                ]
+            )
 
             prompt = f"""Erstelle einen ACTION-PLAN fuer diese Aufgabe:
 
@@ -469,9 +542,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             os.environ["NEMOTRON_ENABLE_THINKING"] = "true"
 
             try:
-                response = await self._call_llm([
-                    {"role": "user", "content": prompt}
-                ])
+                response = await self._call_llm([{"role": "user", "content": prompt}])
             finally:
                 self.model = old_model
                 self.provider = old_provider
@@ -480,10 +551,12 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 else:
                     os.environ.pop("NEMOTRON_ENABLE_THINKING", None)
 
-            response = _re.sub(r'```json\s*', '', response)
-            response = _re.sub(r'```\s*', '', response)
+            response = _re.sub(r"```json\s*", "", response)
+            response = _re.sub(r"```\s*", "", response)
 
-            json_match = _re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response, _re.DOTALL)
+            json_match = _re.search(
+                r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", response, _re.DOTALL
+            )
             if not json_match:
                 log.warning(f"Kein JSON gefunden in Response: {response[:200]}")
                 return None
@@ -513,7 +586,9 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                     compatible_step["params"]["text"] = step["value"]
                 compatible_plan["steps"].append(compatible_step)
 
-            log.info(f"ActionPlan erstellt: {compatible_plan['goal']} ({len(compatible_plan['steps'])} Steps)")
+            log.info(
+                f"ActionPlan erstellt: {compatible_plan['goal']} ({len(compatible_plan['steps'])} Steps)"
+            )
             return compatible_plan
 
         except json.JSONDecodeError as e:
@@ -532,13 +607,17 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 log.info("Keine Elemente gefunden - nutze regulaeren Flow")
                 return None
 
-            action_plan = await self._create_navigation_plan_with_llm(task, screen_state)
+            action_plan = await self._create_navigation_plan_with_llm(
+                task, screen_state
+            )
             if not action_plan:
                 log.info("ActionPlan-Erstellung fehlgeschlagen - nutze regulaeren Flow")
                 return None
 
             log.info(f"Fuehre ActionPlan aus: {action_plan.get('goal', 'N/A')}")
-            result = await self._call_tool("execute_action_plan", {"plan_dict": action_plan})
+            result = await self._call_tool(
+                "execute_action_plan", {"plan_dict": action_plan}
+            )
 
             if result and result.get("success"):
                 return {
@@ -547,7 +626,9 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                     "state": screen_state,
                 }
             else:
-                log.warning(f"ActionPlan fehlgeschlagen: {result.get('error', 'Unknown')}")
+                log.warning(
+                    f"ActionPlan fehlgeschlagen: {result.get('error', 'Unknown')}"
+                )
                 return None
 
         except Exception as e:
@@ -584,12 +665,18 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
 
         if "google" in task_lower and ("such" in task_lower or "search" in task_lower):
             self._set_roi(x=200, y=100, width=800, height=150, name="google_searchbar")
-            log.info("Dynamische UI erkannt: Google Search - ROI auf Suchleiste gesetzt")
+            log.info(
+                "Dynamische UI erkannt: Google Search - ROI auf Suchleiste gesetzt"
+            )
             return True
 
         elif "booking" in task_lower:
-            self._set_roi(x=100, y=150, width=1000, height=400, name="booking_search_form")
-            log.info("Dynamische UI erkannt: Booking.com - ROI auf Suchformular gesetzt")
+            self._set_roi(
+                x=100, y=150, width=1000, height=400, name="booking_search_form"
+            )
+            log.info(
+                "Dynamische UI erkannt: Booking.com - ROI auf Suchformular gesetzt"
+            )
             return True
 
         elif "amazon" in task_lower:
@@ -606,8 +693,10 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
     async def _call_llm(self, messages: List[Dict]) -> str:
         try:
             if self.provider in [
-                ModelProvider.OPENAI, ModelProvider.DEEPSEEK,
-                ModelProvider.INCEPTION, ModelProvider.NVIDIA,
+                ModelProvider.OPENAI,
+                ModelProvider.DEEPSEEK,
+                ModelProvider.INCEPTION,
+                ModelProvider.NVIDIA,
                 ModelProvider.OPENROUTER,
             ]:
                 return await self._call_openai_compatible(messages)
@@ -636,7 +725,9 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         if "nemotron" in self.model.lower():
             enable = os.getenv("NEMOTRON_ENABLE_THINKING", "true").lower() == "true"
             if not enable:
-                kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
+                kwargs["extra_body"] = {
+                    "chat_template_kwargs": {"enable_thinking": False}
+                }
                 kwargs["temperature"] = 0.6
                 kwargs["top_p"] = 0.95
             else:
@@ -704,25 +795,45 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         roi_set = await self._detect_dynamic_ui_and_set_roi(task)
 
         task_lower = task.lower()
-        is_navigation_task = any(keyword in task_lower for keyword in [
-            "browser", "website", "url", "klick", "click", "such", "search",
-            "booking", "google", "amazon", "navigate", "oeffne", "gehe zu",
-        ])
+        is_navigation_task = any(
+            keyword in task_lower
+            for keyword in [
+                "browser",
+                "website",
+                "url",
+                "klick",
+                "click",
+                "such",
+                "search",
+                "booking",
+                "google",
+                "amazon",
+                "navigate",
+                "oeffne",
+                "gehe zu",
+            ]
+        )
 
         if is_navigation_task:
             structured_result = await self._try_structured_navigation(task)
             if structured_result and structured_result.get("success"):
-                log.info(f"Strukturierte Navigation erfolgreich: {structured_result['result']}")
+                log.info(
+                    f"Strukturierte Navigation erfolgreich: {structured_result['result']}"
+                )
                 if roi_set:
                     self._clear_roi()
                 return structured_result["result"]
             else:
-                log.info("Strukturierte Navigation nicht moeglich - nutze regulaeren Flow")
+                log.info(
+                    "Strukturierte Navigation nicht moeglich - nutze regulaeren Flow"
+                )
 
         use_vision = is_navigation_task and self._vision_enabled
         if use_vision:
             log.info("Multimodal-Modus: Screenshots werden an LLM gesendet")
-            initial_screenshot = await asyncio.to_thread(self._capture_screenshot_base64)
+            initial_screenshot = await asyncio.to_thread(
+                self._capture_screenshot_base64
+            )
             initial_msg = self._build_vision_message(task, initial_screenshot)
         else:
             initial_msg = {"role": "user", "content": task}
@@ -748,15 +859,24 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             messages.append({"role": "assistant", "content": reply})
 
             if not action:
-                messages.append({"role": "user", "content": f"Fehler: {err}. Korrektes JSON senden."})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": f"Fehler: {err}. Korrektes JSON senden.",
+                    }
+                )
                 continue
 
-            obs = await self._call_tool(action.get("method", ""), action.get("params", {}))
+            obs = await self._call_tool(
+                action.get("method", ""), action.get("params", {})
+            )
             self._handle_file_artifacts(obs)
 
             obs_text = f"Observation: {json.dumps(self._sanitize_observation(obs), ensure_ascii=False)}"
             if use_vision:
-                screenshot_b64 = await asyncio.to_thread(self._capture_screenshot_base64)
+                screenshot_b64 = await asyncio.to_thread(
+                    self._capture_screenshot_base64
+                )
                 messages.append(self._build_vision_message(obs_text, screenshot_b64))
             else:
                 messages.append({"role": "user", "content": obs_text})

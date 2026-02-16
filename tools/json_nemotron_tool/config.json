@@ -1,0 +1,109 @@
+{
+  "name": "json_nemotron",
+  "version": "1.0.0",
+  "description": "AI-gestützte JSON-Verarbeitung mit Nemotron: Repair, NumPy-Konvertierung, Validierung",
+  "author": "Timus v4.4",
+  "entry_point": "json_nemotron_tool.py",
+  "methods": [
+    {
+      "name": "repair_broken_json",
+      "description": "Repariert fehlerhaftes/broken JSON mit Nemotron AI",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "broken_json": {
+            "type": "string",
+            "description": "Der fehlerhafte JSON-String der repariert werden soll"
+          }
+        },
+        "required": ["broken_json"]
+      },
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {"type": "boolean"},
+          "repaired_json": {"type": "string"},
+          "was_already_valid": {"type": "boolean"},
+          "method": {"type": "string"},
+          "error": {"type": "string"}
+        }
+      }
+    },
+    {
+      "name": "convert_numpy_to_json",
+      "description": "Konvertiert NumPy-Datenstrukturen und komplexe Objekte zu sauberem JSON",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "Python-Daten mit potenziellen NumPy-Typen (bool_, int64, float64, ndarray)"
+          }
+        },
+        "required": ["data"]
+      },
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {"type": "boolean"},
+          "converted_json": {"type": "string"},
+          "method": {"type": "string"},
+          "types_converted": {"type": "array"},
+          "error": {"type": "string"}
+        }
+      }
+    },
+    {
+      "name": "validate_and_optimize_json",
+      "description": "Validiert JSON gegen Schema und optimiert Format/Größe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "json_data": {
+            "type": "string",
+            "description": "Der zu validierende JSON-String"
+          },
+          "schema": {
+            "type": "string",
+            "description": "Optionales JSON-Schema für Validierung"
+          }
+        },
+        "required": ["json_data"]
+      },
+      "returns": {
+        "type": "object",
+        "properties": {
+          "success": {"type": "boolean"},
+          "valid": {"type": "boolean"},
+          "optimized_json": {"type": "string"},
+          "errors": {"type": "array"},
+          "warnings": {"type": "array"},
+          "statistics": {"type": "object"},
+          "error": {"type": "string"}
+        }
+      }
+    },
+    {
+      "name": "sanitize_api_response",
+      "description": "Universal-Methode zur Bereinigung beliebiger API-Responses für JSON-Serialisierung (für mcp_server Fix)",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "response_data": {
+            "type": "object",
+            "description": "Beliebige Python-Datenstruktur die serialisiert werden muss"
+          }
+        },
+        "required": ["response_data"]
+      },
+      "returns": {
+        "type": "string",
+        "description": "JSON-String, garantiert serialisierbar"
+      }
+    }
+  ],
+  "capabilities": ["json", "validation", "conversion"],
+  "tags": ["json", "nemotron", "repair", "numpy", "validation"],
+  "requires_api_key": ["OPENROUTER_API_KEY"],
+  "fallback_behavior": "native_numpy_encoder"
+}

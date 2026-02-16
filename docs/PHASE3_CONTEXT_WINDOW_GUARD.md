@@ -1,0 +1,1 @@
+[{"q": "test"}, {"reason}": "break\n\n# Report\nreport = guard.get_report()\n```\n\n## Ergebnis\n\n- \u2705 Token-Budget-Ueberwachung\n- \u2705 Automatische Output-Komprimierung\n- \u2705 Hard-Stop bei Endlosschleifen\n- \u2705 Loop-Detection verbessert\n- \u2705 Message-Trimming bei Kontext-Overflow\n\n## N\u00e4chste Phase\n\nPhase 4: Memory-Upgrade als Hybrid"}]

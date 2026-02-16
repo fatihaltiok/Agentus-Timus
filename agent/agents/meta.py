@@ -95,3 +95,141 @@ If a skill matches, use its instructions and resources."""
         result = await super().run(enhanced_task)
 
         return result
+
+    async def create_visual_plan(self, task: str) -> dict:
+        """Erstellt einen strukturierten Plan für Visual/Browser-Tasks.
+
+        Diese Methode analysiert den Task und erstellt eine Schritt-für-Schritt
+        Roadmap mit konkreten Aktionen (URL öffnen, Elemente finden, etc.)
+
+        Returns:
+            Dict mit: goal, url, steps (Liste von Actions mit verification)
+        """
+        log.info(f"MetaAgent: Erstelle Visual-Plan für: {task[:60]}...")
+
+        # Prompt für strukturierte Planung
+        plan_prompt = f"""Erstelle einen DETAILLIERTEN Plan für diese Browser-Automatisierung:
+
+AUFGABE: {task}
+
+Analysiere:
+1. Welche URL muss zuerst geöffnet werden?
+2. Was sind die konkreten Schritte (in Reihenfolge)?
+3. Welche Elemente müssen gefunden/klicked werden?
+4. Was ist die erwartete Ergebnis-Überprüfung?
+
+Gib den Plan in diesem JSON-Format zurück:
+{{
+  "goal": "Kurze Zusammenfassung des Ziels",
+  "url": "https://... (Start-URL)",
+  "steps": [
+    {{
+      "step_number": 1,
+      "action": "navigate|click|type|scroll|wait|verify",
+      "description": "Was genau soll passieren",
+      "target": "Element-Name oder null",
+      "value": "Eingabe-Wert oder null",
+      "verification": "Wie prüfen wir Erfolg?",
+      "fallback": "Was tun wenn es nicht klappt?"
+    }}
+  ],
+  "success_criteria": ["Liste der Erfolgs-Bedingungen"],
+  "estimated_steps": 5
+}}
+
+WICHTIG:
+- Sei SPEZIFISCH (konkrete URLs, nicht "irgendeine Seite")
+- Denke an COOKIE-BANNER (erster Schritt oft "akzeptieren")
+- Berücksichtige LADEZEITEN (wait nach navigate)
+- Jeder Step braucht eine verification
+
+Antworte NUR mit dem JSON, keine Markdown, keine Erklärungen."""
+
+        try:
+            # Nutze Reasoning-Modell (Nemotron) für bessere Planung
+            old_model = self.model
+            old_provider = self.provider
+
+            # Temporär auf Nemotron umschalten für Planung
+            from agent.providers import ModelProvider
+            self.model = os.getenv("REASONING_MODEL", "nvidia/nemotron-3-nano-30b-a3b")
+            self.provider = ModelProvider.OPENROUTER
+
+            response = await self._call_llm([
+                {"role": "user", "content": plan_prompt}
+            ])
+
+            # Restore original settings
+            self.model = old_model
+            self.provider = old_provider
+
+            # Parse JSON aus Response
+            import re
+            import json
+
+            # Entferne Markdown-Code-Blocks
+            cleaned = re.sub(r'```json\s*', '', response)
+            cleaned = re.sub(r'```\s*', '', cleaned)
+
+            # Extrahiere JSON
+            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', cleaned, re.DOTALL)
+            if json_match:
+                plan = json.loads(json_match.group(0))
+                log.info(f"✅ Visual-Plan erstellt: {plan.get('goal', 'N/A')} ({len(plan.get('steps', []))} Schritte)")
+                return plan
+            else:
+                log.warning("Kein JSON im Meta-Agent Response gefunden")
+                return self._create_fallback_plan(task)
+
+        except Exception as e:
+            log.error(f"Fehler bei Visual-Plan-Erstellung: {e}")
+            return self._create_fallback_plan(task)
+
+    def _create_fallback_plan(self, task: str) -> dict:
+        """Fallback-Plan wenn die AI-Planung fehlschlägt."""
+        import re
+
+        # Extrahiere URL aus Task
+        url_match = re.search(r'https?://[^\s]+', task)
+        domain_match = re.search(r'([a-zA-Z0-9.-]+\.(de|com|org|net|io))', task)
+
+        url = url_match.group(0) if url_match else (
+            f"https://{domain_match.group(1)}" if domain_match else "https://www.google.com"
+        )
+
+        return {
+            "goal": task,
+            "url": url,
+            "steps": [
+                {
+                    "step_number": 1,
+                    "action": "navigate",
+                    "description": f"Öffne {url}",
+                    "target": None,
+                    "value": url,
+                    "verification": "URL geladen",
+                    "fallback": "Warte und versuche erneut"
+                },
+                {
+                    "step_number": 2,
+                    "action": "wait",
+                    "description": "Warte auf Seiten-Ladung",
+                    "target": None,
+                    "value": "3s",
+                    "verification": "Seite stabil",
+                    "fallback": "Weiter mit nächstem Schritt"
+                },
+                {
+                    "step_number": 3,
+                    "action": "verify",
+                    "description": "Prüfe ob Aufgabe erfüllt",
+                    "target": None,
+                    "value": None,
+                    "verification": "Ziel erreicht",
+                    "fallback": "Manuelle Interaktion nötig"
+                }
+            ],
+            "success_criteria": ["Seite erfolgreich geladen"],
+            "estimated_steps": 3,
+            "_fallback": True
+        }
