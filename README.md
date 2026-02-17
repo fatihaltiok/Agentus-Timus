@@ -184,8 +184,9 @@ Beispiel: "Recherchiere KI-Sicherheit und erstelle einen Plan"
 
 | Tool | Funktionen |
 |------|-----------|
-| **memory_tool** | `remember`, `recall`, `get_memory_context`, `get_known_facts`, `get_memory_stats` |
+| **memory_tool** | `remember`, `recall`, `get_memory_context`, `get_known_facts`, `get_memory_stats`, `find_related_memories`, `sync_memory_to_markdown` |
 | **reflection_tool** | Selbst-Reflexion des Agenten |
+| **reflection_engine** | Automatisierte Post-Task Analyse mit Pattern-Erkennung und Learning-Speicherung |
 | **curator_tool** | Kuratierung von Inhalten |
 
 ### Planung und Koordination
@@ -208,30 +209,67 @@ Beispiel: "Recherchiere KI-Sicherheit und erstelle einen Plan"
 
 ---
 
-## Memory-System
+## Memory-System v2.0
 
-Zwei-Ebenen-Architektur fuer Kurzzeit- und Langzeit-Erinnerungen:
+Drei-Ebenen-Architektur mit Hybrid-Suche, automatisierter Reflexion und bidirektionalem Sync:
 
 ```
-Memory System
+Memory System v2.0
 |
 +-- SessionMemory (Kurzzeit)
 |   +-- Letzte N Nachrichten (max 20)
 |   +-- Aktuelle Entitaeten (Pronomen-Aufloesung)
 |   +-- Current Topic
 |
-+-- PersistentMemory (Langzeit - SQLite + ChromaDB)
-    +-- Fakten mit Vertrauenswert und Quelle
-    +-- Konversations-Zusammenfassungen
-    +-- Benutzer-Profile und Praeferenzen
-    +-- Erkannte Muster und Entscheidungen
++-- PersistentMemory (Langzeit - SQLite + ChromaDB + Markdown)
+|   +-- Fakten mit Vertrauenswert und Quelle
+|   +-- Konversations-Zusammenfassungen
+|   +-- Benutzer-Profile und Praeferenzen
+|   +-- Erkannte Muster und Entscheidungen
+|
++-- SemanticMemoryStore (ChromaDB Vektor-Store)
+|   +-- Embedding-basierte semantische Suche
+|   +-- Hybrid-Suche: ChromaDB (Vektoren) + FTS5 (Keywords)
+|   +-- Kategorie-Filter und Relevanz-Ranking
+|
++-- MarkdownStore (Bidirektionaler Sync)
+|   +-- USER.md - Benutzer-Profil (manuell editierbar)
+|   +-- SOUL.md - Behavior Hooks und Persoenlichkeit
+|   +-- MEMORY.md - Langzeit-Erinnerungen
+|   +-- daily/ - Taegliche Logs
+|
++-- ReflectionEngine (Post-Task Analyse)
+    +-- Automatische Reflexion nach jeder Aufgabe
+    +-- Pattern-Erkennung (was funktioniert, was nicht)
+    +-- Speichert Learnings als patterns/decisions/improvements
 ```
 
 **Features:**
 - Automatische Fakten-Extraktion aus Konversationen
-- Semantische Suche ueber ChromaDB Embeddings
+- Semantische Hybrid-Suche (ChromaDB Embeddings + FTS5 Keyword-Suche)
 - Entity Resolution (er/sie/es -> konkrete Entitaet)
 - Self-Model: Lernt Benutzer-Muster ueber Zeit
+- Post-Task Reflexion mit automatischer Learning-Speicherung
+- Bidirektionaler Sync: SQLite <-> Markdown <-> ChromaDB
+- Manuell editierbare Markdown-Dateien mit automatischer Rueck-Synchronisation
+
+### Proaktiver Scheduler
+
+Der Heartbeat-Scheduler fuehrt in konfigurierbaren Intervallen autonome Aktionen aus:
+
+| Aktion | Intervall | Beschreibung |
+|--------|-----------|--------------|
+| Task-Check | Jedes Heartbeat (15 min) | Prueft `tasks.json` auf pending/in_progress |
+| Self-Model Refresh | Alle 60 min | Aktualisiert Self-Model via LLM |
+| Memory Sync | Alle 4 Heartbeats | SQLite -> Markdown Sync |
+
+```bash
+# Konfiguration via ENV
+HEARTBEAT_ENABLED=true
+HEARTBEAT_INTERVAL_MINUTES=15
+HEARTBEAT_SELF_MODEL_REFRESH_INTERVAL=60
+REFLECTION_ENABLED=true
+```
 
 ---
 
@@ -385,11 +423,16 @@ timus/
 │   ├── delegation_tool/     # Agent-zu-Agent Delegation (MCP-Tool)
 │   ├── memory_tool/
 │   └── ...
+├── orchestration/
+│   ├── scheduler.py         # Proaktiver Heartbeat-Scheduler
+│   └── lane_manager.py      # Lane-basierte Task-Verwaltung
 ├── server/
 │   └── mcp_server.py        # MCP Server (FastAPI, Port 5000)
 ├── skills/                  # Erlernbare Skills
 ├── memory/
-│   └── memory_system.py     # 2-Ebenen Memory
+│   ├── memory_system.py     # Memory v2.0 (Hybrid-Suche, Sync)
+│   ├── reflection_engine.py # Post-Task Reflexion
+│   └── markdown_store/      # USER.md, SOUL.md, MEMORY.md
 ├── utils/                   # Hilfsfunktionen
 ├── config/                  # Personality-System
 ├── main_dispatcher.py       # Zentral-Dispatcher

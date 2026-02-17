@@ -415,7 +415,36 @@ async def lifespan(app: FastAPI):
         log.info(f"  - {tool_name}")
     log.info("=" * 50)
 
+    # === HEARTBEAT SCHEDULER STARTEN ===
+    app.state.scheduler = None
+    if os.getenv("HEARTBEAT_ENABLED", "true").lower() == "true":
+        try:
+            from orchestration.scheduler import init_scheduler, _set_scheduler_instance
+            
+            # Scheduler-Callback für Custom Actions
+            async def on_scheduler_wake(event):
+                log.info(f"💓 Scheduler Event: {event.event_type}")
+                # Könnte später Agent-Aktionen triggern
+            
+            scheduler = init_scheduler(on_wake=on_scheduler_wake)
+            _set_scheduler_instance(scheduler)
+            await scheduler.start()
+            app.state.scheduler = scheduler
+            log.info(f"✅ Heartbeat-Scheduler gestartet (Interval: {scheduler.interval.total_seconds()/60:.0f}min)")
+        except Exception as e:
+            log.warning(f"⚠️ Scheduler konnte nicht gestartet werden: {e}")
+    else:
+        log.info("ℹ️ Heartbeat-Scheduler deaktiviert (HEARTBEAT_ENABLED=false)")
+
     yield  # Server läuft
+
+    # === SHUTDOWN: Scheduler stoppen ===
+    if app.state.scheduler:
+        try:
+            await app.state.scheduler.stop()
+            log.info("✅ Heartbeat-Scheduler gestoppt")
+        except Exception as e:
+            log.warning(f"⚠️ Fehler beim Scheduler-Shutdown: {e}")
 
 
 # --- App-Initialisierung mit Lifespan ---

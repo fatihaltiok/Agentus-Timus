@@ -6,6 +6,7 @@ Enthaelt die Basisklasse fuer alle Timus-Agenten mit:
 - Screen-Change-Gate
 - ROI Management
 - Strukturierte Navigation
+- Post-Task Reflection (v2.0)
 """
 
 import logging
@@ -120,6 +121,11 @@ class BaseAgent(DynamicToolMixin):
             self._vision_enabled = True
         except ImportError:
             pass
+
+        # Post-Task Reflection Support (v2.0)
+        self._reflection_enabled = os.getenv("REFLECTION_ENABLED", "true").lower() == "true"
+        self._reflection_engine = None
+        self._task_action_history: List[Dict[str, Any]] = []
 
         if self.use_screen_change_gate:
             log.info(f"Screen-Change-Gate AKTIV fuer {self.__class__.__name__}")
@@ -822,11 +828,21 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 )
                 if roi_set:
                     self._clear_roi()
+                # Track structured nav action for reflection
+                self._task_action_history.append({
+                    "method": "structured_navigation",
+                    "params": {"task": task},
+                    "result": structured_result.get("result", "")
+                })
+                await self._run_reflection(task, structured_result.get("result", ""))
                 return structured_result["result"]
             else:
                 log.info(
                     "Strukturierte Navigation nicht moeglich - nutze regulaeren Flow"
                 )
+
+        # Clear action history for new task
+        self._task_action_history = []
 
         use_vision = is_navigation_task and self._vision_enabled
         if use_vision:
@@ -849,11 +865,14 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             if reply.startswith("Error"):
                 if roi_set:
                     self._clear_roi()
+                await self._run_reflection(task, reply, success=False)
                 return reply
             if "Final Answer:" in reply:
+                final_result = reply.split("Final Answer:")[1].strip()
                 if roi_set:
                     self._clear_roi()
-                return reply.split("Final Answer:")[1].strip()
+                await self._run_reflection(task, final_result, success=True)
+                return final_result
 
             action, err = self._parse_action(reply)
             messages.append({"role": "assistant", "content": reply})
@@ -870,6 +889,14 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             obs = await self._call_tool(
                 action.get("method", ""), action.get("params", {})
             )
+            
+            # Track action for reflection
+            self._task_action_history.append({
+                "method": action.get("method", ""),
+                "params": action.get("params", {}),
+                "result": str(obs)[:200] if obs else None
+            })
+            
             self._handle_file_artifacts(obs)
 
             obs_text = f"Observation: {json.dumps(self._sanitize_observation(obs), ensure_ascii=False)}"
@@ -883,5 +910,54 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
 
         if roi_set:
             self._clear_roi()
-
+        
+        await self._run_reflection(task, "Limit erreicht", success=False)
         return "Limit erreicht."
+
+    async def _run_reflection(
+        self, 
+        task: str, 
+        result: str, 
+        success: bool = True
+    ) -> None:
+        """
+        Fuehrt Post-Task Reflexion aus und speichert Learnings.
+        
+        Wird automatisch nach Task-Abschluss aufgerufen.
+        """
+        if not self._reflection_enabled:
+            return
+        
+        try:
+            # Lazy import to avoid circular dependency
+            from memory.reflection_engine import get_reflection_engine
+            
+            engine = get_reflection_engine()
+            
+            # Set memory manager if available
+            if engine.memory is None:
+                try:
+                    from memory.memory_system import memory_manager
+                    engine.set_memory_manager(memory_manager)
+                except ImportError:
+                    pass
+            
+            # Set LLM client if available
+            if engine.llm is None and hasattr(self, 'provider_client'):
+                engine.set_llm_client(self.provider_client)
+            
+            # Run reflection
+            reflection = await engine.reflect_on_task(
+                task={"description": task, "type": self.agent_type},
+                actions=self._task_action_history,
+                result={"success": success, "output": result}
+            )
+            
+            if reflection:
+                log.debug(
+                    f"🪞 Reflexion: {len(reflection.what_worked)} positiv, "
+                    f"{len(reflection.what_failed)} negativ"
+                )
+                
+        except Exception as e:
+            log.debug(f"Reflexion fehlgeschlagen (non-critical): {e}")

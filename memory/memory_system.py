@@ -1,6 +1,6 @@
 # memory/memory_system.py
 """
-Timus Memory System v1.0
+Timus Memory System v2.0
 
 Features:
 - Session Memory (aktuelle Konversation)
@@ -8,6 +8,13 @@ Features:
 - Fact Extraction (extrahiert Fakten aus Gesprächen)
 - Conversation Summarization (fasst alte Gespräche zusammen)
 - Semantic Retrieval (findet relevante Erinnerungen)
+- Hybrid Search (ChromaDB + FTS5)
+- Markdown Sync (bidirektional)
+
+v2.0 NEW:
+- SemanticMemoryStore: ChromaDB integration for semantic search
+- Hybrid search combining vector embeddings + keyword FTS5
+- Bidirectional sync with Markdown files
 """
 
 import os
@@ -18,11 +25,14 @@ import hashlib
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, TYPE_CHECKING
 from dataclasses import dataclass, field, asdict
 from openai import OpenAI
 from utils.openai_compat import prepare_openai_params
 from dotenv import load_dotenv
+
+if TYPE_CHECKING:
+    import chromadb
 
 load_dotenv()
 log = logging.getLogger("memory_system")
@@ -85,6 +95,175 @@ class MemoryItem:
     source: str = ""
     created_at: datetime = field(default_factory=datetime.now)
     last_used: datetime = field(default_factory=datetime.now)
+
+
+@dataclass
+class SemanticSearchResult:
+    """Ergebnis einer semantischen Suche."""
+    doc_id: str
+    content: str
+    category: str
+    importance: float
+    distance: float
+    source: str  # "chromadb" or "fts5"
+
+
+class SemanticMemoryStore:
+    """
+    ChromaDB-basierter Vektor-Store für semantische Suche.
+    
+    Speichert MemoryItems als Embeddings und ermöglicht
+    kontextuelle Suche über bedeutungsähnliche Inhalte.
+    """
+    
+    def __init__(self, collection: Optional["chromadb.Collection"] = None):
+        self.collection = collection
+        self._initialized = collection is not None
+    
+    def is_available(self) -> bool:
+        """Prüft ob ChromaDB verfügbar ist."""
+        return self._initialized and self.collection is not None
+    
+    def store_embedding(self, item: MemoryItem) -> Optional[str]:
+        """Speichert MemoryItem mit Embedding in ChromaDB."""
+        if not self.is_available():
+            log.debug("ChromaDB nicht verfügbar, überspringe Embedding")
+            return None
+        
+        try:
+            doc_id = f"{item.category}_{item.key}"
+            content = str(item.value) if not isinstance(item.value, str) else item.value
+            
+            self.collection.upsert(
+                ids=[doc_id],
+                documents=[content],
+                metadatas=[{
+                    "category": item.category,
+                    "key": item.key,
+                    "importance": item.importance,
+                    "confidence": item.confidence,
+                    "source": item.source,
+                    "reason": item.reason[:100] if item.reason else "",
+                    "created_at": item.created_at.isoformat()
+                }]
+            )
+            log.debug(f"ChromaDB: Embedding gespeichert {doc_id}")
+            return doc_id
+        except Exception as e:
+            log.warning(f"ChromaDB Store fehlgeschlagen: {e}")
+            return None
+    
+    def delete_embedding(self, category: str, key: str) -> bool:
+        """Löscht Embedding aus ChromaDB."""
+        if not self.is_available():
+            return False
+        
+        try:
+            doc_id = f"{category}_{key}"
+            self.collection.delete(ids=[doc_id])
+            return True
+        except Exception as e:
+            log.warning(f"ChromaDB Delete fehlgeschlagen: {e}")
+            return False
+    
+    def find_related_memories(
+        self, 
+        query: str, 
+        n_results: int = 5,
+        category_filter: Optional[str] = None
+    ) -> List[SemanticSearchResult]:
+        """
+        Semantische Suche nach relevanten Erinnerungen.
+        
+        Nutzt Vektor-Embeddings für bedeutungsbasierte Suche
+        (nicht nur Keyword-Match).
+        """
+        if not self.is_available():
+            return []
+        
+        try:
+            where_filter = None
+            if category_filter:
+                where_filter = {"category": category_filter}
+            
+            results = self.collection.query(
+                query_texts=[query],
+                n_results=n_results,
+                where=where_filter
+            )
+            
+            return self._format_results(results)
+        except Exception as e:
+            log.warning(f"ChromaDB Query fehlgeschlagen: {e}")
+            return []
+    
+    def _format_results(self, results: Dict) -> List[SemanticSearchResult]:
+        """Formatiert ChromaDB-Ergebnisse."""
+        formatted = []
+        
+        ids = results.get("ids", [[]])[0]
+        documents = results.get("documents", [[]])[0]
+        metadatas = results.get("metadatas", [[]])[0]
+        distances = results.get("distances", [[]])[0]
+        
+        for i, doc_id in enumerate(ids):
+            formatted.append(SemanticSearchResult(
+                doc_id=doc_id,
+                content=documents[i] if i < len(documents) else "",
+                category=metadatas[i].get("category", "unknown") if i < len(metadatas) else "unknown",
+                importance=metadatas[i].get("importance", 0.5) if i < len(metadatas) else 0.5,
+                distance=distances[i] if i < len(distances) else 0.0,
+                source="chromadb"
+            ))
+        
+        return formatted
+    
+    def get_by_category(self, category: str, limit: int = 20) -> List[SemanticSearchResult]:
+        """Holt alle Einträge einer Kategorie."""
+        if not self.is_available():
+            return []
+        
+        try:
+            # ChromaDB get mit where-filter
+            results = self.collection.get(
+                where={"category": category},
+                limit=limit
+            )
+            
+            formatted = []
+            ids = results.get("ids", [])
+            documents = results.get("documents", [])
+            metadatas = results.get("metadatas", [])
+            
+            for i, doc_id in enumerate(ids):
+                formatted.append(SemanticSearchResult(
+                    doc_id=doc_id,
+                    content=documents[i] if i < len(documents) else "",
+                    category=category,
+                    importance=metadatas[i].get("importance", 0.5) if i < len(metadatas) else 0.5,
+                    distance=0.0,
+                    source="chromadb"
+                ))
+            
+            return formatted
+        except Exception as e:
+            log.warning(f"ChromaDB Get by Category fehlgeschlagen: {e}")
+            return []
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Gibt Statistiken zurück."""
+        if not self.is_available():
+            return {"available": False, "count": 0}
+        
+        try:
+            count = self.collection.count()
+            return {
+                "available": True,
+                "count": count,
+                "name": self.collection.name
+            }
+        except Exception as e:
+            return {"available": False, "error": str(e)}
 
 
 class SessionMemory:
@@ -451,7 +630,12 @@ class PersistentMemory:
 class MemoryManager:
     """
     Hauptklasse für das Memory-System.
-    Kombiniert Session und Persistent Memory.
+    Kombiniert Session, Persistent Memory und Semantic Search.
+    
+    v2.0 Features:
+    - ChromaDB für semantische Suche
+    - Hybrid-Suche (Vector + FTS5)
+    - Bidirektionaler Markdown-Sync
     """
     
     def __init__(self):
@@ -463,7 +647,41 @@ class MemoryManager:
         ).hexdigest()[:12]
         self.self_model_last_updated: Optional[datetime] = None
         self.self_model_dirty = False
+        
+        # NEW: Semantic Memory Store (ChromaDB)
+        self.semantic_store: Optional[SemanticMemoryStore] = None
+        self._init_semantic_store()
+        
+        # NEW: Markdown Store for bidirectional sync
+        self._markdown_store = None
+        
         self._load_self_model_state()
+    
+    def _init_semantic_store(self):
+        """Initialisiert ChromaDB-Store wenn verfügbar."""
+        try:
+            # Lazy import to avoid circular dependency
+            import tools.shared_context as shared_context
+            if hasattr(shared_context, 'memory_collection') and shared_context.memory_collection:
+                self.semantic_store = SemanticMemoryStore(shared_context.memory_collection)
+                log.info("✅ SemanticMemoryStore (ChromaDB) initialisiert")
+            else:
+                log.debug("ChromaDB Collection nicht verfügbar, Semantic Search deaktiviert")
+        except ImportError:
+            log.debug("shared_context nicht verfügbar, Semantic Search deaktiviert")
+        except Exception as e:
+            log.warning(f"SemanticMemoryStore Init fehlgeschlagen: {e}")
+    
+    def _get_markdown_store(self):
+        """Lazy-Load Markdown Store."""
+        if self._markdown_store is None:
+            try:
+                from memory.markdown_store import MarkdownStoreWithSearch
+                self._markdown_store = MarkdownStoreWithSearch()
+            except ImportError:
+                from memory.markdown_store.store import MarkdownStoreWithSearch
+                self._markdown_store = MarkdownStoreWithSearch()
+        return self._markdown_store
 
     def _create_chat_completion(self, params: Dict[str, Any]):
         return self.client.chat.completions.create(**prepare_openai_params(params))
@@ -520,10 +738,8 @@ class MemoryManager:
                 reason=decision.get("reason", candidate.get("reason", "")),
                 source="user_message"
             )
-            self.persistent.store_memory_item(item)
-            self._store_legacy_fact(item)
-            self._mark_self_model_dirty(item)
-            log.info(f"🧠 Memory gespeichert: {item.category}/{item.key}")
+            # Use hybrid storage (SQLite + ChromaDB)
+            self.store_with_embedding(item)
 
     def _load_self_model_state(self) -> None:
         item = self._get_self_model_item()
@@ -688,6 +904,238 @@ class MemoryManager:
             source="memory_schema"
         )
         self.persistent.store_fact(fact)
+
+    # === HYBRID SEARCH METHODS ===
+    
+    def store_with_embedding(self, item: MemoryItem) -> bool:
+        """
+        Speichert MemoryItem in SQLite UND ChromaDB.
+        
+        Synchronisiert strukturierte Daten (SQLite) mit
+        semantischen Embeddings (ChromaDB).
+        """
+        # SQLite speichern
+        self.persistent.store_memory_item(item)
+        
+        # ChromaDB Embedding speichern
+        if self.semantic_store and self.semantic_store.is_available():
+            self.semantic_store.store_embedding(item)
+        
+        # Legacy Fact für Kompatibilität
+        self._store_legacy_fact(item)
+        
+        # Self-Model dirty markieren
+        self._mark_self_model_dirty(item)
+        
+        log.info(f"🧠 Memory gespeichert (Hybrid): {item.category}/{item.key}")
+        return True
+    
+    def find_related_memories(
+        self,
+        query: str,
+        n_results: int = 5,
+        category_filter: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Hybrid-Suche: Kombiniert semantische (ChromaDB) und Keyword-Suche (FTS5).
+        
+        Liefert relevante Erinnerungen basierend auf:
+        1. Semantischer Ähnlichkeit (Vektor-Distanz)
+        2. Keyword-Matches (FTS5 Volltextsuche)
+        
+        Args:
+            query: Suchbegriff oder Frage
+            n_results: Maximale Anzahl Ergebnisse
+            category_filter: Optional auf Kategorie filtern
+        
+        Returns:
+            Liste von Dictionaries mit content, source, relevance
+        """
+        results = []
+        seen_ids = set()
+        
+        # 1. Semantische Suche (ChromaDB)
+        if self.semantic_store and self.semantic_store.is_available():
+            semantic_results = self.semantic_store.find_related_memories(
+                query, n_results=n_results, category_filter=category_filter
+            )
+            for r in semantic_results:
+                if r.doc_id not in seen_ids:
+                    results.append({
+                        "content": r.content,
+                        "category": r.category,
+                        "importance": r.importance,
+                        "relevance": 1.0 - r.distance,  # Convert distance to relevance
+                        "source": "semantic",
+                        "doc_id": r.doc_id
+                    })
+                    seen_ids.add(r.doc_id)
+        
+        # 2. Keyword-Suche (FTS5 via Markdown Store)
+        try:
+            md_store = self._get_markdown_store()
+            if md_store:
+                keyword_results = md_store.search(query, limit=n_results)
+                for r in keyword_results:
+                    result_key = f"{r.source}_{r.snippet[:20]}"
+                    if result_key not in seen_ids:
+                        results.append({
+                            "content": r.snippet,
+                            "category": r.source,
+                            "importance": 0.5,
+                            "relevance": r.rank,
+                            "source": "keyword_fts5",
+                            "doc_id": result_key
+                        })
+                        seen_ids.add(result_key)
+        except Exception as e:
+            log.debug(f"FTS5 Suche fehlgeschlagen: {e}")
+        
+        # Nach Relevanz sortieren
+        results.sort(key=lambda x: x.get("relevance", 0), reverse=True)
+        return results[:n_results]
+    
+    def get_enhanced_context(self, current_query: str, max_related: int = 3) -> str:
+        """
+        Baut erweiterten Memory-Kontext mit semantisch relevanten Erinnerungen.
+        
+        Kombiniert den Basis-Kontext mit thematisch verwandten
+        Erinnerungen aus ChromaDB/FTS5.
+        """
+        base_context = self.get_memory_context()
+        
+        if not current_query or len(current_query) < 5:
+            return base_context
+        
+        related = self.find_related_memories(current_query, n_results=max_related)
+        
+        if not related:
+            return base_context
+        
+        related_text = "\n".join([
+            f"- [{r['source']}] {r['content'][:200]}"
+            for r in related
+        ])
+        
+        return f"{base_context}\n\nRELEVANTE ERINNERUNGEN:\n{related_text}"
+    
+    def sync_to_markdown(self) -> bool:
+        """
+        Synchronisiert SQLite/ChromaDB Daten in Markdown-Dateien.
+        
+        Erstellt menschenlesbare Version der strukturierten Daten
+        für manuelles Editieren und Versionierung (Git).
+        """
+        try:
+            md_store = self._get_markdown_store()
+            if not md_store:
+                return False
+            
+            # User Profile aus MemoryItems extrahieren
+            profile_items = self.persistent.get_memory_items("user_profile")
+            profile_dict = {}
+            for item in profile_items:
+                if item.key in ["name", "location"]:
+                    profile_dict[item.key] = str(item.value)
+                elif item.key == "preference":
+                    profile_dict.setdefault("preferences", {})[item.key] = str(item.value)
+                elif item.key == "goal":
+                    profile_dict.setdefault("goals", []).append(str(item.value))
+            
+            if profile_dict:
+                md_store.update_user_profile(profile_dict)
+            
+            # Patterns als Behavior Hooks
+            patterns = self.persistent.get_memory_items("patterns")
+            if patterns:
+                hooks = [str(p.value) for p in patterns[:10]]
+                md_store.update_soul_profile({"behavior_hooks": hooks})
+            
+            # Memory Items als MEMORY.md Einträge
+            from memory.markdown_store.store import MemoryEntry
+            all_items = self.persistent.get_all_memory_items()
+            for item in all_items:
+                if item.importance >= 0.7:
+                    md_store.add_memory(MemoryEntry(
+                        category=item.category,
+                        content=str(item.value)[:500],
+                        importance=item.importance,
+                        source=item.source
+                    ))
+            
+            log.info("✅ Memory → Markdown Sync abgeschlossen")
+            return True
+        except Exception as e:
+            log.error(f"Markdown Sync fehlgeschlagen: {e}")
+            return False
+    
+    def sync_from_markdown(self) -> bool:
+        """
+        Liest Markdown-Dateien und aktualisiert SQLite/ChromaDB.
+        
+        Ermöglicht manuelles Editieren der Memory-Dateien
+        mit automatischer Synchronisation zurück in die strukturierten Stores.
+        """
+        try:
+            md_store = self._get_markdown_store()
+            if not md_store:
+                return False
+            
+            # User Profile lesen
+            user = md_store.read_user_profile()
+            if user.name:
+                self.store_with_embedding(MemoryItem(
+                    category="user_profile",
+                    key="name",
+                    value=user.name,
+                    importance=0.9,
+                    reason="markdown_sync"
+                ))
+            if user.location:
+                self.store_with_embedding(MemoryItem(
+                    category="user_profile",
+                    key="location",
+                    value=user.location,
+                    importance=0.7,
+                    reason="markdown_sync"
+                ))
+            for goal in user.goals:
+                self.store_with_embedding(MemoryItem(
+                    category="user_profile",
+                    key=f"goal_{hashlib.md5(goal.encode()).hexdigest()[:6]}",
+                    value=goal,
+                    importance=0.8,
+                    reason="markdown_sync"
+                ))
+            
+            # Soul/Behavior Hooks
+            soul = md_store.read_soul_profile()
+            for hook in soul.behavior_hooks:
+                self.store_with_embedding(MemoryItem(
+                    category="patterns",
+                    key=f"hook_{hashlib.md5(hook.encode()).hexdigest()[:6]}",
+                    value=hook,
+                    importance=0.7,
+                    reason="markdown_sync"
+                ))
+            
+            # Memory Entries
+            memories = md_store.read_memories()
+            for m in memories:
+                self.store_with_embedding(MemoryItem(
+                    category=m.category,
+                    key=f"md_{hashlib.md5(m.content.encode()).hexdigest()[:8]}",
+                    value=m.content,
+                    importance=m.importance,
+                    reason="markdown_sync",
+                    source=m.source
+                ))
+            
+            log.info("✅ Markdown → Memory Sync abgeschlossen")
+            return True
+        except Exception as e:
+            log.error(f"Markdown → Memory Sync fehlgeschlagen: {e}")
+            return False
 
     def _get_self_model_item(self) -> Optional[MemoryItem]:
         items = self.persistent.get_memory_items("self_model")
@@ -1094,3 +1542,30 @@ def recall(key: str) -> Optional[str]:
 def end_session():
     """Shortcut für Session beenden."""
     memory_manager.end_session()
+
+
+# === NEW: Hybrid Search Shortcuts ===
+
+def find_related_memories(query: str, n_results: int = 5) -> List[Dict[str, Any]]:
+    """Shortcut für Hybrid-Suche (ChromaDB + FTS5)."""
+    return memory_manager.find_related_memories(query, n_results)
+
+
+def get_enhanced_context(current_query: str) -> str:
+    """Shortcut für erweiterten Kontext mit semantischer Suche."""
+    return memory_manager.get_enhanced_context(current_query)
+
+
+def sync_memory_to_markdown() -> bool:
+    """Shortcut für Memory → Markdown Sync."""
+    return memory_manager.sync_to_markdown()
+
+
+def sync_markdown_to_memory() -> bool:
+    """Shortcut für Markdown → Memory Sync."""
+    return memory_manager.sync_from_markdown()
+
+
+def store_memory_item(item: MemoryItem) -> bool:
+    """Shortcut für Hybrid-Speicherung (SQLite + ChromaDB)."""
+    return memory_manager.store_with_embedding(item)
