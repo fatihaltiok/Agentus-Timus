@@ -80,6 +80,8 @@ async def test_e2e_standard_path_persists_metadata(monkeypatch):
     assert metadata.get("execution_path") == "standard"
     assert isinstance(metadata.get("agent_runtime"), dict)
     assert metadata["agent_runtime"]["working_memory"]["enabled"] is True
+    assert isinstance(metadata.get("memory_snapshot"), dict)
+    assert metadata["memory_snapshot"].get("session_id") == session_id
 
 
 @pytest.mark.asyncio
@@ -113,3 +115,4 @@ async def test_e2e_missing_agent_persists_error_event(monkeypatch):
     metadata = event.get("metadata", {})
     assert metadata.get("source") == "run_agent"
     assert metadata.get("error") == "agent_not_found"
+    assert isinstance(metadata.get("memory_snapshot"), dict)

@@ -8,6 +8,8 @@ Date: 2026-02-17
 - Dynamische Relevanzlogik mit Decay (Kurzzeit/Langzeit) und adaptiver Gewichtung.
 - Runtime-Telemetrie pro Agent-Run als Event-Metadaten persistiert.
 - Quality-Gates und E2E-Readiness-Tests ergänzt.
+- Runtime-Memory-Snapshots in Event-Metadaten (inkl. Dialogzustand/Session-Blick).
+- Dynamischer Recall für offene Anliegen (`unresolved-first`) in Readiness-Checks abgesichert.
 
 ## Added
 - `tests/test_milestone5_quality_gates.py`
@@ -20,6 +22,10 @@ Date: 2026-02-17
 - `agent/base_agent.py`
 - `memory/memory_system.py`
 - `docs/MEMORY_ARCHITECTURE.md`
+- `docs/MILESTONE6_RUNBOOK.md`
+- `tests/test_milestone5_quality_gates.py`
+- `tests/test_milestone6_e2e_readiness.py`
+- `verify_milestone6.py`
 
 ## Verification
 - `pytest -q tests/test_milestone5_quality_gates.py`

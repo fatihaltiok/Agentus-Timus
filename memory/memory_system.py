@@ -53,6 +53,7 @@ WORKING_MEMORY_MAX_RELATED = 4
 WORKING_MEMORY_MAX_RECENT_EVENTS = 6
 WORKING_MEMORY_EVENT_HALF_LIFE_HOURS = 18
 WORKING_MEMORY_MEMORY_HALF_LIFE_DAYS = 21
+UNIFIED_RECALL_MAX_SCAN = 80
 
 
 @dataclass
@@ -293,6 +294,9 @@ class SessionMemory:
         self.session_start = datetime.now()
         self.current_topic: Optional[str] = None
         self.entities: Dict[str, str] = {}  # Aktuelle Entitäten (er/sie/es → wer)
+        self.last_user_goal: Optional[str] = None
+        self.open_threads: List[str] = []
+        self.topic_scores: Dict[str, float] = {}
     
     def add_message(self, role: str, content: str):
         """Fügt eine Nachricht hinzu."""
@@ -326,12 +330,150 @@ class SessionMemory:
     def resolve_entity(self, pronoun: str) -> Optional[str]:
         """Löst ein Pronomen zu einer Entität auf."""
         return self.entities.get(pronoun.lower())
+
+    def _normalize_text(self, text: str) -> str:
+        cleaned = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", " ", str(text or ""))
+        return re.sub(r"\s+", " ", cleaned).strip()
+
+    def _extract_topic_terms(self, text: str) -> List[str]:
+        stopwords = {
+            "und", "oder", "aber", "eine", "einer", "einem", "einen", "der", "die",
+            "das", "den", "dem", "dass", "ist", "sind", "war", "ich", "du", "wir",
+            "was", "wie", "wo", "wer", "nach", "mit", "für", "von", "auf", "zu",
+            "bitte", "kannst", "kann", "mal", "eben", "vorhin", "gerade",
+            "the", "and", "for", "with", "that", "this", "from", "about",
+        }
+        terms: List[str] = []
+        for token in re.findall(r"\w{4,}", text.lower()):
+            if token.isdigit() or token in stopwords:
+                continue
+            if token not in terms:
+                terms.append(token)
+        return terms
+
+    def _is_goal_like(self, user_input: str) -> bool:
+        lower = user_input.lower()
+        markers = (
+            "suche", "such", "finde", "find", "liste", "zeige", "geh zu", "gehe zu",
+            "öffne", "oeffne", "vergleich", "analysier", "kauf", "preis", "check",
+        )
+        return ("?" in user_input) or any(marker in lower for marker in markers)
+
+    def _goal_from_user_input(self, user_input: str) -> str:
+        text = self._normalize_text(user_input)
+        if len(text) <= 120:
+            return text
+        return text[:117].rstrip() + "..."
+
+    def _is_unresolved_turn(self, assistant_response: str, status: str) -> bool:
+        if status.lower() in {"error", "cancelled"}:
+            return True
+        lower = assistant_response.lower()
+        unresolved_markers = (
+            "limit erreicht",
+            "fehlgeschlagen",
+            "konnte nicht",
+            "nicht möglich",
+            "nicht moeglich",
+            "keine passende erinnerung",
+            "weiß nicht",
+            "weiss nicht",
+            "ich weiß nicht",
+            "ich weiss nicht",
+        )
+        return any(marker in lower for marker in unresolved_markers)
+
+    def _refresh_open_thread(self, thread_text: str) -> None:
+        if not thread_text:
+            return
+        normalized = thread_text.lower()
+        self.open_threads = [
+            t for t in self.open_threads
+            if t.lower() != normalized
+        ]
+        self.open_threads.insert(0, thread_text)
+        self.open_threads = self.open_threads[:5]
+
+    def _resolve_open_threads(self, user_input: str) -> None:
+        tokens = set(self._extract_topic_terms(user_input))
+        if not tokens:
+            return
+        remaining: List[str] = []
+        for thread in self.open_threads:
+            thread_tokens = set(self._extract_topic_terms(thread))
+            overlap = len(tokens & thread_tokens)
+            if overlap >= 2:
+                continue
+            remaining.append(thread)
+        self.open_threads = remaining[:5]
+
+    def update_dialog_state(
+        self,
+        user_input: str,
+        assistant_response: str,
+        status: str = "completed",
+    ) -> None:
+        user_text = self._normalize_text(user_input)
+        if not user_text:
+            return
+
+        # Vergessen mit weichem Decay: alte Themen verlieren langsam Gewicht.
+        decayed: Dict[str, float] = {}
+        for topic, score in self.topic_scores.items():
+            new_score = float(score) * 0.90
+            if new_score >= 0.12:
+                decayed[topic] = new_score
+        self.topic_scores = decayed
+
+        for token in self._extract_topic_terms(user_text):
+            self.topic_scores[token] = self.topic_scores.get(token, 0.0) + 1.0
+
+        if self.topic_scores:
+            self.current_topic = max(
+                self.topic_scores.items(), key=lambda item: item[1]
+            )[0]
+
+        if self._is_goal_like(user_text):
+            self.last_user_goal = self._goal_from_user_input(user_text)
+
+        if self._is_unresolved_turn(assistant_response, status):
+            if self.last_user_goal:
+                self._refresh_open_thread(self.last_user_goal)
+        elif status.lower() == "completed":
+            self._resolve_open_threads(user_text)
+
+    def get_dynamic_state(self) -> Dict[str, Any]:
+        ranked_topics = sorted(
+            self.topic_scores.items(), key=lambda item: item[1], reverse=True
+        )
+        return {
+            "current_topic": self.current_topic or "",
+            "last_user_goal": self.last_user_goal or "",
+            "open_threads": self.open_threads[:5],
+            "top_topics": [topic for topic, _ in ranked_topics[:6]],
+        }
+
+    def get_dynamic_state_lines(self) -> List[str]:
+        state = self.get_dynamic_state()
+        lines: List[str] = []
+        if state["current_topic"]:
+            lines.append(f"Aktuelles Thema: {state['current_topic']}")
+        if state["last_user_goal"]:
+            lines.append(f"Letztes Ziel: {state['last_user_goal']}")
+        if state["open_threads"]:
+            lines.append("Offene Anliegen: " + " | ".join(state["open_threads"][:3]))
+        if state["top_topics"]:
+            lines.append("Top-Themen: " + ", ".join(state["top_topics"][:5]))
+        return lines
     
     def clear(self):
         """Löscht die Session."""
         self.messages = []
         self.entities = {}
         self.current_topic = None
+        self.last_user_goal = None
+        self.open_threads = []
+        self.topic_scores = {}
         self.session_start = datetime.now()
 
 
@@ -763,6 +905,7 @@ class MemoryManager:
         self.session_id = hashlib.md5(
             datetime.now().isoformat().encode()
         ).hexdigest()[:12]
+        self._active_external_session_id: Optional[str] = None
         self.self_model_last_updated: Optional[datetime] = None
         self.self_model_dirty = False
         self._last_working_memory_stats: Dict[str, Any] = {}
@@ -837,10 +980,20 @@ class MemoryManager:
 
         return None
     
-    def add_interaction(self, user_input: str, assistant_response: str):
+    def add_interaction(
+        self,
+        user_input: str,
+        assistant_response: str,
+        status: str = "completed",
+    ):
         """Fügt eine Interaktion hinzu und extrahiert Fakten."""
         self.session.add_message("user", user_input)
         self.session.add_message("assistant", assistant_response)
+        self.session.update_dialog_state(
+            user_input=user_input,
+            assistant_response=assistant_response,
+            status=status,
+        )
         
         # Selektive Memory-Extraktion
         self._process_memory_candidates(user_input)
@@ -860,8 +1013,17 @@ class MemoryManager:
         if not user_text:
             return
 
+        # Externe Chat-Session als episodischen Rahmen respektieren.
+        if external_session_id:
+            if (
+                self._active_external_session_id
+                and external_session_id != self._active_external_session_id
+            ):
+                self.session.clear()
+            self._active_external_session_id = external_session_id
+
         # Kurzzeitkontext + Kandidaten-Extraktion aktualisieren
-        self.add_interaction(user_text, assistant_text)
+        self.add_interaction(user_text, assistant_text, status=status)
 
         # Persistentes Event sofort schreiben
         self.persistent.store_interaction_event(
@@ -1175,7 +1337,10 @@ class MemoryManager:
         return f"{base_context}\n\nRELEVANTE ERINNERUNGEN:\n{related_text}"
 
     def _normalize_text_for_prompt(self, text: str) -> str:
-        return re.sub(r"\s+", " ", str(text or "")).strip()
+        raw = str(text or "")
+        # Steuerzeichen stoeren Recall/Tokenisierung (z.B. ^V / \x16 aus Terminal).
+        without_ctrl = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", " ", raw)
+        return re.sub(r"\s+", " ", without_ctrl).strip()
 
     def _truncate_for_budget(self, text: str, max_chars: int) -> str:
         cleaned = self._normalize_text_for_prompt(text)
@@ -1219,10 +1384,48 @@ class MemoryManager:
             return 1.0
         return 0.5 ** (age_hours / half_life_hours)
 
+    def _is_unresolved_response_text(self, text: str) -> bool:
+        lower = self._normalize_text_for_prompt(text).lower()
+        markers = (
+            "limit erreicht",
+            "fehlgeschlagen",
+            "konnte nicht",
+            "nicht möglich",
+            "nicht moeglich",
+            "keine passende erinnerung",
+            "weiß nicht",
+            "weiss nicht",
+            "ich weiß nicht",
+            "ich weiss nicht",
+            "error",
+        )
+        return any(marker in lower for marker in markers)
+
+    def _collect_session_focus_terms(self, limit: int = 8) -> List[str]:
+        """Leitet Fokus-Terme aus aktuellem Dialogzustand ab."""
+        state = self.session.get_dynamic_state()
+        raw_segments: List[str] = []
+        if state.get("current_topic"):
+            raw_segments.append(str(state["current_topic"]))
+        if state.get("last_user_goal"):
+            raw_segments.append(str(state["last_user_goal"]))
+        raw_segments.extend(str(item) for item in state.get("open_threads", []))
+
+        terms: List[str] = []
+        for segment in raw_segments:
+            for token in self._extract_query_terms(segment):
+                if token not in terms:
+                    terms.append(token)
+                if len(terms) >= limit:
+                    return terms
+        return terms
+
     def _score_interaction_event(
         self,
         event: Dict[str, Any],
         query_terms: List[str],
+        focus_terms: Optional[List[str]] = None,
+        prefer_unresolved: bool = False,
     ) -> float:
         haystack = self._normalize_text_for_prompt(
             f"{event.get('user_input', '')} {event.get('assistant_response', '')}"
@@ -1234,8 +1437,11 @@ class MemoryManager:
         else:
             semantic_overlap = 0.35
 
+        half_life = WORKING_MEMORY_EVENT_HALF_LIFE_HOURS
+        if prefer_unresolved:
+            half_life *= 1.8
         event_time = self._parse_iso_datetime(event.get("created_at"))
-        recency = self._time_decay(event_time, WORKING_MEMORY_EVENT_HALF_LIFE_HOURS)
+        recency = self._time_decay(event_time, half_life)
 
         status = self._normalize_text_for_prompt(event.get("status", "")).lower()
         status_boost = {
@@ -1243,9 +1449,29 @@ class MemoryManager:
             "cancelled": 0.6,
             "error": 0.4,
         }.get(status, 0.8)
+        if prefer_unresolved and status == "error":
+            status_boost = 0.8
 
-        score = (0.55 * semantic_overlap) + (0.35 * recency) + (0.10 * status_boost)
-        return max(0.0, min(1.5, score))
+        if focus_terms:
+            focus_matches = sum(1 for token in focus_terms if token in haystack)
+            focus_overlap = focus_matches / max(1, len(focus_terms))
+        else:
+            focus_overlap = 0.0
+
+        unresolved_bonus = 0.0
+        if prefer_unresolved and self._is_unresolved_response_text(
+            event.get("assistant_response", "")
+        ):
+            unresolved_bonus = 0.08
+
+        score = (
+            (0.45 * semantic_overlap)
+            + (0.25 * recency)
+            + (0.10 * status_boost)
+            + (0.20 * focus_overlap)
+            + unresolved_bonus
+        )
+        return max(0.0, min(1.8, score))
 
     def _score_related_memory(
         self,
@@ -1254,6 +1480,7 @@ class MemoryManager:
     ) -> float:
         content = self._normalize_text_for_prompt(memory.get("content", "")).lower()
         relevance = float(memory.get("relevance", 0.0) or 0.0)
+        relevance = max(0.0, min(1.0, relevance))
         importance = float(memory.get("importance", 0.5) or 0.5)
 
         if query_terms:
@@ -1278,6 +1505,161 @@ class MemoryManager:
         ) * source_boost
         return max(0.0, min(2.0, score))
 
+    def _is_temporal_recall_query(self, query: str) -> bool:
+        lower = query.lower()
+        markers = (
+            "eben",
+            "vorhin",
+            "gerade",
+            "zuletzt",
+            "offen",
+            "unerledigt",
+            "was habe ich",
+            "was haben wir",
+            "such",
+            "gesuch",
+            "erinner",
+            "nicht mehr",
+        )
+        return any(marker in lower for marker in markers)
+
+    def unified_recall(
+        self,
+        query: str,
+        n_results: int = 5,
+        session_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Einheitlicher Recall-Pfad:
+        1) Episodisch: deterministische interaction_events
+        2) Semantisch: Langzeit-Memory (Hybrid Search)
+        """
+        cleaned_query = self._normalize_text_for_prompt(query)
+        if not cleaned_query:
+            return {"status": "error", "memories": [], "message": "Query darf nicht leer sein"}
+
+        n_results = max(1, min(10, int(n_results)))
+        temporal_query = self._is_temporal_recall_query(cleaned_query)
+        query_terms = self._extract_query_terms(cleaned_query)
+        session_focus_terms = self._collect_session_focus_terms(limit=10)
+        if temporal_query:
+            scoring_terms = query_terms or session_focus_terms
+        else:
+            scoring_terms = query_terms
+        focus_terms = list(dict.fromkeys((query_terms or []) + session_focus_terms))
+        prefer_unresolved = temporal_query or ("offen" in cleaned_query.lower())
+
+        event_limit = max(24, min(UNIFIED_RECALL_MAX_SCAN, n_results * 12))
+        event_candidates: Dict[str, Dict[str, Any]] = {}
+
+        for event in self.persistent.get_recent_interaction_events(limit=event_limit):
+            key = (
+                f"{event.get('session_id','')}|{event.get('created_at','')}|"
+                f"{self._normalize_text_for_prompt(event.get('user_input',''))[:80]}"
+            )
+            event_candidates[key] = event
+
+        if session_id:
+            for event in self.persistent.get_recent_interaction_events(
+                limit=event_limit,
+                session_id=session_id,
+            ):
+                key = (
+                    f"{event.get('session_id','')}|{event.get('created_at','')}|"
+                    f"{self._normalize_text_for_prompt(event.get('user_input',''))[:80]}"
+                )
+                event_candidates[key] = event
+
+        event_memories: List[Dict[str, Any]] = []
+        for event in event_candidates.values():
+            base_score = self._score_interaction_event(
+                event,
+                scoring_terms,
+                focus_terms=focus_terms,
+                prefer_unresolved=prefer_unresolved,
+            )
+            if session_id and event.get("session_id") == session_id:
+                base_score += 0.22
+            if temporal_query:
+                base_score += 0.12
+
+            user_text = self._truncate_for_budget(event.get("user_input", ""), 180)
+            if not user_text:
+                continue
+
+            if temporal_query:
+                text = f"Vorherige Anfrage: {user_text}"
+            else:
+                assistant_text = self._truncate_for_budget(
+                    event.get("assistant_response", ""), 180
+                )
+                text = f"User: {user_text} | Timus: {assistant_text}"
+
+            event_memories.append(
+                {
+                    "id": (
+                        f"event_{event.get('session_id','')}_"
+                        f"{self._normalize_text_for_prompt(event.get('created_at',''))}"
+                    ),
+                    "text": text,
+                    "relevance_score": round(max(0.0, min(2.0, base_score)), 3),
+                    "source": "interaction_event",
+                    "created_at": event.get("created_at", ""),
+                    "session_id": event.get("session_id", ""),
+                }
+            )
+
+        related_memories: List[Dict[str, Any]] = []
+        include_related = (not temporal_query) or (len(event_memories) < n_results)
+        if include_related:
+            for memory in self.find_related_memories(
+                cleaned_query,
+                n_results=max(6, n_results * 3),
+            ):
+                score = self._score_related_memory(memory, query_terms)
+                if temporal_query:
+                    score *= 0.55
+                text = self._truncate_for_budget(memory.get("content", ""), 220)
+                if not text:
+                    continue
+                related_memories.append(
+                    {
+                        "id": str(memory.get("doc_id", "")),
+                        "text": text,
+                        "relevance_score": round(score, 3),
+                        "source": str(memory.get("source", "long_term")),
+                        "created_at": str(memory.get("created_at", "")),
+                        "session_id": "",
+                    }
+                )
+
+        combined = event_memories + related_memories
+        combined.sort(key=lambda item: item.get("relevance_score", 0.0), reverse=True)
+
+        unique: List[Dict[str, Any]] = []
+        seen_texts = set()
+        for item in combined:
+            key = self._normalize_text_for_prompt(item.get("text", "")).lower()
+            if not key or key in seen_texts:
+                continue
+            seen_texts.add(key)
+            unique.append(item)
+            if len(unique) >= n_results:
+                break
+
+        return {
+            "status": "success",
+            "memories": unique,
+            "meta": {
+                "query_terms": query_terms,
+                "focus_terms": focus_terms[:8],
+                "temporal_query": temporal_query,
+                "session_id": session_id or "",
+                "event_candidates": len(event_memories),
+                "related_candidates": len(related_memories),
+            },
+        }
+
     def _adapt_working_memory_targets(
         self,
         query: str,
@@ -1288,11 +1670,16 @@ class MemoryManager:
         temporal_markers = (
             "eben", "vorhin", "gerade", "zuletzt", "heute", "gestern", "laufend", "recent"
         )
+        unresolved_markers = ("offen", "unerledigt", "nicht fertig", "pending")
         profile_markers = (
             "präferenz", "pref", "gewohn", "ziel", "goal", "profil", "mag ich", "ich mag"
         )
 
-        if any(marker in lower for marker in temporal_markers):
+        if any(marker in lower for marker in unresolved_markers):
+            recent_target = max_recent_events
+            related_target = max(1, max_related - 2)
+            shares = (0.62, 0.18, 0.20)
+        elif any(marker in lower for marker in temporal_markers):
             recent_target = max_recent_events
             related_target = max(1, max_related - 1)
             shares = (0.56, 0.24, 0.20)
@@ -1343,6 +1730,7 @@ class MemoryManager:
         max_chars: int = WORKING_MEMORY_MAX_CHARS,
         max_related: int = WORKING_MEMORY_MAX_RELATED,
         max_recent_events: int = WORKING_MEMORY_MAX_RECENT_EVENTS,
+        preferred_session_id: Optional[str] = None,
     ) -> str:
         """
         Baut einen budgetierten Working-Memory-Block für Prompt-Injektion.
@@ -1366,13 +1754,18 @@ class MemoryManager:
         max_related = max(0, int(max_related))
         max_recent_events = max(0, int(max_recent_events))
         query_terms = self._extract_query_terms(query)
+        focus_terms = self._collect_session_focus_terms(limit=10)
+        prefer_unresolved = self._is_temporal_recall_query(query) or ("offen" in query.lower())
         recent_target, related_target, section_shares = self._adapt_working_memory_targets(
             query, max_recent_events, max_related
         )
         stats: Dict[str, Any] = {
             "status": "building",
             "query": query[:200],
+            "preferred_session_id": preferred_session_id or "",
             "query_terms_count": len(query_terms),
+            "focus_terms_count": len(focus_terms),
+            "prefer_unresolved": prefer_unresolved,
             "max_chars": max_chars,
             "max_related": max_related,
             "max_recent_events": max_recent_events,
@@ -1392,9 +1785,29 @@ class MemoryManager:
             recent_events = self.persistent.get_recent_interaction_events(
                 limit=max(12, recent_target * 6)
             )
+            if preferred_session_id:
+                session_events = self.persistent.get_recent_interaction_events(
+                    limit=max(12, recent_target * 6),
+                    session_id=preferred_session_id,
+                )
+                merged: Dict[str, Dict[str, Any]] = {}
+                for event in recent_events + session_events:
+                    key = (
+                        f"{event.get('session_id','')}|{event.get('created_at','')}|"
+                        f"{self._normalize_text_for_prompt(event.get('user_input',''))[:80]}"
+                    )
+                    merged[key] = event
+                recent_events = list(merged.values())
             scored_events: List[Tuple[float, Dict[str, Any]]] = []
             for event in recent_events:
-                score = self._score_interaction_event(event, query_terms)
+                score = self._score_interaction_event(
+                    event,
+                    query_terms,
+                    focus_terms=focus_terms,
+                    prefer_unresolved=prefer_unresolved,
+                )
+                if preferred_session_id and event.get("session_id") == preferred_session_id:
+                    score += 0.22
                 scored_events.append((score, event))
 
             scored_events.sort(key=lambda item: item[0], reverse=True)
@@ -1433,7 +1846,19 @@ class MemoryManager:
 
         # --- 3) Stabiler Kontext ---
         stable_lines: List[str] = []
-        self_model = self._truncate_for_budget(self.get_self_model_prompt(), 350)
+        dynamic_state_lines = [
+            self._normalize_text_for_prompt(line)
+            for line in self.session.get_dynamic_state_lines()
+        ]
+        dynamic_state_lines = [line for line in dynamic_state_lines if line]
+        if dynamic_state_lines:
+            stable_lines.append("AKTIVER_DIALOGZUSTAND:")
+            for line in dynamic_state_lines[:4]:
+                stable_lines.append(f"- {line}")
+        stats["dynamic_state_lines"] = len(dynamic_state_lines)
+
+        self_model_budget = 220 if dynamic_state_lines else 350
+        self_model = self._truncate_for_budget(self.get_self_model_prompt(), self_model_budget)
         if self_model:
             stable_lines.append(f"Self-Model: {self_model}")
 
@@ -1856,6 +2281,12 @@ class MemoryManager:
             context_parts.append(
                 f"AKTUELLE KONVERSATION:\n{session_context}"
             )
+
+        dynamic_state_lines = self.session.get_dynamic_state_lines()
+        if dynamic_state_lines:
+            context_parts.append(
+                "AKTIVER DIALOG-ZUSTAND:\n" + "\n".join(f"- {line}" for line in dynamic_state_lines[:5])
+            )
         
         # 5. Entitäts-Kontext
         if self.session.entities:
@@ -2002,7 +2433,36 @@ Antworte im JSON-Format:
             "total_summaries": len(summaries),
             "total_interaction_events": self.persistent.count_interaction_events(),
             "session_start": self.session.session_start.isoformat(),
-            "entities_tracked": len(self.session.entities)
+            "entities_tracked": len(self.session.entities),
+            "current_topic": self.session.current_topic or "",
+            "open_threads": len(self.session.open_threads),
+        }
+
+    def get_runtime_memory_snapshot(
+        self,
+        session_id: Optional[str] = None,
+        recent_limit: int = 5,
+    ) -> Dict[str, Any]:
+        """Kompakter Laufzeit-Snapshot für Telemetrie/Event-Metadaten."""
+        sid = session_id or self._active_external_session_id or self.session_id
+        recent_limit = max(1, min(20, int(recent_limit)))
+
+        recent_events = self.persistent.get_recent_interaction_events(
+            limit=recent_limit,
+            session_id=sid if sid else None,
+        )
+        latest_event_at = ""
+        if recent_events:
+            latest_event_at = self._normalize_text_for_prompt(
+                recent_events[0].get("created_at", "")
+            )[:19]
+
+        return {
+            "session_id": sid or "",
+            "dialog_state": self.session.get_dynamic_state(),
+            "working_memory_last_stats": self.get_last_working_memory_stats(),
+            "recent_event_count": len(recent_events),
+            "latest_event_at": latest_event_at,
         }
 
 
@@ -2064,6 +2524,7 @@ def get_working_memory_context(
     max_chars: int = WORKING_MEMORY_MAX_CHARS,
     max_related: int = WORKING_MEMORY_MAX_RELATED,
     max_recent_events: int = WORKING_MEMORY_MAX_RECENT_EVENTS,
+    preferred_session_id: Optional[str] = None,
 ) -> str:
     """Shortcut für budgetierten Working-Memory-Kontext."""
     return memory_manager.build_working_memory_context(
@@ -2071,6 +2532,7 @@ def get_working_memory_context(
         max_chars=max_chars,
         max_related=max_related,
         max_recent_events=max_recent_events,
+        preferred_session_id=preferred_session_id,
     )
 
 

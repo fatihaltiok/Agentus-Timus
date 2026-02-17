@@ -2,6 +2,11 @@
 """
 Timus Memory Tool v2.0
 
+ARCHITECTURE FREEZE (2026-02-17):
+- Dieses Modul ist MCP-Adapter fuer Memory-Operationen.
+- Kanonische Domain-Logik liegt in memory/memory_system.py.
+- Neue Memory-Semantik gehoert in den Kern, nicht exklusiv hier.
+
 Features:
 - Session Memory (Kurzzeit-Kontext für aktuelle Konversation)
 - ChromaDB (Langzeit-Gedächtnis mit semantischer Suche)
@@ -60,9 +65,8 @@ def _init_chromadb_fallback():
 
     try:
         import chromadb
-        from chromadb.utils import embedding_functions
         from openai import OpenAI
-        from utils.openai_compat import prepare_openai_params
+        from utils.embedding_provider import get_embedding_function
 
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
@@ -78,19 +82,16 @@ def _init_chromadb_fallback():
         db_path.mkdir(parents=True, exist_ok=True)
 
         chroma_client = chromadb.PersistentClient(path=str(db_path))
-        openai_ef = embedding_functions.OpenAIEmbeddingFunction(
-            api_key=api_key,
-            model_name="text-embedding-3-small"
-        )
+        embedding_fn = get_embedding_function()
         memory_collection = chroma_client.get_or_create_collection(
             name="timus_long_term_memory",
-            embedding_function=openai_ef
+            embedding_function=embedding_fn
         )
         CHROMADB_AVAILABLE = True
         log.info(f"✅ ChromaDB Fallback initialisiert: {db_path}")
 
     except ImportError as e:
-        log.warning(f"⚠️ ChromaDB nicht installiert: {e}")
+        log.warning(f"⚠️ ChromaDB/Embedding-Abhaengigkeit fehlt: {e}")
         CHROMADB_AVAILABLE = False
     except Exception as e:
         log.warning(f"⚠️ ChromaDB Fallback fehlgeschlagen: {e}")
@@ -543,7 +544,7 @@ class MemoryManager:
 
         except Exception as e:
             log.error(f"Fehler bei Recall: {e}")
-            return {"status": "error", "memories": [], "message": str(e)}
+            return {"status": "error", "memories": [], "message": "Gedaechtnis-Suche voruebergehend nicht verfuegbar"}
 
     # === FAKTEN-MANAGEMENT ===
 
@@ -727,21 +728,29 @@ async def remember(text: str, source: str = "user_interaction") -> dict:
 
 @tool(
     name="recall",
-    description="Sucht relevante Informationen im Gedächtnis (semantische Suche).",
+    description="Sucht relevante Informationen im Gedächtnis (episodisch + semantisch).",
     parameters=[
         P("query", "string", "Suchanfrage"),
         P("n_results", "integer", "Maximale Anzahl Ergebnisse (1-10)", required=False, default=3),
+        P(
+            "session_id",
+            "string",
+            "Optionale Session-ID für episodische Priorisierung",
+            required=False,
+            default="",
+        ),
     ],
     capabilities=["memory"],
     category=C.MEMORY
 )
-async def recall(query: str, n_results: int = 3) -> dict:
+async def recall(query: str, n_results: int = 3, session_id: str = "") -> dict:
     """
-    Sucht relevante Informationen im Gedächtnis (semantische Suche).
+    Sucht relevante Informationen im Gedächtnis (episodisch + semantisch).
 
     Args:
         query: Suchanfrage
         n_results: Maximale Anzahl Ergebnisse (1-10)
+        session_id: Optionale Session-ID fuer aktuelle Konversation
 
     Returns:
         Dict mit Liste von Erinnerungen
@@ -750,8 +759,21 @@ async def recall(query: str, n_results: int = 3) -> dict:
         raise Exception("Query darf nicht leer sein.")
 
     n_results = max(1, min(10, n_results))
-    result = await memory_manager.recall_long_term(query, n_results)
+    # Kanonischer Kern: memory/memory_system.py
+    try:
+        from memory.memory_system import memory_manager as canonical_memory_manager
 
+        if hasattr(canonical_memory_manager, "unified_recall"):
+            return canonical_memory_manager.unified_recall(
+                query=query,
+                n_results=n_results,
+                session_id=session_id or None,
+            )
+    except Exception as e:
+        log.debug(f"Unified recall fallback auf legacy Chroma-Pfad: {e}")
+
+    # Legacy-Fallback (nur semantisch) - sollte mittelfristig entfallen.
+    result = await memory_manager.recall_long_term(query, n_results)
     return result
 
 

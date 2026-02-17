@@ -6,6 +6,7 @@ Führt einen schnellen Go/No-Go Check aus:
 1) Standard-Run-Agent Pfad persistiert Event mit Runtime-Metadaten
 2) Fehlerpfad (unbekannter Agent) persistiert Error-Event
 3) Working-Memory Kontext + Stats werden erzeugt
+4) Dynamischer Recall priorisiert offene Anliegen innerhalb der Session
 """
 
 import asyncio
@@ -60,7 +61,7 @@ async def main() -> int:
     agent_key = "verify_m6_agent"
     main_dispatcher.AGENT_CLASS_MAP[agent_key] = _DummyAgent
 
-    print("[1/3] Prüfe Standardpfad...")
+    print("[1/4] Prüfe Standardpfad...")
     ok_session = f"m6v_ok_{uuid.uuid4().hex[:8]}"
     ok_query = f"verify_m6_ok_{uuid.uuid4().hex[:8]}"
     ok_result = await main_dispatcher.run_agent(
@@ -79,9 +80,13 @@ async def main() -> int:
     _assert(ok_event is not None, "Kein persistiertes Event im Standardpfad gefunden.")
     _assert(ok_event.get("status") == "completed", "Standardpfad-Status ist nicht 'completed'.")
     _assert(ok_event.get("metadata", {}).get("execution_path") == "standard", "execution_path fehlt/ist falsch.")
+    _assert(
+        isinstance(ok_event.get("metadata", {}).get("memory_snapshot"), dict),
+        "memory_snapshot fehlt im Standardpfad.",
+    )
     print("  ✅ Standardpfad OK")
 
-    print("[2/3] Prüfe Fehlerpfad (unbekannter Agent)...")
+    print("[2/4] Prüfe Fehlerpfad (unbekannter Agent)...")
     err_session = f"m6v_err_{uuid.uuid4().hex[:8]}"
     err_query = f"verify_m6_err_{uuid.uuid4().hex[:8]}"
     err_result = await main_dispatcher.run_agent(
@@ -100,9 +105,13 @@ async def main() -> int:
     _assert(err_event is not None, "Kein persistiertes Error-Event gefunden.")
     _assert(err_event.get("status") == "error", "Fehlerpfad-Status ist nicht 'error'.")
     _assert(err_event.get("metadata", {}).get("error") == "agent_not_found", "Fehler-Metadaten fehlen.")
+    _assert(
+        isinstance(err_event.get("metadata", {}).get("memory_snapshot"), dict),
+        "memory_snapshot fehlt im Fehlerpfad.",
+    )
     print("  ✅ Fehlerpfad OK")
 
-    print("[3/3] Prüfe Working-Memory Stats...")
+    print("[3/4] Prüfe Working-Memory Stats...")
     wm_context = memory_manager.build_working_memory_context(
         "was habe ich eben zu grafikkarten gesucht?",
         max_chars=800,
@@ -112,10 +121,42 @@ async def main() -> int:
     wm_stats = memory_manager.get_last_working_memory_stats()
     _assert(isinstance(wm_stats, dict), "Working-Memory Stats fehlen.")
     _assert("status" in wm_stats, "Working-Memory Stats enthalten keinen Status.")
+    _assert("focus_terms_count" in wm_stats, "focus_terms_count fehlt in Working-Memory Stats.")
+    _assert("prefer_unresolved" in wm_stats, "prefer_unresolved fehlt in Working-Memory Stats.")
     if wm_stats.get("status") == "ok":
         _assert(len(wm_context) <= 800, "Working-Memory Budget überschritten.")
         _assert(wm_stats.get("final_chars") == len(wm_context), "final_chars inkonsistent.")
     print("  ✅ Working-Memory Stats OK")
+
+    print("[4/4] Prüfe dynamischen Recall für offene Anliegen...")
+    recall_session = f"m6v_recall_{uuid.uuid4().hex[:8]}"
+    memory_manager.log_interaction_event(
+        user_input="suche grafikkarten preise auf ebay",
+        assistant_response="ActionPlan fehlgeschlagen: Tippen fehlgeschlagen",
+        agent_name="executor",
+        status="error",
+        external_session_id=recall_session,
+        metadata={"source": "verify_m6"},
+    )
+    memory_manager.log_interaction_event(
+        user_input="wie ist das wetter",
+        assistant_response="Heute sonnig.",
+        agent_name="executor",
+        status="completed",
+        external_session_id=recall_session,
+        metadata={"source": "verify_m6"},
+    )
+    recall = memory_manager.unified_recall(
+        query="was ist aktuell offen",
+        n_results=3,
+        session_id=recall_session,
+    )
+    _assert(recall.get("status") == "success", "Unified recall liefert keinen Erfolg.")
+    recall_items = recall.get("memories", [])
+    _assert(bool(recall_items), "Unified recall lieferte keine Ergebnisse.")
+    top_text = str(recall_items[0].get("text", "")).lower()
+    _assert("grafikkarten" in top_text, "Offenes Anliegen wurde nicht priorisiert.")
+    print("  ✅ Dynamischer Recall OK")
 
     print("\nMilestone 6 Verification: PASS")
     return 0

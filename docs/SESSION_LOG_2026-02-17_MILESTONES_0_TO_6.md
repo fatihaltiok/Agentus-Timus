@@ -101,10 +101,10 @@ Neue Dateien:
   - `python -m py_compile tests/test_milestone6_e2e_readiness.py verify_milestone6.py`
 - Tests:
   - `pytest -q tests/test_memory_hybrid_v2.py` -> 14 passed
-  - `pytest -q tests/test_milestone5_quality_gates.py` -> 4 passed
+  - `pytest -q tests/test_milestone5_quality_gates.py` -> 12 passed
   - `pytest -q tests/test_milestone6_e2e_readiness.py` -> 2 passed
 - Rollout-Schnellcheck:
-  - `python verify_milestone6.py` -> PASS
+  - `python verify_milestone6.py` -> PASS (inkl. dynamischem Recall-Check)
 
 Hinweis:
 - Es traten nur bekannte Deprecation-Warnings aus Drittbibliotheken auf (kein Blocker).

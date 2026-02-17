@@ -12,6 +12,13 @@ Memory-Stabilisierung wurde bis Meilenstein 6 umgesetzt:
 - Dynamische Relevanz/Decay-Logik fuer Kurzzeit- und Langzeitkontext
 - Runtime-Telemetrie pro Agent-Run in Event-Metadaten
 - Quality-Gates + E2E-Readiness Tests
+- Unified Recall-Pipeline: episodische `interaction_events` + semantisches Langzeit-Memory
+- Session-Kontinuitaet im Dispatcher (eine Chat-Session statt neuer Session-ID pro Turn)
+- Query-Sanitizing fuer Terminal-Steuerzeichen (z.B. `^V` / `\x16`)
+- Aktiver Dialogzustand pro Session (aktuelles Thema, letztes Ziel, offene Anliegen)
+- Milestone 3 erweitert: adaptive Relevanz fuer offene Anliegen (unresolved-first Recall)
+- Milestone 4 erweitert: Runtime-Memory-Snapshots in Event-Metadaten + Recall-Telemetrie
+- Milestone 5 erweitert: Quality-Gates fuer Snapshot/Unresolved-Relevanz + Verifikations-Checks
 
 Wichtige Doku-Dateien:
 - `docs/MEMORY_ARCHITECTURE.md`
@@ -464,6 +471,10 @@ Du> Oeffne Firefox und gehe zu google.com     -> VisualAgent
 ```
 
 Der Dispatcher erkennt automatisch den Intent und waehlt den passenden Agenten.
+
+Session-Hinweise:
+- `new session` oder `/new` startet eine neue Chat-Session-ID.
+- Ohne Reset bleibt der episodische Kontext ueber mehrere Turns erhalten.
 
 Beispiel fuer Live-Status-Ausgabe:
 

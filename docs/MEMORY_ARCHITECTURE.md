@@ -94,11 +94,13 @@ Umgesetzt am 2026-02-17:
 - End-to-End deterministisches Logging in `run_agent(...)` (nicht nur CLI-main loop).
 - Runtime-Telemetrie pro Agent-Run als Event-Metadaten persistiert.
 - Working-Memory-Build-Stats im kanonischen Memory-Kern verfügbar.
+- Runtime-Memory-Snapshot pro Event (Dialogzustand + Session-Blick) in Metadaten.
+- Recall-Meta und Session-ID in Agent-Telemetrie aufgenommen.
 
 Code-Referenzen:
 - `main_dispatcher.py`: `run_agent(...)` + `_log_interaction_deterministic(...)`
 - `agent/base_agent.py`: `get_runtime_telemetry(...)`
-- `memory/memory_system.py`: `get_last_working_memory_stats(...)`
+- `memory/memory_system.py`: `get_last_working_memory_stats(...)` + `get_runtime_memory_snapshot(...)`
 
 ## Milestone 5 Umsetzungsstand
 
@@ -106,9 +108,12 @@ Umgesetzt am 2026-02-17:
 - Quality-Gate Tests für deterministisches Dispatcher-Logging in kritischen Pfaden.
 - Regressionstest für Metadata-Merge im zentralen Interaction-Logger.
 - Regressionstest für Working-Memory Runtime-Stats (inkl. Budgetgrenze bei Status `ok`).
+- Erweiterte Gates für dynamische Relevanz-Flags (`focus_terms_count`, `prefer_unresolved`).
+- Snapshot-Gates: `memory_snapshot` wird in Event-Metadaten erwartet und validiert.
 
 Code-Referenzen:
 - `tests/test_milestone5_quality_gates.py`
+- `tests/test_milestone6_e2e_readiness.py`
 
 ## Milestone 6 Umsetzungsstand
 

@@ -5,6 +5,7 @@ Stand: 2026-02-17
 ## Ziel
 - End-to-End nachweisen, dass jeder `run_agent(...)` Aufruf deterministisch persistiert wird.
 - Nachweisen, dass Working-Memory-Relevanz/Stats stabil abrufbar sind.
+- Nachweisen, dass dynamischer Recall offene Anliegen innerhalb einer Session priorisiert.
 - Einfache Go/No-Go Checks für lokalen Rollout bereitstellen.
 
 ## Automatische Checks
@@ -29,8 +30,14 @@ python verify_milestone6.py
 - `run_agent(...)` schreibt Events in `interaction_events` für:
   - Standardpfad (`status=completed`, `execution_path=standard`)
   - Fehlerpfad (`status=error`, `metadata.error=agent_not_found`)
+- Event-Metadaten enthalten `memory_snapshot` (Standard- und Fehlerpfad).
 - Working-Memory Stats sind verfügbar (`status` Feld vorhanden).
+- Working-Memory Stats enthalten dynamische Felder:
+  - `focus_terms_count`
+  - `prefer_unresolved`
 - Bei `status=ok` gilt: `final_chars <= max_chars`.
+- Dynamischer Recall (`unified_recall`) liefert bei Querys wie "was ist aktuell offen"
+  session-nahe, ungelöste Anliegen als Top-Treffer.
 
 ## Operative Empfehlung vor Produktivbetrieb
 - `WORKING_MEMORY_INJECTION_ENABLED=true` belassen.

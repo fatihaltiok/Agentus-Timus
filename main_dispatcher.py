@@ -31,6 +31,7 @@ AGENTEN-ÜBERSICHT:
 
 import os
 import sys
+import re
 import asyncio
 import textwrap
 import logging
@@ -106,6 +107,12 @@ def _emit_dispatcher_status(agent_name: str, phase: str, detail: str = "") -> No
         return
     detail_txt = f" | {detail}" if detail else ""
     print(f"   ⏱️ Status | Agent {agent_name.upper()} | {phase.upper()}{detail_txt}")
+
+
+def _sanitize_user_query(query: str) -> str:
+    """Entfernt Steuerzeichen aus User-Input (z.B. ^V / \\x16)."""
+    cleaned = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", " ", str(query or ""))
+    return re.sub(r"\s+", " ", cleaned).strip()
 
 # --- System-Prompt (AKTUALISIERT v3.1) ---
 DISPATCHER_PROMPT = """
@@ -629,13 +636,22 @@ async def run_agent(
     from utils.audit_logger import AuditLogger
     from utils.policy_gate import check_query_policy, audit_tool_call
 
+    raw_query = "" if query is None else str(query)
+    query = _sanitize_user_query(raw_query)
+    if not query:
+        return None
+
     audit = AuditLogger()
     audit.log_start(query, agent_name)
     audit_tool_call("dispatcher_start", {"agent": agent_name, "query": query[:100]})
 
     effective_session_id = session_id or str(uuid.uuid4())[:8]
     final_output: Optional[str] = None
-    runtime_metadata: dict = {"source": "run_agent", "agent": agent_name}
+    runtime_metadata: dict = {
+        "source": "run_agent",
+        "agent": agent_name,
+        "query_sanitized": query != raw_query,
+    }
 
     def _ret(value, extra_metadata: Optional[dict] = None):
         nonlocal final_output, runtime_metadata
@@ -988,6 +1004,11 @@ Unique States: {unique_states if unique_states else "N/A"} (Loop-Erkennung)
         else:
             agent_instance = AgentClass(tools_description_string=tools_description)
 
+        try:
+            setattr(agent_instance, "conversation_session_id", effective_session_id)
+        except Exception:
+            pass
+
         final_answer = await agent_instance.run(query)
         _emit_dispatcher_status(agent_name, "done", "Agent-Run abgeschlossen")
         if hasattr(agent_instance, "get_runtime_telemetry"):
@@ -1058,6 +1079,13 @@ def _log_interaction_deterministic(
         event_metadata = {"source": "main_dispatcher", "agent": agent_name}
         if isinstance(metadata, dict):
             event_metadata.update(metadata)
+        if hasattr(memory_manager, "get_runtime_memory_snapshot"):
+            try:
+                snapshot = memory_manager.get_runtime_memory_snapshot(session_id=session_id)
+                if isinstance(snapshot, dict):
+                    event_metadata["memory_snapshot"] = snapshot
+            except Exception:
+                pass
         memory_manager.log_interaction_event(
             user_input=user_input,
             assistant_response=output,
@@ -1113,25 +1141,31 @@ async def main_loop():
     print("  • 'Wie spät ist es?' → EXECUTOR")
     print("\nTipp: 'exit' zum Beenden\n")
 
+    conversation_session_id = f"chat_{uuid.uuid4().hex[:8]}"
+    print(f"Aktive Session: {conversation_session_id}")
+
     while True:
         try:
             q = await asyncio.to_thread(input, "\n\033[32mDu> \033[0m")
-
-            if not q.strip():
+            q_clean = _sanitize_user_query(q)
+            if not q_clean:
                 continue
 
-            if q.lower() in ["exit", "quit", "q"]:
+            if q_clean.lower() in ["exit", "quit", "q"]:
                 break
+            if q_clean.lower() in {"/new", "new session", "neue session", "reset session"}:
+                conversation_session_id = f"chat_{uuid.uuid4().hex[:8]}"
+                print(f"   ♻️ Neue Session gestartet: {conversation_session_id}")
+                continue
 
             print("   🤔 Timus denkt...")
-            agent = await get_agent_decision(q.strip())
+            agent = await get_agent_decision(q_clean)
             print(f"   📌 Agent: {agent.upper()}")
-            round_session_id = str(uuid.uuid4())[:8]
             await run_agent(
                 agent,
-                q.strip(),
+                q_clean,
                 tools_desc,
-                session_id=round_session_id,
+                session_id=conversation_session_id,
             )
 
         except (KeyboardInterrupt, EOFError):

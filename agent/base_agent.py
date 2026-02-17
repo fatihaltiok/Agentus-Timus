@@ -85,6 +85,7 @@ class BaseAgent(DynamicToolMixin):
         self.action_call_counts: Dict[str, int] = {}
         self._remote_tool_names: set[str] = set()
         self._remote_tools_fetched: bool = False
+        self.conversation_session_id: Optional[str] = None
 
         # Multi-Provider Setup
         self.provider_client = get_provider_client()
@@ -132,6 +133,7 @@ class BaseAgent(DynamicToolMixin):
         self._reflection_engine = None
         self._task_action_history: List[Dict[str, Any]] = []
         self._working_memory_last_meta: Dict[str, Any] = {}
+        self._memory_recall_last_meta: Dict[str, Any] = {}
         self._run_started_at: float = 0.0
         self._live_status_enabled = (
             os.getenv("TIMUS_LIVE_STATUS", "true").lower() in {"1", "true", "yes", "on"}
@@ -234,6 +236,8 @@ class BaseAgent(DynamicToolMixin):
         r"\bwas\s+haben\s+wir\b.*\bgesuch\w*\b",
         r"\bvorhin\b.*\bgesuch\w*\b",
         r"\beben\b.*\bgesuch\w*\b",
+        r"\berinner\w*\s+du\s+dich\b",
+        r"\bwei(?:ss|ß)t\s+du\s+das\s+nicht\s+mehr\b",
     )
 
     def should_skip_action(
@@ -805,15 +809,30 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
     async def _try_memory_recall(self, task: str) -> Optional[str]:
         """Fast-Path für Erinnerungsfragen über das Memory-Tool."""
         try:
-            recall_result = await self._call_tool(
-                "recall",
-                {"query": task, "n_results": 5},
-            )
+            self._memory_recall_last_meta = {}
+            recall_params: Dict[str, Any] = {"query": task, "n_results": 5}
+            if self.conversation_session_id:
+                recall_params["session_id"] = self.conversation_session_id
+            recall_result = await self._call_tool("recall", recall_params)
+
+            # Rückwärtskompatibel mit älteren Server-Schemas ohne session_id.
+            if (
+                isinstance(recall_result, dict)
+                and recall_result.get("validation_failed")
+                and "session_id" in recall_params
+            ):
+                recall_result = await self._call_tool(
+                    "recall",
+                    {"query": task, "n_results": 5},
+                )
             if not isinstance(recall_result, dict):
                 return None
 
             if recall_result.get("status") != "success":
                 return None
+            meta = recall_result.get("meta")
+            if isinstance(meta, dict):
+                self._memory_recall_last_meta = meta
 
             memories = recall_result.get("memories", [])
             if not memories:
@@ -1018,10 +1037,21 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 max_chars,
                 max_related,
                 max_recent_events,
+                self.conversation_session_id,
             )
             wm_stats: Dict[str, Any] = {}
             if hasattr(memory_manager, "get_last_working_memory_stats"):
                 wm_stats = memory_manager.get_last_working_memory_stats()
+            memory_snapshot: Dict[str, Any] = {}
+            if hasattr(memory_manager, "get_runtime_memory_snapshot"):
+                try:
+                    snapshot = memory_manager.get_runtime_memory_snapshot(
+                        session_id=self.conversation_session_id
+                    )
+                    if isinstance(snapshot, dict):
+                        memory_snapshot = snapshot
+                except Exception:
+                    memory_snapshot = {}
             self._working_memory_last_meta = {
                 "enabled": True,
                 "context_chars": len(context or ""),
@@ -1031,6 +1061,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                     "max_recent_events": max_recent_events,
                 },
                 "memory_stats": wm_stats,
+                "memory_snapshot": memory_snapshot,
             }
             if context:
                 log.info(f"Working-Memory-Kontext injiziert ({len(context)} chars)")
@@ -1065,6 +1096,8 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             "action_count": len(self._task_action_history),
             "active_phase": self._active_phase,
             "active_tool": self._active_tool_name,
+            "conversation_session_id": self.conversation_session_id or "",
+            "memory_recall": self._memory_recall_last_meta,
             "working_memory": self._working_memory_last_meta,
         }
 
@@ -1076,6 +1109,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         log.info(f"{self.__class__.__name__} ({self.provider.value})")
         self._run_started_at = time.time()
         self._active_tool_name = None
+        self._memory_recall_last_meta = {}
         self._emit_live_status(
             phase="start",
             detail=f"model={self.model} provider={self.provider.value}",
