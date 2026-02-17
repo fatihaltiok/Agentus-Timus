@@ -82,7 +82,13 @@ class ReflectionEngine:
     
     Nach jeder Aufgabe wird eine LLM-basierte Reflexion durchgeführt
     und die Erkenntnisse im Memory-System gespeichert.
+    
+    v2.0 NEU: Skill-Generierung aus wiederkehrenden Fehlern mit Safeguards.
     """
+    
+    # Skill-Creation Safeguards
+    PATTERN_THRESHOLD = 3  # Pattern muss 3x auftreten
+    SKILL_COOLDOWN_HOURS = 1  # Min 1h zwischen Skill-Erstellungen
     
     def __init__(self, memory_manager=None, llm_client=None):
         """
@@ -96,6 +102,11 @@ class ReflectionEngine:
         self.llm = llm_client
         self._reflection_count = 0
         self._last_reflection: Optional[ReflectionResult] = None
+        
+        # NEU v2.0: Skill-Creation Safeguards
+        self._pattern_counter: Dict[str, int] = {}  # pattern_hash -> count
+        self._last_skill_creation: Optional[datetime] = None
+        self._skill_creation_enabled = True  # Kann deaktiviert werden
     
     def set_memory_manager(self, memory_manager):
         """Setzt den Memory Manager nachträglich."""
@@ -104,6 +115,19 @@ class ReflectionEngine:
     def set_llm_client(self, llm_client):
         """Setzt den LLM Client nachträglich."""
         self.llm = llm_client
+    
+    def enable_skill_creation(self, enabled: bool = True):
+        """Aktiviert/Deaktiviert automatische Skill-Erstellung."""
+        self._skill_creation_enabled = enabled
+    
+    def get_skill_stats(self) -> Dict[str, Any]:
+        """Gibt Statistiken zur Skill-Erstellung zurück."""
+        return {
+            "pattern_counter": dict(self._pattern_counter),
+            "last_skill_creation": self._last_skill_creation.isoformat() if self._last_skill_creation else None,
+            "skill_creation_enabled": self._skill_creation_enabled,
+            "cooldown_active": self._is_cooldown_active()
+        }
     
     async def reflect_on_task(
         self,
@@ -340,6 +364,91 @@ class ReflectionEngine:
                     ))
                 except Exception as e:
                     log.debug(f"Improvement-Speicherung fehlgeschlagen: {e}")
+        
+        # NEU v2.0: Skill-Trigger mit Safeguards
+        if self._should_create_tool(reflection):
+            await self._trigger_tool_creation(reflection, task)
+    
+    # =================================================================
+    # SKILL-CREATION METHODEN (v2.0)
+    # =================================================================
+    
+    def _get_pattern_hash(self, failures: List[str]) -> str:
+        """Erzeugt stabilen Hash für ein Fehler-Pattern."""
+        normalized = sorted([f.lower().strip() for f in failures if f])
+        return hashlib.md5("|".join(normalized).encode()).hexdigest()[:12]
+    
+    def _is_cooldown_active(self) -> bool:
+        """Prüft ob Cooldown für Skill-Erstellung aktiv ist."""
+        if not self._last_skill_creation:
+            return False
+        cooldown = timedelta(hours=self.SKILL_COOLDOWN_HOURS)
+        return (datetime.now() - self._last_skill_creation) < cooldown
+    
+    def _should_create_tool(self, reflection: ReflectionResult) -> bool:
+        """
+        Bestimmt ob ein neues Tool erstellt werden soll.
+
+        Safeguards:
+        - Pattern muss mindestens PATTERN_THRESHOLD (3x) aufgetreten sein
+        - Cooldown von SKILL_COOLDOWN_HOURS (1h) zwischen Erstellungen
+        - Mindestens 2 Fehler UND Verbesserungsvorschläge
+        - Confidence >= 0.7
+        - Skill-Creation muss aktiviert sein
+        """
+        # Basis-Checks
+        if not self._skill_creation_enabled:
+            return False
+        
+        if not reflection.what_failed or not reflection.improvements:
+            return False
+        
+        if len(reflection.what_failed) < 2:
+            return False
+        
+        if reflection.confidence < 0.7:
+            return False
+        
+        # Cooldown prüfen
+        if self._is_cooldown_active():
+            log.debug("Skill-Creation Cooldown aktiv")
+            return False
+        
+        # Pattern-Häufigkeit prüfen
+        pattern_key = self._get_pattern_hash(reflection.what_failed)
+        self._pattern_counter[pattern_key] = self._pattern_counter.get(pattern_key, 0) + 1
+        
+        threshold_reached = self._pattern_counter[pattern_key] >= self.PATTERN_THRESHOLD
+        
+        if threshold_reached:
+            log.info(f"Pattern-Schwelle erreicht: {pattern_key} ({self._pattern_counter[pattern_key]}x)")
+        
+        return threshold_reached
+    
+    async def _trigger_tool_creation(self, reflection: ReflectionResult, task: Dict):
+        """Delegiert Tool-Erstellung an skill_manager_tool."""
+        try:
+            # Lazy import um zirkuläre Abhängigkeiten zu vermeiden
+            from tools.skill_manager_tool.tool import create_tool_from_pattern
+            
+            result = await create_tool_from_pattern(
+                pattern_description="; ".join(reflection.what_failed[:3]),
+                source_task=self._format_task(task),
+                improvements=reflection.improvements[:5]
+            )
+            
+            if result and result.get("success"):
+                self._last_skill_creation = datetime.now()
+                log.info(f"🛠️ Neues Tool erstellt: {result.get('skill_name')}")
+            elif result and result.get("skipped"):
+                log.debug(f"Tool-Erstellung übersprungen: {result.get('reason')}")
+            elif result and result.get("error"):
+                log.warning(f"Tool-Erstellung fehlgeschlagen: {result.get('error')}")
+                
+        except ImportError:
+            log.debug("skill_manager_tool nicht verfügbar für Tool-Erstellung")
+        except Exception as e:
+            log.debug(f"Tool-Erstellung nicht möglich: {e}")
     
     async def _store_item(self, item):
         """Speichert MemoryItem mit Embedding."""
@@ -358,7 +467,9 @@ class ReflectionEngine:
         """Gibt Statistiken zurück."""
         return {
             "total_reflections": self._reflection_count,
-            "last_reflection": self._last_reflection.timestamp if self._last_reflection else None
+            "last_reflection": self._last_reflection.timestamp if self._last_reflection else None,
+            # v2.0: Skill-Stats
+            "skill_stats": self.get_skill_stats()
         }
 
 

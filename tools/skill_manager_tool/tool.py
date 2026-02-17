@@ -242,3 +242,192 @@ async def learn_new_skill(skill_name: str, description: str) -> dict:
     except Exception as e:
         log.error(f"Kritischer Fehler im 'learn_new_skill'-Tool: {e}", exc_info=True)
         raise Exception(f"Ein unerwarteter interner Fehler ist im Skill-Manager aufgetreten: {e}")
+
+
+# =================================================================
+# TOOL-GENERIERUNG AUS FEHLERN (B1)
+# =================================================================
+
+import ast
+
+
+def _sanitize_skill_name(name: str) -> str:
+    """Bereinigt einen Skill-Namen für sichere Dateinamen."""
+    # Nur alphanumerische Zeichen und Unterstriche
+    safe = re.sub(r'[^a-zA-Z0-9_]', '_', name.lower())
+    # Führende/Zurückfolgende Unterstriche entfernen
+    safe = safe.strip('_')
+    # Max 40 Zeichen
+    return safe[:40] if safe else "unnamed_skill"
+
+
+def _generate_skill_hash(pattern: str) -> str:
+    """Generiert einen stabilen Hash für ein Pattern."""
+    import hashlib
+    return hashlib.md5(pattern.encode()).hexdigest()[:8]
+
+
+async def _check_duplicate_skill(skill_name: str) -> bool:
+    """Prüft ob ein Skill bereits existiert."""
+    skills = _list_skills_sync()
+    for skill in skills:
+        if skill_name in skill.get("skill_name", "").lower():
+            return True
+    return False
+
+
+@tool(
+    name="create_tool_from_pattern",
+    description="Generiert ein neues Tool aus einem erkannten Fehler-Pattern mit Quality-Gate.",
+    parameters=[
+        P("pattern_description", "string", "Beschreibung des Fehler-Patterns", required=True),
+        P("source_task", "string", "Ursprüngliche Task die fehlschlug", required=True),
+        P("improvements", "array", "Liste der Verbesserungsvorschläge", required=True),
+    ],
+    capabilities=["automation", "skills", "self_improvement"],
+    category=C.AUTOMATION
+)
+async def create_tool_from_pattern(
+    pattern_description: str,
+    source_task: str,
+    improvements: list
+) -> dict:
+    """
+    Generiert ein neues Tool aus einem erkannten Fehler-Pattern.
+
+    Quality-Gate:
+    1. Duplikat-Check gegen bestehende Skills
+    2. Code-Generierung via implement_feature
+    3. AST-Validierung vor Registrierung
+    4. Registrierung nur bei bestandener Validierung
+
+    Args:
+        pattern_description: Beschreibung des Problems/Musters
+        source_task: Die ursprüngliche Task die fehlschlug
+        improvements: Liste der Verbesserungsvorschläge
+
+    Returns:
+        dict mit Status und Skill-Informationen
+    """
+    if not SKILLS_DIR:
+        return {"error": "Skill-Verzeichnis nicht initialisiert"}
+
+    # 1. Skill-Namen generieren
+    skill_name = _sanitize_skill_name(pattern_description)
+    pattern_hash = _generate_skill_hash(pattern_description)
+    skill_name = f"{skill_name}_{pattern_hash}"
+    skill_file_path = f"skills/{skill_name}_skill.py"
+
+    # 2. Duplikat-Check
+    if await _check_duplicate_skill(skill_name):
+        return {
+            "skipped": True,
+            "reason": f"Skill ähnlich '{skill_name}' existiert bereits",
+            "skill_name": skill_name
+        }
+
+    log.info(f"Erstelle neues Tool aus Pattern: {skill_name}")
+
+    # 3. Code-Generierung Prompt
+    improvements_str = "\n".join(f"  - {imp}" for imp in improvements[:5])
+    
+    instruction = f"""
+    Erstelle ein wiederverwendbares Python-Tool als Skill.
+
+    PROBLEM-BESCHREIBUNG:
+    {pattern_description}
+
+    URSÜNGLICHE TASK:
+    {source_task}
+
+    VORSCHLÄGE ZUR VERBESSERUNG:
+    {improvements_str}
+
+    ANFORDERUNGEN:
+    1. Erstelle die Datei: {skill_file_path}
+    2. Nutze den @tool Decorator von tools.tool_registry_v2
+    3. Definiere klare Parameter mit ToolParameter (P)
+    4. Füge eine aussagekräftige Description hinzu
+    5. Implementiere die Kern-Logik mit Fehlerbehandlung
+    6. Füge einen Docstring hinzu
+
+    BEISPIEL-STRUKTUR:
+    ```python
+    from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
+
+    @tool(
+        name="skill_name",
+        description="Beschreibung",
+        parameters=[
+            P("param1", "string", "Beschreibung", required=True),
+        ],
+        capabilities=["automation"],
+        category=C.AUTOMATION
+    )
+    async def skill_name(param1: str) -> dict:
+        '''Docstring'''
+        try:
+            # Implementierung
+            return {{\"status\": \"success\", \"result\": ...}}
+        except Exception as e:
+            return {{\"error\": str(e)}}
+    ```
+    """
+
+    try:
+        # 4. Code generieren
+        result = await call_tool_internal(
+            "implement_feature",
+            {
+                "instruction": instruction,
+                "file_paths": [skill_file_path]
+            }
+        )
+
+        if isinstance(result, dict) and result.get("error"):
+            return {
+                "error": "Code-Generierung fehlgeschlagen",
+                "detail": result.get("error")
+            }
+
+        # 5. AST-Validierung
+        skill_path = SKILLS_DIR / f"{skill_name}_skill.py"
+        if skill_path.exists():
+            code = skill_path.read_text(encoding="utf-8")
+            try:
+                ast.parse(code)
+                log.info(f"AST-Validierung bestanden für {skill_name}")
+            except SyntaxError as e:
+                # Fehlerhaften Code entfernen
+                skill_path.unlink()
+                return {
+                    "error": f"Generierter Code hat Syntax-Fehler: {e}",
+                    "line": e.lineno,
+                    "skill_name": skill_name
+                }
+        else:
+            return {
+                "error": "Skill-Datei wurde nicht erstellt",
+                "expected_path": str(skill_path)
+            }
+
+        # 6. Tool registrieren
+        register_result = await call_tool_internal(
+            "register_new_tool_in_server",
+            {"tool_module_path": f"skills.{skill_name}_skill"}
+        )
+
+        return {
+            "success": True,
+            "skill_name": skill_name,
+            "path": str(skill_path),
+            "registered": bool(register_result and not register_result.get("error")),
+            "message": f"Neues Tool '{skill_name}' erfolgreich erstellt und validiert"
+        }
+
+    except Exception as e:
+        log.error(f"Fehler bei Tool-Generierung: {e}", exc_info=True)
+        return {
+            "error": str(e),
+            "skill_name": skill_name
+        }

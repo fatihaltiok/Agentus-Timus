@@ -415,6 +415,16 @@ async def lifespan(app: FastAPI):
         log.info(f"  - {tool_name}")
     log.info("=" * 50)
 
+    # === BROWSER CONTEXT MANAGER (v2.0) ===
+    try:
+        from tools.browser_tool.persistent_context import PersistentContextManager
+        manager = PersistentContextManager()
+        await manager.initialize()
+        shared_context.browser_context_manager = manager
+        log.info("✅ Browser PersistentContextManager initialisiert")
+    except Exception as e:
+        log.warning(f"⚠️ PersistentContextManager konnte nicht gestartet werden: {e}")
+
     # === HEARTBEAT SCHEDULER STARTEN ===
     app.state.scheduler = None
     if os.getenv("HEARTBEAT_ENABLED", "true").lower() == "true":
@@ -424,7 +434,11 @@ async def lifespan(app: FastAPI):
             # Scheduler-Callback für Custom Actions
             async def on_scheduler_wake(event):
                 log.info(f"💓 Scheduler Event: {event.event_type}")
-                # Könnte später Agent-Aktionen triggern
+                # Browser-Context Cleanup
+                if shared_context.browser_context_manager:
+                    expired = await shared_context.browser_context_manager.cleanup_expired()
+                    if expired > 0:
+                        log.info(f"🧹 {expired} abgelaufene Browser-Sessions entfernt")
             
             scheduler = init_scheduler(on_wake=on_scheduler_wake)
             _set_scheduler_instance(scheduler)
@@ -437,6 +451,14 @@ async def lifespan(app: FastAPI):
         log.info("ℹ️ Heartbeat-Scheduler deaktiviert (HEARTBEAT_ENABLED=false)")
 
     yield  # Server läuft
+
+    # === SHUTDOWN: Browser Contexts speichern ===
+    if shared_context.browser_context_manager:
+        try:
+            await shared_context.browser_context_manager.shutdown()
+            log.info("✅ Browser-Contexts gespeichert und geschlossen")
+        except Exception as e:
+            log.warning(f"⚠️ Fehler beim Browser-Context Shutdown: {e}")
 
     # === SHUTDOWN: Scheduler stoppen ===
     if app.state.scheduler:

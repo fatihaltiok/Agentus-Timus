@@ -84,6 +84,7 @@ class HybridBrowserController:
     - State-Tracking: Loop-Detection und DOM-Changes
     - Cookie-Banner Auto-Handling
     - Smart-Waiting: Network-Aware Timeouts
+    - Session-Isolation (v2.0): Persistente Contexts pro Session
 
     Workflow:
     1. initialize() - Startet Browser
@@ -106,16 +107,23 @@ class HybridBrowserController:
         "button:has-text('Akzeptieren')",
     ]
 
-    def __init__(self, mcp_url: str = "http://localhost:5000", headless: bool = False):
+    def __init__(
+        self, 
+        mcp_url: str = "http://localhost:5000", 
+        headless: bool = False,
+        session_id: str = "default"
+    ):
         """
         Initialisiert Hybrid Browser Controller.
 
         Args:
             mcp_url: MCP-Server URL für Tool-Calls
             headless: Browser im Hintergrund starten
+            session_id: Session-ID für Context-Isolation (v2.0)
         """
         self.mcp_url = mcp_url
         self.headless = headless
+        self.session_id = session_id  # NEU: Session-Isolation
 
         # Components
         self.state_tracker = UIStateTracker(max_history=20)
@@ -138,7 +146,7 @@ class HybridBrowserController:
             'verifications_failed': 0
         }
 
-        log.info(f"✅ HybridBrowserController initialisiert (headless={headless})")
+        log.info(f"✅ HybridBrowserController initialisiert (headless={headless}, session={session_id})")
 
     async def initialize(self) -> bool:
         """
@@ -181,10 +189,13 @@ class HybridBrowserController:
         start_time = time.time()
 
         try:
-            log.info(f"🌐 Navigiere zu: {url}")
+            log.info(f"🌐 [{self.session_id}] Navigiere zu: {url}")
 
-            # MCP-Call an browser_tool
-            result = await self._call_mcp_tool("open_url", {"url": url})
+            # MCP-Call an browser_tool mit session_id
+            result = await self._call_mcp_tool("open_url", {
+                "url": url,
+                "session_id": self.session_id
+            })
 
             if "error" in result:
                 return ActionResult(

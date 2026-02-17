@@ -2,7 +2,7 @@
 Browser-Tool (Playwright) • Navigation + Smart Consent-Dismiss
 --------------------------------------------------------------
 Methoden:
-  • open_url(url)
+  • open_url(url, session_id)
   • dismiss_overlays()
   • get_text()
   • list_links()
@@ -11,6 +11,12 @@ Methoden:
   • click_by_selector(selector)
   • get_page_content()
   • type_text(selector, text_to_type)
+
+v2.0 NEU:
+  • Session-Isolation via PersistentContextManager
+  • Persistenter Cookie/LocalStorage State
+  • Retry-Logik für Network-Fehler
+
 Alle Rückgaben: dict (V2 Registry)
 """
 # --- Standard-Bibliotheken ---
@@ -36,6 +42,15 @@ from playwright.async_api import (
 
 from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 
+# NEU: PersistentContextManager und RetryHandler
+from .persistent_context import (
+    PersistentContextManager,
+    SessionContext,
+    get_context_manager,
+    set_context_manager
+)
+from .retry_handler import retry_handler, BrowserRetryHandler
+
 # --- Globale Konfiguration & Logging ---
 CONSENT_SELECTORS = [
     "button#onetrust-accept-btn-handler",
@@ -53,8 +68,71 @@ if not log.handlers:
         level=logging.INFO,
         format="%(asctime)s | %(levelname)-7s | %(name)-12s | %(message)s")
 
-# --- Playwright-Session mit Selbstheilung ---
+
+# =================================================================
+# SESSION-MANAGEMENT (v2.0)
+# =================================================================
+
+async def ensure_browser_initialized(session_id: str = "default") -> Page:
+    """
+    Stellt sicher dass ein Browser-Context für die Session existiert.
+    
+    Nutzt PersistentContextManager für Session-Isolierung.
+    
+    Args:
+        session_id: Eindeutige Session-ID für Context-Isolation
+    
+    Returns:
+        Page-Objekt für die Session
+    """
+    import tools.shared_context as shared_context
+    
+    # Context Manager aus shared_context holen oder erstellen
+    manager = shared_context.browser_context_manager
+    if not manager:
+        manager = PersistentContextManager()
+        await manager.initialize()
+        shared_context.browser_context_manager = manager
+    
+    # Context für Session holen/erstellen
+    session = await manager.get_or_create_context(session_id)
+    return session.page
+
+
+async def save_session_state(session_id: str = "default") -> bool:
+    """Speichert den State einer Session (Cookies, LocalStorage)."""
+    import tools.shared_context as shared_context
+    manager = shared_context.browser_context_manager
+    if manager:
+        return await manager.save_context_state(session_id)
+    return False
+
+
+async def close_session(session_id: str, save_state: bool = True) -> bool:
+    """Schließt eine Browser-Session."""
+    import tools.shared_context as shared_context
+    manager = shared_context.browser_context_manager
+    if manager:
+        return await manager.close_context(session_id, save_state)
+    return False
+
+
+def _adaptive_timeout(host: str, default_ms: int = 30000) -> int:
+    """Berechnet adaptives Timeout basierend auf Domain-Stats."""
+    # Vereinfacht - in Zukunft mit Context Manager Stats
+    return default_ms
+
+
+# =================================================================
+# LEGACY BROWSER SESSION (für Backward Compatibility)
+# =================================================================
+
 class BrowserSession:
+    """
+    Legacy Browser-Session für Backward Compatibility.
+    
+    Wird durch PersistentContextManager ersetzt.
+    """
     def __init__(self):
         self.play: Optional[Playwright] = None
         self.browser_instance: Optional[PlaywrightBrowser] = None
@@ -117,77 +195,65 @@ class BrowserSession:
         self.page = None
         log.info("Playwright Browser-Session geschlossen.")
 
+
+# Legacy global für Backward Compatibility
 browser_session_manager = BrowserSession()
 
-async def ensure_browser_initialized():
-    global browser_session_manager
-    if not browser_session_manager.is_initialized or not browser_session_manager.page or browser_session_manager.page.is_closed():
-        log.info("Browser-Session wird initialisiert oder neu erstellt...")
-        if browser_session_manager.is_initialized:
-            try:
-                if browser_session_manager.context and not browser_session_manager.context.is_closed():
-                    browser_session_manager.page = await browser_session_manager.context.new_page()
-                    log.info("Neue Seite in bestehendem Kontext erstellt.")
-                else:
-                    await browser_session_manager.close()
-                    await browser_session_manager.initialize()
-            except Exception as e_reopen:
-                log.error(f"Fehler beim Neuerstellen der Seite/Kontext: {e_reopen}. Initialisiere komplett neu.")
-                await browser_session_manager.close()
-                await browser_session_manager.initialize()
-        else:
-            await browser_session_manager.initialize()
-
-    if not browser_session_manager.page or browser_session_manager.page.is_closed():
-        raise RuntimeError("Playwright-Seite konnte nicht initialisiert oder abgerufen werden.")
-    return browser_session_manager.page
-
-
-def _adaptive_timeout(host: str, default_ms: int = 30000) -> int:
-    global browser_session_manager
-    avg_load_time_ms = browser_session_manager.domain_stats.get(host)
-    return int(avg_load_time_ms * 1.5 + 5000) if avg_load_time_ms else default_ms
-
-# --- Überarbeitete Tool-Methoden ---
+# --- Überarbeitete Tool-Methoden (v2.0 mit session_id) ---
 
 @tool(
     name="open_url",
     description="Öffnet eine URL im Browser, behandelt Blocker und gibt klaren Status zurück.",
     parameters=[
         P("url", "string", "Die zu öffnende URL", required=True),
+        P("session_id", "string", "Browser-Session ID für Context-Isolation", required=False, default="default"),
     ],
     capabilities=["browser", "navigation", "interaction"],
     category=C.BROWSER
 )
-async def open_url(url: str) -> dict:
-    """Öffnet eine URL, behandelt Blocker und gibt klaren Status zurück."""
+async def open_url(url: str, session_id: str = "default") -> dict:
+    """Öffnet eine URL, behandelt Blocker und gibt klaren Status zurück.
+    
+    Args:
+        url: Die zu öffnende URL
+        session_id: Session-ID für Context-Isolation (Cookies werden pro Session persistiert)
+    """
     try:
-        page = await ensure_browser_initialized()
+        page = await ensure_browser_initialized(session_id)
     except RuntimeError as e_init:
         log.error(f"Kritischer Fehler bei Browser-Initialisierung: {e_init}", exc_info=True)
         raise Exception(f"Browser konnte nicht initialisiert werden: {e_init}")
 
-    log.info(f"🌐 Öffne URL: {url}")
-    try:
+    log.info(f"🌐 [{session_id}] Öffne URL: {url}")
+    
+    # Mit Retry-Handler ausführen
+    async def _navigate():
         response = await page.goto(url, wait_until="domcontentloaded", timeout=60000)
         await page.wait_for_timeout(1500)
+        return response
+    
+    try:
+        response = await retry_handler.execute_with_retry(_navigate)
+        
+        if isinstance(response, dict) and response.get("retries_exhausted"):
+            return {"status": "failed_retry", "url": url, "error": response.get("error")}
 
         page_content = await page.content()
         if "Checking if the site connection is secure" in page_content or "DDoS protection by Cloudflare" in page_content:
             log.warning(f"Seite {url} wird durch Blocker geschützt.")
-            return {"status": "blocked_by_security", "url": url, "title": await page.title()}
+            return {"status": "blocked_by_security", "url": url, "title": await page.title(), "session_id": session_id}
 
         status = response.status if response else "unbekannt"
         title = await page.title()
-        log.info(f"✅ Seite '{title}' geladen mit Status {status}.")
+        log.info(f"✅ [{session_id}] Seite '{title}' geladen mit Status {status}.")
 
-        await dismiss_overlays()
+        await dismiss_overlays(session_id=session_id)
 
-        return {"status": "opened", "url": page.url, "title": title, "http_status": status}
+        return {"status": "opened", "url": page.url, "title": title, "http_status": status, "session_id": session_id}
 
     except PlaywrightTimeoutError:
         log.error(f"Timeout beim Laden von {url}.")
-        return {"status": "failed_timeout", "url": url, "message": "Seite konnte nicht innerhalb des Zeitlimits geladen werden."}
+        return {"status": "failed_timeout", "url": url, "message": "Seite konnte nicht innerhalb des Zeitlimits geladen werden.", "session_id": session_id}
     except Exception as e:
         log.error(f"Allgemeiner Fehler beim Öffnen von {url}: {e}", exc_info=True)
         raise Exception(f"Unerwarteter Browser-Fehler: {str(e)}")
@@ -197,12 +263,13 @@ async def open_url(url: str) -> dict:
     description="Schließt Cookie-Banner, Consent-Overlays und andere Popup-Elemente auf der aktuellen Seite.",
     parameters=[
         P("max_secs", "integer", "Maximale Dauer in Sekunden für das Schließen", required=False, default=5),
+        P("session_id", "string", "Browser-Session ID", required=False, default="default"),
     ],
     capabilities=["browser", "navigation", "interaction"],
     category=C.BROWSER
 )
-async def dismiss_overlays(max_secs: int = 5) -> dict:
-    page = await ensure_browser_initialized()
+async def dismiss_overlays(max_secs: int = 5, session_id: str = "default") -> dict:
+    page = await ensure_browser_initialized(session_id)
     if not page:
         raise Exception("Seite nicht geladen oder Browser nicht initialisiert.")
 
@@ -758,6 +825,121 @@ async def shutdown_browser_tool():
     if browser_session_manager.is_initialized:
         log.info("Fahre Browser-Tool herunter...")
         await browser_session_manager.close()
+
+
+# =================================================================
+# NEUE SESSION-MANAGEMENT TOOLS (v2.0)
+# =================================================================
+
+@tool(
+    name="browser_session_status",
+    description="Gibt Status aller aktiven Browser-Sessions zurück.",
+    parameters=[],
+    capabilities=["browser", "system"],
+    category=C.BROWSER
+)
+async def browser_session_status() -> dict:
+    """Gibt Status aller aktiven Browser-Sessions."""
+    import tools.shared_context as shared_context
+    
+    manager = shared_context.browser_context_manager
+    if not manager:
+        return {
+            "status": "not_initialized",
+            "message": "PersistentContextManager nicht initialisiert"
+        }
+    
+    return {
+        "status": "ok",
+        "manager_status": manager.get_status()
+    }
+
+
+@tool(
+    name="browser_save_session",
+    description="Speichert den State einer Browser-Session (Cookies, LocalStorage).",
+    parameters=[
+        P("session_id", "string", "Session-ID zum Speichern", required=False, default="default"),
+    ],
+    capabilities=["browser", "system"],
+    category=C.BROWSER
+)
+async def browser_save_session(session_id: str = "default") -> dict:
+    """Speichert Session-State für spätere Wiederherstellung."""
+    success = await save_session_state(session_id)
+    
+    if success:
+        return {
+            "status": "saved",
+            "session_id": session_id,
+            "message": f"Session '{session_id}' State gespeichert"
+        }
+    else:
+        return {
+            "status": "error",
+            "session_id": session_id,
+            "message": f"Session '{session_id}' nicht gefunden oder Save fehlgeschlagen"
+        }
+
+
+@tool(
+    name="browser_close_session",
+    description="Schließt eine Browser-Session und speichert optional den State.",
+    parameters=[
+        P("session_id", "string", "Session-ID zum Schließen", required=True),
+        P("save_state", "boolean", "State vor dem Schließen speichern", required=False, default=True),
+    ],
+    capabilities=["browser", "system"],
+    category=C.BROWSER
+)
+async def browser_close_session(session_id: str, save_state: bool = True) -> dict:
+    """Schließt eine Browser-Session."""
+    if session_id == "default":
+        return {
+            "status": "error",
+            "message": "Default-Session kann nicht geschlossen werden"
+        }
+    
+    success = await close_session(session_id, save_state)
+    
+    if success:
+        return {
+            "status": "closed",
+            "session_id": session_id,
+            "saved": save_state,
+            "message": f"Session '{session_id}' geschlossen"
+        }
+    else:
+        return {
+            "status": "error",
+            "session_id": session_id,
+            "message": f"Session '{session_id}' nicht gefunden"
+        }
+
+
+@tool(
+    name="browser_cleanup_expired",
+    description="Räumt abgelaufene Browser-Sessions auf.",
+    parameters=[],
+    capabilities=["browser", "system"],
+    category=C.BROWSER
+)
+async def browser_cleanup_expired() -> dict:
+    """Entfernt abgelaufene Sessions (Timeout)."""
+    import tools.shared_context as shared_context
+    
+    manager = shared_context.browser_context_manager
+    if not manager:
+        return {"status": "error", "message": "Manager nicht initialisiert"}
+    
+    count = await manager.cleanup_expired()
+    
+    return {
+        "status": "ok",
+        "sessions_removed": count,
+        "message": f"{count} abgelaufene Sessions entfernt"
+    }
+
 
 if __name__ == '__main__':
     async def main_test():

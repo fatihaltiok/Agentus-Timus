@@ -138,8 +138,8 @@ Beispiel: "Recherchiere KI-Sicherheit und erstelle einen Plan"
 
 | Tool | Funktionen |
 |------|-----------|
-| **browser_tool** | `open_url`, `click_by_text`, `click_by_selector`, `get_text`, `list_links`, `type_text`, `get_page_content`, `dismiss_overlays` |
-| **browser_controller** | DOM-First Browser-Control mit State-Tracking |
+| **browser_tool** | `open_url`, `click_by_text`, `click_by_selector`, `get_text`, `list_links`, `type_text`, `get_page_content`, `dismiss_overlays`, `browser_session_status`, `browser_save_session`, `browser_close_session`, `browser_cleanup_expired` |
+| **browser_controller** | DOM-First Browser-Control mit State-Tracking und Session-ID Propagation |
 | **smart_navigation_tool** | Webseiten-Analyse (`analyze_current_page`) |
 | **visual_browser_tool** | Vision-basierte Browser-Steuerung |
 | **application_launcher** | Desktop-Apps starten (`list_applications`, `open_application`) |
@@ -195,7 +195,7 @@ Beispiel: "Recherchiere KI-Sicherheit und erstelle einen Plan"
 |------|-----------|
 | **delegation_tool** | Agent-zu-Agent Delegation (`delegate_to_agent`, `find_agent_by_capability`) |
 | **planner** | Task-Planung (`add_task`, `list_available_skills`) |
-| **skill_manager_tool** | Skill-Verwaltung (`run_skill`, `list_available_skills`) |
+| **skill_manager_tool** | Skill-Verwaltung (`list_skills`, `learn_new_skill`, `register_new_tool_in_server`, `create_tool_from_pattern`) |
 | **skill_recorder** | Skill-Aufzeichnung (`get_recording_status`, `list_recordings`) |
 | **report_generator** | Report-Generierung |
 | **save_results** | Ergebnis-Speicherung |
@@ -253,6 +253,36 @@ Memory System v2.0
 - Bidirektionaler Sync: SQLite <-> Markdown <-> ChromaDB
 - Manuell editierbare Markdown-Dateien mit automatischer Rueck-Synchronisation
 
+### Browser-Isolation
+
+Session-isolierte Browser-Kontexte mit persistentem State:
+
+```
+PersistentContextManager
+├── Session-Pool (max 5 parallele Kontexte)
+├── LRU Eviction bei Limit ("default" geschuetzt)
+├── Cookie/LocalStorage Persistenz via storage_state
+├── Session-Timeout Cleanup (60 min)
+└── Retry-Handler
+    ├── Exponential Backoff (2s, 5s, 10s)
+    └── CAPTCHA/Cloudflare-Erkennung
+```
+
+```python
+# Session-isoliert browsen
+result = await open_url("https://example.com", session_id="user_123")
+await browser_save_session("user_123")       # State speichern
+await browser_close_session("user_123")      # Session schliessen
+```
+
+```bash
+# Konfiguration via ENV
+BROWSER_MAX_CONTEXTS=5
+BROWSER_SESSION_TIMEOUT=60
+BROWSER_MAX_RETRIES=3
+BROWSER_RETRY_DELAYS=2,5,10
+```
+
 ### Proaktiver Scheduler
 
 Der Heartbeat-Scheduler fuehrt in konfigurierbaren Intervallen autonome Aktionen aus:
@@ -275,7 +305,10 @@ REFLECTION_ENABLED=true
 
 ## Skill-System
 
-Timus kann Faehigkeiten erlernen und wiederverwenden. Skills werden in YAML+Markdown definiert:
+Timus verfuegt ueber ein duales Skill-System:
+
+### 1. YAML-Skills (Agent-Workflows)
+Skills werden in YAML+Markdown definiert und vom MetaAgent automatisch eingesetzt:
 
 ```yaml
 ---
@@ -286,6 +319,13 @@ tags: [automation, web]
 # Anweisungen
 Schritt-fuer-Schritt Anleitungen fuer den Agenten
 ```
+
+### 2. Python-Skills (Tool-Generierung)
+Automatisch generierte Python-Tools ueber `create_tool_from_pattern`:
+
+- **Quality-Gate:** Duplikat-Check -> Code-Generierung -> AST-Validierung -> Auto-Registrierung
+- **Safeguards:** Pattern muss 3x auftreten, 1h Cooldown, Confidence >= 0.7
+- **UI-Pattern Templates:** 8 vorgefertigte Templates (calendar_picker, modal_handler, form_filler, infinite_scroll, login_handler, cookie_banner, dropdown_selector, table_extraction)
 
 **Vorhandene Skills:**
 - **image_loader_skill** - Bild-Laden mit Groessen-Anpassung
@@ -415,7 +455,9 @@ timus/
 ├── tools/                   # 50+ Tool-Module
 │   ├── ocr_tool/
 │   ├── som_tool/
-│   ├── browser_tool/
+│   ├── browser_tool/        # Browser mit Session-Isolation + Retry
+│   │   ├── persistent_context.py  # PersistentContextManager
+│   │   └── retry_handler.py       # Exponential Backoff + CAPTCHA
 │   ├── mouse_tool/
 │   ├── search_tool/
 │   ├── creative_tool/
@@ -429,6 +471,7 @@ timus/
 ├── server/
 │   └── mcp_server.py        # MCP Server (FastAPI, Port 5000)
 ├── skills/                  # Erlernbare Skills
+│   └── templates/           # UI-Pattern Templates (8 Patterns)
 ├── memory/
 │   ├── memory_system.py     # Memory v2.0 (Hybrid-Suche, Sync)
 │   ├── reflection_engine.py # Post-Task Reflexion
