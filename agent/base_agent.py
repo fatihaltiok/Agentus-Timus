@@ -133,9 +133,44 @@ class BaseAgent(DynamicToolMixin):
         self._task_action_history: List[Dict[str, Any]] = []
         self._working_memory_last_meta: Dict[str, Any] = {}
         self._run_started_at: float = 0.0
+        self._live_status_enabled = (
+            os.getenv("TIMUS_LIVE_STATUS", "true").lower() in {"1", "true", "yes", "on"}
+        )
+        self._active_phase = "idle"
+        self._active_tool_name: Optional[str] = None
 
         if self.use_screen_change_gate:
             log.info(f"Screen-Change-Gate AKTIV fuer {self.__class__.__name__}")
+
+    def _emit_live_status(
+        self,
+        phase: str,
+        detail: str = "",
+        step: Optional[int] = None,
+        total_steps: Optional[int] = None,
+        tool_name: Optional[str] = None,
+    ) -> None:
+        """Kompakte Live-Statusanzeige fuer Terminal-User."""
+        self._active_phase = phase
+        if tool_name is not None:
+            self._active_tool_name = tool_name
+        elif not phase.startswith("tool_"):
+            # Nur waehrend Tool-Phasen einen aktiven Tool-Namen anzeigen.
+            self._active_tool_name = None
+        if not self._live_status_enabled:
+            return
+
+        ts = datetime.now().strftime("%H:%M:%S")
+        step_txt = ""
+        if step is not None and total_steps is not None:
+            step_txt = f" | Step {step}/{total_steps}"
+        tool_txt = ""
+        if self._active_tool_name:
+            tool_txt = f" | Tool {self._active_tool_name}"
+        detail_txt = f" | {detail}" if detail else ""
+        print(
+            f"   ⏱️ Status [{ts}] | Agent {self.agent_type.upper()} | {phase.upper()}{step_txt}{tool_txt}{detail_txt}"
+        )
 
     # ------------------------------------------------------------------
     # Screenshot + Vision (delegiert an shared utilities)
@@ -382,10 +417,20 @@ class BaseAgent(DynamicToolMixin):
 
     async def _call_tool(self, method: str, params: dict) -> dict:
         method, params = self._refine_tool_call(method, params)
+        self._emit_live_status(
+            phase="tool_active",
+            detail=str(params)[:120],
+            tool_name=method,
+        )
 
         allowed, policy_reason = check_tool_policy(method, params)
         if not allowed:
             log.error(f"Tool-Call durch Policy blockiert: {method}")
+            self._emit_live_status(
+                phase="tool_blocked",
+                detail="Policy blockiert",
+                tool_name=method,
+            )
             return {"error": policy_reason, "blocked_by_policy": True}
 
         await self._ensure_remote_tool_names()
@@ -394,6 +439,11 @@ class BaseAgent(DynamicToolMixin):
             registry_v2.validate_tool_call(method, **params)
         except ValidationError as e:
             log.error(f"Parameter-Validierungsfehler fuer {method}: {e}")
+            self._emit_live_status(
+                phase="tool_error",
+                detail=f"Validierungsfehler: {e}",
+                tool_name=method,
+            )
             return {"error": f"Validierungsfehler: {e}", "validation_failed": True}
         except ValueError:
             if method not in self._remote_tool_names:
@@ -405,6 +455,11 @@ class BaseAgent(DynamicToolMixin):
 
         if should_skip:
             log.error(f"Tool-Call uebersprungen: {method} (Loop)")
+            self._emit_live_status(
+                phase="tool_skipped",
+                detail=loop_reason or "Loop detected",
+                tool_name=method,
+            )
             return {"skipped": True, "reason": loop_reason or "Loop detected", "_loop_warning": loop_reason or "Loop detected"}
 
         if loop_reason:
@@ -431,12 +486,32 @@ class BaseAgent(DynamicToolMixin):
                         result["_loop_warning"] = loop_reason
                     else:
                         result = {"value": result, "_loop_warning": loop_reason}
+                self._emit_live_status(
+                    phase="tool_done",
+                    detail="ok",
+                    tool_name=method,
+                )
                 return result
 
             if "error" in data:
+                self._emit_live_status(
+                    phase="tool_error",
+                    detail=str(data["error"])[:120],
+                    tool_name=method,
+                )
                 return {"error": str(data["error"])}
+            self._emit_live_status(
+                phase="tool_error",
+                detail="Invalid response",
+                tool_name=method,
+            )
             return {"error": "Invalid response"}
         except Exception as e:
+            self._emit_live_status(
+                phase="tool_error",
+                detail=str(e)[:120],
+                tool_name=method,
+            )
             return {"error": str(e)}
 
     # ------------------------------------------------------------------
@@ -988,6 +1063,8 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             "provider": self.provider.value,
             "run_duration_sec": run_duration,
             "action_count": len(self._task_action_history),
+            "active_phase": self._active_phase,
+            "active_tool": self._active_tool_name,
             "working_memory": self._working_memory_last_meta,
         }
 
@@ -998,6 +1075,11 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
     async def run(self, task: str) -> str:
         log.info(f"{self.__class__.__name__} ({self.provider.value})")
         self._run_started_at = time.time()
+        self._active_tool_name = None
+        self._emit_live_status(
+            phase="start",
+            detail=f"model={self.model} provider={self.provider.value}",
+        )
 
         roi_set = await self._detect_dynamic_ui_and_set_roi(task)
 
@@ -1016,6 +1098,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                         "result": memory_answer[:200],
                     }
                 ]
+                self._emit_live_status(phase="memory_recall", detail="Fast-Path genutzt")
                 await self._run_reflection(task, memory_answer, success=True)
                 return memory_answer
 
@@ -1026,6 +1109,10 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             if structured_result and structured_result.get("success"):
                 log.info(
                     f"Strukturierte Navigation erfolgreich: {structured_result['result']}"
+                )
+                self._emit_live_status(
+                    phase="structured_nav",
+                    detail="ActionPlan erfolgreich",
                 )
                 if roi_set:
                     self._clear_roi()
@@ -1065,15 +1152,32 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         ]
 
         for step in range(1, self.max_iterations + 1):
+            self._emit_live_status(
+                phase="thinking",
+                step=step,
+                total_steps=self.max_iterations,
+            )
             reply = await self._call_llm(messages)
 
             if reply.startswith("Error"):
+                self._emit_live_status(
+                    phase="error",
+                    detail=reply[:120],
+                    step=step,
+                    total_steps=self.max_iterations,
+                )
                 if roi_set:
                     self._clear_roi()
                 await self._run_reflection(task, reply, success=False)
                 return reply
             if "Final Answer:" in reply:
                 final_result = reply.split("Final Answer:")[1].strip()
+                self._emit_live_status(
+                    phase="final",
+                    detail=f"{len(final_result)} chars",
+                    step=step,
+                    total_steps=self.max_iterations,
+                )
                 if roi_set:
                     self._clear_roi()
                 await self._run_reflection(task, final_result, success=True)
@@ -1083,6 +1187,12 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             messages.append({"role": "assistant", "content": reply})
 
             if not action:
+                self._emit_live_status(
+                    phase="parse_error",
+                    detail=(err or "Kein JSON")[:120],
+                    step=step,
+                    total_steps=self.max_iterations,
+                )
                 messages.append(
                     {
                         "role": "user",
@@ -1115,6 +1225,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
 
         if roi_set:
             self._clear_roi()
+        self._emit_live_status(phase="limit", detail="max iterations erreicht")
         
         await self._run_reflection(task, "Limit erreicht", success=False)
         return "Limit erreicht."

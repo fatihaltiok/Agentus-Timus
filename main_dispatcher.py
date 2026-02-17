@@ -98,6 +98,15 @@ logging.basicConfig(
 )
 log = logging.getLogger("MainDispatcher")
 
+
+def _emit_dispatcher_status(agent_name: str, phase: str, detail: str = "") -> None:
+    """Kompakte Live-Statusanzeige fuer Dispatcher/Spezialpfade."""
+    enabled = os.getenv("TIMUS_LIVE_STATUS", "true").lower() in {"1", "true", "yes", "on"}
+    if not enabled:
+        return
+    detail_txt = f" | {detail}" if detail else ""
+    print(f"   ⏱️ Status | Agent {agent_name.upper()} | {phase.upper()}{detail_txt}")
+
 # --- System-Prompt (AKTUALISIERT v3.1) ---
 DISPATCHER_PROMPT = """
 Du bist der zentrale Dispatcher für Timus. Analysiere die INTENTION des Nutzers und wähle den richtigen Spezialisten.
@@ -679,11 +688,13 @@ async def run_agent(
             pass  # Non-interactive: weitermachen
 
     log.info(f"\n🚀 Starte Agent: {agent_name.upper()}")
+    _emit_dispatcher_status(agent_name, "start", "Initialisiere Agent")
 
     try:
         # QUICK FIX: Spezielle Behandlung für VisualAgent (nutzt präzisen standalone Agent)
         if AgentClass == "SPECIAL_VISUAL":
             log.info("👁️ Nutze präzisen VisualAgent v2.1 (SoM + Mouse Feedback)")
+            _emit_dispatcher_status(agent_name, "visual_active", "Standalone VisualAgent")
             final_answer = await run_visual_task_precise(query, max_iterations=30)
 
             print("\n" + "=" * 80)
@@ -698,6 +709,7 @@ async def run_agent(
         if AgentClass == "SPECIAL_VISION_QWEN":
             log.info("🎯 Nutze Qwen-VL via MCP-Server Tool (kein neuer Prozess!)")
             log.info("   Vorteile: Nutzt bereits geladenes Modell, kein Doppel-Laden")
+            _emit_dispatcher_status(agent_name, "plan", "Meta-Planung")
 
             # ═══════════════════════════════════════════════════════════════════
             # NEU: Meta-Agent Planung vor Visual-Ausführung
@@ -725,6 +737,7 @@ async def run_agent(
                 # Nutze geplante URL falls vorhanden
                 url = visual_plan.get('url')
                 task = visual_plan.get('goal', query)
+                _emit_dispatcher_status(agent_name, "plan_done", f"steps={len(visual_plan.get('steps', []))}")
 
             except Exception as e:
                 log.warning(f"⚠️ Meta-Agent Planung fehlgeschlagen: {e}, nutze Fallback")
@@ -772,6 +785,7 @@ ERFOLGSKRITERIEN: {', '.join(visual_plan.get('success_criteria', []))}
             try:
                 import httpx
 
+                _emit_dispatcher_status(agent_name, "tool_active", "qwen_web_automation")
                 async with httpx.AsyncClient() as client:
                     response = await client.post(
                         "http://localhost:5000",
@@ -822,6 +836,7 @@ Durchgeführte Aktionen:
                         print(final_answer)
                         print("=" * 80)
                         audit.log_end(str(final_answer)[:200], "completed")
+                        _emit_dispatcher_status(agent_name, "done", "qwen_web_automation erfolgreich")
                         return _ret(
                             final_answer,
                             {"execution_path": "special_vision_qwen"},
@@ -832,6 +847,7 @@ Durchgeführte Aktionen:
                         )
                         log.error(f"❌ MCP Tool Fehler: {error_msg}")
                         audit.log_end(error_msg, "error")
+                        _emit_dispatcher_status(agent_name, "error", f"qwen_web_automation: {error_msg[:80]}")
                         return _ret(
                             f"Fehler: {error_msg}",
                             {"execution_path": "special_vision_qwen", "error": error_msg},
@@ -840,6 +856,7 @@ Durchgeführte Aktionen:
             except Exception as e:
                 log.error(f"❌ Fehler beim MCP-Tool Aufruf: {e}")
                 audit.log_end(str(e), "error")
+                _emit_dispatcher_status(agent_name, "error", f"MCP-Tool: {str(e)[:80]}")
                 return _ret(
                     f"Fehler: {e}",
                     {"execution_path": "special_vision_qwen", "exception": str(e)[:300]},
@@ -857,6 +874,7 @@ Durchgeführte Aktionen:
 
             log.info("🎯 Nutze VisualNemotronAgent v4 (Desktop Edition)")
             log.info("   Features: PyAutoGUI | SoM UI-Scan | Echte Maus-Klicks")
+            _emit_dispatcher_status(agent_name, "visual_active", "VisualNemotron v4")
 
             # Extrahiere URL und Task
             import re
@@ -935,6 +953,7 @@ Unique States: {unique_states if unique_states else "N/A"} (Loop-Erkennung)
                 print(final_answer)
                 print("=" * 80)
                 audit.log_end(str(final_answer)[:200], "completed")
+                _emit_dispatcher_status(agent_name, "done", "VisualNemotron abgeschlossen")
                 return _ret(
                     final_answer,
                     {"execution_path": "special_visual_nemotron"},
@@ -946,6 +965,7 @@ Unique States: {unique_states if unique_states else "N/A"} (Loop-Erkennung)
 
                 log.error(traceback.format_exc())
                 audit.log_end(str(e), "error")
+                _emit_dispatcher_status(agent_name, "error", f"VisualNemotron: {str(e)[:80]}")
                 return _ret(
                     f"Fehler bei Visual Automation: {e}",
                     {"execution_path": "special_visual_nemotron", "exception": str(e)[:300]},
@@ -969,6 +989,7 @@ Unique States: {unique_states if unique_states else "N/A"} (Loop-Erkennung)
             agent_instance = AgentClass(tools_description_string=tools_description)
 
         final_answer = await agent_instance.run(query)
+        _emit_dispatcher_status(agent_name, "done", "Agent-Run abgeschlossen")
         if hasattr(agent_instance, "get_runtime_telemetry"):
             try:
                 runtime_metadata["agent_runtime"] = agent_instance.get_runtime_telemetry()

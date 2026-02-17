@@ -429,7 +429,13 @@ ACTIVE_MONITOR=1
 USE_MOUSE_FEEDBACK=1
 USE_SCREEN_CHANGE_GATE=false
 AUTO_OPEN_FILES=true
+TIMUS_LIVE_STATUS=true
 ```
+
+`TIMUS_LIVE_STATUS=true` zeigt eine aktive Laufzeitanzeige im Terminal:
+- Welcher Agent gerade aktiv ist
+- In welcher Phase der Agent ist (`thinking`, `tool_active`, `final`, ...)
+- Welches Tool gerade laeuft
 
 ### Starten
 
@@ -458,6 +464,14 @@ Du> Oeffne Firefox und gehe zu google.com     -> VisualAgent
 ```
 
 Der Dispatcher erkennt automatisch den Intent und waehlt den passenden Agenten.
+
+Beispiel fuer Live-Status-Ausgabe:
+
+```text
+⏱️ Status [21:22:05] | Agent EXECUTOR | THINKING | Step 2/30
+⏱️ Status [21:22:06] | Agent EXECUTOR | TOOL_ACTIVE | Tool search_web | {'query': 'beste grafikkarten 2026'}
+⏱️ Status [21:22:08] | Agent EXECUTOR | TOOL_DONE | Tool search_web | ok
+```
 
 ---
 
