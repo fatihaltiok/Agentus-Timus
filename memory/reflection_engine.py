@@ -24,6 +24,7 @@ import json
 import logging
 import hashlib
 import re
+import asyncio
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
@@ -241,13 +242,19 @@ class ReflectionEngine:
             else:
                 log.warning("Kein LLM Client für Reflexion verfügbar")
                 return None
-        
+
         try:
             from utils.openai_compat import prepare_openai_params
-            
-            response = self.llm.chat.completions.create(
+
+            llm_client = self._resolve_chat_client()
+            if not llm_client:
+                log.warning("Kein kompatibler Chat-Client für Reflexion verfügbar")
+                return None
+
+            response = await asyncio.to_thread(
+                llm_client.chat.completions.create,
                 **prepare_openai_params({
-                    "model": "gpt-4o-mini",
+                    "model": os.getenv("REFLECTION_MODEL", "gpt-4o-mini"),
                     "messages": [
                         {
                             "role": "system",
@@ -267,6 +274,52 @@ class ReflectionEngine:
         except Exception as e:
             log.error(f"LLM Call für Reflexion fehlgeschlagen: {e}")
             return None
+
+    def _resolve_chat_client(self):
+        """Löst einen OpenAI-kompatiblen Chat-Client auf.
+
+        Unterstützt:
+        - direkten OpenAI-kompatiblen Client mit `.chat.completions`
+        - MultiProviderClient via `.get_client(ModelProvider.XXX)`
+        """
+        if hasattr(self.llm, "chat") and hasattr(self.llm.chat, "completions"):
+            return self.llm
+
+        if not hasattr(self.llm, "get_client"):
+            return None
+
+        try:
+            from agent.providers import ModelProvider
+        except Exception as e:
+            log.debug(f"ModelProvider Import fehlgeschlagen: {e}")
+            return None
+
+        provider_order = []
+        preferred_provider = os.getenv("REFLECTION_PROVIDER", "openai").lower().strip()
+        try:
+            provider_order.append(ModelProvider(preferred_provider))
+        except ValueError:
+            pass
+
+        for provider in (
+            ModelProvider.OPENAI,
+            ModelProvider.OPENROUTER,
+            ModelProvider.DEEPSEEK,
+            ModelProvider.NVIDIA,
+            ModelProvider.INCEPTION,
+        ):
+            if provider not in provider_order:
+                provider_order.append(provider)
+
+        for provider in provider_order:
+            try:
+                client = self.llm.get_client(provider)
+                if hasattr(client, "chat") and hasattr(client.chat, "completions"):
+                    return client
+            except Exception:
+                continue
+
+        return None
     
     def _parse_response(self, raw: Optional[str]) -> Optional[ReflectionResult]:
         """Parst LLM Response zu ReflectionResult."""

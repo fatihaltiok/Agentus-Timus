@@ -234,7 +234,7 @@ def _initialize_shared_clients():
 
     try:
         import chromadb
-        from chromadb.utils import embedding_functions
+        from utils.embedding_provider import get_embedding_function
 
         if shared_context.openai_client:
             db_path = project_root / "memory_db"
@@ -242,10 +242,7 @@ def _initialize_shared_clients():
                 path=str(db_path),
                 settings=chromadb.config.Settings(anonymized_telemetry=False),
             )
-            openai_ef = embedding_functions.OpenAIEmbeddingFunction(
-                api_key=shared_context.openai_client.api_key,
-                model_name="text-embedding-3-small",
-            )
+            openai_ef = get_embedding_function()
             shared_context.memory_collection = (
                 chroma_db_client.get_or_create_collection(
                     name="timus_long_term_memory", embedding_function=openai_ef
