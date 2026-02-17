@@ -1,13 +1,18 @@
 """MetaAgent - Koordinator mit Skill-Orchestrierung."""
 import os
+import re
+import json
 import logging
-from typing import List
+from typing import List, Optional
 from pathlib import Path
 
 from agent.base_agent import BaseAgent
 from agent.prompts import META_SYSTEM_PROMPT
 
 log = logging.getLogger("TimusAgent-v4.4")
+
+
+from agent.shared.json_utils import extract_json_robust  # noqa: F401 - re-exported
 
 
 class MetaAgent(BaseAgent):
@@ -163,32 +168,33 @@ Antworte NUR mit dem JSON, keine Markdown, keine Erklärungen."""
             self.model = old_model
             self.provider = old_provider
 
-            # Parse JSON aus Response
-            import re
-            import json
-
-            # Entferne Markdown-Code-Blocks
-            cleaned = re.sub(r'```json\s*', '', response)
-            cleaned = re.sub(r'```\s*', '', cleaned)
-
-            # Extrahiere JSON
-            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', cleaned, re.DOTALL)
-            if json_match:
-                plan = json.loads(json_match.group(0))
-                log.info(f"✅ Visual-Plan erstellt: {plan.get('goal', 'N/A')} ({len(plan.get('steps', []))} Schritte)")
+            # Parse JSON aus Response via robustes Brace-Counting
+            plan = extract_json_robust(response)
+            if plan and plan.get('steps'):
+                log.info(f"Visual-Plan erstellt: {plan.get('goal', 'N/A')} ({len(plan.get('steps', []))} Schritte)")
                 return plan
             else:
-                log.warning("Kein JSON im Meta-Agent Response gefunden")
+                log.warning("Kein valides JSON im Meta-Agent Response gefunden")
                 return self._create_fallback_plan(task)
 
         except Exception as e:
             log.error(f"Fehler bei Visual-Plan-Erstellung: {e}")
             return self._create_fallback_plan(task)
 
-    def _create_fallback_plan(self, task: str) -> dict:
-        """Fallback-Plan wenn die AI-Planung fehlschlägt."""
-        import re
+    def _extract_search_terms(self, task: str) -> str:
+        """Extrahiert Suchbegriffe aus dem Task."""
+        patterns = [
+            r'(?:such|schau)\s+(?:nach|fuer|for)\s+(.+?)(?:\s+(?:auf|in|bei|von)|\.|$)',
+            r'(?:search|find|look)\s+(?:for)?\s+(.+?)(?:\s+(?:on|in|at)|\.|$)',
+        ]
+        for p in patterns:
+            m = re.search(p, task, re.IGNORECASE)
+            if m:
+                return m.group(1).strip()
+        return ""
 
+    def _create_fallback_plan(self, task: str) -> dict:
+        """Fallback-Plan wenn die AI-Planung fehlschlaegt."""
         # Extrahiere URL aus Task
         url_match = re.search(r'https?://[^\s]+', task)
         domain_match = re.search(r'([a-zA-Z0-9.-]+\.(de|com|org|net|io))', task)
@@ -197,39 +203,68 @@ Antworte NUR mit dem JSON, keine Markdown, keine Erklärungen."""
             f"https://{domain_match.group(1)}" if domain_match else "https://www.google.com"
         )
 
+        # Suchbegriffe aus Task extrahieren
+        search_terms = self._extract_search_terms(task)
+
+        steps = [
+            {
+                "step_number": 1,
+                "action": "navigate",
+                "description": f"Oeffne {url}",
+                "target": None,
+                "value": url,
+                "verification": "URL geladen",
+                "fallback": "Warte und versuche erneut"
+            },
+            {
+                "step_number": 2,
+                "action": "wait",
+                "description": "Warte auf Seiten-Ladung",
+                "target": None,
+                "value": "3s",
+                "verification": "Seite stabil",
+                "fallback": "Weiter mit naechstem Schritt"
+            },
+        ]
+
+        # Wenn Suchbegriffe vorhanden, Suche als Steps einfuegen
+        if search_terms:
+            steps.append({
+                "step_number": 3,
+                "action": "type",
+                "description": f"Suche nach: {search_terms}",
+                "target": "Suchfeld",
+                "value": search_terms,
+                "verification": "Suchbegriff eingegeben",
+                "fallback": "Suchfeld manuell finden"
+            })
+            steps.append({
+                "step_number": 4,
+                "action": "click",
+                "description": "Suche absenden",
+                "target": "Such-Button oder Enter",
+                "value": None,
+                "verification": "Suchergebnisse angezeigt",
+                "fallback": "Enter druecken"
+            })
+
+        # Verify-Step am Ende
+        verify_step_number = len(steps) + 1
+        steps.append({
+            "step_number": verify_step_number,
+            "action": "verify",
+            "description": "Pruefe ob Aufgabe erfuellt",
+            "target": None,
+            "value": None,
+            "verification": "Ziel erreicht",
+            "fallback": "Manuelle Interaktion noetig"
+        })
+
         return {
             "goal": task,
             "url": url,
-            "steps": [
-                {
-                    "step_number": 1,
-                    "action": "navigate",
-                    "description": f"Öffne {url}",
-                    "target": None,
-                    "value": url,
-                    "verification": "URL geladen",
-                    "fallback": "Warte und versuche erneut"
-                },
-                {
-                    "step_number": 2,
-                    "action": "wait",
-                    "description": "Warte auf Seiten-Ladung",
-                    "target": None,
-                    "value": "3s",
-                    "verification": "Seite stabil",
-                    "fallback": "Weiter mit nächstem Schritt"
-                },
-                {
-                    "step_number": 3,
-                    "action": "verify",
-                    "description": "Prüfe ob Aufgabe erfüllt",
-                    "target": None,
-                    "value": None,
-                    "verification": "Ziel erreicht",
-                    "fallback": "Manuelle Interaktion nötig"
-                }
-            ],
+            "steps": steps,
             "success_criteria": ["Seite erfolgreich geladen"],
-            "estimated_steps": 3,
+            "estimated_steps": len(steps),
             "_fallback": True
         }

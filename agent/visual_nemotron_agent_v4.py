@@ -538,32 +538,61 @@ ENTSCHEIDE DEN NÄCHSTEN SCHRITT (nur JSON, keine Erklärungen):"""
 # ============================================================================
 
 class LoopDetector:
-    """Erkennt wiederholte Zustände."""
-    
+    """Erkennt wiederholte Zustaende mit Perceptual Hashing und Proximity-Check."""
+
     def __init__(self, max_similar_screenshots: int = 3):
         self.screenshot_hashes: List[str] = []
         self.action_history: List[str] = []
         self.max_similar = max_similar_screenshots
-    
+
+    def _perceptual_hash(self, img: Image.Image) -> str:
+        """Average-Hash: robust gegen kleine Pixel-Aenderungen."""
+        small = img.resize((8, 8)).convert('L')
+        pixels = list(small.getdata())
+        avg = sum(pixels) / len(pixels)
+        return ''.join('1' if p > avg else '0' for p in pixels)
+
+    def _actions_similar(self, a1: str, a2: str) -> bool:
+        """Prueft ob zwei Aktionen aehnlich sind (Koordinaten-Proximity)."""
+        try:
+            d1, d2 = json.loads(a1), json.loads(a2)
+            if d1.get("action") == d2.get("action") == "click":
+                c1 = d1.get("coordinates", {})
+                c2 = d2.get("coordinates", {})
+                dx = abs(c1.get("x", 0) - c2.get("x", 0))
+                dy = abs(c1.get("y", 0) - c2.get("y", 0))
+                return dx <= 30 and dy <= 30
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            pass
+        return a1 == a2
+
     def add_state(self, screenshot: Image.Image, action: Dict) -> bool:
         """True wenn Loop erkannt."""
-        img_bytes = screenshot.tobytes()
-        img_hash = hashlib.md5(img_bytes).hexdigest()[:16]
+        img_hash = self._perceptual_hash(screenshot)
         action_str = json.dumps(action, sort_keys=True)
-        
+
         self.screenshot_hashes.append(img_hash)
         self.action_history.append(action_str)
-        
+
         if len(self.screenshot_hashes) >= self.max_similar:
             recent_hashes = self.screenshot_hashes[-self.max_similar:]
             recent_actions = self.action_history[-self.max_similar:]
-            
-            if len(set(recent_hashes)) == 1 and len(set(recent_actions)) <= 1:
-                log.warning(f"   🔄 LOOP ERKANNT! {self.max_similar}x identisch")
+
+            # Perceptual Hashes vergleichen (identisch = gleicher Screen)
+            hashes_same = len(set(recent_hashes)) == 1
+
+            # Aktionen via Proximity vergleichen
+            actions_same = all(
+                self._actions_similar(recent_actions[0], a)
+                for a in recent_actions[1:]
+            )
+
+            if hashes_same and actions_same:
+                log.warning(f"   LOOP ERKANNT! {self.max_similar}x identisch/aehnlich")
                 return True
-        
+
         return False
-    
+
     def get_unique_states(self) -> int:
         return len(set(self.screenshot_hashes))
 

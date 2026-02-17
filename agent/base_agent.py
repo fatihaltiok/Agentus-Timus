@@ -31,6 +31,7 @@ from agent.shared.mcp_client import MCPClient
 from agent.shared.screenshot import capture_screenshot_base64
 from agent.shared.action_parser import parse_action
 from agent.shared.vision_formatter import build_openai_vision_message
+from agent.shared.json_utils import extract_json_robust
 
 from utils.openai_compat import prepare_openai_params
 from utils.policy_gate import check_tool_policy
@@ -80,6 +81,7 @@ class BaseAgent(DynamicToolMixin):
         self.http_client = httpx.AsyncClient(timeout=300.0)
         self.recent_actions: List[str] = []
         self.last_skip_times: Dict[str, float] = {}
+        self.action_call_counts: Dict[str, int] = {}
 
         # Multi-Provider Setup
         self.provider_client = get_provider_client()
@@ -187,7 +189,10 @@ class BaseAgent(DynamicToolMixin):
             return True, reason
 
         action_key = f"{action_name}:{json.dumps(params, sort_keys=True)}"
-        count = self.recent_actions.count(action_key)
+
+        # Persistenter Counter (vergisst nie)
+        self.action_call_counts[action_key] = self.action_call_counts.get(action_key, 0) + 1
+        count = self.action_call_counts[action_key]
 
         COOLDOWN_ACTIONS = {
             "get_all_screen_text": 8.0,
@@ -207,38 +212,38 @@ class BaseAgent(DynamicToolMixin):
                 log.warning(reason)
                 return True, reason
 
-        if action_name in LOW_VALUE_ACTIONS and count >= 2:
+        if action_name in LOW_VALUE_ACTIONS and count >= 3:
             reason = (
-                f"Low-value tool '{action_name}' already used {count + 1}x. "
+                f"Low-value tool '{action_name}' already used {count}x. "
                 f"Switch to higher-signal tools (search_web, open_url, analyze_screen_verified)."
             )
             log.warning(reason)
             self.last_skip_times[action_key] = now
             return True, reason
 
-        if count >= 2:
+        if count >= 3:
             reason = (
-                f"Loop detected: {action_name} wurde bereits {count + 1}x aufgerufen "
+                f"Loop detected: {action_name} wurde bereits {count}x aufgerufen "
                 f"mit denselben Parametern. KRITISCH: Aktion wird uebersprungen. "
                 f"Versuche anderen Ansatz!"
             )
             log.error(
-                f"Kritischer Loop ({count + 1}x): {action_name} - Aktion wird uebersprungen"
+                f"Kritischer Loop ({count}x): {action_name} - Aktion wird uebersprungen"
             )
             self.last_skip_times[action_key] = now
             return True, reason
 
-        elif count >= 1:
+        elif count >= 2:
             reason = (
-                f"Loop detected: {action_name} wurde bereits {count + 1}x aufgerufen "
+                f"Loop detected: {action_name} wurde bereits {count}x aufgerufen "
                 f"mit denselben Parametern. Versuche andere Parameter oder anderen Ansatz."
             )
-            log.warning(f"Loop ({count + 1}x): {action_name} - Warnung an Agent")
+            log.warning(f"Loop ({count}x): {action_name} - Warnung an Agent")
             self.recent_actions.append(action_key)
             return False, reason
 
         self.recent_actions.append(action_key)
-        if len(self.recent_actions) > 20:
+        if len(self.recent_actions) > 40:
             self.recent_actions.pop(0)
 
         return False, None
@@ -334,7 +339,7 @@ class BaseAgent(DynamicToolMixin):
 
         if should_skip:
             log.error(f"Tool-Call uebersprungen: {method} (Loop)")
-            return {"skipped": True, "reason": loop_reason or "Loop detected"}
+            return {"skipped": True, "reason": loop_reason or "Loop detected", "_loop_warning": loop_reason or "Loop detected"}
 
         if loop_reason:
             log.warning(f"Loop-Warnung fuer {method}: {loop_reason}")
@@ -557,17 +562,10 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 else:
                     os.environ.pop("NEMOTRON_ENABLE_THINKING", None)
 
-            response = _re.sub(r"```json\s*", "", response)
-            response = _re.sub(r"```\s*", "", response)
-
-            json_match = _re.search(
-                r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", response, _re.DOTALL
-            )
-            if not json_match:
+            plan = extract_json_robust(response)
+            if not plan:
                 log.warning(f"Kein JSON gefunden in Response: {response[:200]}")
                 return None
-
-            plan = json.loads(json_match.group(0))
 
             if not plan.get("steps") or not isinstance(plan["steps"], list):
                 log.warning("ActionPlan hat keine Steps")
