@@ -14,6 +14,7 @@ import os
 import json
 import asyncio
 import base64
+import re
 import subprocess
 import platform
 import time
@@ -82,6 +83,8 @@ class BaseAgent(DynamicToolMixin):
         self.recent_actions: List[str] = []
         self.last_skip_times: Dict[str, float] = {}
         self.action_call_counts: Dict[str, int] = {}
+        self._remote_tool_names: set[str] = set()
+        self._remote_tools_fetched: bool = False
 
         # Multi-Provider Setup
         self.provider_client = get_provider_client()
@@ -128,6 +131,8 @@ class BaseAgent(DynamicToolMixin):
         self._reflection_enabled = os.getenv("REFLECTION_ENABLED", "true").lower() == "true"
         self._reflection_engine = None
         self._task_action_history: List[Dict[str, Any]] = []
+        self._working_memory_last_meta: Dict[str, Any] = {}
+        self._run_started_at: float = 0.0
 
         if self.use_screen_change_gate:
             log.info(f"Screen-Change-Gate AKTIV fuer {self.__class__.__name__}")
@@ -174,6 +179,27 @@ class BaseAgent(DynamicToolMixin):
         "end_session",
         "get_memory_stats",
     }
+    NAVIGATION_TASK_PATTERNS = (
+        r"\bbrowser\b",
+        r"\bwebsite\b",
+        r"\burl\b",
+        r"\bklick(?:e|en|t)?\b",
+        r"\bclick\b",
+        r"\bbooking\b",
+        r"\bgoogle\b",
+        r"\bamazon\b",
+        r"\bnavigat(?:e|ion)\b",
+        r"\boeffne\b",
+        r"\böffne\b",
+        r"\bgehe\s+zu\b",
+    )
+    MEMORY_QUERY_PATTERNS = (
+        r"\bwas\s+habe\s+ich\b.*\bgesuch\w*\b",
+        r"\bwas\s+suche\s+ich\b",
+        r"\bwas\s+haben\s+wir\b.*\bgesuch\w*\b",
+        r"\bvorhin\b.*\bgesuch\w*\b",
+        r"\beben\b.*\bgesuch\w*\b",
+    )
 
     def should_skip_action(
         self, action_name: str, params: dict
@@ -315,6 +341,41 @@ class BaseAgent(DynamicToolMixin):
             )
         return self._lane
 
+    async def _ensure_remote_tool_names(self) -> None:
+        """Holt einmalig die Tool-Namen vom Server (lazy)."""
+        if self._remote_tools_fetched:
+            return
+
+        self._remote_tools_fetched = True
+        try:
+            resp = await self.http_client.get(
+                f"{MCP_URL}/get_tool_schemas/openai",
+                timeout=10.0,
+            )
+            if resp.status_code != 200:
+                log.debug(
+                    f"Remote-Registry Endpoint antwortet mit Status {resp.status_code}"
+                )
+                return
+
+            schema_data = resp.json()
+            if schema_data.get("status") != "success":
+                return
+
+            for tool in schema_data.get("tools", []):
+                if not isinstance(tool, dict):
+                    continue
+                fn = tool.get("function", {})
+                if not isinstance(fn, dict):
+                    continue
+                name = fn.get("name", "")
+                if name:
+                    self._remote_tool_names.add(name)
+
+            log.info(f"Remote-Registry geladen: {len(self._remote_tool_names)} Tools")
+        except Exception as e:
+            log.debug(f"Remote-Registry nicht erreichbar (non-critical): {e}")
+
     # ------------------------------------------------------------------
     # MCP Tool Call (mit Loop-Detection und Lane-Integration)
     # ------------------------------------------------------------------
@@ -327,13 +388,18 @@ class BaseAgent(DynamicToolMixin):
             log.error(f"Tool-Call durch Policy blockiert: {method}")
             return {"error": policy_reason, "blocked_by_policy": True}
 
+        await self._ensure_remote_tool_names()
+
         try:
             registry_v2.validate_tool_call(method, **params)
         except ValidationError as e:
             log.error(f"Parameter-Validierungsfehler fuer {method}: {e}")
             return {"error": f"Validierungsfehler: {e}", "validation_failed": True}
-        except ValueError as e:
-            log.warning(f"Tool '{method}' nicht in Registry - nutze direkten RPC-Call")
+        except ValueError:
+            if method not in self._remote_tool_names:
+                log.warning(f"Tool '{method}' weder lokal noch remote bekannt")
+            else:
+                log.debug(f"Tool '{method}' remote bekannt - Server validiert")
 
         should_skip, loop_reason = self.should_skip_action(method, params)
 
@@ -630,13 +696,71 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                     "state": screen_state,
                 }
             else:
+                error_msg = "Unknown"
+                if isinstance(result, dict):
+                    error_msg = (
+                        result.get("error")
+                        or result.get("error_message")
+                        or result.get("message")
+                        or "Unknown"
+                    )
                 log.warning(
-                    f"ActionPlan fehlgeschlagen: {result.get('error', 'Unknown')}"
+                    f"ActionPlan fehlgeschlagen: {error_msg}"
                 )
                 return None
 
         except Exception as e:
             log.error(f"Strukturierte Navigation fehlgeschlagen: {e}")
+            return None
+
+    def _is_navigation_task(self, task_lower: str) -> bool:
+        """Heuristik: Nur echte Navigation/UI-Aufgaben triggern den Screen-Flow."""
+        return any(
+            re.search(pattern, task_lower) is not None
+            for pattern in self.NAVIGATION_TASK_PATTERNS
+        )
+
+    def _is_memory_recall_query(self, task_lower: str) -> bool:
+        """Erkennt direkte Rückfragen nach bereits besprochenem Inhalt."""
+        return any(
+            re.search(pattern, task_lower) is not None
+            for pattern in self.MEMORY_QUERY_PATTERNS
+        )
+
+    async def _try_memory_recall(self, task: str) -> Optional[str]:
+        """Fast-Path für Erinnerungsfragen über das Memory-Tool."""
+        try:
+            recall_result = await self._call_tool(
+                "recall",
+                {"query": task, "n_results": 5},
+            )
+            if not isinstance(recall_result, dict):
+                return None
+
+            if recall_result.get("status") != "success":
+                return None
+
+            memories = recall_result.get("memories", [])
+            if not memories:
+                return "Ich finde dazu gerade keine passende Erinnerung im Gedächtnis."
+
+            lines = []
+            for item in memories[:3]:
+                text = str(item.get("text", "")).strip()
+                if not text:
+                    continue
+                score = item.get("relevance_score")
+                if isinstance(score, (int, float)):
+                    lines.append(f"- {text} (Relevanz {score:.2f})")
+                else:
+                    lines.append(f"- {text}")
+
+            if not lines:
+                return "Ich habe Erinnerungen gefunden, aber ohne verwertbaren Text."
+
+            return "Das habe ich im Gedächtnis gefunden:\n" + "\n".join(lines)
+        except Exception as e:
+            log.debug(f"Memory-Recall Fast-Path fehlgeschlagen: {e}")
             return None
 
     # ------------------------------------------------------------------
@@ -790,33 +914,112 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         return parse_action(text)
 
     # ------------------------------------------------------------------
+    # Working-Memory Prompt-Injektion
+    # ------------------------------------------------------------------
+
+    async def _build_working_memory_context(self, task: str) -> str:
+        enabled = os.getenv("WORKING_MEMORY_INJECTION_ENABLED", "true").lower()
+        if enabled not in {"1", "true", "yes", "on"}:
+            self._working_memory_last_meta = {
+                "enabled": False,
+                "reason": "disabled_by_env",
+                "context_chars": 0,
+            }
+            return ""
+
+        try:
+            max_chars = int(os.getenv("WORKING_MEMORY_CHAR_BUDGET", "3200"))
+            max_related = int(os.getenv("WORKING_MEMORY_MAX_RELATED", "4"))
+            max_recent_events = int(os.getenv("WORKING_MEMORY_MAX_RECENT_EVENTS", "6"))
+        except ValueError:
+            max_chars, max_related, max_recent_events = 3200, 4, 6
+
+        try:
+            from memory.memory_system import memory_manager
+
+            context = await asyncio.to_thread(
+                memory_manager.build_working_memory_context,
+                task,
+                max_chars,
+                max_related,
+                max_recent_events,
+            )
+            wm_stats: Dict[str, Any] = {}
+            if hasattr(memory_manager, "get_last_working_memory_stats"):
+                wm_stats = memory_manager.get_last_working_memory_stats()
+            self._working_memory_last_meta = {
+                "enabled": True,
+                "context_chars": len(context or ""),
+                "settings": {
+                    "max_chars": max_chars,
+                    "max_related": max_related,
+                    "max_recent_events": max_recent_events,
+                },
+                "memory_stats": wm_stats,
+            }
+            if context:
+                log.info(f"Working-Memory-Kontext injiziert ({len(context)} chars)")
+            return context or ""
+        except Exception as e:
+            log.debug(f"Working-Memory-Kontext nicht verfügbar (non-critical): {e}")
+            self._working_memory_last_meta = {
+                "enabled": True,
+                "error": str(e),
+                "context_chars": 0,
+            }
+            return ""
+
+    def _inject_working_memory_into_task(self, task: str, working_memory_context: str) -> str:
+        if not working_memory_context:
+            return task
+        return (
+            f"{working_memory_context}\n\n"
+            f"AKTUELLE_NUTZERANFRAGE:\n{task}\n\n"
+            "Bearbeite jetzt ausschließlich die aktuelle Nutzeranfrage."
+        )
+
+    def get_runtime_telemetry(self) -> Dict[str, Any]:
+        run_duration = None
+        if self._run_started_at > 0:
+            run_duration = round(max(0.0, time.time() - self._run_started_at), 3)
+        return {
+            "agent_type": self.agent_type,
+            "model": self.model,
+            "provider": self.provider.value,
+            "run_duration_sec": run_duration,
+            "action_count": len(self._task_action_history),
+            "working_memory": self._working_memory_last_meta,
+        }
+
+    # ------------------------------------------------------------------
     # Haupt-Loop
     # ------------------------------------------------------------------
 
     async def run(self, task: str) -> str:
         log.info(f"{self.__class__.__name__} ({self.provider.value})")
+        self._run_started_at = time.time()
 
         roi_set = await self._detect_dynamic_ui_and_set_roi(task)
 
         task_lower = task.lower()
-        is_navigation_task = any(
-            keyword in task_lower
-            for keyword in [
-                "browser",
-                "website",
-                "url",
-                "klick",
-                "click",
-                "such",
-                "search",
-                "booking",
-                "google",
-                "amazon",
-                "navigate",
-                "oeffne",
-                "gehe zu",
-            ]
-        )
+        is_memory_query = self._is_memory_recall_query(task_lower)
+
+        if is_memory_query:
+            memory_answer = await self._try_memory_recall(task)
+            if memory_answer:
+                if roi_set:
+                    self._clear_roi()
+                self._task_action_history = [
+                    {
+                        "method": "recall",
+                        "params": {"query": task, "n_results": 5},
+                        "result": memory_answer[:200],
+                    }
+                ]
+                await self._run_reflection(task, memory_answer, success=True)
+                return memory_answer
+
+        is_navigation_task = self._is_navigation_task(task_lower)
 
         if is_navigation_task:
             structured_result = await self._try_structured_navigation(task)
@@ -841,6 +1044,10 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
 
         # Clear action history for new task
         self._task_action_history = []
+        working_memory_context = await self._build_working_memory_context(task)
+        task_with_context = self._inject_working_memory_into_task(
+            task, working_memory_context
+        )
 
         use_vision = is_navigation_task and self._vision_enabled
         if use_vision:
@@ -848,9 +1055,9 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             initial_screenshot = await asyncio.to_thread(
                 self._capture_screenshot_base64
             )
-            initial_msg = self._build_vision_message(task, initial_screenshot)
+            initial_msg = self._build_vision_message(task_with_context, initial_screenshot)
         else:
-            initial_msg = {"role": "user", "content": task}
+            initial_msg = {"role": "user", "content": task_with_context}
 
         messages = [
             {"role": "system", "content": self.system_prompt},
@@ -942,7 +1149,13 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             
             # Set LLM client if available
             if engine.llm is None and hasattr(self, 'provider_client'):
-                engine.set_llm_client(self.provider_client)
+                try:
+                    engine.set_llm_client(
+                        self.provider_client.get_client(ModelProvider.OPENAI)
+                    )
+                except Exception:
+                    # Fallback: ReflectionEngine kann MultiProviderClient selbst auflösen
+                    engine.set_llm_client(self.provider_client)
             
             # Run reflection
             reflection = await engine.reflect_on_task(

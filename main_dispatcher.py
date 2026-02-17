@@ -391,6 +391,14 @@ EXECUTOR_KEYWORDS = [
     "hauptstadt von",
     "was ist ein",
     "definiere",
+    "vorhin",
+    "erinnerst du dich",
+    "was haben wir",
+    "was suchte ich",
+    "was haben wir gesucht",
+    "was habe ich",
+    "was suche ich",
+    "eben gesucht",
 ]
 
 
@@ -568,7 +576,23 @@ async def get_agent_decision(user_query: str) -> str:
         )
 
         response = await asyncio.to_thread(client.chat.completions.create, **api_params)
-        decision = response.choices[0].message.content.strip().lower().replace(".", "")
+        raw_content = ""
+        if response.choices and hasattr(response.choices[0], "message"):
+            content = response.choices[0].message.content
+            if isinstance(content, str):
+                raw_content = content
+            elif isinstance(content, list):
+                # Defensive: Einige APIs liefern segmentierte Content-Listen
+                parts = []
+                for item in content:
+                    if isinstance(item, dict) and isinstance(item.get("text"), str):
+                        parts.append(item["text"])
+                raw_content = "".join(parts)
+
+        decision = raw_content.strip().lower().replace(".", "")
+        if not decision:
+            log.warning("⚠️ Leere Dispatcher-Antwort. Fallback auf 'executor'.")
+            return "executor"
 
         # Direkter Treffer
         if decision in AGENT_CLASS_MAP:
@@ -601,6 +625,15 @@ async def run_agent(
     audit_tool_call("dispatcher_start", {"agent": agent_name, "query": query[:100]})
 
     effective_session_id = session_id or str(uuid.uuid4())[:8]
+    final_output: Optional[str] = None
+    runtime_metadata: dict = {"source": "run_agent", "agent": agent_name}
+
+    def _ret(value, extra_metadata: Optional[dict] = None):
+        nonlocal final_output, runtime_metadata
+        final_output = None if value is None else str(value)
+        if isinstance(extra_metadata, dict):
+            runtime_metadata.update(extra_metadata)
+        return value
 
     lane_manager.set_registry(registry_v2)
     lane = await lane_manager.get_or_create_lane(effective_session_id)
@@ -611,7 +644,15 @@ async def run_agent(
     if not AgentClass:
         log.error(f"❌ Agent '{agent_name}' nicht gefunden.")
         audit.log_end("Agent nicht gefunden", "error")
-        return
+        result = _ret(None, {"error": "agent_not_found"})
+        _log_interaction_deterministic(
+            user_input=query,
+            assistant_output=final_output,
+            agent_name=agent_name,
+            session_id=effective_session_id,
+            metadata=runtime_metadata,
+        )
+        return result
 
     # Policy Gate: Destruktive Anfragen pruefen
     safe, warning = check_query_policy(query)
@@ -622,7 +663,18 @@ async def run_agent(
             confirm = await asyncio.to_thread(input, "Fortfahren? (ja/nein): ")
             if confirm.strip().lower() not in ["ja", "j", "yes", "y"]:
                 audit.log_end(f"Abgebrochen: {warning}", "cancelled")
-                return f"Abgebrochen: {warning}"
+                result = _ret(
+                    f"Abgebrochen: {warning}",
+                    {"cancelled_by_policy": True},
+                )
+                _log_interaction_deterministic(
+                    user_input=query,
+                    assistant_output=final_output,
+                    agent_name=agent_name,
+                    session_id=effective_session_id,
+                    metadata=runtime_metadata,
+                )
+                return result
         except Exception:
             pass  # Non-interactive: weitermachen
 
@@ -640,7 +692,7 @@ async def run_agent(
             print(textwrap.fill(str(final_answer), width=80))
             print("=" * 80)
             audit.log_end(str(final_answer)[:200], "completed")
-            return final_answer
+            return _ret(final_answer, {"execution_path": "special_visual"})
 
         # NEU: Spezielle Behandlung für Vision Qwen Agent - NUTZT MCP-TOOL!
         if AgentClass == "SPECIAL_VISION_QWEN":
@@ -770,26 +822,38 @@ Durchgeführte Aktionen:
                         print(final_answer)
                         print("=" * 80)
                         audit.log_end(str(final_answer)[:200], "completed")
-                        return final_answer
+                        return _ret(
+                            final_answer,
+                            {"execution_path": "special_vision_qwen"},
+                        )
                     else:
                         error_msg = result.get("error", {}).get(
                             "message", "Unbekannter Fehler"
                         )
                         log.error(f"❌ MCP Tool Fehler: {error_msg}")
                         audit.log_end(error_msg, "error")
-                        return f"Fehler: {error_msg}"
+                        return _ret(
+                            f"Fehler: {error_msg}",
+                            {"execution_path": "special_vision_qwen", "error": error_msg},
+                        )
 
             except Exception as e:
                 log.error(f"❌ Fehler beim MCP-Tool Aufruf: {e}")
                 audit.log_end(str(e), "error")
-                return f"Fehler: {e}"
+                return _ret(
+                    f"Fehler: {e}",
+                    {"execution_path": "special_vision_qwen", "exception": str(e)[:300]},
+                )
 
         # VisualNemotronAgent v4 für Desktop-Automatisierung (mit echten Maus-Tools)
         if AgentClass == "SPECIAL_VISUAL_NEMOTRON":
             if not VISUAL_NEMOTRON_V4_AVAILABLE:
                 log.error("❌ VisualNemotronAgent v4 nicht verfügbar")
                 audit.log_end("VisualNemotronAgent v4 nicht verfügbar", "error")
-                return "Fehler: VisualNemotronAgent v4 nicht verfügbar"
+                return _ret(
+                    "Fehler: VisualNemotronAgent v4 nicht verfügbar",
+                    {"execution_path": "special_visual_nemotron", "error": "agent_unavailable"},
+                )
 
             log.info("🎯 Nutze VisualNemotronAgent v4 (Desktop Edition)")
             log.info("   Features: PyAutoGUI | SoM UI-Scan | Echte Maus-Klicks")
@@ -871,7 +935,10 @@ Unique States: {unique_states if unique_states else "N/A"} (Loop-Erkennung)
                 print(final_answer)
                 print("=" * 80)
                 audit.log_end(str(final_answer)[:200], "completed")
-                return final_answer
+                return _ret(
+                    final_answer,
+                    {"execution_path": "special_visual_nemotron"},
+                )
 
             except Exception as e:
                 log.error(f"❌ VisualNemotronAgent Fehler: {e}")
@@ -879,7 +946,10 @@ Unique States: {unique_states if unique_states else "N/A"} (Loop-Erkennung)
 
                 log.error(traceback.format_exc())
                 audit.log_end(str(e), "error")
-                return f"Fehler bei Visual Automation: {e}"
+                return _ret(
+                    f"Fehler bei Visual Automation: {e}",
+                    {"execution_path": "special_visual_nemotron", "exception": str(e)[:300]},
+                )
 
         # Normale Agenten
         # ReasoningAgent braucht enable_thinking Parameter
@@ -899,6 +969,11 @@ Unique States: {unique_states if unique_states else "N/A"} (Loop-Erkennung)
             agent_instance = AgentClass(tools_description_string=tools_description)
 
         final_answer = await agent_instance.run(query)
+        if hasattr(agent_instance, "get_runtime_telemetry"):
+            try:
+                runtime_metadata["agent_runtime"] = agent_instance.get_runtime_telemetry()
+            except Exception as telemetry_error:
+                runtime_metadata["agent_runtime_error"] = str(telemetry_error)[:200]
 
         print("\n" + "=" * 80)
         print(f"💡 FINALE ANTWORT ({agent_name.upper()}):")
@@ -906,7 +981,7 @@ Unique States: {unique_states if unique_states else "N/A"} (Loop-Erkennung)
         print(textwrap.fill(str(final_answer), width=80))
         print("=" * 80)
         audit.log_end(str(final_answer)[:200], "completed")
-        return final_answer
+        return _ret(final_answer, {"execution_path": "standard"})
 
     except Exception as e:
         import traceback
@@ -914,7 +989,67 @@ Unique States: {unique_states if unique_states else "N/A"} (Loop-Erkennung)
         log.error(f"❌ Fehler beim Ausführen des Agenten '{agent_name}': {e}")
         log.error(traceback.format_exc())
         audit.log_end(str(e), "error")
-        return None
+        return _ret(
+            None,
+            {
+                "execution_path": "run_agent_exception",
+                "exception": str(e)[:300],
+            },
+        )
+    finally:
+        _log_interaction_deterministic(
+            user_input=query,
+            assistant_output=final_output,
+            agent_name=agent_name,
+            session_id=effective_session_id,
+            metadata=runtime_metadata,
+        )
+
+
+def _infer_interaction_status(result: Optional[str]) -> str:
+    """Leitet einen einfachen Status aus dem Agent-Ergebnis ab."""
+    if result is None:
+        return "error"
+    text = str(result).strip().lower()
+    if not text:
+        return "error"
+    if text.startswith("abgebrochen"):
+        return "cancelled"
+    if text.startswith("fehler") or text.startswith("error"):
+        return "error"
+    return "completed"
+
+
+def _log_interaction_deterministic(
+    *,
+    user_input: str,
+    assistant_output: Optional[str],
+    agent_name: str,
+    session_id: str,
+    metadata: Optional[dict] = None,
+) -> None:
+    """Persistiert jede Runde deterministisch im kanonischen Memory-Kern."""
+    try:
+        from memory.memory_system import memory_manager
+
+        output = "" if assistant_output is None else str(assistant_output)
+        status = _infer_interaction_status(output)
+        event_metadata = {"source": "main_dispatcher", "agent": agent_name}
+        if isinstance(metadata, dict):
+            event_metadata.update(metadata)
+        memory_manager.log_interaction_event(
+            user_input=user_input,
+            assistant_response=output,
+            agent_name=agent_name,
+            status=status,
+            external_session_id=session_id,
+            metadata=event_metadata,
+        )
+        log.info(
+            f"🧠 Deterministisches Logging gespeichert (session={session_id}, status={status})"
+        )
+    except Exception as e:
+        log.warning(f"⚠️ Deterministisches Interaction-Logging fehlgeschlagen: {e}")
 
 
 async def fetch_tool_descriptions_from_server() -> Optional[str]:
@@ -970,7 +1105,13 @@ async def main_loop():
             print("   🤔 Timus denkt...")
             agent = await get_agent_decision(q.strip())
             print(f"   📌 Agent: {agent.upper()}")
-            await run_agent(agent, q.strip(), tools_desc)
+            round_session_id = str(uuid.uuid4())[:8]
+            await run_agent(
+                agent,
+                q.strip(),
+                tools_desc,
+                session_id=round_session_id,
+            )
 
         except (KeyboardInterrupt, EOFError):
             break

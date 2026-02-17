@@ -2,6 +2,10 @@
 """
 Timus Memory System v2.0
 
+ARCHITECTURE FREEZE (2026-02-17):
+- Dieses Modul ist der kanonische Memory-Kern (Domain-Logik, Persistenz, Retrieval).
+- MCP-Tool-Endpunkte in tools/memory_tool/tool.py sollen als Adapter dienen.
+
 Features:
 - Session Memory (aktuelle Konversation)
 - Persistent Memory (SQLite Datenbank)
@@ -44,6 +48,11 @@ MAX_CONTEXT_TOKENS = 2000  # Max Tokens für Memory-Kontext
 SUMMARIZE_THRESHOLD = 10  # Nach N Nachrichten zusammenfassen
 SELF_MODEL_MIN_MESSAGES = 6
 SELF_MODEL_UPDATE_INTERVAL_HOURS = 12
+WORKING_MEMORY_MAX_CHARS = 3200
+WORKING_MEMORY_MAX_RELATED = 4
+WORKING_MEMORY_MAX_RECENT_EVENTS = 6
+WORKING_MEMORY_EVENT_HALF_LIFE_HOURS = 18
+WORKING_MEMORY_MEMORY_HALF_LIFE_DAYS = 21
 
 
 @dataclass
@@ -106,6 +115,8 @@ class SemanticSearchResult:
     importance: float
     distance: float
     source: str  # "chromadb" or "fts5"
+    key: str = ""
+    created_at: str = ""
 
 
 class SemanticMemoryStore:
@@ -213,7 +224,9 @@ class SemanticMemoryStore:
                 category=metadatas[i].get("category", "unknown") if i < len(metadatas) else "unknown",
                 importance=metadatas[i].get("importance", 0.5) if i < len(metadatas) else 0.5,
                 distance=distances[i] if i < len(distances) else 0.0,
-                source="chromadb"
+                source="chromadb",
+                key=metadatas[i].get("key", "") if i < len(metadatas) else "",
+                created_at=metadatas[i].get("created_at", "") if i < len(metadatas) else "",
             ))
         
         return formatted
@@ -242,7 +255,9 @@ class SemanticMemoryStore:
                     category=category,
                     importance=metadatas[i].get("importance", 0.5) if i < len(metadatas) else 0.5,
                     distance=0.0,
-                    source="chromadb"
+                    source="chromadb",
+                    key=metadatas[i].get("key", "") if i < len(metadatas) else "",
+                    created_at=metadatas[i].get("created_at", "") if i < len(metadatas) else "",
                 ))
             
             return formatted
@@ -380,6 +395,17 @@ class PersistentMemory:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
 
+                CREATE TABLE IF NOT EXISTS interaction_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    agent_name TEXT,
+                    status TEXT DEFAULT 'completed',
+                    user_input TEXT NOT NULL,
+                    assistant_response TEXT NOT NULL,
+                    metadata TEXT,  -- JSON object
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+
                 CREATE TABLE IF NOT EXISTS memory_items (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     category TEXT NOT NULL,
@@ -397,6 +423,8 @@ class PersistentMemory:
                 CREATE INDEX IF NOT EXISTS idx_facts_category ON facts(category);
                 CREATE INDEX IF NOT EXISTS idx_facts_key ON facts(key);
                 CREATE INDEX IF NOT EXISTS idx_summaries_created ON summaries(created_at);
+                CREATE INDEX IF NOT EXISTS idx_interaction_events_session ON interaction_events(session_id);
+                CREATE INDEX IF NOT EXISTS idx_interaction_events_created ON interaction_events(created_at);
                 CREATE INDEX IF NOT EXISTS idx_memory_category ON memory_items(category);
                 CREATE INDEX IF NOT EXISTS idx_memory_key ON memory_items(key);
             """)
@@ -626,6 +654,96 @@ class PersistentMemory:
                 })
         return results
 
+    def store_interaction_event(
+        self,
+        session_id: str,
+        user_input: str,
+        assistant_response: str,
+        agent_name: str = "",
+        status: str = "completed",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Speichert ein einzelnes Interaktions-Event deterministisch."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO interaction_events (
+                    session_id, agent_name, status, user_input, assistant_response, metadata, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    agent_name,
+                    status,
+                    user_input,
+                    assistant_response,
+                    json.dumps(metadata or {}, ensure_ascii=False),
+                    datetime.now().isoformat(),
+                ),
+            )
+
+    def count_interaction_events(self) -> int:
+        """Anzahl aller gespeicherten Interaktions-Events."""
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute("SELECT COUNT(*) FROM interaction_events").fetchone()
+            return int(row[0]) if row else 0
+
+    def get_recent_interaction_events(
+        self,
+        limit: int = 20,
+        session_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Holt die zuletzt persistierten Interaktions-Events (neueste zuerst)."""
+        events: List[Dict[str, Any]] = []
+        with sqlite3.connect(self.db_path) as conn:
+            if session_id:
+                rows = conn.execute(
+                    """
+                    SELECT session_id, agent_name, status, user_input, assistant_response, metadata, created_at
+                    FROM interaction_events
+                    WHERE session_id = ?
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """,
+                    (session_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT session_id, agent_name, status, user_input, assistant_response, metadata, created_at
+                    FROM interaction_events
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+
+            for row in rows:
+                metadata_raw = row[5] or ""
+                metadata: Dict[str, Any] = {}
+                if metadata_raw:
+                    try:
+                        loaded = json.loads(metadata_raw)
+                        if isinstance(loaded, dict):
+                            metadata = loaded
+                    except Exception:
+                        metadata = {}
+
+                events.append(
+                    {
+                        "session_id": row[0],
+                        "agent_name": row[1] or "",
+                        "status": row[2] or "",
+                        "user_input": row[3] or "",
+                        "assistant_response": row[4] or "",
+                        "metadata": metadata,
+                        "created_at": row[6] or "",
+                    }
+                )
+
+        return events
+
 
 class MemoryManager:
     """
@@ -647,6 +765,7 @@ class MemoryManager:
         ).hexdigest()[:12]
         self.self_model_last_updated: Optional[datetime] = None
         self.self_model_dirty = False
+        self._last_working_memory_stats: Dict[str, Any] = {}
         
         # NEW: Semantic Memory Store (ChromaDB)
         self.semantic_store: Optional[SemanticMemoryStore] = None
@@ -656,6 +775,10 @@ class MemoryManager:
         self._markdown_store = None
         
         self._load_self_model_state()
+
+    def get_last_working_memory_stats(self) -> Dict[str, Any]:
+        """Gibt Metadaten des letzten Working-Memory-Builds zurück."""
+        return dict(self._last_working_memory_stats)
     
     def _init_semantic_store(self):
         """Initialisiert ChromaDB-Store wenn verfügbar."""
@@ -721,6 +844,34 @@ class MemoryManager:
         
         # Selektive Memory-Extraktion
         self._process_memory_candidates(user_input)
+
+    def log_interaction_event(
+        self,
+        user_input: str,
+        assistant_response: str,
+        agent_name: str = "",
+        status: str = "completed",
+        external_session_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Deterministisches Logging pro Runde (unabhängig von Tool-Wahl)."""
+        user_text = (user_input or "").strip()
+        assistant_text = (assistant_response or "").strip()
+        if not user_text:
+            return
+
+        # Kurzzeitkontext + Kandidaten-Extraktion aktualisieren
+        self.add_interaction(user_text, assistant_text)
+
+        # Persistentes Event sofort schreiben
+        self.persistent.store_interaction_event(
+            session_id=external_session_id or self.session_id,
+            user_input=user_text,
+            assistant_response=assistant_text,
+            agent_name=agent_name,
+            status=status,
+            metadata=metadata or {},
+        )
     
     def _process_memory_candidates(self, message: str):
         """Erstellt Memory-Kandidaten und speichert selektiv."""
@@ -967,7 +1118,9 @@ class MemoryManager:
                         "importance": r.importance,
                         "relevance": 1.0 - r.distance,  # Convert distance to relevance
                         "source": "semantic",
-                        "doc_id": r.doc_id
+                        "doc_id": r.doc_id,
+                        "key": r.key,
+                        "created_at": r.created_at,
                     })
                     seen_ids.add(r.doc_id)
         
@@ -985,7 +1138,9 @@ class MemoryManager:
                             "importance": 0.5,
                             "relevance": r.rank,
                             "source": "keyword_fts5",
-                            "doc_id": result_key
+                            "doc_id": result_key,
+                            "key": "",
+                            "created_at": "",
                         })
                         seen_ids.add(result_key)
         except Exception as e:
@@ -1018,6 +1173,353 @@ class MemoryManager:
         ])
         
         return f"{base_context}\n\nRELEVANTE ERINNERUNGEN:\n{related_text}"
+
+    def _normalize_text_for_prompt(self, text: str) -> str:
+        return re.sub(r"\s+", " ", str(text or "")).strip()
+
+    def _truncate_for_budget(self, text: str, max_chars: int) -> str:
+        cleaned = self._normalize_text_for_prompt(text)
+        if max_chars <= 0:
+            return ""
+        if len(cleaned) <= max_chars:
+            return cleaned
+        if max_chars <= 3:
+            return cleaned[:max_chars]
+        return cleaned[: max_chars - 3].rstrip() + "..."
+
+    def _extract_query_terms(self, query: str) -> List[str]:
+        stopwords = {
+            "und", "oder", "aber", "eine", "einer", "einem", "einen", "der", "die",
+            "das", "den", "dem", "dass", "ist", "sind", "war", "ich", "du", "wir",
+            "was", "wie", "wo", "wer", "nach", "mit", "für", "von", "auf", "zu",
+            "the", "and", "for", "with", "that", "this", "from", "about",
+        }
+        terms = []
+        for token in re.findall(r"\w{3,}", query.lower()):
+            if token not in stopwords and token not in terms:
+                terms.append(token)
+        return terms
+
+    def _parse_iso_datetime(self, raw: Any) -> Optional[datetime]:
+        text = self._normalize_text_for_prompt(raw)
+        if not text:
+            return None
+        try:
+            # Support "YYYY-MM-DD HH:MM:SS" und ISO-Strings
+            text = text.replace(" ", "T")
+            return datetime.fromisoformat(text)
+        except Exception:
+            return None
+
+    def _time_decay(self, timestamp: Optional[datetime], half_life_hours: float) -> float:
+        if timestamp is None:
+            return 0.45
+        age_hours = max(0.0, (datetime.now() - timestamp).total_seconds() / 3600.0)
+        if half_life_hours <= 0:
+            return 1.0
+        return 0.5 ** (age_hours / half_life_hours)
+
+    def _score_interaction_event(
+        self,
+        event: Dict[str, Any],
+        query_terms: List[str],
+    ) -> float:
+        haystack = self._normalize_text_for_prompt(
+            f"{event.get('user_input', '')} {event.get('assistant_response', '')}"
+        ).lower()
+
+        if query_terms:
+            matches = sum(1 for token in query_terms if token in haystack)
+            semantic_overlap = matches / max(1, len(query_terms))
+        else:
+            semantic_overlap = 0.35
+
+        event_time = self._parse_iso_datetime(event.get("created_at"))
+        recency = self._time_decay(event_time, WORKING_MEMORY_EVENT_HALF_LIFE_HOURS)
+
+        status = self._normalize_text_for_prompt(event.get("status", "")).lower()
+        status_boost = {
+            "completed": 1.0,
+            "cancelled": 0.6,
+            "error": 0.4,
+        }.get(status, 0.8)
+
+        score = (0.55 * semantic_overlap) + (0.35 * recency) + (0.10 * status_boost)
+        return max(0.0, min(1.5, score))
+
+    def _score_related_memory(
+        self,
+        memory: Dict[str, Any],
+        query_terms: List[str],
+    ) -> float:
+        content = self._normalize_text_for_prompt(memory.get("content", "")).lower()
+        relevance = float(memory.get("relevance", 0.0) or 0.0)
+        importance = float(memory.get("importance", 0.5) or 0.5)
+
+        if query_terms:
+            matches = sum(1 for token in query_terms if token in content)
+            semantic_overlap = matches / max(1, len(query_terms))
+        else:
+            semantic_overlap = 0.2
+
+        created_at = self._parse_iso_datetime(memory.get("created_at"))
+        recency = self._time_decay(
+            created_at, WORKING_MEMORY_MEMORY_HALF_LIFE_DAYS * 24.0
+        )
+
+        source = self._normalize_text_for_prompt(memory.get("source", "")).lower()
+        source_boost = 1.0 if source == "semantic" else 0.88
+
+        score = (
+            (0.45 * relevance)
+            + (0.25 * importance)
+            + (0.20 * semantic_overlap)
+            + (0.10 * recency)
+        ) * source_boost
+        return max(0.0, min(2.0, score))
+
+    def _adapt_working_memory_targets(
+        self,
+        query: str,
+        max_recent_events: int,
+        max_related: int,
+    ) -> Tuple[int, int, Tuple[float, float, float]]:
+        lower = query.lower()
+        temporal_markers = (
+            "eben", "vorhin", "gerade", "zuletzt", "heute", "gestern", "laufend", "recent"
+        )
+        profile_markers = (
+            "präferenz", "pref", "gewohn", "ziel", "goal", "profil", "mag ich", "ich mag"
+        )
+
+        if any(marker in lower for marker in temporal_markers):
+            recent_target = max_recent_events
+            related_target = max(1, max_related - 1)
+            shares = (0.56, 0.24, 0.20)
+        elif any(marker in lower for marker in profile_markers):
+            recent_target = max(1, max_recent_events // 2)
+            related_target = max_related
+            shares = (0.28, 0.50, 0.22)
+        else:
+            recent_target = max_recent_events
+            related_target = max_related
+            shares = (0.42, 0.36, 0.22)
+
+        return recent_target, related_target, shares
+
+    def _build_budgeted_section(self, title: str, lines: List[str], budget: int) -> str:
+        if budget < 20 or not lines:
+            return ""
+        header = f"{title}:\n"
+        if len(header) >= budget:
+            return ""
+
+        kept: List[str] = []
+        used = len(header)
+        for raw in lines:
+            line = self._normalize_text_for_prompt(raw)
+            if not line:
+                continue
+            remaining = budget - used
+            if remaining <= 1:
+                break
+
+            if len(line) + 1 <= remaining:
+                kept.append(line)
+                used += len(line) + 1
+                continue
+
+            if remaining > 8:
+                kept.append(self._truncate_for_budget(line, remaining - 1))
+            break
+
+        if not kept:
+            return ""
+        return header + "\n".join(kept)
+
+    def build_working_memory_context(
+        self,
+        current_query: str,
+        max_chars: int = WORKING_MEMORY_MAX_CHARS,
+        max_related: int = WORKING_MEMORY_MAX_RELATED,
+        max_recent_events: int = WORKING_MEMORY_MAX_RECENT_EVENTS,
+    ) -> str:
+        """
+        Baut einen budgetierten Working-Memory-Block für Prompt-Injektion.
+
+        Priorität:
+        1) Kurzzeit: jüngste Interaktions-Events
+        2) Langzeit: query-relevante Erinnerungen (hybrid search)
+        3) Stabil: Self-Model + Behavior Hooks
+        """
+        query = self._normalize_text_for_prompt(current_query)
+        if not query:
+            self._last_working_memory_stats = {
+                "status": "no_query",
+                "query": "",
+                "query_terms_count": 0,
+                "final_chars": 0,
+            }
+            return ""
+
+        max_chars = max(600, int(max_chars))
+        max_related = max(0, int(max_related))
+        max_recent_events = max(0, int(max_recent_events))
+        query_terms = self._extract_query_terms(query)
+        recent_target, related_target, section_shares = self._adapt_working_memory_targets(
+            query, max_recent_events, max_related
+        )
+        stats: Dict[str, Any] = {
+            "status": "building",
+            "query": query[:200],
+            "query_terms_count": len(query_terms),
+            "max_chars": max_chars,
+            "max_related": max_related,
+            "max_recent_events": max_recent_events,
+            "recent_target": recent_target,
+            "related_target": related_target,
+            "section_shares": {
+                "short_term": section_shares[0],
+                "long_term": section_shares[1],
+                "stable": section_shares[2],
+            },
+        }
+
+        # --- 1) Kurzzeitkontext aus persistenten Interaktions-Events ---
+        event_lines: List[str] = []
+        selected_events: List[Dict[str, Any]] = []
+        if recent_target > 0:
+            recent_events = self.persistent.get_recent_interaction_events(
+                limit=max(12, recent_target * 6)
+            )
+            scored_events: List[Tuple[float, Dict[str, Any]]] = []
+            for event in recent_events:
+                score = self._score_interaction_event(event, query_terms)
+                scored_events.append((score, event))
+
+            scored_events.sort(key=lambda item: item[0], reverse=True)
+            selected_events = [item[1] for item in scored_events[:recent_target]]
+            selected_events.sort(
+                key=lambda ev: self._parse_iso_datetime(ev.get("created_at")) or datetime.min
+            )
+
+            for event in selected_events:
+                ts = self._normalize_text_for_prompt(event.get("created_at", ""))[:19]
+                user_text = self._truncate_for_budget(event.get("user_input", ""), 140)
+                assistant_text = self._truncate_for_budget(
+                    event.get("assistant_response", ""), 160
+                )
+                event_lines.append(
+                    f"- ({ts}) User: {user_text} | Timus: {assistant_text}"
+                )
+        stats["selected_recent_events"] = len(event_lines)
+
+        # --- 2) Langzeitkontext: relevante Erinnerungen ---
+        related_lines: List[str] = []
+        if related_target > 0 and len(query) >= 3:
+            related = self.find_related_memories(query, n_results=max(related_target * 4, 6))
+            scored_related: List[Tuple[float, Dict[str, Any]]] = []
+            for memory in related:
+                score = self._score_related_memory(memory, query_terms)
+                scored_related.append((score, memory))
+
+            scored_related.sort(key=lambda item: item[0], reverse=True)
+            for _, memory in scored_related[:related_target]:
+                category = self._normalize_text_for_prompt(memory.get("category", ""))
+                source = self._normalize_text_for_prompt(memory.get("source", ""))
+                content = self._truncate_for_budget(memory.get("content", ""), 180)
+                related_lines.append(f"- [{category}/{source}] {content}")
+        stats["selected_related_memories"] = len(related_lines)
+
+        # --- 3) Stabiler Kontext ---
+        stable_lines: List[str] = []
+        self_model = self._truncate_for_budget(self.get_self_model_prompt(), 350)
+        if self_model:
+            stable_lines.append(f"Self-Model: {self_model}")
+
+        hooks = [self._normalize_text_for_prompt(h) for h in self.get_behavior_hooks()[:4]]
+        if hooks:
+            stable_lines.append("Hooks: " + " | ".join(hooks))
+
+        if query_terms and selected_events:
+            repeated = []
+            for token in query_terms:
+                count = 0
+                for ev in selected_events:
+                    text = self._normalize_text_for_prompt(ev.get("user_input", "")).lower()
+                    if token in text:
+                        count += 1
+                if count >= 2:
+                    repeated.append(token)
+            if repeated:
+                stable_lines.append("Aktive Themen: " + ", ".join(repeated[:5]))
+        stats["stable_lines"] = len(stable_lines)
+
+        # Budgetiert zusammensetzen
+        sections: List[Tuple[str, List[str]]] = [
+            ("KURZZEITKONTEXT", event_lines),
+            ("LANGZEITKONTEXT", related_lines),
+            ("STABILER_KONTEXT", stable_lines),
+        ]
+        if not any(lines for _, lines in sections):
+            stats["status"] = "no_sections"
+            stats["generated_sections"] = []
+            stats["final_chars"] = 0
+            self._last_working_memory_stats = stats
+            return ""
+
+        header = (
+            "WORKING_MEMORY_CONTEXT\n"
+            "Nutze nur relevante Teile. Bei Konflikt gilt die aktuelle Nutzeranfrage."
+        )
+        blocks: List[str] = []
+        used_chars = len(header)
+        share_map = {
+            "KURZZEITKONTEXT": section_shares[0],
+            "LANGZEITKONTEXT": section_shares[1],
+            "STABILER_KONTEXT": section_shares[2],
+        }
+        generated_sections: List[str] = []
+
+        for title, lines in sections:
+            if not lines:
+                continue
+            remaining = max_chars - used_chars
+            if remaining <= 0:
+                break
+
+            section_budget = int(max_chars * share_map.get(title, 0.33))
+            section_budget = max(120, min(remaining, section_budget))
+            block = self._build_budgeted_section(title, lines, section_budget)
+            if not block:
+                continue
+
+            separator_len = 2  # "\n\n"
+            if used_chars + separator_len + len(block) > max_chars:
+                tight_budget = max_chars - used_chars - separator_len
+                block = self._truncate_for_budget(block, tight_budget)
+                if not block:
+                    continue
+
+            blocks.append(block)
+            generated_sections.append(title)
+            used_chars += separator_len + len(block)
+
+        if not blocks:
+            stats["status"] = "budget_exhausted"
+            stats["generated_sections"] = []
+            stats["final_chars"] = 0
+            self._last_working_memory_stats = stats
+            return ""
+
+        final_text = header + "".join(f"\n\n{block}" for block in blocks)
+        if len(final_text) > max_chars:
+            final_text = self._truncate_for_budget(final_text, max_chars)
+        stats["status"] = "ok"
+        stats["generated_sections"] = generated_sections
+        stats["final_chars"] = len(final_text)
+        self._last_working_memory_stats = stats
+        return final_text.strip()
     
     def sync_to_markdown(self) -> bool:
         """
@@ -1498,6 +2000,7 @@ Antworte im JSON-Format:
             "session_messages": len(self.session.messages),
             "total_facts": len(facts),
             "total_summaries": len(summaries),
+            "total_interaction_events": self.persistent.count_interaction_events(),
             "session_start": self.session.session_start.isoformat(),
             "entities_tracked": len(self.session.entities)
         }
@@ -1554,6 +2057,21 @@ def find_related_memories(query: str, n_results: int = 5) -> List[Dict[str, Any]
 def get_enhanced_context(current_query: str) -> str:
     """Shortcut für erweiterten Kontext mit semantischer Suche."""
     return memory_manager.get_enhanced_context(current_query)
+
+
+def get_working_memory_context(
+    current_query: str,
+    max_chars: int = WORKING_MEMORY_MAX_CHARS,
+    max_related: int = WORKING_MEMORY_MAX_RELATED,
+    max_recent_events: int = WORKING_MEMORY_MAX_RECENT_EVENTS,
+) -> str:
+    """Shortcut für budgetierten Working-Memory-Kontext."""
+    return memory_manager.build_working_memory_context(
+        current_query=current_query,
+        max_chars=max_chars,
+        max_related=max_related,
+        max_recent_events=max_recent_events,
+    )
 
 
 def sync_memory_to_markdown() -> bool:
