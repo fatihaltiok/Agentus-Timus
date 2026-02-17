@@ -4,6 +4,30 @@ Timus ist ein autonomes Multi-Agent-System fuer Desktop-Automatisierung, Web-Rec
 
 ---
 
+## Aktueller Stand (2026-02-17)
+
+Memory-Stabilisierung wurde bis Meilenstein 6 umgesetzt:
+- Deterministisches Interaction-Logging zentral in `run_agent(...)`
+- Working-Memory-Layer mit Budget + Prompt-Injektion
+- Dynamische Relevanz/Decay-Logik fuer Kurzzeit- und Langzeitkontext
+- Runtime-Telemetrie pro Agent-Run in Event-Metadaten
+- Quality-Gates + E2E-Readiness Tests
+
+Wichtige Doku-Dateien:
+- `docs/MEMORY_ARCHITECTURE.md`
+- `docs/MILESTONE6_RUNBOOK.md`
+- `docs/RELEASE_NOTES_MILESTONE6.md`
+- `docs/SESSION_LOG_2026-02-17_MILESTONES_0_TO_6.md`
+
+Schnelle Verifikation:
+```bash
+pytest -q tests/test_milestone5_quality_gates.py
+pytest -q tests/test_milestone6_e2e_readiness.py
+python verify_milestone6.py
+```
+
+---
+
 ## Architektur
 
 ```
@@ -476,10 +500,19 @@ timus/
 │   ├── memory_system.py     # Memory v2.0 (Hybrid-Suche, Sync)
 │   ├── reflection_engine.py # Post-Task Reflexion
 │   └── markdown_store/      # USER.md, SOUL.md, MEMORY.md
+├── tests/
+│   ├── test_milestone5_quality_gates.py
+│   ├── test_milestone6_e2e_readiness.py
+│   └── ...                  # Weitere Test-Suites
+├── verify_milestone6.py     # Go/No-Go Schnellcheck fuer Milestone 6
 ├── utils/                   # Hilfsfunktionen
 ├── config/                  # Personality-System
 ├── main_dispatcher.py       # Zentral-Dispatcher
-└── docs/                    # Dokumentation
+└── docs/                    # Dokumentation + Runbooks
+    ├── MEMORY_ARCHITECTURE.md
+    ├── MILESTONE6_RUNBOOK.md
+    ├── RELEASE_NOTES_MILESTONE6.md
+    └── SESSION_LOG_2026-02-17_MILESTONES_0_TO_6.md
 ```
 
 ---
