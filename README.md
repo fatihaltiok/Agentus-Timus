@@ -33,6 +33,14 @@ pytest -q tests/test_milestone6_e2e_readiness.py
 python verify_milestone6.py
 ```
 
+CI-Gates (GitHub Actions):
+- Workflow: `.github/workflows/ci.yml`
+- Abgesicherte Gates:
+  - `Gate 1`: Syntax-Compile (`python -m py_compile` auf Kernmodulen)
+  - `Gate 2`: Regression-Tests (`tests/test_milestone5_quality_gates.py` + `tests/test_milestone6_e2e_readiness.py`)
+  - `Gate 3`: Readiness-Check (`python verify_milestone6.py`)
+- CI-Dependencies: `requirements-ci.txt`
+
 ---
 
 ## Architektur
