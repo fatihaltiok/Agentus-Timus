@@ -1,10 +1,15 @@
 # Timus - Autonomous Multi-Agent Desktop AI
 
+<p align="center">
+  <img src="assets/branding/timus-logo-glow.png" alt="Timus Logo" width="760">
+</p>
+
 Timus ist ein autonomes Multi-Agent-System fuer Desktop-Automatisierung, Web-Recherche, Code-Generierung und kreative Aufgaben. Es kombiniert 7 spezialisierte KI-Agenten mit 50+ Tools ueber einen zentralen MCP-Server.
 
 Branding:
 - Primary Logo: `assets/branding/timus-logo-primary.svg`
 - Icon: `assets/branding/timus-icon.svg`
+- Glow Logo (PNG): `assets/branding/timus-logo-glow.png`
 
 ## Lizenz und Markenhinweis
 

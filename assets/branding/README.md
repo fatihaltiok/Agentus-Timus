@@ -14,6 +14,11 @@ Primary logo and icon assets for Timus.
   - Symbol only
   - Recommended for app icon, avatar, favicon source
 
+- `assets/branding/timus-logo-glow.png`
+  - Glow variant on dark background
+  - Recommended for README hero preview and social teaser images
+  - Size: `1536x1024`
+
 ## Color Palette
 
 - `#1e2a42` wordmark
