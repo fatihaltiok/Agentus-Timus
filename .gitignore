@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 .envalt*.txt
+env.txt
 
 # Python
 __pycache__/
