@@ -55,39 +55,66 @@ CI-Gates (GitHub Actions):
 
 ## Architektur
 
-```
+``` 
 Benutzer-Input
       |
       v
- main_dispatcher.py ──── Intent-Analyse (Keyword + LLM)
+main_dispatcher.py
+  ├─ Query-Sanitizing
+  ├─ Intent-Analyse (Keyword + LLM)
+  ├─ Policy-Gate (check_query_policy)
+  └─ Lane-/Session-Orchestrierung (lane_manager)
       |
       v
- ┌────────────────────────────────────────────────────┐
- │               AGENTEN-AUSWAHL                      │
- ├──────────┬──────────┬──────────┬───────────────────┤
- │ Executor │ Research │Reasoning │ Creative          │
- │ Developer│   Meta   │  Visual  │ Visual-Nemotron   │
- └────┬─────┴────┬─────┴────┬─────┴───────────────────┘
-      │          │          │
-      │    ┌─────┴──────┐   │
-      │    │ Delegation │   │  <-- Agenten koennen sich
-      │    │   (MCP)    │   │      gegenseitig delegieren
-      │    └─────┬──────┘   │
-      v          v          v
- ┌─────────────────────────────────────┐
- │     MCP-Server (Port 5000)         │
- │     JSON-RPC 2.0 | 50+ Tools      │
- ├─────────────────────────────────────┤
- │ OCR | Vision | Browser | Mouse     │
- │ Search | Files | Memory | Voice    │
- │ Creative | Developer | Delegation  │
- └─────────────────────────────────────┘
-      │          │          │
-      v          v          v
- ┌─────────┐ ┌────────┐ ┌──────────┐
- │ Desktop │ │ Browser│ │ APIs     │
- │PyAutoGUI│ │Playwrt │ │OpenAI ..│
- └─────────┘ └────────┘ └──────────┘
+Agent-Auswahl (AGENT_CLASS_MAP)
+  executor | research | reasoning | creative
+  development | meta | visual | vision_qwen | visual_nemotron
+      |
+      v
+agent/base_agent.py
+  ├─ Working-Memory-Injektion
+  ├─ Recall-Fast-Path (session-aware)
+  ├─ Tool-Loop-Guard + Runtime-Telemetrie
+  └─ Remote-Tool-Registry-Sync (/get_tool_schemas/openai)
+      |
+      v
+MCP-Server :5000 (FastAPI + JSON-RPC)
+  ├─ tool_registry_v2 / Schemas
+  ├─ Tool-Validierung (serverseitig)
+  └─ Tools: Browser, Vision, OCR, Mouse, Search, File, Memory, Voice, ...
+      |
+      +--> Externe Systeme: Desktop (PyAutoGUI), Browser (Playwright), APIs
+      |
+      +--> memory/memory_system.py (kanonischer Memory-Kern)
+            ├─ interaction_events (deterministisches Logging)
+            ├─ unified_recall (episodisch + semantisch)
+            ├─ working_memory_context (Budget + Decay + Relevanz)
+            └─ runtime memory snapshots
+```
+
+```mermaid
+flowchart TD
+    U[Benutzer-Input] --> D[main_dispatcher.py]
+    D --> DS[Query-Sanitizing]
+    D --> DI[Intent-Analyse]
+    D --> DP[Policy-Gate]
+    D --> DL[Lane/Session-Orchestrierung]
+    DL --> A[Agent-Auswahl AGENT_CLASS_MAP]
+
+    A --> B[agent/base_agent.py]
+    B --> BW[Working-Memory-Injektion]
+    B --> BR[Recall Fast-Path]
+    B --> BT[Loop-Guard + Telemetrie]
+    B --> BRG[Remote-Registry-Sync]
+
+    B --> M[MCP-Server :5000 FastAPI JSON-RPC]
+    M --> TR[tool_registry_v2 + Server-Validierung]
+    M --> T[Tool-Module]
+    T --> E[Desktop / Browser / APIs]
+    T --> MM[memory/memory_system.py]
+    MM --> IE[interaction_events]
+    MM --> UR[unified_recall]
+    MM --> WM[working_memory_context]
 ```
 
 ---
