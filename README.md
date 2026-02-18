@@ -2,6 +2,12 @@
 
 Timus ist ein autonomes Multi-Agent-System fuer Desktop-Automatisierung, Web-Recherche, Code-Generierung und kreative Aufgaben. Es kombiniert 7 spezialisierte KI-Agenten mit 50+ Tools ueber einen zentralen MCP-Server.
 
+## Lizenz und Markenhinweis
+
+- Lizenz: Apache License 2.0 (`LICENSE`)
+- Copyright: Fatih Altiok und Contributors
+- Hinweis: Der Name "Timus" und zugehoerige Branding-Elemente (z. B. Logo) sind nicht durch die Apache-2.0-Lizenz freigegeben.
+
 ---
 
 ## Aktueller Stand (2026-02-17)
