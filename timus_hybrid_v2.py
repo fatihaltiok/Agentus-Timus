@@ -14,17 +14,17 @@ Features:
 import asyncio
 import os
 import sys
-import tempfile
 import threading
 import queue
 import time
 import atexit
+import re
+import uuid
 import httpx
 import numpy as np
 import sounddevice as sd
 from pathlib import Path
 from typing import Optional
-from datetime import datetime
 
 sys.path.insert(0, str(Path.home() / "dev" / "timus"))
 
@@ -45,7 +45,7 @@ from main_dispatcher import (
 )
 
 # Memory System importieren
-from memory import memory_manager, get_memory_context, add_to_memory, end_session
+from memory import memory_manager, end_session
 
 # Emotion Detector importieren
 try:
@@ -73,6 +73,13 @@ INWORLD_SPEAKING_RATE = float(os.getenv("INWORLD_SPEAKING_RATE", "1.3"))  # 0.5-
 INWORLD_TEMPERATURE = float(os.getenv("INWORLD_TEMPERATURE", "1.5"))      # Emotionale Varianz
 SAMPLE_RATE = 16000
 EXIT_COMMANDS = ["stop", "beenden", "ende", "tschüss", "exit", "quit"]
+NEW_SESSION_COMMANDS = {
+    "/new",
+    "new session",
+    "neue session",
+    "neue konversation",
+    "reset session",
+}
 
 # VAD Einstellungen
 VAD_THRESHOLD = 0.003
@@ -102,9 +109,42 @@ class TimusHybridWithMemory:
         # Aktuelle Emotion
         self.current_emotion = "neutral"
         self.emotion_confidence = 0.0
-        
+        self.conversation_session_id = self._new_session_id()
+
         # Bei Beendigung Session speichern
         atexit.register(self._cleanup)
+
+    @staticmethod
+    def _new_session_id() -> str:
+        return f"hybrid_{uuid.uuid4().hex[:8]}"
+
+    @staticmethod
+    def _sanitize_user_input(text: str) -> str:
+        cleaned = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", " ", str(text or ""))
+        return re.sub(r"\s+", " ", cleaned).strip()
+
+    def _log_local_interaction(
+        self,
+        user_input: str,
+        assistant_response: str,
+        status: str = "completed",
+        command: str = "",
+    ) -> None:
+        """Lokale Kommandos ebenfalls deterministisch im Memory-Kern persistieren."""
+        try:
+            memory_manager.log_interaction_event(
+                user_input=user_input,
+                assistant_response=assistant_response,
+                agent_name="hybrid_local",
+                status=status,
+                external_session_id=self.conversation_session_id,
+                metadata={
+                    "source": "timus_hybrid_v2",
+                    "local_command": command,
+                },
+            )
+        except Exception as e:
+            print(f"   ⚠️ Lokales Logging fehlgeschlagen: {e}")
     
     def _cleanup(self):
         """Cleanup bei Beendigung."""
@@ -152,6 +192,7 @@ class TimusHybridWithMemory:
         # Memory Stats
         stats = memory_manager.get_stats()
         print(f"   🧠 Memory: {stats['total_facts']} Fakten, {stats['total_summaries']} Zusammenfassungen")
+        print(f"   🧵 Aktive Session: {self.conversation_session_id}")
         
         print("✅ Initialisierung abgeschlossen!\n")
         return True
@@ -310,78 +351,106 @@ class TimusHybridWithMemory:
         finally:
             self.is_speaking = False
     
-    def _build_prompt_with_memory(self, user_input: str) -> str:
-        """Baut Prompt mit Memory-Kontext."""
-        memory_context = get_memory_context()
-        
-        if memory_context:
-            return f"""{memory_context}
-
-AKTUELLE ANFRAGE:
-{user_input}
-
-WICHTIG: Nutze den Kontext um die Anfrage zu verstehen. Wenn sich der Benutzer auf etwas Vorheriges bezieht (er, sie, das, etc.), nutze die bekannten Informationen."""
-        
-        return user_input
-
     async def process_input(self, input_type: str, content) -> str:
         """Verarbeitet Eingabe durch Timus mit Memory."""
         self.is_processing = True
-        
+
         try:
             # Bei Audio: Transkribieren UND Emotion erkennen
             if input_type == "audio":
                 print("   🔄 Transkribiere...")
-                text = await asyncio.to_thread(self.transcribe, content)
-                if not text.strip():
+                user_text = await asyncio.to_thread(self.transcribe, content)
+                if not user_text.strip():
                     return ""
-                
+
                 # Emotion parallel erkennen
                 if self.emotion_detector:
                     emotion_result = await asyncio.to_thread(self.detect_emotion, content)
                     self.current_emotion = emotion_result.get("emotion", "neutral")
                     self.emotion_confidence = emotion_result.get("confidence", 0.0)
-                    
+
                     if self.emotion_confidence > 0.6:
-                        emotion_emoji = {"happy": "😊", "sad": "😔", "angry": "😤", "neutral": "😐"}.get(self.current_emotion, "🎭")
+                        emotion_emoji = {
+                            "happy": "😊",
+                            "sad": "😔",
+                            "angry": "😤",
+                            "neutral": "😐",
+                        }.get(self.current_emotion, "🎭")
                         print(f"   🎭 Emotion: {self.current_emotion} {emotion_emoji} ({self.emotion_confidence*100:.0f}%)")
-                
-                print(f"👤 Du (Voice): {text}")
-                # Markiere als Spracheingabe für den Agent
-                text = f"[SPRACHEINGABE via Mikrofon] {text}"
+
+                print(f"👤 Du (Voice): {user_text}")
             else:
-                text = content
-                print(f"👤 Du (Text): {text}")
-                # Markiere als Texteingabe für den Agent  
-                text = f"[TEXTEINGABE via Tastatur] {text}"
+                user_text = str(content or "")
+                print(f"👤 Du (Text): {user_text}")
                 # Bei Text keine Emotion erkennen
                 self.current_emotion = "neutral"
                 self.emotion_confidence = 0.0
-            
+
+            user_text = self._sanitize_user_input(user_text)
+            if not user_text:
+                return ""
+
+            text_lower = user_text.lower()
+
+            def local_response(message: str, command: str, status: str = "completed") -> str:
+                self._log_local_interaction(
+                    user_input=user_text,
+                    assistant_response=message,
+                    status=status,
+                    command=command,
+                )
+                return message
+
+            # Session-Kontinuitaet: expliziter Session-Reset per Kommando
+            if text_lower in NEW_SESSION_COMMANDS:
+                old_session = self.conversation_session_id
+                self.conversation_session_id = self._new_session_id()
+                message = (
+                    f"♻️ Neue Session gestartet: {self.conversation_session_id} "
+                    f"(vorher: {old_session})"
+                )
+                print(f"   {message}")
+                return local_response(message, command="new_session")
+
             # Exit-Check (aber nicht wenn es um Aufzeichnung geht)
-            if any(cmd in text.lower() for cmd in EXIT_COMMANDS) and "aufzeichnung" not in text.lower() and "aufnahme" not in text.lower():
+            if any(cmd in text_lower for cmd in EXIT_COMMANDS) and "aufzeichnung" not in text_lower and "aufnahme" not in text_lower:
+                self._log_local_interaction(
+                    user_input=user_text,
+                    assistant_response="Session durch Exit-Kommando beendet.",
+                    status="cancelled",
+                    command="exit",
+                )
                 return "__EXIT__"
-            
+
             # Memory-Befehle prüfen
-            text_lower = text.lower()
-            
             if "was weißt du über mich" in text_lower or "was erinnerst du" in text_lower:
                 facts = memory_manager.persistent.get_all_facts()
                 if facts:
                     fact_list = "\n".join([f"- {f.key}: {f.value}" for f in facts[:10]])
-                    return f"Das weiß ich über dich:\n{fact_list}"
-                else:
-                    return "Ich habe noch keine Informationen über dich gespeichert."
-            
+                    return local_response(
+                        f"Das weiß ich über dich:\n{fact_list}",
+                        command="memory_facts",
+                    )
+                return local_response(
+                    "Ich habe noch keine Informationen über dich gespeichert.",
+                    command="memory_facts",
+                )
+
             if "vergiss" in text_lower and ("alles" in text_lower or "memory" in text_lower):
                 # Gefährlich - nachfragen
-                return "Bist du sicher? Sage 'Ja, vergiss alles' um dein Memory zu löschen."
-            
+                return local_response(
+                    "Bist du sicher? Sage 'Ja, vergiss alles' um dein Memory zu löschen.",
+                    command="memory_confirm_clear",
+                )
+
             if "ja, vergiss alles" in text_lower:
                 memory_manager.session.clear()
                 # DB löschen wäre hier - aber das ist destruktiv
-                return "Ich habe mein Kurzzeit-Gedächtnis gelöscht. Die langfristigen Fakten bleiben erhalten."
-            
+                return local_response(
+                    "Ich habe mein Kurzzeit-Gedächtnis gelöscht. Die langfristigen Fakten bleiben erhalten.",
+                    command="memory_clear_session",
+                )
+
             # === SKILL RECORDING BEFEHLE ===
             def is_recording_start_command(text: str) -> bool:
                 """Prüft ob es ein Recording-Start-Befehl ist (robust)."""
@@ -390,28 +459,27 @@ WICHTIG: Nutze den Kontext um die Anfrage zu verstehen. Wenn sich der Benutzer a
                 recording_words = ["aufzeichnung", "aufnahme", "recording", "aufzeich", "aufnah"]
                 action_words = ["start", "beginn", "lerne", "nehme", "mach"]
                 skill_words = ["skill", "fähigkeit", "aktion"]
-                
+
                 has_recording = any(w in t for w in recording_words)
                 has_action = any(w in t for w in action_words)
                 has_skill = any(w in t for w in skill_words)
-                
+
                 # "aufzeichnung" + irgendein Aktionswort ODER "skill" + "lerne/aufnehmen"
                 return (has_recording and has_action) or (has_skill and has_action) or ("lerne" in t and "skill" in t)
-            
+
             def is_recording_stop_command(text: str) -> bool:
                 """Prüft ob es ein Recording-Stop-Befehl ist (robust)."""
                 t = text.lower()
                 stop_words = ["beende", "stopp", "stop", "fertig", "ende", "speicher"]
                 recording_words = ["aufzeichnung", "aufnahme", "recording", "aufzeich"]
-                
+
                 has_stop = any(w in t for w in stop_words)
                 has_recording = any(w in t for w in recording_words)
-                
+
                 return has_stop and has_recording
-            
+
             def extract_skill_name(text: str) -> str:
                 """Extrahiert Skill-Namen aus dem Text."""
-                import re
                 t = text.lower()
                 # Suche nach "für X", "namens X", "genannt X"
                 patterns = [
@@ -427,10 +495,10 @@ WICHTIG: Nutze den Kontext um die Anfrage zu verstehen. Wenn sich der Benutzer a
                         if name not in ["für", "die", "der", "das", "eine", "einen", "skill", "aufzeichnung"]:
                             return name
                 return f"skill_{int(time.time())}"
-            
+
             # Recording Start
-            if is_recording_start_command(text):
-                skill_name = extract_skill_name(text)
+            if is_recording_start_command(user_text):
+                skill_name = extract_skill_name(user_text)
                 async with httpx.AsyncClient(timeout=30) as client:
                     r = await client.post("http://127.0.0.1:5000", json={
                         "jsonrpc": "2.0",
@@ -440,12 +508,18 @@ WICHTIG: Nutze den Kontext um die Anfrage zu verstehen. Wenn sich der Benutzer a
                     })
                     result = r.json()
                     if "result" in result:
-                        return f"🎬 Aufzeichnung gestartet für '{skill_name}'! Führe jetzt deine Aktionen aus. Sage 'Beende Aufzeichnung' wenn fertig."
-                    else:
-                        return f"❌ Fehler: {result.get('error', {}).get('message', 'Unbekannt')}"
-            
+                        return local_response(
+                            f"🎬 Aufzeichnung gestartet für '{skill_name}'! Führe jetzt deine Aktionen aus. Sage 'Beende Aufzeichnung' wenn fertig.",
+                            command="skill_record_start",
+                        )
+                    return local_response(
+                        f"❌ Fehler: {result.get('error', {}).get('message', 'Unbekannt')}",
+                        command="skill_record_start",
+                        status="error",
+                    )
+
             # Recording Stop
-            if is_recording_stop_command(text):
+            if is_recording_stop_command(user_text):
                 async with httpx.AsyncClient(timeout=30) as client:
                     r = await client.post("http://127.0.0.1:5000", json={
                         "jsonrpc": "2.0",
@@ -456,10 +530,16 @@ WICHTIG: Nutze den Kontext um die Anfrage zu verstehen. Wenn sich der Benutzer a
                     result = r.json()
                     if "result" in result:
                         res = result["result"]
-                        return f"✅ Skill '{res.get('skill_name')}' gespeichert mit {res.get('steps_count', '?')} Schritten!"
-                    else:
-                        return f"❌ Fehler: {result.get('error', {}).get('message', 'Unbekannt')}"
-            
+                        return local_response(
+                            f"✅ Skill '{res.get('skill_name')}' gespeichert mit {res.get('steps_count', '?')} Schritten!",
+                            command="skill_record_stop",
+                        )
+                    return local_response(
+                        f"❌ Fehler: {result.get('error', {}).get('message', 'Unbekannt')}",
+                        command="skill_record_stop",
+                        status="error",
+                    )
+
             # Recording Status
             if "status" in text_lower and any(w in text_lower for w in ["aufzeichnung", "recording", "aufnahme"]):
                 async with httpx.AsyncClient(timeout=30) as client:
@@ -471,33 +551,34 @@ WICHTIG: Nutze den Kontext um die Anfrage zu verstehen. Wenn sich der Benutzer a
                     })
                     result = r.json().get("result", {})
                     if result.get("active"):
-                        return f"🎬 Aufzeichnung läuft: '{result.get('skill_name')}' - {result.get('action_count')} Aktionen"
-                    else:
-                        return "📴 Keine Aufzeichnung aktiv."
+                        return local_response(
+                            f"🎬 Aufzeichnung läuft: '{result.get('skill_name')}' - {result.get('action_count')} Aktionen",
+                            command="skill_record_status",
+                        )
+                    return local_response("📴 Keine Aufzeichnung aktiv.", command="skill_record_status")
             # === ENDE SKILL RECORDING ===
-            
+
             # === SKILL AUSFÜHRUNG ===
             def is_skill_list_command(text: str) -> bool:
                 t = text.lower()
                 list_words = ["liste", "zeige", "welche", "verfügbar", "gelernt", "kennst"]
                 skill_words = ["skill", "fähigkeit", "können"]
                 return any(l in t for l in list_words) and any(s in t for s in skill_words)
-            
+
             def is_skill_run_command(text: str) -> tuple:
                 """Prüft ob Skill ausgeführt werden soll. Returns (True/False, skill_name)"""
-                import re
                 t = text.lower()
                 run_words = ["führe", "starte", "nutze", "ausführen", "run", "execute"]
-                
+
                 if any(w in t for w in run_words) and "skill" in t:
                     # Extrahiere Skill-Namen
                     match = re.search(r'skill\s+["\']?(\w+)["\']?', t)
                     if match:
                         return True, match.group(1)
                 return False, None
-            
+
             # Skill-Liste
-            if is_skill_list_command(text):
+            if is_skill_list_command(user_text):
                 async with httpx.AsyncClient(timeout=30) as client:
                     r = await client.post("http://127.0.0.1:5000", json={
                         "jsonrpc": "2.0",
@@ -508,12 +589,14 @@ WICHTIG: Nutze den Kontext um die Anfrage zu verstehen. Wenn sich der Benutzer a
                     skills = result.get("skills", [])
                     if skills:
                         skill_list = "\n".join([f"• {s['name']}: {s['description'][:50]}" for s in skills])
-                        return f"📚 Meine erlernten Skills:\n{skill_list}"
-                    else:
-                        return "Ich habe noch keine Skills gelernt."
-            
+                        return local_response(
+                            f"📚 Meine erlernten Skills:\n{skill_list}",
+                            command="skill_list",
+                        )
+                    return local_response("Ich habe noch keine Skills gelernt.", command="skill_list")
+
             # Skill ausführen
-            should_run, skill_name = is_skill_run_command(text)
+            should_run, skill_name = is_skill_run_command(user_text)
             if should_run and skill_name:
                 async with httpx.AsyncClient(timeout=60) as client:
                     r = await client.post("http://127.0.0.1:5000", json={
@@ -524,41 +607,53 @@ WICHTIG: Nutze den Kontext um die Anfrage zu verstehen. Wenn sich der Benutzer a
                     })
                     result = r.json()
                     if "result" in result:
-                        return f"✅ Skill '{skill_name}' ausgeführt!"
-                    else:
-                        return f"❌ Fehler: {result.get('error', {}).get('message', 'Skill nicht gefunden')}"
+                        return local_response(f"✅ Skill '{skill_name}' ausgeführt!", command="skill_run")
+                    return local_response(
+                        f"❌ Fehler: {result.get('error', {}).get('message', 'Skill nicht gefunden')}",
+                        command="skill_run",
+                        status="error",
+                    )
             # === ENDE SKILL AUSFÜHRUNG ===
 
-            # Prompt mit Memory bauen
-            enhanced_prompt = self._build_prompt_with_memory(text)
-            
             # Agent entscheiden
             print("   🤔 Timus denkt...")
-            agent_name = quick_intent_check(text)
+            agent_name = quick_intent_check(user_text)
             if not agent_name:
-                agent_name = await get_agent_decision(text)
-            
+                agent_name = await get_agent_decision(user_text)
+
             print(f"   📌 Agent: {agent_name.upper()}")
-            
-            # Agent ausführen
-            result = await run_agent(agent_name, enhanced_prompt, self.tools_description)
-            
+
+            # Agent ausführen (Session-kontinuierlich, deterministisches Logging im Dispatcher)
+            result = await run_agent(
+                agent_name,
+                user_text,
+                self.tools_description,
+                session_id=self.conversation_session_id,
+            )
+
             if result is None:
                 result = "Ich konnte keine Antwort generieren."
-            
+
             # Emotion-basierte Antwort-Anpassung
             if self.current_emotion != "neutral" and self.emotion_confidence > 0.7:
                 emotion_prefix = self.get_emotion_prefix(self.current_emotion)
                 if emotion_prefix and not str(result).startswith(emotion_prefix):
                     result = emotion_prefix + str(result)
-            
-            # Interaktion im Memory speichern
-            add_to_memory(text, str(result))
-            
+
             return str(result)
-            
+
         except Exception as e:
-            return f"Fehler: {e}"
+            error_msg = f"Fehler: {e}"
+            try:
+                self._log_local_interaction(
+                    user_input=self._sanitize_user_input(content if isinstance(content, str) else ""),
+                    assistant_response=error_msg,
+                    status="error",
+                    command="exception",
+                )
+            except Exception:
+                pass
+            return error_msg
         finally:
             self.is_processing = False
     
@@ -591,6 +686,7 @@ WICHTIG: Nutze den Kontext um die Anfrage zu verstehen. Wenn sich der Benutzer a
         print("📝 Tippe Text + Enter  ODER  🎤 Sprich einfach los")
         print("🧠 Memory aktiv - Ich erinnere mich an unser Gespräch")
         print("🎭 Emotion aktiv - Ich erkenne deine Stimmung")
+        print(f"🧵 Session: {self.conversation_session_id}  |  Kommando: /new fuer neue Session")
         print("─" * 60 + "\n")
         
         while self.running:
@@ -634,6 +730,7 @@ async def main():
 ║   🎭 Emotion: Ich erkenne deine Stimmung                      ║
 ║                                                                ║
 ║   Sage "Stop" oder "Beenden" zum Beenden                      ║
+║   Tippe "/new" fuer eine neue Session-ID                      ║
 ║   Frage "Was weißt du über mich?" für Memory-Status           ║
 ╚════════════════════════════════════════════════════════════════╝
     """)

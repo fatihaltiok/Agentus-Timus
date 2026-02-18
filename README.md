@@ -492,12 +492,23 @@ TIMUS_LIVE_STATUS=true
 ### Starten
 
 ```bash
+# Alles in 3 separaten Terminals (MCP + Dispatcher + Hybrid)
+./start_timus_three_terminals.sh
+
 # 1. MCP-Server starten
 python server/mcp_server.py
 
 # 2. Dispatcher starten
 python main_dispatcher.py
+
+# Optional: Hybrid Voice/Text separat
+python timus_hybrid_v2.py
 ```
+
+Hinweis zum Startskript:
+- `start_timus_three_terminals.sh` aktiviert standardmäßig automatisch die Conda-Umgebung `timus`.
+- Falls der Env-Name anders ist: `TIMUS_CONDA_ENV=<name> ./start_timus_three_terminals.sh`
+- Falls du einen eigenen Aktivierungsbefehl brauchst: `TIMUS_ACTIVATE_CMD='source .../conda.sh && conda activate <name>' ./start_timus_three_terminals.sh`
 
 ---
 
