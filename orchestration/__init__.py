@@ -18,6 +18,10 @@ from .lane_manager import (
     Lane,
     LaneStatus
 )
+from .canvas_store import (
+    CanvasStore,
+    canvas_store,
+)
 
 __all__ = [
     # Scheduler
@@ -31,5 +35,8 @@ __all__ = [
     # Lane Manager
     "lane_manager",
     "Lane",
-    "LaneStatus"
+    "LaneStatus",
+    # Canvas
+    "CanvasStore",
+    "canvas_store",
 ]

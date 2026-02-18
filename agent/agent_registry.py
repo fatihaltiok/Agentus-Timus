@@ -12,6 +12,7 @@ import logging
 import httpx
 from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass, field
+from contextvars import ContextVar
 
 log = logging.getLogger("AgentRegistry")
 
@@ -36,12 +37,112 @@ class AgentRegistry:
     """
 
     MAX_DELEGATION_DEPTH = 3
+    AGENT_TYPE_ALIASES = {
+        "development": "developer",
+        "dev": "developer",
+        "researcher": "research",
+        "analyst": "reasoning",
+        "vision": "visual",
+    }
 
     def __init__(self):
         self._specs: Dict[str, AgentSpec] = {}
         self._instances: Dict[str, Any] = {}
         self._tools_description: Optional[str] = None
-        self._delegation_stack: List[str] = []
+        # Task-lokaler Delegation-Stack: verhindert False-Positives bei Parallel-Requests.
+        self._delegation_stack_var: ContextVar[tuple[str, ...]] = ContextVar(
+            "timus_delegation_stack", default=()
+        )
+
+    def _resolve_effective_session_id(
+        self, from_agent: str, session_id: Optional[str]
+    ) -> Optional[str]:
+        """Leitet effektive Session-ID aus Parameter oder Source-Agent ab."""
+        if session_id:
+            return session_id
+
+        source_instance = self._instances.get(from_agent)
+        if source_instance is not None:
+            return getattr(source_instance, "conversation_session_id", None)
+        return None
+
+    def _log_canvas_delegation(
+        self,
+        *,
+        from_agent: str,
+        to_agent: str,
+        session_id: Optional[str],
+        status: str,
+        task: str = "",
+        message: str = "",
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Best-effort Logging fuer Delegation im Canvas."""
+        if not session_id:
+            return
+
+        try:
+            from orchestration.canvas_store import canvas_store
+
+            canvas_id = canvas_store.get_canvas_id_for_session(session_id)
+            if not canvas_id:
+                return
+
+            from_node = f"agent:{from_agent}"
+            to_node = f"agent:{to_agent}"
+
+            canvas_store.upsert_node(
+                canvas_id=canvas_id,
+                node_id=from_node,
+                node_type="agent",
+                title=from_agent,
+                status="running" if status == "running" else "completed",
+                metadata={"last_session_id": session_id},
+            )
+            canvas_store.upsert_node(
+                canvas_id=canvas_id,
+                node_id=to_node,
+                node_type="agent",
+                title=to_agent,
+                status=status,
+                metadata={"last_session_id": session_id},
+            )
+            edge = canvas_store.add_edge(
+                canvas_id=canvas_id,
+                source_node_id=from_node,
+                target_node_id=to_node,
+                label="delegate_to_agent",
+                kind="delegation",
+                metadata={"session_id": session_id},
+            )
+            canvas_store.add_event(
+                canvas_id=canvas_id,
+                event_type="delegation",
+                status=status,
+                agent=from_agent,
+                node_id=to_node,
+                session_id=session_id,
+                message=message or f"{from_agent} -> {to_agent}",
+                payload={
+                    "from_agent": from_agent,
+                    "to_agent": to_agent,
+                    "task_preview": (task or "")[:200],
+                    "edge_id": edge.get("id", ""),
+                    **(payload or {}),
+                },
+            )
+        except Exception as e:
+            log.debug(f"Canvas-Delegation-Logging uebersprungen: {e}")
+
+    def normalize_agent_name(self, name: str) -> str:
+        """Normalisiert Agent-Namen (Lowercase + Alias-Aufloesung)."""
+        normalized = (name or "").strip().lower()
+        return self.AGENT_TYPE_ALIASES.get(normalized, normalized)
+
+    def get_current_agent_name(self) -> Optional[str]:
+        """Liefert den aktuell laufenden delegierten Agenten (falls vorhanden)."""
+        stack = self._delegation_stack_var.get()
+        return stack[-1] if stack else None
 
     def register_spec(
         self,
@@ -83,33 +184,112 @@ class AgentRegistry:
             log.info(f"Agent instanziiert: {name} ({spec.factory.__name__})")
         return self._instances[name]
 
-    async def delegate(self, from_agent: str, to_agent: str, task: str) -> str:
+    async def delegate(
+        self,
+        from_agent: str,
+        to_agent: str,
+        task: str,
+        session_id: Optional[str] = None,
+    ) -> str:
         """Delegiert Task mit Loop-Prevention via Stack."""
+        from_agent = self.normalize_agent_name(from_agent)
+        to_agent = self.normalize_agent_name(to_agent)
+        effective_session_id = self._resolve_effective_session_id(from_agent, session_id)
+
         if to_agent not in self._specs:
+            self._log_canvas_delegation(
+                from_agent=from_agent,
+                to_agent=to_agent,
+                session_id=effective_session_id,
+                status="error",
+                task=task,
+                message=f"Delegation fehlgeschlagen: Agent '{to_agent}' nicht registriert",
+                payload={"reason": "agent_not_registered"},
+            )
             return f"FEHLER: Agent '{to_agent}' nicht registriert. Verfuegbar: {list(self._specs.keys())}"
 
-        if to_agent in self._delegation_stack:
-            chain = " -> ".join(self._delegation_stack)
+        stack = list(self._delegation_stack_var.get())
+
+        if to_agent in stack:
+            chain = " -> ".join(stack)
+            self._log_canvas_delegation(
+                from_agent=from_agent,
+                to_agent=to_agent,
+                session_id=effective_session_id,
+                status="error",
+                task=task,
+                message=f"Zirkulaere Delegation: {chain} -> {to_agent}",
+                payload={"reason": "cycle_detected", "chain": chain},
+            )
             return f"FEHLER: Zirkulaere Delegation ({chain} -> {to_agent})"
 
-        if len(self._delegation_stack) >= self.MAX_DELEGATION_DEPTH:
+        if len(stack) >= self.MAX_DELEGATION_DEPTH:
+            self._log_canvas_delegation(
+                from_agent=from_agent,
+                to_agent=to_agent,
+                session_id=effective_session_id,
+                status="error",
+                task=task,
+                message=f"Max Delegation-Tiefe ({self.MAX_DELEGATION_DEPTH}) erreicht",
+                payload={"reason": "max_depth"},
+            )
             return f"FEHLER: Max Delegation-Tiefe ({self.MAX_DELEGATION_DEPTH}) erreicht"
 
-        self._delegation_stack.append(to_agent)
-        log.info(f"Delegation: {from_agent} -> {to_agent} (Stack: {self._delegation_stack})")
+        next_stack = tuple(stack + [to_agent])
+        stack_token = self._delegation_stack_var.set(next_stack)
+        log.info(f"Delegation: {from_agent} -> {to_agent} (Stack: {list(next_stack)})")
+        self._log_canvas_delegation(
+            from_agent=from_agent,
+            to_agent=to_agent,
+            session_id=effective_session_id,
+            status="running",
+            task=task,
+            message=f"Delegation gestartet: {from_agent} -> {to_agent}",
+            payload={"stack_depth": len(next_stack)},
+        )
 
+        agent = None
+        previous_session_id: Optional[str] = None
+        target_has_session_attr = False
         try:
             agent = await self._get_or_create(to_agent)
+            if hasattr(agent, "conversation_session_id"):
+                target_has_session_attr = True
+                previous_session_id = getattr(agent, "conversation_session_id", None)
+                if effective_session_id:
+                    setattr(agent, "conversation_session_id", effective_session_id)
+
             result = await agent.run(task)
+            self._log_canvas_delegation(
+                from_agent=from_agent,
+                to_agent=to_agent,
+                session_id=effective_session_id,
+                status="completed",
+                task=task,
+                message=f"Delegation abgeschlossen: {from_agent} -> {to_agent}",
+                payload={"result_preview": str(result)[:240]},
+            )
             return result
         except Exception as e:
             log.error(f"Delegation {from_agent} -> {to_agent} fehlgeschlagen: {e}")
+            self._log_canvas_delegation(
+                from_agent=from_agent,
+                to_agent=to_agent,
+                session_id=effective_session_id,
+                status="error",
+                task=task,
+                message=f"Delegation fehlgeschlagen: {e}",
+                payload={"exception": str(e)[:300]},
+            )
             return f"FEHLER: Delegation an '{to_agent}' fehlgeschlagen: {e}"
         finally:
-            self._delegation_stack.pop()
+            if target_has_session_attr and agent is not None:
+                setattr(agent, "conversation_session_id", previous_session_id)
+            self._delegation_stack_var.reset(stack_token)
 
     def find_by_capability(self, capability: str) -> List[AgentSpec]:
         """Findet alle AgentSpecs mit einer bestimmten Capability."""
+        capability = (capability or "").strip().lower()
         return [
             spec for spec in self._specs.values()
             if capability in spec.capabilities

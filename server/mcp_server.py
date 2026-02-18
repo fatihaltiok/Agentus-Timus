@@ -7,12 +7,14 @@ import importlib
 import logging
 import inspect
 import json as _json
+import threading
+import webbrowser
 from datetime import datetime
 
 # --- Drittanbieter-Bibliotheken ---
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from jsonrpcserver import async_dispatch
 from dotenv import load_dotenv
@@ -80,6 +82,8 @@ sys.path.insert(0, str(project_root))
 import tools.shared_context as shared_context
 from tools.tool_registry_v2 import registry_v2, ValidationError
 from utils.policy_gate import check_tool_policy
+from orchestration.canvas_store import canvas_store
+from server.canvas_ui import build_canvas_ui_html
 
 log = logging.getLogger("mcp_server")
 
@@ -332,6 +336,70 @@ def _detect_inception_registered() -> bool:
         return False
 
 
+def _is_truthy_env(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _canvas_ui_url() -> str:
+    host = (os.getenv("HOST", "127.0.0.1") or "127.0.0.1").strip()
+    if host in {"0.0.0.0", "::"}:
+        host = "127.0.0.1"
+    port = int(os.getenv("PORT", 5000))
+    return f"http://{host}:{port}/canvas/ui"
+
+
+def _bootstrap_canvas_startup() -> dict:
+    """Initialisiert Canvas-MVP beim Server-Start (best effort)."""
+    auto_create = _is_truthy_env(os.getenv("TIMUS_CANVAS_AUTO_CREATE"), default=True)
+    auto_open = _is_truthy_env(os.getenv("TIMUS_CANVAS_AUTO_OPEN"), default=True)
+
+    created_canvas_id = None
+    primary_canvas_id = None
+
+    canvases = canvas_store.list_canvases(limit=1)
+    if canvases.get("items"):
+        primary_canvas_id = str(canvases["items"][0].get("id") or "")
+
+    if auto_create and not primary_canvas_id:
+        title = (os.getenv("TIMUS_CANVAS_DEFAULT_TITLE") or "Live Canvas").strip()
+        description = "Auto-created on MCP startup"
+        canvas = canvas_store.create_canvas(
+            title=title,
+            description=description,
+            metadata={"auto_created": True, "source": "mcp_startup"},
+        )
+        created_canvas_id = canvas.get("id")
+        primary_canvas_id = created_canvas_id
+        log.info(f"✅ Canvas auto-created: {created_canvas_id}")
+
+    ui_url = _canvas_ui_url()
+    opened = False
+
+    if auto_open:
+        def _open_ui():
+            try:
+                webbrowser.open(ui_url, new=2)
+            except Exception as exc:
+                log.warning(f"⚠️ Canvas UI konnte nicht automatisch geöffnet werden: {exc}")
+
+        try:
+            # Verzögert starten, damit der HTTP-Listener bereit ist.
+            threading.Timer(1.2, _open_ui).start()
+            opened = True
+            log.info(f"🖼️ Canvas UI Auto-Open geplant: {ui_url}")
+        except Exception as exc:
+            log.warning(f"⚠️ Canvas UI Auto-Open nicht verfügbar: {exc}")
+
+    return {
+        "primary_canvas_id": primary_canvas_id,
+        "created_canvas_id": created_canvas_id,
+        "auto_open": opened,
+        "ui_url": ui_url,
+    }
+
+
 # --- Lifespan-Manager ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -339,8 +407,14 @@ async def lifespan(app: FastAPI):
     log.info("🚀 TIMUS MCP SERVER STARTUP-PROZESS BEGINNT...")
     log.info("=" * 50)
 
-    load_dotenv()
+    load_dotenv(override=True)
     log.info("✅ .env-Datei geladen.")
+
+    # Canvas-MVP Bootstrap (best effort)
+    try:
+        app.state.canvas_startup = _bootstrap_canvas_startup()
+    except Exception as e:
+        log.warning(f"⚠️ Canvas Startup-Bootstrap fehlgeschlagen: {e}")
 
     # System initialisieren (Hardware, Clients, Tools)
     _initialize_hardware_and_engines()
@@ -597,6 +671,231 @@ async def get_tools_by_capability(capability: str):
         }
     except Exception as e:
         log.error(f"Fehler bei Capability-Abfrage: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500, content={"status": "error", "error": str(e)}
+        )
+
+
+@app.get("/canvas", summary="List Canvas Documents")
+async def list_canvas(limit: int = 50):
+    try:
+        data = canvas_store.list_canvases(limit=limit)
+        return {
+            "status": "success",
+            "count": data["count"],
+            "items": data["items"],
+        }
+    except Exception as e:
+        log.error(f"Canvas-List Fehler: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500, content={"status": "error", "error": str(e)}
+        )
+
+
+@app.get("/canvas/ui", summary="Canvas Web UI", response_class=HTMLResponse)
+async def canvas_ui():
+    return HTMLResponse(content=build_canvas_ui_html())
+
+
+@app.post("/canvas/create", summary="Create Canvas")
+async def create_canvas(payload: dict):
+    try:
+        title = (payload or {}).get("title", "")
+        description = (payload or {}).get("description", "")
+        metadata = (payload or {}).get("metadata", {})
+        canvas = canvas_store.create_canvas(
+            title=title,
+            description=description,
+            metadata=metadata,
+        )
+        return {"status": "success", "canvas": canvas}
+    except Exception as e:
+        log.error(f"Canvas-Create Fehler: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500, content={"status": "error", "error": str(e)}
+        )
+
+
+@app.get("/canvas/{canvas_id}", summary="Get Canvas")
+async def get_canvas(
+    canvas_id: str,
+    session_id: str = "",
+    agent: str = "",
+    status: str = "",
+    only_errors: bool = False,
+    event_limit: int = 200,
+):
+    try:
+        canvas = canvas_store.get_canvas_view(
+            canvas_id=canvas_id,
+            session_id=session_id,
+            agent=agent,
+            status=status,
+            only_errors=only_errors,
+            event_limit=event_limit,
+        )
+        if not canvas:
+            return JSONResponse(
+                status_code=404,
+                content={"status": "error", "error": "canvas_not_found"},
+            )
+        return {"status": "success", "canvas": canvas}
+    except Exception as e:
+        log.error(f"Canvas-Get Fehler: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500, content={"status": "error", "error": str(e)}
+        )
+
+
+@app.get("/canvas/by_session/{session_id}", summary="Get Canvas by Session")
+async def get_canvas_by_session(
+    session_id: str,
+    agent: str = "",
+    status: str = "",
+    only_errors: bool = False,
+    event_limit: int = 200,
+):
+    try:
+        canvas = canvas_store.get_canvas_by_session_view(
+            session_id=session_id,
+            agent=agent,
+            status=status,
+            only_errors=only_errors,
+            event_limit=event_limit,
+        )
+        if not canvas:
+            return JSONResponse(
+                status_code=404,
+                content={"status": "error", "error": "canvas_for_session_not_found"},
+            )
+        return {"status": "success", "canvas": canvas}
+    except Exception as e:
+        log.error(f"Canvas-by-session Fehler: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500, content={"status": "error", "error": str(e)}
+        )
+
+
+@app.post("/canvas/{canvas_id}/attach_session", summary="Attach Session to Canvas")
+async def attach_session(canvas_id: str, payload: dict):
+    session_id = (payload or {}).get("session_id", "")
+    if not session_id:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "error": "session_id_required"},
+        )
+    try:
+        mapping = canvas_store.attach_session(canvas_id=canvas_id, session_id=session_id)
+        return {"status": "success", "mapping": mapping}
+    except KeyError:
+        return JSONResponse(
+            status_code=404,
+            content={"status": "error", "error": "canvas_not_found"},
+        )
+    except Exception as e:
+        log.error(f"Canvas attach_session Fehler: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500, content={"status": "error", "error": str(e)}
+        )
+
+
+@app.post("/canvas/{canvas_id}/nodes/upsert", summary="Upsert Canvas Node")
+async def upsert_canvas_node(canvas_id: str, payload: dict):
+    node_id = (payload or {}).get("node_id", "")
+    node_type = (payload or {}).get("node_type", "generic")
+    title = (payload or {}).get("title", node_id)
+    status = (payload or {}).get("status", "idle")
+    position = (payload or {}).get("position")
+    metadata = (payload or {}).get("metadata", {})
+    if not node_id:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "error": "node_id_required"},
+        )
+    try:
+        node = canvas_store.upsert_node(
+            canvas_id=canvas_id,
+            node_id=node_id,
+            node_type=node_type,
+            title=title,
+            status=status,
+            position=position,
+            metadata=metadata,
+        )
+        return {"status": "success", "node": node}
+    except KeyError:
+        return JSONResponse(
+            status_code=404,
+            content={"status": "error", "error": "canvas_not_found"},
+        )
+    except Exception as e:
+        log.error(f"Canvas upsert_node Fehler: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500, content={"status": "error", "error": str(e)}
+        )
+
+
+@app.post("/canvas/{canvas_id}/edges/add", summary="Add Canvas Edge")
+async def add_canvas_edge(canvas_id: str, payload: dict):
+    source = (payload or {}).get("source_node_id", "")
+    target = (payload or {}).get("target_node_id", "")
+    label = (payload or {}).get("label", "")
+    kind = (payload or {}).get("kind", "flow")
+    metadata = (payload or {}).get("metadata", {})
+    if not source or not target:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "error": "source_node_id_and_target_node_id_required"},
+        )
+    try:
+        edge = canvas_store.add_edge(
+            canvas_id=canvas_id,
+            source_node_id=source,
+            target_node_id=target,
+            label=label,
+            kind=kind,
+            metadata=metadata,
+        )
+        return {"status": "success", "edge": edge}
+    except KeyError:
+        return JSONResponse(
+            status_code=404,
+            content={"status": "error", "error": "canvas_not_found"},
+        )
+    except Exception as e:
+        log.error(f"Canvas add_edge Fehler: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500, content={"status": "error", "error": str(e)}
+        )
+
+
+@app.post("/canvas/{canvas_id}/events/add", summary="Add Canvas Event")
+async def add_canvas_event(canvas_id: str, payload: dict):
+    event_type = (payload or {}).get("event_type", "")
+    if not event_type:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "error": "event_type_required"},
+        )
+    try:
+        event = canvas_store.add_event(
+            canvas_id=canvas_id,
+            event_type=event_type,
+            status=(payload or {}).get("status", ""),
+            agent=(payload or {}).get("agent", ""),
+            node_id=(payload or {}).get("node_id", ""),
+            message=(payload or {}).get("message", ""),
+            session_id=(payload or {}).get("session_id", ""),
+            payload=(payload or {}).get("payload", {}),
+        )
+        return {"status": "success", "event": event}
+    except KeyError:
+        return JSONResponse(
+            status_code=404,
+            content={"status": "error", "error": "canvas_not_found"},
+        )
+    except Exception as e:
+        log.error(f"Canvas add_event Fehler: {e}", exc_info=True)
         return JSONResponse(
             status_code=500, content={"status": "error", "error": str(e)}
         )

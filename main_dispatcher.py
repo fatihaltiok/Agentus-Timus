@@ -58,6 +58,9 @@ except NameError:
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
 
+# WICHTIG: .env frueh laden, bevor Agent-Module ihre Clients/Konstanten initialisieren.
+load_dotenv(dotenv_path=project_root / ".env", override=True)
+
 # --- Imports ---
 from agent.timus_consolidated import (
     ExecutorAgent,
@@ -91,7 +94,6 @@ except ImportError as e:
     VISUAL_NEMOTRON_V4_AVAILABLE = False
 
 # --- Initialisierung ---
-load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 logging.basicConfig(
     level=logging.INFO,
@@ -663,6 +665,13 @@ async def run_agent(
     lane_manager.set_registry(registry_v2)
     lane = await lane_manager.get_or_create_lane(effective_session_id)
     log.info(f"Lane {effective_session_id} status: {lane.status.value}")
+    _log_canvas_agent_event(
+        session_id=effective_session_id,
+        agent_name=agent_name,
+        status="running",
+        message=query[:200],
+        payload={"phase": "start"},
+    )
 
     AgentClass = AGENT_CLASS_MAP.get(agent_name)
 
@@ -676,6 +685,13 @@ async def run_agent(
             agent_name=agent_name,
             session_id=effective_session_id,
             metadata=runtime_metadata,
+        )
+        _log_canvas_agent_event(
+            session_id=effective_session_id,
+            agent_name=agent_name,
+            status="error",
+            message="Agent nicht gefunden",
+            payload={"reason": "agent_not_found"},
         )
         return result
 
@@ -698,6 +714,13 @@ async def run_agent(
                     agent_name=agent_name,
                     session_id=effective_session_id,
                     metadata=runtime_metadata,
+                )
+                _log_canvas_agent_event(
+                    session_id=effective_session_id,
+                    agent_name=agent_name,
+                    status="cancelled",
+                    message=str(final_output or "")[:200],
+                    payload={"reason": "policy_cancelled"},
                 )
                 return result
         except Exception:
@@ -1046,6 +1069,13 @@ Unique States: {unique_states if unique_states else "N/A"} (Loop-Erkennung)
             session_id=effective_session_id,
             metadata=runtime_metadata,
         )
+        _log_canvas_agent_event(
+            session_id=effective_session_id,
+            agent_name=agent_name,
+            status=_infer_interaction_status(final_output),
+            message=str(final_output or "")[:240],
+            payload=runtime_metadata,
+        )
 
 
 def _infer_interaction_status(result: Optional[str]) -> str:
@@ -1099,6 +1129,34 @@ def _log_interaction_deterministic(
         )
     except Exception as e:
         log.warning(f"⚠️ Deterministisches Interaction-Logging fehlgeschlagen: {e}")
+
+
+def _log_canvas_agent_event(
+    *,
+    session_id: str,
+    agent_name: str,
+    status: str,
+    message: str = "",
+    payload: Optional[dict] = None,
+) -> None:
+    """Schreibt Agent-Run Events in ein zugeordnetes Canvas (falls vorhanden)."""
+    try:
+        from orchestration.canvas_store import canvas_store
+
+        result = canvas_store.record_agent_event(
+            session_id=session_id,
+            agent_name=agent_name,
+            status=status,
+            message=message,
+            payload=payload,
+        )
+        if result:
+            canvas_id = result.get("canvas_id", "")
+            log.info(
+                f"🧩 Canvas-Event gespeichert (canvas={canvas_id}, session={session_id}, status={status})"
+            )
+    except Exception as e:
+        log.debug(f"Canvas-Logging uebersprungen: {e}")
 
 
 async def fetch_tool_descriptions_from_server() -> Optional[str]:
