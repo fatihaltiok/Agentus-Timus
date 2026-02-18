@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="400" viewBox="0 0 1200 400" role="img" aria-labelledby="title desc">
+  <title id="title">Timus Primary Logo</title>
+  <desc id="desc">Orbit-style symbol with six nodes and Timus wordmark.</desc>
+
+  <!-- Transparent background by default -->
+  <defs>
+    <linearGradient id="nodeBlue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#34b9ee"/>
+      <stop offset="100%" stop-color="#0581c7"/>
+    </linearGradient>
+    <linearGradient id="nodeGreen" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#53d87b"/>
+      <stop offset="100%" stop-color="#1fae48"/>
+    </linearGradient>
+  </defs>
+
+  <g transform="translate(70,20)">
+    <g transform="translate(130,180)">
+      <circle cx="0" cy="0" r="110" fill="none" stroke="#0f6cb6" stroke-width="7" stroke-linecap="round" stroke-dasharray="30 18"/>
+
+      <path d="M -92 5 C -45 -72 45 -72 92 5" fill="none" stroke="#2eb4e7" stroke-width="7" stroke-linecap="round"/>
+      <path d="M -92 -5 C -45 72 45 72 92 -5" fill="none" stroke="#2ab86a" stroke-width="7" stroke-linecap="round"/>
+      <path d="M -62 -70 C 10 -28 10 28 -62 70" fill="none" stroke="#2ab86a" stroke-width="7" stroke-linecap="round"/>
+      <path d="M 62 -70 C -10 -28 -10 28 62 70" fill="none" stroke="#2eb4e7" stroke-width="7" stroke-linecap="round"/>
+      <path d="M -74 -45 C 0 -10 0 10 -74 45" fill="none" stroke="#2eb4e7" stroke-width="6" stroke-linecap="round" opacity="0.9"/>
+      <path d="M 74 -45 C 0 -10 0 10 74 45" fill="none" stroke="#2ab86a" stroke-width="6" stroke-linecap="round" opacity="0.9"/>
+
+      <circle cx="0" cy="-110" r="22" fill="url(#nodeBlue)"/>
+      <circle cx="95" cy="-55" r="22" fill="url(#nodeGreen)"/>
+      <circle cx="95" cy="55" r="22" fill="url(#nodeBlue)"/>
+      <circle cx="0" cy="110" r="22" fill="url(#nodeGreen)"/>
+      <circle cx="-95" cy="55" r="22" fill="url(#nodeBlue)"/>
+      <circle cx="-95" cy="-55" r="22" fill="url(#nodeGreen)"/>
+    </g>
+  </g>
+
+  <text x="470" y="237"
+        fill="#1e2a42"
+        font-family="Segoe UI, Inter, Arial, sans-serif"
+        font-size="136"
+        font-weight="700"
+        letter-spacing="0.5">Timus</text>
+</svg>

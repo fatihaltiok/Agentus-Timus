@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Timus Icon</title>
+  <desc id="desc">Orbit-style Timus symbol with six nodes.</desc>
+
+  <!-- Transparent background by default -->
+  <defs>
+    <linearGradient id="nodeBlue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#34b9ee"/>
+      <stop offset="100%" stop-color="#0581c7"/>
+    </linearGradient>
+    <linearGradient id="nodeGreen" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#53d87b"/>
+      <stop offset="100%" stop-color="#1fae48"/>
+    </linearGradient>
+  </defs>
+
+  <g transform="translate(256,256)">
+    <circle cx="0" cy="0" r="156" fill="none" stroke="#0f6cb6" stroke-width="10" stroke-linecap="round" stroke-dasharray="42 24"/>
+
+    <path d="M -132 6 C -62 -102 62 -102 132 6" fill="none" stroke="#2eb4e7" stroke-width="10" stroke-linecap="round"/>
+    <path d="M -132 -6 C -62 102 62 102 132 -6" fill="none" stroke="#2ab86a" stroke-width="10" stroke-linecap="round"/>
+    <path d="M -90 -96 C 16 -40 16 40 -90 96" fill="none" stroke="#2ab86a" stroke-width="10" stroke-linecap="round"/>
+    <path d="M 90 -96 C -16 -40 -16 40 90 96" fill="none" stroke="#2eb4e7" stroke-width="10" stroke-linecap="round"/>
+    <path d="M -108 -64 C 0 -16 0 16 -108 64" fill="none" stroke="#2eb4e7" stroke-width="8" stroke-linecap="round" opacity="0.9"/>
+    <path d="M 108 -64 C 0 -16 0 16 108 64" fill="none" stroke="#2ab86a" stroke-width="8" stroke-linecap="round" opacity="0.9"/>
+
+    <circle cx="0" cy="-156" r="30" fill="url(#nodeBlue)"/>
+    <circle cx="135" cy="-78" r="30" fill="url(#nodeGreen)"/>
+    <circle cx="135" cy="78" r="30" fill="url(#nodeBlue)"/>
+    <circle cx="0" cy="156" r="30" fill="url(#nodeGreen)"/>
+    <circle cx="-135" cy="78" r="30" fill="url(#nodeBlue)"/>
+    <circle cx="-135" cy="-78" r="30" fill="url(#nodeGreen)"/>
+  </g>
+</svg>
