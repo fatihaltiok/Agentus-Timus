@@ -104,12 +104,27 @@ async def generate_image(prompt: str, size: str = "1024x1024", quality: str = "s
         }
 
     except Exception as e:
-        # Verbesserte Fehlerbehandlung, um die OpenAI-Fehlermeldung zu extrahieren
+        # Verbesserte Fehlerbehandlung inkl. strukturierter Error-Codes.
         error_message = str(e)
-        if hasattr(e, 'body') and e.body and 'error' in e.body and 'message' in e.body['error']:
-            error_message = f"OpenAI API Fehler: {e.body['error']['message']}"
+        error_code = ""
+        error_type = ""
+
+        body = getattr(e, "body", None)
+        if isinstance(body, dict):
+            err = body.get("error", {}) or {}
+            if isinstance(err, dict):
+                error_message = str(err.get("message") or error_message)
+                error_code = str(err.get("code") or "")
+                error_type = str(err.get("type") or "")
+
         log.error(f"❌ {error_message}", exc_info=True)
-        return {"status": "error", "message": error_message}
+        return {
+            "status": "error",
+            "error": error_message,
+            "message": error_message,
+            "error_code": error_code,
+            "error_type": error_type,
+        }
 
 # ... (deine anderen Methoden wie generate_code, generate_text bleiben unverändert) ...
 

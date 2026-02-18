@@ -139,6 +139,38 @@ Gib NUR das Action-JSON zurueck!"""
                 "quality": quality,
             })
 
+    @staticmethod
+    def _extract_tool_error(observation: dict) -> tuple[bool, str, str]:
+        """Normalisiert Fehlererkennung aus Tool-Responses."""
+        if not isinstance(observation, dict):
+            return True, "Unerwartetes Antwortformat vom Tool.", ""
+
+        status = str(observation.get("status", "") or "").strip().lower()
+        error_code = str(observation.get("error_code", "") or "").strip().lower()
+
+        if "error" in observation:
+            return True, str(observation.get("error") or "Unbekannter Fehler"), error_code
+        if status in {"error", "failed", "failure"}:
+            msg = str(
+                observation.get("message")
+                or observation.get("error")
+                or "Unbekannter Fehler"
+            )
+            return True, msg, error_code
+        return False, "", error_code
+
+    @staticmethod
+    def _build_safe_retry_prompt(detailed_prompt: str) -> str:
+        """Erzeugt einen moderationsfreundlichen Retry-Prompt fuer Bildgenerierung."""
+        base = str(detailed_prompt or "").strip()
+        safety_clause = (
+            "Original fictional character only, no copyrighted or trademarked characters, "
+            "no logos, no real persons, no violence, no weapons, family-friendly."
+        )
+        if base:
+            return f"{base}. {safety_clause}"
+        return safety_clause
+
     async def run(self, task: str) -> str:
         log.info(f"{self.__class__.__name__} - HYBRID MODE (GPT-5.1 + Nemotron)")
 
@@ -156,11 +188,34 @@ Gib NUR das Action-JSON zurueck!"""
         self._handle_file_artifacts(observation)
 
         if isinstance(observation, dict):
-            if "error" in observation:
-                return f"Fehler bei der Bildgenerierung: {observation['error']}"
+            has_error, error_message, error_code = self._extract_tool_error(observation)
+            if has_error and error_code == "moderation_blocked":
+                safe_prompt = self._build_safe_retry_prompt(detailed_prompt)
+                log.warning("Bildgenerierung moderiert geblockt. Versuche sicheren Retry.")
+                observation_retry = await self._execute_with_nemotron(
+                    safe_prompt, size="1024x1024", quality="high"
+                )
+                self._handle_file_artifacts(observation_retry)
+                if isinstance(observation_retry, dict):
+                    retry_error, retry_message, _ = self._extract_tool_error(observation_retry)
+                    if retry_error:
+                        return f"Fehler bei der Bildgenerierung: {retry_message}"
+                    observation = observation_retry
+                    detailed_prompt = safe_prompt
+                else:
+                    return "Fehler bei der Bildgenerierung: Unerwartetes Antwortformat beim Retry."
+
+            elif has_error:
+                return f"Fehler bei der Bildgenerierung: {error_message}"
 
             saved_path = observation.get("saved_as", "")
             image_url = observation.get("image_url", "")
+
+            if not saved_path and not image_url:
+                return (
+                    "Bildgenerierung abgeschlossen, aber es wurde weder Datei noch URL "
+                    "zurueckgegeben."
+                )
 
             final_answer = "Ich habe das Bild erfolgreich generiert!"
             if saved_path:
