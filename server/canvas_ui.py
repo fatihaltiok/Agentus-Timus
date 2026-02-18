@@ -13,20 +13,20 @@ def build_canvas_ui_html(poll_ms: int = 2000) -> str:
   <title>Timus Canvas Live View</title>
   <style>
     :root {
-      --bg: #f4f7fb;
-      --surface: #ffffff;
-      --line: #d6dde8;
-      --text: #0f2138;
-      --muted: #5d6b82;
-      --ok: #17864e;
-      --warn: #a36b00;
-      --err: #b0122f;
-      --brand: #0b6fca;
+      --bg: #1f2326;
+      --surface: #2a2f33;
+      --line: #3b4349;
+      --text: #7dff99;
+      --muted: #56c86f;
+      --ok: #9bffb1;
+      --warn: #d6f57a;
+      --err: #ff6d7a;
+      --brand: #4df27a;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      background: linear-gradient(180deg, #eff4fb 0%, var(--bg) 100%);
+      background: linear-gradient(180deg, #1b1f22 0%, var(--bg) 100%);
       color: var(--text);
       font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
     }
@@ -92,21 +92,25 @@ def build_canvas_ui_html(poll_ms: int = 2000) -> str:
       border-radius: 8px;
       font: inherit;
       padding: 8px 10px;
-      background: #fff;
+      background: #23292d;
       color: var(--text);
     }
     button {
       cursor: pointer;
       background: var(--brand);
-      color: #fff;
+      color: #12301b;
       border-color: var(--brand);
       font-weight: 600;
     }
     button.secondary {
-      background: #fff;
+      background: #23292d;
       color: var(--text);
       border-color: var(--line);
       font-weight: 500;
+    }
+    input::placeholder {
+      color: #5bbf72;
+      opacity: 0.9;
     }
     .list {
       display: grid;
@@ -116,12 +120,12 @@ def build_canvas_ui_html(poll_ms: int = 2000) -> str:
       border: 1px solid var(--line);
       border-radius: 10px;
       padding: 10px;
-      background: #fbfdff;
+      background: #252b2f;
       cursor: pointer;
     }
     .canvas-card.active {
       border-color: var(--brand);
-      background: #eef6ff;
+      background: #1f3a29;
     }
     .small {
       color: var(--muted);
@@ -147,7 +151,7 @@ def build_canvas_ui_html(poll_ms: int = 2000) -> str:
       justify-content: space-between;
       gap: 8px;
       padding: 8px 0;
-      border-bottom: 1px solid #eef2f8;
+      border-bottom: 1px solid var(--line);
     }
     .row:last-child { border-bottom: none; }
     .badge {
@@ -158,9 +162,9 @@ def build_canvas_ui_html(poll_ms: int = 2000) -> str:
       text-transform: uppercase;
       letter-spacing: 0.3px;
     }
-    .badge.ok { background: #e7f7ef; color: var(--ok); }
-    .badge.warn { background: #fff3dd; color: var(--warn); }
-    .badge.err { background: #ffe5ea; color: var(--err); }
+    .badge.ok { background: #24412b; color: var(--ok); }
+    .badge.warn { background: #454b1f; color: var(--warn); }
+    .badge.err { background: #4a2329; color: var(--err); }
     .muted { color: var(--muted); }
     .empty {
       color: var(--muted);
@@ -177,7 +181,7 @@ def build_canvas_ui_html(poll_ms: int = 2000) -> str:
     .event {
       border: 1px solid var(--line);
       border-radius: 10px;
-      background: #fbfdff;
+      background: #252b2f;
       padding: 10px;
     }
     .event .head {
@@ -298,8 +302,16 @@ def build_canvas_ui_html(poll_ms: int = 2000) -> str:
       list.innerHTML = "";
       const items = out.items || [];
       if (!items.length) {
+        selectedCanvasId = "";
+        document.getElementById("attachCanvasId").value = "";
         list.innerHTML = '<div class="empty">No canvases yet.</div>';
         return;
+      }
+
+      const selectedStillExists = items.some((c) => c.id === selectedCanvasId);
+      if (!selectedStillExists) {
+        selectedCanvasId = items[0].id;
+        document.getElementById("attachCanvasId").value = selectedCanvasId;
       }
 
       for (const c of items) {
@@ -317,6 +329,10 @@ def build_canvas_ui_html(poll_ms: int = 2000) -> str:
           void loadCanvasList();
         });
         list.appendChild(card);
+      }
+
+      if (!selectedStillExists) {
+        await refreshSelectedCanvas();
       }
     }
 
@@ -520,6 +536,7 @@ def build_canvas_ui_html(poll_ms: int = 2000) -> str:
 
       readFilterControls();
       await loadCanvasList();
+      await refreshSelectedCanvas();
       setPolling(true);
     }
 

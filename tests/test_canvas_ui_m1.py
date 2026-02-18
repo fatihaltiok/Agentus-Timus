@@ -16,6 +16,8 @@ def test_build_canvas_ui_html_contains_core_sections():
     assert "/canvas/create" in html
     assert "/canvas/" in html
     assert "POLL_MS = 1500" in html
+    assert "selectedStillExists" in html
+    assert "selectedCanvasId = items[0].id" in html
 
 
 def test_canvas_ui_route_registered():

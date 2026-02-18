@@ -68,4 +68,5 @@ xdg-open http://127.0.0.1:5000/canvas/ui
 - ENV-Schalter:
   - `TIMUS_CANVAS_AUTO_CREATE=true|false` (default: `true`)
   - `TIMUS_CANVAS_AUTO_OPEN=true|false` (default: `true`)
+  - `TIMUS_CANVAS_AUTO_ATTACH_SESSIONS=true|false` (default: `true`)
   - `TIMUS_CANVAS_DEFAULT_TITLE="..."` (default: `Live Canvas`)

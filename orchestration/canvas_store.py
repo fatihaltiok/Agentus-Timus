@@ -90,6 +90,13 @@ class CanvasStore:
             raise KeyError(f"Canvas '{canvas_id}' nicht gefunden")
         return canvas
 
+    def _get_primary_canvas_id_unlocked(self) -> Optional[str]:
+        canvases = list(self._data["canvases"].values())
+        if not canvases:
+            return None
+        canvases.sort(key=lambda c: str(c.get("updated_at", "")), reverse=True)
+        return str(canvases[0].get("id") or "") or None
+
     def list_canvases(self, limit: int = 50) -> Dict[str, Any]:
         with self._lock:
             limit = max(1, min(200, int(limit)))
@@ -430,8 +437,24 @@ class CanvasStore:
         payload: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Schreibt Agent-Run-Event in zugeordnetes Canvas (falls Mapping existiert)."""
+        auto_attach = (
+            os.getenv("TIMUS_CANVAS_AUTO_ATTACH_SESSIONS", "true").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
+
         with self._lock:
             canvas_id = self._data["session_to_canvas"].get(session_id)
+            if not canvas_id and auto_attach and session_id:
+                fallback_canvas_id = self._get_primary_canvas_id_unlocked()
+                if fallback_canvas_id:
+                    canvas = self._data["canvases"].get(fallback_canvas_id)
+                    if canvas is not None:
+                        self._data["session_to_canvas"][session_id] = fallback_canvas_id
+                        if session_id not in canvas["session_ids"]:
+                            canvas["session_ids"].append(session_id)
+                        canvas["updated_at"] = _utc_now_iso()
+                        self._save_unlocked()
+                        canvas_id = fallback_canvas_id
             if not canvas_id:
                 return None
 

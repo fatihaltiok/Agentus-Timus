@@ -82,3 +82,34 @@ def test_record_agent_event_only_with_attached_session(tmp_path):
     loaded = store.get_canvas(canvas["id"])
     assert loaded is not None
     assert any(e.get("status") == "completed" for e in loaded["events"])
+
+
+def test_record_agent_event_auto_attaches_session_to_primary_canvas(tmp_path, monkeypatch):
+    monkeypatch.setenv("TIMUS_CANVAS_AUTO_ATTACH_SESSIONS", "true")
+    store = _store(tmp_path)
+
+    old = store.create_canvas("Older")
+    new = store.create_canvas("Newer")
+    result = store.record_agent_event("sess_auto_1", "executor", "running")
+
+    assert result is not None
+    assert result["canvas_id"] == new["id"]
+
+    loaded = store.get_canvas(new["id"])
+    assert loaded is not None
+    assert "sess_auto_1" in loaded["session_ids"]
+    assert any(ev.get("session_id") == "sess_auto_1" for ev in loaded["events"])
+
+    # Die aeltere Canvas soll nicht versehentlich verbunden werden.
+    loaded_old = store.get_canvas(old["id"])
+    assert loaded_old is not None
+    assert "sess_auto_1" not in loaded_old["session_ids"]
+
+
+def test_record_agent_event_auto_attach_can_be_disabled(tmp_path, monkeypatch):
+    monkeypatch.setenv("TIMUS_CANVAS_AUTO_ATTACH_SESSIONS", "false")
+    store = _store(tmp_path)
+    store.create_canvas("Only Canvas")
+
+    result = store.record_agent_event("sess_auto_off", "executor", "running")
+    assert result is None
