@@ -99,27 +99,27 @@ MCP-Server :5000 (FastAPI + JSON-RPC)
 
 ```mermaid
 flowchart TD
-    U[Benutzer-Input] --> D[main_dispatcher.py]
-    D --> DS[Query-Sanitizing]
-    D --> DI[Intent-Analyse]
-    D --> DP[Policy-Gate]
-    D --> DL[Lane/Session-Orchestrierung]
-    DL --> A[Agent-Auswahl AGENT_CLASS_MAP]
+    U["User Input"] --> D["main_dispatcher.py"]
+    D --> DS["query sanitize"]
+    D --> DI["intent analysis"]
+    D --> DP["policy gate"]
+    D --> DL["lane and session"]
+    DL --> A["agent selection"]
 
-    A --> B[agent/base_agent.py]
-    B --> BW[Working-Memory-Injektion]
-    B --> BR[Recall Fast-Path]
-    B --> BT[Loop-Guard + Telemetrie]
-    B --> BRG[Remote-Registry-Sync]
+    A --> B["agent/base_agent.py"]
+    B --> BW["working memory inject"]
+    B --> BR["recall fast path"]
+    B --> BT["loop guard and telemetry"]
+    B --> BRG["remote registry sync"]
 
-    B --> M[MCP-Server :5000 FastAPI JSON-RPC]
-    M --> TR[tool_registry_v2 + Server-Validierung]
-    M --> T[Tool-Module]
-    T --> E[Desktop / Browser / APIs]
-    T --> MM[memory/memory_system.py]
-    MM --> IE[interaction_events]
-    MM --> UR[unified_recall]
-    MM --> WM[working_memory_context]
+    B --> M["MCP server 5000 json-rpc"]
+    M --> TR["tool_registry_v2 and validation"]
+    M --> T["tool modules"]
+    T --> E["desktop browser apis"]
+    T --> MM["memory/memory_system.py"]
+    MM --> IE["interaction events"]
+    MM --> UR["unified recall"]
+    MM --> WM["working memory context"]
 ```
 
 ---
