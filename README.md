@@ -96,6 +96,12 @@ MCP-Server :5000 (FastAPI + JSON-RPC)
   ├─ Tool-Validierung (serverseitig)
   └─ Tools: Browser, Vision, OCR, Mouse, Search, File, Memory, Voice, ...
       |
+      +--> florence2_hybrid_analysis (VisualNemotron v4 Vision-Pfad)
+      |     ├─ Florence-2: <CAPTION> + <OD> (UI-Elemente + BBoxes)
+      |     ├─ PaddleOCR (CPU): Text + BBoxes + Confidence
+      |     ├─ Merge: summary_prompt + ocr_backend status
+      |     └─ Nemotron Decision -> PyAutoGUI/MCP Action-Ausführung
+      |
       +--> Externe Systeme: Desktop (PyAutoGUI), Browser (Playwright), APIs
       |
       +--> memory/memory_system.py (kanonischer Memory-Kern)
@@ -123,6 +129,13 @@ flowchart TD
     B --> M["MCP server 5000 json-rpc"]
     M --> TR["tool_registry_v2 and validation"]
     M --> T["tool modules"]
+    T --> FH["florence2_hybrid_analysis"]
+    FH --> FC["Florence-2 CAPTION + OD"]
+    FH --> PO["PaddleOCR CPU text+bbox+conf"]
+    FC --> FM["merge summary_prompt + ocr_backend"]
+    PO --> FM
+    FM --> ND["Nemotron decision"]
+    ND --> PA["PyAutoGUI and MCP actions"]
     T --> E["desktop browser apis"]
     T --> MM["memory/memory_system.py"]
     MM --> IE["interaction events"]
