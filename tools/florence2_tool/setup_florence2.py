@@ -8,7 +8,7 @@ Testet:
     1. Abhängigkeiten
     2. Tool-Registrierung in registry_v2
     3. florence2_health
-    4. Screenshot + full_analysis
+    4. Screenshot + hybrid_analysis (mit full_analysis Fallback)
     5. Nemotron-Verbindung (wenn OPENROUTER_API_KEY gesetzt)
 """
 
@@ -68,7 +68,7 @@ def check_tool_registration():
 
         from tools.tool_registry_v2 import registry_v2
         all_tools = registry_v2.list_all_tools()
-        expected = ["florence2_health", "florence2_full_analysis",
+        expected = ["florence2_health", "florence2_full_analysis", "florence2_hybrid_analysis",
                     "florence2_detect_ui", "florence2_ocr", "florence2_analyze_region"]
         ok = True
         for name in expected:
@@ -103,7 +103,7 @@ def check_health():
 
 
 def check_screenshot_analysis():
-    print("\n[4/5] Screenshot + florence2_full_analysis...")
+    print("\n[4/5] Screenshot + florence2_hybrid_analysis...")
     try:
         import mss
         from mss.tools import to_png
@@ -118,7 +118,10 @@ def check_screenshot_analysis():
         from tools.tool_registry_v2 import registry_v2
         import asyncio
         t0 = time.time()
-        result = asyncio.run(registry_v2.execute("florence2_full_analysis", image_path=path))
+        result = asyncio.run(registry_v2.execute("florence2_hybrid_analysis", image_path=path))
+        if isinstance(result, dict) and "error" in result:
+            print(f"  WARNUNG: Hybrid fehlgeschlagen ({result['error']}) -> fallback full_analysis")
+            result = asyncio.run(registry_v2.execute("florence2_full_analysis", image_path=path))
         elapsed = time.time() - t0
 
         if "error" in result:

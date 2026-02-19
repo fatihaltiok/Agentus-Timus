@@ -276,16 +276,35 @@ KEIN Code, KEINE Erklärung - nur JSON!"""
                     return {"error": "Kein DOM-Target verfuegbar"}
 
                 async def _vision_click(a):
-                    """Bestehender Vision-Pfad: GPT-4 Vision → Koordinaten."""
+                    """Vision-Fallback: Florence-2 detect_ui für lokale Koordinaten."""
                     vx, vy = x, y
                     if not vx or not vy:
-                        log.info(f"   🔍 Suche mit GPT-4 Vision: '{search_term}'")
+                        log.info(f"   🔍 Suche mit Florence-2 detect_ui: '{search_term}'")
+                        temp_path = "/tmp/v4_click_search.png"
                         screenshot = await self.screenshot()
-                        found = await self.find_element_by_description(search_term, screenshot)
-                        if found:
-                            vx, vy = found
+                        await asyncio.to_thread(screenshot.save, temp_path)
+
+                        result = await self.mcp.call_tool(
+                            "florence2_detect_ui",
+                            {"image_path": temp_path},
+                        )
+                        if isinstance(result, dict) and result.get("error"):
+                            return {"error": f"Florence-2 detect_ui Fehler: {result['error']}"}
+
+                        term = (search_term or "").lower().strip()
+                        candidates = (
+                            e for e in result.get("elements", [])
+                            if term and term in e.get("label", "").lower()
+                        )
+                        best = min(
+                            candidates,
+                            key=lambda e: len(e.get("label", "")),
+                            default=None,
+                        )
+                        if best and best.get("center"):
+                            vx, vy = best["center"]
                         else:
-                            return {"error": f"Element nicht gefunden: {search_term}"}
+                            return {"error": f"Element nicht gefunden (Florence-2): {search_term}"}
                     return await self.mcp.click_at(int(vx), int(vy))
 
                 result, method_used = await try_dom_first(action, _dom_click, _vision_click)
@@ -300,14 +319,32 @@ KEIN Code, KEINE Erklärung - nur JSON!"""
                 x, y = coords.get("x", 0), coords.get("y", 0)
                 
                 if not x or not y:
-                    # Auch hier GPT-4 Vision nutzen
-                    target_desc = target.get("description", "input field oder text box")
+                    # Auch hier lokal mit Florence-2 statt GPT-4-Koordinatensuche.
+                    target_desc = target.get("description", target.get("element_type", "input"))
+                    temp_path = "/tmp/v4_focus_search.png"
                     screenshot = await self.screenshot()
-                    found = await self.find_element_by_description(target_desc, screenshot)
-                    if found:
-                        x, y = found
+                    await asyncio.to_thread(screenshot.save, temp_path)
+                    result = await self.mcp.call_tool(
+                        "florence2_detect_ui",
+                        {"image_path": temp_path},
+                    )
+                    if isinstance(result, dict) and result.get("error"):
+                        return False, f"Florence-2 detect_ui Fehler: {result['error']}"
+
+                    term = (target_desc or "").lower().strip()
+                    candidates = (
+                        e for e in result.get("elements", [])
+                        if term and term in e.get("label", "").lower()
+                    )
+                    best = min(
+                        candidates,
+                        key=lambda e: len(e.get("label", "")),
+                        default=None,
+                    )
+                    if best and best.get("center"):
+                        x, y = best["center"]
                     else:
-                        return False, "Kein Fokus-Element gefunden"
+                        return False, f"Kein Fokus-Element gefunden (Florence-2): {target_desc}"
                 
                 if x and y:
                     await self.mcp.click_and_focus(int(x), int(y))
@@ -701,24 +738,36 @@ class VisionClient:
 
     async def _florence2_analyze(self, img: Image.Image, task: str) -> str:
         """
-        Florence-2 via MCP florence2_full_analysis.
+        Florence-2 via MCP florence2_hybrid_analysis.
         Speichert Screenshot temporär, ruft Tool auf, gibt summary_prompt zurück.
+        Fallback bei Fehler: florence2_full_analysis.
         """
         temp_path = "/tmp/v4_florence2_screen.png"
         await asyncio.to_thread(img.save, temp_path)
 
         try:
             async with httpx.AsyncClient(timeout=self.florence2_timeout) as client:
-                resp = await client.post(
-                    self.mcp_url,
-                    json={
-                        "jsonrpc": "2.0",
-                        "method": "florence2_full_analysis",
-                        "params": {"image_path": temp_path},
-                        "id": 1,
-                    },
-                )
-                data = resp.json()
+                async def _rpc(method: str, request_id: int) -> Dict[str, Any]:
+                    resp = await client.post(
+                        self.mcp_url,
+                        json={
+                            "jsonrpc": "2.0",
+                            "method": method,
+                            "params": {"image_path": temp_path},
+                            "id": request_id,
+                        },
+                    )
+                    return resp.json()
+
+                used_method = "florence2_hybrid_analysis"
+                data = await _rpc(used_method, 1)
+
+                has_rpc_error = "error" in data
+                has_result_error = isinstance(data.get("result"), dict) and "error" in data["result"]
+                if has_rpc_error or has_result_error:
+                    log.warning("   ⚠️ florence2_hybrid_analysis fehlgeschlagen -> fallback zu florence2_full_analysis")
+                    used_method = "florence2_full_analysis"
+                    data = await _rpc(used_method, 2)
 
             if "result" in data:
                 r = data["result"]
@@ -727,7 +776,8 @@ class VisionClient:
                 summary = r.get("summary_prompt", "")
                 if summary:
                     log.info(
-                        f"   🌸 Florence-2: {r.get('element_count', 0)} Elemente, "
+                        f"   🌸 Florence-2 ({used_method}): {r.get('element_count', 0)} UI-Elemente, "
+                        f"text={r.get('text_count', '?')}, ocr={r.get('ocr_backend', 'florence2')}, "
                         f"device={r.get('device', '?')}"
                     )
                     return summary
@@ -739,13 +789,13 @@ class VisionClient:
         except Exception as e:
             return f"[Florence-2 failed: {e}]"
         return "[Florence-2: kein Ergebnis]"
-    
+
     async def _qwen_analyze(self, img: Image.Image, task: str) -> str:
         """Qwen-VL Fallback mit langem Timeout."""
         temp_path = "/tmp/v4_screenshot.png"
         small_img = self._resize_for_qwen(img)
         small_img.save(temp_path, quality=85)
-        
+
         prompt = f"""Analyze this desktop/browser screenshot.
 TASK: {task}
 
@@ -774,7 +824,7 @@ Focus on actionable details for automation."""
                     }
                 )
                 data = resp.json()
-                
+
                 if "result" in data:
                     result = data["result"]
                     if "raw_response" in result:
@@ -787,10 +837,10 @@ Focus on actionable details for automation."""
                                 desc += f" at ({a['x']}, {a['y']})"
                             desc += "\n"
                         return desc
-                
+
                 if "error" in data:
                     return f"[Qwen-VL Error: {data['error'].get('message', 'Unknown')}]"
-                    
+
         except Exception as e:
             return f"[Vision failed: {e}]"
     
@@ -996,6 +1046,10 @@ class VisualNemotronAgentV4:
                     if error and error.startswith("ASK_USER"):
                         return self._result(False, error)
 
+                    if act_type in ("click", "click_and_focus") and not error:
+                        await asyncio.sleep(0.8)  # UI Zeit zum Reagieren
+                        self.desktop.elements = await self.desktop.scan_elements()
+
                     if error:
                         step_success = False
                         step_error = error
@@ -1008,10 +1062,6 @@ class VisualNemotronAgentV4:
                     success=step_success,
                     error=step_error
                 ))
-                
-                # Nach Aktionen: Neu scannen falls nötig
-                if step % 3 == 0:  # Alle 3 Schritte
-                    self.desktop.elements = await self.desktop.scan_elements()
                 
                 await asyncio.sleep(0.5)
             

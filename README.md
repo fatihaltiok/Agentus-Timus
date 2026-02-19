@@ -24,7 +24,9 @@ Branding:
 **Florence-2 Vision Integration (Phase 1–7) abgeschlossen:**
 - Florence-2 (microsoft/Florence-2-large-ft, ~3GB VRAM) als primäres Vision-Modell integriert
 - `VisionClient` im `VisualNemotronAgent v4`: Florence-2 (PRIMARY) → GPT-4 Vision → Qwen-VL
-- Neues MCP-Tool `florence2_tool` mit 5 async Funktionen (UI-Detection, OCR, Region-Analyse)
+- Neues MCP-Tool `florence2_tool` mit 6 async Funktionen inkl. `florence2_hybrid_analysis` (Florence-2 + PaddleOCR)
+- Hybrid-Pipeline aktiv: Florence-2 für UI-Detection, PaddleOCR für Texte inkl. Confidence und `ocr_backend`-Status
+- PaddleOCR Runtime-Härtung für CPU-Setups (`device=cpu`, `enable_hpi=false`, `enable_mkldnn=false`) mit API-Fallbacks
 - NemotronClient mit LLM-Fallback (LOCAL_LLM via `LOCAL_LLM_URL`)
 - Feature-Flag `FLORENCE2_ENABLED=true/false` in `.env`
 - Pre-existing Bug in `utils/skill_types.py` behoben (falsche `@property`-Dekoration)
@@ -50,6 +52,7 @@ Wichtige Doku-Dateien:
 Schnelle Verifikation:
 ```bash
 pytest -q tests/
+pytest -q tests/test_florence2_hybrid_paddleocr.py
 python tools/florence2_tool/setup_florence2.py  # Florence-2 Diagnose
 ```
 
@@ -293,7 +296,7 @@ Beispiel: "Recherchiere KI-Sicherheit und erstelle einen Plan"
 
 | Tool | Funktionen |
 |------|-----------|
-| **florence2_tool** | Florence-2 Integration (lokal auf GPU) — `florence2_health`, `florence2_full_analysis`, `florence2_detect_ui`, `florence2_ocr`, `florence2_analyze_region` |
+| **florence2_tool** | Florence-2 Integration (lokal auf GPU) — `florence2_health`, `florence2_full_analysis`, `florence2_hybrid_analysis`, `florence2_detect_ui`, `florence2_ocr`, `florence2_analyze_region` |
 | **qwen_vl_tool** | Qwen2-VL Integration (lokal auf GPU, Fallback) |
 
 ---
