@@ -18,7 +18,7 @@ import uuid
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 
 def _utc_now_iso() -> str:
@@ -42,31 +42,119 @@ class CanvasStore:
     """Thread-sicherer JSON-Store fuer Canvas-Daten."""
 
     def __init__(self, store_path: Optional[Path | str] = None):
-        default_path = Path("data") / "canvas_store.json"
-        self._path = Path(store_path or os.getenv("TIMUS_CANVAS_STORE", str(default_path)))
+        self._repo_root = Path(__file__).resolve().parent.parent
+        default_path = self._repo_root / "data" / "canvas_store.json"
+        env_store = (os.getenv("TIMUS_CANVAS_STORE") or "").strip()
+        resolved_path = store_path or env_store or default_path
+        self._path = Path(resolved_path)
+        self._default_path_mode = bool(not store_path and not env_store)
         self._lock = threading.RLock()
+        self._store_signature: Optional[Tuple[int, int]] = None
         self._data: Dict[str, Any] = {
             "canvases": {},
             "session_to_canvas": {},
         }
         self._load()
 
+    @staticmethod
+    def _normalize_store_data(raw: Any) -> Optional[Dict[str, Any]]:
+        if not isinstance(raw, dict):
+            return None
+        return {
+            "canvases": raw.get("canvases", {}) or {},
+            "session_to_canvas": raw.get("session_to_canvas", {}) or {},
+        }
+
+    def _load_data_from_path_unlocked(self, path: Path) -> Optional[Dict[str, Any]]:
+        if not path.exists():
+            return None
+        try:
+            parsed = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        return self._normalize_store_data(parsed)
+
+    @staticmethod
+    def _store_score(data: Optional[Dict[str, Any]]) -> Tuple[int, int, int]:
+        if not data:
+            return (0, 0, 0)
+        canvases = data.get("canvases", {}) or {}
+        mappings = data.get("session_to_canvas", {}) or {}
+        events = 0
+        for canvas in canvases.values():
+            events += len((canvas or {}).get("events", []) or [])
+        return (events, len(canvases), len(mappings))
+
+    def _maybe_migrate_legacy_store_unlocked(self) -> None:
+        """Migriert bestaende Legacy-Store-Dateien auf den kanonischen Repo-Pfad."""
+        if not self._default_path_mode:
+            return
+
+        canonical_data = self._load_data_from_path_unlocked(self._path)
+        canonical_score = self._store_score(canonical_data)
+
+        candidates = []
+        # Legacy: Start aus server/ fuehrte historisch zu server/data/canvas_store.json
+        legacy_server_path = self._repo_root / "server" / "data" / "canvas_store.json"
+        legacy_cwd_path = Path.cwd() / "data" / "canvas_store.json"
+        for candidate in (legacy_server_path, legacy_cwd_path):
+            if candidate == self._path or not candidate.exists():
+                continue
+            data = self._load_data_from_path_unlocked(candidate)
+            score = self._store_score(data)
+            if score > canonical_score:
+                candidates.append((score, candidate))
+
+        if not candidates:
+            return
+
+        _, best_path = sorted(candidates, key=lambda x: x[0], reverse=True)[0]
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.write_text(best_path.read_text(encoding="utf-8"), encoding="utf-8")
+        self._store_signature = None
+
+    def _read_store_signature_unlocked(self) -> Optional[Tuple[int, int]]:
+        if not self._path.exists():
+            return None
+        stat = self._path.stat()
+        return (int(stat.st_mtime_ns), int(stat.st_size))
+
     def _load(self) -> None:
         with self._lock:
+            self._maybe_migrate_legacy_store_unlocked()
             if not self._path.exists():
                 self._path.parent.mkdir(parents=True, exist_ok=True)
                 self._save_unlocked()
                 return
 
             try:
-                loaded = json.loads(self._path.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
+                loaded = self._load_data_from_path_unlocked(self._path)
+                if loaded:
                     self._data["canvases"] = loaded.get("canvases", {}) or {}
                     self._data["session_to_canvas"] = loaded.get("session_to_canvas", {}) or {}
+                self._store_signature = self._read_store_signature_unlocked()
             except Exception:
                 # Korrupten Store nicht crashen lassen; neuen leeren Store verwenden.
                 self._data = {"canvases": {}, "session_to_canvas": {}}
                 self._save_unlocked()
+
+    def _reload_if_changed_unlocked(self) -> bool:
+        current_signature = self._read_store_signature_unlocked()
+        if current_signature is None:
+            return False
+        if self._store_signature == current_signature:
+            return False
+
+        try:
+            loaded = self._load_data_from_path_unlocked(self._path)
+            if loaded:
+                self._data["canvases"] = loaded.get("canvases", {}) or {}
+                self._data["session_to_canvas"] = loaded.get("session_to_canvas", {}) or {}
+                self._store_signature = current_signature
+                return True
+        except Exception:
+            return False
+        return False
 
     def _save_unlocked(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -76,6 +164,7 @@ class CanvasStore:
             encoding="utf-8",
         )
         tmp_path.replace(self._path)
+        self._store_signature = self._read_store_signature_unlocked()
 
     def _save(self) -> None:
         with self._lock:
@@ -99,6 +188,7 @@ class CanvasStore:
 
     def list_canvases(self, limit: int = 50) -> Dict[str, Any]:
         with self._lock:
+            self._reload_if_changed_unlocked()
             limit = max(1, min(200, int(limit)))
             canvases = list(self._data["canvases"].values())
             canvases.sort(key=lambda c: c.get("updated_at", ""), reverse=True)
@@ -114,6 +204,7 @@ class CanvasStore:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         with self._lock:
+            self._reload_if_changed_unlocked()
             canvas_id = self._new_id("canvas")
             now = _utc_now_iso()
             canvas = {
@@ -134,6 +225,7 @@ class CanvasStore:
 
     def get_canvas(self, canvas_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
+            self._reload_if_changed_unlocked()
             canvas = self._data["canvases"].get(canvas_id)
             return deepcopy(canvas) if canvas else None
 
@@ -172,6 +264,7 @@ class CanvasStore:
     ) -> Optional[Dict[str, Any]]:
         """Liefert eine gefilterte Canvas-Sicht."""
         with self._lock:
+            self._reload_if_changed_unlocked()
             raw = self._data["canvases"].get(canvas_id)
             if not raw:
                 return None
@@ -269,10 +362,12 @@ class CanvasStore:
 
     def get_canvas_id_for_session(self, session_id: str) -> Optional[str]:
         with self._lock:
+            self._reload_if_changed_unlocked()
             return self._data["session_to_canvas"].get(session_id)
 
     def get_canvas_by_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
+            self._reload_if_changed_unlocked()
             canvas_id = self._data["session_to_canvas"].get(session_id)
             if not canvas_id:
                 return None
@@ -289,6 +384,7 @@ class CanvasStore:
         event_limit: int = 200,
     ) -> Optional[Dict[str, Any]]:
         with self._lock:
+            self._reload_if_changed_unlocked()
             canvas_id = self._data["session_to_canvas"].get(session_id)
         if not canvas_id:
             return None
@@ -303,6 +399,7 @@ class CanvasStore:
 
     def attach_session(self, canvas_id: str, session_id: str) -> Dict[str, Any]:
         with self._lock:
+            self._reload_if_changed_unlocked()
             canvas = self._get_canvas_unlocked(canvas_id)
             previous_canvas = self._data["session_to_canvas"].get(session_id)
 
@@ -329,6 +426,7 @@ class CanvasStore:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         with self._lock:
+            self._reload_if_changed_unlocked()
             canvas = self._get_canvas_unlocked(canvas_id)
             now = _utc_now_iso()
             nodes = canvas["nodes"]
@@ -372,6 +470,7 @@ class CanvasStore:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         with self._lock:
+            self._reload_if_changed_unlocked()
             canvas = self._get_canvas_unlocked(canvas_id)
             for edge in canvas["edges"]:
                 if (
@@ -408,6 +507,7 @@ class CanvasStore:
         payload: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         with self._lock:
+            self._reload_if_changed_unlocked()
             canvas = self._get_canvas_unlocked(canvas_id)
             event = {
                 "id": self._new_id("event"),
@@ -443,6 +543,7 @@ class CanvasStore:
         )
 
         with self._lock:
+            self._reload_if_changed_unlocked()
             canvas_id = self._data["session_to_canvas"].get(session_id)
             if not canvas_id and auto_attach and session_id:
                 fallback_canvas_id = self._get_primary_canvas_id_unlocked()

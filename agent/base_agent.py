@@ -1107,6 +1107,11 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
 
     async def run(self, task: str) -> str:
         log.info(f"{self.__class__.__name__} ({self.provider.value})")
+        # Run-scope Reset: verhindert, dass alte Loop-Counter ueber mehrere Tasks leaken.
+        self.recent_actions = []
+        self.last_skip_times = {}
+        self.action_call_counts = {}
+        self._task_action_history = []
         self._run_started_at = time.time()
         self._active_tool_name = None
         self._memory_recall_last_meta = {}

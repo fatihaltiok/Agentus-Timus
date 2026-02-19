@@ -39,7 +39,7 @@ from utils.openai_compat import prepare_openai_params
 from agent.shared.mcp_client import MCPClient as _SharedMCPClient
 from agent.shared.action_parser import parse_action as _shared_parse_action
 
-load_dotenv(dotenv_path=PROJECT_ROOT / ".env")
+load_dotenv(dotenv_path=PROJECT_ROOT / ".env", override=True)
 
 MCP_URL = os.getenv("MCP_URL", "http://127.0.0.1:5000")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")

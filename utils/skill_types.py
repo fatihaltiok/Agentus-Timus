@@ -99,7 +99,6 @@ class Skill:
     def description(self) -> str:
         return self.metadata.description
     
-    @property
     def should_trigger(self, task: str) -> bool:
         """
         Bestimmt ob dieser Skill für einen Task relevant ist.
@@ -111,8 +110,10 @@ class Skill:
         # Zähle Keyword-Matches
         matches = sum(1 for kw in keywords if kw in task_lower)
         
-        # Threshold: Mindestens 2 Keywords oder Name im Task
-        return matches >= 2 or self.name.lower().replace('-', ' ') in task_lower
+        # Threshold: Mindestens 2 Keywords oder mindestens ein Namensteil im Task
+        name_parts = self.name.lower().replace('-', ' ').split()
+        name_match = any(part in task_lower for part in name_parts if len(part) > 2)
+        return matches >= 2 or name_match
     
     def get_scripts(self) -> Dict[str, SkillResource]:
         """Liefert alle Scripts (lazy loading)"""

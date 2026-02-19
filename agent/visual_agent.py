@@ -61,7 +61,7 @@ except ImportError:
     MSS_AVAILABLE = False
 
 # --- Konfiguration ---
-load_dotenv(dotenv_path=PROJECT_ROOT / ".env")
+load_dotenv(dotenv_path=PROJECT_ROOT / ".env", override=True)
 
 MCP_URL = os.getenv("MCP_URL", "http://127.0.0.1:5000")
 DEBUG = os.getenv("VISUAL_AGENT_DEBUG", "1") == "1"

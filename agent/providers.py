@@ -61,6 +61,8 @@ class MultiProviderClient:
         for provider, env_var in self.API_KEY_ENV.items():
             key = os.getenv(env_var)
             if key:
+                key = key.strip()
+            if key:
                 self._api_keys[provider] = key
                 log.debug(f"API Key geladen fuer: {provider.value}")
 

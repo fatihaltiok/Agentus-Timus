@@ -22,7 +22,7 @@ from datetime import datetime
 sys.path.insert(0, str(Path.home() / "dev" / "timus"))
 
 from dotenv import load_dotenv
-load_dotenv(Path.home() / "dev" / "timus" / ".env")
+load_dotenv(Path.home() / "dev" / "timus" / ".env", override=True)
 
 from faster_whisper import WhisperModel
 import requests

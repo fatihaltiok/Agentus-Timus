@@ -19,9 +19,20 @@ Branding:
 
 ---
 
-## Aktueller Stand (2026-02-17)
+## Aktueller Stand (2026-02-19)
 
-Memory-Stabilisierung wurde bis Meilenstein 6 umgesetzt:
+**Florence-2 Vision Integration (Phase 1–7) abgeschlossen:**
+- Florence-2 (microsoft/Florence-2-large-ft, ~3GB VRAM) als primäres Vision-Modell integriert
+- `VisionClient` im `VisualNemotronAgent v4`: Florence-2 (PRIMARY) → GPT-4 Vision → Qwen-VL
+- Neues MCP-Tool `florence2_tool` mit 5 async Funktionen (UI-Detection, OCR, Region-Analyse)
+- NemotronClient mit LLM-Fallback (LOCAL_LLM via `LOCAL_LLM_URL`)
+- Feature-Flag `FLORENCE2_ENABLED=true/false` in `.env`
+- Pre-existing Bug in `utils/skill_types.py` behoben (falsche `@property`-Dekoration)
+- Vollständige Test-Suite: **184 bestanden, 3 übersprungen**
+
+Abschlussdoku: `docs/ABSCHLUSSBERICHT_Florence2_Integration_2026-02-19.md`
+
+**Memory-Stabilisierung (Meilenstein 6, 2026-02-17):**
 - Deterministisches Interaction-Logging zentral in `run_agent(...)`
 - Working-Memory-Layer mit Budget + Prompt-Injektion
 - Dynamische Relevanz/Decay-Logik fuer Kurzzeit- und Langzeitkontext
@@ -29,11 +40,6 @@ Memory-Stabilisierung wurde bis Meilenstein 6 umgesetzt:
 - Quality-Gates + E2E-Readiness Tests
 - Unified Recall-Pipeline: episodische `interaction_events` + semantisches Langzeit-Memory
 - Session-Kontinuitaet im Dispatcher (eine Chat-Session statt neuer Session-ID pro Turn)
-- Query-Sanitizing fuer Terminal-Steuerzeichen (z.B. `^V` / `\x16`)
-- Aktiver Dialogzustand pro Session (aktuelles Thema, letztes Ziel, offene Anliegen)
-- Milestone 3 erweitert: adaptive Relevanz fuer offene Anliegen (unresolved-first Recall)
-- Milestone 4 erweitert: Runtime-Memory-Snapshots in Event-Metadaten + Recall-Telemetrie
-- Milestone 5 erweitert: Quality-Gates fuer Snapshot/Unresolved-Relevanz + Verifikations-Checks
 
 Wichtige Doku-Dateien:
 - `docs/MEMORY_ARCHITECTURE.md`
@@ -43,9 +49,8 @@ Wichtige Doku-Dateien:
 
 Schnelle Verifikation:
 ```bash
-pytest -q tests/test_milestone5_quality_gates.py
-pytest -q tests/test_milestone6_e2e_readiness.py
-python verify_milestone6.py
+pytest -q tests/
+python tools/florence2_tool/setup_florence2.py  # Florence-2 Diagnose
 ```
 
 CI-Gates (GitHub Actions):
@@ -166,9 +171,11 @@ flowchart TD
 - **Features:** ROI-Management, Loop-Recovery, Screen-Change-Gate, Strukturierte Navigation
 
 ### VisualNemotronAgent v4 (Desktop Edition)
-- **Modell:** Nemotron + Qwen2-VL / GPT-4 Vision
+- **Modell:** Nemotron + Florence-2 (PRIMARY) / GPT-4 Vision / Qwen2-VL
 - **Aufgabe:** Komplexe mehrstufige Desktop-Automatisierung
 - **Tech:** PyAutoGUI + SoM fuer echte Maus-Klicks auf dem ganzen Desktop
+- **Vision-Kaskade:** Florence-2 lokal (3GB VRAM) → GPT-4 Vision API → Qwen-VL lokal
+- **LLM-Fallback:** Nemotron (OpenRouter) → LOCAL_LLM (konfigurierbar via `LOCAL_LLM_URL`)
 
 ---
 
@@ -286,7 +293,8 @@ Beispiel: "Recherchiere KI-Sicherheit und erstelle einen Plan"
 
 | Tool | Funktionen |
 |------|-----------|
-| **qwen_vl_tool** | Qwen2-VL Integration (lokal auf GPU) |
+| **florence2_tool** | Florence-2 Integration (lokal auf GPU) — `florence2_health`, `florence2_full_analysis`, `florence2_detect_ui`, `florence2_ocr`, `florence2_analyze_region` |
+| **qwen_vl_tool** | Qwen2-VL Integration (lokal auf GPU, Fallback) |
 
 ---
 
@@ -442,7 +450,8 @@ Jeder Agent kann ueber Environment-Variablen auf ein anderes Modell/Provider umk
 | **Playwright** | Browser-Automation |
 | **PyAutoGUI** | Desktop-Steuerung (Maus/Tastatur) |
 | **PaddleOCR** | GPU-beschleunigte Texterkennung |
-| **Qwen2-VL** | Lokales Vision-Language-Modell |
+| **Florence-2** | Primäres lokales Vision-Modell (UI-Detection + OCR, ~3GB VRAM) |
+| **Qwen2-VL** | Lokales Vision-Language-Modell (Fallback) |
 
 ---
 
@@ -487,6 +496,13 @@ USE_MOUSE_FEEDBACK=1
 USE_SCREEN_CHANGE_GATE=false
 AUTO_OPEN_FILES=true
 TIMUS_LIVE_STATUS=true
+
+# Florence-2 Vision (VisualNemotronAgent v4)
+FLORENCE2_ENABLED=true
+FLORENCE2_MODEL=microsoft/Florence-2-large-ft
+LOCAL_LLM_URL=                 # optional: lokaler LLM-Fallback fuer Nemotron
+LOCAL_LLM_MODEL=               # z.B. Qwen/Qwen2.5-7B-Instruct
+HF_TOKEN=hf_...                # fuer HuggingFace Modell-Download
 ```
 
 `TIMUS_LIVE_STATUS=true` zeigt eine aktive Laufzeitanzeige im Terminal:
@@ -573,6 +589,7 @@ timus/
 │   ├── creative_tool/
 │   ├── developer_tool/
 │   ├── delegation_tool/     # Agent-zu-Agent Delegation (MCP-Tool)
+│   ├── florence2_tool/      # Florence-2 Vision (UI-Detection + OCR, Primary)
 │   ├── memory_tool/
 │   └── ...
 ├── orchestration/
@@ -598,7 +615,8 @@ timus/
     ├── MEMORY_ARCHITECTURE.md
     ├── MILESTONE6_RUNBOOK.md
     ├── RELEASE_NOTES_MILESTONE6.md
-    └── SESSION_LOG_2026-02-17_MILESTONES_0_TO_6.md
+    ├── SESSION_LOG_2026-02-17_MILESTONES_0_TO_6.md
+    └── ABSCHLUSSBERICHT_Florence2_Integration_2026-02-19.md
 ```
 
 ---

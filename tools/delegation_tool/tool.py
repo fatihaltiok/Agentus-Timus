@@ -23,22 +23,46 @@ log = logging.getLogger("DelegationTool")
         P("agent_type", "string",
           "Ziel-Agent: executor, research, reasoning, creative, developer, visual, meta"),
         P("task", "string", "Die zu delegierende Aufgabe"),
+        P("from_agent", "string", "Optional: Name des aufrufenden Agenten", required=False),
+        P("session_id", "string", "Optional: Session-ID fuer Gedaechtnis-Kontinuitaet", required=False),
     ],
     capabilities=["orchestration"],
     category=C.SYSTEM,
 )
-async def delegate_to_agent(agent_type: str, task: str) -> dict:
+async def delegate_to_agent(
+    agent_type: str,
+    task: str,
+    from_agent: str = "unknown",
+    session_id: str | None = None,
+) -> dict:
     from agent.agent_registry import agent_registry
 
-    log.info(f"Delegation angefragt: -> {agent_type} | Task: {task[:100]}")
+    canonical_agent = agent_registry.normalize_agent_name(agent_type)
+    inferred_from_agent = agent_registry.get_current_agent_name()
+    effective_from_agent = from_agent or inferred_from_agent or "unknown"
+    if effective_from_agent == "unknown" and inferred_from_agent:
+        effective_from_agent = inferred_from_agent
 
-    result = await agent_registry.delegate(
-        from_agent="unknown",
-        to_agent=agent_type,
-        task=task,
+    log.info(
+        f"Delegation angefragt: {effective_from_agent} -> {canonical_agent} | "
+        f"Task: {task[:100]}"
     )
 
-    return {"status": "success", "agent": agent_type, "result": result}
+    result = await agent_registry.delegate(
+        from_agent=effective_from_agent,
+        to_agent=canonical_agent,
+        task=task,
+        session_id=session_id,
+    )
+
+    if isinstance(result, str) and result.startswith("FEHLER:"):
+        return {
+            "status": "error",
+            "agent": canonical_agent,
+            "error": result,
+        }
+
+    return {"status": "success", "agent": canonical_agent, "result": result}
 
 
 @tool(

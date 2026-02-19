@@ -113,3 +113,28 @@ def test_record_agent_event_auto_attach_can_be_disabled(tmp_path, monkeypatch):
 
     result = store.record_agent_event("sess_auto_off", "executor", "running")
     assert result is None
+
+
+def test_store_reloads_changes_from_second_instance(tmp_path, monkeypatch):
+    monkeypatch.setenv("TIMUS_CANVAS_AUTO_ATTACH_SESSIONS", "false")
+    store_path = tmp_path / "canvas_store_shared.json"
+    store_a = CanvasStore(store_path)
+    store_b = CanvasStore(store_path)
+
+    canvas = store_a.create_canvas("Shared")
+    cid = canvas["id"]
+    store_a.attach_session(canvas_id=cid, session_id="sess_shared")
+
+    # Zweite Instanz schreibt Event (simuliert Dispatcher-Prozess).
+    result_b = store_b.record_agent_event(
+        session_id="sess_shared",
+        agent_name="executor",
+        status="running",
+        message="from-b",
+    )
+    assert result_b is not None
+
+    # Erste Instanz muss externe Aenderung ohne Neustart sehen.
+    loaded_a = store_a.get_canvas(cid)
+    assert loaded_a is not None
+    assert any(ev.get("message") == "from-b" for ev in loaded_a["events"])

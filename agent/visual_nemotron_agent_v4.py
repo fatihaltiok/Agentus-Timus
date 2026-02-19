@@ -39,7 +39,7 @@ from openai import OpenAI
 # Setup
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
-load_dotenv(dotenv_path=PROJECT_ROOT / ".env")
+load_dotenv(dotenv_path=PROJECT_ROOT / ".env", override=True)
 
 # Shared Utilities
 from agent.shared.mcp_client import MCPClient as _SharedMCPClient
@@ -57,6 +57,11 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 NEMOTRON_MODEL = os.getenv("REASONING_MODEL", "nvidia/nemotron-3-nano-30b-a3b")
 MCP_URL = os.getenv("MCP_SERVER_URL", "http://localhost:5000")
+# Feature-Flag: Florence-2 als primärer Vision-Pfad (FLORENCE2_ENABLED=false → alter Pfad)
+FLORENCE2_ENABLED = os.getenv("FLORENCE2_ENABLED", "true").lower() not in {"0", "false", "no", "off"}
+# LLM-Fallback für Decision-Layer (nur NemotronClient, NICHT Florence-Detection)
+LOCAL_LLM_URL = os.getenv("LOCAL_LLM_URL", "")        # z.B. http://localhost:1234/v1
+LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "")    # z.B. Qwen/Qwen2.5-7B-Instruct
 
 
 # ============================================================================
@@ -402,14 +407,55 @@ KEIN Code, KEINE Erklärung - nur JSON!"""
 # ============================================================================
 
 class NemotronClient:
-    """Client für Nemotron mit strikter JSON-Validierung."""
-    
+    """
+    Client für Nemotron (Decision-Layer) mit lokalem LLM-Fallback.
+
+    Priorität:
+      1. Nemotron via OpenRouter (OPENROUTER_API_KEY)
+      2. Lokaler OpenAI-kompatibler Endpoint (LOCAL_LLM_URL + LOCAL_LLM_MODEL)
+
+    Hinweis: Fallback gilt NUR für den Decision-Layer.
+             Florence-2 (Vision-Layer) hat einen eigenen Fallback-Pfad in VisionClient.
+    """
+
+    MAX_RETRIES = 3
+
     def __init__(self):
         self.client = OpenAI(
             api_key=OPENROUTER_API_KEY,
-            base_url="https://openrouter.ai/api/v1"
+            base_url="https://openrouter.ai/api/v1",
         )
-    
+        # Lokaler Fallback-Client (optional)
+        self.fallback_client: Optional[OpenAI] = None
+        self.fallback_model: str = LOCAL_LLM_MODEL
+        if LOCAL_LLM_URL and LOCAL_LLM_MODEL:
+            self.fallback_client = OpenAI(
+                api_key="local",
+                base_url=LOCAL_LLM_URL,
+            )
+            log.info(f"   🔄 LLM-Fallback konfiguriert: {LOCAL_LLM_URL} ({LOCAL_LLM_MODEL})")
+
+    def _call_llm(self, system_prompt: str, user_prompt: str, use_fallback: bool = False) -> str:
+        """Ruft Nemotron oder den lokalen Fallback auf."""
+        if use_fallback and self.fallback_client:
+            client = self.fallback_client
+            model = self.fallback_model
+            log.info(f"   🔄 Nutze LLM-Fallback: {model}")
+        else:
+            client = self.client
+            model = NEMOTRON_MODEL
+
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.1,
+            max_tokens=1500,
+        )
+        return response.choices[0].message.content.strip()
+
     def _extract_json(self, text: str) -> Dict:
         """Extrahiere JSON aus Nemotron-Antwort (nutzt shared parser als Fallback)."""
         # Versuche zuerst spezifisches Nemotron-Parsing
@@ -501,36 +547,37 @@ BISHERIGE SCHRITTE ({len(step_history)}):
 
 ENTSCHEIDE DEN NÄCHSTEN SCHRITT (nur JSON, keine Erklärungen):"""
 
-        try:
-            response = self.client.chat.completions.create(
-                model=NEMOTRON_MODEL,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=0.1,
-                max_tokens=1500
-            )
-            
-            result_text = response.choices[0].message.content.strip()
-            result_json = self._extract_json(result_text)
-            
-            # Ensure required fields
-            if "actions" not in result_json:
-                result_json["actions"] = []
-            if "status" not in result_json:
-                result_json["status"] = "in_progress"
-            
-            log.info(f"   🤖 Nemotron: {len(result_json['actions'])} Aktionen geplant")
-            return result_json
-            
-        except Exception as e:
-            log.error(f"   ❌ Nemotron Fehler: {e}")
-            return {
-                "actions": [{"action": "scan", "element_types": ["button", "text field"]}],
-                "status": "in_progress",
-                "error": str(e)
-            }
+        last_error: Optional[str] = None
+        for attempt in range(self.MAX_RETRIES):
+            use_fallback = attempt > 0  # Erster Versuch: Nemotron; danach Fallback
+            try:
+                result_text = await asyncio.to_thread(
+                    self._call_llm, system_prompt, user_prompt, use_fallback
+                )
+                result_json = self._extract_json(result_text)
+
+                if "actions" not in result_json:
+                    result_json["actions"] = []
+                if "status" not in result_json:
+                    result_json["status"] = "in_progress"
+
+                source = "Fallback" if use_fallback else "Nemotron"
+                log.info(f"   🤖 {source}: {len(result_json['actions'])} Aktionen geplant")
+                return result_json
+
+            except Exception as e:
+                last_error = str(e)
+                if use_fallback or not self.fallback_client:
+                    log.error(f"   ❌ LLM Fehler (Versuch {attempt + 1}): {e}")
+                else:
+                    log.warning(f"   ⚠️ Nemotron Fehler (Versuch {attempt + 1}): {e} → Fallback")
+
+        log.error(f"   ❌ Alle {self.MAX_RETRIES} LLM-Versuche fehlgeschlagen: {last_error}")
+        return {
+            "actions": [{"action": "scan", "element_types": ["button", "text field"]}],
+            "status": "in_progress",
+            "error": last_error,
+        }
 
 
 # ============================================================================
@@ -603,38 +650,95 @@ class LoopDetector:
 
 class VisionClient:
     """
-    Screenshot-Analyse: GPT-4 Vision als PRIMARY (schnell), Qwen-VL als Fallback.
-    
-    GPT-4: ~3-5s pro Bild (API)
-    Qwen-VL: ~60s+ pro Bild (lokal, falls GPU Probleme)
+    Screenshot-Analyse mit dreistufigem Fallback-Pfad:
+
+    1. Florence-2 (lokal, PRIMARY wenn FLORENCE2_ENABLED=true)
+       ~1-3s auf GPU, gibt strukturierten summary_prompt für Nemotron zurück.
+    2. GPT-4 Vision (API, ~3-5s)
+    3. Qwen-VL (lokal, ~60s+)
     """
-    
+
     def __init__(self, mcp_url: str = MCP_URL):
         self.mcp_url = mcp_url
-        self.use_gpt4_primary = True  # Schnellere Alternative
-        self.gpt4_timeout = 10.0  # GPT-4 sollte in 10s fertig sein
-        self.qwen_timeout = 120.0  # Qwen braucht mehr Zeit
-    
+        self.use_gpt4_primary = True
+        self.florence2_timeout = 90.0   # Erstes Laden dauert länger (Modell-Download)
+        self.gpt4_timeout = 10.0
+        self.qwen_timeout = 120.0
+
     def _resize_for_qwen(self, img: Image.Image) -> Image.Image:
         return img.resize((512, 288), Image.Resampling.LANCZOS)
-    
+
     async def analyze(self, img: Image.Image, task: str) -> str:
         """
-        Screenshot → Text via GPT-4 (PRIMARY) oder Qwen-VL (Fallback).
+        Screenshot → strukturierte Beschreibung für Nemotron.
+
+        Pfad-Reihenfolge (abhängig von Flags und API-Keys):
+          Florence-2 (lokal) → GPT-4 Vision (API) → Qwen-VL (lokal)
         """
-        # PRIMARY: GPT-4 Vision (schnell, ~3-5s)
+        # PRIMARY: Florence-2 (lokal, kein API-Key nötig)
+        if FLORENCE2_ENABLED:
+            try:
+                result = await self._florence2_analyze(img, task)
+                if result and not result.startswith("["):
+                    log.info("   🌸 Florence-2 (lokal) erfolgreich")
+                    return result
+            except Exception as e:
+                log.warning(f"   Florence-2 failed: {e} -> Fallback zu GPT-4")
+
+        # FALLBACK 1: GPT-4 Vision (schnell, ~3-5s)
         if self.use_gpt4_primary and OPENAI_API_KEY:
             try:
                 result = await self._gpt4_analyze(img, task)
                 if result and not result.startswith("["):
-                    log.info("   🚀 GPT-4 Vision (schnell) erfolgreich")
+                    log.info("   🚀 GPT-4 Vision (Fallback) erfolgreich")
                     return result
             except Exception as e:
                 log.warning(f"   GPT-4 failed: {e} -> Fallback zu Qwen-VL")
-        
-        # FALLBACK: Qwen-VL (langsam, ~60s+, aber kostenlos)
-        log.info("   🐌 Nutze Qwen-VL (langsam, 60s+ Timeout)...")
+
+        # FALLBACK 2: Qwen-VL (langsam, ~60s+)
+        log.info("   🐌 Nutze Qwen-VL (Fallback, 60s+ Timeout)...")
         return await self._qwen_analyze(img, task)
+
+    async def _florence2_analyze(self, img: Image.Image, task: str) -> str:
+        """
+        Florence-2 via MCP florence2_full_analysis.
+        Speichert Screenshot temporär, ruft Tool auf, gibt summary_prompt zurück.
+        """
+        temp_path = "/tmp/v4_florence2_screen.png"
+        await asyncio.to_thread(img.save, temp_path)
+
+        try:
+            async with httpx.AsyncClient(timeout=self.florence2_timeout) as client:
+                resp = await client.post(
+                    self.mcp_url,
+                    json={
+                        "jsonrpc": "2.0",
+                        "method": "florence2_full_analysis",
+                        "params": {"image_path": temp_path},
+                        "id": 1,
+                    },
+                )
+                data = resp.json()
+
+            if "result" in data:
+                r = data["result"]
+                if "error" in r:
+                    return f"[Florence-2 Error: {r['error']}]"
+                summary = r.get("summary_prompt", "")
+                if summary:
+                    log.info(
+                        f"   🌸 Florence-2: {r.get('element_count', 0)} Elemente, "
+                        f"device={r.get('device', '?')}"
+                    )
+                    return summary
+                return "[Florence-2: leerer summary_prompt]"
+
+            if "error" in data:
+                return f"[Florence-2 RPC Error: {data['error'].get('message', 'Unknown')}]"
+
+        except Exception as e:
+            return f"[Florence-2 failed: {e}]"
+        return "[Florence-2: kein Ergebnis]"
     
     async def _qwen_analyze(self, img: Image.Image, task: str) -> str:
         """Qwen-VL Fallback mit langem Timeout."""

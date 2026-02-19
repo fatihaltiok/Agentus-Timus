@@ -12,6 +12,7 @@ Der Canvas-MVP ergaenzt Timus um einen persistierten Arbeitsgraphen fuer Session
 ## Persistenz
 - Datei: `data/canvas_store.json`
 - Modul: `orchestration/canvas_store.py`
+- Hinweis: Seit dem Fix ist der Default-Pfad repo-konsistent (unabhaengig vom aktuellen Working Directory), um Drifts wie `server/data/canvas_store.json` zu vermeiden.
 
 ## HTTP-Endpoints (MCP Server)
 - `GET /canvas/ui` (Web-UI)
@@ -65,8 +66,11 @@ xdg-open http://127.0.0.1:5000/canvas/ui
 - Delegation-Flow loggt automatisch Edges/Events (`from_agent -> to_agent`), wenn die Session einem Canvas zugeordnet ist.
 - Beim MCP-Start wird automatisch ein Default-Canvas erstellt, falls noch keines existiert.
 - Beim MCP-Start wird die Canvas-UI automatisch im Browser geoeffnet (best effort).
+- MCP schreibt Spiegel-Logs fuer neue Canvas-Events/Edges in `timus_server.log`.
 - ENV-Schalter:
   - `TIMUS_CANVAS_AUTO_CREATE=true|false` (default: `true`)
   - `TIMUS_CANVAS_AUTO_OPEN=true|false` (default: `true`)
   - `TIMUS_CANVAS_AUTO_ATTACH_SESSIONS=true|false` (default: `true`)
+  - `TIMUS_CANVAS_MIRROR_LOG=true|false` (default: `true`)
+  - `TIMUS_CANVAS_MIRROR_LOG_INTERVAL=<seconds>` (default: `1.2`)
   - `TIMUS_CANVAS_DEFAULT_TITLE="..."` (default: `Live Canvas`)

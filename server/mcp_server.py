@@ -2,6 +2,7 @@
 
 import sys
 import os
+import asyncio
 from pathlib import Path
 import importlib
 import logging
@@ -9,6 +10,7 @@ import inspect
 import json as _json
 import threading
 import webbrowser
+from collections import deque
 from datetime import datetime
 
 # --- Drittanbieter-Bibliotheken ---
@@ -77,6 +79,8 @@ def numpy_aware_serializer(response):
 # --- Projekt-Setup ---
 project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
+# .env frueh laden, damit env-basierte Pfade bereits bei Modul-Imports wirken.
+load_dotenv(dotenv_path=project_root / ".env", override=False)
 
 # --- Lokale Module und Kontext importieren ---
 import tools.shared_context as shared_context
@@ -153,6 +157,8 @@ TOOL_MODULES = [
     "tools.browser_controller.tool",
     # NEU: JSON-Nemotron Tool für AI-gestützte JSON-Verarbeitung
     "tools.json_nemotron_tool.json_nemotron_tool",
+    # NEU: Florence-2 Vision Tool — UI-Detection + OCR (ersetzt Qwen-VL als Primary)
+    "tools.florence2_tool.tool",
 ]
 
 # --- Hilfsfunktionen für den Lifespan-Manager ---
@@ -400,6 +406,104 @@ def _bootstrap_canvas_startup() -> dict:
     }
 
 
+def _short_text(value: str, limit: int = 140) -> str:
+    text = str(value or "").replace("\n", " ").strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)] + "..."
+
+
+async def _canvas_mirror_log_worker(interval_seconds: float = 1.2) -> None:
+    """Spiegelt neue Canvas-Events/Edges als MCP-Logeintraege."""
+    interval = max(0.3, float(interval_seconds))
+    seen_event_ids: set[str] = set()
+    seen_edge_ids: set[str] = set()
+    seen_event_order: deque[str] = deque()
+    seen_edge_order: deque[str] = deque()
+    canvas_updated_at: dict[str, str] = {}
+    max_seen = 25000
+
+    def _remember(seen_set: set[str], seen_q: deque[str], value: str) -> bool:
+        if not value or value in seen_set:
+            return False
+        seen_set.add(value)
+        seen_q.append(value)
+        while len(seen_q) > max_seen:
+            old = seen_q.popleft()
+            seen_set.discard(old)
+        return True
+
+    # Baseline setzen, damit beim Start nicht die komplette Historie neu geloggt wird.
+    try:
+        initial = canvas_store.list_canvases(limit=200).get("items", [])
+        for canvas in initial:
+            cid = str(canvas.get("id") or "")
+            canvas_updated_at[cid] = str(canvas.get("updated_at") or "")
+            for ev in canvas.get("events", []) or []:
+                _remember(seen_event_ids, seen_event_order, str(ev.get("id") or ""))
+            for edge in canvas.get("edges", []) or []:
+                _remember(seen_edge_ids, seen_edge_order, str(edge.get("id") or ""))
+        log.info(
+            "🧩 Canvas mirror logger gestartet (canvases=%s, interval=%.1fs)",
+            len(initial),
+            interval,
+        )
+    except Exception as exc:
+        log.warning(f"⚠️ Canvas mirror baseline fehlgeschlagen: {exc}")
+
+    while True:
+        try:
+            canvases = canvas_store.list_canvases(limit=200).get("items", [])
+            for canvas in canvases:
+                cid = str(canvas.get("id") or "")
+                updated_at = str(canvas.get("updated_at") or "")
+                if canvas_updated_at.get(cid) == updated_at:
+                    continue
+
+                canvas_updated_at[cid] = updated_at
+
+                events = sorted(
+                    (canvas.get("events", []) or []),
+                    key=lambda e: str(e.get("created_at", "")),
+                )
+                for ev in events:
+                    event_id = str(ev.get("id") or "")
+                    if not _remember(seen_event_ids, seen_event_order, event_id):
+                        continue
+                    log.info(
+                        "🧩 Canvas event | canvas=%s session=%s agent=%s type=%s status=%s msg=%s",
+                        cid,
+                        str(ev.get("session_id") or "-"),
+                        str(ev.get("agent") or "-"),
+                        str(ev.get("type") or "-"),
+                        str(ev.get("status") or "-"),
+                        _short_text(str(ev.get("message") or "-")),
+                    )
+
+                edges = sorted(
+                    (canvas.get("edges", []) or []),
+                    key=lambda e: str(e.get("created_at", "")),
+                )
+                for edge in edges:
+                    edge_id = str(edge.get("id") or "")
+                    if not _remember(seen_edge_ids, seen_edge_order, edge_id):
+                        continue
+                    log.info(
+                        "🧩 Canvas edge  | canvas=%s %s -> %s kind=%s label=%s",
+                        cid,
+                        str(edge.get("source") or "-"),
+                        str(edge.get("target") or "-"),
+                        str(edge.get("kind") or "-"),
+                        _short_text(str(edge.get("label") or "-"), limit=60),
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning(f"⚠️ Canvas mirror loop Fehler: {exc}")
+
+        await asyncio.sleep(interval)
+
+
 # --- Lifespan-Manager ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -415,6 +519,23 @@ async def lifespan(app: FastAPI):
         app.state.canvas_startup = _bootstrap_canvas_startup()
     except Exception as e:
         log.warning(f"⚠️ Canvas Startup-Bootstrap fehlgeschlagen: {e}")
+
+    # Canvas-Mirror-Logger (MCP-seitige Spiegel-Logs)
+    app.state.canvas_mirror_task = None
+    if _is_truthy_env(os.getenv("TIMUS_CANVAS_MIRROR_LOG"), default=True):
+        try:
+            interval_s = float(os.getenv("TIMUS_CANVAS_MIRROR_LOG_INTERVAL", "1.2"))
+            app.state.canvas_mirror_task = asyncio.create_task(
+                _canvas_mirror_log_worker(interval_seconds=interval_s)
+            )
+            log.info(
+                "✅ Canvas mirror logger aktiviert (TIMUS_CANVAS_MIRROR_LOG=true, interval=%.1fs)",
+                max(0.3, interval_s),
+            )
+        except Exception as e:
+            log.warning(f"⚠️ Canvas mirror logger konnte nicht gestartet werden: {e}")
+    else:
+        log.info("ℹ️ Canvas mirror logger deaktiviert (TIMUS_CANVAS_MIRROR_LOG=false)")
 
     # System initialisieren (Hardware, Clients, Tools)
     _initialize_hardware_and_engines()
@@ -538,6 +659,16 @@ async def lifespan(app: FastAPI):
             log.info("✅ Heartbeat-Scheduler gestoppt")
         except Exception as e:
             log.warning(f"⚠️ Fehler beim Scheduler-Shutdown: {e}")
+
+    # === SHUTDOWN: Canvas mirror logger stoppen ===
+    if app.state.canvas_mirror_task:
+        app.state.canvas_mirror_task.cancel()
+        try:
+            await app.state.canvas_mirror_task
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            log.warning(f"⚠️ Fehler beim Canvas mirror shutdown: {e}")
 
 
 # --- App-Initialisierung mit Lifespan ---
