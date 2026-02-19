@@ -458,10 +458,10 @@ class SessionMemory:
         lines: List[str] = []
         if state["current_topic"]:
             lines.append(f"Aktuelles Thema: {state['current_topic']}")
-        if state["last_user_goal"]:
-            lines.append(f"Letztes Ziel: {state['last_user_goal']}")
         if state["open_threads"]:
             lines.append("Offene Anliegen: " + " | ".join(state["open_threads"][:3]))
+        if state["last_user_goal"]:
+            lines.append(f"Letztes Ziel: {state['last_user_goal']}")
         if state["top_topics"]:
             lines.append("Top-Themen: " + ", ".join(state["top_topics"][:5]))
         return lines
@@ -1646,6 +1646,31 @@ class MemoryManager:
             unique.append(item)
             if len(unique) >= n_results:
                 break
+
+        # Wenn eine Session explizit angefragt ist, stelle sicher, dass ein
+        # session-lokales Ereignis in den Top-Ergebnissen enthalten bleibt.
+        if session_id:
+            has_session_event = any(
+                item.get("source") == "interaction_event" and item.get("session_id") == session_id
+                for item in unique
+            )
+            if not has_session_event:
+                session_events = [
+                    item for item in event_memories if item.get("session_id") == session_id
+                ]
+                if session_events:
+                    session_events.sort(
+                        key=lambda item: item.get("relevance_score", 0.0),
+                        reverse=True,
+                    )
+                    preferred = session_events[0]
+                    unique = [preferred] + [
+                        item
+                        for item in unique
+                        if self._normalize_text_for_prompt(item.get("id", ""))
+                        != self._normalize_text_for_prompt(preferred.get("id", ""))
+                    ]
+                    unique = unique[:n_results]
 
         return {
             "status": "success",

@@ -47,6 +47,9 @@ from utils.openai_compat import prepare_openai_params
 from orchestration.lane_manager import lane_manager, LaneStatus
 from tools.tool_registry_v2 import registry_v2
 
+# Logger frueh definieren, damit Import-Fallbacks sicher loggen koennen.
+log = logging.getLogger("MainDispatcher")
+
 # --- Modulpfad-Korrektur ---
 try:
     current_file_path = Path(__file__).resolve()
@@ -99,7 +102,6 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-7s | %(name)-20s | %(message)s",
 )
-log = logging.getLogger("MainDispatcher")
 
 
 def _emit_dispatcher_status(agent_name: str, phase: str, detail: str = "") -> None:

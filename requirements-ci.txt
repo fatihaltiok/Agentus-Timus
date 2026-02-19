@@ -11,3 +11,4 @@ jsonrpcserver==5.0.9
 chromadb==0.4.24
 numpy==1.26.4
 tiktoken==0.11.0
+Pillow
