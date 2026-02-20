@@ -21,6 +21,7 @@ import cv2
 # Drittanbieter-Bibliotheken
 import mss
 from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
+from utils.coordinate_converter import sanitize_scale, to_click_point
 
 # Dynamischer Import
 try:
@@ -37,8 +38,12 @@ log = logging.getLogger("visual_grounding_tool")
 # Konfiguration
 MIN_CONFIDENCE = 50  # Minimale OCR-Konfidenz
 FUZZY_THRESHOLD = 70  # Minimale Fuzzy-Match-Ähnlichkeit
-DPI_SCALE = float(os.getenv("DISPLAY_SCALE", "1.0"))  # Für HiDPI-Displays
 ACTIVE_MONITOR = int(os.getenv("ACTIVE_MONITOR", "1"))  # 1 = Hauptmonitor, 2 = Zweiter, etc.
+
+
+def _display_scale() -> float:
+    """Liest den aktuellen Display-Scale robust ein."""
+    return sanitize_scale(os.getenv("DISPLAY_SCALE", "1.0"), default=1.0)
 
 
 def _get_screenshot_with_offset() -> Tuple[Image.Image, int, int]:
@@ -177,6 +182,7 @@ def _find_best_match(
     min_search_len = len(search_lower)
 
     candidates = []
+    display_scale = _display_scale()
 
     for block in blocks:
         block_text = block['text'].lower()
@@ -203,12 +209,18 @@ def _find_best_match(
             score = fuzz.token_set_ratio(search_lower, block_text)
 
         if score >= FUZZY_THRESHOLD:
+            click_x, click_y = to_click_point(
+                relative_pixel_x=block["center_x"],
+                relative_pixel_y=block["center_y"],
+                monitor_offset_x=offset_x,
+                monitor_offset_y=offset_y,
+                dpi_scale=display_scale,
+            )
             candidates.append({
                 **block,
                 "match_score": score,
-                # Wende Offset und DPI-Skalierung an
-                "click_x": int((block['center_x'] + offset_x) / DPI_SCALE),
-                "click_y": int((block['center_y'] + offset_y) / DPI_SCALE),
+                "click_x": click_x,
+                "click_y": click_y,
             })
 
     if not candidates:
@@ -236,6 +248,7 @@ def _find_all_matches(
     min_search_len = len(search_lower)
 
     matches = []
+    display_scale = _display_scale()
 
     for block in blocks:
         block_text = block['text'].lower()
@@ -255,10 +268,19 @@ def _find_all_matches(
             score = fuzz.token_set_ratio(search_lower, block_text)
 
         if score >= FUZZY_THRESHOLD:
+            click_x, click_y = to_click_point(
+                relative_pixel_x=block["center_x"],
+                relative_pixel_y=block["center_y"],
+                monitor_offset_x=offset_x,
+                monitor_offset_y=offset_y,
+                dpi_scale=display_scale,
+            )
             matches.append({
                 "text": block['text'],
-                "x": int((block['center_x'] + offset_x) / DPI_SCALE),
-                "y": int((block['center_y'] + offset_y) / DPI_SCALE),
+                "x": click_x,
+                "y": click_y,
+                "click_x": click_x,
+                "click_y": click_y,
                 "width": block['width'],
                 "height": block['height'],
                 "match_score": score,
@@ -565,7 +587,7 @@ async def get_all_screen_text() -> dict:
         raise Exception("OCR nicht verfügbar")
 
     try:
-        img, _, _ = await asyncio.to_thread(_get_screenshot_with_offset)
+        img, offset_x, offset_y = await asyncio.to_thread(_get_screenshot_with_offset)
         processed = await asyncio.to_thread(_preprocess_for_ocr, img, "adaptive")
 
         ocr_data = await asyncio.to_thread(
@@ -582,12 +604,29 @@ async def get_all_screen_text() -> dict:
         for b in blocks:
             text = b.get('text', '').strip()
             if len(text) > 2:  # Nur Texte mit >2 Zeichen
+                click_x, click_y = to_click_point(
+                    relative_pixel_x=b.get("center_x", 0),
+                    relative_pixel_y=b.get("center_y", 0),
+                    monitor_offset_x=offset_x,
+                    monitor_offset_y=offset_y,
+                    dpi_scale=_display_scale(),
+                )
                 text_elements.append({
                     "text": text,
-                    "x": b.get('x', 0),
-                    "y": b.get('y', 0),
+                    "x": click_x,
+                    "y": click_y,
+                    "click_x": click_x,
+                    "click_y": click_y,
+                    "center_x": click_x,
+                    "center_y": click_y,
                     "width": b.get('width', 0),
                     "height": b.get('height', 0),
+                    "bbox": {
+                        "x1": b.get("x1", 0),
+                        "y1": b.get("y1", 0),
+                        "x2": b.get("x2", 0),
+                        "y2": b.get("y2", 0),
+                    },
                     "confidence": b.get('confidence', 0.0)
                 })
 

@@ -130,6 +130,7 @@ TOOL_MODULES = [
     "tools.mouse_tool.tool",
     "tools.visual_segmentation_tool.tool",
     "tools.debug_tool.tool",
+    "tools.debug_screenshot_tool.tool",
     "tools.inception_tool.tool",
     "tools.icon_recognition_tool.tool",
     "tools.engines.object_detection_engine",
@@ -153,6 +154,7 @@ TOOL_MODULES = [
     # NEU: Vision Stability System v1.0 (GPT-5.2 Empfehlungen)
     "tools.screen_change_detector.tool",
     "tools.screen_contract_tool.tool",
+    "tools.opencv_template_matcher_tool.tool",
     # NEU: DOM-First Browser Controller v2.0 (2026-02-10)
     "tools.browser_controller.tool",
     # NEU: JSON-Nemotron Tool für AI-gestützte JSON-Verarbeitung

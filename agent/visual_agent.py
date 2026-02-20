@@ -623,13 +623,16 @@ async def execute_smart_action(method: str, params: dict) -> dict:
 
 
 # --- Verification Helpers ---
-async def verify_action(method: str) -> Tuple[bool, str]:
+async def verify_action(method: str, debug_context: Optional[dict] = None) -> Tuple[bool, str]:
     """Verifiziert ob Aktion erfolgreich war."""
     needs_verify = ["click_at", "type_text", "refine_and_click", "click_with_verification"]
     if method not in needs_verify:
         return True, "no_verification_needed"
     
-    result = await call_tool("verify_action_result", {"timeout": 5.0})
+    verify_params = {"timeout": 5.0}
+    if debug_context:
+        verify_params["debug_context"] = debug_context
+    result = await call_tool("verify_action_result", verify_params)
     success = result.get("success", False)
     
     if success:
@@ -864,7 +867,16 @@ async def run_visual_task(task: str, max_iterations: int = 30) -> str:
         
         # Verification für wichtige Aktionen
         if method in ["click_at", "type_text", "refine_and_click"]:
-            verified, verify_msg = await verify_action(method)
+            verify_context = {
+                "agent": "visual_agent_v2_1",
+                "method": method,
+                "params": params,
+                "llm_reply": reply[:1200],
+                "x": params.get("x"),
+                "y": params.get("y"),
+                "confidence": result.get("confidence"),
+            }
+            verified, verify_msg = await verify_action(method, verify_context)
             
             if not verified and method != "type_text":
                 context.failed_clicks += 1

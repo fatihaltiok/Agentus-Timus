@@ -37,7 +37,7 @@ import textwrap
 import logging
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 import httpx
 from openai import OpenAI
@@ -212,9 +212,9 @@ AGENT_CLASS_MAP = {
     "reasoning": ReasoningAgent,  # NEU v3.1
     "research": DeepResearchAgent,
     "executor": ExecutorAgent,
-    "visual": "SPECIAL_VISION_QWEN",  # Nutzt Qwen-VL (statt altem Executor)
-    "vision_qwen": "SPECIAL_VISION_QWEN",  # Qwen-VL basierter Vision Agent
-    "visual_nemotron": "SPECIAL_VISUAL_NEMOTRON",  # NEU: Nemotron + Qwen-VL
+    "visual": "SPECIAL_VISUAL_NEMOTRON",  # Florence-2 + Nemotron
+    "vision_qwen": "SPECIAL_VISUAL_NEMOTRON",  # Florence-2 + Nemotron (ehem. Qwen-VL)
+    "visual_nemotron": "SPECIAL_VISUAL_NEMOTRON",  # Florence-2 + Nemotron
     "meta": MetaAgent,
     "development": DeveloperAgentV2,  # AKTUALISIERT v3.2: Developer Agent v2
     "creative": CreativeAgent,
@@ -224,8 +224,8 @@ AGENT_CLASS_MAP = {
     "thinker": ReasoningAgent,  # NEU
     "deep_research": DeepResearchAgent,
     "researcher": DeepResearchAgent,
-    "vision": "SPECIAL_VISION_QWEN",  # Alias für vision_qwen
-    "qwen": "SPECIAL_VISION_QWEN",  # Kurzform
+    "vision": "SPECIAL_VISUAL_NEMOTRON",  # Florence-2 + Nemotron
+    "qwen": "SPECIAL_VISUAL_NEMOTRON",  # ehem. Qwen-VL, jetzt Florence-2
     "visual_nemotron": "SPECIAL_VISUAL_NEMOTRON",
     "nemotron_vision": "SPECIAL_VISUAL_NEMOTRON",
     "web_automation": "SPECIAL_VISUAL_NEMOTRON",
@@ -422,103 +422,87 @@ EXECUTOR_KEYWORDS = [
 ]
 
 
-def _structure_task(task: str, url: str) -> str:
+def _structure_task(task: str, url: str) -> List[str]:
     """
-    Wandelt komplexe natürlichsprachige Anfragen in strukturierte Tasks um.
+    Wandelt komplexe natürlichsprachige Anfragen in eine geordnete Schritt-Liste um.
 
-    Beispiele:
-    - "starte browser und gehe zu amazon.de und schau nach grafikkarten"
-      → "1. Navigiere zu amazon.de\n2. Akzeptiere Cookies falls vorhanden\n3. Suche nach 'grafikkarten'\n4. Extrahiere Ergebnisse"
+    Rückgabe: List[str] — jeder Eintrag ist ein eigenständiger, ausführbarer Schritt.
+
+    Beispiel:
+    - "suche hotels in stockholm für 3.3.2026 2 personen"
+      → ["Navigiere zu booking.com",
+         "Cookies akzeptieren falls Banner sichtbar",
+         "Klicke auf Suchfeld und gib ein: 'hotels in stockholm'",
+         "Drücke Enter",
+         "Setze Datum: 3.3.2026",
+         "Setze Personen: 2",
+         "Beende Task und berichte Ergebnisse"]
     """
     import re
 
     task_lower = task.lower()
-    structured_steps = []
-    step_num = 1
+    steps: List[str] = []
 
-    # Extrahiere Aktionen aus dem Task
-    actions_map = {
-        r"\b(?:starte|öffne)\s+(?:den\s+)?browser\b": "browser_start",
-        r"\bgehe\s+(?:zu|auf)\b": "navigate",
-        r"\bschau\s+(?:nach|auf)\b": "search",
-        r"\bsuche\s+(?:nach)?\b": "search",
-        r"\bfinde\b": "search",
-        r"\bzeige\s+(?:mir)?\b": "extract",
-        r"\bextrahiere\b": "extract",
-        r"\bklicke\s+(?:auf)?\b": "click",
-        r"\bfülle\s+(?:aus)?\b": "fill",
-        r"\bgib\s+(?:ein)?\b": "type",
-        r"\b(?:akzeptiere|schließe)\s+(?:cookies?|banner)\b": "handle_cookies",
-        r"\bwarte\b": "wait",
-        r"\bund\s+dann\b": "next_step",
-        r"\bdanach\b": "next_step",
-        r"\banschließend\b": "next_step",
-    }
-
-    # Analysiere den Task
-    found_actions = []
-    for pattern, action_type in actions_map.items():
-        matches = list(re.finditer(pattern, task_lower))
-        for match in matches:
-            found_actions.append((match.start(), action_type, match.group()))
-
-    # Sortiere nach Position
-    found_actions.sort(key=lambda x: x[0])
-
-    # Wenn keine spezifischen Aktionen gefunden, nutze generischen Plan
-    if not found_actions:
-        return f"1. Navigiere zu {url}\n2. Analysiere Seite\n3. Führe aus: {task}"
-
-    # Baue strukturierten Task
-    # Immer als erstes: Navigation
+    # 1. Navigation + Cookies (immer zuerst)
     if url:
         domain = url.replace("https://", "").replace("http://", "").split("/")[0]
-        structured_steps.append(f"{step_num}. Navigiere zu {domain}")
-        step_num += 1
-        structured_steps.append(
-            f"{step_num}. Warte auf Seitenladung und akzeptiere Cookies falls nötig"
+        steps.append(f"Navigiere zu {domain}")
+        steps.append(
+            "Akzeptiere Cookies NUR falls ein Cookie-Banner sichtbar ist — sonst direkt weiter"
         )
-        step_num += 1
 
-    # Füge gefundene Aktionen hinzu
-    for _, action_type, original in found_actions:
-        if action_type == "search":
-            # Extrahiere Suchbegriff (alles nach "suche nach" oder "schau nach")
-            search_terms = re.findall(
-                r"(?:suche nach|schau nach|finde)\s+([\w\s]+?)(?:\s+und|\s+auf|\s+von|\s+bei|$)",
-                task_lower,
-            )
-            if search_terms:
-                term = search_terms[0].strip()
-                structured_steps.append(
-                    f"{step_num}. Suche nach '{term}' in das Suchfeld"
-                )
-                step_num += 1
-                structured_steps.append(f"{step_num}. Drücke Enter um Suche zu starten")
-                step_num += 1
-                structured_steps.append(f"{step_num}. Warte auf Ergebnisse")
-                step_num += 1
+    # 2. Suchbegriff (robust: matched Punkte, Ziffern, Umlaute)
+    search_match = re.search(
+        r"(?:suche(?:\s+nach)?|schau(?:\s+nach)?|finde)\s+(.+?)(?:\s+(?:und\s+dann|dann|anschließend)|$)",
+        task_lower,
+    )
+    if search_match:
+        start, end = search_match.span(1)
+        term = task[start:end].strip()  # Originaltext beibehalten (Groß-/Kleinschreibung)
+        # Suche + Button-Klick in EINEM Schritt — verhindert step_done ohne Aktion
+        steps.append(
+            f"Klicke auf das Suchfeld (Destinations-Eingabe), gib ein: '{term}' "
+            f"und klicke danach auf den blauen Suche-Button (oder drücke Enter)"
+        )
+        steps.append("Warte 3 Sekunden auf Suchergebnisse")
 
-        elif action_type == "extract" or action_type == "click":
-            # Extrahiere Ziel
-            targets = re.findall(
-                r"(?:zeige|extrahiere|klicke auf)\s+([\w\s]+?)(?:\s+und|\s+dann|$)",
-                task_lower,
-            )
-            if targets:
-                target = targets[0].strip()
-                if "erste" in target or "ersten" in target or "top" in target:
-                    structured_steps.append(
-                        f"{step_num}. Extrahiere die ersten 3 Ergebnisse"
-                    )
-                else:
-                    structured_steps.append(f"{step_num}. Interagiere mit: {target}")
-                step_num += 1
+    # 3. Datum (z.B. "3.3.2026", "03.03.2026", "3/3/2026")
+    date_matches = re.findall(r'\d{1,2}[./]\d{1,2}[./]\d{2,4}', task)
+    if date_matches:
+        date_str = ', '.join(date_matches)
+        steps.append(
+            f"Klicke auf das Anreisedatum-Feld und wähle {date_str} im Kalender "
+            f"(Klick auf den richtigen Tag)"
+        )
+
+    # 4. Personen-/Gästeanzahl
+    persons_match = re.search(
+        r'(\d+)\s*(?:person(?:en)?|erwachsene?|gäste?|reisende?)',
+        task_lower,
+    )
+    if persons_match:
+        steps.append(
+            f"Setze die Anzahl Reisende/Gäste auf {persons_match.group(1)} Personen "
+            f"(Gäste-Auswahl-Feld, NICHT das Suchfeld)"
+        )
+
+    # 5. Explizite Klick/Extraktions-Anweisung
+    click_match = re.search(
+        r"(?:klicke\s+auf|extrahiere|zeige\s+(?:mir)?)\s+(.+?)(?:\s+(?:und|dann)|$)",
+        task_lower,
+    )
+    if click_match:
+        start, end = click_match.span(1)
+        steps.append(f"Interagiere mit: {task[start:end].strip()}")
+
+    # Fallback: wenn fast nichts erkannt, originalen Task direkt übergeben
+    if len(steps) <= 2:
+        steps.append(f"Führe aus: {task}")
 
     # Abschluss
-    structured_steps.append(f"{step_num}. Beende Task und berichte Ergebnisse")
+    steps.append("Beende Task und berichte Ergebnisse")
 
-    return "\n".join(structured_steps)
+    return steps
 
 
 def quick_intent_check(query: str) -> Optional[str]:
@@ -746,163 +730,6 @@ async def run_agent(
             audit.log_end(str(final_answer)[:200], "completed")
             return _ret(final_answer, {"execution_path": "special_visual"})
 
-        # NEU: Spezielle Behandlung für Vision Qwen Agent - NUTZT MCP-TOOL!
-        if AgentClass == "SPECIAL_VISION_QWEN":
-            log.info("🎯 Nutze Qwen-VL via MCP-Server Tool (kein neuer Prozess!)")
-            log.info("   Vorteile: Nutzt bereits geladenes Modell, kein Doppel-Laden")
-            _emit_dispatcher_status(agent_name, "plan", "Meta-Planung")
-
-            # ═══════════════════════════════════════════════════════════════════
-            # NEU: Meta-Agent Planung vor Visual-Ausführung
-            # ═══════════════════════════════════════════════════════════════════
-            log.info("🧠 Meta-Agent: Erstelle strukturierten Plan...")
-
-            try:
-                meta_agent = MetaAgent(tools_description)
-                visual_plan = await meta_agent.create_visual_plan(query)
-
-                log.info(f"✅ Plan erstellt: {visual_plan.get('goal', 'N/A')}")
-                log.info(f"   URL: {visual_plan.get('url', 'N/A')}")
-                log.info(f"   Schritte: {len(visual_plan.get('steps', []))}")
-
-                # Zeige Plan in UI
-                print("\n" + "─" * 60)
-                print("📋 META-AGENT PLAN:")
-                print("─" * 60)
-                for step in visual_plan.get('steps', []):
-                    print(f"  {step.get('step_number')}. {step.get('action').upper()}: {step.get('description')}")
-                    if step.get('verification'):
-                        print(f"     ✓ Verify: {step.get('verification')}")
-                print("─" * 60)
-
-                # Nutze geplante URL falls vorhanden
-                url = visual_plan.get('url')
-                task = visual_plan.get('goal', query)
-                _emit_dispatcher_status(agent_name, "plan_done", f"steps={len(visual_plan.get('steps', []))}")
-
-            except Exception as e:
-                log.warning(f"⚠️ Meta-Agent Planung fehlgeschlagen: {e}, nutze Fallback")
-                # Fallback: Manuelle URL-Extraktion
-                import re
-                url_match = re.search(r"https?://[^\s]+", query)
-                domain_match = re.search(r"([a-zA-Z0-9.-]+\.(de|com|org|net|io))", query)
-                url = url_match.group(0) if url_match else (
-                    f"https://{domain_match.group(1)}" if domain_match else "https://www.google.com"
-                )
-                task = query
-                visual_plan = None
-
-            if not url:
-                log.warning("⚠️ Keine URL gefunden, verwende google.com als Default")
-                url = "https://www.google.com"
-
-            log.info(f"   URL: {url}")
-            log.info(f"   Task: {task[:50]}{'...' if len(task) > 50 else ''}")
-
-            # ═══════════════════════════════════════════════════════════════════
-            # Erweitere Task um Plan-Kontext (falls Plan vorhanden)
-            # ═══════════════════════════════════════════════════════════════════
-            enhanced_task = task
-            if visual_plan and visual_plan.get('steps'):
-                import json
-                plan_context = f"""
-FOLGE DIESEM PLAN SCHLITT FÜR SCHLITT:
-"""
-                for step in visual_plan.get('steps', []):
-                    plan_context += f"""
-Schritt {step.get('step_number')}: {step.get('action').upper()}
-- Beschreibung: {step.get('description')}
-- Überprüfung: {step.get('verification')}
-- Fallback: {step.get('fallback')}
-"""
-                plan_context += f"""
-ZIEL: {visual_plan.get('goal')}
-ERFOLGSKRITERIEN: {', '.join(visual_plan.get('success_criteria', []))}
-"""
-                enhanced_task = task + plan_context
-                log.info(f"   Task erweitert mit Plan-Kontext ({len(plan_context)} chars)")
-
-            # WICHTIG: Nutze MCP-Tool statt neuen Prozess!
-            try:
-                import httpx
-
-                _emit_dispatcher_status(agent_name, "tool_active", "qwen_web_automation")
-                async with httpx.AsyncClient() as client:
-                    response = await client.post(
-                        "http://localhost:5000",
-                        json={
-                            "jsonrpc": "2.0",
-                            "method": "qwen_web_automation",
-                            "params": {
-                                "url": url,
-                                "task": enhanced_task,
-                                "headless": False,
-                                "max_iterations": 15,
-                                "wait_between_actions": 2.0,
-                            },
-                            "id": 1,
-                        },
-                        timeout=300.0,  # 5 Minuten Timeout für komplexe Tasks
-                    )
-                    result = response.json()
-
-                    if "result" in result:
-                        r = result["result"]
-                        success = r.get("success", False)
-                        steps = r.get("steps", [])
-                        final_url = r.get("final_url", "")
-
-                        final_answer = f"""🎯 Vision Qwen Automation Ergebnis (via MCP):
-
-Status: {"✅ ERFOLGREICH" if success else "❌ NICHT VOLLSTÄNDIG"}
-URL: {final_url}
-Schritte: {len(steps)}
-
-Durchgeführte Aktionen:
-"""
-                        for i, step in enumerate(steps, 1):
-                            actions_str = ", ".join(
-                                [
-                                    f"{a.get('action')}({a.get('x', '')},{a.get('y', '')})"
-                                    if a.get("x")
-                                    else a.get("action")
-                                    for a in step.get("actions", [])
-                                ]
-                            )
-                            final_answer += f"  {i}. {actions_str[:60]}{'...' if len(actions_str) > 60 else ''}\n"
-
-                        print("\n" + "=" * 80)
-                        print(f"💡 FINALE ANTWORT ({agent_name.upper()}):")
-                        print("=" * 80)
-                        print(final_answer)
-                        print("=" * 80)
-                        audit.log_end(str(final_answer)[:200], "completed")
-                        _emit_dispatcher_status(agent_name, "done", "qwen_web_automation erfolgreich")
-                        return _ret(
-                            final_answer,
-                            {"execution_path": "special_vision_qwen"},
-                        )
-                    else:
-                        error_msg = result.get("error", {}).get(
-                            "message", "Unbekannter Fehler"
-                        )
-                        log.error(f"❌ MCP Tool Fehler: {error_msg}")
-                        audit.log_end(error_msg, "error")
-                        _emit_dispatcher_status(agent_name, "error", f"qwen_web_automation: {error_msg[:80]}")
-                        return _ret(
-                            f"Fehler: {error_msg}",
-                            {"execution_path": "special_vision_qwen", "error": error_msg},
-                        )
-
-            except Exception as e:
-                log.error(f"❌ Fehler beim MCP-Tool Aufruf: {e}")
-                audit.log_end(str(e), "error")
-                _emit_dispatcher_status(agent_name, "error", f"MCP-Tool: {str(e)[:80]}")
-                return _ret(
-                    f"Fehler: {e}",
-                    {"execution_path": "special_vision_qwen", "exception": str(e)[:300]},
-                )
-
         # VisualNemotronAgent v4 für Desktop-Automatisierung (mit echten Maus-Tools)
         if AgentClass == "SPECIAL_VISUAL_NEMOTRON":
             if not VISUAL_NEMOTRON_V4_AVAILABLE:
@@ -939,17 +766,17 @@ Durchgeführte Aktionen:
                 log.warning("⚠️ Keine URL gefunden, verwende google.com als Default")
                 url = "https://www.google.com"
 
-            structured_task = _structure_task(task, url)
+            task_list = _structure_task(task, url)
 
             log.info(f"   URL: {url}")
-            log.info(
-                f"   Task: {structured_task[:80]}{'...' if len(structured_task) > 80 else ''}"
-            )
+            log.info(f"   Plan ({len(task_list)} Schritte):")
+            for i, s in enumerate(task_list):
+                log.info(f"      {i+1}. {s}")
 
             try:
                 log.info("   🚀 Starte v4 (Desktop Edition mit PyAutoGUI)")
                 result = await run_desktop_task(
-                    task=structured_task, url=url if url else None, max_steps=15
+                    task_list=task_list, url=url if url else None, max_steps=15
                 )
                 version = "v4"
 
@@ -959,34 +786,45 @@ Durchgeführte Aktionen:
                 unique_states = result.get("unique_states", 0)
                 error = result.get("error")
 
+                # Plan-Ergebnis oder Freitext-Ergebnis
+                completed_steps = result.get("completed_steps", [])
+                failed_steps = result.get("failed_steps", [])
+
                 final_answer = f"""🎯 Visual Nemotron Automation {version} Ergebnis:
 
 Status: {"✅ ERFOLGREICH" if success else "❌ FEHLER" if error else "⚠️ UNVOLLSTÄNDIG"}
-Schritte: {steps_executed} ausgeführt{f" ({steps_planned} geplant)" if steps_planned else ""}
-Unique States: {unique_states if unique_states else "N/A"} (Loop-Erkennung)
+Schritte: {steps_executed} ausgeführt{f" von {steps_planned} geplant" if steps_planned else ""}
 """
                 if error:
                     final_answer += f"\nFehler: {error}\n"
 
-                # Zeige durchgeführte Aktionen
-                results = result.get("results", result.get("history", []))
-                if results:
-                    final_answer += "\nDurchgeführte Aktionen:\n"
-                    for r in results[:10]:  # Max 10 Schritte anzeigen
-                        if isinstance(r, dict):
-                            act = r.get("action", {})
-                            if isinstance(act, dict):
-                                act_type = act.get("action", "unknown")
-                                target = (
-                                    act.get("target", {}).get("description", "")
-                                    if isinstance(act.get("target"), dict)
-                                    else ""
-                                )
-                            else:
-                                act_type = str(act)
-                                target = ""
-                            status = "✅" if r.get("success") else "❌"
-                            final_answer += f"  {status} {act_type} → {target[:30]}\n"
+                # Plan-Modus: Zeige Todo-Fortschritt
+                if completed_steps or failed_steps:
+                    final_answer += "\nPlan-Fortschritt:\n"
+                    for s in completed_steps:
+                        final_answer += f"  ✅ {s[:70]}\n"
+                    for s in failed_steps:
+                        final_answer += f"  ❌ {s[:70]}\n"
+                else:
+                    # Freitext-Modus: Zeige Aktionen
+                    results = result.get("results", result.get("history", []))
+                    if results:
+                        final_answer += "\nDurchgeführte Aktionen:\n"
+                        for r in results[:10]:
+                            if isinstance(r, dict):
+                                act = r.get("action", {})
+                                if isinstance(act, dict):
+                                    act_type = act.get("action", "unknown")
+                                    target = (
+                                        act.get("target", {}).get("description", "")
+                                        if isinstance(act.get("target"), dict)
+                                        else ""
+                                    )
+                                else:
+                                    act_type = str(act)
+                                    target = ""
+                                status = "✅" if r.get("success") else "❌"
+                                final_answer += f"  {status} {act_type} → {target[:30]}\n"
 
                 print("\n" + "=" * 80)
                 print(f"💡 FINALE ANTWORT ({agent_name.upper()}):")

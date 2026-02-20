@@ -17,7 +17,7 @@ import asyncio
 import os
 import base64
 import time
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, Any
 from dataclasses import dataclass, field
 from PIL import Image, ImageChops, ImageFilter
 import numpy as np
@@ -45,6 +45,12 @@ try:
 except ImportError:
     QWEN_VL_AVAILABLE = False
 
+try:
+    from tools.debug_screenshot_tool.tool import create_debug_artifacts
+    DEBUG_SCREENSHOT_AVAILABLE = True
+except ImportError:
+    DEBUG_SCREENSHOT_AVAILABLE = False
+
 
 @dataclass
 class VerificationResult:
@@ -58,6 +64,7 @@ class VerificationResult:
     message: str = ""
     before_screenshot: Optional[bytes] = None
     after_screenshot: Optional[bytes] = None
+    debug_artifacts: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -173,7 +180,8 @@ class VerificationEngine:
                            expected_change: bool = True,
                            min_change: float = None,
                            timeout: float = None,
-                           text_field_mode: bool = False) -> VerificationResult:
+                           text_field_mode: bool = False,
+                           debug_context: Optional[Dict[str, Any]] = None) -> VerificationResult:
         """Verifiziert ob eine Aktion erfolgreich war."""
         if not self.before_state:
             return VerificationResult(
@@ -235,17 +243,85 @@ class VerificationEngine:
         else:
             success = change_detected
 
+        debug_artifacts = None
+        if not success:
+            debug_artifacts = await self._capture_failure_debug(
+                message=message,
+                expected_change=expected_change,
+                min_change=min_change,
+                change_percentage=change_percentage,
+                debug_context=debug_context or {},
+            )
+
         result = VerificationResult(
             success=success,
             change_detected=change_detected,
             change_percentage=change_percentage,
             stable=True,
             error_detected=False,
-            message=message
+            message=message,
+            debug_artifacts=debug_artifacts,
         )
 
         self.history.append(result)
         return result
+
+    async def _capture_failure_debug(
+        self,
+        message: str,
+        expected_change: bool,
+        min_change: float,
+        change_percentage: float,
+        debug_context: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        if not DEBUG_SCREENSHOT_AVAILABLE:
+            log.warning("debug_screenshot_tool nicht verfügbar - kein Overlay erzeugt")
+            return None
+
+        target_x = debug_context.get("x", debug_context.get("click_x"))
+        target_y = debug_context.get("y", debug_context.get("click_y"))
+        width = debug_context.get("width", 0)
+        height = debug_context.get("height", 0)
+        confidence = debug_context.get("confidence")
+
+        metadata = {
+            "verify": {
+                "expected_change": expected_change,
+                "min_change": min_change,
+                "change_percentage": round(change_percentage * 100, 4),
+                "message": message,
+            },
+            "before": {
+                "timestamp": self.before_state.timestamp if self.before_state else None,
+                "hash": self.before_state.screenshot_hash if self.before_state else None,
+            },
+            "after": {
+                "timestamp": self.after_state.timestamp if self.after_state else None,
+                "hash": self.after_state.screenshot_hash if self.after_state else None,
+            },
+            "context": debug_context,
+        }
+
+        try:
+            result = await asyncio.to_thread(
+                create_debug_artifacts,
+                target_x,
+                target_y,
+                int(width) if width else 0,
+                int(height) if height else 0,
+                confidence,
+                message,
+                metadata,
+                None,
+            )
+            log.info(
+                "Debug-Overlay gespeichert: %s",
+                result.get("screenshot_path", "unbekannt"),
+            )
+            return result
+        except Exception as e:
+            log.error(f"Fehler beim Erstellen des Debug-Overlays: {e}", exc_info=True)
+            return None
 
     async def wait_for_stability(self, timeout: float = None) -> Tuple[bool, float]:
         """Wartet bis der Bildschirm stabil ist."""
@@ -283,6 +359,8 @@ class VerificationEngine:
 
             if hasattr(result, 'value'):
                 screen_text = result.value.get("text", "").lower()
+            elif isinstance(result, dict):
+                screen_text = result.get("text", "").lower()
             else:
                 screen_text = str(result).lower()
 
@@ -386,6 +464,7 @@ async def capture_screen_before_action() -> dict:
         P("timeout", "number", "Max Wartezeit auf Änderung in Sekunden", required=False, default=5.0),
         P("min_change", "number", "Minimale erwartete Änderung (0.0-1.0)", required=False, default=None),
         P("text_field_mode", "boolean", "Bei True: Fallback zu Screenshot-Analyse auf Fokus", required=False, default=False),
+        P("debug_context", "object", "Optional: Kontextdaten fuer Debug-Overlay bei Fehlschlag", required=False, default=None),
     ],
     capabilities=["vision", "verification"],
     category=C.UI
@@ -393,23 +472,28 @@ async def capture_screen_before_action() -> dict:
 async def verify_action_result(expected_change: bool = True,
                                timeout: float = 5.0,
                                min_change: float = None,
-                               text_field_mode: bool = False) -> dict:
+                               text_field_mode: bool = False,
+                               debug_context: Optional[Dict[str, Any]] = None) -> dict:
     """Verifiziert ob die letzte Aktion erfolgreich war."""
     try:
         result = await verification_engine.verify_action(
             expected_change=expected_change,
             min_change=min_change,
             timeout=timeout,
-            text_field_mode=text_field_mode
+            text_field_mode=text_field_mode,
+            debug_context=debug_context,
         )
 
-        return {
+        payload = {
             "success": result.success,
             "change_detected": result.change_detected,
             "change_percentage": round(result.change_percentage * 100, 2),
             "message": result.message,
             "recommendation": "Aktion wiederholen" if not result.success else "Weiter mit nächstem Schritt"
         }
+        if result.debug_artifacts:
+            payload["debug_artifacts"] = result.debug_artifacts
+        return payload
     except Exception as e:
         log.error(f"Fehler bei verify_action: {e}", exc_info=True)
         raise Exception(str(e))

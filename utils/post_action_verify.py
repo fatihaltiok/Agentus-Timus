@@ -44,11 +44,13 @@ async def verified_action(
     # 3. Aenderung pruefen
     change_detected = False
     change_pct = 0.0
+    debug_artifacts = None
     try:
         verify = await verify_after_fn(timeout=verify_timeout)
         if isinstance(verify, dict):
             change_detected = verify.get("change_detected", verify.get("success", False))
             change_pct = verify.get("change_percentage", 0.0)
+            debug_artifacts = verify.get("debug_artifacts")
     except Exception as e:
         log.warning(f"[verify] verify_after fehlgeschlagen: {e}")
 
@@ -71,6 +73,8 @@ async def verified_action(
         "error_type": error_type,
         "verified": change_detected and not has_error,
     }
+    if debug_artifacts:
+        summary["debug_artifacts"] = debug_artifacts
 
     if summary["verified"]:
         log.info(f"[verify] '{action_name}' VERIFIZIERT ({change_pct:.1f}% Aenderung)")

@@ -25,11 +25,16 @@ import logging
 import hashlib
 import re
 import asyncio
-from datetime import datetime
+from pathlib import Path
+from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 
 log = logging.getLogger("ReflectionEngine")
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_DEBUG_ARTIFACT_DIR = PROJECT_ROOT / "debug_failed_clicks"
+DEFAULT_VISION_ADAPTIVE_CONFIG_PATH = PROJECT_ROOT / "data" / "vision_adaptive_config.json"
 
 
 @dataclass
@@ -128,6 +133,266 @@ class ReflectionEngine:
             "last_skill_creation": self._last_skill_creation.isoformat() if self._last_skill_creation else None,
             "skill_creation_enabled": self._skill_creation_enabled,
             "cooldown_active": self._is_cooldown_active()
+        }
+
+    # =================================================================
+    # VISION ADAPTIVE CONFIG (M4)
+    # =================================================================
+
+    def _resolve_vision_adaptive_config_path(self, config_path: Optional[str] = None) -> Path:
+        raw = config_path or os.getenv("VISION_ADAPTIVE_CONFIG_PATH")
+        return Path(raw).expanduser().resolve() if raw else DEFAULT_VISION_ADAPTIVE_CONFIG_PATH
+
+    def _default_vision_adaptive_config(self) -> Dict[str, Any]:
+        return {
+            "version": 1,
+            "updated_at": datetime.now().isoformat(),
+            "policy": {
+                "require_human_approval": True,
+                "auto_apply": False,
+            },
+            "active": {
+                "opencv_template_threshold": 0.82,
+                "template_candidates": [],
+            },
+            "pending_changes": [],
+            "history": [],
+        }
+
+    def load_vision_adaptive_config(self, config_path: Optional[str] = None) -> Dict[str, Any]:
+        """Lädt adaptive Vision-Config oder erstellt eine Default-Version."""
+        path = self._resolve_vision_adaptive_config_path(config_path)
+        if not path.exists():
+            config = self._default_vision_adaptive_config()
+            self.save_vision_adaptive_config(config, config_path=str(path))
+            return config
+
+        try:
+            config = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            config = self._default_vision_adaptive_config()
+            self.save_vision_adaptive_config(config, config_path=str(path))
+            return config
+
+        if not isinstance(config, dict):
+            config = self._default_vision_adaptive_config()
+        config.setdefault("policy", {"require_human_approval": True, "auto_apply": False})
+        config.setdefault("active", {"opencv_template_threshold": 0.82, "template_candidates": []})
+        config.setdefault("pending_changes", [])
+        config.setdefault("history", [])
+        return config
+
+    def save_vision_adaptive_config(self, config: Dict[str, Any], config_path: Optional[str] = None) -> Path:
+        """Speichert adaptive Vision-Config."""
+        path = self._resolve_vision_adaptive_config_path(config_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        config["updated_at"] = datetime.now().isoformat()
+        path.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
+        return path
+
+    def list_pending_vision_adaptations(self, config_path: Optional[str] = None) -> List[Dict[str, Any]]:
+        config = self.load_vision_adaptive_config(config_path=config_path)
+        return [
+            item for item in config.get("pending_changes", [])
+            if item.get("status", "pending") == "pending"
+        ]
+
+    def _extract_template_candidates(self, payload: Dict[str, Any]) -> List[str]:
+        """Extrahiert Template-Kandidaten aus Debug-Kontextdaten."""
+        candidates: List[str] = []
+        context = payload.get("metadata", {}).get("context", {}) or {}
+        values = [
+            context.get("template_name"),
+            context.get("target_text"),
+            context.get("text"),
+            context.get("label"),
+            context.get("element_type"),
+        ]
+        for value in values:
+            if not isinstance(value, str):
+                continue
+            cleaned = re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+            if len(cleaned) >= 3:
+                candidates.append(cleaned[:64])
+        return list(dict.fromkeys(candidates))
+
+    def _build_visual_signature(self, payload: Dict[str, Any]) -> str:
+        verify = payload.get("metadata", {}).get("verify", {}) or {}
+        context = payload.get("metadata", {}).get("context", {}) or {}
+        reason = str(payload.get("message", "") or verify.get("message", "")).lower().strip()
+        reason = re.sub(r"\s+", " ", reason)[:120]
+        expected_change = verify.get("expected_change")
+        min_change = float(verify.get("min_change", 0.0) or 0.0)
+        change_percentage = float(verify.get("change_percentage", 0.0) or 0.0)
+        change_bucket = int(change_percentage // 5)
+        element_hint = str(context.get("element_type", "")).lower().strip()[:40]
+        return (
+            f"reason={reason}|expected={expected_change}|min={round(min_change, 3)}"
+            f"|bucket={change_bucket}|hint={element_hint}"
+        )
+
+    def analyze_visual_failures(
+        self,
+        debug_dir: Optional[str] = None,
+        config_path: Optional[str] = None,
+        min_occurrences: int = 2,
+        limit: int = 300,
+    ) -> Dict[str, Any]:
+        """
+        Analysiert Debug-Artefakte und erzeugt nur PENDING adaptive Vorschlaege.
+        Es werden keine produktiven Parameter ohne Freigabe aktiviert.
+        """
+        directory = Path(debug_dir).expanduser().resolve() if debug_dir else DEFAULT_DEBUG_ARTIFACT_DIR
+        config = self.load_vision_adaptive_config(config_path=config_path)
+        active_threshold = float(config.get("active", {}).get("opencv_template_threshold", 0.82))
+
+        files = sorted(directory.glob("*.json"))[-max(1, int(limit)) :] if directory.exists() else []
+        groups: Dict[str, List[Dict[str, Any]]] = {}
+        analyzed_files = 0
+
+        for file_path in files:
+            try:
+                payload = json.loads(file_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            analyzed_files += 1
+            signature = self._build_visual_signature(payload)
+            payload["_artifact_path"] = str(file_path)
+            groups.setdefault(signature, []).append(payload)
+
+        existing_signatures = {
+            item.get("signature")
+            for item in (config.get("pending_changes", []) + config.get("history", []))
+            if isinstance(item, dict)
+        }
+
+        new_pending_changes = 0
+        for signature, items in groups.items():
+            occurrences = len(items)
+            if occurrences < max(1, int(min_occurrences)):
+                continue
+            if signature in existing_signatures:
+                continue
+
+            template_candidates: List[str] = []
+            for item in items:
+                template_candidates.extend(self._extract_template_candidates(item))
+            template_candidates = list(dict.fromkeys(template_candidates))[:6]
+
+            # Wiederholte Failures -> konservativ niedrigerer Threshold als Vorschlag.
+            threshold_delta = min(0.10, occurrences * 0.01)
+            proposed_threshold = round(max(0.65, active_threshold - threshold_delta), 3)
+
+            change_id = hashlib.md5(f"{signature}|{occurrences}".encode("utf-8")).hexdigest()[:12]
+            pending = {
+                "id": change_id,
+                "status": "pending",
+                "source": "reflection_visual_patterns",
+                "created_at": datetime.now().isoformat(),
+                "signature": signature,
+                "occurrences": occurrences,
+                "evidence": [i.get("_artifact_path") for i in items[:8]],
+                "proposed_changes": {
+                    "opencv_template_threshold": proposed_threshold,
+                    "template_candidates": template_candidates,
+                },
+                "requires_human_approval": True,
+            }
+            config.setdefault("pending_changes", []).append(pending)
+            new_pending_changes += 1
+
+        self.save_vision_adaptive_config(config, config_path=config_path)
+        return {
+            "analyzed_files": analyzed_files,
+            "pattern_groups": len(groups),
+            "new_pending_changes": new_pending_changes,
+            "pending_total": len(config.get("pending_changes", [])),
+            "config_path": str(self._resolve_vision_adaptive_config_path(config_path)),
+        }
+
+    def approve_vision_adaptation(
+        self,
+        change_id: str,
+        approved_by: str,
+        config_path: Optional[str] = None,
+        notes: str = "",
+    ) -> Dict[str, Any]:
+        """Genehmigt einen pending Vorschlag und aktiviert ihn in active."""
+        config = self.load_vision_adaptive_config(config_path=config_path)
+        pending_changes = config.get("pending_changes", [])
+        target_index = next(
+            (idx for idx, item in enumerate(pending_changes) if item.get("id") == change_id and item.get("status") == "pending"),
+            None,
+        )
+        if target_index is None:
+            return {"success": False, "message": f"Pending change '{change_id}' nicht gefunden"}
+
+        change = pending_changes.pop(target_index)
+        proposed = change.get("proposed_changes", {})
+        active = config.setdefault("active", {})
+
+        if "opencv_template_threshold" in proposed:
+            active["opencv_template_threshold"] = float(proposed["opencv_template_threshold"])
+
+        existing_templates = list(active.get("template_candidates", []))
+        for candidate in proposed.get("template_candidates", []):
+            if candidate not in existing_templates:
+                existing_templates.append(candidate)
+        active["template_candidates"] = existing_templates
+
+        history_item = dict(change)
+        history_item.update(
+            {
+                "status": "approved",
+                "approved_by": approved_by,
+                "approved_at": datetime.now().isoformat(),
+                "notes": notes,
+            }
+        )
+        config.setdefault("history", []).append(history_item)
+        self.save_vision_adaptive_config(config, config_path=config_path)
+        return {
+            "success": True,
+            "change_id": change_id,
+            "active": active,
+            "pending_total": len(config.get("pending_changes", [])),
+        }
+
+    def reject_vision_adaptation(
+        self,
+        change_id: str,
+        rejected_by: str,
+        reason: str = "",
+        config_path: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Lehnt einen pending Vorschlag ab ohne aktive Parameter zu ändern."""
+        config = self.load_vision_adaptive_config(config_path=config_path)
+        pending_changes = config.get("pending_changes", [])
+        target_index = next(
+            (idx for idx, item in enumerate(pending_changes) if item.get("id") == change_id and item.get("status") == "pending"),
+            None,
+        )
+        if target_index is None:
+            return {"success": False, "message": f"Pending change '{change_id}' nicht gefunden"}
+
+        change = pending_changes.pop(target_index)
+        history_item = dict(change)
+        history_item.update(
+            {
+                "status": "rejected",
+                "rejected_by": rejected_by,
+                "rejected_at": datetime.now().isoformat(),
+                "reason": reason,
+            }
+        )
+        config.setdefault("history", []).append(history_item)
+        self.save_vision_adaptive_config(config, config_path=config_path)
+        return {
+            "success": True,
+            "change_id": change_id,
+            "pending_total": len(config.get("pending_changes", [])),
         }
     
     async def reflect_on_task(

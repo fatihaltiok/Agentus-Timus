@@ -27,6 +27,7 @@ from PIL import Image
 
 from .state_tracker import UIStateTracker, UIState, StateDiff
 from .dom_parser import DOMParser, DOMElement
+from utils.coordinate_converter import resolve_click_coordinates
 
 log = logging.getLogger("hybrid_browser")
 
@@ -462,10 +463,16 @@ class HybridBrowserController:
                 matching_elem = elements[0]
 
             # Koordinaten extrahieren
-            coords = {
-                "x": matching_elem.get("center_x"),
-                "y": matching_elem.get("center_y")
-            }
+            resolved = resolve_click_coordinates(matching_elem, already_absolute=True)
+            if not resolved:
+                return ActionResult(
+                    success=False,
+                    method_used=ActionMethod.VISION,
+                    execution_time=time.time() - start_time,
+                    error="Element ohne gueltige Koordinaten erhalten",
+                )
+
+            coords = {"x": resolved[0], "y": resolved[1]}
 
             # Klick via mouse_tool
             if action_type == "click":

@@ -54,8 +54,11 @@ log = logging.getLogger("VisualNemotronV4")
 
 # Config
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-NEMOTRON_MODEL = os.getenv("REASONING_MODEL", "nvidia/nemotron-3-nano-30b-a3b")
+NEMOTRON_MODEL = os.getenv("REASONING_MODEL", "qwen/qwen3.5-plus-02-15")
+NEMOTRON_PROVIDER = os.getenv("REASONING_MODEL_PROVIDER", "openrouter").lower()
+OPENROUTER_VISION_MODEL = os.getenv("OPENROUTER_VISION_MODEL", "")   # z.B. qwen/qwen3.5-plus-02-15
 MCP_URL = os.getenv("MCP_SERVER_URL", "http://localhost:5000")
 # Feature-Flag: Florence-2 als primärer Vision-Pfad (FLORENCE2_ENABLED=false → alter Pfad)
 FLORENCE2_ENABLED = os.getenv("FLORENCE2_ENABLED", "true").lower() not in {"0", "false", "no", "off"}
@@ -355,7 +358,12 @@ KEIN Code, KEINE Erklärung - nur JSON!"""
             elif act_type == "type":
                 text = action.get("text_input", "")
                 press_enter = action.get("press_enter", False)
-                
+                # Fokus-Klick wenn Koordinaten mitgegeben (verhindert Tippen ins Leere)
+                type_coords = coords if coords.get("x") and coords.get("y") else {}
+                if type_coords:
+                    await self.mcp.click_and_focus(int(type_coords["x"]), int(type_coords["y"]))
+                    await asyncio.sleep(0.3)
+                    log.info(f"   🖱️  Fokus-Klick vor type bei ({type_coords['x']}, {type_coords['y']})")
                 result = await self.mcp.type_text(text, press_enter)
                 if "error" in result:
                     return False, result["error"].get("message", "Tippen fehlgeschlagen")
@@ -458,10 +466,20 @@ class NemotronClient:
     MAX_RETRIES = 3
 
     def __init__(self):
-        self.client = OpenAI(
-            api_key=OPENROUTER_API_KEY,
-            base_url="https://openrouter.ai/api/v1",
-        )
+        # Provider-Auswahl: openrouter | openai
+        # Hinweis: Für Anthropic-Modelle → openrouter mit "anthropic/claude-..." nutzen
+        if NEMOTRON_PROVIDER == "openai":
+            self.client = OpenAI(
+                api_key=OPENAI_API_KEY,
+            )
+            log.info(f"   🤖 Decision-LLM: {NEMOTRON_MODEL} (OpenAI direkt)")
+        else:
+            # Standard: OpenRouter (unterstützt qwen, google, anthropic, nvidia, ...)
+            self.client = OpenAI(
+                api_key=OPENROUTER_API_KEY,
+                base_url="https://openrouter.ai/api/v1",
+            )
+            log.info(f"   🤖 Decision-LLM: {NEMOTRON_MODEL} (OpenRouter)")
         # Lokaler Fallback-Client (optional)
         self.fallback_client: Optional[OpenAI] = None
         self.fallback_model: str = LOCAL_LLM_MODEL
@@ -518,71 +536,140 @@ class NemotronClient:
         screenshot_description: str,
         task_description: str,
         step_history: List[Dict],
-        available_elements: List[Dict] = None
+        available_elements: List[Dict] = None,
+        current_step: Optional[str] = None,
+        completed_steps: Optional[List[str]] = None,
+        pending_steps: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
-        Generiert nächsten Schritt mit Desktop-spezifischem Prompt.
+        Generiert die Aktion(en) für den aktuellen Schritt.
+
+        Wenn current_step gesetzt ist (Plan-Modus): fokussierter Prompt nur für diesen Schritt.
+        Sonst: freier Modus (Fallback für Kompatibilität).
         """
-        
         elements_str = ""
         if available_elements:
             elements_str = "\nVERFÜGBARE UI-ELEMENTE:\n"
-            for e in available_elements[:10]:  # Max 10 Elemente
+            for e in available_elements[:10]:
                 elements_str += f"  - [{e.get('id', '?')}] {e.get('type', 'element')} bei ({e.get('x', '?')}, {e.get('y', '?')})\n"
-        
-        system_prompt = f"""Du bist ein Desktop-Automation-Experte.
 
-AUFGABE:
-Analysiere den Desktop/Screenshot und entscheide die nächste Aktion.
+        if current_step:
+            # ── PLAN-MODUS: Fokussierter Einzel-Schritt-Prompt ──────────────
+            done_str = "\n".join(f"  ✅ {s}" for s in (completed_steps or []))
+            pending_str = "\n".join(f"  ⏳ {s}" for s in (pending_steps or []))
 
-REGELN:
+            system_prompt = """Du bist ein Desktop-Automation-Experte für Web-Browser-Automatisierung.
+
+DEINE AUFGABE: Führe GENAU EINEN Schritt aus dem Plan aus.
+
+PFLICHT-REGELN (alle müssen eingehalten werden):
 1. Gib IMMER valides JSON zurück (zwischen ```json und ```)
-2. Koordinaten sind Bildschirm-Koordinaten (Pixel)
-3. Wenn Elemente bekannt sind, nutze deren Koordinaten direkt
-4. "scan" Aktion um UI-Elemente zu finden (am Anfang wichtig!)
-5. "done" nur wenn Task wirklich komplett
+2. Koordinaten sind absolute Bildschirm-Koordinaten (Pixel, 1920x1200)
+3. Führe NUR den AKTUELLEN SCHRITT aus — nicht mehr
+4. "step_done" wenn der aktuelle Schritt abgeschlossen ist oder kein Handlungsbedarf
+5. NIEMALS "done" verwenden — das entscheidet das übergeordnete System
+6. NIEMALS eine leere "actions": [] zurückgeben OHNE "step_done" — das ist ungültig!
+   → Wenn du das Element nicht siehst: erst "scan" ausführen
+   → Wenn der Schritt wirklich nicht möglich ist: "step_blocked" setzen
+
+ENTSCHEIDUNGSBAUM:
+- Schritt ist erledigt / nicht nötig? → status: "step_done", actions: []
+- Element sichtbar im Screenshot?     → direkt click/type/press ausführen
+- Element NICHT sichtbar?             → ZUERST {"action":"scan","element_types":["input","button","text field","search bar"]}
+- Schritt technisch unmöglich?        → status: "step_blocked", actions: []
 
 VERFÜGBARE AKTIONEN:
-- click: Klicke auf Element (mit Koordinaten x, y)
-- click_and_focus: Doppelter Klick für Fokus (für hartnäckige Felder)
-- type: Tippe Text ein (text_input + optional press_enter)
-- press: Drücke Taste (key: Enter, Tab, Escape)
-- scroll_up/down: Scrolle
-- wait: Warte X Sekunden
-- navigate: Öffne URL im Browser (xdg-open)
-- scan: Scanne UI-Elemente (element_types Array)
-- done: Task abgeschlossen
+- scan:            {"action":"scan","element_types":["input","button","search bar"]}
+- click:           {"action":"click","coordinates":{"x":500,"y":300},"target":{"element_type":"button","description":"Text"}}
+- click_and_focus: {"action":"click_and_focus","coordinates":{"x":500,"y":300},"target":{"element_type":"input","description":"Suchfeld"}}
+- type:            {"action":"type","text_input":"Suchbegriff","coordinates":{"x":500,"y":300}}
+- type mit Enter:  {"action":"type","text_input":"Text","press_enter":true,"coordinates":{"x":500,"y":300}}
+- press:           {"action":"press","key":"Enter"}
+- wait:            {"action":"wait","seconds":2.0}
+- scroll_up/down:  {"action":"scroll_up"} oder {"action":"scroll_down"}
 
-WICHTIG: Antworte NUR mit JSON im Format:
+TYPISCHE BOOKING.COM KOORDINATEN (Schätzwerte, falls keine besseren bekannt):
+- Destinations-Suchfeld: ca. x=415, y=328
+- Suche-Button (blau):   ca. x=1055, y=328
+- Datepicker-Anreise:    ca. x=640, y=328
+- Datepicker-Abreise:    ca. x=730, y=328
+- Gäste-Feld:            ca. x=895, y=328
+
+WICHTIG für Suche-Schritte:
+- Wenn der Schritt "Suche-Button klicken" oder "Enter drücken" enthält:
+  Führe IMMER eine konkrete Aktion aus (click auf Suche-Button ODER press Enter)
+  → NIEMALS step_done ohne tatsächlichen Klick/Enter bei Such-Schritten!
+
+ANTWORT-FORMAT:
 ```json
-{{
-  "task_analysis": {{
-    "current_state": "Beschreibung",
-    "available_elements": 5,
-    "next_step_reasoning": "Warum diese Aktion?"
-  }},
+{
+  "step_analysis": {
+    "current_state": "Was sehe ich auf dem Screenshot?",
+    "element_visible": true,
+    "reasoning": "Warum diese Aktion?"
+  },
   "actions": [
-    {{
-      "action": "click",
-      "coordinates": {{"x": 750, "y": 400}},
-      "target": {{"element_type": "button", "description": "Such-Button"}},
-      "reason": "Warum?"
-    }}
+    {
+      "action": "click_and_focus",
+      "coordinates": {"x": 480, "y": 490},
+      "target": {"element_type": "input", "description": "Destinations-Suchfeld"},
+      "reason": "Suchfeld fokussieren"
+    }
   ],
   "status": "in_progress"
-}}
-```"""
+}
+```
+Schritt erledigt → "status": "step_done"
+Schritt blockiert → "status": "step_blocked"
+"""
 
-        user_prompt = f"""TASK: {task_description}
+            user_prompt = f"""AKTUELLER SCHRITT: "{current_step}"
+
+BEREITS ERLEDIGT:
+{done_str if done_str else "  (noch nichts)"}
+
+AUSSTEHEND (NICHT jetzt ausführen):
+{pending_str if pending_str else "  (keine weiteren)"}
 
 SCREENSHOT BESCHREIBUNG:
 {screenshot_description}
 {elements_str}
+LETZTE AKTIONEN ({len(step_history)}):
+{json.dumps(step_history[-2:], indent=2) if step_history else "Keine"}
 
+Führe NUR den AKTUELLEN SCHRITT aus (nur JSON):"""
+
+        else:
+            # ── FREIER MODUS (Fallback) ──────────────────────────────────────
+            system_prompt = """Du bist ein Desktop-Automation-Experte.
+
+AUFGABE: Analysiere den Screenshot und entscheide die nächste Aktion.
+
+REGELN:
+1. Gib IMMER valides JSON zurück (zwischen ```json und ```)
+2. Koordinaten sind Bildschirm-Koordinaten (Pixel)
+3. "done" nur wenn Task wirklich komplett
+
+VERFÜGBARE AKTIONEN: click, click_and_focus, type, press, scroll_up, scroll_down, wait, navigate, scan, done
+
+ANTWORT-FORMAT:
+```json
+{
+  "task_analysis": {"current_state": "...", "next_step_reasoning": "..."},
+  "actions": [{"action": "click", "coordinates": {"x": 0, "y": 0}, "target": {"element_type": "button", "description": "..."}, "reason": "..."}],
+  "status": "in_progress"
+}
+```"""
+
+            user_prompt = f"""TASK: {task_description}
+
+SCREENSHOT BESCHREIBUNG:
+{screenshot_description}
+{elements_str}
 BISHERIGE SCHRITTE ({len(step_history)}):
-{json.dumps(step_history[-3:], indent=2) if step_history else "Noch keine Schritte"}
+{json.dumps(step_history[-3:], indent=2) if step_history else "Noch keine"}
 
-ENTSCHEIDE DEN NÄCHSTEN SCHRITT (nur JSON, keine Erklärungen):"""
+ENTSCHEIDE DEN NÄCHSTEN SCHRITT (nur JSON):"""
 
         last_error: Optional[str] = None
         for attempt in range(self.MAX_RETRIES):
@@ -707,10 +794,13 @@ class VisionClient:
 
     async def analyze(self, img: Image.Image, task: str) -> str:
         """
-        Screenshot → strukturierte Beschreibung für Nemotron.
+        Screenshot → strukturierte Beschreibung für Decision-LLM.
 
-        Pfad-Reihenfolge (abhängig von Flags und API-Keys):
-          Florence-2 (lokal) → GPT-4 Vision (API) → Qwen-VL (lokal)
+        Pfad-Reihenfolge:
+          1. Florence-2 (lokal, PRIMARY wenn FLORENCE2_ENABLED=true)
+          2. OpenRouter Vision (OPENROUTER_VISION_MODEL, z.B. qwen3.5-plus)
+          3. GPT-4 Vision (OPENAI_API_KEY, Legacy-Fallback)
+          4. Qwen-VL (lokal MCP, letzter Fallback)
         """
         # PRIMARY: Florence-2 (lokal, kein API-Key nötig)
         if FLORENCE2_ENABLED:
@@ -720,9 +810,19 @@ class VisionClient:
                     log.info("   🌸 Florence-2 (lokal) erfolgreich")
                     return result
             except Exception as e:
-                log.warning(f"   Florence-2 failed: {e} -> Fallback zu GPT-4")
+                log.warning(f"   Florence-2 failed: {e} -> Fallback zu OpenRouter Vision")
 
-        # FALLBACK 1: GPT-4 Vision (schnell, ~3-5s)
+        # FALLBACK 1: OpenRouter Vision (Qwen3.5 Plus oder anderes Vision-Modell)
+        if OPENROUTER_VISION_MODEL and OPENROUTER_API_KEY:
+            try:
+                result = await self._openrouter_analyze(img, task)
+                if result and not result.startswith("["):
+                    log.info(f"   🔮 OpenRouter Vision ({OPENROUTER_VISION_MODEL}) erfolgreich")
+                    return result
+            except Exception as e:
+                log.warning(f"   OpenRouter Vision failed: {e} -> Fallback zu GPT-4")
+
+        # FALLBACK 2: GPT-4 Vision (Legacy)
         if self.use_gpt4_primary and OPENAI_API_KEY:
             try:
                 result = await self._gpt4_analyze(img, task)
@@ -732,7 +832,7 @@ class VisionClient:
             except Exception as e:
                 log.warning(f"   GPT-4 failed: {e} -> Fallback zu Qwen-VL")
 
-        # FALLBACK 2: Qwen-VL (langsam, ~60s+)
+        # FALLBACK 3: Qwen-VL (lokal MCP, langsam ~60s+)
         log.info("   🐌 Nutze Qwen-VL (Fallback, 60s+ Timeout)...")
         return await self._qwen_analyze(img, task)
 
@@ -844,6 +944,69 @@ Focus on actionable details for automation."""
         except Exception as e:
             return f"[Vision failed: {e}]"
     
+    async def _openrouter_analyze(self, img: Image.Image, task: str) -> str:
+        """
+        Screenshot-Analyse via OpenRouter Vision-Modell (z.B. Qwen3.5 Plus).
+        Kompatibel mit OpenAI multimodal API-Format (base64 image_url).
+        """
+        if not OPENROUTER_VISION_MODEL or not OPENROUTER_API_KEY:
+            return "[No OpenRouter Vision config]"
+
+        buf = BytesIO()
+        img.save(buf, format='PNG')
+        b64 = base64.b64encode(buf.getvalue()).decode()
+
+        prompt = f"""Analysiere diesen Desktop/Browser-Screenshot für Web-Automatisierung.
+
+AUFGABE: {task}
+
+Beschreibe GENAU:
+1. Welche Webseite/App ist sichtbar? (URL, Titel, Name)
+2. Welche UI-Elemente siehst du? (Suchfelder, Buttons, Formulare, Dropdowns, Popups)
+3. Wo befinden sich die Elemente? (Pixelposition: x, y geschätzt für 1920x1200 Bildschirm)
+4. Aktueller Seitenzustand: Ladebildschirm / Hauptseite / Suchergebnisse / Dialog / Fehler
+5. Cookie-Banner oder Overlays vorhanden? Falls ja: Position des Akzeptieren-Buttons
+
+Antworte strukturiert und präzise. NUR beschreiben, KEIN Code."""
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                        "HTTP-Referer": "https://timus-agent.local",
+                        "X-Title": "TIMUS Vision Agent",
+                    },
+                    json={
+                        "model": OPENROUTER_VISION_MODEL,
+                        "messages": [{
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
+                            ]
+                        }],
+                        "max_tokens": 800,
+                        "temperature": 0.1,
+                    }
+                )
+                data = resp.json()
+
+            if "choices" in data and data["choices"]:
+                result = data["choices"][0]["message"]["content"]
+                preview = result[:120].replace('\n', ' ')
+                log.info(f"   🔮 OpenRouter Vision: {preview}...")
+                return result
+
+            if "error" in data:
+                err = data["error"]
+                return f"[OpenRouter Vision Error: {err.get('message', err)}]"
+
+        except Exception as e:
+            return f"[OpenRouter Vision failed: {e}]"
+        return "[OpenRouter Vision: kein Ergebnis]"
+
     async def _gpt4_analyze(self, img: Image.Image, task: str) -> str:
         """
         GPT-4 Vision mit DEBUG-Logging.
@@ -941,15 +1104,17 @@ class VisualNemotronAgentV4:
         url: Optional[str],
         task_description: str,
         headless: bool = False,  # Ignoriert bei Desktop
-        max_steps: int = 15
+        max_steps: int = 15,
+        task_list: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Führt einen Desktop-Task aus.
-        
+
         Args:
             url: Optional - URL zum Öffnen (für Browser-Tasks)
-            task_description: Was zu tun ist
-            max_steps: Maximale Iterationen
+            task_description: Was zu tun ist (Freitext, Fallback)
+            max_steps: Maximale Iterationen (nur im Freitext-Modus)
+            task_list: Geordnete To-Do-Liste (Plan-then-Execute Modus)
         """
         log.info("="*60)
         log.info("🚀 VisualNemotronAgent v4 - Desktop Edition")
@@ -968,11 +1133,16 @@ class VisualNemotronAgentV4:
                     "url": url
                 })
                 await asyncio.sleep(2)
-            
+
             # Erster Scan für UI-Elemente
             log.info("\n🔍 Initialer Scan...")
-            elements = await self.desktop.scan_elements()
-            
+            await self.desktop.scan_elements()
+
+            # ── PLAN-MODUS ───────────────────────────────────────────────────
+            if task_list:
+                return await self._execute_plan(task_list)
+
+            # ── FREITEXT-MODUS (Fallback) ────────────────────────────────────
             for step in range(1, max_steps + 1):
                 log.info(f"\n{'='*50}")
                 log.info(f"STEP {step}/{max_steps}")
@@ -1026,10 +1196,25 @@ class VisualNemotronAgentV4:
                     act_type = action.get("action", "").lower()
                     if act_type in ("click", "click_and_focus", "type"):
                         from utils.post_action_verify import verified_action
+                        _coords = action.get("coordinates", {})
+                        debug_context = {
+                            "agent": "visual_nemotron_v4",
+                            "task": task_description,
+                            "iteration": step,
+                            "action": action,
+                            "x": _coords.get("x"),
+                            "y": _coords.get("y"),
+                            "width": action.get("width", 0),
+                            "height": action.get("height", 0),
+                            "confidence": action.get("confidence"),
+                        }
                         _, verify_summary = await verified_action(
                             capture_before_fn=lambda: self.desktop.mcp.call_tool("capture_screen_before_action", {}),
                             action_fn=lambda a=action: self.desktop.execute_action(a),
-                            verify_after_fn=lambda timeout=5.0: self.desktop.mcp.call_tool("verify_action_result", {"timeout": timeout}),
+                            verify_after_fn=lambda timeout=5.0, ctx=debug_context: self.desktop.mcp.call_tool(
+                                "verify_action_result",
+                                {"timeout": timeout, "debug_context": ctx},
+                            ),
                             check_errors_fn=lambda: self.desktop.mcp.call_tool("check_for_errors", {}),
                             action_name=act_type,
                         )
@@ -1091,27 +1276,250 @@ class VisualNemotronAgentV4:
             ]
         }
 
+    # ── Plan-then-Execute ────────────────────────────────────────────────────
+
+    async def _run_action_verified(
+        self, action: Dict, step_label: str
+    ) -> Tuple[bool, Optional[str], bool]:
+        """
+        Führt eine einzelne Aktion aus und verifiziert sie.
+        Returns: (done, error, verified)
+        Non-verifiable Aktionen (wait, scan, …) gelten immer als verified.
+        """
+        from utils.post_action_verify import verified_action as _verified_action
+
+        act_type = action.get("action", "").lower()
+
+        if act_type in ("click", "click_and_focus", "type"):
+            _coords = action.get("coordinates", {})
+            debug_context = {
+                "agent": "visual_nemotron_v4",
+                "task": step_label,
+                "action": action,
+                "x": _coords.get("x"),
+                "y": _coords.get("y"),
+                "width": action.get("width", 0),
+                "height": action.get("height", 0),
+                "confidence": action.get("confidence"),
+            }
+            action_result, verify_summary = await _verified_action(
+                capture_before_fn=lambda: self.desktop.mcp.call_tool(
+                    "capture_screen_before_action", {}
+                ),
+                action_fn=lambda a=action: self.desktop.execute_action(a),
+                verify_after_fn=lambda timeout=5.0, ctx=debug_context: self.desktop.mcp.call_tool(
+                    "verify_action_result", {"timeout": timeout, "debug_context": ctx}
+                ),
+                check_errors_fn=lambda: self.desktop.mcp.call_tool("check_for_errors", {}),
+                action_name=act_type,
+            )
+            action_tuple = action_result if isinstance(action_result, tuple) else (False, None)
+            done, error = action_tuple[0], action_tuple[1]
+            verified = verify_summary.get("verified", False)
+
+            if act_type in ("click", "click_and_focus") and not error:
+                await asyncio.sleep(0.8)
+                self.desktop.elements = await self.desktop.scan_elements()
+
+            return done, error, verified
+
+        else:
+            done, error = await self.desktop.execute_action(action)
+            return done, error, True  # nicht-verifizierbare Aktionen immer OK
+
+    async def _execute_step_with_retry(
+        self,
+        step: str,
+        step_num: int,
+        completed: List[str],
+        pending: List[str],
+        max_retries: int = 3,
+        max_actions_per_retry: int = 5,
+    ) -> bool:
+        """
+        Führt einen einzelnen To-Do-Schritt aus, mit Retry bei Fehlschlag.
+        Returns True wenn Schritt erfolgreich abgeschlossen.
+        """
+        for attempt in range(max_retries):
+            if attempt > 0:
+                log.info(f"   🔄 Retry {attempt}/{max_retries - 1}: '{step[:50]}'")
+                await asyncio.sleep(1.0)
+
+            # Screenshot + Vision für diesen Schritt
+            screenshot = await self.desktop.screenshot()
+            log.info(f"   🧠 Screenshot analysieren...")
+            vision_desc = await self.vision.analyze(screenshot, step)
+
+            # Nemotron: fokussierter Einzel-Schritt-Prompt
+            history_dict = [
+                {"step": h.step, "action": h.action, "success": h.success}
+                for h in self.history
+            ]
+            nemotron_result = await self.nemotron.generate_step(
+                screenshot_description=vision_desc,
+                task_description=step,
+                step_history=history_dict,
+                available_elements=self.desktop.elements,
+                current_step=step,
+                completed_steps=completed,
+                pending_steps=pending,
+            )
+
+            status = nemotron_result.get("status", "in_progress")
+            if status == "step_done":
+                # Sicherheits-Check: Schritte mit Pflicht-Aktionen nie still überspringen
+                _step_lower = step.lower()
+                _action_required = any(kw in _step_lower for kw in [
+                    "suche-button", "enter", "klicke", "gib ein", "tippe", "drücke"
+                ])
+                actions_proposed = nemotron_result.get("actions", [])
+                if _action_required and not actions_proposed:
+                    log.warning(
+                        "   ⚠️ step_done bei Pflicht-Aktions-Schritt ohne Aktion → erzwinge Scan"
+                    )
+                    self.desktop.elements = await self.desktop.scan_elements(
+                        ["input", "button", "text field", "search bar"]
+                    )
+                    await asyncio.sleep(0.5)
+                    continue  # Retry mit UI-Kontext
+                log.info("   ✅ Nemotron: Schritt kein Handlungsbedarf → erledigt")
+                return True
+            if status == "step_blocked":
+                log.warning("   🚫 Nemotron: Schritt nicht ausführbar → überspringe")
+                return False
+
+            actions = nemotron_result.get("actions", [])
+            log.info(f"   🎯 {len(actions)} Aktion(en) für diesen Schritt")
+
+            # Wenn Nemotron keine Aktionen plant und kein step_done → UI-Scan für mehr Kontext
+            if not actions:
+                log.info("   🔍 0 Aktionen ohne step_done → UI-Scan für mehr Kontext")
+                self.desktop.elements = await self.desktop.scan_elements(
+                    ["input", "button", "text field", "search bar", "link"]
+                )
+                await asyncio.sleep(0.5)
+                continue  # Nächster Retry mit mehr UI-Kontext
+
+            step_verified = False
+            for action in actions[:max_actions_per_retry]:
+                # Loop-Schutz
+                if self.loop_detector.add_state(screenshot, action):
+                    log.warning("🔄 Loop erkannt, breche Schritt ab")
+                    return False
+
+                act_type = action.get("action", "").lower()
+                if act_type == "done":
+                    return True
+
+                done, error, verified = await self._run_action_verified(action, step)
+
+                self.history.append(StepResult(
+                    step=step_num,
+                    action=action,
+                    success=not bool(error),
+                    error=error,
+                ))
+
+                if done:
+                    return True
+                if error and error.startswith("ASK_USER"):
+                    return False
+                if error:
+                    log.warning(f"   ⚠️ Aktion fehlgeschlagen: {error}")
+                if verified:
+                    step_verified = True
+
+            if step_verified:
+                return True
+
+            await asyncio.sleep(0.5)
+
+        log.warning(f"   ❌ Schritt nach {max_retries} Versuchen nicht abgeschlossen")
+        return False
+
+    async def _execute_plan(self, task_list: List[str]) -> Dict:
+        """
+        Plan-then-Execute: Arbeitet die To-Do-Liste schrittweise ab.
+        Jeder Schritt hat eigene Retry-Logik; Fehler eines Schritts
+        stoppen nicht den gesamten Plan.
+        """
+        completed: List[str] = []
+        failed: List[str] = []
+        total = len(task_list)
+
+        log.info(f"\n📋 PLAN ({total} Schritte):")
+        for i, step in enumerate(task_list):
+            log.info(f"   {i + 1:2d}. {step}")
+
+        for step_idx, step in enumerate(task_list):
+            log.info(f"\n{'=' * 50}")
+            log.info(f"📌 SCHRITT {step_idx + 1}/{total}: {step}")
+            log.info(f"{'=' * 50}")
+
+            pending = task_list[step_idx + 1:]
+            success = await self._execute_step_with_retry(
+                step=step,
+                step_num=step_idx + 1,
+                completed=completed,
+                pending=pending,
+            )
+
+            if success:
+                completed.append(step)
+                log.info(f"   ✅ [{step_idx + 1}/{total}] Erledigt: {step[:70]}")
+            else:
+                failed.append(step)
+                log.warning(f"   ❌ [{step_idx + 1}/{total}] Fehlgeschlagen: {step[:70]}")
+
+        overall_success = len(failed) == 0
+        log.info(f"\n{'=' * 50}")
+        log.info(f"📊 PLAN-ERGEBNIS: {len(completed)}/{total} Schritte erfolgreich")
+        if failed:
+            log.warning(f"   Fehlgeschlagen: {failed}")
+
+        return {
+            "success": overall_success,
+            "steps_executed": len(completed) + len(failed),
+            "total_steps_planned": total,
+            "completed_steps": completed,
+            "failed_steps": failed,
+            "unique_states": self.loop_detector.get_unique_states(),
+            "history": [
+                {"step": h.step, "action": h.action, "success": h.success, "error": h.error}
+                for h in self.history
+            ],
+        }
+
 
 # ============================================================================
 # API
 # ============================================================================
 
 async def run_desktop_task(
-    task: str,
+    task: str = "",
     url: Optional[str] = None,
-    max_steps: int = 15
+    max_steps: int = 15,
+    task_list: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     Haupt-API für Desktop-Tasks.
-    
-    Beispiel:
+
+    Plan-then-Execute (empfohlen):
+        result = await run_desktop_task(
+            task_list=["Navigiere zu amazon.de", "Suche nach 'Grafikkarte'", ...],
+            url="https://amazon.de"
+        )
+
+    Freitext-Fallback:
         result = await run_desktop_task(
             task="Suche nach NVIDIA Grafikkarten",
             url="https://amazon.de"
         )
     """
     agent = VisualNemotronAgentV4()
-    return await agent.execute_task(url, task, max_steps=max_steps)
+    return await agent.execute_task(
+        url, task, max_steps=max_steps, task_list=task_list
+    )
 
 
 if __name__ == "__main__":

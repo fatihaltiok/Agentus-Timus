@@ -13,12 +13,16 @@ Version: 1.0
 import logging
 import asyncio
 import os
+import json
+import time
 import httpx
-from typing import List, Dict, Optional, Tuple
+from pathlib import Path
+from typing import Any, List, Dict, Optional, Tuple
 from dataclasses import dataclass
 
 from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 from dotenv import load_dotenv
+from utils.coordinate_converter import resolve_click_coordinates
 
 # --- Setup ---
 load_dotenv()
@@ -27,6 +31,11 @@ log = logging.getLogger("hybrid_detection")
 # MCP Server URL für Tool-Aufrufe
 MCP_URL = os.getenv("MCP_URL", "http://127.0.0.1:5000")
 TIMEOUT = 180.0
+OPENCV_TEMPLATE_THRESHOLD = float(os.getenv("OPENCV_TEMPLATE_THRESHOLD", "0.82"))
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+VISION_ADAPTIVE_CONFIG_PATH = Path(
+    os.getenv("VISION_ADAPTIVE_CONFIG_PATH", str(PROJECT_ROOT / "data" / "vision_adaptive_config.json"))
+).expanduser()
 
 
 @dataclass
@@ -75,6 +84,38 @@ class HybridDetectionEngine:
             log.error(f"Fehler beim Tool-Aufruf ({method}): {e}")
             return None
 
+    def _load_active_vision_adaptive(self) -> Dict[str, Any]:
+        """Lädt nur den aktiven Bereich der Adaptive-Config (nur bereits freigegebene Änderungen)."""
+        path = Path(
+            os.getenv("VISION_ADAPTIVE_CONFIG_PATH", str(VISION_ADAPTIVE_CONFIG_PATH))
+        ).expanduser().resolve()
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            active = payload.get("active", {})
+            return active if isinstance(active, dict) else {}
+        except Exception:
+            return {}
+
+    def _adaptive_template_threshold(self) -> float:
+        active = self._load_active_vision_adaptive()
+        value = active.get("opencv_template_threshold", OPENCV_TEMPLATE_THRESHOLD)
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            parsed = OPENCV_TEMPLATE_THRESHOLD
+        return max(0.5, min(0.99, parsed))
+
+    def _adaptive_template_candidates(self) -> List[str]:
+        active = self._load_active_vision_adaptive()
+        values = active.get("template_candidates", [])
+        if not isinstance(values, list):
+            return []
+        result: List[str] = []
+        for value in values:
+            if isinstance(value, str) and value.strip():
+                result.append(value.strip())
+        return result
+
     async def find_by_text(self, text: str) -> Optional[DetectedElement]:
         """Findet ein Element anhand seines Textes (sehr präzise)."""
         log.info(f"Text-Suche: '{text}'")
@@ -82,9 +123,13 @@ class HybridDetectionEngine:
         result = await self._call_tool("find_text_coordinates", {"text_to_find": text})
 
         if result and result.get("found"):
-            coords = result.get("coordinates", {})
-            x = coords.get("center_x", coords.get("x", 0))
-            y = coords.get("center_y", coords.get("y", 0))
+            coords = resolve_click_coordinates(result, already_absolute=True)
+            if not coords:
+                coords = resolve_click_coordinates(result.get("coordinates", {}), already_absolute=True)
+            if not coords:
+                log.warning("Text-Erkennung ohne verwertbare Koordinaten")
+                return None
+            x, y = coords
 
             log.info(f"Text gefunden bei ({x}, {y})")
 
@@ -132,6 +177,42 @@ class HybridDetectionEngine:
         log.warning(f"{element_type} nicht gefunden")
         return None
 
+    async def find_by_template_matching(
+        self,
+        template_name: Optional[str],
+        threshold: Optional[float] = None,
+    ) -> Optional[DetectedElement]:
+        """Findet ein Element via OpenCV-Template-Matching."""
+        if not template_name:
+            return None
+        threshold = self._adaptive_template_threshold() if threshold is None else threshold
+
+        log.info(f"Template Matching: '{template_name}'")
+        result = await self._call_tool(
+            "opencv_template_match",
+            {
+                "template_name": template_name,
+                "threshold": threshold,
+                "multi_scale": True,
+            },
+        )
+        if result and result.get("found"):
+            coords = resolve_click_coordinates(result, already_absolute=True)
+            if not coords:
+                return None
+            x, y = coords
+            return DetectedElement(
+                method="opencv_template",
+                element_type="template_match",
+                x=x,
+                y=y,
+                confidence=float(result.get("confidence", result.get("score", 0.0))),
+                text=template_name,
+                bounds=result.get("bbox"),
+                metadata=result,
+            )
+        return None
+
     async def refine_with_mouse_feedback(
         self,
         x: int,
@@ -167,7 +248,9 @@ class HybridDetectionEngine:
         text: Optional[str] = None,
         element_type: Optional[str] = None,
         refine: bool = True,
-        target_cursor: Optional[str] = None
+        target_cursor: Optional[str] = None,
+        template_name: Optional[str] = None,
+        enable_template_fallback: bool = True,
     ) -> Optional[DetectedElement]:
         """Intelligente Element-Suche mit Hybrid-Ansatz."""
         element = None
@@ -179,6 +262,24 @@ class HybridDetectionEngine:
         # 2. Object Detection (wenn kein Text oder Text-Suche fehlgeschlagen)
         if not element and element_type:
             element = await self.find_by_object_detection(element_type)
+
+        # 2b. OpenCV Template Fallback
+        if not element and enable_template_fallback:
+            candidates: List[str] = []
+            for candidate in [template_name, text, element_type]:
+                if isinstance(candidate, str) and candidate.strip():
+                    candidates.append(candidate.strip())
+            candidates.extend(self._adaptive_template_candidates())
+            seen: set[str] = set()
+            threshold = self._adaptive_template_threshold()
+            for candidate in candidates:
+                key = candidate.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                element = await self.find_by_template_matching(candidate, threshold=threshold)
+                if element:
+                    break
 
         # 3. Mouse Feedback Verfeinerung
         if element and refine:
@@ -229,6 +330,8 @@ hybrid_engine = HybridDetectionEngine()
         P("element_type", "string", "Typ des Elements (button, text field, icon, etc.)", required=False, default=None),
         P("refine", "boolean", "Mit Mouse Feedback verfeinern?", required=False, default=True),
         P("target_cursor", "string", "Erwarteter Cursor-Typ (ibeam, hand, arrow)", required=False, default=None),
+        P("template_name", "string", "Optionaler Template-Name für OpenCV-Fallback", required=False, default=None),
+        P("enable_template_fallback", "boolean", "OpenCV-Fallback aktivieren?", required=False, default=True),
     ],
     capabilities=["vision", "detection"],
     category=C.VISION
@@ -237,7 +340,9 @@ async def hybrid_find_element(
     text: Optional[str] = None,
     element_type: Optional[str] = None,
     refine: bool = True,
-    target_cursor: Optional[str] = None
+    target_cursor: Optional[str] = None,
+    template_name: Optional[str] = None,
+    enable_template_fallback: bool = True,
 ) -> dict:
     """Intelligente Element-Suche mit Hybrid-Ansatz."""
     if not text and not element_type:
@@ -248,7 +353,9 @@ async def hybrid_find_element(
             text=text,
             element_type=element_type,
             refine=refine,
-            target_cursor=target_cursor
+            target_cursor=target_cursor,
+            template_name=template_name,
+            enable_template_fallback=enable_template_fallback,
         )
 
         if not element:
@@ -282,6 +389,8 @@ async def hybrid_find_element(
         P("element_type", "string", "Typ des Elements", required=False, default=None),
         P("refine", "boolean", "Mit Mouse Feedback verfeinern?", required=False, default=True),
         P("verify", "boolean", "Cursor vor dem Klick überprüfen?", required=False, default=True),
+        P("template_name", "string", "Optionaler Template-Name für OpenCV-Fallback", required=False, default=None),
+        P("enable_template_fallback", "boolean", "OpenCV-Fallback aktivieren?", required=False, default=True),
     ],
     capabilities=["vision", "detection"],
     category=C.VISION
@@ -290,20 +399,36 @@ async def hybrid_find_and_click(
     text: Optional[str] = None,
     element_type: Optional[str] = None,
     refine: bool = True,
-    verify: bool = True
+    verify: bool = True,
+    template_name: Optional[str] = None,
+    enable_template_fallback: bool = True,
 ) -> dict:
     """Findet ein Element mit Hybrid-Ansatz und klickt darauf."""
     try:
+        start_ts = time.perf_counter()
+        pipeline_log: List[Dict[str, Any]] = []
+
         element = await hybrid_engine.smart_find_element(
             text=text,
             element_type=element_type,
-            refine=refine
+            refine=refine,
+            template_name=template_name,
+            enable_template_fallback=enable_template_fallback,
         )
 
         if not element:
             raise Exception(
                 f"Element nicht gefunden (text='{text}', type='{element_type}')"
             )
+        pipeline_log.append(
+            {
+                "stage": "detect_primary",
+                "method": element.method,
+                "x": element.x,
+                "y": element.y,
+                "confidence": element.confidence,
+            }
+        )
 
         click_method = "click_with_verification" if verify else "click_at"
         click_result = await hybrid_engine._call_tool(
@@ -312,11 +437,82 @@ async def hybrid_find_and_click(
         )
 
         success = click_result.get("success", False) if click_result else False
+        attempts = [
+            {
+                "attempt": 1,
+                "method": click_method,
+                "x": element.x,
+                "y": element.y,
+                "success": bool(success),
+                "result": click_result,
+            }
+        ]
+
+        recovered = False
+        # Recovery: Bei fehlgeschlagenem ersten Klick einen zweiten Versuch mit
+        # erzwungenem Template-Fallback durchführen.
+        if (
+            not success
+            and enable_template_fallback
+            and (template_name or text or element_type)
+        ):
+            retry_element = await hybrid_engine.smart_find_element(
+                text=text,
+                element_type=element_type,
+                refine=False,
+                template_name=template_name,
+                enable_template_fallback=True,
+            )
+            if retry_element:
+                pipeline_log.append(
+                    {
+                        "stage": "detect_recovery",
+                        "method": retry_element.method,
+                        "x": retry_element.x,
+                        "y": retry_element.y,
+                        "confidence": retry_element.confidence,
+                    }
+                )
+                retry_click_result = await hybrid_engine._call_tool(
+                    click_method,
+                    {"x": retry_element.x, "y": retry_element.y},
+                )
+                retry_success = (
+                    retry_click_result.get("success", False)
+                    if retry_click_result
+                    else False
+                )
+                attempts.append(
+                    {
+                        "attempt": 2,
+                        "method": click_method,
+                        "x": retry_element.x,
+                        "y": retry_element.y,
+                        "success": bool(retry_success),
+                        "result": retry_click_result,
+                    }
+                )
+                if retry_success:
+                    success = True
+                    recovered = True
+                    element = retry_element
+                    click_result = retry_click_result
 
         if success:
             log.info(f"Erfolgreich geklickt bei ({element.x}, {element.y})")
         else:
             log.warning(f"Klick möglicherweise fehlgeschlagen")
+
+        runtime_ms = round((time.perf_counter() - start_ts) * 1000, 2)
+        pipeline_log.append(
+            {
+                "stage": "final",
+                "success": bool(success),
+                "recovered": recovered,
+                "attempt_count": len(attempts),
+                "runtime_ms": runtime_ms,
+            }
+        )
 
         return {
             "clicked": True,
@@ -329,7 +525,12 @@ async def hybrid_find_and_click(
                 "text": element.text,
                 "confidence": element.confidence
             },
-            "click_result": click_result
+            "click_result": click_result,
+            "recovered": recovered,
+            "attempt_count": len(attempts),
+            "attempts": attempts,
+            "runtime_ms": runtime_ms,
+            "pipeline_log": pipeline_log,
         }
 
     except Exception as e:

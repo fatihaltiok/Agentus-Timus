@@ -24,6 +24,7 @@ import logging
 import inspect
 import json
 import asyncio
+import os
 import re
 from typing import Dict, Callable, Any, List, Optional, TypedDict, get_type_hints, Union
 from dataclasses import dataclass, field
@@ -493,7 +494,13 @@ class ToolRegistryV2:
         if metadata.is_async:
             result = await metadata.function(**validated_kwargs)
         else:
-            result = await asyncio.to_thread(metadata.function, **validated_kwargs)
+            # In einigen Laufumgebungen kann run_in_executor/to_thread haengen.
+            # Default: direkte Ausfuehrung; optional per Env wieder in Threadpool.
+            use_threadpool = os.getenv("TIMUS_SYNC_TOOL_USE_THREADPOOL", "0") == "1"
+            if use_threadpool:
+                result = await asyncio.to_thread(metadata.function, **validated_kwargs)
+            else:
+                result = metadata.function(**validated_kwargs)
 
         return result
 

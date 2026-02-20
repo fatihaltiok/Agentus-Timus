@@ -30,7 +30,10 @@ DATUM: Februar 2026
 """
 
 import asyncio
+import json
 import logging
+import os
+import signal
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, Optional, Any
@@ -44,12 +47,14 @@ from playwright.async_api import (
     Playwright,
     TimeoutError as PlaywrightTimeoutError,
 )
+from utils.coordinate_converter import sanitize_scale
 
 log = logging.getLogger("PersistentContextManager")
 
 # Konfiguration
 MAX_CONTEXTS = 5
 SESSION_TIMEOUT_MINUTES = 60
+SHUTDOWN_TIMEOUT_SECONDS = 8.0
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) "
     "Gecko/20100101 Firefox/115.0"
@@ -66,6 +71,50 @@ class SessionContext:
     created_at: datetime = field(default_factory=datetime.now)
     last_used: datetime = field(default_factory=datetime.now)
     request_count: int = 0
+
+
+class _MockPage:
+    """Leichtgewichtiges Test-Page-Objekt fuer pytest-Laeufe."""
+
+    def __init__(self):
+        self.url = "about:blank"
+
+    async def close(self) -> None:
+        return None
+
+
+class _MockBrowserContext:
+    """Leichtgewichtiger Browser-Context fuer den Mock-Backend-Pfad."""
+
+    def __init__(self):
+        self._page = _MockPage()
+
+    async def new_page(self) -> _MockPage:
+        return self._page
+
+    async def storage_state(self, path: Optional[str] = None):
+        state = {"cookies": [], "origins": []}
+        if path:
+            Path(path).write_text(json.dumps(state), encoding="utf-8")
+        return state
+
+    async def close(self) -> None:
+        return None
+
+
+class _MockBrowser:
+    """Leichtgewichtiges Browser-Objekt fuer Tests ohne echte Engine."""
+
+    async def new_context(self, **_kwargs) -> _MockBrowserContext:
+        return _MockBrowserContext()
+
+    async def close(self) -> None:
+        return None
+
+
+class _MockPlaywright:
+    async def stop(self) -> None:
+        return None
 
 
 class PersistentContextManager:
@@ -94,11 +143,28 @@ class PersistentContextManager:
         self.base_storage_dir.mkdir(parents=True, exist_ok=True)
         self.headless = headless
         self.user_agent = user_agent
+        self.viewport_width = int(os.getenv("BROWSER_VIEWPORT_WIDTH", "1280"))
+        self.viewport_height = int(os.getenv("BROWSER_VIEWPORT_HEIGHT", "720"))
+        self.device_scale_factor = sanitize_scale(
+            os.getenv("BROWSER_DEVICE_SCALE_FACTOR", os.getenv("DISPLAY_SCALE", "1.0")),
+            default=1.0,
+        )
 
         self.contexts: Dict[str, SessionContext] = {}
         self._playwright: Optional[Playwright] = None
         self._browser: Optional[Browser] = None
         self._initialized = False
+        self._use_mock_backend = self._should_use_mock_backend()
+
+    @staticmethod
+    def _should_use_mock_backend() -> bool:
+        """Waehlt das Browser-Backend (mock fuer pytest, real fuer Produktion)."""
+        backend = os.getenv("TIMUS_BROWSER_BACKEND", "").strip().lower()
+        if backend in {"mock", "fake"}:
+            return True
+        if backend in {"real", "playwright", "firefox"}:
+            return False
+        return "PYTEST_CURRENT_TEST" in os.environ
 
     async def initialize(self) -> bool:
         """
@@ -108,6 +174,13 @@ class PersistentContextManager:
             True wenn erfolgreich initialisiert
         """
         if self._initialized:
+            return True
+
+        if self._use_mock_backend:
+            self._playwright = _MockPlaywright()  # type: ignore[assignment]
+            self._browser = _MockBrowser()  # type: ignore[assignment]
+            self._initialized = True
+            log.info("✅ PersistentContextManager initialisiert (backend=mock)")
             return True
 
         try:
@@ -183,6 +256,11 @@ class PersistentContextManager:
         context_kwargs = {
             "user_agent": self.user_agent,
             "accept_downloads": False,
+            "viewport": {
+                "width": self.viewport_width,
+                "height": self.viewport_height,
+            },
+            "device_scale_factor": self.device_scale_factor,
         }
 
         # Gespeicherten State laden falls vorhanden
@@ -193,7 +271,12 @@ class PersistentContextManager:
             except Exception as e:
                 log.warning(f"Konnte Storage-State nicht laden: {e}")
 
-        context = await self._browser.new_context(**context_kwargs)
+        try:
+            context = await self._browser.new_context(**context_kwargs)
+        except TypeError:
+            # Fallback falls ein Backend einzelne Optionen nicht unterstuetzt.
+            context_kwargs.pop("device_scale_factor", None)
+            context = await self._browser.new_context(**context_kwargs)
         page = await context.new_page()
 
         session = SessionContext(
@@ -348,31 +431,94 @@ class PersistentContextManager:
         """
         log.info("PersistentContextManager Shutdown...")
 
+        if self._use_mock_backend:
+            self.contexts.clear()
+            self._browser = None
+            self._playwright = None
+            self._initialized = False
+            log.info("✅ PersistentContextManager heruntergefahren (backend=mock)")
+            return
+
         # Alle Contexts schließen
         await self.cleanup_all()
 
         # Browser schließen
         if self._browser:
+            browser_pid = self._get_browser_pid()
             try:
-                await self._browser.close()
+                await asyncio.wait_for(
+                    self._browser.close(), timeout=SHUTDOWN_TIMEOUT_SECONDS
+                )
+            except asyncio.TimeoutError:
+                log.warning(
+                    "Browser-Close Timeout nach %.1fs - fahre mit Shutdown fort",
+                    SHUTDOWN_TIMEOUT_SECONDS,
+                )
+                self._force_kill_pid(browser_pid, "browser")
             except Exception as e:
                 log.debug(f"Browser-Close Fehler: {e}")
+                self._force_kill_pid(browser_pid, "browser")
+            finally:
+                self._browser = None
 
         # Playwright stoppen
         if self._playwright:
             try:
-                await self._playwright.stop()
+                await asyncio.wait_for(
+                    self._playwright.stop(), timeout=SHUTDOWN_TIMEOUT_SECONDS
+                )
+            except asyncio.TimeoutError:
+                log.warning(
+                    "Playwright-Stop Timeout nach %.1fs - fahre mit Shutdown fort",
+                    SHUTDOWN_TIMEOUT_SECONDS,
+                )
             except Exception as e:
                 log.debug(f"Playwright-Stop Fehler: {e}")
+            finally:
+                self._playwright = None
 
         self._initialized = False
         log.info("✅ PersistentContextManager heruntergefahren")
+
+    def _get_browser_pid(self) -> Optional[int]:
+        """Best effort: liest Browser-PID aus Playwright-Internals."""
+        if not self._browser:
+            return None
+        try:
+            impl = getattr(self._browser, "_impl_obj", None)
+            conn = getattr(impl, "_connection", None)
+            transport = getattr(conn, "_transport", None)
+            proc = getattr(transport, "_proc", None)
+            pid = getattr(proc, "pid", None)
+            return int(pid) if pid is not None else None
+        except Exception:
+            return None
+
+    def _force_kill_pid(self, pid: Optional[int], label: str) -> None:
+        """Verhindert Teardown-Haenger, wenn Browser/Driver nicht sauber beendet."""
+        if not pid:
+            return
+        try:
+            os.kill(pid, signal.SIGKILL)
+            log.warning("Erzwungenes Beenden fuer %s PID %s", label, pid)
+        except ProcessLookupError:
+            pass
+        except Exception as exc:
+            log.debug("Force-Kill fehlgeschlagen fuer %s PID %s: %s", label, pid, exc)
 
     def get_status(self) -> Dict[str, Any]:
         """Gibt Status aller aktiven Sessions zurück."""
         return {
             "initialized": self._initialized,
+            "backend": "mock" if self._use_mock_backend else "playwright",
             "headless": self.headless,
+            "coordinate_context": {
+                "viewport": {
+                    "width": self.viewport_width,
+                    "height": self.viewport_height,
+                },
+                "device_scale_factor": self.device_scale_factor,
+            },
             "active_contexts": len(self.contexts),
             "max_contexts": MAX_CONTEXTS,
             "session_timeout_minutes": SESSION_TIMEOUT_MINUTES,

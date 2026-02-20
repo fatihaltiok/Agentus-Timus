@@ -19,20 +19,30 @@ Branding:
 
 ---
 
-## Aktueller Stand (2026-02-19)
+## Aktueller Stand (2026-02-20)
 
-**Florence-2 Vision Integration (Phase 1–7) abgeschlossen:**
+**Qwen3.5 Plus Integration + Plan-then-Execute Architektur:**
+- Decision-LLM gewechselt: `nvidia/nemotron-3-nano-30b-a3b` → **`qwen/qwen3.5-plus-02-15`** (OpenRouter, Vision-fähig)
+- **Plan-then-Execute**: `_structure_task()` gibt `List[str]` zurück, Agent arbeitet To-Do-Liste Schritt für Schritt ab
+- **`_execute_step_with_retry()`**: Bis zu 3 Retries pro Schritt, automatischer UI-Scan bei 0 Aktionen
+- **`_execute_plan()`**: Iteriert über Task-Liste, loggt ✅/❌ Fortschritt pro Schritt
+- **Qwen3.5 Plus als Vision-Analyse**: `OPENROUTER_VISION_MODEL=qwen/qwen3.5-plus-02-15` — Screenshot-Beschreibung auf Deutsch mit Pixelpositionen
+- **Vision-Pipeline erweitert**: Florence-2 (lokal, PRIMARY) → Qwen3.5 Plus (OpenRouter) → GPT-4 Vision → Qwen-VL (lokal)
+- **Provider-flexibler NemotronClient**: `REASONING_MODEL_PROVIDER=openrouter|openai` via `.env` wählbar
+- **Bug-Fix**: `step_done`-Sicherheitscheck verhindert stille Erledigung ohne Aktion bei Pflicht-Schritten
+- **Bug-Fix**: `verification_tool` false-positive `error=True` bei Dict-Results behoben
+- **Bug-Fix**: Koordinaten-Extraktion für Debug-Overlays (`action["coordinates"]["x"]` statt `action["x"]`)
+- **Bug-Fix**: Automatischer `click_and_focus` vor `type`-Aktion wenn Koordinaten vorhanden
+
+**Florence-2 Vision Integration (Phase 1–7) abgeschlossen (2026-02-19):**
 - Florence-2 (microsoft/Florence-2-large-ft, ~3GB VRAM) als primäres Vision-Modell integriert
-- `VisionClient` im `VisualNemotronAgent v4`: Florence-2 (PRIMARY) → GPT-4 Vision → Qwen-VL
 - Neues MCP-Tool `florence2_tool` mit 6 async Funktionen inkl. `florence2_hybrid_analysis` (Florence-2 + PaddleOCR)
 - Hybrid-Pipeline aktiv: Florence-2 für UI-Detection, PaddleOCR für Texte inkl. Confidence und `ocr_backend`-Status
 - PaddleOCR Runtime-Härtung für CPU-Setups (`device=cpu`, `enable_hpi=false`, `enable_mkldnn=false`) mit API-Fallbacks
-- NemotronClient mit LLM-Fallback (LOCAL_LLM via `LOCAL_LLM_URL`)
 - Feature-Flag `FLORENCE2_ENABLED=true/false` in `.env`
-- Pre-existing Bug in `utils/skill_types.py` behoben (falsche `@property`-Dekoration)
 - Vollständige Test-Suite: **184 bestanden, 3 übersprungen**
 
-Abschlussdoku: `docs/ABSCHLUSSBERICHT_Florence2_Integration_2026-02-19.md`
+Abschlussdoku: `docs/ABSCHLUSSBERICHT_VISION_M0_M6_2026-02-20.md`
 
 **Memory-Stabilisierung (Meilenstein 6, 2026-02-17):**
 - Deterministisches Interaction-Logging zentral in `run_agent(...)`
@@ -96,11 +106,12 @@ MCP-Server :5000 (FastAPI + JSON-RPC)
   ├─ Tool-Validierung (serverseitig)
   └─ Tools: Browser, Vision, OCR, Mouse, Search, File, Memory, Voice, ...
       |
-      +--> florence2_hybrid_analysis (VisualNemotron v4 Vision-Pfad)
-      |     ├─ Florence-2: <CAPTION> + <OD> (UI-Elemente + BBoxes)
-      |     ├─ PaddleOCR (CPU): Text + BBoxes + Confidence
-      |     ├─ Merge: summary_prompt + ocr_backend status
-      |     └─ Nemotron Decision -> PyAutoGUI/MCP Action-Ausführung
+      +--> VisualNemotron v4 Vision-Pipeline
+      |     ├─ Florence-2 (lokal, PRIMARY): UI-Elemente + BBoxes
+      |     ├─ Qwen3.5 Plus (OpenRouter, FALLBACK 1): Screenshot-Analyse
+      |     ├─ GPT-4 Vision (OpenAI, FALLBACK 2): Legacy
+      |     ├─ Qwen-VL (lokal MCP, FALLBACK 3): letzter Ausweg
+      |     └─ Qwen3.5 Plus Decision-LLM -> Plan-then-Execute -> PyAutoGUI/MCP
       |
       +--> Externe Systeme: Desktop (PyAutoGUI), Browser (Playwright), APIs
       |
@@ -158,9 +169,9 @@ flowchart TD
 - **Max Iterationen:** 8
 
 ### ReasoningAgent
-- **Modell:** nvidia/nemotron-3-nano-30b-a3b (OpenRouter)
+- **Modell:** qwen/qwen3.5-plus-02-15 (OpenRouter) — ehemals nvidia/nemotron-3-nano-30b-a3b
 - **Aufgabe:** Komplexe Multi-Step-Analyse, Debugging, Architektur-Entscheidungen, Root-Cause-Analyse, Pro/Contra-Abwaegungen
-- **Besonderheit:** enable_thinking-Steuerung fuer Nemotron Reasoning
+- **Besonderheit:** Provider-flexibel (`REASONING_MODEL_PROVIDER=openrouter|openai`), Vision-fähig
 
 ### CreativeAgent
 - **Modell:** gpt-5.2 (OpenAI)
@@ -187,11 +198,12 @@ flowchart TD
 - **Features:** ROI-Management, Loop-Recovery, Screen-Change-Gate, Strukturierte Navigation
 
 ### VisualNemotronAgent v4 (Desktop Edition)
-- **Modell:** Nemotron + Florence-2 (PRIMARY) / GPT-4 Vision / Qwen2-VL
-- **Aufgabe:** Komplexe mehrstufige Desktop-Automatisierung
+- **Decision-LLM:** Qwen3.5 Plus (qwen/qwen3.5-plus-02-15, OpenRouter) — via `REASONING_MODEL` + `REASONING_MODEL_PROVIDER` wählbar
+- **Vision-Kaskade:** Florence-2 lokal (PRIMARY) → Qwen3.5 Plus via OpenRouter → GPT-4 Vision → Qwen-VL lokal
+- **Architektur:** Plan-then-Execute — `_structure_task()` erstellt To-Do-Liste, `_execute_step_with_retry()` mit 3 Retries pro Schritt
+- **Aufgabe:** Komplexe mehrstufige Desktop-Automatisierung (Browser, Apps, Formulare)
 - **Tech:** PyAutoGUI + SoM fuer echte Maus-Klicks auf dem ganzen Desktop
-- **Vision-Kaskade:** Florence-2 lokal (3GB VRAM) → GPT-4 Vision API → Qwen-VL lokal
-- **LLM-Fallback:** Nemotron (OpenRouter) → LOCAL_LLM (konfigurierbar via `LOCAL_LLM_URL`)
+- **LLM-Fallback:** Qwen3.5 Plus (OpenRouter) → LOCAL_LLM (konfigurierbar via `LOCAL_LLM_URL`)
 
 ---
 
@@ -449,7 +461,7 @@ Skills werden vom MetaAgent automatisch erkannt und bei passenden Tasks eingeset
 | **Anthropic** | claude-sonnet-4-5, claude-opus-4-6 | Meta, Visual |
 | **DeepSeek** | deepseek-reasoner | Deep Research |
 | **Inception Labs** | mercury-coder-small | Developer |
-| **NVIDIA / OpenRouter** | nemotron-3-nano-30b-a3b | Reasoning |
+| **Qwen / OpenRouter** | qwen3.5-plus-02-15 | Reasoning + Vision-Analyse |
 | **Google** | Gemini | Placeholder |
 
 Jeder Agent kann ueber Environment-Variablen auf ein anderes Modell/Provider umkonfiguriert werden.
@@ -516,7 +528,15 @@ TIMUS_LIVE_STATUS=true
 # Florence-2 Vision (VisualNemotronAgent v4)
 FLORENCE2_ENABLED=true
 FLORENCE2_MODEL=microsoft/Florence-2-large-ft
-LOCAL_LLM_URL=                 # optional: lokaler LLM-Fallback fuer Nemotron
+
+# Decision-LLM (Plan-then-Execute, Browser-Automatisierung)
+REASONING_MODEL=qwen/qwen3.5-plus-02-15
+REASONING_MODEL_PROVIDER=openrouter      # openrouter | openai
+
+# OpenRouter Vision (Screenshot-Analyse, Fallback nach Florence-2)
+OPENROUTER_VISION_MODEL=qwen/qwen3.5-plus-02-15   # leer = kein OpenRouter Vision
+
+LOCAL_LLM_URL=                 # optional: lokaler LLM-Fallback
 LOCAL_LLM_MODEL=               # z.B. Qwen/Qwen2.5-7B-Instruct
 HF_TOKEN=hf_...                # fuer HuggingFace Modell-Download
 ```

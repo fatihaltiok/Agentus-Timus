@@ -192,6 +192,19 @@ class ScreenContractEngine:
         self.http_client = httpx.AsyncClient(timeout=TIMEOUT)
         self.current_screen_state: Optional[ScreenState] = None
 
+    @staticmethod
+    def _map_detection_method(raw_method: Optional[str]) -> DetectionMethod:
+        method = (raw_method or "").lower()
+        if "opencv" in method or "template" in method:
+            return DetectionMethod.TEMPLATE_MATCHING
+        if "ocr" in method:
+            return DetectionMethod.OCR
+        if "mouse_feedback" in method:
+            return DetectionMethod.MOUSE_FEEDBACK
+        if "som" in method or "object" in method:
+            return DetectionMethod.OBJECT_DETECTION
+        return DetectionMethod.HYBRID
+
     async def _call_tool(self, method: str, params: Dict = None) -> Optional[Dict]:
         """Ruft ein Tool über MCP-Server auf."""
         payload = {
@@ -303,7 +316,9 @@ class ScreenContractEngine:
                 {
                     "text": search_text,
                     "element_type": elem_type,
-                    "refine": True
+                    "template_name": spec.get("template_name"),
+                    "enable_template_fallback": spec.get("enable_template_fallback", True),
+                    "refine": True,
                 }
             )
 
@@ -315,7 +330,7 @@ class ScreenContractEngine:
                     y=result.get("y", 0),
                     bbox=result.get("bounds", {}),
                     confidence=result.get("confidence", 0.8),
-                    method=DetectionMethod.HYBRID,
+                    method=self._map_detection_method(result.get("method")),
                     text=search_text,
                     metadata=result.get("metadata", {})
                 ))

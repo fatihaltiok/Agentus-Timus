@@ -28,6 +28,12 @@ from dataclasses import dataclass, field
 from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 from tools.engines.qwen_vl_engine import qwen_vl_engine_instance
 from dotenv import load_dotenv
+from utils.coordinate_converter import (
+    denormalize_point,
+    normalize_point,
+    sanitize_scale,
+    to_click_point,
+)
 
 # --- Setup ---
 load_dotenv()
@@ -35,6 +41,7 @@ log = logging.getLogger("som_tool")
 
 # Konfiguration
 ACTIVE_MONITOR = int(os.getenv("ACTIVE_MONITOR", "1"))
+ZOOM_PASS_THRESHOLD = int(os.getenv("SOM_ZOOM_PASS_THRESHOLD", "5"))
 
 # Erweiterte UI-Element-Typen
 UI_ELEMENT_TYPES = [
@@ -60,7 +67,7 @@ UI_ELEMENT_TYPES = [
 # Qwen-VL Prompt für UI-Element-Erkennung (kein Action-Planning!)
 SOM_DETECTION_PROMPT = """Du bist ein UI-Element-Detektor. Deine EINZIGE Aufgabe: Alle sichtbaren UI-Elemente im Screenshot auflisten.
 
-AUFLÖSUNG: 1920x1080 Pixel (Full HD)
+AUFLOESUNG: {width}x{height} Pixel
 
 Gib ALLE klickbaren/interaktiven Elemente als JSON-Array zurück.
 Jedes Element hat: type, x, y (Center-Koordinaten in Pixeln), text (sichtbarer Text).
@@ -69,13 +76,12 @@ Erlaubte Typen: {element_types}
 
 FORMAT (NUR JSON, KEINE Erklärungen):
 [
-  {{"type": "button", "x": 960, "y": 50, "text": "Search"}},
-  {{"type": "text field", "x": 960, "y": 540, "text": ""}},
-  {{"type": "link", "x": 200, "y": 300, "text": "About"}}
+  {{"type": "button", "x": {example_x}, "y": {example_y}, "text": "Search"}},
+  {{"type": "text field", "x": {example_x}, "y": {example_y}, "text": ""}}
 ]
 
 REGELN:
-1. Koordinaten sind Pixel (0-1919 für x, 0-1079 für y)
+1. Koordinaten sind Pixel (0-{max_x} fuer x, 0-{max_y} fuer y)
 2. x,y = CENTER des Elements
 3. Liste ALLE sichtbaren interaktiven Elemente auf
 4. NUR die erlaubten Typen verwenden
@@ -113,8 +119,8 @@ class SetOfMarkEngine:
     def __init__(self):
         self.elements: List[UIElement] = []
         self.screenshot: Optional[Image.Image] = None
-        self.screen_width: int = 1920
-        self.screen_height: int = 1200
+        self.screen_width: int = 0
+        self.screen_height: int = 0
         self.monitor_offset_x: int = 0
         self.monitor_offset_y: int = 0
         self._last_scan_types: List[str] = []
@@ -144,14 +150,27 @@ class SetOfMarkEngine:
             )
             return img
 
-    def _detect_all_elements(self, img: Image.Image, element_types: List[str]) -> List[Dict]:
+    def _detect_all_elements(
+        self,
+        img: Image.Image,
+        element_types: List[str],
+        source: str = "base",
+    ) -> List[Dict]:
         """
         Erkennt alle UI-Elemente mit einem einzigen Qwen-VL Call.
         """
         types_str = ", ".join(element_types)
-        prompt = SOM_DETECTION_PROMPT.format(element_types=types_str)
+        prompt = SOM_DETECTION_PROMPT.format(
+            width=img.width,
+            height=img.height,
+            max_x=max(img.width - 1, 0),
+            max_y=max(img.height - 1, 0),
+            example_x=max(img.width // 2, 0),
+            example_y=max(img.height // 2, 0),
+            element_types=types_str,
+        )
 
-        log.info(f"Qwen-VL SoM-Erkennung: {types_str}")
+        log.info(f"Qwen-VL SoM-Erkennung [{source}]: {types_str}")
 
         result = qwen_vl_engine_instance.analyze_screenshot(
             image=img,
@@ -167,9 +186,20 @@ class SetOfMarkEngine:
         raw_response = result.get("raw_response", "")
         log.debug(f"Qwen-VL Raw: {raw_response[:300]}")
 
-        return self._parse_qwen_elements(raw_response)
+        return self._parse_qwen_elements(
+            raw_response,
+            reference_width=img.width,
+            reference_height=img.height,
+            source=source,
+        )
 
-    def _parse_qwen_elements(self, raw_response: str) -> List[Dict]:
+    def _parse_qwen_elements(
+        self,
+        raw_response: str,
+        reference_width: int,
+        reference_height: int,
+        source: str = "base",
+    ) -> List[Dict]:
         """
         Parst die Qwen-VL JSON-Antwort und konvertiert Pixel-Koordinaten
         zu normalisierten 0-1 Werten.
@@ -205,13 +235,13 @@ class SetOfMarkEngine:
             if px is None or py is None:
                 continue
 
-            # Pixel -> Normalisiert (0-1)
-            norm_cx = float(px) / 1920.0
-            norm_cy = float(py) / 1080.0
-
-            # Clamp to valid range
-            norm_cx = max(0.0, min(1.0, norm_cx))
-            norm_cy = max(0.0, min(1.0, norm_cy))
+            # Pixel -> Normalisiert (0-1), bezogen auf die echte Referenzauflösung
+            norm_cx, norm_cy = normalize_point(
+                pixel_x=float(px),
+                pixel_y=float(py),
+                reference_width=reference_width,
+                reference_height=reference_height,
+            )
 
             # Bounding Box um Center (5% Umkreis)
             box_size = 0.05
@@ -224,11 +254,60 @@ class SetOfMarkEngine:
                 "center_y": norm_cy,
                 "element_type": elem_type,
                 "text": text,
-                "_method": "qwen_vl"
+                "_method": "qwen_vl",
+                "_source": source,
             })
 
         log.info(f"{len(elements)} Elemente aus Qwen-VL geparst")
         return elements
+
+    def _run_zoom_pass(self, element_types: List[str]) -> List[Dict]:
+        """
+        Optionaler Zoom-Pass: zentraler Crop wird vergroessert analysiert
+        und auf den Fullscreen-Normraum zurueckprojiziert.
+        """
+        if not self.screenshot:
+            return []
+
+        full_w = self.screenshot.width
+        full_h = self.screenshot.height
+        if full_w <= 0 or full_h <= 0:
+            return []
+
+        zoom_factor = 1.6
+        crop_w = max(200, int(full_w / zoom_factor))
+        crop_h = max(120, int(full_h / zoom_factor))
+        crop_left = max(0, (full_w - crop_w) // 2)
+        crop_top = max(0, (full_h - crop_h) // 2)
+
+        crop = self.screenshot.crop((crop_left, crop_top, crop_left + crop_w, crop_top + crop_h))
+        zoom_detected = self._detect_all_elements(crop, element_types, source="zoom")
+        if not zoom_detected:
+            return []
+
+        projected: List[Dict] = []
+        for obj in zoom_detected:
+            x_min = (crop_left + obj["x_min"] * crop_w) / float(full_w)
+            y_min = (crop_top + obj["y_min"] * crop_h) / float(full_h)
+            x_max = (crop_left + obj["x_max"] * crop_w) / float(full_w)
+            y_max = (crop_top + obj["y_max"] * crop_h) / float(full_h)
+            center_x = (crop_left + obj["center_x"] * crop_w) / float(full_w)
+            center_y = (crop_top + obj["center_y"] * crop_h) / float(full_h)
+
+            projected.append(
+                {
+                    **obj,
+                    "x_min": max(0.0, min(1.0, x_min)),
+                    "y_min": max(0.0, min(1.0, y_min)),
+                    "x_max": max(0.0, min(1.0, x_max)),
+                    "y_max": max(0.0, min(1.0, y_max)),
+                    "center_x": max(0.0, min(1.0, center_x)),
+                    "center_y": max(0.0, min(1.0, center_y)),
+                    "_source": "zoom_projected",
+                }
+            )
+
+        return projected
 
     def _deduplicate_objects(self, objects: List[Dict], iou_threshold: float = 0.5) -> List[Dict]:
         """Entfernt doppelte Erkennungen."""
@@ -302,20 +381,32 @@ class SetOfMarkEngine:
         center_y: Optional[float] = None
     ) -> Tuple[int, int, int, int, int, int]:
         """Konvertiert normalisierte Koordinaten (0-1) zu absoluten Pixeln."""
-        relative_pixel_x = int(x_min * self.screen_width)
-        relative_pixel_y = int(y_min * self.screen_height)
-        relative_pixel_x_max = int(x_max * self.screen_width)
-        relative_pixel_y_max = int(y_max * self.screen_height)
+        relative_pixel_x, relative_pixel_y = denormalize_point(
+            x_min, y_min, self.screen_width, self.screen_height
+        )
+        relative_pixel_x_max, relative_pixel_y_max = denormalize_point(
+            x_max, y_max, self.screen_width, self.screen_height
+        )
 
         width = relative_pixel_x_max - relative_pixel_x
         height = relative_pixel_y_max - relative_pixel_y
 
         if center_x is not None and center_y is not None:
-            pixel_center_x = self.monitor_offset_x + int(center_x * self.screen_width)
-            pixel_center_y = self.monitor_offset_y + int(center_y * self.screen_height)
+            relative_center_x, relative_center_y = denormalize_point(
+                center_x, center_y, self.screen_width, self.screen_height
+            )
         else:
-            pixel_center_x = self.monitor_offset_x + relative_pixel_x + width // 2
-            pixel_center_y = self.monitor_offset_y + relative_pixel_y + height // 2
+            relative_center_x = relative_pixel_x + width // 2
+            relative_center_y = relative_pixel_y + height // 2
+
+        display_scale = sanitize_scale(os.getenv("DISPLAY_SCALE", "1.0"), default=1.0)
+        pixel_center_x, pixel_center_y = to_click_point(
+            relative_pixel_x=relative_center_x,
+            relative_pixel_y=relative_center_y,
+            monitor_offset_x=self.monitor_offset_x,
+            monitor_offset_y=self.monitor_offset_y,
+            dpi_scale=display_scale,
+        )
 
         return relative_pixel_x, relative_pixel_y, width, height, pixel_center_x, pixel_center_y
 
@@ -335,7 +426,9 @@ class SetOfMarkEngine:
 
         log.info(f"Scanne nach {len(types_to_scan)} Element-Typen via Qwen-VL: {', '.join(types_to_scan[:3])}...")
 
-        detected = self._detect_all_elements(self.screenshot, types_to_scan)
+        detected = self._detect_all_elements(self.screenshot, types_to_scan, source="base")
+        if use_zoom and len(detected) <= ZOOM_PASS_THRESHOLD:
+            detected.extend(self._run_zoom_pass(types_to_scan))
         detected = self._deduplicate_objects(detected)
         detected = self._filter_oversized_boxes(detected)
 
@@ -447,6 +540,8 @@ class SetOfMarkEngine:
                 "type": e.element_type,
                 "x": e.center_x,
                 "y": e.center_y,
+                "center_x": e.center_x,
+                "center_y": e.center_y,
                 "click_x": e.center_x,
                 "click_y": e.center_y,
                 "bounds": {

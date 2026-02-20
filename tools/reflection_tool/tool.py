@@ -89,3 +89,104 @@ async def log_learning_entry(
     except Exception as e:
         log.error(f"Fehler beim Schreiben ins Logbuch: {e}", exc_info=True)
         return {"status": "error", "message": f"Fehler beim Schreiben ins Logbuch: {e}"}
+
+
+def _engine():
+    from memory.reflection_engine import get_reflection_engine
+
+    return get_reflection_engine()
+
+
+@tool(
+    name="reflection_analyze_visual_patterns",
+    description="Analysiert Debug-Artefakte und erstellt adaptive Vision-Vorschlaege (nur pending, keine Auto-Aktivierung).",
+    parameters=[
+        P("debug_dir", "string", "Optionaler Pfad zu Debug-Artefakten (JSON).", required=False, default=None),
+        P("config_path", "string", "Optionaler Pfad zur vision_adaptive_config.json.", required=False, default=None),
+        P("min_occurrences", "integer", "Minimale Wiederholungen fuer einen Vorschlag.", required=False, default=2),
+        P("limit", "integer", "Maximale Anzahl analysierter Artefakte.", required=False, default=300),
+    ],
+    capabilities=["memory", "reflection", "vision", "adaptive"],
+    category=C.MEMORY,
+)
+async def reflection_analyze_visual_patterns(
+    debug_dir: str | None = None,
+    config_path: str | None = None,
+    min_occurrences: int = 2,
+    limit: int = 300,
+) -> dict:
+    return await asyncio.to_thread(
+        _engine().analyze_visual_failures,
+        debug_dir,
+        config_path,
+        min_occurrences,
+        limit,
+    )
+
+
+@tool(
+    name="reflection_list_pending_adaptations",
+    description="Listet alle pending Vision-Anpassungen auf, die eine manuelle Freigabe brauchen.",
+    parameters=[
+        P("config_path", "string", "Optionaler Pfad zur vision_adaptive_config.json.", required=False, default=None),
+    ],
+    capabilities=["memory", "reflection", "vision", "adaptive"],
+    category=C.MEMORY,
+)
+async def reflection_list_pending_adaptations(config_path: str | None = None) -> dict:
+    pending = await asyncio.to_thread(_engine().list_pending_vision_adaptations, config_path)
+    return {"count": len(pending), "pending_changes": pending}
+
+
+@tool(
+    name="reflection_approve_adaptation",
+    description="Genehmigt einen pending Vision-Vorschlag und aktiviert ihn im active Config-Bereich.",
+    parameters=[
+        P("change_id", "string", "ID des pending Vorschlags.", required=True),
+        P("approved_by", "string", "Freigebende Person oder Rolle.", required=True),
+        P("notes", "string", "Optionaler Freigabe-Kommentar.", required=False, default=""),
+        P("config_path", "string", "Optionaler Pfad zur vision_adaptive_config.json.", required=False, default=None),
+    ],
+    capabilities=["memory", "reflection", "vision", "adaptive"],
+    category=C.MEMORY,
+)
+async def reflection_approve_adaptation(
+    change_id: str,
+    approved_by: str,
+    notes: str = "",
+    config_path: str | None = None,
+) -> dict:
+    return await asyncio.to_thread(
+        _engine().approve_vision_adaptation,
+        change_id,
+        approved_by,
+        config_path,
+        notes,
+    )
+
+
+@tool(
+    name="reflection_reject_adaptation",
+    description="Lehnt einen pending Vision-Vorschlag ab (keine Aktivierung).",
+    parameters=[
+        P("change_id", "string", "ID des pending Vorschlags.", required=True),
+        P("rejected_by", "string", "Ablehnende Person oder Rolle.", required=True),
+        P("reason", "string", "Optionaler Ablehnungsgrund.", required=False, default=""),
+        P("config_path", "string", "Optionaler Pfad zur vision_adaptive_config.json.", required=False, default=None),
+    ],
+    capabilities=["memory", "reflection", "vision", "adaptive"],
+    category=C.MEMORY,
+)
+async def reflection_reject_adaptation(
+    change_id: str,
+    rejected_by: str,
+    reason: str = "",
+    config_path: str | None = None,
+) -> dict:
+    return await asyncio.to_thread(
+        _engine().reject_vision_adaptation,
+        change_id,
+        rejected_by,
+        reason,
+        config_path,
+    )

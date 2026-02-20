@@ -849,9 +849,11 @@ async def browser_session_status() -> dict:
             "message": "PersistentContextManager nicht initialisiert"
         }
     
+    manager_status = manager.get_status()
     return {
         "status": "ok",
-        "manager_status": manager.get_status()
+        "manager_status": manager_status,
+        "coordinate_context": manager_status.get("coordinate_context", {}),
     }
 
 
