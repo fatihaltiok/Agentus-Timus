@@ -21,6 +21,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -65,6 +66,9 @@ def _is_allowed(user_id: int) -> bool:
     return not allowed or user_id in allowed
 
 
+_PROJECT_ROOT = Path(__file__).parent.parent
+
+
 async def _send_long(update: Update, text: str) -> None:
     """Sendet lange Texte in Blöcken (Telegram-Limit: 4096 Zeichen)."""
     MAX = 4000
@@ -72,6 +76,45 @@ async def _send_long(update: Update, text: str) -> None:
         text = "(kein Ergebnis)"
     for i in range(0, len(text), MAX):
         await update.message.reply_text(text[i : i + MAX])
+
+
+async def _try_send_image(update: Update, result: str) -> bool:
+    """
+    Erkennt ob das Agent-Ergebnis ein Bild enthält und sendet es als Foto.
+    Gibt True zurück wenn ein Bild gesendet wurde.
+
+    Priorität:
+      1. Lokale Datei (results/*.png) — zuverlässig, kein Ablauf
+      2. HTTP-URL aus dem Ergebnis — als Fallback (DALL-E URLs verfallen nach 24h)
+    """
+    # 1. Lokalen Dateipfad suchen (results/DATUM_image_NAME.png)
+    match = re.search(r'results/[\w\-]+\.(?:png|jpg|jpeg|webp)', result)
+    if match:
+        image_path = _PROJECT_ROOT / match.group(0)
+        if image_path.exists():
+            # Caption: Prompt-Teil aus der Antwort extrahieren
+            prompt_match = re.search(r'(?:Prompt|prompt)[:\s]+(.{10,200})', result)
+            caption = prompt_match.group(1).strip()[:1024] if prompt_match else "Timus hat dieses Bild generiert"
+            try:
+                with open(image_path, "rb") as f:
+                    await update.message.reply_photo(photo=f, caption=caption)
+                log.info(f"Bild gesendet: {image_path.name}")
+                return True
+            except Exception as e:
+                log.error(f"Fehler beim Senden der lokalen Bilddatei: {e}")
+
+    # 2. URL als Fallback (z.B. wenn kein b64 geliefert wurde)
+    url_match = re.search(r'https://[^\s]+\.(?:png|jpg|jpeg|webp)[^\s]*', result)
+    if url_match:
+        image_url = url_match.group(0)
+        try:
+            await update.message.reply_photo(photo=image_url)
+            log.info(f"Bild per URL gesendet: {image_url[:60]}...")
+            return True
+        except Exception as e:
+            log.error(f"Fehler beim Senden der Bild-URL: {e}")
+
+    return False
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -316,7 +359,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             pass
 
         response = str(result) if result else "_(kein Ergebnis)_"
-        await _send_long(update, response)
+
+        # Bild-Erkennung: wenn der Agent ein Bild generiert hat → als Foto senden
+        image_sent = await _try_send_image(update, response)
+        if not image_sent:
+            await _send_long(update, response)
 
     except Exception as e:
         log.error(f"Fehler bei Telegram-Nachricht: {e}", exc_info=True)
