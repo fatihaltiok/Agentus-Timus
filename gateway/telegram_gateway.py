@@ -18,6 +18,8 @@ Befehle:
 """
 
 import asyncio
+import base64
+import io
 import json
 import logging
 import os
@@ -26,6 +28,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
+import httpx
 from telegram import Update
 from telegram.constants import ChatAction, ParseMode
 from telegram.ext import (
@@ -115,6 +118,102 @@ async def _try_send_image(update: Update, result: str) -> bool:
             log.error(f"Fehler beim Senden der Bild-URL: {e}")
 
     return False
+
+
+# ──────────────────────────────────────────────────────────────────
+# Voice-System (Whisper STT + Inworld.AI TTS)
+# ──────────────────────────────────────────────────────────────────
+
+_whisper_model = None  # Lazy-Init beim ersten Voice-Message
+
+
+def _get_whisper():
+    """Lädt Whisper beim ersten Aufruf (CUDA wenn verfügbar, sonst CPU)."""
+    global _whisper_model
+    if _whisper_model is None:
+        from faster_whisper import WhisperModel
+        try:
+            _whisper_model = WhisperModel("medium", device="cuda", compute_type="float16")
+            log.info("Whisper geladen (CUDA)")
+        except Exception:
+            _whisper_model = WhisperModel("medium", device="cpu", compute_type="int8")
+            log.info("Whisper geladen (CPU Fallback)")
+    return _whisper_model
+
+
+def _transcribe_sync(ogg_bytes: bytes) -> str:
+    """OGG-Bytes → Text (synchron, für asyncio.to_thread)."""
+    import numpy as np
+    from pydub import AudioSegment
+
+    audio = AudioSegment.from_ogg(io.BytesIO(ogg_bytes))
+    audio = audio.set_channels(1).set_frame_rate(16000)
+    samples = np.array(audio.get_array_of_samples(), dtype=np.float32) / 32768.0
+
+    whisper = _get_whisper()
+    segments, _ = whisper.transcribe(samples, language="de", vad_filter=True)
+    return " ".join(s.text.strip() for s in segments)
+
+
+async def _transcribe_ogg(ogg_bytes: bytes) -> str:
+    """Async-Wrapper für Whisper-Transkription."""
+    return await asyncio.to_thread(_transcribe_sync, ogg_bytes)
+
+
+async def _synthesize_voice(text: str) -> Optional[bytes]:
+    """
+    Text → OGG/Opus-Bytes via Inworld.AI TTS.
+    Gibt None zurück wenn INWORLD_API_KEY nicht gesetzt oder Fehler.
+    """
+    api_key = os.getenv("INWORLD_API_KEY", "")
+    if not api_key or not text.strip():
+        return None
+
+    voice   = os.getenv("INWORLD_VOICE", "Ashley")
+    model   = os.getenv("INWORLD_MODEL", "inworld-tts-1.5-max")
+    rate    = float(os.getenv("INWORLD_SPEAKING_RATE", "1.3"))
+    temp    = float(os.getenv("INWORLD_TEMPERATURE", "1.5"))
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                "https://api.inworld.ai/tts/v1/voice",
+                json={
+                    "text": text[:500],
+                    "voiceId": voice,
+                    "modelId": model,
+                    "voiceSettings": {"speaking_rate": rate},
+                    "temperature": temp,
+                },
+                headers={
+                    "Authorization": f"Basic {api_key}",
+                    "Content-Type": "application/json",
+                },
+            )
+            resp.raise_for_status()
+
+        mp3_bytes = base64.b64decode(resp.json()["audioContent"])
+
+        # MP3 → OGG/Opus (Telegram erwartet OGG)
+        from pydub import AudioSegment
+        audio = AudioSegment.from_mp3(io.BytesIO(mp3_bytes))
+        ogg_buf = io.BytesIO()
+        audio.export(ogg_buf, format="ogg", codec="libopus")
+        return ogg_buf.getvalue()
+
+    except Exception as e:
+        log.error(f"TTS Fehler: {e}")
+        return None
+
+
+async def _keep_typing(update: Update) -> None:
+    """Hält den Typing-Indikator aktiv (alle 4s erneuern)."""
+    while True:
+        await asyncio.sleep(4)
+        try:
+            await update.message.chat.send_action(ChatAction.TYPING)
+        except Exception:
+            break
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -332,16 +431,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         agent = await get_agent_decision(text)
         log.info(f"  Agent gewählt: {agent.upper()}")
 
-        # Typing-Indikator während Verarbeitung
-        async def keep_typing():
-            while True:
-                await asyncio.sleep(4)
-                try:
-                    await update.message.chat.send_action(ChatAction.TYPING)
-                except Exception:
-                    break
-
-        typing_task = asyncio.create_task(keep_typing())
+        typing_task = asyncio.create_task(_keep_typing(update))
         try:
             result = await run_agent(
                 agent_name=agent,
@@ -372,6 +462,97 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except Exception:
             pass
         await update.message.reply_text(f"❌ Fehler: {e}")
+
+
+async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Verarbeitet eingehende Telegram-Sprachnachrichten.
+
+    Ablauf:
+      1. OGG-Datei herunterladen
+      2. Whisper-Transkription (STT)
+      3. Timus Agent-Pipeline (run_agent)
+      4. Inworld.AI TTS → OGG → reply_voice()
+         (Fallback: reply_text() wenn kein INWORLD_API_KEY)
+    """
+    user = update.effective_user
+    if not _is_allowed(user.id):
+        await update.message.reply_text("⛔ Kein Zugriff.")
+        return
+
+    session_id = _get_session(user.id)
+    await update.message.chat.send_action(ChatAction.TYPING)
+    thinking_msg = await update.message.reply_text("🎤 Verstehe deine Stimme…")
+
+    try:
+        # 1. Sprachnachricht herunterladen (OGG/Opus von Telegram)
+        voice_file = await context.bot.get_file(update.message.voice.file_id)
+        ogg_bytes = bytes(await voice_file.download_as_bytearray())
+
+        # 2. Transkribieren
+        await update.message.chat.send_action(ChatAction.TYPING)
+        user_text = await _transcribe_ogg(ogg_bytes)
+
+        if not user_text.strip():
+            await thinking_msg.edit_text("❌ Konnte deine Stimme nicht verstehen. Bitte nochmal versuchen.")
+            return
+
+        log.info(f"Voice [{user.id}] transkribiert: {user_text[:80]}")
+        await thinking_msg.edit_text(
+            f"🎤 _{user_text}_\n\n🤔 Timus denkt…",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+
+        # 3. Agent-Pipeline (gleiche Logik wie handle_message)
+        from main_dispatcher import run_agent, get_agent_decision
+        tools_desc = context.bot_data.get("tools_desc", "")
+        agent = await get_agent_decision(user_text)
+        log.info(f"  Voice-Agent: {agent.upper()}")
+
+        typing_task = asyncio.create_task(_keep_typing(update))
+        try:
+            result = await run_agent(
+                agent_name=agent,
+                query=user_text,
+                tools_description=tools_desc,
+                session_id=session_id,
+            )
+        finally:
+            typing_task.cancel()
+
+        try:
+            await thinking_msg.delete()
+        except Exception:
+            pass
+
+        response = str(result) if result else "Ich konnte keine Antwort generieren."
+
+        # 4. Bild-Check (falls CreativeAgent ein Bild erzeugt hat)
+        image_sent = await _try_send_image(update, response)
+
+        # 5. TTS → Sprachnachricht zurück
+        await update.message.chat.send_action(ChatAction.RECORD_VOICE)
+        ogg_audio = await _synthesize_voice(response)
+
+        if ogg_audio:
+            # Kurze Caption: erste 200 Zeichen der Antwort
+            caption = response[:200] + ("…" if len(response) > 200 else "")
+            await update.message.reply_voice(
+                voice=io.BytesIO(ogg_audio),
+                caption=caption if not image_sent else None,
+            )
+        else:
+            # Kein TTS konfiguriert → Textantwort
+            if not image_sent:
+                await _send_long(update, response)
+
+    except Exception as e:
+        log.error(f"Voice-Handler Fehler: {e}", exc_info=True)
+        try:
+            await thinking_msg.delete()
+        except Exception:
+            pass
+        await update.message.reply_text(f"❌ Fehler bei Sprachverarbeitung: {e}")
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -409,6 +590,9 @@ class TelegramGateway:
             self._app.add_handler(CommandHandler("status", cmd_status))
             self._app.add_handler(
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
+            )
+            self._app.add_handler(
+                MessageHandler(filters.VOICE, handle_voice_message)
             )
 
             await self._app.initialize()
