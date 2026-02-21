@@ -88,34 +88,41 @@ async def _try_send_image(update: Update, result: str) -> bool:
 
     Priorität:
       1. Lokale Datei (results/*.png) — zuverlässig, kein Ablauf
-      2. HTTP-URL aus dem Ergebnis — als Fallback (DALL-E URLs verfallen nach 24h)
+      2. DALL-E URL ("URL: https://...") — Download + als Bytes senden
+         (Telegram kann OpenAI-CDN-URLs nicht direkt laden)
     """
-    # 1. Lokalen Dateipfad suchen (results/DATUM_image_NAME.png)
-    match = re.search(r'results/[\w\-]+\.(?:png|jpg|jpeg|webp)', result)
-    if match:
-        image_path = _PROJECT_ROOT / match.group(0)
+    # Caption aus Antwort extrahieren (Verwendeter Prompt: ...)
+    prompt_match = re.search(r'(?:Verwendeter Prompt|Prompt)[:\s]+(.{10,300})', result)
+    caption = prompt_match.group(1).strip()[:1024] if prompt_match else "🎨 Timus hat dieses Bild generiert"
+
+    # 1. Lokale Datei suchen — [^\n"']+ erlaubt Leerzeichen im Dateinamen
+    path_match = re.search(r'results/[^\n"\']+\.(?:png|jpg|jpeg|webp)', result, re.IGNORECASE)
+    if path_match:
+        image_path = _PROJECT_ROOT / path_match.group(0).strip()
         if image_path.exists():
-            # Caption: Prompt-Teil aus der Antwort extrahieren
-            prompt_match = re.search(r'(?:Prompt|prompt)[:\s]+(.{10,200})', result)
-            caption = prompt_match.group(1).strip()[:1024] if prompt_match else "Timus hat dieses Bild generiert"
             try:
                 with open(image_path, "rb") as f:
                     await update.message.reply_photo(photo=f, caption=caption)
-                log.info(f"Bild gesendet: {image_path.name}")
+                log.info(f"Bild gesendet (lokal): {image_path.name}")
                 return True
             except Exception as e:
                 log.error(f"Fehler beim Senden der lokalen Bilddatei: {e}")
 
-    # 2. URL als Fallback (z.B. wenn kein b64 geliefert wurde)
-    url_match = re.search(r'https://[^\s]+\.(?:png|jpg|jpeg|webp)[^\s]*', result)
+    # 2. DALL-E URL: "URL: https://..." — Bild herunterladen und als Bytes senden
+    #    DALL-E URLs enden NICHT auf .png, daher kein Dateiendungs-Filter
+    url_match = re.search(r'URL:\s*(https://[^\s\n]+)', result, re.IGNORECASE)
     if url_match:
-        image_url = url_match.group(0)
+        image_url = url_match.group(1).rstrip('.,)')
         try:
-            await update.message.reply_photo(photo=image_url)
-            log.info(f"Bild per URL gesendet: {image_url[:60]}...")
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(image_url)
+                resp.raise_for_status()
+                image_bytes = resp.content
+            await update.message.reply_photo(photo=image_bytes, caption=caption)
+            log.info(f"Bild gesendet (URL-Download): {image_url[:60]}...")
             return True
         except Exception as e:
-            log.error(f"Fehler beim Senden der Bild-URL: {e}")
+            log.error(f"Fehler beim Senden via URL-Download: {e}")
 
     return False
 
