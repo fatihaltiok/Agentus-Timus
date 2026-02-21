@@ -50,6 +50,7 @@ from .persistent_context import (
     set_context_manager
 )
 from .retry_handler import retry_handler, BrowserRetryHandler
+from tools.hybrid_input_tool import hybrid_click_or_fill
 
 # --- Globale Konfiguration & Logging ---
 CONSENT_SELECTORS = [
@@ -776,7 +777,11 @@ async def get_page_content() -> dict:
 )
 async def type_text(selector: str, text_to_type: str) -> dict:
     """
-    Gibt Text in ein Input-Element ein (via CSS-Selector).
+    Gibt Text in ein Input-Element ein.
+
+    Strategie:
+      1. hybrid_click_or_fill (DOM-First + activeElement-Check für SPAs)
+      2. Legacy fill() als Fallback
 
     Args:
         selector: CSS-Selector des Input-Elements (z.B. "input[name='search']", "#email")
@@ -788,31 +793,44 @@ async def type_text(selector: str, text_to_type: str) -> dict:
     try:
         log.info(f"⌨️  Tippe Text in Element: {selector}")
 
-        if not browser_session_manager.is_initialized:
-            await browser_session_manager.initialize()
+        page = await ensure_browser_initialized()
 
-        page = browser_session_manager.page
+        # 1. Hybrid Input (DOM-First + activeElement-Check)
+        success, method = await hybrid_click_or_fill(
+            page=page,
+            selector=selector,
+            value=text_to_type,
+        )
 
-        # Element finden
+        if success:
+            log.info(f"✅ Text '{text_to_type[:40]}' via {method} eingegeben.")
+            return {
+                "status": "text_typed",
+                "selector": selector,
+                "text": text_to_type,
+                "method": method,
+                "current_url": page.url,
+                "message": f"Text in Element '{selector}' eingegeben via {method}.",
+            }
+
+        # 2. Legacy-Fallback (direktes query_selector + fill)
+        log.info(f"   hybrid_click_or_fill: VISION_FALLBACK → Legacy fill()")
         element = await page.query_selector(selector)
         if not element:
             raise Exception(f"Input-Element mit Selector '{selector}' nicht gefunden.")
 
-        # In Viewport scrollen
         await element.scroll_into_view_if_needed(timeout=5000)
+        await element.click()
+        await element.fill(text_to_type)
 
-        # Erst leeren, dann tippen
-        await element.click()  # Fokussieren
-        await element.fill(text_to_type)  # Schneller als type()
-
-        log.info(f"✅ Text '{text_to_type}' in '{selector}' eingegeben.")
-
+        log.info(f"✅ Text '{text_to_type[:40]}' via LEGACY_FILL eingegeben.")
         return {
             "status": "text_typed",
             "selector": selector,
             "text": text_to_type,
+            "method": "LEGACY_FILL",
             "current_url": page.url,
-            "message": f"Text in Element '{selector}' eingegeben."
+            "message": f"Text in Element '{selector}' eingegeben.",
         }
 
     except Exception as exc:
