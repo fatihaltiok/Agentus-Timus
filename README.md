@@ -78,7 +78,7 @@ CI-Gates (GitHub Actions):
 
 ## Architektur
 
-``` 
+```
 Benutzer-Input
       |
       v
@@ -113,6 +113,13 @@ MCP-Server :5000 (FastAPI + JSON-RPC)
       |     ├─ Qwen-VL (lokal MCP, FALLBACK 3): letzter Ausweg
       |     └─ Qwen3.5 Plus Decision-LLM -> Plan-then-Execute -> PyAutoGUI/MCP
       |
+      +--> Browser-Input-Pipeline (hybrid_input_tool)
+      |     ├─ DOM-First (Playwright Locator, höchste Zuverlässigkeit)
+      |     ├─ activeElement-Check (SPA-Kompatibilität: React/Vue/Angular)
+      |     │   ├─ INPUT/TEXTAREA → page.keyboard.type()
+      |     │   └─ sonst          → element.fill()
+      |     └─ VISION_FALLBACK → Legacy fill() als letzter Ausweg
+      |
       +--> Externe Systeme: Desktop (PyAutoGUI), Browser (Playwright), APIs
       |
       +--> memory/memory_system.py (kanonischer Memory-Kern)
@@ -140,13 +147,24 @@ flowchart TD
     B --> M["MCP server 5000 json-rpc"]
     M --> TR["tool_registry_v2 and validation"]
     M --> T["tool modules"]
-    T --> FH["florence2_hybrid_analysis"]
-    FH --> FC["Florence-2 CAPTION + OD"]
-    FH --> PO["PaddleOCR CPU text+bbox+conf"]
+
+    T --> FH["VisualNemotron v4 Vision-Pipeline"]
+    FH --> FC["Florence-2 PRIMARY: UI-Elemente + BBoxes"]
+    FH --> QV["Qwen3.5 Plus OpenRouter: Screenshot-Analyse"]
+    FH --> PO["PaddleOCR CPU: text + bbox + confidence"]
     FC --> FM["merge summary_prompt + ocr_backend"]
+    QV --> FM
     PO --> FM
-    FM --> ND["Nemotron decision"]
-    ND --> PA["PyAutoGUI and MCP actions"]
+    FM --> ND["Qwen3.5 Plus Decision-LLM"]
+    ND --> PTE["Plan-then-Execute _execute_step_with_retry"]
+    PTE --> PA["PyAutoGUI and MCP actions"]
+
+    T --> HI["hybrid_input_tool DOM-First"]
+    HI --> AE["activeElement-Check SPA"]
+    AE --> KT["keyboard.type INPUT TEXTAREA"]
+    AE --> EF["element.fill Standard HTML"]
+    HI --> VF["VISION_FALLBACK Legacy fill"]
+
     T --> E["desktop browser apis"]
     T --> MM["memory/memory_system.py"]
     MM --> IE["interaction events"]
@@ -255,6 +273,7 @@ Beispiel: "Recherchiere KI-Sicherheit und erstelle einen Plan"
 | Tool | Funktionen |
 |------|-----------|
 | **browser_tool** | `open_url`, `click_by_text`, `click_by_selector`, `get_text`, `list_links`, `type_text`, `get_page_content`, `dismiss_overlays`, `browser_session_status`, `browser_save_session`, `browser_close_session`, `browser_cleanup_expired` |
+| **hybrid_input_tool** | DOM-First Formular-Eingabe mit SPA-Kompatibilität (`hybrid_click_or_fill`) — activeElement-Check für React/Vue/Angular, `keyboard.type()` vs `fill()` je nach Fokus-Zustand |
 | **browser_controller** | DOM-First Browser-Control mit State-Tracking und Session-ID Propagation |
 | **smart_navigation_tool** | Webseiten-Analyse (`analyze_current_page`) |
 | **visual_browser_tool** | Vision-basierte Browser-Steuerung |
