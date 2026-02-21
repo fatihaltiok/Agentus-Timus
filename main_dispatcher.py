@@ -451,28 +451,42 @@ def _structure_task(task: str, url: str) -> List[str]:
             "Akzeptiere Cookies NUR falls ein Cookie-Banner sichtbar ist — sonst direkt weiter"
         )
 
-    # 2. Suchbegriff (robust: matched Punkte, Ziffern, Umlaute)
+    # 2. Zielort aus Suchbegriff extrahieren (NUR den Ort, keine Datums-/Personendetails)
     search_match = re.search(
-        r"(?:suche(?:\s+nach)?|schau(?:\s+nach)?|finde)\s+(.+?)(?:\s+(?:und\s+dann|dann|anschließend)|$)",
+        r"(?:suche(?:\s+nach)?|schau(?:\s+nach)?|finde)\s+(?:hotels?\s+in\s+)?(.+?)"
+        r"(?:\s+(?:für\s+den|für|am|vom|ab|und\s+dann|dann|anschließend)|\s+\d{1,2}[./]|$)",
         task_lower,
     )
     if search_match:
         start, end = search_match.span(1)
-        term = task[start:end].strip()  # Originaltext beibehalten (Groß-/Kleinschreibung)
-        # Suche + Button-Klick in EINEM Schritt — verhindert step_done ohne Aktion
-        steps.append(
-            f"Klicke auf das Suchfeld (Destinations-Eingabe), gib ein: '{term}' "
-            f"und klicke danach auf den blauen Suche-Button (oder drücke Enter)"
-        )
-        steps.append("Warte 3 Sekunden auf Suchergebnisse")
+        destination = task[start:end].strip().rstrip(",")
 
-    # 3. Datum (z.B. "3.3.2026", "03.03.2026", "3/3/2026")
-    date_matches = re.findall(r'\d{1,2}[./]\d{1,2}[./]\d{2,4}', task)
-    if date_matches:
-        date_str = ', '.join(date_matches)
+        # Schritt A: NUR ins Suchfeld tippen (Zielort)
         steps.append(
-            f"Klicke auf das Anreisedatum-Feld und wähle {date_str} im Kalender "
-            f"(Klick auf den richtigen Tag)"
+            f"Klicke auf das Suchfeld 'Wohin reisen Sie?' (Destinations-Eingabefeld oben auf der Seite) "
+            f"und tippe NUR: '{destination}'"
+        )
+        # Schritt B: Autocomplete-Vorschlag wählen ODER Enter drücken
+        steps.append(
+            f"Wähle den ersten Vorschlag '{destination}' aus der Autocomplete-/Dropdown-Liste "
+            f"(falls kein Dropdown: drücke Enter)"
+        )
+        steps.append("Warte 2 Sekunden bis die Seite reagiert hat")
+
+    # 3. Datum — Anreise und Abreise als GETRENNTE Schritte
+    date_matches = re.findall(r'\d{1,2}[./]\d{1,2}[./]\d{2,4}', task)
+    if len(date_matches) >= 2:
+        steps.append(
+            f"Klicke auf das Anreisedatum-Feld und wähle den {date_matches[0]} im Kalender "
+            f"(Klick auf den richtigen Tag im Monats-Kalender)"
+        )
+        steps.append(
+            f"Klicke auf das Abreisedatum-Feld (oder wähle direkt im geöffneten Kalender) "
+            f"und wähle den {date_matches[1]}"
+        )
+    elif len(date_matches) == 1:
+        steps.append(
+            f"Klicke auf das Datum-Feld und wähle den {date_matches[0]} im Kalender"
         )
 
     # 4. Personen-/Gästeanzahl
@@ -482,11 +496,18 @@ def _structure_task(task: str, url: str) -> List[str]:
     )
     if persons_match:
         steps.append(
-            f"Setze die Anzahl Reisende/Gäste auf {persons_match.group(1)} Personen "
-            f"(Gäste-Auswahl-Feld, NICHT das Suchfeld)"
+            f"Klicke auf das Gäste-Feld (zeigt '2 Erwachsene · X Kinder · X Zimmer') "
+            f"und setze die Anzahl auf {persons_match.group(1)} Erwachsene"
         )
 
-    # 5. Explizite Klick/Extraktions-Anweisung
+    # 5. Suche starten (immer als letzter Pflichtschritt nach Datum/Gäste)
+    if search_match:
+        steps.append(
+            "Klicke auf den blauen Suche-Button um die Hotelsuche zu starten"
+        )
+        steps.append("Warte 3 Sekunden auf die Suchergebnisse")
+
+    # 6. Explizite Klick/Extraktions-Anweisung
     click_match = re.search(
         r"(?:klicke\s+auf|extrahiere|zeige\s+(?:mir)?)\s+(.+?)(?:\s+(?:und|dann)|$)",
         task_lower,

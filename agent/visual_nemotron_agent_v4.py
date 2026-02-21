@@ -1401,6 +1401,7 @@ class VisualNemotronAgentV4:
                 continue  # Nächster Retry mit mehr UI-Kontext
 
             step_verified = False
+            last_type_verified = True  # True = kein type ausgeführt, kein Problem
             for action in actions[:max_actions_per_retry]:
                 # Loop-Schutz
                 if self.loop_detector.add_state(screenshot, action):
@@ -1429,8 +1430,20 @@ class VisualNemotronAgentV4:
                 if verified:
                     step_verified = True
 
-            if step_verified:
+                # type-Aktionen separat tracken: nicht-verifiziertes Tippen → Retry
+                if act_type == "type":
+                    last_type_verified = verified
+                    if not verified:
+                        log.warning(
+                            "   ⚠️ type NICHT verifiziert (Text landete nicht im Feld)"
+                            " → erzwinge Retry"
+                        )
+
+            # Schritt nur als erledigt werten wenn KEIN nicht-verifiziertes type vorliegt
+            if step_verified and last_type_verified:
                 return True
+            if not last_type_verified:
+                log.info("   🔁 type-Verifikation fehlgeschlagen → Retry")
 
             await asyncio.sleep(0.5)
 

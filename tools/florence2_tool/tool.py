@@ -45,6 +45,10 @@ _paddle_ocr_init_failed = False
 _device: str = "cpu"
 _model_path: str = os.getenv("FLORENCE2_MODEL", "microsoft/Florence-2-large-ft")
 _enabled: bool = os.getenv("FLORENCE2_ENABLED", "true").lower() not in {"0", "false", "no", "off"}
+# FLORENCE2_DEVICE: "auto" (default) | "cpu" | "cuda"
+# "auto" = CUDA wenn verfügbar, sonst CPU
+# "cpu"  = erzwinge CPU (sicher, kein CUDA-Conflict, ~5-10s statt ~1s)
+_device_override: str = os.getenv("FLORENCE2_DEVICE", "auto").lower()
 MIN_DIM = 10
 
 
@@ -65,8 +69,14 @@ def _load_model():
     log.info(f"Lade Florence-2: {_model_path}")
     t0 = time.time()
 
-    _device = "cuda" if torch.cuda.is_available() else "cpu"
+    if _device_override == "cpu":
+        _device = "cpu"
+    elif _device_override == "cuda":
+        _device = "cuda"
+    else:
+        _device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.float16 if _device == "cuda" else torch.float32
+    log.info(f"Florence-2 Device: {_device} (override={_device_override})")
 
     _processor = AutoProcessor.from_pretrained(
         _model_path,
