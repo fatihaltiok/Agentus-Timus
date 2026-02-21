@@ -1,0 +1,24 @@
+[Unit]
+Description=Timus Main Dispatcher (Autonomous Agent)
+After=network.target timus-mcp.service
+Wants=network.target
+Requires=timus-mcp.service
+
+[Service]
+Type=simple
+User=fatih-ubuntu
+WorkingDirectory=/home/fatih-ubuntu/dev/timus
+ExecStart=/home/fatih-ubuntu/miniconda3/envs/timus/bin/python main_dispatcher.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=timus-dispatcher
+
+# Umgebungsvariablen
+Environment=PYTHONUNBUFFERED=1
+# X11-Display für visuelle Tools (Screenshot etc.)
+Environment=DISPLAY=:0
+
+[Install]
+WantedBy=multi-user.target

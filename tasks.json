@@ -25,27 +25,27 @@
       "description": "In Google Cloud Shell ein kleines Kalkulationsprogramm erstellen: Python-CLI-Rechner (Grundrechenarten, Klammern), Datei calculator.py anlegen, kurze Nutzung/Startanleitung und optional einfache Tests.",
       "priority": 1,
       "target_agent": "developer",
-      "status": "pending",
+      "status": "completed",
       "created_at": "2026-01-04T15:29:45.205036",
-      "completed_at": null,
-      "result_summary": null
+      "completed_at": "2026-02-21T20:20:59.638053",
+      "result_summary": "Mock-Ergebnis für: In Google Cloud Shell ein klei"
     },
     {
       "id": "ae7c9a6e-9847-475d-a993-7d6d4006e504",
       "description": "Liedtext (Deutsch), moderner Pop/Indie, Thema Neuanfang nach schwerer Zeit; 2 Strophen, Refrain, Bridge, Outro; optional Akkorde.",
       "priority": 2,
       "target_agent": "research",
-      "status": "pending",
+      "status": "completed",
       "created_at": "2026-02-06T23:36:48.629762",
-      "completed_at": null,
-      "result_summary": null
+      "completed_at": "2026-02-21T20:20:59.638942",
+      "result_summary": "Mock-Ergebnis für: Liedtext (Deutsch), moderner P"
     },
     {
       "id": "6d28475b-c596-43ec-8457-5e21d17e60fc",
       "description": "Audit und Test des Skills 'terminal_control': 1) Vollständigen Code reviewen auf Sicherheitslücken (Injection, sudo-Handling, fehlende Timeouts); 2) Unit-Tests/Beispiele ausführen oder erstellen; 3) Konkrete Fix-Vorschläge und minimal notwendige Berechtigungen dokumentieren; 4) Sicherheits-README und Warnhinweise ergänzen; 5) Ergebnisbericht mit empfohlener Nutzung und möglichen Risiken erstellen.",
       "priority": 50,
       "target_agent": "security_audit",
-      "status": "pending",
+      "status": "in_progress",
       "created_at": "2026-02-15T12:26:34.894923",
       "completed_at": null,
       "result_summary": null
@@ -57,6 +57,56 @@
       "target_agent": "developer",
       "status": "pending",
       "created_at": "2026-02-19T22:48:29.601715",
+      "completed_at": null,
+      "result_summary": null
+    },
+    {
+      "id": "3e98f08f-f28b-410b-8127-22bf32ae266a",
+      "description": "Sage mir das aktuelle Datum und die Uhrzeit.",
+      "priority": 1,
+      "target_agent": "executor",
+      "status": "pending",
+      "created_at": "2026-02-21T20:20:35.287174",
+      "completed_at": null,
+      "result_summary": null
+    },
+    {
+      "id": "6570bbb5-e9ab-42b7-9992-6673e3d28486",
+      "description": "Test: Was ist 2+2?",
+      "priority": 2,
+      "target_agent": "executor",
+      "status": "pending",
+      "created_at": "2026-02-21T20:20:50.254509",
+      "completed_at": null,
+      "result_summary": null
+    },
+    {
+      "id": "93f49f2e-ecc9-4f79-b9c4-10330de22bcf",
+      "description": "Autonomer Test: Was ist 2+2?",
+      "priority": 2,
+      "target_agent": "executor",
+      "status": "completed",
+      "created_at": "2026-02-21T20:21:46.210770",
+      "completed_at": "2026-02-21T20:21:54.417046",
+      "result_summary": "Ergebnis: Autonomer Test: Was ist 2+2?"
+    },
+    {
+      "id": "a205b524-6d9f-40cb-801f-199ae973b645",
+      "description": "Race Test A",
+      "priority": 2,
+      "target_agent": "executor",
+      "status": "pending",
+      "created_at": "2026-02-21T20:22:05.394595",
+      "completed_at": null,
+      "result_summary": null
+    },
+    {
+      "id": "28917815-bf24-4aef-8dcb-d41723b2ff6f",
+      "description": "Race Test B",
+      "priority": 2,
+      "target_agent": "executor",
+      "status": "pending",
+      "created_at": "2026-02-21T20:22:05.395046",
       "completed_at": null,
       "result_summary": null
     }

@@ -20,7 +20,10 @@ Author: Inception
 """
 
 import logging
+import os
+import sys
 import time
+from pathlib import Path
 from typing import List, Tuple, Callable, Dict, Any, Optional
 
 from selenium import webdriver
@@ -43,12 +46,33 @@ import pytesseract
 # ----------------------------------------------------------------------
 # Logging configuration
 # ----------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+LOG_DIR = Path("skills/logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_FILE = LOG_DIR / "visual_nemotronv4_errors.log"
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
+# Console handler for general info
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO)
+console_formatter = logging.Formatter(
+    "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-logger = logging.getLogger(__name__)
+console_handler.setFormatter(console_formatter)
+
+# File handler for detailed error logs
+file_handler = logging.FileHandler(LOG_FILE, mode="a", encoding="utf-8")
+file_handler.setLevel(logging.DEBUG)
+file_formatter = logging.Formatter(
+    "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+file_handler.setFormatter(file_formatter)
+
+logger.addHandler(console_handler)
+logger.addHandler(file_handler)
 
 # ----------------------------------------------------------------------
 # Helper functions
@@ -82,6 +106,46 @@ def _close_overlays(driver: webdriver.Chrome) -> None:
             continue
         except Exception as exc:
             logger.exception("Unexpected error while closing overlay: %s", exc)
+
+# ----------------------------------------------------------------------
+# Configuration parsing
+# ----------------------------------------------------------------------
+def get_config(
+    url: Any,
+    timeout: Any = 30,
+    retries: Any = 2,
+) -> Dict[str, Any]:
+    """
+    Validate and normalize configuration parameters for the skill.
+
+    Parameters
+    ----------
+    url : Any
+        Target URL to open.
+    timeout : Any, optional
+        Maximum time to wait for page load and element presence.
+    retries : Any, optional
+        Number of retry attempts for actions.
+
+    Returns
+    -------
+    dict
+        Normalized configuration with keys 'url', 'timeout', 'retries'.
+
+    Raises
+    ------
+    ValueError
+        If any parameter is of an invalid type or value.
+    """
+    if not isinstance(url, str) or not url.strip():
+        raise ValueError("url must be a non‑empty string.")
+    if not isinstance(timeout, int) or timeout <= 0:
+        raise ValueError("timeout must be a positive integer.")
+    if not isinstance(retries, int) or retries < 0:
+        raise ValueError("retries must be a non‑negative integer.")
+    config = {"url": url.strip(), "timeout": timeout, "retries": retries}
+    logger.debug("Configuration validated: %s", config)
+    return config
 
 # ----------------------------------------------------------------------
 # Phase 1: Initialization
@@ -378,6 +442,76 @@ def cleanup(driver: webdriver.Chrome) -> None:
         logger.exception("Error while closing browser: %s", exc)
 
 # ----------------------------------------------------------------------
+# Dry‑run simulation
+# ----------------------------------------------------------------------
+def dry_run(url: str, simulate_ui: bool = True) -> Dict[str, Any]:
+    """
+    Simulate a full workflow without launching a real browser. Useful
+    for unit testing and CI pipelines where a browser may not be
+    available.
+
+    Parameters
+    ----------
+    url : str
+        The URL to simulate. If it equals 'about:blank' a deterministic
+        simulation is performed.
+    simulate_ui : bool, optional
+        If True, simulate UI element detection and OCR; otherwise skip
+        those steps.
+
+    Returns
+    -------
+    dict
+        A dictionary containing simulated results:
+            - 'url': the input URL
+            - 'screenshot': a dummy NumPy array
+            - 'ocr_text': deterministic string
+            - 'ui_elements': list of dummy UI elements
+            - 'actions_performed': list of simulated actions
+
+    Raises
+    ------
+    ValueError
+        If url is not a string.
+    """
+    if not isinstance(url, str):
+        raise ValueError("url must be a string.")
+    logger.info("Starting dry run simulation for URL: %s", url)
+
+    # Simulated screenshot (blank image)
+    screenshot = np.zeros((1080, 1920, 3), dtype=np.uint8)
+
+    # Simulated OCR text
+    ocr_text = "Simulated OCR output for URL: " + url
+
+    # Simulated UI elements
+    ui_elements = []
+    if simulate_ui:
+        ui_elements = [
+            {"name": "dummy_button", "bbox": (100, 200, 150, 50), "center": (175, 225)},
+            {"name": "dummy_input", "bbox": (300, 400, 200, 40), "center": (400, 420)},
+        ]
+        logger.debug("Simulated UI elements: %s", ui_elements)
+
+    # Simulated actions
+    actions_performed = [
+        {"type": "click", "target": {"by": By.XPATH, "value": "//button[@id='dummy']"}},
+        {"type": "type", "target": {"by": By.CSS_SELECTOR, "value": "#dummy_input"}, "text": "test"},
+        {"type": "scroll", "scroll_to": (0, 500)},
+    ]
+    logger.debug("Simulated actions: %s", actions_performed)
+
+    result = {
+        "url": url,
+        "screenshot": screenshot,
+        "ocr_text": ocr_text,
+        "ui_elements": ui_elements,
+        "actions_performed": actions_performed,
+    }
+    logger.info("Dry run simulation completed.")
+    return result
+
+# ----------------------------------------------------------------------
 # Example usage (test stub)
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
@@ -391,33 +525,4 @@ if __name__ == "__main__":
     test_actions = [
         {
             "type": "click",
-            "target": {"by": By.XPATH, "value": "//button[text()='More information']"},
-        },
-        {
-            "type": "scroll",
-            "scroll_to": (0, 500),
-        },
-    ]
-
-    # Define a simple verification function
-    def verify_example(driver: webdriver.Chrome) -> bool:
-        try:
-            elem = driver.find_element(By.CSS_SELECTOR, "h1")
-            return "Example Domain" in elem.text
-        except NoSuchElementException:
-            return False
-
-    # Run the workflow
-    driver = None
-    try:
-        driver = initialize_browser(test_url, headless=False, timeout=20)
-        # Locate UI elements (not used in this simple test)
-        locate_ui_elements(driver, test_templates, threshold=0.9)
-        # Perform actions
-        perform_actions(driver, test_actions, retries=2, retry_interval=1, timeout=15)
-        # Verify result
-        result = verify_result(driver, verify_example, timeout=10)
-        logger.info("Verification result: %s", result)
-    finally:
-        if driver:
-            cleanup(driver)
+            "target": {"by": By.XPATH, "value": "//button[text()='More information']

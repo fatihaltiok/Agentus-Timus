@@ -19,6 +19,52 @@ Branding:
 
 ---
 
+## Aktueller Stand (2026-02-21)
+
+**Autonomie-Ausbau M0–M5 + systemd (2026-02-21):**
+- **AutonomousRunner** (`orchestration/autonomous_runner.py`): Bridge zwischen Heartbeat-Scheduler und Task-Ausführung — läuft parallel zur CLI-Schleife
+- **SQLite Task-Queue** (`orchestration/task_queue.py`): Ersetzt `tasks.json` — thread-safe, Priority-basiert (CRITICAL→LOW), atomare Operationen, Retry-Logik, Erinnerungs-Scheduling via `run_at`
+- **Telegram Gateway** (`gateway/telegram_gateway.py`): Bot `@agentustimus_bot` — `/task`, `/tasks`, `/remind`, `/status` — Session-Mapping, Typing-Indikator, 4096-Zeichen-Chunking
+- **System Monitor** (`gateway/system_monitor.py`): CPU/RAM/Disk-Überwachung, Telegram-Alerts bei Schwellwert, 30-Minuten-Cooldown
+- **Error Classifier** (`utils/error_classifier.py`): Granulare Exception-Klassifizierung (API_ERROR, RATE_LIMIT, TIMEOUT, TOOL_FAIL, …) mit retriable/failover-Flags
+- **Model Failover** (`utils/model_failover.py`): Automatische Agenten-Eskalation bei Ausfällen (research→reasoning→meta→executor), exponentieller Backoff
+- **systemd Services**: `timus-mcp.service` + `timus-dispatcher.service` — Auto-Start, Restart bei Crash, Daemon-Modus (kein TTY)
+- **Import-Bug Fix** (`tools/summarizer/tool.py`): `ensure_browser_initialized` aus korrektem Modul importiert — alle 53 Tools ladbar
+
+Neue Dateien:
+
+| Datei | Beschreibung |
+|---|---|
+| `orchestration/autonomous_runner.py` | Scheduler↔Agent Bridge |
+| `orchestration/task_queue.py` | SQLite Task-Queue (ersetzt tasks.json) |
+| `gateway/telegram_gateway.py` | Telegram-Bot (@agentustimus_bot) |
+| `gateway/webhook_gateway.py` | HMAC-authentifizierter Webhook-Server |
+| `gateway/event_router.py` | Event → Task-Queue Router |
+| `gateway/system_monitor.py` | CPU/RAM/Disk Monitor mit Telegram-Alerts |
+| `utils/error_classifier.py` | Exception → ErrorType Klassifizierer |
+| `utils/model_failover.py` | Automatischer Agenten-Failover |
+| `data/task_queue.db` | SQLite Datenbank (Task-Persistenz) |
+| `timus-mcp.service` | systemd Unit für MCP-Server |
+| `timus-dispatcher.service` | systemd Unit für Dispatcher |
+
+Neue ENV-Variablen:
+
+```bash
+HEARTBEAT_ENABLED=true
+HEARTBEAT_INTERVAL_MINUTES=15
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_ALLOWED_IDS=<deine_telegram_user_id>
+WEBHOOK_ENABLED=false
+WEBHOOK_PORT=8765
+MONITOR_ENABLED=true
+MONITOR_INTERVAL_MINUTES=5
+MONITOR_CPU_THRESHOLD=85
+MONITOR_RAM_THRESHOLD=85
+MONITOR_DISK_THRESHOLD=90
+```
+
+---
+
 ## Aktueller Stand (2026-02-20)
 
 **Qwen3.5 Plus Integration + Plan-then-Execute Architektur:**
@@ -77,6 +123,33 @@ CI-Gates (GitHub Actions):
 ---
 
 ## Architektur
+
+### Autonomie-Stack (Übersicht)
+
+```
+                    ┌─────────────────────────────────────────┐
+                    │           TIMUS (Autonomous)            │
+                    │                                         │
+  Telegram ──────→  │  TelegramGateway                        │
+  Webhook  ──────→  │  WebhookServer  → EventRouter           │
+  Heartbeat ─────→  │  ProactiveScheduler                     │
+  CLI       ──────→ │  _cli_loop()  (nur mit TTY)             │
+                    │       ↓                                 │
+                    │  AutonomousRunner                       │
+                    │       ↓                                 │
+                    │  SQLite TaskQueue  ←── /task, /remind   │
+                    │       ↓                                 │
+                    │  failover_run_agent()                   │
+                    │       ↓                                 │
+                    │  [executor|research|reasoning|...]      │
+                    │       ↓                                 │
+                    │  MCP Server (53 Tools)                  │
+                    │       ↓                                 │
+                    │  SystemMonitor → Telegram Alert         │
+                    └─────────────────────────────────────────┘
+```
+
+### Dispatcher-Pipeline (Detail)
 
 ```
 Benutzer-Input
@@ -425,7 +498,7 @@ Der Heartbeat-Scheduler fuehrt in konfigurierbaren Intervallen autonome Aktionen
 
 | Aktion | Intervall | Beschreibung |
 |--------|-----------|--------------|
-| Task-Check | Jedes Heartbeat (15 min) | Prueft `tasks.json` auf pending/in_progress |
+| Task-Check | Jedes Heartbeat (15 min) | Holt nächsten Task aus SQLite-Queue via `claim_next()` |
 | Self-Model Refresh | Alle 60 min | Aktualisiert Self-Model via LLM |
 | Memory Sync | Alle 4 Heartbeats | SQLite -> Markdown Sync |
 
@@ -581,6 +654,27 @@ python main_dispatcher.py
 python timus_hybrid_v2.py
 ```
 
+### systemd (Auto-Start, Produktionsbetrieb)
+
+```bash
+# Service-Dateien installieren
+sudo cp timus-mcp.service /etc/systemd/system/
+sudo cp timus-dispatcher.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable timus-mcp timus-dispatcher
+
+# Starten
+sudo systemctl start timus-mcp
+sleep 3
+sudo systemctl start timus-dispatcher
+
+# Status & Logs
+sudo systemctl status timus-mcp timus-dispatcher
+journalctl -u timus-dispatcher -f
+```
+
+Im systemd-Betrieb (kein TTY) deaktiviert sich die CLI automatisch — Timus wartet auf SIGTERM und ist nur noch über Telegram steuerbar.
+
 Hinweis zum Startskript:
 - `start_timus_three_terminals.sh` aktiviert standardmäßig automatisch die Conda-Umgebung `timus`.
 - Falls der Env-Name anders ist: `TIMUS_CONDA_ENV=<name> ./start_timus_three_terminals.sh`
@@ -648,8 +742,17 @@ timus/
 │   ├── memory_tool/
 │   └── ...
 ├── orchestration/
-│   ├── scheduler.py         # Proaktiver Heartbeat-Scheduler
-│   └── lane_manager.py      # Lane-basierte Task-Verwaltung
+│   ├── scheduler.py            # Proaktiver Heartbeat-Scheduler
+│   ├── autonomous_runner.py    # Scheduler↔Agent Bridge (autonome Ausführung)
+│   ├── task_queue.py           # SQLite Task-Queue mit Prioritäten + Retry
+│   ├── canvas_store.py         # Agent-Run Events (Canvas-Logging)
+│   └── lane_manager.py         # Lane-basierte Task-Verwaltung
+├── gateway/
+│   ├── telegram_gateway.py     # Telegram-Bot (@agentustimus_bot)
+│   ├── webhook_gateway.py      # HMAC-authentifizierter Webhook-Server
+│   ├── event_router.py         # Event → Task-Queue Router
+│   ├── system_monitor.py       # CPU/RAM/Disk Monitor mit Telegram-Alerts
+│   └── rss_poller.py           # RSS-Feed Polling
 ├── server/
 │   └── mcp_server.py        # MCP Server (FastAPI, Port 5000)
 ├── skills/                  # Erlernbare Skills
@@ -663,14 +766,24 @@ timus/
 │   ├── test_milestone6_e2e_readiness.py
 │   └── ...                  # Weitere Test-Suites
 ├── verify_milestone6.py     # Go/No-Go Schnellcheck fuer Milestone 6
-├── utils/                   # Hilfsfunktionen
-├── config/                  # Personality-System
-├── main_dispatcher.py       # Zentral-Dispatcher
-└── docs/                    # Dokumentation + Runbooks
+├── utils/
+│   ├── error_classifier.py     # Exception → ErrorType Klassifizierer
+│   ├── model_failover.py       # Automatischer Agenten-Failover
+│   ├── audit_logger.py         # Security/Compliance-Audit-Trail
+│   ├── policy_gate.py          # Policy-Gate (destruktive Anfragen)
+│   └── ...
+├── data/
+│   └── task_queue.db           # SQLite Task-Persistenz
+├── config/                     # Personality-System
+├── main_dispatcher.py          # Zentral-Dispatcher (v3.4 Autonomous + Telegram)
+├── timus-mcp.service           # systemd Unit für MCP-Server
+├── timus-dispatcher.service    # systemd Unit für Dispatcher
+└── docs/                       # Dokumentation + Runbooks
     ├── MEMORY_ARCHITECTURE.md
     ├── MILESTONE6_RUNBOOK.md
     ├── RELEASE_NOTES_MILESTONE6.md
     ├── SESSION_LOG_2026-02-17_MILESTONES_0_TO_6.md
+    ├── SESSION_LOG_2026-02-21_AUTONOMIE_MILESTONES.md
     └── ABSCHLUSSBERICHT_Florence2_Integration_2026-02-19.md
 ```
 

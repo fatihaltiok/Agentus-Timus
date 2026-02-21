@@ -1,0 +1,48 @@
+[tool.poetry]
+name = "visual_nemotronv4_web_interaction_skill"
+version = "0.1.0"
+description = "Skill für die Interaktion mit Web-APIs (Scan, OCR, Click) – Version 4"
+authors = ["Your Name <you@example.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+
+[tool.poetry.dev-dependencies]
+pytest = ">=7.0"
+black = "*"
+flake8 = "*"
+pytest-cov = "*"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 88
+target-version = ["py39"]
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | \.venv_tests
+  | _build
+  | buck-out
+  | build
+  | dist
+)'''
+'''
+
+[tool.flake8]
+max-line-length = 88
+extend-ignore = ["E203", "W503"]
+exclude = ".git,__pycache__,build,dist,venv,venv_tests"
+
+[tool.isort]
+profile = "black"
+line_length = 88
+skip_gitignore = true

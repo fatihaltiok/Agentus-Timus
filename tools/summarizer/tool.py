@@ -12,9 +12,9 @@ from utils.openai_compat import prepare_openai_params
 # KORREKTUR: Wir importieren nicht mehr `browser_session_manager`, sondern nur noch die Helferfunktion.
 from tools.shared_context import (
     openai_client,
-    ensure_browser_initialized,
     log
 )
+from tools.browser_tool.tool import ensure_browser_initialized
 
 @tool(
     name="summarize_article",

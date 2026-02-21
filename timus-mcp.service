@@ -1,0 +1,25 @@
+[Unit]
+Description=Timus MCP Server (Tool Registry)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=fatih-ubuntu
+WorkingDirectory=/home/fatih-ubuntu/dev/timus
+ExecStart=/home/fatih-ubuntu/miniconda3/envs/timus/bin/uvicorn \
+    server.mcp_server:app \
+    --host 127.0.0.1 \
+    --port 5000 \
+    --log-level info
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=timus-mcp
+
+# Umgebungsvariablen (lädt .env automatisch via python-dotenv im Code)
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

@@ -58,3 +58,6 @@ paddleocr
 
 # --- System Monitoring ---
 psutil
+
+python-telegram-bot==21.9
+feedparser==6.0.12

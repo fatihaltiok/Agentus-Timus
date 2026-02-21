@@ -1042,37 +1042,62 @@ def _log_canvas_agent_event(
         log.debug(f"Canvas-Logging uebersprungen: {e}")
 
 
-async def fetch_tool_descriptions_from_server() -> Optional[str]:
-    """Holt die Tool-Liste vom Server."""
+async def fetch_tool_descriptions_from_server(
+    max_wait: int = 90, retry_interval: int = 3
+) -> Optional[str]:
+    """
+    Holt die Tool-Liste vom Server.
+    Wartet bis zu max_wait Sekunden auf den MCP-Server (Retry bei ConnectError).
+    Nützlich wenn Dispatcher und MCP-Server gleichzeitig starten (systemd).
+    """
     server_url = "http://127.0.0.1:5000/get_tool_descriptions"
+    waited = 0
 
-    try:
-        async with httpx.AsyncClient() as http_client:
-            response = await http_client.get(server_url, timeout=5.0)
+    while True:
+        try:
+            async with httpx.AsyncClient() as http_client:
+                response = await http_client.get(server_url, timeout=5.0)
 
             if response.status_code != 200:
                 log.error(f"❌ Server antwortet mit Status {response.status_code}")
                 return None
 
+            if waited > 0:
+                log.info(f"✅ MCP-Server erreichbar (nach {waited}s Wartezeit)")
             return response.json().get("descriptions")
 
-    except httpx.ConnectError:
-        log.fatal(f"FATAL: Keine Verbindung zum Server ({server_url}).")
-        log.fatal("Starte den MCP Server mit: python server/mcp_server.py")
-        return None
-    except Exception as e:
-        log.error(f"❌ Fehler beim Abrufen der Tools: {e}")
-        return None
+        except httpx.ConnectError:
+            if waited == 0:
+                log.info(f"⏳ MCP-Server noch nicht bereit — warte bis zu {max_wait}s ...")
+            waited += retry_interval
+            if waited > max_wait:
+                log.fatal(f"FATAL: Keine Verbindung zum Server ({server_url}) nach {max_wait}s.")
+                log.fatal("Starte den MCP Server mit: python server/mcp_server.py")
+                return None
+            log.info(f"   ... {waited}s/{max_wait}s")
+            await asyncio.sleep(retry_interval)
+
+        except Exception as e:
+            log.error(f"❌ Fehler beim Abrufen der Tools: {e}")
+            return None
 
 
-async def main_loop():
-    """Hauptschleife des Dispatchers."""
-    print("\n" + "=" * 60)
-    print("🤖 TIMUS MASTER DISPATCHER (v3.2 - Dev Agent v2) 🤖")
-    print("=" * 60)
+async def _cli_loop(tools_desc: str) -> None:
+    """Interaktive CLI-Schleife (läuft parallel zum AutonomousRunner)."""
+    import sys
+    import signal as _signal
 
-    tools_desc = await fetch_tool_descriptions_from_server()
-    if not tools_desc:
+    # Daemon-Modus: kein TTY (z.B. systemd-Service) → warte auf SIGTERM
+    if not sys.stdin.isatty():
+        log.info("Daemon-Modus: CLI deaktiviert (kein TTY). Stoppe via SIGTERM.")
+        stop_event = asyncio.Event()
+        try:
+            loop = asyncio.get_event_loop()
+            loop.add_signal_handler(_signal.SIGTERM, stop_event.set)
+            loop.add_signal_handler(_signal.SIGINT, stop_event.set)
+        except NotImplementedError:
+            pass  # Windows
+        await stop_event.wait()
         return
 
     print("\nBereit. Beispiele:")
@@ -1080,6 +1105,7 @@ async def main_loop():
     print("  • 'Recherchiere KI-Sicherheit' → RESEARCH")
     print("  • 'Öffne Firefox' → VISUAL")
     print("  • 'Wie spät ist es?' → EXECUTOR")
+    print("  • '/tasks' → Offene autonome Tasks anzeigen")
     print("\nTipp: 'exit' zum Beenden\n")
 
     conversation_session_id = f"chat_{uuid.uuid4().hex[:8]}"
@@ -1094,9 +1120,15 @@ async def main_loop():
 
             if q_clean.lower() in ["exit", "quit", "q"]:
                 break
+
             if q_clean.lower() in {"/new", "new session", "neue session", "reset session"}:
                 conversation_session_id = f"chat_{uuid.uuid4().hex[:8]}"
                 print(f"   ♻️ Neue Session gestartet: {conversation_session_id}")
+                continue
+
+            # Task-Liste anzeigen
+            if q_clean.lower() in {"/tasks", "tasks", "offene tasks"}:
+                _print_tasks()
                 continue
 
             print("   🤔 Timus denkt...")
@@ -1113,6 +1145,88 @@ async def main_loop():
             break
         except Exception as e:
             log.error(f"Fehler: {e}")
+
+
+def _print_tasks() -> None:
+    """Zeigt alle Tasks aus der SQLite-Queue an."""
+    try:
+        from orchestration.task_queue import get_queue
+        tasks = get_queue().get_all(limit=20)
+        if not tasks:
+            print("   Keine Tasks vorhanden.")
+            return
+        stats = get_queue().stats()
+        print(f"\n   Queue: {stats}")
+        print(f"\n   {'ID':8} {'Prio':6} {'Status':12} {'Agent':12} Beschreibung")
+        print("   " + "-" * 75)
+        prio_names = {0: "CRIT", 1: "HIGH", 2: "NORM", 3: "LOW"}
+        icons = {"pending": "⏳", "in_progress": "🔄", "completed": "✅", "failed": "❌", "cancelled": "🚫"}
+        for t in tasks:
+            tid = t.get("id", "?")[:8]
+            status = t.get("status", "?")
+            prio = prio_names.get(t.get("priority", 2), "?")
+            agent = (t.get("target_agent") or "auto")[:10]
+            desc = t.get("description", "")[:42]
+            icon = icons.get(status, "•")
+            print(f"   {tid:8} {prio:6} {icon} {status:10} {agent:12} {desc}")
+    except Exception as e:
+        print(f"   Fehler beim Lesen: {e}")
+
+
+async def main_loop():
+    """Hauptschleife: CLI + AutonomousRunner + Telegram parallel."""
+    print("\n" + "=" * 60)
+    print("🤖 TIMUS MASTER DISPATCHER (v3.4 - Autonomous + Telegram) 🤖")
+    print("=" * 60)
+
+    tools_desc = await fetch_tool_descriptions_from_server()
+    if not tools_desc:
+        return
+
+    # 1. Autonomous Runner (Scheduler)
+    from orchestration.autonomous_runner import AutonomousRunner
+    interval = int(os.getenv("HEARTBEAT_INTERVAL_MINUTES", "15"))
+    runner = AutonomousRunner(interval_minutes=interval)
+    await runner.start(tools_desc)
+    log.info(f"🤖 AutonomousRunner aktiv (alle {interval} min)")
+
+    # 2. Telegram Gateway (optional)
+    from gateway.telegram_gateway import TelegramGateway
+    tg_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    gateway = TelegramGateway(token=tg_token, tools_desc=tools_desc)
+    tg_active = await gateway.start()
+    if tg_active:
+        print("   📱 Telegram-Bot aktiv")
+    else:
+        print("   📱 Telegram inaktiv (TELEGRAM_BOT_TOKEN nicht gesetzt)")
+
+    # 3. Webhook-Server (optional)
+    from gateway.webhook_gateway import WebhookServer
+    webhook = WebhookServer()
+    webhook_enabled = os.getenv("WEBHOOK_ENABLED", "false").lower() in ("1", "true", "yes")
+    if webhook_enabled:
+        await webhook.start()
+        port = os.getenv("WEBHOOK_PORT", "8765")
+        print(f"   🔗 Webhook-Server aktiv auf Port {port}")
+    else:
+        print("   🔗 Webhook inaktiv (WEBHOOK_ENABLED=false)")
+
+    # 4. System-Monitor
+    from gateway.system_monitor import SystemMonitor
+    monitor = SystemMonitor()
+    await monitor.start()
+
+    # events.json Vorlage anlegen wenn nicht vorhanden
+    from gateway.event_router import init_events_config
+    init_events_config()
+
+    try:
+        await _cli_loop(tools_desc)
+    finally:
+        await runner.stop()
+        await gateway.stop()
+        await webhook.stop()
+        await monitor.stop()
 
     print("\n👋 Bye!")
 
