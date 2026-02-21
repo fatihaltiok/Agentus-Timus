@@ -612,11 +612,16 @@ async def get_agent_decision(user_query: str) -> str:
                 for item in content:
                     if isinstance(item, dict) and isinstance(item.get("text"), str):
                         parts.append(item["text"])
+                    elif hasattr(item, "text") and isinstance(getattr(item, "text"), str):
+                        parts.append(getattr(item, "text"))
                 raw_content = "".join(parts)
 
         decision = raw_content.strip().lower().replace(".", "")
         if not decision:
-            log.warning("⚠️ Leere Dispatcher-Antwort. Fallback auf 'executor'.")
+            log.warning(
+                "⚠️ Leere Dispatcher-Antwort. Fallback auf 'executor'. "
+                f"(raw_len={len(raw_content)}, raw_preview={repr(raw_content[:120])})"
+            )
             return "executor"
 
         # Direkter Treffer
@@ -630,7 +635,10 @@ async def get_agent_decision(user_query: str) -> str:
                 log.info(f"✅ Entscheidung (extrahiert): {key}")
                 return key
 
-        log.warning(f"⚠️ Unsicher ({decision}). Fallback auf 'executor'.")
+        log.warning(
+            f"⚠️ Unsicher ({decision}). Fallback auf 'executor'. "
+            f"(raw_len={len(raw_content)}, raw_preview={repr(raw_content[:160])})"
+        )
         return "executor"
 
     except Exception as e:
@@ -892,6 +900,20 @@ Schritte: {steps_executed} ausgeführt{f" von {steps_planned} geplant" if steps_
             setattr(agent_instance, "conversation_session_id", effective_session_id)
         except Exception:
             pass
+        try:
+            if hasattr(agent_instance, "set_audit_step_logger"):
+                agent_instance.set_audit_step_logger(audit.log_step)
+                audit.log_step(
+                    action="agent_trace_hook",
+                    input_data={
+                        "agent": agent_name,
+                        "session_id": effective_session_id,
+                    },
+                    output_data={"enabled": True},
+                    status="ok",
+                )
+        except Exception as e:
+            log.debug(f"Audit-Step-Hook konnte nicht gesetzt werden: {e}")
 
         final_answer = await agent_instance.run(query)
         _emit_dispatcher_status(agent_name, "done", "Agent-Run abgeschlossen")

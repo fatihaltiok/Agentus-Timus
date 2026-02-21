@@ -19,7 +19,7 @@ import subprocess
 import platform
 import time
 from datetime import datetime
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Callable
 
 import httpx
 
@@ -138,6 +138,10 @@ class BaseAgent(DynamicToolMixin):
         self._live_status_enabled = (
             os.getenv("TIMUS_LIVE_STATUS", "true").lower() in {"1", "true", "yes", "on"}
         )
+        self._step_trace_enabled = (
+            os.getenv("TIMUS_STEP_TRACE", "true").lower() in {"1", "true", "yes", "on"}
+        )
+        self._audit_step_logger: Optional[Callable[..., None]] = None
         self._active_phase = "idle"
         self._active_tool_name: Optional[str] = None
 
@@ -173,6 +177,46 @@ class BaseAgent(DynamicToolMixin):
         print(
             f"   ⏱️ Status [{ts}] | Agent {self.agent_type.upper()} | {phase.upper()}{step_txt}{tool_txt}{detail_txt}"
         )
+
+    def set_audit_step_logger(self, logger_fn: Optional[Callable[..., None]]) -> None:
+        """Setzt einen optionalen JSONL-Step-Logger (z.B. AuditLogger.log_step)."""
+        self._audit_step_logger = logger_fn
+
+    def _preview_value(self, value: Any, limit: int = 500) -> str:
+        """Kompakte, einzeilige Vorschau fuer Logs."""
+        try:
+            if isinstance(value, str):
+                text = value
+            else:
+                text = json.dumps(value, ensure_ascii=False, default=str)
+        except Exception:
+            text = str(value)
+        text = text.replace("\n", "\\n")
+        if len(text) > limit:
+            return text[:limit] + "...<truncated>"
+        return text
+
+    def _emit_step_trace(
+        self,
+        action: str,
+        input_data: Any = None,
+        output_data: Any = None,
+        status: str = "ok",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Schreibt feingranulare Run-Schritte ins Audit-JSONL (wenn aktiv)."""
+        if not self._step_trace_enabled or not self._audit_step_logger:
+            return
+        try:
+            self._audit_step_logger(
+                action=action,
+                input_data=input_data,
+                output_data=output_data,
+                status=status,
+                metadata=metadata,
+            )
+        except Exception as e:
+            log.debug(f"Step-Trace Logging fehlgeschlagen: {e}")
 
     # ------------------------------------------------------------------
     # Screenshot + Vision (delegiert an shared utilities)
@@ -959,7 +1003,20 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         kwargs = prepare_openai_params(kwargs)
 
         resp = await asyncio.to_thread(client.chat.completions.create, **kwargs)
-        return resp.choices[0].message.content.strip()
+        if not resp.choices or not hasattr(resp.choices[0], "message"):
+            return ""
+        content = resp.choices[0].message.content
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts: List[str] = []
+            for item in content:
+                if isinstance(item, dict) and isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+                elif hasattr(item, "text") and isinstance(getattr(item, "text"), str):
+                    parts.append(getattr(item, "text"))
+            return "".join(parts).strip()
+        return str(content or "").strip()
 
     async def _call_anthropic(self, messages: List[Dict]) -> str:
         client = self.provider_client.get_client(ModelProvider.ANTHROPIC)
@@ -1006,6 +1063,109 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
 
     def _parse_action(self, text: str) -> Tuple[Optional[dict], Optional[str]]:
         return parse_action(text)
+
+    def _format_generate_text_output(self, text: str) -> str:
+        """Bereitet generate_text-Ergebnisse nutzerfreundlich auf (falls JSON-Liste)."""
+        raw = (text or "").strip()
+        if not raw:
+            return raw
+
+        cleaned = raw.replace("```json", "").replace("```", "").strip()
+        parsed: Any = None
+        try:
+            parsed = json.loads(cleaned)
+        except Exception:
+            parsed = None
+
+        cafes: Optional[List[Dict[str, Any]]] = None
+        if isinstance(parsed, list):
+            cafes = [x for x in parsed if isinstance(x, dict)]
+        elif isinstance(parsed, dict):
+            value = parsed.get("cafes")
+            if isinstance(value, list):
+                cafes = [x for x in value if isinstance(x, dict)]
+
+        if not cafes:
+            return raw
+
+        lines: List[str] = []
+        for idx, cafe in enumerate(cafes[:15], start=1):
+            name = str(cafe.get("name", "")).strip()
+            desc = str(
+                cafe.get("short_description")
+                or cafe.get("description")
+                or cafe.get("atmosphere")
+                or ""
+            ).strip()
+            if not name:
+                continue
+            if desc:
+                lines.append(f"{idx}. {name} - {desc}")
+            else:
+                lines.append(f"{idx}. {name}")
+
+        if lines:
+            return "Hier ist deine Liste:\n" + "\n".join(lines)
+        return raw
+
+    def _is_list_request(self, task_lower: str) -> bool:
+        """Erkennt, ob der Nutzer explizit eine Liste möchte."""
+        patterns = (
+            r"\berstelle\s+eine?\s+liste\b",
+            r"\bmach\s+eine?\s+liste\b",
+            r"\bliste\b",
+            r"\blist\b",
+            r"\bauflisten\b",
+        )
+        return any(re.search(p, task_lower) for p in patterns)
+
+    async def _finalize_list_output(self, task: str, result: str) -> str:
+        """
+        Formatiert Listenanfragen in ein konsistentes Ausgabeformat und speichert sie als Datei.
+        """
+        task_lower = (task or "").lower()
+        if not self._is_list_request(task_lower):
+            return result
+
+        final_text = (result or "").strip()
+        if not final_text:
+            return result
+
+        # JSON-Output von generate_text in nummerierte Liste umwandeln.
+        if final_text.startswith("[") or final_text.startswith("{") or "```json" in final_text:
+            final_text = self._format_generate_text_output(final_text)
+
+        # Falls noch keine klare Listenform vorhanden ist, einfache Zeilen als nummerierte Liste ausgeben.
+        if not re.search(r"(?m)^\s*\d+\.\s+", final_text):
+            raw_lines = [ln.strip(" -\t") for ln in final_text.splitlines() if ln.strip()]
+            if raw_lines:
+                final_text = "Hier ist deine Liste:\n" + "\n".join(
+                    f"{i}. {line}" for i, line in enumerate(raw_lines, start=1)
+                )
+
+        # Ergebnis zusätzlich persistieren.
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        slug = re.sub(r"[^a-z0-9]+", "_", task_lower)[:50].strip("_") or "liste"
+        file_path = f"results/{ts}_{slug}.md"
+        file_content = f"# Ergebnisliste\n\n{final_text}\n"
+
+        save_obs = await self._call_tool(
+            "write_file",
+            {"path": file_path, "content": file_content},
+        )
+        saved_ok = isinstance(save_obs, dict) and save_obs.get("status") == "success"
+        self._emit_step_trace(
+            action="list_output_persisted",
+            output_data={
+                "path": file_path,
+                "saved": saved_ok,
+                "tool_observation_preview": self._preview_value(save_obs, 500),
+            },
+            status="ok" if saved_ok else "warning",
+        )
+        if saved_ok:
+            return f"{final_text}\n\nGespeichert unter: `{file_path}`"
+        return final_text
 
     # ------------------------------------------------------------------
     # Working-Memory Prompt-Injektion
@@ -1119,6 +1279,21 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             phase="start",
             detail=f"model={self.model} provider={self.provider.value}",
         )
+        self._emit_step_trace(
+            action="agent_run_start",
+            input_data={
+                "task_preview": self._preview_value(task, 400),
+                "task_chars": len(task or ""),
+            },
+            status="started",
+            metadata={
+                "agent_type": self.agent_type,
+                "model": self.model,
+                "provider": self.provider.value,
+                "max_iterations": self.max_iterations,
+                "session_id": self.conversation_session_id or "",
+            },
+        )
 
         roi_set = await self._detect_dynamic_ui_and_set_roi(task)
 
@@ -1138,6 +1313,13 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                     }
                 ]
                 self._emit_live_status(phase="memory_recall", detail="Fast-Path genutzt")
+                self._emit_step_trace(
+                    action="memory_fastpath_hit",
+                    output_data={
+                        "answer_preview": self._preview_value(memory_answer, 600),
+                        "answer_chars": len(memory_answer),
+                    },
+                )
                 await self._run_reflection(task, memory_answer, success=True)
                 return memory_answer
 
@@ -1153,6 +1335,14 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                     phase="structured_nav",
                     detail="ActionPlan erfolgreich",
                 )
+                self._emit_step_trace(
+                    action="structured_navigation_success",
+                    output_data={
+                        "result_preview": self._preview_value(
+                            structured_result.get("result", ""), 500
+                        )
+                    },
+                )
                 if roi_set:
                     self._clear_roi()
                 # Track structured nav action for reflection
@@ -1167,12 +1357,24 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 log.info(
                     "Strukturierte Navigation nicht moeglich - nutze regulaeren Flow"
                 )
+                self._emit_step_trace(
+                    action="structured_navigation_fallback",
+                    status="warning",
+                )
 
         # Clear action history for new task
         self._task_action_history = []
         working_memory_context = await self._build_working_memory_context(task)
         task_with_context = self._inject_working_memory_into_task(
             task, working_memory_context
+        )
+        self._emit_step_trace(
+            action="working_memory_injected",
+            output_data={
+                "context_chars": len(working_memory_context or ""),
+                "context_preview": self._preview_value(working_memory_context, 700),
+            },
+            metadata={"vision_enabled": self._vision_enabled},
         )
 
         use_vision = is_navigation_task and self._vision_enabled
@@ -1189,6 +1391,8 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             {"role": "system", "content": self.system_prompt},
             initial_msg,
         ]
+        last_generate_text_output: str = ""
+        empty_reply_streak = 0
 
         for step in range(1, self.max_iterations + 1):
             self._emit_live_status(
@@ -1196,7 +1400,65 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 step=step,
                 total_steps=self.max_iterations,
             )
+            last_msg = messages[-1] if messages else {}
+            last_content = last_msg.get("content", "") if isinstance(last_msg, dict) else ""
+            self._emit_step_trace(
+                action="llm_request",
+                input_data={
+                    "step": step,
+                    "messages_count": len(messages),
+                    "last_role": (
+                        last_msg.get("role", "")
+                        if isinstance(last_msg, dict)
+                        else ""
+                    ),
+                    "last_message_preview": self._preview_value(last_content, 400),
+                },
+            )
             reply = await self._call_llm(messages)
+            if not (reply or "").strip():
+                empty_reply_streak += 1
+                self._emit_step_trace(
+                    action="empty_llm_reply",
+                    output_data={"step": step, "streak": empty_reply_streak},
+                    status="warning",
+                )
+            else:
+                empty_reply_streak = 0
+            self._emit_step_trace(
+                action="llm_reply",
+                output_data={
+                    "step": step,
+                    "reply_chars": len(reply or ""),
+                    "reply_preview": self._preview_value(reply, 900),
+                    "contains_final_answer": "Final Answer:" in (reply or ""),
+                },
+            )
+            if (
+                empty_reply_streak >= 2
+                and last_generate_text_output
+            ):
+                final_result = self._format_generate_text_output(last_generate_text_output)
+                final_result = await self._finalize_list_output(task, final_result)
+                self._emit_live_status(
+                    phase="final",
+                    detail="Fallback: generate_text übernommen",
+                    step=step,
+                    total_steps=self.max_iterations,
+                )
+                self._emit_step_trace(
+                    action="fallback_final_from_generate_text",
+                    output_data={
+                        "step": step,
+                        "final_chars": len(final_result),
+                        "final_preview": self._preview_value(final_result, 900),
+                    },
+                    status="completed",
+                )
+                if roi_set:
+                    self._clear_roi()
+                await self._run_reflection(task, final_result, success=True)
+                return final_result
 
             if reply.startswith("Error"):
                 self._emit_live_status(
@@ -1207,10 +1469,19 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 )
                 if roi_set:
                     self._clear_roi()
+                self._emit_step_trace(
+                    action="llm_error",
+                    output_data={
+                        "step": step,
+                        "error_preview": self._preview_value(reply, 800),
+                    },
+                    status="error",
+                )
                 await self._run_reflection(task, reply, success=False)
                 return reply
             if "Final Answer:" in reply:
                 final_result = reply.split("Final Answer:")[1].strip()
+                final_result = await self._finalize_list_output(task, final_result)
                 self._emit_live_status(
                     phase="final",
                     detail=f"{len(final_result)} chars",
@@ -1219,6 +1490,15 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 )
                 if roi_set:
                     self._clear_roi()
+                self._emit_step_trace(
+                    action="final_answer_detected",
+                    output_data={
+                        "step": step,
+                        "final_preview": self._preview_value(final_result, 800),
+                        "final_chars": len(final_result),
+                    },
+                    status="completed",
+                )
                 await self._run_reflection(task, final_result, success=True)
                 return final_result
 
@@ -1235,19 +1515,61 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 messages.append(
                     {
                         "role": "user",
-                        "content": f"Fehler: {err}. Korrektes JSON senden.",
+                        "content": (
+                            f"Fehler: {err}. "
+                            "Antworte jetzt ENTWEDER mit "
+                            "Action: {\"method\":\"tool_name\",\"params\":{...}} "
+                            "ODER mit Final Answer: ... "
+                            "Nutze NICHT das System-Tool add_interaction."
+                        ),
                     }
+                )
+                self._emit_step_trace(
+                    action="parse_error",
+                    output_data={
+                        "step": step,
+                        "error": err or "Kein JSON",
+                        "reply_preview": self._preview_value(reply, 900),
+                    },
+                    status="warning",
                 )
                 continue
 
-            obs = await self._call_tool(
-                action.get("method", ""), action.get("params", {})
+            method = action.get("method", "")
+            params = action.get("params", {})
+            self._emit_step_trace(
+                action="action_parsed",
+                input_data={
+                    "step": step,
+                    "method": method,
+                    "params_preview": self._preview_value(params, 800),
+                },
             )
+
+            obs = await self._call_tool(method, params)
+            self._emit_step_trace(
+                action="tool_observation",
+                input_data={"step": step, "method": method},
+                output_data={
+                    "observation_type": type(obs).__name__,
+                    "observation_preview": self._preview_value(
+                        self._sanitize_observation(obs), 950
+                    ),
+                },
+            )
+            if (
+                method == "generate_text"
+                and isinstance(obs, dict)
+                and obs.get("status") == "success"
+                and isinstance(obs.get("text"), str)
+                and obs.get("text", "").strip()
+            ):
+                last_generate_text_output = obs["text"].strip()
             
             # Track action for reflection
             self._task_action_history.append({
-                "method": action.get("method", ""),
-                "params": action.get("params", {}),
+                "method": method,
+                "params": params,
                 "result": str(obs)[:200] if obs else None
             })
             
@@ -1265,6 +1587,11 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         if roi_set:
             self._clear_roi()
         self._emit_live_status(phase="limit", detail="max iterations erreicht")
+        self._emit_step_trace(
+            action="iteration_limit_reached",
+            output_data={"max_iterations": self.max_iterations},
+            status="error",
+        )
         
         await self._run_reflection(task, "Limit erreicht", success=False)
         return "Limit erreicht."
