@@ -75,7 +75,6 @@ def _load_model():
         _device = "cuda"
     else:
         _device = "cuda" if torch.cuda.is_available() else "cpu"
-    dtype = torch.float16 if _device == "cuda" else torch.float32
     log.info(f"Florence-2 Device: {_device} (override={_device_override})")
 
     _processor = AutoProcessor.from_pretrained(
@@ -83,11 +82,27 @@ def _load_model():
         trust_remote_code=True,
     )
 
-    _model = AutoModelForCausalLM.from_pretrained(
-        _model_path,
-        torch_dtype=dtype,
-        trust_remote_code=True,
-    ).to(_device)
+    def _load_on_device(target_device: str):
+        dtype = torch.float16 if target_device == "cuda" else torch.float32
+        return AutoModelForCausalLM.from_pretrained(
+            _model_path,
+            torch_dtype=dtype,
+            trust_remote_code=True,
+        ).to(target_device)
+
+    # CUDA→CPU Fallback: wenn GPU busy/unavailable → automatisch CPU
+    if _device == "cuda":
+        try:
+            _model = _load_on_device("cuda")
+        except Exception as cuda_err:
+            log.warning(
+                f"Florence-2 CUDA fehlgeschlagen ({cuda_err.__class__.__name__})"
+                f" → CPU-Fallback"
+            )
+            _device = "cpu"
+            _model = _load_on_device("cpu")
+    else:
+        _model = _load_on_device(_device)
 
     _model.eval()
     elapsed = time.time() - t0
