@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
@@ -174,7 +175,134 @@ async def run_plan(steps: List[Dict[str, Any]], initial_params: Optional[Dict[st
         raise Exception("Der Plan muss eine Liste von Schritten sein.")
     return await _execute_plan_logic(steps, initial_context=initial_params)
 
-SKILLS_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../agent/skills.yml"))
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+SKILLS_PATH = PROJECT_ROOT / "agent" / "skills.yml"
+SKILL_MD_DIR = PROJECT_ROOT / "skills"
+
+
+def _load_yaml_skills() -> Dict[str, Any]:
+    if not SKILLS_PATH.exists():
+        return {}
+    with open(SKILLS_PATH, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def _load_skill_md_registry():
+    try:
+        from utils.skill_types import SkillRegistry
+    except Exception as exc:
+        log.warning(f"SKILL.md Registry konnte nicht importiert werden: {exc}")
+        return None
+
+    registry = SkillRegistry()
+    try:
+        registry.load_all_from_directory(SKILL_MD_DIR)
+    except Exception as exc:
+        log.warning(f"SKILL.md Registry konnte nicht geladen werden: {exc}")
+        return None
+    return registry
+
+
+def _pick_entry_script(script_names: List[str]) -> Optional[str]:
+    if not script_names:
+        return None
+
+    preferred = ("main.py", "run.py", "entrypoint.py")
+    names_set = set(script_names)
+    for candidate in preferred:
+        if candidate in names_set:
+            return candidate
+
+    sorted_names = sorted(script_names)
+    for suffix in (".py", ".sh", ".bash"):
+        for name in sorted_names:
+            if name.endswith(suffix):
+                return name
+    return sorted_names[0]
+
+
+def _build_skill_catalog() -> Dict[str, Dict[str, Any]]:
+    """
+    Vereinheitlicht Skills aus:
+    - agent/skills.yml (workflow skills)
+    - skills/*/SKILL.md (instructional/script skills)
+    """
+    catalog: Dict[str, Dict[str, Any]] = {}
+
+    skills_yml = _load_yaml_skills()
+    for name, skill_data in skills_yml.items():
+        if not isinstance(skill_data, dict):
+            continue
+        meta = skill_data.get("meta", {}) if isinstance(skill_data.get("meta"), dict) else {}
+        params_meta = meta.get("params", {}) if isinstance(meta.get("params"), dict) else {}
+        steps = skill_data.get("steps", [])
+        catalog[name] = {
+            "name": name,
+            "source": "skills_yml",
+            "execution_mode": "workflow",
+            "description": meta.get("description", "Keine Beschreibung."),
+            "required_params": sorted(params_meta.keys()),
+            "steps_count": len(steps) if isinstance(steps, list) else 0,
+            "skill_data": skill_data,
+        }
+
+    registry = _load_skill_md_registry()
+    if registry:
+        for name in registry.list_all():
+            skill = registry.get(name)
+            if not skill:
+                continue
+
+            scripts = skill.get_scripts()
+            references = skill.get_references()
+            assets = skill.get_assets()
+            entry_script = _pick_entry_script(list(scripts.keys()))
+            execution_mode = "script" if entry_script else "instructional"
+
+            if name in catalog:
+                # YAML hat Vorrang bei run_skill, aber SKILL.md Metadaten ergänzen.
+                catalog[name]["also_available_as"] = "skill_md"
+                catalog[name]["skill_md_execution_mode"] = execution_mode
+                catalog[name]["skill_md_scripts"] = sorted(scripts.keys())
+                catalog[name]["skill_md_references"] = sorted(references.keys())
+                continue
+
+            catalog[name] = {
+                "name": name,
+                "source": "skill_md",
+                "execution_mode": execution_mode,
+                "description": skill.description or "Keine Beschreibung.",
+                "required_params": [],
+                "steps_count": 0,
+                "entry_script": entry_script,
+                "available_scripts": sorted(scripts.keys()),
+                "available_references": sorted(references.keys()),
+                "available_assets": sorted(assets.keys()),
+            }
+
+    return catalog
+
+
+def _resolve_skill_name(raw_name: str, catalog: Dict[str, Dict[str, Any]]) -> Optional[str]:
+    if not raw_name:
+        return None
+    if raw_name in catalog:
+        return raw_name
+
+    normalized = raw_name.strip().lower().replace("_", "-")
+    if normalized in catalog:
+        return normalized
+    return None
+
+
+def _load_skill_md_by_name(skill_name: str):
+    registry = _load_skill_md_registry()
+    if not registry:
+        return None
+    skill = registry.get(skill_name)
+    if skill:
+        return skill
+    return registry.get(skill_name.replace("_", "-"))
 
 @tool(
     name="run_skill",
@@ -187,23 +315,77 @@ SKILLS_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../age
     category=C.AUTOMATION
 )
 async def run_skill(name: str, params: Optional[Dict[str, Any]] = None) -> dict:
-    """Lädt einen Skill aus skills.yml und führt dessen 'steps'-Liste aus."""
-    try:
-        with open(SKILLS_PATH, "r", encoding="utf-8") as f:
-            skills_data = yaml.safe_load(f) or {}
-    except Exception as e:
-        raise Exception(f"Skills-Datei kann nicht geladen werden: {e}")
+    """Führt einen Skill aus (skills.yml Workflow oder SKILL.md Skill)."""
+    catalog = _build_skill_catalog()
+    resolved_name = _resolve_skill_name((name or "").strip(), catalog)
+    if not resolved_name:
+        raise Exception(f"Skill '{name}' nicht gefunden.")
 
-    skill_data = skills_data.get(name)
-    if not skill_data:
-        raise Exception(f"Skill '{name}' nicht in skills.yml gefunden.")
+    skill_meta = catalog[resolved_name]
+    source = skill_meta.get("source")
+    log.info(
+        f"SKILL: Führe Skill '{resolved_name}' aus "
+        f"(source={source}, mode={skill_meta.get('execution_mode')})"
+    )
 
-    skill_plan = skill_data.get("steps")
-    if not isinstance(skill_plan, list):
-        raise Exception(f"Skill '{name}' hat keine gültige 'steps'-Liste.")
+    # Workflow-Skill aus agent/skills.yml
+    if source == "skills_yml":
+        skill_data = skill_meta.get("skill_data", {})
+        skill_plan = skill_data.get("steps")
+        if not isinstance(skill_plan, list):
+            raise Exception(f"Skill '{resolved_name}' hat keine gültige 'steps'-Liste.")
+        return await _execute_plan_logic(skill_plan, initial_context=params)
 
-    log.info(f"SKILL: Führe Skill '{name}' mit Startparametern aus: {params}")
-    return await _execute_plan_logic(skill_plan, initial_context=params)
+    # SKILL.md Skill (script-basiert oder instructional)
+    if source == "skill_md":
+        skill = _load_skill_md_by_name(resolved_name)
+        if not skill:
+            raise Exception(f"SKILL.md Skill '{resolved_name}' konnte nicht geladen werden.")
+
+        entry_script = skill_meta.get("entry_script")
+        if entry_script:
+            script_args: List[str] = []
+            if params:
+                # Übergabe als JSON-String für generische Script-Entrypoints.
+                script_args.append(json.dumps(params, ensure_ascii=False))
+
+            script_result = skill.execute_script(entry_script, *script_args)
+            if not isinstance(script_result, dict):
+                raise Exception(
+                    f"Skill-Script '{entry_script}' lieferte ein ungültiges Ergebnis: {type(script_result).__name__}"
+                )
+            if not script_result.get("success"):
+                raise Exception(
+                    f"Skill-Script '{entry_script}' fehlgeschlagen: {script_result.get('error') or script_result.get('stderr') or 'unknown error'}"
+                )
+
+            return {
+                "plan_status": "done",
+                "skill_name": resolved_name,
+                "source": "skill_md",
+                "execution_mode": "script",
+                "entry_script": entry_script,
+                "result": script_result,
+            }
+
+        full_context = skill.get_full_context()
+        return {
+            "plan_status": "done",
+            "skill_name": resolved_name,
+            "source": "skill_md",
+            "execution_mode": "instructional",
+            "instructions": full_context[:8000],
+            "available_scripts": skill_meta.get("available_scripts", []),
+            "available_references": skill_meta.get("available_references", []),
+            "message": (
+                "Instructional skill loaded. Use these instructions/resources "
+                "to execute the task with appropriate tools."
+            ),
+        }
+
+    raise Exception(
+        f"Skill '{resolved_name}' hat eine unbekannte Source '{source}'."
+    )
 
 @tool(
     name="list_available_skills",
@@ -215,18 +397,23 @@ async def run_skill(name: str, params: Optional[Dict[str, Any]] = None) -> dict:
 async def list_available_skills() -> dict:
     """Gibt eine Liste aller Skill-Namen und ihrer Meta-Beschreibung zurück."""
     try:
-        with open(SKILLS_PATH, "r", encoding="utf-8") as f:
-            skills = yaml.safe_load(f) or {}
+        catalog = _build_skill_catalog()
     except Exception as e:
         raise Exception(f"Fehler beim Laden der Skills: {e}")
 
     result = []
-    for name, skill_data in skills.items():
-        if not isinstance(skill_data, dict): continue
-        meta = skill_data.get("meta", {})
-        desc = meta.get("description", "Keine Beschreibung.")
-        steps = skill_data.get("steps", [])
-        result.append({"name": name, "steps": len(steps), "description": desc})
+    for name in sorted(catalog.keys()):
+        skill_meta = catalog[name]
+        result.append(
+            {
+                "name": name,
+                "steps": int(skill_meta.get("steps_count", 0)),
+                "description": skill_meta.get("description", "Keine Beschreibung."),
+                "source": skill_meta.get("source", "unknown"),
+                "execution_mode": skill_meta.get("execution_mode", "unknown"),
+                "required_params": skill_meta.get("required_params", []),
+            }
+        )
 
     return {"skills": result}
 
@@ -243,23 +430,32 @@ async def get_skill_details(name: str) -> dict:
     """Gibt die detaillierte Beschreibung und die erwarteten Parameter für einen Skill zurück."""
     log.info(f"Suche Details für Skill '{name}'...")
     try:
-        with open(SKILLS_PATH, "r", encoding="utf-8") as f:
-            skills_data = yaml.safe_load(f) or {}
+        catalog = _build_skill_catalog()
     except Exception as e:
-        raise Exception(f"Fehler beim Laden der skills.yml: {e}")
+        raise Exception(f"Fehler beim Laden der Skills: {e}")
 
-    skill_data = skills_data.get(name)
-    if not skill_data or not isinstance(skill_data, dict):
-        raise Exception(f"Skill '{name}' nicht in skills.yml gefunden oder hat ungültiges Format.")
+    skill_meta = catalog.get(name)
+    if not skill_meta:
+        raise Exception(f"Skill '{name}' nicht gefunden.")
 
-    # KORREKTUR: Lese Daten aus der neuen YAML-Struktur
-    meta = skill_data.get("meta", {})
-    description = meta.get("description", "Keine Beschreibung verfügbar.")
-    # Extrahiere Parameter aus dem 'params'-Block in 'meta'
-    required_params = list(meta.get("params", {}).keys())
-
-    return {
+    response = {
         "name": name,
-        "description": description,
-        "required_params": sorted(required_params)
+        "description": skill_meta.get("description", "Keine Beschreibung verfügbar."),
+        "required_params": sorted(skill_meta.get("required_params", [])),
+        "source": skill_meta.get("source", "unknown"),
+        "execution_mode": skill_meta.get("execution_mode", "unknown"),
+        "steps_count": int(skill_meta.get("steps_count", 0)),
     }
+
+    if skill_meta.get("source") == "skill_md":
+        response["available_scripts"] = skill_meta.get("available_scripts", [])
+        response["available_references"] = skill_meta.get("available_references", [])
+        response["available_assets"] = skill_meta.get("available_assets", [])
+        response["entry_script"] = skill_meta.get("entry_script")
+    elif skill_meta.get("source") == "skills_yml":
+        response["also_available_as"] = skill_meta.get("also_available_as")
+        if "skill_md_scripts" in skill_meta:
+            response["skill_md_scripts"] = skill_meta.get("skill_md_scripts", [])
+            response["skill_md_references"] = skill_meta.get("skill_md_references", [])
+
+    return response

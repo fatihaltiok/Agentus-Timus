@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 
 log = logging.getLogger(__name__)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 # Templates
 SKILL_MD_TEMPLATE = '''---
@@ -213,6 +214,19 @@ def init_skill(
         )
 
 
+def _resolve_base_path(path: str) -> Path:
+    """
+    Löst relative Skill-Pfade stabil gegen PROJECT_ROOT auf.
+
+    Verhindert, dass bei abweichendem CWD (z.B. server/) Skills in
+    einem falschen Unterordner landen.
+    """
+    raw = Path(path or "skills").expanduser()
+    if raw.is_absolute():
+        return raw
+    return (PROJECT_ROOT / raw).resolve()
+
+
 @tool(
     name="init_skill_tool",
     description="Erstellt einen neuen Skill mit Template-Struktur (SKILL.md, scripts/, references/).",
@@ -237,12 +251,13 @@ async def init_skill_tool(
     Erstellt einen neuen Skill mit Template.
     """
     try:
+        base_path = _resolve_base_path(path)
         result = init_skill(
             name=name,
             description=description,
             resources=resources,
             examples=examples,
-            base_path=Path(path)
+            base_path=base_path,
         )
 
         if result.success:
@@ -251,7 +266,7 @@ async def init_skill_tool(
                 from utils.skill_types import SkillRegistry
                 from utils.skill_parser import find_all_skills
 
-                new_skills = find_all_skills(Path("skills"))
+                new_skills = find_all_skills(base_path)
 
                 log.info(f"Auto-Reload: {len(new_skills)} Skills gefunden (inkl. neuem Skill)")
 

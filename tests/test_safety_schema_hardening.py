@@ -314,6 +314,37 @@ class TestToolRegistryValidation:
         with pytest.raises(ValidationError):
             registry_v2.validate_tool_call("preflight_test", value=123)
 
+    def test_validate_tool_call_allows_tool_param_named_name(self):
+        from tools.tool_registry_v2 import (
+            registry_v2,
+            tool,
+            ToolParameter as P,
+            ToolCategory as C,
+        )
+
+        registry_v2.clear()
+
+        @tool(
+            name="name_param_tool",
+            description="Tool mit Parameter 'name'",
+            parameters=[
+                P(name="name", type="string", description="Skill-Name", required=True),
+                P(name="path", type="string", description="Pfad", required=False, default="skills"),
+            ],
+            capabilities=["test"],
+            category=C.SYSTEM,
+        )
+        def name_param_tool(name: str, path: str = "skills"):
+            return {"name": name, "path": path}
+
+        validated = registry_v2.validate_tool_call(
+            "name_param_tool",
+            name="stockholm-cafe-skill-test",
+            path="skills",
+        )
+        assert validated["name"] == "stockholm-cafe-skill-test"
+        assert validated["path"] == "skills"
+
 
 class TestAgentToolCallIntegration:
     """Tests für die Agent Tool-Call Integration mit Policy."""

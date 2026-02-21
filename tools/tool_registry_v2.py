@@ -504,7 +504,7 @@ class ToolRegistryV2:
 
         return result
 
-    def validate_tool_call(self, name: str, **kwargs) -> Dict[str, Any]:
+    def validate_tool_call(self, tool_name: str, /, **kwargs) -> Dict[str, Any]:
         """
         Validiert einen Tool-Aufruf ohne ihn auszufuehren.
 
@@ -521,8 +521,8 @@ class ToolRegistryV2:
             ValueError: Wenn das Tool nicht existiert
             ValidationError: Wenn die Validierung fehlschlaegt
         """
-        metadata = self.get_tool(name)
-        return validate_tool_parameters(name, metadata.parameters, kwargs)
+        metadata = self.get_tool(tool_name)
+        return validate_tool_parameters(tool_name, metadata.parameters, kwargs)
 
     def list_all_tools(self) -> Dict[str, Dict]:
         return {
