@@ -6,6 +6,7 @@ Bei jedem Heartbeat werden pending Tasks aus der SQLite-Queue autonom ausgeführ
 """
 
 import asyncio
+import io
 import logging
 import uuid
 from typing import Optional
@@ -152,8 +153,10 @@ class AutonomousRunner:
             )
 
             if result is not None:
-                queue.complete(task_id, str(result)[:2000])
+                result_str = str(result)
+                queue.complete(task_id, result_str[:2000])
                 log.info(f"✅ Task [{task_id[:8]}] abgeschlossen")
+                await self._send_result_to_telegram(description, result_str)
             else:
                 queue.fail(task_id, "Alle Failover-Versuche erschöpft")
 
@@ -199,6 +202,95 @@ class AutonomousRunner:
             log.info("🚨 Failure-Alert via Telegram gesendet")
         except Exception as e:
             log.warning(f"Alert-Versand fehlgeschlagen: {e}")
+
+
+    async def _send_result_to_telegram(self, description: str, result: str) -> None:
+        """
+        Sendet das Task-Ergebnis an alle erlaubten Telegram-User.
+
+        - Kurze Ergebnisse (≤ 3800 Zeichen) → Textnachricht
+        - Lange Ergebnisse (Recherchen, Reports) → .md-Dokument-Anhang
+        - Bilder (results/*.png + DALL-E URLs) → reply_photo
+        """
+        import os, re
+        token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+        allowed_ids = os.getenv("TELEGRAM_ALLOWED_IDS", "")
+        if not token or not allowed_ids:
+            return
+
+        try:
+            from telegram import Bot
+            bot = Bot(token=token)
+            chat_ids = [int(x.strip()) for x in allowed_ids.split(",") if x.strip()]
+
+            header = f"✅ *Autonomer Task abgeschlossen*\n_{description[:120]}_\n\n"
+            MAX_TEXT = 3800
+
+            for chat_id in chat_ids:
+                try:
+                    # Bild-Erkennung (selbe Logik wie TelegramGateway)
+                    image_sent = False
+
+                    path_match = re.search(r'results/[^\n"\']+\.(?:png|jpg|jpeg|webp)', result, re.IGNORECASE)
+                    if path_match:
+                        from pathlib import Path
+                        project_root = Path(__file__).parent.parent
+                        image_path = project_root / path_match.group(0).strip()
+                        if image_path.exists():
+                            prompt_match = re.search(r'(?:Verwendeter Prompt|Prompt)[:\s]+(.{10,300})', result)
+                            caption = prompt_match.group(1).strip()[:1024] if prompt_match else description[:200]
+                            with open(image_path, "rb") as f:
+                                await bot.send_photo(chat_id=chat_id, photo=f, caption=caption)
+                            image_sent = True
+
+                    if not image_sent:
+                        url_match = re.search(r'URL:\s*(https://[^\s\n]+)', result, re.IGNORECASE)
+                        if url_match:
+                            import httpx
+                            image_url = url_match.group(1).rstrip('.,)')
+                            try:
+                                async with httpx.AsyncClient(timeout=30) as client:
+                                    resp = await client.get(image_url)
+                                    resp.raise_for_status()
+                                await bot.send_photo(chat_id=chat_id, photo=resp.content)
+                                image_sent = True
+                            except Exception as img_e:
+                                log.warning(f"Bild-URL-Versand fehlgeschlagen: {img_e}")
+
+                    if image_sent:
+                        continue  # Bild gesendet, kein Text mehr nötig
+
+                    # Text-Ergebnis senden
+                    if len(result) <= MAX_TEXT:
+                        await bot.send_message(
+                            chat_id=chat_id,
+                            text=header + result,
+                            parse_mode="Markdown",
+                        )
+                    else:
+                        # Zu lang → als .md-Dokument senden
+                        await bot.send_message(
+                            chat_id=chat_id,
+                            text=header + result[:MAX_TEXT] + f"\n\n…_(vollständig als Dokument)_",
+                            parse_mode="Markdown",
+                        )
+                        doc_content = f"# {description}\n\n{result}"
+                        safe_name = re.sub(r'[^\w\s\-]', '', description[:40]).strip().replace(' ', '_')
+                        await bot.send_document(
+                            chat_id=chat_id,
+                            document=io.BytesIO(doc_content.encode("utf-8")),
+                            filename=f"timus_recherche_{safe_name}.md",
+                            caption="📄 Vollständiger Bericht",
+                        )
+
+                except Exception as e:
+                    log.warning(f"Ergebnis-Versand an {chat_id} fehlgeschlagen: {e}")
+
+            await bot.close()
+            log.info("📨 Task-Ergebnis via Telegram gesendet")
+
+        except Exception as e:
+            log.warning(f"_send_result_to_telegram fehlgeschlagen: {e}")
 
 
 # ------------------------------------------------------------------
