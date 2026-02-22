@@ -48,22 +48,100 @@ IMAGE_MODEL_NAME = os.getenv("IMAGE_GENERATION_MODEL", "gpt-image-1.5-2025-12-16
 
 
 AGENT_CAPABILITY_MAP = {
-    "executor": None,  # Alle Tools
-    "research": ["search", "document", "memory"],
-    "reasoning": ["search", "document", "memory", "code"],
-    "creative": ["creative", "document", "voice"],
-    "meta": None,  # Alle Tools
-    "visual": ["browser", "vision", "mouse", "ui"],
-    "development": ["code", "file", "search"],
-    # M1: neue Agenten
-    "data":     None,  # Alle Tools (braucht file, data, document)
-    "document": None,  # Alle Tools (braucht file, document)
-    # M2: neue Agenten
-    "communication": None,  # Alle Tools (braucht create_docx, create_txt)
-    # M3: neue Agenten
-    "system": ["system"],   # Nur system-Tools (read_log, search_log etc.)
-    # M4: neue Agenten
-    "shell":  ["shell"],    # Nur shell-Tools (run_command, run_script etc.)
+    # ── Bestehende Agenten (praezisiert) ─────────────────────────────
+    "executor": [
+        "search", "web",                         # Websuche
+        "file", "filesystem", "results",         # Dateien + Speichern
+        "memory",                                # Kontext
+        "voice", "speech",                       # Sprachausgabe
+        "document", "pdf", "txt", "summarize",  # Einfache Dokumente
+        "tasks", "planning", "automation",       # Aufgaben-Verwaltung
+        "analysis", "data",                      # Basisanalyse + CSV/XLSX lesen
+    ],
+    "research": [
+        "search", "web", "deep_research",        # Suche + Tiefenrecherche
+        "document", "report", "summarize",       # Ausgabe + Zusammenfassung
+        "memory",                                # Kontext
+        "analysis", "fact_check", "verification",# Verifikation
+        "file", "results",                       # Speichern
+    ],
+    "reasoning": [
+        "search", "web",                         # Recherche
+        "document", "report",                    # Ausgabe
+        "memory",                                # Kontext
+        "code", "development",                   # Code-Analyse
+        "analysis", "fact_check", "verification",# Pruefung
+        "file", "results",                       # Speichern
+    ],
+    "creative": [
+        "creative", "image",                     # Bild-Erstellung
+        "document", "txt", "pdf",               # Text-Ausgabe
+        "voice", "speech",                       # Sprachausgabe
+        "file", "results",                       # Speichern
+        "memory",                                # Kontext
+    ],
+    "meta": [
+        "meta", "orchestration",                 # Orchestrierung + delegation_tool
+        "planning", "automation", "tasks",       # Workflow-Planung
+        "memory", "reflection", "curation",     # Kontext + Lernen
+        "skills",                               # Skill-Verwaltung
+        "analysis", "verification", "fact_check",# Entscheidungen
+        "search", "web",                         # Recherche
+        "document", "report", "summarize",      # Ausgabe
+        "results", "file", "filesystem",        # Speichern + Dateien
+        "system",                               # Systemueberblick
+    ],
+    "visual": [
+        "browser", "dom", "navigation",         # Browser-Steuerung
+        "interaction", "mouse", "feedback",     # Maus + Tastatur
+        "vision", "ocr", "grounding",          # Bilderkennung
+        "ui", "ui_detection", "screen",        # UI-Elemente
+        "som", "detection", "segmentation",    # Objekt-Erkennung
+        "annotation", "template_matching",      # Matching
+        "opencv", "verification", "fallback",   # Fallback-Erkennung
+        "automation", "application",            # Apps + Automatisierung
+        "adaptive", "timing",                   # Timing-Anpassung
+        "memory", "results",                    # Kontext + Speichern
+    ],
+    "development": [
+        "code", "development", "inception",     # Code schreiben + Inception-API
+        "file", "filesystem",                   # Dateizugriff
+        "search", "web",                        # Recherche
+        "memory", "results",                    # Kontext + Speichern
+        "analysis", "debug",                    # Analyse + Debugging
+    ],
+    # ── M1: Daten + Dokumente ─────────────────────────────────────────
+    "data": [
+        "data",                                 # data_tool (read_data_file, analyze_data)
+        "file", "filesystem",                   # Dateizugriff
+        "document", "pdf", "xlsx", "csv",      # Ausgabe-Formate
+        "analysis", "fact_check",              # Analyse
+        "results", "report",                   # Speichern
+        "memory",                              # Kontext
+    ],
+    "document": [
+        "document", "pdf", "docx",             # Haupt-Ausgabe-Formate
+        "xlsx", "csv", "txt",                  # Tabellen + Plaintext
+        "file", "filesystem",                  # Dateizugriff
+        "results", "report",                   # Speichern
+        "memory",                              # Kontext
+        "analysis",                            # Inhaltspruefung
+    ],
+    # ── M2: Kommunikation ─────────────────────────────────────────────
+    "communication": [
+        "document", "txt", "docx",             # Ausgabe (Briefe, Anschreiben)
+        "file", "filesystem",                  # Dateizugriff
+        "results",                             # Speichern
+        "memory",                              # Kontext (Fatih-Profil)
+    ],
+    # ── M3: System-Monitor ────────────────────────────────────────────
+    "system": [
+        "system", "monitoring",               # system_tool + system_monitor_tool
+    ],
+    # ── M4: Shell-Operator ────────────────────────────────────────────
+    "shell": [
+        "shell",                              # shell_tool (alle 5 Funktionen)
+    ],
 }
 
 
