@@ -60,6 +60,8 @@ AGENT_CAPABILITY_MAP = {
     "document": None,  # Alle Tools (braucht file, document)
     # M2: neue Agenten
     "communication": None,  # Alle Tools (braucht create_docx, create_txt)
+    # M3: neue Agenten
+    "system": ["system"],   # Nur system-Tools (read_log, search_log etc.)
 }
 
 

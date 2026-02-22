@@ -78,6 +78,8 @@ from agent.agents.data     import DataAgent
 from agent.agents.document import DocumentAgent
 # M2: neue Agenten
 from agent.agents.communication import CommunicationAgent
+# M3: neue Agenten
+from agent.agents.system import SystemAgent
 
 # Developer Agent v2 (verbessert mit context_files Support)
 from agent.developer_agent_v2 import DeveloperAgentV2
@@ -232,6 +234,18 @@ Du bist der zentrale Dispatcher für Timus. Analysiere die INTENTION des Nutzers
       - "Erstelle ein PDF / Word-Dokument"
       - Wenn ein strukturiertes, professionelles Dokument gewünscht wird
 
+12. **system**: Der SYSTEM-MONITOR
+    - Zustaendigkeit: Log-Analyse, Prozesse, CPU/RAM, systemd-Services — NUR LESEN
+    - Wähle 'system' bei:
+      - "Was ist im Timus-Log?"
+      - "Zeig mir alle Errors der letzten 24 Stunden"
+      - "Wie viel CPU/RAM verbraucht der Server?"
+      - "Ist der timus.service aktiv?"
+      - "Welche Python-Prozesse laufen?"
+      - "Was ist gestern Nacht abgestuerzt?"
+      - "Diagnose", "Systemstatus", "Log pruefen", "Service-Status"
+      - NICHT bei: "starte den Service" (→ shell), "repariere den Code" (→ development)
+
 ### WICHTIGE REGELN
 
 1. Bei VERGLEICHSFRAGEN (A vs B, was ist besser, Unterschied zwischen) → 'reasoning'
@@ -240,7 +254,7 @@ Du bist der zentrale Dispatcher für Timus. Analysiere die INTENTION des Nutzers
 4. Bei RECHERCHE nach externen Fakten/News → 'research'
 5. Bei EINFACHEN Fragen ohne Analyse → 'executor'
 
-Antworte NUR mit einem Wort: 'reasoning', 'research', 'executor', 'meta', 'visual', 'development' oder 'creative'.
+Antworte NUR mit einem Wort: 'reasoning', 'research', 'executor', 'meta', 'visual', 'development', 'creative', 'data', 'document', 'communication' oder 'system'.
 """
 
 # --- Mapping (AKTUALISIERT v3.2 - Developer Agent v2) ---
@@ -262,6 +276,10 @@ AGENT_CLASS_MAP = {
     "communication": CommunicationAgent,
     "email":         CommunicationAgent,  # Alias
     "komm":          CommunicationAgent,  # Alias
+    # M3: neue Agenten
+    "system":        SystemAgent,
+    "sysmon":        SystemAgent,         # Alias
+    "log":           SystemAgent,         # Alias
     # Aliase
     "analyst": ReasoningAgent,  # NEU
     "debugger": ReasoningAgent,  # NEU

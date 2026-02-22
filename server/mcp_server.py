@@ -98,6 +98,7 @@ _KNOWN_AGENTS = [
     "executor", "research", "reasoning", "creative", "development", "meta", "visual",
     "data", "document",  # M1
     "communication",     # M2
+    "system",            # M3
 ]
 _agent_status: dict = {
     a: {"status": "idle", "last_run": None, "last_query": ""}
@@ -214,6 +215,8 @@ TOOL_MODULES = [
     "tools.json_nemotron_tool.json_nemotron_tool",
     # NEU: Florence-2 Vision Tool — UI-Detection + OCR (ersetzt Qwen-VL als Primary)
     "tools.florence2_tool.tool",
+    # M3: System-Monitor Tools
+    "tools.system_tool.tool",
 ]
 
 # --- Hilfsfunktionen für den Lifespan-Manager ---
