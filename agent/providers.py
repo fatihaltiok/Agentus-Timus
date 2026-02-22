@@ -140,7 +140,7 @@ class AgentModelConfig:
         # M2: neue Agenten
         "communication": ("COMMUNICATION_MODEL", "COMMUNICATION_MODEL_PROVIDER", "claude-sonnet-4-5-20250929", ModelProvider.ANTHROPIC),
         # M3: neue Agenten
-        "system": ("SYSTEM_MODEL", "SYSTEM_MODEL_PROVIDER", "gpt-4o", ModelProvider.OPENAI),
+        "system": ("SYSTEM_MODEL", "SYSTEM_MODEL_PROVIDER", "qwen/qwen3.5-plus-02-15", ModelProvider.OPENROUTER),
     }
 
     @classmethod
