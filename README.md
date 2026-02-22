@@ -216,26 +216,41 @@ CI-Gates (GitHub Actions):
 ### Autonomie-Stack (Übersicht)
 
 ```
-                    ┌─────────────────────────────────────────┐
-                    │           TIMUS (Autonomous)            │
-                    │                                         │
-  Telegram ──────→  │  TelegramGateway                        │
-  Webhook  ──────→  │  WebhookServer  → EventRouter           │
-  Heartbeat ─────→  │  ProactiveScheduler                     │
-  CLI       ──────→ │  _cli_loop()  (nur mit TTY)             │
-                    │       ↓                                 │
-                    │  AutonomousRunner                       │
-                    │       ↓                                 │
-                    │  SQLite TaskQueue  ←── /task, /remind   │
-                    │       ↓                                 │
-                    │  failover_run_agent()                   │
-                    │       ↓                                 │
-                    │  [executor|research|reasoning|...]      │
-                    │       ↓                                 │
-                    │  MCP Server (80+ Tools, 12 Agenten)     │
-                    │       ↓                                 │
-                    │  SystemMonitor → Telegram Alert         │
-                    └─────────────────────────────────────────┘
+                    ┌──────────────────────────────────────────────────────┐
+                    │                TIMUS (Autonomous)                    │
+                    │                                                      │
+  Telegram ──────→  │  TelegramGateway                                     │
+  Webhook  ──────→  │  WebhookServer  → EventRouter                        │
+  Heartbeat ─────→  │  ProactiveScheduler                                  │
+  CLI       ──────→ │  _cli_loop()  (nur mit TTY)                          │
+  Canvas    ──────→ │  /chat  (SSE-Push, 12 Agent-LEDs)                    │
+                    │       ↓                                              │
+                    │  AutonomousRunner                                    │
+                    │       ↓                                              │
+                    │  SQLite TaskQueue  ←── /task, /remind                │
+                    │       ↓                                              │
+                    │  failover_run_agent()                                │
+                    │       ↓                                              │
+                    │  ┌──────────────────────────────────────────────┐   │
+                    │  │ AGENT_CLASS_MAP (12 Agenten)                  │   │
+                    │  │  executor  │ research  │ reasoning │ creative │   │
+                    │  │  developer │ meta      │ visual               │   │
+                    │  │  data  │ document │ communication  (M1/M2)   │   │
+                    │  │  system (M3, read-only)                       │   │
+                    │  │  shell  (M4, 5-Schicht-Policy)                │   │
+                    │  └──────────────────────────────────────────────┘   │
+                    │       ↓                                              │
+                    │  MCP Server :5000 (80+ Tools, AGENT_CAPABILITY_MAP) │
+                    │       ↓                          ↓                  │
+                    │  Memory v2.1              SystemMonitor              │
+                    │  ├─ SessionMemory          → Telegram Alert          │
+                    │  ├─ SQLite + ChromaDB                               │
+                    │  │   (agent_id-Isolation)                           │
+                    │  ├─ FTS5 Hybrid-Suche                               │
+                    │  ├─ MarkdownStore                                   │
+                    │  └─ Nemotron-Kurator                                │
+                    │      (nvidia/nemotron-3-nano-30b-a3b)               │
+                    └──────────────────────────────────────────────────────┘
 ```
 
 ### Dispatcher-Pipeline (Detail)
@@ -284,31 +299,50 @@ MCP-Server :5000 (FastAPI + JSON-RPC)
       |
       +--> Externe Systeme: Desktop (PyAutoGUI), Browser (Playwright), APIs
       |
-      +--> memory/memory_system.py (kanonischer Memory-Kern)
-            ├─ interaction_events (deterministisches Logging)
-            ├─ unified_recall (episodisch + semantisch)
+      +--> SystemAgent-Pipeline (M3, read-only)
+      |     ├─ read_log / search_log  (timus / debug / shell / system)
+      |     ├─ get_processes          (psutil Top-Prozesse)
+      |     ├─ get_system_stats       (CPU, RAM, Disk, Load-Avg)
+      |     └─ get_service_status     (systemctl + journalctl)
+      |
+      +--> ShellAgent-Pipeline (M4, 5-Schicht-Policy)
+      |     ├─ Schicht 1: Blacklist   (rm -rf, dd if=, Fork-Bomb, curl|bash, ...)
+      |     ├─ Schicht 2: Whitelist   (SHELL_WHITELIST_MODE=1)
+      |     ├─ Schicht 3: Timeout     (30s Default, SHELL_TIMEOUT)
+      |     ├─ Schicht 4: Audit-Log   (logs/shell_audit.log)
+      |     └─ Schicht 5: Dry-Run     (add_cron default dry_run=True)
+      |
+      +--> memory/memory_system.py (Memory v2.1)
+            ├─ SessionMemory         (RAM, letzte 20 Nachrichten)
+            ├─ interaction_events    (deterministisches Logging)
+            ├─ unified_recall        (episodisch + semantisch)
             ├─ working_memory_context (Budget + Decay + Relevanz)
-            └─ runtime memory snapshots
+            ├─ ChromaDB              (Embeddings + agent_id-Isolation)
+            │   ├─ remember(text, agent_id=...)   → speichert mit Agent-Label
+            │   └─ recall(query, agent_filter=...) → filtert nach Agent
+            └─ Nemotron-Kurator (curator_tool)
+                ├─ Modell: nvidia/nemotron-3-nano-30b-a3b (OpenRouter)
+                └─ 4 Kriterien: Faktenwissen | Präferenz | Selbsterkenntnis | Kontext
 ```
 
 ```mermaid
 flowchart TD
-    U["User Input"] --> D["main_dispatcher.py"]
+    U["User Input\nCLI / Telegram / Canvas / Terminal"] --> D["main_dispatcher.py"]
     D --> DS["query sanitize"]
-    D --> DI["intent analysis"]
+    D --> DI["intent analysis LLM"]
     D --> DP["policy gate"]
     D --> DL["lane and session"]
-    DL --> A["agent selection"]
+    DL --> A["AGENT_CLASS_MAP\n12 Agenten"]
 
-    A --> B["agent/base_agent.py"]
+    A --> B["agent/base_agent.py\nDynamicToolMixin"]
     B --> BW["working memory inject"]
-    B --> BR["recall fast path"]
-    B --> BT["loop guard and telemetry"]
-    B --> BRG["remote registry sync"]
+    B --> BR["recall fast path\nagent_filter aware"]
+    B --> BT["loop guard and telemetry\nmax_iterations"]
+    B --> BCM["AGENT_CAPABILITY_MAP\nfiltert Tools pro Agent"]
 
-    B --> M["MCP server 5000 json-rpc"]
-    M --> TR["tool_registry_v2 and validation"]
-    M --> T["tool modules"]
+    B --> M["MCP server :5000 FastAPI JSON-RPC\n80+ Tools"]
+    M --> TR["tool_registry_v2\nSchema + Validierung"]
+    M --> T["tool modules\n60+ geladen"]
 
     T --> FH["VisualNemotron v4 Vision-Pipeline"]
     FH --> FC["Florence-2 PRIMARY: UI-Elemente + BBoxes"]
@@ -327,11 +361,28 @@ flowchart TD
     AE --> EF["element.fill Standard HTML"]
     HI --> VF["VISION_FALLBACK Legacy fill"]
 
-    T --> E["desktop browser apis"]
-    T --> MM["memory/memory_system.py"]
-    MM --> IE["interaction events"]
-    MM --> UR["unified recall"]
-    MM --> WM["working memory context"]
+    T --> SYS["SystemAgent M3 read-only"]
+    SYS --> SL["read_log search_log"]
+    SYS --> SP["get_processes get_system_stats"]
+    SYS --> SS["get_service_status systemctl"]
+
+    T --> SH["ShellAgent M4 5-Schicht-Policy"]
+    SH --> SHB["Blacklist rm-rf dd fork-bomb"]
+    SH --> SHW["Whitelist SHELL_WHITELIST_MODE"]
+    SH --> SHA["Audit-Log logs/shell_audit.log"]
+    SH --> SHD["Dry-Run add_cron default"]
+
+    T --> E["Externe Systeme\nDesktop PyAutoGUI Browser Playwright APIs"]
+
+    T --> MM["memory/memory_system.py\nMemory v2.1"]
+    MM --> IE["interaction events\ndeterministisches Logging"]
+    MM --> UR["unified recall\nepisodisch + semantisch"]
+    MM --> WM["working memory context\nBudget + Decay + Relevanz"]
+    MM --> CHR["ChromaDB\nEmbeddings + agent_id-Isolation"]
+    CHR --> REM["remember text agent_id\nspeichert mit Agent-Label"]
+    CHR --> REC["recall query agent_filter\nfiltert nach Agent"]
+    MM --> CUR["Nemotron-Kurator curator_tool\nnvidia/nemotron-3-nano-30b-a3b"]
+    CUR --> CRD["4 Kriterien\nFaktenwissen Präferenz Selbsterkenntnis Kontext"]
 ```
 
 ---
