@@ -76,6 +76,8 @@ from agent.timus_consolidated import (
 # M1: neue Agenten
 from agent.agents.data     import DataAgent
 from agent.agents.document import DocumentAgent
+# M2: neue Agenten
+from agent.agents.communication import CommunicationAgent
 
 # Developer Agent v2 (verbessert mit context_files Support)
 from agent.developer_agent_v2 import DeveloperAgentV2
@@ -209,6 +211,17 @@ Du bist der zentrale Dispatcher für Timus. Analysiere die INTENTION des Nutzers
      - "Werte diese Excel-Tabelle aus"
      - Wenn eine Datei (CSV, XLSX, JSON) ausgewertet werden soll
 
+11. **communication**: Der KOMMUNIKATIONS-SPEZIALIST
+    - Zustaendigkeit: E-Mails, Briefe, LinkedIn-Posts, Anschreiben, Follow-ups
+    - Wähle 'communication' bei:
+      - "Schreib eine E-Mail an..."
+      - "Formuliere eine Anfrage / ein Anschreiben"
+      - "Erstelle einen LinkedIn-Post"
+      - "Schreib ein Follow-up"
+      - "Wie antworte ich auf..."
+      - "Verfasse einen Brief"
+      - Wenn ein kommunikativer Text in bestimmtem Ton gewuenscht wird
+
 10. **document**: Der DOKUMENTEN-SPEZIALIST
     - Zuständigkeit: Professionelle Dokumente erstellen (Angebote, Berichte, Briefe, Lebensläufe)
     - Wähle 'document' bei:
@@ -245,6 +258,10 @@ AGENT_CLASS_MAP = {
     # M1: neue Agenten
     "data":     DataAgent,
     "document": DocumentAgent,
+    # M2: neue Agenten
+    "communication": CommunicationAgent,
+    "email":         CommunicationAgent,  # Alias
+    "komm":          CommunicationAgent,  # Alias
     # Aliase
     "analyst": ReasoningAgent,  # NEU
     "debugger": ReasoningAgent,  # NEU

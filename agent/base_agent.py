@@ -58,6 +58,8 @@ AGENT_CAPABILITY_MAP = {
     # M1: neue Agenten
     "data":     None,  # Alle Tools (braucht file, data, document)
     "document": None,  # Alle Tools (braucht file, document)
+    # M2: neue Agenten
+    "communication": None,  # Alle Tools (braucht create_docx, create_txt)
 }
 
 

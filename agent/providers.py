@@ -137,6 +137,8 @@ class AgentModelConfig:
         # M1: neue Agenten
         "data":     ("DATA_MODEL",     "DATA_MODEL_PROVIDER",     "gpt-4o",                         ModelProvider.OPENAI),
         "document": ("DOCUMENT_MODEL", "DOCUMENT_MODEL_PROVIDER", "claude-sonnet-4-5-20250929",      ModelProvider.ANTHROPIC),
+        # M2: neue Agenten
+        "communication": ("COMMUNICATION_MODEL", "COMMUNICATION_MODEL_PROVIDER", "claude-sonnet-4-5-20250929", ModelProvider.ANTHROPIC),
     }
 
     @classmethod

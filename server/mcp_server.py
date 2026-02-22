@@ -97,6 +97,7 @@ log = logging.getLogger("mcp_server")
 _KNOWN_AGENTS = [
     "executor", "research", "reasoning", "creative", "development", "meta", "visual",
     "data", "document",  # M1
+    "communication",     # M2
 ]
 _agent_status: dict = {
     a: {"status": "idle", "last_run": None, "last_query": ""}
