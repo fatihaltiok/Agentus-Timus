@@ -167,6 +167,7 @@ TOOL_MODULES = [
     "tools.maintenance_tool.tool",
     "tools.developer_tool.tool",
     "tools.file_system_tool.tool",
+    "tools.document_creator.tool",
     "tools.meta_tool.tool",
     "tools.reflection_tool.tool",
     "tools.init_skill_tool.tool",
