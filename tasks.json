@@ -109,6 +109,16 @@
       "created_at": "2026-02-21T20:22:05.395046",
       "completed_at": null,
       "result_summary": null
+    },
+    {
+      "id": "f9de5ac5-7df4-4edb-afc6-f0fb7d60bf71",
+      "description": "Starte Kennenlernphase mit Nutzer: 1) Frage Einwilligung zur Speicherung von Nutzerinformationen; 2) Sammle Basisdaten: bevorzugte Anrede/Name, Muttersprache, Land/Stadt (optional), Zeitzone; 3) Sammle Präferenzen: Themeninteressen, bevorzugter Kommunikationsstil (kurz/detailliert/sarkastisch?), bevorzugte Sprache, gewünschter Antworttempo; 4) Ziele & Erwartungen (kurz-, mittel-, langfristig); 5) Verfügbarkeiten & bevorzugte Kontaktzeiten; 6) Datenschutz-/Speicherrestriktionen & sensible Themen; 7) Speichere relevante Antworten ins Session‑Memory; 8) Erstelle kurze Zusammenfassung und 3 prioritäre Folgefragen zur Vertiefung.",
+      "priority": 10,
+      "target_agent": "research",
+      "status": "pending",
+      "created_at": "2026-02-22T00:12:34.714299",
+      "completed_at": null,
+      "result_summary": null
     }
   ]
 }

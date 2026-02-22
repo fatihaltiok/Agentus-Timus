@@ -19,6 +19,56 @@ Branding:
 
 ---
 
+## Aktueller Stand (2026-02-22)
+
+**Canvas v2 + Terminal-Client + Telegram-Erweiterungen:**
+
+### Canvas v2 (`server/canvas_ui.py` + neue MCP-Endpoints)
+
+Die Canvas-Oberfläche wurde vollständig überarbeitet:
+
+| Feature | Beschreibung |
+|---|---|
+| **Agent-Health-LEDs** | 7 farbige LEDs (idle=grau, thinking=blink-gelb, completed=grün, error=rot) |
+| **Thinking-LED** | Blinkt in der Topbar solange ein KI-Modell arbeitet |
+| **Interaktiver Chat** | Chat-Panel unten — Nachrichten an Timus, Antwort via SSE in Echtzeit |
+| **Datei-Upload** | 📎-Schaltfläche → `data/uploads/` → Pfad automatisch in Chat-Input |
+| **SSE-Stream** | `GET /events/stream` pusht Echtzeit-Events ohne Polling |
+
+Neue API-Endpoints:
+
+| Endpoint | Beschreibung |
+|---|---|
+| `GET /agent_status` | JSON mit allen 7 Agenten-States + thinking-Flag |
+| `GET /events/stream` | SSE: agent_status, thinking, chat_reply, chat_error, upload |
+| `POST /chat` | Textnachricht → `get_agent_decision()` + `run_agent()` → SSE-Push |
+| `GET /chat/history` | In-Memory Chat-Verlauf (letzte 200 Nachrichten) |
+| `POST /upload` | multipart/form-data → `data/uploads/` → SSE-Broadcast |
+
+Canvas aufrufen: `http://localhost:5000/canvas/ui`
+
+### Terminal-Client (`timus_terminal.py`)
+
+Separater Terminal-Client der **parallel zum systemd-Service** läuft:
+- Verbindet sich mit dem laufenden MCP-Server (Port 5000)
+- Startet keine neuen Services (kein Telegram-Bot, kein Runner)
+- Eigene Session-ID (`term_XXXXXXXX`)
+- `/tasks` zeigt die SQLite-Queue, `/new` startet neue Session
+
+```bash
+python timus_terminal.py   # oder ./timus_terminal.py
+```
+
+### Telegram-Erweiterungen
+
+- **Autonome Task-Ergebnisse** werden nach Abschluss automatisch per Telegram gesendet:
+  - Kurze Ergebnisse (≤ 3800 Zeichen) → Textnachricht
+  - Lange Ergebnisse → Vorschau + `.md`-Dokument-Anhang
+  - Bilder (DALL-E / lokale `results/`-Dateien) → `send_photo()`
+- **Sprachnachrichten** (`timus_hybrid_v2.py`): Whisper STT (OGG → Text) + Inworld.AI TTS (Text → OGG-Reply)
+
+---
+
 ## Aktueller Stand (2026-02-21)
 
 **Autonomie-Ausbau M0–M5 + systemd (2026-02-21):**
@@ -675,6 +725,16 @@ journalctl -u timus-dispatcher -f
 
 Im systemd-Betrieb (kein TTY) deaktiviert sich die CLI automatisch — Timus wartet auf SIGTERM und ist nur noch über Telegram steuerbar.
 
+**Terminal-Client** (parallel zum laufenden Service):
+
+```bash
+# Zweites Terminal öffnen — verbindet sich mit dem laufenden MCP-Server
+python timus_terminal.py
+
+# Canvas-Web-UI öffnen (bei laufendem MCP-Server)
+xdg-open http://localhost:5000/canvas/ui
+```
+
 Hinweis zum Startskript:
 - `start_timus_three_terminals.sh` aktiviert standardmäßig automatisch die Conda-Umgebung `timus`.
 - Falls der Env-Name anders ist: `TIMUS_CONDA_ENV=<name> ./start_timus_three_terminals.sh`
@@ -754,7 +814,8 @@ timus/
 │   ├── system_monitor.py       # CPU/RAM/Disk Monitor mit Telegram-Alerts
 │   └── rss_poller.py           # RSS-Feed Polling
 ├── server/
-│   └── mcp_server.py        # MCP Server (FastAPI, Port 5000)
+│   ├── mcp_server.py        # MCP Server (FastAPI, Port 5000, 53 Tools)
+│   └── canvas_ui.py         # Canvas Web-UI v2 (Chat, LEDs, Upload, SSE)
 ├── skills/                  # Erlernbare Skills
 │   └── templates/           # UI-Pattern Templates (8 Patterns)
 ├── memory/
@@ -773,9 +834,11 @@ timus/
 │   ├── policy_gate.py          # Policy-Gate (destruktive Anfragen)
 │   └── ...
 ├── data/
-│   └── task_queue.db           # SQLite Task-Persistenz
+│   ├── task_queue.db           # SQLite Task-Persistenz
+│   └── uploads/                # Datei-Uploads aus Canvas-Chat
 ├── config/                     # Personality-System
 ├── main_dispatcher.py          # Zentral-Dispatcher (v3.4 Autonomous + Telegram)
+├── timus_terminal.py           # Terminal-Client (parallel zu systemd)
 ├── timus-mcp.service           # systemd Unit für MCP-Server
 ├── timus-dispatcher.service    # systemd Unit für Dispatcher
 └── docs/                       # Dokumentation + Runbooks
