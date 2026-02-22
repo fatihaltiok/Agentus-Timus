@@ -852,6 +852,19 @@ timus/
 
 ---
 
+## Über den Entwickler
+
+**Fatih Altiok** · Offenbach · Raum Frankfurt
+
+Timus ist ein Einzelprojekt — über ein Jahr Entwicklung, ohne formale IT-Ausbildung, mit KI-Modellen als Werkzeug. Die Architektur, die Entscheidungen und die Produktionsreife sind meine Arbeit.
+
+Offen für Freelance-Projekte rund um KI-Automatisierung und LLM-Integration.
+
+📧 fatihaltiok@outlook.com
+🔗 [github.com/fatihaltiok](https://github.com/fatihaltiok)
+
+---
+
 ## Lizenz
 
 Timus - Autonomous Multi-Agent Desktop AI
