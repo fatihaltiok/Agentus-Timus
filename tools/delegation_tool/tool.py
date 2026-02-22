@@ -17,11 +17,11 @@ log = logging.getLogger("DelegationTool")
     description=(
         "Delegiert eine Aufgabe an einen spezialisierten Agenten. "
         "Nutze dies wenn deine eigenen Faehigkeiten nicht ausreichen. "
-        "Verfuegbare Agenten: executor, research, reasoning, creative, developer, visual, meta."
+        "Verfuegbare Agenten: executor, research, reasoning, creative, developer, visual, meta, image."
     ),
     parameters=[
         P("agent_type", "string",
-          "Ziel-Agent: executor, research, reasoning, creative, developer, visual, meta"),
+          "Ziel-Agent: executor, research, reasoning, creative, developer, visual, meta, image"),
         P("task", "string", "Die zu delegierende Aufgabe"),
         P("from_agent", "string", "Optional: Name des aufrufenden Agenten", required=False),
         P("session_id", "string", "Optional: Session-ID fuer Gedaechtnis-Kontinuitaet", required=False),

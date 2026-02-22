@@ -322,6 +322,7 @@ def register_all_agents():
         ExecutorAgent, DeepResearchAgent, ReasoningAgent,
         CreativeAgent, DeveloperAgent, MetaAgent, VisualAgent,
     )
+    from agent.agents.image import ImageAgent
 
     registry = agent_registry
 
@@ -360,6 +361,11 @@ def register_all_agents():
         "meta", "meta",
         ["orchestration", "planning", "coordination"],
         MetaAgent,
+    )
+    registry.register_spec(
+        "image", "image",
+        ["image_analysis", "vision", "photo", "bild"],
+        ImageAgent,
     )
 
     log.info(f"Alle Agenten registriert: {registry.list_agents()}")
