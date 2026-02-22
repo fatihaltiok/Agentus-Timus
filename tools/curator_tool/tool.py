@@ -20,7 +20,13 @@ log = logging.getLogger(__name__)
 
 # --- Initialisierung ---
 load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# Nemotron via OpenRouter fuer strukturierte Entscheidungen
+client = OpenAI(
+    api_key=os.getenv("OPENROUTER_API_KEY"),
+    base_url="https://openrouter.ai/api/v1",
+)
+_CURATOR_MODEL = os.getenv("CURATOR_MODEL", "nvidia/nemotron-3-nano-30b-a3b")
 
 # --- System-Prompt für den Kurator-Geist ---
 CURATOR_PROMPT = """
@@ -70,36 +76,42 @@ Output:
 
 @tool(
     name="curate_and_remember",
-    description="Laesst eine KI entscheiden, ob eine Information wichtig ist und speichert sie dann im Langzeitgedaechtnis.",
+    description="Laesst Nemotron entscheiden, ob eine Information wichtig ist und speichert sie dann im Langzeitgedaechtnis. Speichert agent_id fuer spaetere Filterung.",
     parameters=[
-        P("text", "string", "Die potentielle Erinnerung / der zu bewertende Text", required=True),
-        P("source", "string", "Die Quelle der Information", required=True),
+        P("text",     "string", "Die potentielle Erinnerung / der zu bewertende Text", required=True),
+        P("source",   "string", "Die Quelle der Information", required=True),
+        P("agent_id", "string", "ID des speichernden Agenten (z.B. 'executor', 'data', 'shell')", required=False),
     ],
     capabilities=["memory", "curation"],
     category=C.SYSTEM
 )
-async def curate_and_remember(text: str, source: str) -> dict:
+async def curate_and_remember(text: str, source: str, agent_id: str = "") -> dict:
     """
     Lässt eine KI entscheiden, ob eine Information wichtig ist und speichert sie dann im Langzeitgedächtnis.
     Args:
         text (str): Die potentielle Erinnerung.
         source (str): Die Quelle der Information.
     """
-    log.info(f"Kuratiere potenzielle Erinnerung: '{text[:60]}...'")
+    agent_label = f"[{agent_id}] " if agent_id else ""
+    log.info(f"Kuratiere {agent_label}Erinnerung: '{text[:60]}...'")
     try:
-        # Schritt 1: Lasse den Kurator-Geist entscheiden
+        # Schritt 1: Nemotron entscheidet ob speicherungswuerdig
+        agent_ctx = f"\nAgent-Kontext: {agent_id}" if agent_id else ""
         response = await asyncio.to_thread(
             client.chat.completions.create,
-            model="gpt-4o",
+            model=_CURATOR_MODEL,
             messages=[
                 {"role": "system", "content": CURATOR_PROMPT},
-                {"role": "user", "content": f"Input: \"{text}\"\nSource: \"{source}\""}
+                {"role": "user", "content": f"Input: \"{text}\"\nSource: \"{source}\"{agent_ctx}"}
             ],
             temperature=0.0,
-            response_format={"type": "json_object"}
         )
+        # JSON aus Antwort extrahieren (Nemotron gibt manchmal Markdown-Wrapper)
+        raw = response.choices[0].message.content or ""
+        import re as _re
+        json_match = _re.search(r'\{.*\}', raw, _re.DOTALL)
+        decision_str = json_match.group(0) if json_match else raw
 
-        decision_str = response.choices[0].message.content
         decision = json.loads(decision_str)
 
         is_memorable = decision.get("is_memorable", False)
@@ -110,11 +122,11 @@ async def curate_and_remember(text: str, source: str) -> dict:
 
         # Schritt 2: Wenn die Information wichtig ist, speichere sie mit dem memory_tool
         if is_memorable and memory_text:
-            # call_tool_internal ist async, also rufen wir es direkt mit await auf
-            remember_result = await call_tool_internal(
-                "remember",
-                {"text": memory_text, "source": source}
-            )
+            # agent_id mitgeben fuer spaetere Filterung
+            remember_params = {"text": memory_text, "source": source}
+            if agent_id:
+                remember_params["agent_id"] = agent_id
+            remember_result = await call_tool_internal("remember", remember_params)
 
             # Prüfen, ob der interne Aufruf selbst ein Fehler-Dict zurückgab
             if isinstance(remember_result, dict) and remember_result.get("error"):

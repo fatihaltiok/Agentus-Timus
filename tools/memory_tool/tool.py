@@ -484,8 +484,8 @@ class MemoryManager:
 
     # === LANGZEIT-MEMORY (ChromaDB) ===
 
-    async def remember_long_term(self, text: str, source: str = "user_interaction") -> Dict:
-        """Speichert im Langzeit-Gedächtnis (ChromaDB)."""
+    async def remember_long_term(self, text: str, source: str = "user_interaction", agent_id: str = "") -> Dict:
+        """Speichert im Langzeit-Gedächtnis (ChromaDB) mit optionaler Agent-ID."""
         if not self.chromadb_available:
             return {"status": "error", "message": "ChromaDB nicht verfügbar"}
 
@@ -500,6 +500,7 @@ class MemoryManager:
                 documents=[text.strip()],
                 metadatas=[{
                     "source": source,
+                    "agent_id": agent_id or "unknown",
                     "timestamp_created": datetime.now().isoformat(),
                     "access_count": 0
                 }],
@@ -513,17 +514,24 @@ class MemoryManager:
             log.error(f"Fehler bei Langzeit-Speicherung: {e}")
             return {"status": "error", "message": str(e)}
 
-    async def recall_long_term(self, query: str, n_results: int = 3) -> Dict:
-        """Sucht im Langzeit-Gedächtnis (semantische Suche)."""
+    async def recall_long_term(self, query: str, n_results: int = 3, agent_filter: str = "") -> Dict:
+        """Sucht im Langzeit-Gedächtnis. Optional nur Erinnerungen eines bestimmten Agenten."""
         if not self.chromadb_available:
             return {"status": "error", "memories": [], "message": "ChromaDB nicht verfügbar"}
 
         try:
-            results = await asyncio.to_thread(
-                memory_collection.query,
+            query_kwargs = dict(
                 query_texts=[query],
                 n_results=n_results,
-                include=["metadatas", "documents", "distances"]
+                include=["metadatas", "documents", "distances"],
+            )
+            # Agent-Filter: nur Erinnerungen dieses Agenten zurueckgeben
+            if agent_filter:
+                query_kwargs["where"] = {"agent_id": {"$eq": agent_filter}}
+
+            results = await asyncio.to_thread(
+                memory_collection.query,
+                **query_kwargs
             )
 
             memories = []
@@ -696,15 +704,16 @@ memory_manager = MemoryManager()
 
 @tool(
     name="remember",
-    description="Speichert eine Information im Langzeit-Gedächtnis.",
+    description="Speichert eine Information im Langzeit-Gedächtnis mit Agent-Herkunft.",
     parameters=[
-        P("text", "string", "Der zu speichernde Text"),
-        P("source", "string", "Quelle der Information (z.B. user_interaction, web_search)", required=False, default="user_interaction"),
+        P("text",     "string", "Der zu speichernde Text"),
+        P("source",   "string", "Quelle der Information (z.B. user_interaction, web_search)", required=False, default="user_interaction"),
+        P("agent_id", "string", "Agenten-ID fuer spaetere Filterung (z.B. 'executor', 'data', 'shell')", required=False, default=""),
     ],
     capabilities=["memory"],
     category=C.MEMORY
 )
-async def remember(text: str, source: str = "user_interaction") -> dict:
+async def remember(text: str, source: str = "user_interaction", agent_id: str = "") -> dict:
     """
     Speichert eine Information im Langzeit-Gedächtnis.
 
@@ -718,7 +727,7 @@ async def remember(text: str, source: str = "user_interaction") -> dict:
     if not text or len(text.strip()) < 10:
         raise Exception("Text muss mindestens 10 Zeichen haben.")
 
-    result = await memory_manager.remember_long_term(text, source)
+    result = await memory_manager.remember_long_term(text, source, agent_id)
 
     if result["status"] == "success":
         return result
@@ -730,20 +739,15 @@ async def remember(text: str, source: str = "user_interaction") -> dict:
     name="recall",
     description="Sucht relevante Informationen im Gedächtnis (episodisch + semantisch).",
     parameters=[
-        P("query", "string", "Suchanfrage"),
-        P("n_results", "integer", "Maximale Anzahl Ergebnisse (1-10)", required=False, default=3),
-        P(
-            "session_id",
-            "string",
-            "Optionale Session-ID für episodische Priorisierung",
-            required=False,
-            default="",
-        ),
+        P("query",        "string",  "Suchanfrage"),
+        P("n_results",    "integer", "Maximale Anzahl Ergebnisse (1-10)", required=False, default=3),
+        P("session_id",   "string",  "Optionale Session-ID fuer episodische Priorisierung", required=False, default=""),
+        P("agent_filter", "string",  "Nur Erinnerungen dieses Agenten (z.B. 'shell', 'data'). Leer = alle.", required=False, default=""),
     ],
     capabilities=["memory"],
     category=C.MEMORY
 )
-async def recall(query: str, n_results: int = 3, session_id: str = "") -> dict:
+async def recall(query: str, n_results: int = 3, session_id: str = "", agent_filter: str = "") -> dict:
     """
     Sucht relevante Informationen im Gedächtnis (episodisch + semantisch).
 
@@ -772,8 +776,8 @@ async def recall(query: str, n_results: int = 3, session_id: str = "") -> dict:
     except Exception as e:
         log.debug(f"Unified recall fallback auf legacy Chroma-Pfad: {e}")
 
-    # Legacy-Fallback (nur semantisch) - sollte mittelfristig entfallen.
-    result = await memory_manager.recall_long_term(query, n_results)
+    # Legacy-Fallback (nur semantisch) - agent_filter wird weitergegeben
+    result = await memory_manager.recall_long_term(query, n_results, agent_filter)
     return result
 
 
