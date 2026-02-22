@@ -9,6 +9,8 @@ import logging
 import inspect
 import json as _json
 import threading
+import re
+import uuid
 import webbrowser
 from collections import deque
 from datetime import datetime
@@ -16,7 +18,7 @@ from datetime import datetime
 # --- Drittanbieter-Bibliotheken ---
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from jsonrpcserver import async_dispatch
 from dotenv import load_dotenv
@@ -90,6 +92,51 @@ from orchestration.canvas_store import canvas_store
 from server.canvas_ui import build_canvas_ui_html
 
 log = logging.getLogger("mcp_server")
+
+# ── Canvas Chat & Agent-Status (In-Memory) ────────────────────────────────────
+_KNOWN_AGENTS = [
+    "executor", "research", "reasoning", "creative", "development", "meta", "visual"
+]
+_agent_status: dict = {
+    a: {"status": "idle", "last_run": None, "last_query": ""}
+    for a in _KNOWN_AGENTS
+}
+_thinking_active: bool = False
+_sse_queues: list = []
+_sse_lock = threading.Lock()
+_chat_history: list = []
+_chat_lock = threading.Lock()
+
+
+def _broadcast_sse(event: dict) -> None:
+    """Sendet ein SSE-Event an alle verbundenen Browser-Clients."""
+    payload = _json.dumps(event, ensure_ascii=False)
+    with _sse_lock:
+        dead = []
+        for q in _sse_queues:
+            try:
+                q.put_nowait(payload)
+            except Exception:
+                dead.append(q)
+        for q in dead:
+            try:
+                _sse_queues.remove(q)
+            except ValueError:
+                pass
+
+
+def _set_agent_status(agent: str, status: str, query: str = "") -> None:
+    """Aktualisiert den Agenten-Status und benachrichtigt alle SSE-Clients."""
+    global _thinking_active
+    _agent_status[agent] = {
+        "status": status,
+        "last_run": datetime.utcnow().isoformat() + "Z",
+        "last_query": (query or "")[:80],
+    }
+    _thinking_active = any(v["status"] == "thinking" for v in _agent_status.values())
+    _broadcast_sse({"type": "agent_status", "agent": agent, "status": status})
+    _broadcast_sse({"type": "thinking", "active": _thinking_active})
+
 
 try:
     log_path = project_root / "timus_server.log"
@@ -1034,6 +1081,168 @@ async def add_canvas_event(canvas_id: str, payload: dict):
         return JSONResponse(
             status_code=500, content={"status": "error", "error": str(e)}
         )
+
+
+@app.get("/agent_status", summary="Agenten-Status & Thinking-LED")
+async def get_agent_status_endpoint():
+    return {
+        "status": "success",
+        "agents": _agent_status,
+        "thinking": _thinking_active,
+    }
+
+
+@app.get("/events/stream", summary="SSE-Stream für Echtzeit-Canvas-Updates")
+async def events_stream(request: Request):
+    """Server-Sent Events: Pushing agent-status, thinking-LED und Chat-Events."""
+    queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+    with _sse_lock:
+        _sse_queues.append(queue)
+
+    async def generator():
+        try:
+            init_data = _json.dumps(
+                {"type": "init", "agents": _agent_status, "thinking": _thinking_active},
+                ensure_ascii=False,
+            )
+            yield f"data: {init_data}\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    data = await asyncio.wait_for(queue.get(), timeout=25.0)
+                    yield f"data: {data}\n\n"
+                except asyncio.TimeoutError:
+                    yield 'data: {"type":"ping"}\n\n'
+        finally:
+            with _sse_lock:
+                try:
+                    _sse_queues.remove(queue)
+                except ValueError:
+                    pass
+
+    return StreamingResponse(
+        generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/chat", summary="Interaktiver Chat mit Timus")
+async def canvas_chat(request: Request):
+    """Sendet eine Nachricht an Timus und gibt die Antwort zurück (SSE pushed ebenfalls)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(
+            status_code=400, content={"status": "error", "error": "invalid_json"}
+        )
+
+    query = (body or {}).get("query", "").strip()
+    if not query:
+        return JSONResponse(
+            status_code=400, content={"status": "error", "error": "query_required"}
+        )
+
+    session_id = (body or {}).get("session_id") or f"canvas_{uuid.uuid4().hex[:8]}"
+    ts = datetime.utcnow().isoformat() + "Z"
+
+    with _chat_lock:
+        _chat_history.append({"role": "user", "text": query, "ts": ts})
+        if len(_chat_history) > 200:
+            _chat_history[:] = _chat_history[-200:]
+
+    _broadcast_sse({"type": "chat_user", "text": query, "ts": ts})
+
+    agent = "executor"
+    try:
+        from main_dispatcher import run_agent, get_agent_decision
+
+        # Tool-Beschreibungen direkt aus dem Registry (kein HTTP-Self-Call)
+        try:
+            tools_list = registry_v2.list_tools()
+            tools_desc = "\n".join(
+                f"- {t.name}: {t.description}" for t in tools_list
+            )
+        except Exception:
+            tools_desc = ""
+
+        agent = await get_agent_decision(query)
+        _set_agent_status(agent, "thinking", query)
+
+        result = await run_agent(
+            agent_name=agent,
+            query=query,
+            tools_description=tools_desc,
+            session_id=session_id,
+        )
+
+        _set_agent_status(agent, "completed", query)
+        reply = str(result) if result else "(keine Antwort)"
+        reply_ts = datetime.utcnow().isoformat() + "Z"
+
+        with _chat_lock:
+            _chat_history.append(
+                {"role": "assistant", "agent": agent, "text": reply, "ts": reply_ts}
+            )
+
+        _broadcast_sse({"type": "chat_reply", "agent": agent, "text": reply, "ts": reply_ts})
+        return {"status": "success", "agent": agent, "reply": reply, "session_id": session_id}
+
+    except Exception as e:
+        log.error(f"Canvas-Chat Fehler: {e}", exc_info=True)
+        _set_agent_status(agent, "error", query)
+        _broadcast_sse({"type": "chat_error", "error": str(e)})
+        return JSONResponse(
+            status_code=500, content={"status": "error", "error": str(e)}
+        )
+
+
+@app.get("/chat/history", summary="Chat-Verlauf abrufen")
+async def get_chat_history_endpoint():
+    with _chat_lock:
+        return {"status": "success", "history": list(_chat_history)}
+
+
+@app.post("/upload", summary="Datei-Upload für Canvas-Chat")
+async def canvas_upload(request: Request):
+    """Nimmt eine Datei per multipart/form-data entgegen und speichert sie."""
+    content_type = request.headers.get("content-type", "")
+    if "multipart" not in content_type:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "error": "multipart/form-data erforderlich"},
+        )
+
+    form = await request.form()
+    file_field = form.get("file")
+    if not file_field:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "error": "Kein 'file'-Feld im Formular"},
+        )
+
+    upload_dir = project_root / "data" / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    raw_name = getattr(file_field, "filename", None) or "upload.bin"
+    safe_name = re.sub(r"[^\w.\-]", "_", raw_name)[:120]
+    dest = upload_dir / f"{uuid.uuid4().hex[:8]}_{safe_name}"
+
+    content = await file_field.read()
+    dest.write_bytes(content)
+
+    rel_path = str(dest.relative_to(project_root))
+    _broadcast_sse(
+        {"type": "upload", "filename": safe_name, "path": rel_path, "size": len(content)}
+    )
+
+    return {
+        "status": "success",
+        "filename": safe_name,
+        "path": rel_path,
+        "size": len(content),
+    }
 
 
 @app.post("/", summary="JSON-RPC Endpoint")
