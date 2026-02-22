@@ -784,7 +784,7 @@ async function handleFileUpload(file) {
     const data = await api("/upload", { method: "POST", body: fd });
     if (data.status === "success") {
       document.getElementById("chatInput").value =
-        `Analysiere die hochgeladene Datei: ${data.path}`;
+        `Analysiere die hochgeladene Datei: ${data.abs_path || data.path}`;
       document.getElementById("chatInput").focus();
     }
   } catch (err) {

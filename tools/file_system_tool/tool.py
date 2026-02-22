@@ -5,7 +5,7 @@ Filesystem-Tools für Timus.
 Erlaubt Timus den Zugriff auf das gesamte Dateisystem des Benutzers.
 - Lesen:    überall erlaubt (außer system-kritische Pfade)
 - Schreiben: nur /home und /tmp (Schutz vor versehentlichem System-Schreiben)
-- Relative Pfade werden relativ zu HOME (/home/fatih-ubuntu/) aufgelöst
+- Relative Pfade werden relativ zu project_root aufgelöst (z.B. data/uploads/...)
 """
 
 import logging
@@ -30,16 +30,19 @@ _WRITE_ALLOWED_PREFIXES = [
 ]
 
 
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
 def _resolve_path(path: str) -> Path:
     """
     Löst einen Pfad auf.
     - Absoluter Pfad (/home/...) → direkt
-    - Relativer Pfad            → relativ zu HOME
+    - Relativer Pfad            → relativ zu project_root (z.B. data/uploads/...)
     """
     p = Path(path)
     if p.is_absolute():
         return p.resolve()
-    return (Path.home() / path).resolve()
+    return (_PROJECT_ROOT / path).resolve()
 
 
 def _check_read(full_path: Path):

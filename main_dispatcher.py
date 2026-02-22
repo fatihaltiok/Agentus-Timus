@@ -27,6 +27,7 @@ AGENTEN-ÜBERSICHT:
 - development: Code schreiben v2 (mercury-coder + context_files)
 - meta: Planung, Orchestrierung (claude-sonnet)
 - visual: UI-Steuerung (claude-sonnet)
+- image: Bild-Analyse (qwen3.5-plus, OpenRouter)
 """
 
 import os
@@ -82,6 +83,8 @@ from agent.agents.communication import CommunicationAgent
 from agent.agents.system import SystemAgent
 # M4: neue Agenten
 from agent.agents.shell import ShellAgent
+# M5: Bild-Analyse
+from agent.agents.image import ImageAgent
 
 # Developer Agent v2 (verbessert mit context_files Support)
 from agent.developer_agent_v2 import DeveloperAgentV2
@@ -261,6 +264,15 @@ Du bist der zentrale Dispatcher für Timus. Analysiere die INTENTION des Nutzers
                  "Schreib ein Skript" (→ development)
     - WICHTIG: shell ist der maechtigste Agent — nur bei klarer Ausfuehrungs-Intention
 
+14. **image**: Der BILD-ANALYST
+    - Zustaendigkeit: Hochgeladene Bilder analysieren und beschreiben
+    - Wähle 'image' bei:
+      - "Analysiere die hochgeladene Datei: ...jpg/jpeg/png/webp..."
+      - "Was zeigt dieses Bild?"
+      - "Beschreibe das Foto"
+      - "Was steht auf dem Screenshot?"
+      - Immer wenn ein Bildpfad (.jpg, .jpeg, .png, .webp, .gif, .bmp) vorkommt
+
 ### WICHTIGE REGELN
 
 1. Bei VERGLEICHSFRAGEN (A vs B, was ist besser, Unterschied zwischen) → 'reasoning'
@@ -268,8 +280,9 @@ Du bist der zentrale Dispatcher für Timus. Analysiere die INTENTION des Nutzers
 3. Bei ARCHITEKTUR-FRAGEN (welche Technologie, Design-Entscheidungen) → 'reasoning'
 4. Bei RECHERCHE nach externen Fakten/News → 'research'
 5. Bei EINFACHEN Fragen ohne Analyse → 'executor'
+6. Bei BILDPFADEN (.jpg, .jpeg, .png, .webp etc.) → immer 'image'
 
-Antworte NUR mit einem Wort: 'reasoning', 'research', 'executor', 'meta', 'visual', 'development', 'creative', 'data', 'document', 'communication', 'system' oder 'shell'.
+Antworte NUR mit einem Wort: 'reasoning', 'research', 'executor', 'meta', 'visual', 'development', 'creative', 'data', 'document', 'communication', 'system', 'shell' oder 'image'.
 """
 
 # --- Mapping (AKTUALISIERT v3.2 - Developer Agent v2) ---
@@ -299,6 +312,10 @@ AGENT_CLASS_MAP = {
     "shell":         ShellAgent,
     "terminal":      ShellAgent,          # Alias
     "bash":          ShellAgent,          # Alias
+    # M5: Bild-Analyse
+    "image":         ImageAgent,
+    "bild":          ImageAgent,          # Alias
+    "foto":          ImageAgent,          # Alias
     # Aliase
     "analyst": ReasoningAgent,  # NEU
     "debugger": ReasoningAgent,  # NEU
@@ -607,9 +624,16 @@ def _structure_task(task: str, url: str) -> List[str]:
     return steps
 
 
+_IMAGE_EXTENSIONS = re.compile(r"\.(jpg|jpeg|png|webp|gif|bmp|tiff?|avif)\b", re.IGNORECASE)
+
+
 def quick_intent_check(query: str) -> Optional[str]:
     """Schnelle Keyword-basierte Intent-Erkennung."""
     query_lower = query.lower()
+
+    # BILD-Dateien — höchste Priorität (Erweiterung im Pfad erkannt)
+    if _IMAGE_EXTENSIONS.search(query):
+        return "image"
 
     # REASONING zuerst prüfen (höchste Priorität für komplexe Fragen)
     for keyword in REASONING_KEYWORDS:

@@ -1243,6 +1243,7 @@ async def canvas_upload(request: Request):
     dest.write_bytes(content)
 
     rel_path = str(dest.relative_to(project_root))
+    abs_path = str(dest.resolve())
     _broadcast_sse(
         {"type": "upload", "filename": safe_name, "path": rel_path, "size": len(content)}
     )
@@ -1251,6 +1252,7 @@ async def canvas_upload(request: Request):
         "status": "success",
         "filename": safe_name,
         "path": rel_path,
+        "abs_path": abs_path,
         "size": len(content),
     }
 

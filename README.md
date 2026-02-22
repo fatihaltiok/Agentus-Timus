@@ -4,7 +4,7 @@
   <img src="assets/branding/timus-logo-glow.png" alt="Timus Logo" width="760">
 </p>
 
-Timus ist ein autonomes Multi-Agent-System fuer Desktop-Automatisierung, Web-Recherche, Code-Generierung und kreative Aufgaben. Es kombiniert **12 spezialisierte KI-Agenten** mit **80+ Tools** ueber einen zentralen MCP-Server.
+Timus ist ein autonomes Multi-Agent-System fuer Desktop-Automatisierung, Web-Recherche, Code-Generierung und kreative Aufgaben. Es kombiniert **13 spezialisierte KI-Agenten** mit **80+ Tools** ueber einen zentralen MCP-Server.
 
 Branding:
 - Primary Logo: `assets/branding/timus-logo-primary.svg`
@@ -21,9 +21,9 @@ Branding:
 
 ## Aktueller Stand (2026-02-22)
 
-### Agenten-Meilensteine M1–M4 + Memory-Verbesserungen
+### Agenten-Meilensteine M1–M5 + Memory-Verbesserungen + Bugfixes
 
-Vier neue Agenten-Meilensteine wurden implementiert und vollständig getestet:
+Fünf neue Agenten-Meilensteine implementiert, vollständig getestet und zwei Bugfixes eingebaut:
 
 | Meilenstein | Agent | Modell | Beschreibung |
 |-------------|-------|--------|--------------|
@@ -31,6 +31,18 @@ Vier neue Agenten-Meilensteine wurden implementiert und vollständig getestet:
 | **M2** | CommunicationAgent | claude-sonnet-4-5 (Anthropic) | E-Mails, Berichte, Dokument-Erstellung, professionelle Texte |
 | **M3** | SystemAgent | qwen3.5-plus-02-15 (OpenRouter) | Log-Analyse, Prozessüberwachung, System-Stats, Service-Status (read-only) |
 | **M4** | ShellAgent | claude-sonnet-4-6 (Anthropic) | Shell-Befehle mit 5-Schicht-Sicherheits-Policy |
+| **M5** | ImageAgent | qwen3.5-plus-02-15 (OpenRouter) | Hochgeladene Bilder analysieren — automatisches Routing bei Bild-Erweiterungen |
+
+**M5 — ImageAgent (Bild-Analyse):**
+- Automatisches Routing: Sobald ein Pfad mit `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, `.bmp` etc. in der Anfrage vorkommt → `image`-Agent
+- Modell: `qwen/qwen3.5-plus-02-15` (OpenRouter, Vision-fähig, deutlich günstiger als Claude)
+- Liest Bilddatei von Disk → Base64-Encoding → OpenAI-kompatibles Vision-Format → Analyse auf Deutsch
+- Konfigurierbar via `IMAGE_MODEL` / `IMAGE_MODEL_PROVIDER` in `.env`
+
+**Bugfixes Upload-Pipeline:**
+- `file_system_tool`: Relative Pfade wurden fälschlicherweise gegen `$HOME` aufgelöst → jetzt korrekt gegen `project_root`
+- `mcp_server.py`: Upload-Response enthält jetzt `abs_path` (absoluter Pfad)
+- `canvas_ui.py`: Chat-Input bei Upload-Dateien nutzt jetzt den absoluten Pfad → Agent findet die Datei zuverlässig
 
 **ShellAgent Sicherheits-Policy (5 Schichten):**
 1. **Blacklist** — `rm -rf`, `dd if=`, Fork-Bombs, `curl|bash`, `shutdown` etc. blockiert
@@ -238,6 +250,7 @@ CI-Gates (GitHub Actions):
                     │  │  data  │ document │ communication  (M1/M2)   │   │
                     │  │  system (M3, read-only)                       │   │
                     │  │  shell  (M4, 5-Schicht-Policy)                │   │
+                    │  │  image  (M5, Bild-Analyse Qwen3.5+)           │   │
                     │  └──────────────────────────────────────────────┘   │
                     │       ↓                                              │
                     │  MCP Server :5000 (80+ Tools, AGENT_CAPABILITY_MAP) │
@@ -268,7 +281,7 @@ main_dispatcher.py
       v
 Agent-Auswahl (AGENT_CLASS_MAP)
   executor | research | reasoning | creative | development
-  meta | visual | data | document | communication | system | shell
+  meta | visual | data | document | communication | system | shell | image
       |
       v
 agent/base_agent.py
@@ -389,7 +402,7 @@ flowchart TD
 
 ## Agenten
 
-Timus verfügt über **12 spezialisierte Agenten** in zwei Gruppen: die ursprünglichen Kern-Agenten und die neuen M1–M4-Agenten.
+Timus verfügt über **13 spezialisierte Agenten** in zwei Gruppen: die ursprünglichen Kern-Agenten und die neuen M1–M5-Agenten.
 
 ### Kern-Agenten
 
@@ -441,7 +454,7 @@ Timus verfügt über **12 spezialisierte Agenten** in zwei Gruppen: die ursprün
 
 ---
 
-### M1–M4 Agenten (neu)
+### M1–M5 Agenten (neu)
 
 #### DataAgent *(M1)*
 - **Modell:** gpt-4o (OpenAI) — via `DATA_MODEL`
@@ -464,6 +477,13 @@ Timus verfügt über **12 spezialisierte Agenten** in zwei Gruppen: die ursprün
 - **Aufgabe:** Kontrollierte Shell-Ausführung mit 5-Schicht-Policy (Blacklist, Whitelist, Timeout, Audit, Dry-Run)
 - **Besonderheit:** Erklärt Befehle vor der Ausführung, Audit-Log in `logs/shell_audit.log`, Cron-Management nur per Dry-Run
 - **Max Iterationen:** 10 | **Tools:** 5
+
+#### ImageAgent *(M5)*
+- **Modell:** qwen/qwen3.5-plus-02-15 (OpenRouter) — via `IMAGE_MODEL`
+- **Aufgabe:** Hochgeladene Bilder analysieren und auf Deutsch beschreiben
+- **Routing:** Automatisch bei Bildpfaden (.jpg, .jpeg, .png, .webp, .gif, .bmp, .tiff, .avif) in der Anfrage — hat höchste Priorität in `quick_intent_check`
+- **Technik:** Liest Datei von Disk → Base64-Encoding → OpenAI-kompatibles Vision-Format → direkte Analyse ohne Tool-Loop
+- **Max Iterationen:** 1 (direkter LLM-Call, kein Tool-Loop nötig)
 
 ---
 
@@ -733,7 +753,7 @@ Skills werden vom MetaAgent automatisch erkannt und bei passenden Tasks eingeset
 | **Anthropic** | claude-sonnet-4-5, claude-sonnet-4-6 | Meta, Visual, Document, Communication, Shell |
 | **DeepSeek** | deepseek-reasoner | Deep Research |
 | **Inception Labs** | mercury-coder-small | Developer |
-| **OpenRouter** | qwen/qwen3.5-plus-02-15 | System (M3) + Vision-Analyse |
+| **OpenRouter** | qwen/qwen3.5-plus-02-15 | System (M3) + Image (M5) + Vision-Analyse |
 | **OpenRouter** | nvidia/nemotron-3-nano-30b-a3b | Reasoning + Memory Kurator |
 | **Google** | Gemini | Placeholder |
 
@@ -745,6 +765,8 @@ SYSTEM_MODEL=qwen/qwen3.5-plus-02-15
 SYSTEM_MODEL_PROVIDER=openrouter
 SHELL_MODEL=claude-sonnet-4-6
 SHELL_MODEL_PROVIDER=anthropic
+IMAGE_MODEL=qwen/qwen3.5-plus-02-15
+IMAGE_MODEL_PROVIDER=openrouter
 
 # Nemotron Memory-Kurator überschreiben
 CURATOR_MODEL=nvidia/nemotron-3-nano-30b-a3b   # via OPENROUTER_API_KEY
@@ -904,6 +926,7 @@ Du> Analysiere diese CSV-Datei                -> DataAgent    (M1)
 Du> Schreibe eine formale E-Mail an...        -> CommunicationAgent (M2)
 Du> Zeige mir CPU und RAM Auslastung          -> SystemAgent  (M3)
 Du> Liste alle Cron-Jobs auf                  -> ShellAgent   (M4)
+Du> Analysiere die hochgeladene Datei: /...foto.jpg -> ImageAgent (M5)
 ```
 
 Der Dispatcher erkennt automatisch den Intent und waehlt den passenden Agenten.
@@ -940,11 +963,12 @@ timus/
 │   │   ├── document.py      # M1: DocumentAgent
 │   │   ├── communication.py # M2: CommunicationAgent
 │   │   ├── system.py        # M3: SystemAgent (read-only Monitoring)
-│   │   └── shell.py         # M4: ShellAgent (5-Schicht-Policy)
+│   │   ├── shell.py         # M4: ShellAgent (5-Schicht-Policy)
+│   │   └── image.py         # M5: ImageAgent (Bild-Analyse, Qwen3.5+)
 │   ├── agent_registry.py    # Agent-Registry mit Factory-Pattern + Delegation
 │   ├── base_agent.py        # BaseAgent + AGENT_CAPABILITY_MAP (präzise Tool-Sets)
 │   ├── providers.py         # LLM Provider-Infrastruktur (7 Provider)
-│   ├── prompts.py           # System Prompts (inkl. SYSTEM_PROMPT_TEMPLATE, SHELL_PROMPT_TEMPLATE)
+│   ├── prompts.py           # System Prompts (inkl. SYSTEM_PROMPT_TEMPLATE, SHELL_PROMPT_TEMPLATE, IMAGE_PROMPT_TEMPLATE)
 │   ├── dynamic_tool_mixin.py  # DynamicToolMixin — filtert Tools nach AGENT_CAPABILITY_MAP
 │   ├── visual_agent.py      # Standalone Visual Agent v2.1
 │   ├── developer_agent_v2.py
@@ -1007,7 +1031,7 @@ timus/
 │   ├── task_queue.db           # SQLite Task-Persistenz
 │   └── uploads/                # Datei-Uploads aus Canvas-Chat
 ├── config/                     # Personality-System
-├── main_dispatcher.py          # Zentral-Dispatcher (v3.5 — 12 Agenten)
+├── main_dispatcher.py          # Zentral-Dispatcher (v3.5 — 13 Agenten)
 ├── timus_terminal.py           # Terminal-Client (parallel zu systemd)
 ├── timus-mcp.service           # systemd Unit für MCP-Server
 ├── timus-dispatcher.service    # systemd Unit für Dispatcher
