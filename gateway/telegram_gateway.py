@@ -88,14 +88,13 @@ async def _try_send_image(update: Update, result: str) -> bool:
 
     Priorität:
       1. Lokale Datei (results/*.png) — zuverlässig, kein Ablauf
-      2. DALL-E URL ("URL: https://...") — Download + als Bytes senden
+      2. Jede HTTPS-URL im Text — Download + als Bytes senden
          (Telegram kann OpenAI-CDN-URLs nicht direkt laden)
     """
-    # Caption aus Antwort extrahieren (Verwendeter Prompt: ...)
     prompt_match = re.search(r'(?:Verwendeter Prompt|Prompt)[:\s]+(.{10,300})', result)
     caption = prompt_match.group(1).strip()[:1024] if prompt_match else "🎨 Timus hat dieses Bild generiert"
 
-    # 1. Lokale Datei suchen — [^\n"']+ erlaubt Leerzeichen im Dateinamen
+    # 1. Lokale Bilddatei suchen
     path_match = re.search(r'results/[^\n"\']+\.(?:png|jpg|jpeg|webp)', result, re.IGNORECASE)
     if path_match:
         image_path = _PROJECT_ROOT / path_match.group(0).strip()
@@ -108,11 +107,10 @@ async def _try_send_image(update: Update, result: str) -> bool:
             except Exception as e:
                 log.error(f"Fehler beim Senden der lokalen Bilddatei: {e}")
 
-    # 2. DALL-E URL: "URL: https://..." — Bild herunterladen und als Bytes senden
-    #    DALL-E URLs enden NICHT auf .png, daher kein Dateiendungs-Filter
-    url_match = re.search(r'URL:\s*(https://[^\s\n]+)', result, re.IGNORECASE)
+    # 2. Jede HTTPS-URL im Text — breites Regex, kein "URL:"-Präfix nötig
+    url_match = re.search(r'https://[^\s\n"\'<>]{20,}', result, re.IGNORECASE)
     if url_match:
-        image_url = url_match.group(1).rstrip('.,)')
+        image_url = url_match.group(0).rstrip('.,)')
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.get(image_url)
@@ -125,6 +123,38 @@ async def _try_send_image(update: Update, result: str) -> bool:
             log.error(f"Fehler beim Senden via URL-Download: {e}")
 
     return False
+
+
+async def _try_send_document(update: Update, result: str) -> bool:
+    """
+    Erkennt ob das Agent-Ergebnis eine nicht-Bild-Datei enthält und sendet sie als Dokument.
+    Gibt True zurück wenn eine Datei gesendet wurde.
+    """
+    # Dateierweiterungen die als Dokument gesendet werden (keine Bilder — die gehen über _try_send_image)
+    DOC_EXTENSIONS = r'\.(?:pdf|txt|csv|json|md|py|js|html|css|docx|xlsx|zip|tar|gz|log|xml|yaml|yml)'
+    path_match = re.search(
+        r'(?:results|data|reports)/[^\n"\']+' + DOC_EXTENSIONS,
+        result, re.IGNORECASE
+    )
+    if not path_match:
+        return False
+
+    file_path = _PROJECT_ROOT / path_match.group(0).strip()
+    if not file_path.exists():
+        return False
+
+    try:
+        with open(file_path, "rb") as f:
+            await update.message.reply_document(
+                document=f,
+                filename=file_path.name,
+                caption=f"📄 {file_path.name}",
+            )
+        log.info(f"Dokument gesendet: {file_path.name}")
+        return True
+    except Exception as e:
+        log.error(f"Fehler beim Senden des Dokuments: {e}")
+        return False
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -457,9 +487,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         response = str(result) if result else "_(kein Ergebnis)_"
 
-        # Bild-Erkennung: wenn der Agent ein Bild generiert hat → als Foto senden
+        # Bild → als Foto senden
         image_sent = await _try_send_image(update, response)
-        if not image_sent:
+        # Dokument → als Datei senden
+        doc_sent = await _try_send_document(update, response)
+        # Kein Bild/Datei → als Text senden
+        if not image_sent and not doc_sent:
             await _send_long(update, response)
 
     except Exception as e:
@@ -534,8 +567,9 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
         response = str(result) if result else "Ich konnte keine Antwort generieren."
 
-        # 4. Bild-Check (falls CreativeAgent ein Bild erzeugt hat)
+        # 4. Bild-Check / Dokument-Check
         image_sent = await _try_send_image(update, response)
+        doc_sent   = await _try_send_document(update, response)
 
         # 5. TTS → Sprachnachricht zurück
         await update.message.chat.send_action(ChatAction.RECORD_VOICE)
@@ -560,6 +594,49 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
         except Exception:
             pass
         await update.message.reply_text(f"❌ Fehler bei Sprachverarbeitung: {e}")
+
+
+async def handle_document_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Empfängt Dateien (Dokumente, Bilder als Datei) von Telegram.
+    Speichert sie in data/uploads/ und gibt Timus Bescheid.
+    """
+    user = update.effective_user
+    if not _is_allowed(user.id):
+        await update.message.reply_text("⛔ Kein Zugriff.")
+        return
+
+    # Dokument oder Foto-als-Datei
+    doc = update.message.document
+    if not doc:
+        return
+
+    await update.message.chat.send_action(ChatAction.TYPING)
+
+    try:
+        file = await context.bot.get_file(doc.file_id)
+        file_bytes = bytes(await file.download_as_bytearray())
+
+        safe_name = re.sub(r"[^\w.\-]", "_", doc.file_name or "upload.bin")[:120]
+        upload_dir = _PROJECT_ROOT / "data" / "uploads"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        dest = upload_dir / f"tg_{uuid.uuid4().hex[:8]}_{safe_name}"
+        dest.write_bytes(file_bytes)
+
+        rel_path = str(dest.relative_to(_PROJECT_ROOT))
+        size_kb = len(file_bytes) / 1024
+
+        await update.message.reply_text(
+            f"📎 Datei empfangen: *{doc.file_name}* ({size_kb:.1f} KB)\n"
+            f"Gespeichert: `{rel_path}`\n\n"
+            f"Was soll ich damit machen?",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        log.info(f"Dokument empfangen: {doc.file_name} → {rel_path}")
+
+    except Exception as e:
+        log.error(f"Fehler beim Empfangen der Datei: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Fehler beim Empfangen der Datei: {e}")
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -600,6 +677,9 @@ class TelegramGateway:
             )
             self._app.add_handler(
                 MessageHandler(filters.VOICE, handle_voice_message)
+            )
+            self._app.add_handler(
+                MessageHandler(filters.Document.ALL, handle_document_message)
             )
 
             await self._app.initialize()
