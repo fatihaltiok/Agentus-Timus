@@ -55,6 +55,9 @@ AGENT_CAPABILITY_MAP = {
     "meta": None,  # Alle Tools
     "visual": ["browser", "vision", "mouse", "ui"],
     "development": ["code", "file", "search"],
+    # M1: neue Agenten
+    "data":     None,  # Alle Tools (braucht file, data, document)
+    "document": None,  # Alle Tools (braucht file, document)
 }
 
 

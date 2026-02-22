@@ -134,6 +134,9 @@ class AgentModelConfig:
         "meta": ("PLANNING_MODEL", "PLANNING_MODEL_PROVIDER", "claude-sonnet-4-5-20250929", ModelProvider.ANTHROPIC),
         "visual": ("VISION_MODEL", "VISION_MODEL_PROVIDER", "claude-sonnet-4-5-20250929", ModelProvider.ANTHROPIC),
         "reasoning": ("REASONING_MODEL", "REASONING_MODEL_PROVIDER", "nvidia/nemotron-3-nano-30b-a3b", ModelProvider.OPENROUTER),
+        # M1: neue Agenten
+        "data":     ("DATA_MODEL",     "DATA_MODEL_PROVIDER",     "gpt-4o",                         ModelProvider.OPENAI),
+        "document": ("DOCUMENT_MODEL", "DOCUMENT_MODEL_PROVIDER", "claude-sonnet-4-5-20250929",      ModelProvider.ANTHROPIC),
     }
 
     @classmethod

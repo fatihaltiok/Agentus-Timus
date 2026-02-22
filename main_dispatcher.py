@@ -73,6 +73,10 @@ from agent.timus_consolidated import (
     ReasoningAgent,  # NEU v3.1
 )
 
+# M1: neue Agenten
+from agent.agents.data     import DataAgent
+from agent.agents.document import DocumentAgent
+
 # Developer Agent v2 (verbessert mit context_files Support)
 from agent.developer_agent_v2 import DeveloperAgentV2
 
@@ -195,6 +199,26 @@ Du bist der zentrale Dispatcher für Timus. Analysiere die INTENTION des Nutzers
      - "Male ein Bild von..."
      - "Schreibe ein Gedicht"
 
+9. **data**: Der DATENANALYST
+   - Zuständigkeit: CSV/XLSX/JSON einlesen, Statistiken berechnen, Tabellen/Berichte erstellen
+   - Wähle 'data' bei:
+     - "Analysiere diese CSV-Datei"
+     - "Berechne die Summe / den Durchschnitt"
+     - "Was sind meine größten Ausgaben?"
+     - "Erstelle eine Statistik aus den Daten"
+     - "Werte diese Excel-Tabelle aus"
+     - Wenn eine Datei (CSV, XLSX, JSON) ausgewertet werden soll
+
+10. **document**: Der DOKUMENTEN-SPEZIALIST
+    - Zuständigkeit: Professionelle Dokumente erstellen (Angebote, Berichte, Briefe, Lebensläufe)
+    - Wähle 'document' bei:
+      - "Erstelle ein Angebot für..."
+      - "Schreib einen Bericht über..."
+      - "Erstelle ein Protokoll"
+      - "Mach einen Lebenslauf / eine Bewerbung"
+      - "Erstelle ein PDF / Word-Dokument"
+      - Wenn ein strukturiertes, professionelles Dokument gewünscht wird
+
 ### WICHTIGE REGELN
 
 1. Bei VERGLEICHSFRAGEN (A vs B, was ist besser, Unterschied zwischen) → 'reasoning'
@@ -218,6 +242,9 @@ AGENT_CLASS_MAP = {
     "meta": MetaAgent,
     "development": DeveloperAgentV2,  # AKTUALISIERT v3.2: Developer Agent v2
     "creative": CreativeAgent,
+    # M1: neue Agenten
+    "data":     DataAgent,
+    "document": DocumentAgent,
     # Aliase
     "analyst": ReasoningAgent,  # NEU
     "debugger": ReasoningAgent,  # NEU

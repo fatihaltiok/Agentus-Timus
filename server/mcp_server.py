@@ -95,7 +95,8 @@ log = logging.getLogger("mcp_server")
 
 # ── Canvas Chat & Agent-Status (In-Memory) ────────────────────────────────────
 _KNOWN_AGENTS = [
-    "executor", "research", "reasoning", "creative", "development", "meta", "visual"
+    "executor", "research", "reasoning", "creative", "development", "meta", "visual",
+    "data", "document",  # M1
 ]
 _agent_status: dict = {
     a: {"status": "idle", "last_run": None, "last_query": ""}
@@ -168,6 +169,7 @@ TOOL_MODULES = [
     "tools.developer_tool.tool",
     "tools.file_system_tool.tool",
     "tools.document_creator.tool",
+    "tools.data_tool.tool",
     "tools.meta_tool.tool",
     "tools.reflection_tool.tool",
     "tools.init_skill_tool.tool",
