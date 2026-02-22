@@ -99,6 +99,7 @@ _KNOWN_AGENTS = [
     "data", "document",  # M1
     "communication",     # M2
     "system",            # M3
+    "shell",             # M4
 ]
 _agent_status: dict = {
     a: {"status": "idle", "last_run": None, "last_query": ""}
@@ -217,6 +218,8 @@ TOOL_MODULES = [
     "tools.florence2_tool.tool",
     # M3: System-Monitor Tools
     "tools.system_tool.tool",
+    # M4: Shell-Operator Tools
+    "tools.shell_tool.tool",
 ]
 
 # --- Hilfsfunktionen für den Lifespan-Manager ---

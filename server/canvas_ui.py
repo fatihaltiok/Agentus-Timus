@@ -608,7 +608,7 @@ function renderToolActivity() {
 }
 
 // ── AGENT LEDs ───────────────────────────────────────────────────
-const AGENTS = ["executor","research","reasoning","creative","development","meta","visual","data","document","communication","system"];
+const AGENTS = ["executor","research","reasoning","creative","development","meta","visual","data","document","communication","system","shell"];
 const agentState = Object.fromEntries(AGENTS.map(a => [a, "idle"]));
 
 function renderAgentLeds(agents) {

@@ -62,6 +62,8 @@ AGENT_CAPABILITY_MAP = {
     "communication": None,  # Alle Tools (braucht create_docx, create_txt)
     # M3: neue Agenten
     "system": ["system"],   # Nur system-Tools (read_log, search_log etc.)
+    # M4: neue Agenten
+    "shell":  ["shell"],    # Nur shell-Tools (run_command, run_script etc.)
 }
 
 

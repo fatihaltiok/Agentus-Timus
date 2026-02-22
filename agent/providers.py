@@ -141,6 +141,8 @@ class AgentModelConfig:
         "communication": ("COMMUNICATION_MODEL", "COMMUNICATION_MODEL_PROVIDER", "claude-sonnet-4-5-20250929", ModelProvider.ANTHROPIC),
         # M3: neue Agenten
         "system": ("SYSTEM_MODEL", "SYSTEM_MODEL_PROVIDER", "qwen/qwen3.5-plus-02-15", ModelProvider.OPENROUTER),
+        # M4: neue Agenten
+        "shell": ("SHELL_MODEL", "SHELL_MODEL_PROVIDER", "claude-sonnet-4-6", ModelProvider.ANTHROPIC),
     }
 
     @classmethod

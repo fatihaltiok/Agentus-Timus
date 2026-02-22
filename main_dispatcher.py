@@ -80,6 +80,8 @@ from agent.agents.document import DocumentAgent
 from agent.agents.communication import CommunicationAgent
 # M3: neue Agenten
 from agent.agents.system import SystemAgent
+# M4: neue Agenten
+from agent.agents.shell import ShellAgent
 
 # Developer Agent v2 (verbessert mit context_files Support)
 from agent.developer_agent_v2 import DeveloperAgentV2
@@ -246,6 +248,19 @@ Du bist der zentrale Dispatcher für Timus. Analysiere die INTENTION des Nutzers
       - "Diagnose", "Systemstatus", "Log pruefen", "Service-Status"
       - NICHT bei: "starte den Service" (→ shell), "repariere den Code" (→ development)
 
+13. **shell**: Der SHELL-OPERATOR
+    - Zustaendigkeit: Bash-Befehle ausfuehren, Skripte starten, Cron-Jobs verwalten
+    - Wähle 'shell' ТОЛЬКО bei EXPLIZITEN Ausfuehrungs-Anfragen:
+      - "Fuehre diesen Befehl aus: ..."
+      - "Starte das Skript results/backup.py"
+      - "Lege einen Cron-Job an der taeglich um 08:00 laeuft"
+      - "Fuehre im Terminal aus..."
+      - "Zeig mir die Cron-Jobs"
+      - "Starte den timus-Service neu" (mit systemctl)
+    - NICHT bei: "Lies die Datei" (→ executor), "Was laeuft?" (→ system),
+                 "Schreib ein Skript" (→ development)
+    - WICHTIG: shell ist der maechtigste Agent — nur bei klarer Ausfuehrungs-Intention
+
 ### WICHTIGE REGELN
 
 1. Bei VERGLEICHSFRAGEN (A vs B, was ist besser, Unterschied zwischen) → 'reasoning'
@@ -254,7 +269,7 @@ Du bist der zentrale Dispatcher für Timus. Analysiere die INTENTION des Nutzers
 4. Bei RECHERCHE nach externen Fakten/News → 'research'
 5. Bei EINFACHEN Fragen ohne Analyse → 'executor'
 
-Antworte NUR mit einem Wort: 'reasoning', 'research', 'executor', 'meta', 'visual', 'development', 'creative', 'data', 'document', 'communication' oder 'system'.
+Antworte NUR mit einem Wort: 'reasoning', 'research', 'executor', 'meta', 'visual', 'development', 'creative', 'data', 'document', 'communication', 'system' oder 'shell'.
 """
 
 # --- Mapping (AKTUALISIERT v3.2 - Developer Agent v2) ---
@@ -280,6 +295,10 @@ AGENT_CLASS_MAP = {
     "system":        SystemAgent,
     "sysmon":        SystemAgent,         # Alias
     "log":           SystemAgent,         # Alias
+    # M4: neue Agenten
+    "shell":         ShellAgent,
+    "terminal":      ShellAgent,          # Alias
+    "bash":          ShellAgent,          # Alias
     # Aliase
     "analyst": ReasoningAgent,  # NEU
     "debugger": ReasoningAgent,  # NEU
