@@ -1251,6 +1251,7 @@ async def handle_jsonrpc(request: Request):
     req_str = (await request.body()).decode("utf-8")
     log.debug(f"⇢ IN: {req_str[:500]}{'...' if len(req_str) > 500 else ''}")
 
+    method = ""
     try:
         import json as _json
 
@@ -1288,7 +1289,17 @@ async def handle_jsonrpc(request: Request):
     except Exception as e:
         log.debug(f"Pre-Dispatch Check nicht moeglich: {e}")
 
+    # Tool-Activity via SSE broadcasten (nur echte Tool-Aufrufe, keine rpc.* Methoden)
+    tool_id = ""
+    if method and not method.startswith("rpc."):
+        tool_id = uuid.uuid4().hex[:8]
+        _broadcast_sse({"type": "tool_start", "tool": method, "id": tool_id})
+
     reply_str = await async_dispatch(req_str, serializer=numpy_aware_serializer)
+
+    if tool_id:
+        _broadcast_sse({"type": "tool_done", "tool": method, "id": tool_id})
+
     if reply_str:
         log.debug(f"⇠ OUT: {reply_str[:500]}{'...' if len(reply_str) > 500 else ''}")
         return Response(content=reply_str, media_type="application/json")

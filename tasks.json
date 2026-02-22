@@ -119,6 +119,16 @@
       "created_at": "2026-02-22T00:12:34.714299",
       "completed_at": null,
       "result_summary": null
+    },
+    {
+      "id": "f18df682-1cf6-4def-825a-08435b0316ed",
+      "description": "Starte Kennenlernphase: Einwilligung erhalten ('ja') bestätigt — sende strukturiertes Fragen-Set zur Sammlung von Basisdaten (Anrede, Name, Alter, Interessen, Kommunikationspräferenzen) und warte auf Antworten.",
+      "priority": 50,
+      "target_agent": "assistant",
+      "status": "pending",
+      "created_at": "2026-02-22T12:00:10.577948",
+      "completed_at": null,
+      "result_summary": null
     }
   ]
 }

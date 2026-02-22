@@ -411,6 +411,36 @@ def build_canvas_ui_html(poll_ms: int = 2000) -> str:
     }
     .upload-label:hover { border-color: var(--brand); color: var(--brand); }
 
+    /* ── TOOL ACTIVITY ────────────────────────────────────────── */
+    .tool-row {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 3px 4px;
+      border-radius: 5px;
+      font-size: 11px;
+    }
+    .tool-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: #3a4040;
+    }
+    .tool-dot.running {
+      background: var(--warn);
+      animation: blink 0.7s ease-in-out infinite;
+    }
+    .tool-dot.done { background: var(--ok); }
+    .tool-name-active {
+      color: var(--warn);
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .tool-name-done {
+      color: var(--muted);
+      font-size: 10px;
+    }
+
     @media (max-width: 1100px) {
       .shell { grid-template-columns: 1fr; }
       .right-panel { grid-template-rows: 1fr 280px; }
@@ -439,6 +469,11 @@ def build_canvas_ui_html(poll_ms: int = 2000) -> str:
         <!-- AGENT LEDs -->
         <div class="section-label">Agenten</div>
         <div id="agentLeds"></div>
+
+        <!-- TOOL ACTIVITY -->
+        <div class="section-label">Tools</div>
+        <div id="toolActive"></div>
+        <div id="toolHistory"></div>
 
         <!-- CANVAS VERWALTUNG -->
         <div class="section-label">Canvas</div>
@@ -521,6 +556,8 @@ let pollTimer        = null;
 let currentFilters   = { session_id: "", agent: "", status: "", only_errors: false, event_limit: 100 };
 let chatSessionId    = "canvas_" + Math.random().toString(36).slice(2, 10);
 let isSending        = false;
+let activeTool       = null;   // { tool, id }
+let toolHistory      = [];     // letzten 5 abgeschlossenen Tools
 
 // ── UTILITIES ────────────────────────────────────────────────────
 function esc(v) {
@@ -541,6 +578,33 @@ async function api(url, opts) {
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(d.error || d.message || r.statusText);
   return d;
+}
+
+// ── TOOL ACTIVITY ────────────────────────────────────────────────
+function renderToolActivity() {
+  const activeEl  = document.getElementById("toolActive");
+  const historyEl = document.getElementById("toolHistory");
+
+  if (activeTool) {
+    activeEl.innerHTML =
+      `<div class="tool-row">` +
+      `<div class="tool-dot running"></div>` +
+      `<span class="tool-name-active">${esc(activeTool.tool)}</span>` +
+      `</div>`;
+  } else {
+    activeEl.innerHTML = `<div class="empty" style="font-size:10px;">Kein Tool aktiv</div>`;
+  }
+
+  if (toolHistory.length) {
+    historyEl.innerHTML = toolHistory.map(t =>
+      `<div class="tool-row">` +
+      `<div class="tool-dot done"></div>` +
+      `<span class="tool-name-done">${esc(t)}</span>` +
+      `</div>`
+    ).join("");
+  } else {
+    historyEl.innerHTML = "";
+  }
 }
 
 // ── AGENT LEDs ───────────────────────────────────────────────────
@@ -635,6 +699,20 @@ function handleSSE(d) {
   if (d.type === "upload") {
     appendChatMsg("assistant", "System",
       `📎 Datei gespeichert: ${d.filename} (${(d.size / 1024).toFixed(1)} KB)\nPfad: ${d.path}`);
+    return;
+  }
+  if (d.type === "tool_start") {
+    activeTool = { tool: d.tool, id: d.id };
+    renderToolActivity();
+    return;
+  }
+  if (d.type === "tool_done") {
+    activeTool = null;
+    if (d.tool) {
+      toolHistory.unshift(d.tool);
+      if (toolHistory.length > 5) toolHistory.length = 5;
+    }
+    renderToolActivity();
     return;
   }
 }
@@ -855,6 +933,7 @@ async function init() {
 
   // Leere LED-Zeilen sofort rendern
   renderAgentLeds({});
+  renderToolActivity();
 
   // Agent-Status vom Server holen
   try {
