@@ -27,7 +27,7 @@ Fünf neue Agenten-Meilensteine implementiert, vollständig getestet und zwei Bu
 
 | Meilenstein | Agent | Modell | Beschreibung |
 |-------------|-------|--------|--------------|
-| **M1** | DataAgent | gpt-4o (OpenAI) | CSV/Excel/JSON Analyse, Datenverarbeitung, statistische Auswertungen |
+| **M1** | DataAgent | deepseek-v3.2 (OpenRouter) | CSV/Excel/JSON Analyse, Datenverarbeitung, statistische Auswertungen |
 | **M2** | CommunicationAgent | claude-sonnet-4-5 (Anthropic) | E-Mails, Berichte, Dokument-Erstellung, professionelle Texte |
 | **M3** | SystemAgent | qwen3.5-plus-02-15 (OpenRouter) | Log-Analyse, Prozessüberwachung, System-Stats, Service-Status (read-only) |
 | **M4** | ShellAgent | claude-sonnet-4-6 (Anthropic) | Shell-Befehle mit 5-Schicht-Sicherheits-Policy |
@@ -457,7 +457,7 @@ Timus verfügt über **13 spezialisierte Agenten** in zwei Gruppen: die ursprün
 ### M1–M5 Agenten (neu)
 
 #### DataAgent *(M1)*
-- **Modell:** gpt-4o (OpenAI) — via `DATA_MODEL`
+- **Modell:** deepseek/deepseek-v3.2 (OpenRouter) — via `DATA_MODEL`
 - **Aufgabe:** CSV, Excel, JSON Analyse — Datenverarbeitung, statistische Auswertungen, Diagramme
 - **Max Iterationen:** 15 | **Tools:** 42
 
@@ -749,12 +749,13 @@ Skills werden vom MetaAgent automatisch erkannt und bei passenden Tasks eingeset
 
 | Provider | Modelle | Agenten |
 |----------|---------|---------|
-| **OpenAI** | gpt-5-mini, gpt-5.2, gpt-4o | Executor, Creative, Data |
+| **OpenAI** | gpt-5-mini, gpt-5.2 | Executor, Creative |
 | **Anthropic** | claude-sonnet-4-5, claude-sonnet-4-6 | Meta, Visual, Document, Communication, Shell |
 | **DeepSeek** | deepseek-reasoner | Deep Research |
 | **Inception Labs** | mercury-coder-small | Developer |
 | **OpenRouter** | qwen/qwen3.5-plus-02-15 | System (M3) + Image (M5) + Vision-Analyse |
 | **OpenRouter** | nvidia/nemotron-3-nano-30b-a3b | Reasoning + Memory Kurator |
+| **OpenRouter** | deepseek/deepseek-v3.2 | Data (M1) |
 | **Google** | Gemini | Placeholder |
 
 Jeder Agent kann ueber Environment-Variablen auf ein anderes Modell/Provider umkonfiguriert werden:
@@ -767,6 +768,8 @@ SHELL_MODEL=claude-sonnet-4-6
 SHELL_MODEL_PROVIDER=anthropic
 IMAGE_MODEL=qwen/qwen3.5-plus-02-15
 IMAGE_MODEL_PROVIDER=openrouter
+DATA_MODEL=deepseek/deepseek-v3.2
+DATA_MODEL_PROVIDER=openrouter
 
 # Nemotron Memory-Kurator überschreiben
 CURATOR_MODEL=nvidia/nemotron-3-nano-30b-a3b   # via OPENROUTER_API_KEY

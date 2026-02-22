@@ -100,6 +100,7 @@ _KNOWN_AGENTS = [
     "communication",     # M2
     "system",            # M3
     "shell",             # M4
+    "image",             # M5
 ]
 _agent_status: dict = {
     a: {"status": "idle", "last_run": None, "last_query": ""}
