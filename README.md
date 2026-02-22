@@ -4,7 +4,7 @@
   <img src="assets/branding/timus-logo-glow.png" alt="Timus Logo" width="760">
 </p>
 
-Timus ist ein autonomes Multi-Agent-System fuer Desktop-Automatisierung, Web-Recherche, Code-Generierung und kreative Aufgaben. Es kombiniert 7 spezialisierte KI-Agenten mit 50+ Tools ueber einen zentralen MCP-Server.
+Timus ist ein autonomes Multi-Agent-System fuer Desktop-Automatisierung, Web-Recherche, Code-Generierung und kreative Aufgaben. Es kombiniert **12 spezialisierte KI-Agenten** mit **80+ Tools** ueber einen zentralen MCP-Server.
 
 Branding:
 - Primary Logo: `assets/branding/timus-logo-primary.svg`
@@ -21,6 +21,45 @@ Branding:
 
 ## Aktueller Stand (2026-02-22)
 
+### Agenten-Meilensteine M1–M4 + Memory-Verbesserungen
+
+Vier neue Agenten-Meilensteine wurden implementiert und vollständig getestet:
+
+| Meilenstein | Agent | Modell | Beschreibung |
+|-------------|-------|--------|--------------|
+| **M1** | DataAgent | gpt-4o (OpenAI) | CSV/Excel/JSON Analyse, Datenverarbeitung, statistische Auswertungen |
+| **M2** | CommunicationAgent | claude-sonnet-4-5 (Anthropic) | E-Mails, Berichte, Dokument-Erstellung, professionelle Texte |
+| **M3** | SystemAgent | qwen3.5-plus-02-15 (OpenRouter) | Log-Analyse, Prozessüberwachung, System-Stats, Service-Status (read-only) |
+| **M4** | ShellAgent | claude-sonnet-4-6 (Anthropic) | Shell-Befehle mit 5-Schicht-Sicherheits-Policy |
+
+**ShellAgent Sicherheits-Policy (5 Schichten):**
+1. **Blacklist** — `rm -rf`, `dd if=`, Fork-Bombs, `curl|bash`, `shutdown` etc. blockiert
+2. **Whitelist-Modus** — `SHELL_WHITELIST_MODE=1` erlaubt nur explizit gelistete Befehle
+3. **Timeout** — 30 Sekunden Default-Timeout (konfigurierbar)
+4. **Audit-Log** — jeder Befehl wird in `logs/shell_audit.log` protokolliert
+5. **Dry-Run** — `cron`-Einträge standardmäßig nur simuliert (`dry_run=True`)
+
+**Capability-Map Refactoring:**
+
+Jeder Agent sieht nur die für seine Aufgaben relevanten Tools (statt alle 80+):
+
+| Agent | Tools |
+|-------|-------|
+| shell | 5 (nur Shell-Tools) |
+| system | 14 (Log, Prozesse, Stats) |
+| communication | 34 |
+| development | 39 |
+| data | 42 |
+| document | 41 |
+| executor | 60 |
+| meta | 68 (Orchestrator, sieht am meisten) |
+
+**Memory-System Verbesserungen:**
+- **Nemotron als Kurator**: `curator_tool` nutzt jetzt `nvidia/nemotron-3-nano-30b-a3b` via OpenRouter statt gpt-4o — strukturierte Entscheidungen zu 4 Kriterien (Faktenwissen, Nutzerpräferenz, Selbsterkenntnis, Kontext)
+- **Agent-Isolation in ChromaDB**: `remember(agent_id=...)` speichert die Agent-ID in der Metadaten-Schicht — `recall(agent_filter=...)` filtert Erinnerungen nach Agent — rückwärtskompatibel (ohne Filter = alle Memories)
+
+---
+
 **Canvas v2 + Terminal-Client + Telegram-Erweiterungen:**
 
 ### Canvas v2 (`server/canvas_ui.py` + neue MCP-Endpoints)
@@ -29,7 +68,7 @@ Die Canvas-Oberfläche wurde vollständig überarbeitet:
 
 | Feature | Beschreibung |
 |---|---|
-| **Agent-Health-LEDs** | 7 farbige LEDs (idle=grau, thinking=blink-gelb, completed=grün, error=rot) |
+| **Agent-Health-LEDs** | 12 farbige LEDs (idle=grau, thinking=blink-gelb, completed=grün, error=rot) |
 | **Thinking-LED** | Blinkt in der Topbar solange ein KI-Modell arbeitet |
 | **Interaktiver Chat** | Chat-Panel unten — Nachrichten an Timus, Antwort via SSE in Echtzeit |
 | **Datei-Upload** | 📎-Schaltfläche → `data/uploads/` → Pfad automatisch in Chat-Input |
@@ -39,7 +78,7 @@ Neue API-Endpoints:
 
 | Endpoint | Beschreibung |
 |---|---|
-| `GET /agent_status` | JSON mit allen 7 Agenten-States + thinking-Flag |
+| `GET /agent_status` | JSON mit allen 12 Agenten-States + thinking-Flag |
 | `GET /events/stream` | SSE: agent_status, thinking, chat_reply, chat_error, upload |
 | `POST /chat` | Textnachricht → `get_agent_decision()` + `run_agent()` → SSE-Push |
 | `GET /chat/history` | In-Memory Chat-Verlauf (letzte 200 Nachrichten) |
@@ -79,7 +118,7 @@ python timus_terminal.py   # oder ./timus_terminal.py
 - **Error Classifier** (`utils/error_classifier.py`): Granulare Exception-Klassifizierung (API_ERROR, RATE_LIMIT, TIMEOUT, TOOL_FAIL, …) mit retriable/failover-Flags
 - **Model Failover** (`utils/model_failover.py`): Automatische Agenten-Eskalation bei Ausfällen (research→reasoning→meta→executor), exponentieller Backoff
 - **systemd Services**: `timus-mcp.service` + `timus-dispatcher.service` — Auto-Start, Restart bei Crash, Daemon-Modus (kein TTY)
-- **Import-Bug Fix** (`tools/summarizer/tool.py`): `ensure_browser_initialized` aus korrektem Modul importiert — alle 53 Tools ladbar
+- **Import-Bug Fix** (`tools/summarizer/tool.py`): `ensure_browser_initialized` aus korrektem Modul importiert — alle Tool-Module ladbar
 
 Neue Dateien:
 
@@ -193,7 +232,7 @@ CI-Gates (GitHub Actions):
                     │       ↓                                 │
                     │  [executor|research|reasoning|...]      │
                     │       ↓                                 │
-                    │  MCP Server (53 Tools)                  │
+                    │  MCP Server (80+ Tools, 12 Agenten)     │
                     │       ↓                                 │
                     │  SystemMonitor → Telegram Alert         │
                     └─────────────────────────────────────────┘
@@ -213,8 +252,8 @@ main_dispatcher.py
       |
       v
 Agent-Auswahl (AGENT_CLASS_MAP)
-  executor | research | reasoning | creative
-  development | meta | visual | vision_qwen | visual_nemotron
+  executor | research | reasoning | creative | development
+  meta | visual | data | document | communication | system | shell
       |
       v
 agent/base_agent.py
@@ -227,7 +266,7 @@ agent/base_agent.py
 MCP-Server :5000 (FastAPI + JSON-RPC)
   ├─ tool_registry_v2 / Schemas
   ├─ Tool-Validierung (serverseitig)
-  └─ Tools: Browser, Vision, OCR, Mouse, Search, File, Memory, Voice, ...
+  └─ Tools: Browser, Vision, OCR, Mouse, Search, File, Memory, Voice, System, Shell, ...
       |
       +--> VisualNemotron v4 Vision-Pipeline
       |     ├─ Florence-2 (lokal, PRIMARY): UI-Elemente + BBoxes
@@ -299,52 +338,81 @@ flowchart TD
 
 ## Agenten
 
-### ExecutorAgent
-- **Modell:** gpt-5-mini (OpenAI)
-- **Aufgabe:** Schnelle einfache Tasks - Dateien lesen/schreiben, Websuche, Zusammenfassungen, einfache Fragen
-- **Max Iterationen:** 30
+Timus verfügt über **12 spezialisierte Agenten** in zwei Gruppen: die ursprünglichen Kern-Agenten und die neuen M1–M4-Agenten.
 
-### DeepResearchAgent
-- **Modell:** deepseek-reasoner (DeepSeek)
+### Kern-Agenten
+
+#### ExecutorAgent
+- **Modell:** gpt-5-mini (OpenAI) — via `FAST_MODEL`
+- **Aufgabe:** Schnelle einfache Tasks — Dateien lesen/schreiben, Websuche, Zusammenfassungen, einfache Fragen
+- **Max Iterationen:** 30 | **Tools:** 60
+
+#### DeepResearchAgent
+- **Modell:** deepseek-reasoner (DeepSeek) — via `RESEARCH_MODEL`
 - **Aufgabe:** Tiefenrecherche mit These-Antithese-Synthese Framework, Source Quality Rating, akademische Quellenanalyse
-- **Max Iterationen:** 8
+- **Max Iterationen:** 8 | **Tools:** 48
 
-### ReasoningAgent
-- **Modell:** qwen/qwen3.5-plus-02-15 (OpenRouter) — ehemals nvidia/nemotron-3-nano-30b-a3b
+#### ReasoningAgent
+- **Modell:** nvidia/nemotron-3-nano-30b-a3b (OpenRouter) — via `REASONING_MODEL` + `REASONING_MODEL_PROVIDER`
 - **Aufgabe:** Komplexe Multi-Step-Analyse, Debugging, Architektur-Entscheidungen, Root-Cause-Analyse, Pro/Contra-Abwaegungen
-- **Besonderheit:** Provider-flexibel (`REASONING_MODEL_PROVIDER=openrouter|openai`), Vision-fähig
+- **Besonderheit:** Provider-flexibel (`REASONING_MODEL_PROVIDER=openrouter|openai`), Vision-fähig | **Tools:** 46
 
-### CreativeAgent
-- **Modell:** gpt-5.2 (OpenAI)
+#### CreativeAgent
+- **Modell:** gpt-5.2 (OpenAI) — via `CREATIVE_MODEL`
 - **Aufgabe:** Bildgenerierung (DALL-E), kreative Texte, Gedichte, Songs
-- **Besonderheit:** Hybrid-Workflow - GPT-5.1 generiert detaillierten Prompt, Nemotron strukturiert den Tool-Call
+- **Besonderheit:** Hybrid-Workflow — GPT-5.2 generiert detaillierten Prompt, Tool-Call für DALL-E | **Tools:** 44
 
-### DeveloperAgent / DeveloperAgentV2
-- **Modell:** mercury-coder-small (Inception Labs)
+#### DeveloperAgent / DeveloperAgentV2
+- **Modell:** mercury-coder-small (Inception Labs) — via `CODE_MODEL`
 - **Aufgabe:** Code-Generierung, Refactoring, Skripte, Datei-Operationen
-- **V2-Features:** Context-Files Support, Code-Validierung (AST, Style, Security), Multi-Tool Support, Fehler-Recovery
+- **V2-Features:** Context-Files Support, Code-Validierung (AST, Style, Security), Multi-Tool Support, Fehler-Recovery | **Tools:** 39
 
-### MetaAgent
-- **Modell:** claude-sonnet-4-5 (Anthropic)
+#### MetaAgent
+- **Modell:** claude-sonnet-4-5 (Anthropic) — via `PLANNING_MODEL`
 - **Aufgabe:** Workflow-Planung, mehrstufige Aufgaben koordinieren, Agent-Orchestrierung
-- **Besonderheit:** Skill-System mit automatischer Skill-Auswahl und Progressive Disclosure
+- **Besonderheit:** Skill-System mit automatischer Skill-Auswahl, Progressive Disclosure, Orchestrator-Rolle | **Tools:** 68
 
-### VisualAgent
-- **Modell:** claude-sonnet-4-5 (Anthropic)
+#### VisualAgent
+- **Modell:** claude-sonnet-4-5 (Anthropic) — via `VISION_MODEL`
 - **Aufgabe:** Desktop-/Browser-Automatisierung mit Screenshot-Analyse
 - **3-Stufen-Praezision:**
-  1. SoM (Set-of-Mark) - Grob-Lokalisierung (+-50px)
-  2. Mouse Feedback Tool - Fein-Lokalisierung (+-5px)
+  1. SoM (Set-of-Mark) — Grob-Lokalisierung (±50px)
+  2. Mouse Feedback Tool — Fein-Lokalisierung (±5px)
   3. Cursor-Typ als Echtzeit-Feedback (ibeam = Textfeld, hand = klickbar)
-- **Features:** ROI-Management, Loop-Recovery, Screen-Change-Gate, Strukturierte Navigation
+- **Features:** ROI-Management, Loop-Recovery, Screen-Change-Gate, Strukturierte Navigation | **Tools:** 43
 
-### VisualNemotronAgent v4 (Desktop Edition)
-- **Decision-LLM:** Qwen3.5 Plus (qwen/qwen3.5-plus-02-15, OpenRouter) — via `REASONING_MODEL` + `REASONING_MODEL_PROVIDER` wählbar
+#### VisualNemotronAgent v4 (Desktop Edition)
+- **Decision-LLM:** Qwen3.5 Plus (qwen/qwen3.5-plus-02-15, OpenRouter) — via `REASONING_MODEL` + `REASONING_MODEL_PROVIDER`
 - **Vision-Kaskade:** Florence-2 lokal (PRIMARY) → Qwen3.5 Plus via OpenRouter → GPT-4 Vision → Qwen-VL lokal
 - **Architektur:** Plan-then-Execute — `_structure_task()` erstellt To-Do-Liste, `_execute_step_with_retry()` mit 3 Retries pro Schritt
 - **Aufgabe:** Komplexe mehrstufige Desktop-Automatisierung (Browser, Apps, Formulare)
 - **Tech:** PyAutoGUI + SoM fuer echte Maus-Klicks auf dem ganzen Desktop
-- **LLM-Fallback:** Qwen3.5 Plus (OpenRouter) → LOCAL_LLM (konfigurierbar via `LOCAL_LLM_URL`)
+
+---
+
+### M1–M4 Agenten (neu)
+
+#### DataAgent *(M1)*
+- **Modell:** gpt-4o (OpenAI) — via `DATA_MODEL`
+- **Aufgabe:** CSV, Excel, JSON Analyse — Datenverarbeitung, statistische Auswertungen, Diagramme
+- **Max Iterationen:** 15 | **Tools:** 42
+
+#### CommunicationAgent *(M2)*
+- **Modell:** claude-sonnet-4-5 (Anthropic) — via `COMMUNICATION_MODEL`
+- **Aufgabe:** Professionelle Kommunikation — E-Mails verfassen, Berichte erstellen, Dokument-Export (DOCX, TXT)
+- **Max Iterationen:** 12 | **Tools:** 34
+
+#### SystemAgent *(M3)*
+- **Modell:** qwen/qwen3.5-plus-02-15 (OpenRouter) — via `SYSTEM_MODEL`
+- **Aufgabe:** Read-only System-Monitoring — Logs lesen/durchsuchen, Prozesse anzeigen, CPU/RAM/Disk-Stats, Service-Status
+- **Besonderheit:** Ausschließlich lesend — kein Schreibzugriff, kein Shell-Ausführen
+- **Max Iterationen:** 12 | **Tools:** 14
+
+#### ShellAgent *(M4)*
+- **Modell:** claude-sonnet-4-6 (Anthropic) — via `SHELL_MODEL`
+- **Aufgabe:** Kontrollierte Shell-Ausführung mit 5-Schicht-Policy (Blacklist, Whitelist, Timeout, Audit, Dry-Run)
+- **Besonderheit:** Erklärt Befehle vor der Ausführung, Audit-Log in `logs/shell_audit.log`, Cron-Management nur per Dry-Run
+- **Max Iterationen:** 10 | **Tools:** 5
 
 ---
 
@@ -433,6 +501,8 @@ Beispiel: "Recherchiere KI-Sicherheit und erstelle einen Plan"
 
 | Tool | Funktionen |
 |------|-----------|
+| **system_tool** *(M3)* | `read_log`, `search_log`, `get_processes`, `get_system_stats`, `get_service_status` — read-only System-Monitoring |
+| **shell_tool** *(M4)* | `run_command`, `run_script`, `list_cron`, `add_cron` (dry_run), `read_audit_log` — kontrollierte Shell-Ausführung |
 | **system_monitor_tool** | System-Auslastung (CPU, RAM, Festplatte) |
 | **maintenance_tool** | Cleanup und Wartung |
 | **debug_tool** | Debugging-Utilities |
@@ -468,9 +538,9 @@ Beispiel: "Recherchiere KI-Sicherheit und erstelle einen Plan"
 
 ---
 
-## Memory-System v2.0
+## Memory-System v2.1
 
-Drei-Ebenen-Architektur mit Hybrid-Suche, automatisierter Reflexion und bidirektionalem Sync:
+Vier-Ebenen-Architektur mit Hybrid-Suche, Nemotron-Kuration, Agent-Isolation und bidirektionalem Sync:
 
 ```
 Memory System v2.0
@@ -506,11 +576,20 @@ Memory System v2.0
 **Features:**
 - Automatische Fakten-Extraktion aus Konversationen
 - Semantische Hybrid-Suche (ChromaDB Embeddings + FTS5 Keyword-Suche)
-- Entity Resolution (er/sie/es -> konkrete Entitaet)
+- Entity Resolution (er/sie/es → konkrete Entitaet)
 - Self-Model: Lernt Benutzer-Muster ueber Zeit
 - Post-Task Reflexion mit automatischer Learning-Speicherung
-- Bidirektionaler Sync: SQLite <-> Markdown <-> ChromaDB
+- Bidirektionaler Sync: SQLite ↔ Markdown ↔ ChromaDB
 - Manuell editierbare Markdown-Dateien mit automatischer Rueck-Synchronisation
+- **Nemotron-Kurator** (`curator_tool`): `nvidia/nemotron-3-nano-30b-a3b` entscheidet nach 4 Kriterien ob eine Information gespeichert wird
+- **Agent-Isolation**: ChromaDB Metadaten enthalten `agent_id` — `recall(agent_filter="shell")` gibt nur Shell-Memories zurück
+
+```python
+# Agent-isoliertes Speichern und Abrufen
+await remember(text="...", source="shell_run", agent_id="shell")
+await recall(query="...", agent_filter="shell")   # nur Shell-Memories
+await recall(query="...")                          # alle Memories (rückwärtskompatibel)
+```
 
 ### Browser-Isolation
 
@@ -597,16 +676,32 @@ Skills werden vom MetaAgent automatisch erkannt und bei passenden Tasks eingeset
 
 ## Unterstuetzte LLM-Provider
 
-| Provider | Modelle | Verwendung |
-|----------|---------|------------|
-| **OpenAI** | gpt-5, gpt-5.2, gpt-5-mini, gpt-4o | Executor, Creative |
-| **Anthropic** | claude-sonnet-4-5, claude-opus-4-6 | Meta, Visual |
+| Provider | Modelle | Agenten |
+|----------|---------|---------|
+| **OpenAI** | gpt-5-mini, gpt-5.2, gpt-4o | Executor, Creative, Data |
+| **Anthropic** | claude-sonnet-4-5, claude-sonnet-4-6 | Meta, Visual, Document, Communication, Shell |
 | **DeepSeek** | deepseek-reasoner | Deep Research |
 | **Inception Labs** | mercury-coder-small | Developer |
-| **Qwen / OpenRouter** | qwen3.5-plus-02-15 | Reasoning + Vision-Analyse |
+| **OpenRouter** | qwen/qwen3.5-plus-02-15 | System (M3) + Vision-Analyse |
+| **OpenRouter** | nvidia/nemotron-3-nano-30b-a3b | Reasoning + Memory Kurator |
 | **Google** | Gemini | Placeholder |
 
-Jeder Agent kann ueber Environment-Variablen auf ein anderes Modell/Provider umkonfiguriert werden.
+Jeder Agent kann ueber Environment-Variablen auf ein anderes Modell/Provider umkonfiguriert werden:
+
+```bash
+# M3 / M4 Agenten-Modelle überschreiben
+SYSTEM_MODEL=qwen/qwen3.5-plus-02-15
+SYSTEM_MODEL_PROVIDER=openrouter
+SHELL_MODEL=claude-sonnet-4-6
+SHELL_MODEL_PROVIDER=anthropic
+
+# Nemotron Memory-Kurator überschreiben
+CURATOR_MODEL=nvidia/nemotron-3-nano-30b-a3b   # via OPENROUTER_API_KEY
+
+# Shell-Agent Sicherheits-Policy
+SHELL_WHITELIST_MODE=0         # 1 = nur erlaubte Befehle
+SHELL_TIMEOUT=30               # Sekunden
+```
 
 ---
 
@@ -754,6 +849,10 @@ Du> Male ein Bild von einem Hund im Park      -> CreativeAgent
 Du> Schreibe ein Python-Skript fuer...        -> DeveloperAgent
 Du> Erstelle einen Plan fuer...               -> MetaAgent
 Du> Oeffne Firefox und gehe zu google.com     -> VisualAgent
+Du> Analysiere diese CSV-Datei                -> DataAgent    (M1)
+Du> Schreibe eine formale E-Mail an...        -> CommunicationAgent (M2)
+Du> Zeige mir CPU und RAM Auslastung          -> SystemAgent  (M3)
+Du> Liste alle Cron-Jobs auf                  -> ShellAgent   (M4)
 ```
 
 Der Dispatcher erkennt automatisch den Intent und waehlt den passenden Agenten.
@@ -778,16 +877,29 @@ Beispiel fuer Live-Status-Ausgabe:
 timus/
 ├── agent/
 │   ├── shared/              # Shared Utilities (MCP Client, Screenshot, Parser)
-│   ├── agents/              # 7 spezialisierte Agenten
+│   ├── agents/              # 12 spezialisierte Agenten
+│   │   ├── executor.py
+│   │   ├── research.py
+│   │   ├── reasoning.py
+│   │   ├── creative.py
+│   │   ├── developer.py
+│   │   ├── meta.py
+│   │   ├── visual.py
+│   │   ├── data.py          # M1: DataAgent
+│   │   ├── document.py      # M1: DocumentAgent
+│   │   ├── communication.py # M2: CommunicationAgent
+│   │   ├── system.py        # M3: SystemAgent (read-only Monitoring)
+│   │   └── shell.py         # M4: ShellAgent (5-Schicht-Policy)
 │   ├── agent_registry.py    # Agent-Registry mit Factory-Pattern + Delegation
-│   ├── base_agent.py        # BaseAgent mit Multi-Provider Support
-│   ├── providers.py         # LLM Provider-Infrastruktur
-│   ├── prompts.py           # System Prompts
+│   ├── base_agent.py        # BaseAgent + AGENT_CAPABILITY_MAP (präzise Tool-Sets)
+│   ├── providers.py         # LLM Provider-Infrastruktur (7 Provider)
+│   ├── prompts.py           # System Prompts (inkl. SYSTEM_PROMPT_TEMPLATE, SHELL_PROMPT_TEMPLATE)
+│   ├── dynamic_tool_mixin.py  # DynamicToolMixin — filtert Tools nach AGENT_CAPABILITY_MAP
 │   ├── visual_agent.py      # Standalone Visual Agent v2.1
 │   ├── developer_agent_v2.py
 │   ├── visual_nemotron_agent_v4.py
 │   └── timus_consolidated.py  # Re-Export Shim
-├── tools/                   # 50+ Tool-Module
+├── tools/                   # 80+ Tool-Module
 │   ├── ocr_tool/
 │   ├── som_tool/
 │   ├── browser_tool/        # Browser mit Session-Isolation + Retry
@@ -799,8 +911,13 @@ timus/
 │   ├── developer_tool/
 │   ├── delegation_tool/     # Agent-zu-Agent Delegation (MCP-Tool)
 │   ├── florence2_tool/      # Florence-2 Vision (UI-Detection + OCR, Primary)
-│   ├── memory_tool/
-│   └── ...
+│   ├── memory_tool/         # Memory v2.1 (agent_id, agent_filter, Nemotron-Kurator)
+│   ├── curator_tool/        # Nemotron-Kurator (nvidia/nemotron-3-nano-30b-a3b via OpenRouter)
+│   ├── system_tool/         # M3: read_log, search_log, get_processes, get_system_stats, get_service_status
+│   ├── shell_tool/          # M4: run_command, run_script, list_cron, add_cron, read_audit_log
+│   ├── data_tool/           # M1: CSV/Excel/JSON Analyse
+│   ├── document_creator/    # M1: DOCX/TXT Erstellung
+│   └── ...                  # 60+ weitere Tools
 ├── orchestration/
 │   ├── scheduler.py            # Proaktiver Heartbeat-Scheduler
 │   ├── autonomous_runner.py    # Scheduler↔Agent Bridge (autonome Ausführung)
@@ -814,14 +931,16 @@ timus/
 │   ├── system_monitor.py       # CPU/RAM/Disk Monitor mit Telegram-Alerts
 │   └── rss_poller.py           # RSS-Feed Polling
 ├── server/
-│   ├── mcp_server.py        # MCP Server (FastAPI, Port 5000, 53 Tools)
-│   └── canvas_ui.py         # Canvas Web-UI v2 (Chat, LEDs, Upload, SSE)
+│   ├── mcp_server.py        # MCP Server (FastAPI, Port 5000, 80+ Tools, 12 Agent-LEDs)
+│   └── canvas_ui.py         # Canvas Web-UI v2 (Chat, 12 LEDs, Upload, SSE)
 ├── skills/                  # Erlernbare Skills
 │   └── templates/           # UI-Pattern Templates (8 Patterns)
 ├── memory/
-│   ├── memory_system.py     # Memory v2.0 (Hybrid-Suche, Sync)
+│   ├── memory_system.py     # Memory v2.1 (Hybrid-Suche, Nemotron-Kurator, Agent-Isolation)
 │   ├── reflection_engine.py # Post-Task Reflexion
 │   └── markdown_store/      # USER.md, SOUL.md, MEMORY.md
+├── logs/
+│   └── shell_audit.log      # Audit-Log aller ShellAgent-Befehle
 ├── tests/
 │   ├── test_milestone5_quality_gates.py
 │   ├── test_milestone6_e2e_readiness.py
@@ -837,7 +956,7 @@ timus/
 │   ├── task_queue.db           # SQLite Task-Persistenz
 │   └── uploads/                # Datei-Uploads aus Canvas-Chat
 ├── config/                     # Personality-System
-├── main_dispatcher.py          # Zentral-Dispatcher (v3.4 Autonomous + Telegram)
+├── main_dispatcher.py          # Zentral-Dispatcher (v3.5 — 12 Agenten)
 ├── timus_terminal.py           # Terminal-Client (parallel zu systemd)
 ├── timus-mcp.service           # systemd Unit für MCP-Server
 ├── timus-dispatcher.service    # systemd Unit für Dispatcher
@@ -847,6 +966,8 @@ timus/
     ├── RELEASE_NOTES_MILESTONE6.md
     ├── SESSION_LOG_2026-02-17_MILESTONES_0_TO_6.md
     ├── SESSION_LOG_2026-02-21_AUTONOMIE_MILESTONES.md
+    ├── SESSION_LOG_2026-02-22_CANVAS_V2_PROFIL.md
+    ├── SESSION_LOG_2026-02-22_M1_M4_AGENTS_MEMORY.md
     └── ABSCHLUSSBERICHT_Florence2_Integration_2026-02-19.md
 ```
 

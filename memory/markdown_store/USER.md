@@ -8,7 +8,7 @@ preferences:
 goals:
   - ein RAG System auf bauen im Dev Ordner ist schon eins drin schau dir das mal an und sag mir deine Meinung
 constraints: []
-updated_at: 2026-02-22T18:01:18.914372
+updated_at: 2026-02-22T19:47:50.878583
 ---
 
 # Benutzer-Profil
@@ -36,4 +36,4 @@ Nicht gesetzt
 Keine Constraints
 
 ---
-*Zuletzt aktualisiert: 2026-02-22T18:01:18.914372*
+*Zuletzt aktualisiert: 2026-02-22T19:47:50.878583*

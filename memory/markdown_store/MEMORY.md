@@ -1,8 +1,8 @@
 ---
 entries:
-  - {'category': 'user_profile', 'content': 'Ich mag strukturierte JSON Antworten', 'importance': 0.7, 'created_at': '2026-02-22T18:01:20.045955', 'source': ''}
+  - {'category': 'user_profile', 'content': 'Ich mag strukturierte JSON Antworten', 'importance': 0.7, 'created_at': '2026-02-22T19:47:51.984813', 'source': ''}
 count: 1
-updated_at: 2026-02-22T18:01:20.045959
+updated_at: 2026-02-22T19:47:51.984818
 ---
 
 # Wichtige Erinnerungen
@@ -16,4 +16,4 @@ Sie kann manuell editiert werden.
 
 
 ---
-*Einträge: 1 | Zuletzt aktualisiert: 2026-02-22T18:01:20.045968*
+*Einträge: 1 | Zuletzt aktualisiert: 2026-02-22T19:47:51.984828*
