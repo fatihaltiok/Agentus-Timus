@@ -8,7 +8,9 @@ FEATURES:
 - Loop-Prevention via Delegation-Stack
 """
 
+import asyncio
 import logging
+import os
 import httpx
 from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass, field
@@ -43,6 +45,12 @@ class AgentRegistry:
         "researcher": "research",
         "analyst": "reasoning",
         "vision": "visual",
+        "daten": "data",
+        "bash": "shell",
+        "terminal": "shell",
+        "monitoring": "system",
+        "koordinator": "meta",
+        "orchestrator": "meta",
     }
 
     def __init__(self):
@@ -184,19 +192,32 @@ class AgentRegistry:
             log.info(f"Agent instanziiert: {name} ({spec.factory.__name__})")
         return self._instances[name]
 
+    # Strings die auf ein nur teilweise abgeschlossenes Ergebnis hinweisen
+    _PARTIAL_MARKERS = frozenset({"Limit erreicht.", "Max Iterationen."})
+
     async def delegate(
         self,
         from_agent: str,
         to_agent: str,
         task: str,
         session_id: Optional[str] = None,
-    ) -> str:
-        """Delegiert Task mit Loop-Prevention via Stack."""
+    ) -> Dict[str, Any]:
+        """Delegiert Task mit Loop-Prevention via Stack.
+
+        Gibt immer ein strukturiertes Dict zurueck:
+            {"status": "success",  "agent": "...", "result": "..."}
+            {"status": "partial",  "agent": "...", "result": "...", "note": "..."}
+            {"status": "error",    "agent": "...", "error":  "..."}
+        """
         from_agent = self.normalize_agent_name(from_agent)
         to_agent = self.normalize_agent_name(to_agent)
         effective_session_id = self._resolve_effective_session_id(from_agent, session_id)
 
         if to_agent not in self._specs:
+            error_msg = (
+                f"FEHLER: Agent '{to_agent}' nicht registriert. "
+                f"Verfuegbar: {list(self._specs.keys())}"
+            )
             self._log_canvas_delegation(
                 from_agent=from_agent,
                 to_agent=to_agent,
@@ -206,12 +227,13 @@ class AgentRegistry:
                 message=f"Delegation fehlgeschlagen: Agent '{to_agent}' nicht registriert",
                 payload={"reason": "agent_not_registered"},
             )
-            return f"FEHLER: Agent '{to_agent}' nicht registriert. Verfuegbar: {list(self._specs.keys())}"
+            return {"status": "error", "agent": to_agent, "error": error_msg}
 
         stack = list(self._delegation_stack_var.get())
 
         if to_agent in stack:
             chain = " -> ".join(stack)
+            error_msg = f"FEHLER: Zirkulaere Delegation ({chain} -> {to_agent})"
             self._log_canvas_delegation(
                 from_agent=from_agent,
                 to_agent=to_agent,
@@ -221,9 +243,12 @@ class AgentRegistry:
                 message=f"Zirkulaere Delegation: {chain} -> {to_agent}",
                 payload={"reason": "cycle_detected", "chain": chain},
             )
-            return f"FEHLER: Zirkulaere Delegation ({chain} -> {to_agent})"
+            return {"status": "error", "agent": to_agent, "error": error_msg}
 
         if len(stack) >= self.MAX_DELEGATION_DEPTH:
+            error_msg = (
+                f"FEHLER: Max Delegation-Tiefe ({self.MAX_DELEGATION_DEPTH}) erreicht"
+            )
             self._log_canvas_delegation(
                 from_agent=from_agent,
                 to_agent=to_agent,
@@ -233,7 +258,7 @@ class AgentRegistry:
                 message=f"Max Delegation-Tiefe ({self.MAX_DELEGATION_DEPTH}) erreicht",
                 payload={"reason": "max_depth"},
             )
-            return f"FEHLER: Max Delegation-Tiefe ({self.MAX_DELEGATION_DEPTH}) erreicht"
+            return {"status": "error", "agent": to_agent, "error": error_msg}
 
         next_stack = tuple(stack + [to_agent])
         stack_token = self._delegation_stack_var.set(next_stack)
@@ -248,9 +273,13 @@ class AgentRegistry:
             payload={"stack_depth": len(next_stack)},
         )
 
+        timeout = float(os.getenv("DELEGATION_TIMEOUT", "120"))
+        max_retries = int(os.getenv("DELEGATION_MAX_RETRIES", "1"))
+
         agent = None
         previous_session_id: Optional[str] = None
         target_has_session_attr = False
+        last_error: Optional[Exception] = None
         try:
             agent = await self._get_or_create(to_agent)
             if hasattr(agent, "conversation_session_id"):
@@ -259,7 +288,55 @@ class AgentRegistry:
                 if effective_session_id:
                     setattr(agent, "conversation_session_id", effective_session_id)
 
-            result = await agent.run(task)
+            for attempt in range(max_retries):
+                try:
+                    raw = await asyncio.wait_for(agent.run(task), timeout=timeout)
+                    last_error = None
+                    break
+                except asyncio.TimeoutError as e:
+                    last_error = TimeoutError(
+                        f"Agent '{to_agent}' hat nicht innerhalb von {timeout}s geantwortet"
+                    )
+                    log.warning(
+                        f"Delegation {from_agent} -> {to_agent} Timeout "
+                        f"(Versuch {attempt + 1}/{max_retries})"
+                    )
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(2 ** attempt)
+                except Exception as e:
+                    last_error = e
+                    log.warning(
+                        f"Delegation {from_agent} -> {to_agent} Fehler "
+                        f"(Versuch {attempt + 1}/{max_retries}): {e}"
+                    )
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(2 ** attempt)
+            else:
+                raise last_error  # type: ignore[misc]
+
+            if last_error is not None:
+                raise last_error
+
+            # Partial-Result-Erkennung
+            result_str = str(raw)
+            if result_str in self._PARTIAL_MARKERS:
+                status = "partial"
+                self._log_canvas_delegation(
+                    from_agent=from_agent,
+                    to_agent=to_agent,
+                    session_id=effective_session_id,
+                    status="completed",
+                    task=task,
+                    message=f"Delegation partiell: {from_agent} -> {to_agent}",
+                    payload={"result_preview": result_str[:240]},
+                )
+                return {
+                    "status": "partial",
+                    "agent": to_agent,
+                    "result": result_str,
+                    "note": "Aufgabe nicht vollstaendig abgeschlossen",
+                }
+
             self._log_canvas_delegation(
                 from_agent=from_agent,
                 to_agent=to_agent,
@@ -267,9 +344,10 @@ class AgentRegistry:
                 status="completed",
                 task=task,
                 message=f"Delegation abgeschlossen: {from_agent} -> {to_agent}",
-                payload={"result_preview": str(result)[:240]},
+                payload={"result_preview": result_str[:240]},
             )
-            return result
+            return {"status": "success", "agent": to_agent, "result": result_str}
+
         except Exception as e:
             log.error(f"Delegation {from_agent} -> {to_agent} fehlgeschlagen: {e}")
             self._log_canvas_delegation(
@@ -281,7 +359,11 @@ class AgentRegistry:
                 message=f"Delegation fehlgeschlagen: {e}",
                 payload={"exception": str(e)[:300]},
             )
-            return f"FEHLER: Delegation an '{to_agent}' fehlgeschlagen: {e}"
+            return {
+                "status": "error",
+                "agent": to_agent,
+                "error": f"FEHLER: Delegation an '{to_agent}' fehlgeschlagen: {e}",
+            }
         finally:
             if target_has_session_attr and agent is not None:
                 setattr(agent, "conversation_session_id", previous_session_id)
@@ -321,6 +403,7 @@ def register_all_agents():
     from agent.agents import (
         ExecutorAgent, DeepResearchAgent, ReasoningAgent,
         CreativeAgent, DeveloperAgent, MetaAgent, VisualAgent,
+        DataAgent, DocumentAgent, CommunicationAgent, SystemAgent, ShellAgent,
     )
     from agent.agents.image import ImageAgent
 
@@ -366,6 +449,31 @@ def register_all_agents():
         "image", "image",
         ["image_analysis", "vision", "photo", "bild"],
         ImageAgent,
+    )
+    registry.register_spec(
+        "data", "data",
+        ["data", "csv", "excel", "json", "analysis", "statistics"],
+        DataAgent,
+    )
+    registry.register_spec(
+        "document", "document",
+        ["document", "pdf", "docx", "report", "writing"],
+        DocumentAgent,
+    )
+    registry.register_spec(
+        "communication", "communication",
+        ["communication", "email", "letter", "linkedin"],
+        CommunicationAgent,
+    )
+    registry.register_spec(
+        "system", "system",
+        ["system", "monitoring", "logs", "processes", "stats"],
+        SystemAgent,
+    )
+    registry.register_spec(
+        "shell", "shell",
+        ["shell", "bash", "command", "script", "cron"],
+        ShellAgent,
     )
 
     log.info(f"Alle Agenten registriert: {registry.list_agents()}")

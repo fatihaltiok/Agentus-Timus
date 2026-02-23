@@ -19,7 +19,22 @@ Branding:
 
 ---
 
-## Aktueller Stand (2026-02-22)
+## Aktueller Stand (2026-02-23)
+
+### Agenten-Kommunikation — Architektur-Verbesserung (M1–M4)
+
+Vollständige Überarbeitung des Agent-zu-Agent Kommunikationssystems in 4 Meilensteinen:
+
+| Meilenstein | Inhalt |
+|-------------|--------|
+| **M1** | Registry-Vollständigkeit: alle 13 Agenten erreichbar (data, document, communication, system, shell ergänzt); Session-ID-Propagation image→research; neue Typ-Aliases |
+| **M2** | Resilience: `asyncio.wait_for`-Timeout (default 120s via `DELEGATION_TIMEOUT`); Retry-Schleife mit exponentiellem Backoff (`DELEGATION_MAX_RETRIES`); Stack-Reset nach Timeout |
+| **M3** | Strukturierte Rückgabe: `delegate()` gibt immer `{"status": "success"|"partial"|"error", ...}` zurück; Partial-Marker `"Limit erreicht."` und `"Max Iterationen."` erkannt; Image-Agent Partial-Handling |
+| **M4** | Meta-Orchestrator: DELEGATION-Sektion im META_SYSTEM_PROMPT; Partial-Result-Warnung in MetaAgent; Aliases `koordinator`/`orchestrator` → `meta` |
+
+**41 neue/angepasste Tests — alle grün.** (test_m1–m4, test_v3_vollstaendige_architektur, test_delegation_hardening)
+
+---
 
 ### Agenten-Meilensteine M1–M5 + Memory-Verbesserungen + Bugfixes
 
@@ -235,7 +250,7 @@ CI-Gates (GitHub Actions):
   Webhook  ──────→  │  WebhookServer  → EventRouter                        │
   Heartbeat ─────→  │  ProactiveScheduler                                  │
   CLI       ──────→ │  _cli_loop()  (nur mit TTY)                          │
-  Canvas    ──────→ │  /chat  (SSE-Push, 12 Agent-LEDs)                    │
+  Canvas    ──────→ │  /chat  (SSE-Push, 13 Agent-LEDs)                    │
                     │       ↓                                              │
                     │  AutonomousRunner                                    │
                     │       ↓                                              │
@@ -244,14 +259,19 @@ CI-Gates (GitHub Actions):
                     │  failover_run_agent()                                │
                     │       ↓                                              │
                     │  ┌──────────────────────────────────────────────┐   │
-                    │  │ AGENT_CLASS_MAP (12 Agenten)                  │   │
+                    │  │ AGENT_CLASS_MAP (13 Agenten)                  │   │
                     │  │  executor  │ research  │ reasoning │ creative │   │
-                    │  │  developer │ meta      │ visual               │   │
+                    │  │  developer │ meta      │ visual    │ image    │   │
                     │  │  data  │ document │ communication  (M1/M2)   │   │
                     │  │  system (M3, read-only)                       │   │
                     │  │  shell  (M4, 5-Schicht-Policy)                │   │
-                    │  │  image  (M5, Bild-Analyse Qwen3.5+)           │   │
                     │  └──────────────────────────────────────────────┘   │
+                    │       ↓                                              │
+                    │  AgentRegistry — delegate_to_agent                   │
+                    │  ├─ Timeout (asyncio.wait_for, 120s default)        │
+                    │  ├─ Retry (expon. Backoff, DELEGATION_MAX_RETRIES)  │
+                    │  ├─ Partial-Erkennung ("Limit erreicht." → partial) │
+                    │  └─ Loop-Prevention (Stack, MAX_DEPTH=3)            │
                     │       ↓                                              │
                     │  MCP Server :5000 (80+ Tools, AGENT_CAPABILITY_MAP) │
                     │       ↓                          ↓                  │
@@ -279,9 +299,9 @@ main_dispatcher.py
   └─ Lane-/Session-Orchestrierung (lane_manager)
       |
       v
-Agent-Auswahl (AGENT_CLASS_MAP)
-  executor | research | reasoning | creative | development
-  meta | visual | data | document | communication | system | shell | image
+Agent-Auswahl (AGENT_CLASS_MAP — 13 Agenten)
+  executor | research | reasoning | creative | developer
+  meta | visual | image | data | document | communication | system | shell
       |
       v
 agent/base_agent.py
@@ -345,7 +365,13 @@ flowchart TD
     D --> DI["intent analysis LLM"]
     D --> DP["policy gate"]
     D --> DL["lane and session"]
-    DL --> A["AGENT_CLASS_MAP\n12 Agenten"]
+    DL --> A["AGENT_CLASS_MAP\n13 Agenten"]
+
+    A --> AR["AgentRegistry\ndelegate_to_agent"]
+    AR --> ART["Timeout asyncio.wait_for\nDELEGATION_TIMEOUT default 120s"]
+    AR --> ARR["Retry expon. Backoff\nDELEGATION_MAX_RETRIES default 1"]
+    AR --> ARP["Partial-Erkennung\nLimit erreicht und Max Iterationen"]
+    AR --> ARL["Loop-Prevention\nStack + MAX_DEPTH 3"]
 
     A --> B["agent/base_agent.py\nDynamicToolMixin"]
     B --> BW["working memory inject"]
@@ -506,6 +532,12 @@ Beispiel: "Recherchiere KI-Sicherheit und erstelle einen Plan"
 - **Loop-Prevention:** Delegation-Stack verhindert zirkulaere Aufrufe (A->B->A)
 - **Max Tiefe:** Maximal 3 verschachtelte Delegationen
 - **Capability-Suche:** `find_agent_by_capability("vision")` findet den VisualAgent
+- **Timeout:** `asyncio.wait_for` sichert jeden Delegations-Aufruf ab (default 120s via `DELEGATION_TIMEOUT`)
+- **Retry:** Automatische Wiederholung mit exponentiellem Backoff (`DELEGATION_MAX_RETRIES`, default 1 = kein Retry)
+- **Strukturierte Rückgabe:** `delegate()` gibt immer `{"status": "success"|"partial"|"error", "agent": "...", "result"|"error": "..."}` — nie mehr rohen String
+- **Partial-Erkennung:** `"Limit erreicht."` und `"Max Iterationen."` werden als `status: partial` erkannt — aufrufender Agent kann reagieren
+- **13 Agenten im Registry:** data, document, communication, system, shell vollständig registriert und delegierbar
+- **Typ-Aliases:** `bash`/`terminal` → `shell`, `daten` → `data`, `monitoring` → `system`, `koordinator`/`orchestrator` → `meta`
 
 ---
 

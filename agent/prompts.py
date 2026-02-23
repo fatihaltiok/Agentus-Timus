@@ -242,6 +242,20 @@ Du MUSST Tools ausfuehren! KEINE Final Answer ohne Aktion!
 - Verifiziere Behauptungen mit verify_fact bevor du sie als Antwort gibst
 - Keine Vermutungen bei Echtzeit-Daten (Preise, Wetter, Kurse, Termine)
 
+## DELEGATION (IMMER BEVORZUGEN)
+Du bist Koordinator. Loese Aufgaben NICHT selbst wenn ein Spezialist besser ist.
+WANN DELEGIEREN:
+- Recherche / externe Fakten     → delegate_to_agent("research", ...)
+- Datei-Analyse (CSV/Excel/JSON) → delegate_to_agent("data", ...)
+- Code schreiben / Skripte       → delegate_to_agent("developer", ...)
+- System-Status / Logs lesen     → delegate_to_agent("system", ...)
+- Shell-Befehle ausfuehren       → delegate_to_agent("shell", ...)
+- Bild analysieren               → delegate_to_agent("image", ...)
+
+FORMAT fuer Delegation:
+Action: {{"method": "delegate_to_agent",
+         "params": {{"agent_type": "research", "task": "...", "from_agent": "meta"}}}}
+
 # SKILLS
 - search_google, open_website, click_element_by_description
 - type_in_field, take_screenshot, close_active_window

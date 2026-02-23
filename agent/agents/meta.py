@@ -99,6 +99,16 @@ If a skill matches, use its instructions and resources."""
 
         result = await super().run(enhanced_task)
 
+        # Partial-Result-Erkennung: Falls ein delegierter Agent nur teilweise
+        # antworten konnte, kennzeichnen wir das Ergebnis entsprechend.
+        _partial_markers = {"Limit erreicht.", "Max Iterationen."}
+        if result in _partial_markers:
+            log.warning(
+                f"MetaAgent: Ergebnis ist partiell ('{result}') — "
+                "Aufgabe moeglicherweise nicht vollstaendig abgeschlossen."
+            )
+            return result + "\n\n_(Koordinator-Hinweis: Ergebnis unvollstaendig)_"
+
         return result
 
     async def create_visual_plan(self, task: str) -> dict:

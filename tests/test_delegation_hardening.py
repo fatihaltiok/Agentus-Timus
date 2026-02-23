@@ -45,7 +45,8 @@ async def test_agent_registry_alias_development_maps_to_developer():
         task="fix bug",
     )
 
-    assert result == "ok:fix bug"
+    assert result["status"] == "success"
+    assert result["result"] == "ok:fix bug"
 
 
 @pytest.mark.asyncio
@@ -75,8 +76,10 @@ async def test_delegation_stack_is_task_local_for_parallel_calls():
         registry.delegate(from_agent="meta", to_agent="research", task="b"),
     )
 
-    assert result_a == "ok:a"
-    assert result_b == "ok:b"
+    assert result_a["status"] == "success"
+    assert result_a["result"] == "ok:a"
+    assert result_b["status"] == "success"
+    assert result_b["result"] == "ok:b"
 
 
 @pytest.mark.asyncio
@@ -114,7 +117,8 @@ async def test_delegate_propagates_session_id_from_source_agent_and_restores_tar
         task="remember context",
     )
 
-    assert result == "ok:remember context"
+    assert result["status"] == "success"
+    assert result["result"] == "ok:remember context"
     assert target.seen_sessions == ["sess-123"]
     assert target.conversation_session_id is None
 
@@ -133,7 +137,11 @@ async def test_delegate_tool_returns_error_status_when_registry_reports_error(mo
 
         async def delegate(self, from_agent: str, to_agent: str, task: str, session_id=None):
             assert from_agent == "meta"
-            return "FEHLER: Agent nicht registriert"
+            return {
+                "status": "error",
+                "agent": to_agent,
+                "error": "FEHLER: Agent nicht registriert",
+            }
 
     monkeypatch.setattr(agent_registry_module, "agent_registry", _FakeRegistry())
 
@@ -187,7 +195,8 @@ async def test_delegate_logs_canvas_edge_and_events(monkeypatch, tmp_path):
         task="collect evidence",
     )
 
-    assert result == "ok:collect evidence"
+    assert result["status"] == "success"
+    assert result["result"] == "ok:collect evidence"
 
     loaded = test_store.get_canvas(canvas["id"])
     assert loaded is not None

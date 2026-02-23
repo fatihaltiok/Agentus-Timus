@@ -113,17 +113,27 @@ class ImageAgent(BaseAgent):
                     agent_type="research",
                     task=research_task,
                     from_agent="image",
+                    session_id=getattr(self, "conversation_session_id", None),
                 )
 
                 if isinstance(research_result, dict):
+                    status = research_result.get("status", "success")
                     research_text = research_result.get("result", str(research_result))
+                    if status == "partial":
+                        note = "\n\n_(Hinweis: Recherche wurde nur teilweise abgeschlossen)_"
+                    elif status == "error":
+                        research_text = research_result.get("error", str(research_result))
+                        note = "\n\n_(Hinweis: Recherche fehlgeschlagen)_"
+                    else:
+                        note = ""
                 else:
                     research_text = str(research_result)
+                    note = ""
 
                 return (
                     f"## Bild-Analyse\n\n{image_analysis}\n\n"
                     f"---\n\n"
-                    f"## Recherche-Ergebnisse\n\n{research_text}"
+                    f"## Recherche-Ergebnisse\n\n{research_text}{note}"
                 )
 
             except Exception as e:
