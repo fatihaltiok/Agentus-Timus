@@ -486,6 +486,18 @@ META_KEYWORDS = [
     "zuerst",
     "zum schluss",
     "abschließend",
+    # Compound-Intents: Recherche + Bild / mehrstufig
+    "coverbild",
+    "cover bild",
+    "und erstelle",
+    "dann erstelle",
+    "bild dazu",
+    "illustration dazu",
+    "infos und",
+    "informationen und",
+    "recherchiere und",
+    "hole mir informationen",
+    "hole informationen",
 ]
 
 EXECUTOR_KEYWORDS = [
