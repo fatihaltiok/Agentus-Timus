@@ -271,7 +271,8 @@ Du bist der zentrale Dispatcher für Timus. Analysiere die INTENTION des Nutzers
       - "Was zeigt dieses Bild?"
       - "Beschreibe das Foto"
       - "Was steht auf dem Screenshot?"
-      - Immer wenn ein Bildpfad (.jpg, .jpeg, .png, .webp, .gif, .bmp) vorkommt
+      - Wenn der Nutzer explizit ein VORHANDENES Bild analysieren will
+      - NICHT bei Speicherpfaden wie "speichere als /pfad/datei.png" — das ist kein vorhandenes Bild
 
 ### WICHTIGE REGELN
 
@@ -280,7 +281,7 @@ Du bist der zentrale Dispatcher für Timus. Analysiere die INTENTION des Nutzers
 3. Bei ARCHITEKTUR-FRAGEN (welche Technologie, Design-Entscheidungen) → 'reasoning'
 4. Bei RECHERCHE nach externen Fakten/News → 'research'
 5. Bei EINFACHEN Fragen ohne Analyse → 'executor'
-6. Bei BILDPFADEN (.jpg, .jpeg, .png, .webp etc.) → immer 'image'
+6. Bei BILDPFADEN nur 'image' wenn das Bild ANALYSIERT werden soll, NICHT bei Speicher-/Ausgabepfaden
 
 Antworte NUR mit einem Wort: 'reasoning', 'research', 'executor', 'meta', 'visual', 'development', 'creative', 'data', 'document', 'communication', 'system', 'shell' oder 'image'.
 """
@@ -643,9 +644,13 @@ def quick_intent_check(query: str) -> Optional[str]:
     """Schnelle Keyword-basierte Intent-Erkennung."""
     query_lower = query.lower()
 
-    # BILD-Dateien — höchste Priorität (Erweiterung im Pfad erkannt)
-    if _IMAGE_EXTENSIONS.search(query):
-        return "image"
+    # BILD-Dateien — höchste Priorität (nur wenn Datei tatsächlich existiert)
+    for _img_match in _IMAGE_EXTENSIONS.finditer(query):
+        _path_start = query.rfind(" ", 0, _img_match.start())
+        _path_start = _path_start + 1 if _path_start >= 0 else 0
+        _candidate = query[_path_start:_img_match.end()].strip("\"'(),[]")
+        if os.path.isfile(_candidate):
+            return "image"
 
     # REASONING zuerst prüfen (höchste Priorität für komplexe Fragen)
     for keyword in REASONING_KEYWORDS:
