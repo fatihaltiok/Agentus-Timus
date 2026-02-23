@@ -16,6 +16,14 @@ from agent.shared.json_utils import extract_json_robust  # noqa: F401 - re-expor
 
 
 class MetaAgent(BaseAgent):
+    # Koordinator darf Spezialisten-Tools NIE direkt aufrufen — nur per Delegation.
+    # Erbt alles aus BaseAgent.SYSTEM_ONLY_TOOLS und erweitert es.
+    SYSTEM_ONLY_TOOLS = BaseAgent.SYSTEM_ONLY_TOOLS | {
+        "run_command",
+        "run_script",
+        "add_cron",
+    }
+
     def __init__(self, tools_description_string: str):
         super().__init__(META_SYSTEM_PROMPT, tools_description_string, 30, "meta")
 

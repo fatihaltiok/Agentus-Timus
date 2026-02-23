@@ -338,6 +338,34 @@ class BaseAgent(DynamicToolMixin):
         return obs
 
     # ------------------------------------------------------------------
+    # Implicit Final Answer Detection
+    # ------------------------------------------------------------------
+
+    _COMPLETION_PATTERNS = re.compile(
+        r"(?:"
+        r"aufgabe\s+(?:erfolgreich|abgeschlossen|erledigt)"
+        r"|erfolgreich\s+(?:abgeschlossen|erstellt|gespeichert|generiert)"
+        r"|(?:bild|datei|cover|ergebnis)\s+(?:wurde|ist)\s+(?:erfolgreich|gespeichert)"
+        r"|✅"
+        r"|task\s+(?:complete|done|finished)"
+        r"|successfully\s+(?:created|saved|completed|generated)"
+        r")",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _looks_like_implicit_final_answer(cls, text: str) -> bool:
+        """Erkennt Abschluss-Nachrichten des LLM ohne explizites 'Final Answer:'.
+
+        Bedingungen (beide müssen zutreffen):
+        - Kein JSON im Text (kein Tool-Call beabsichtigt)
+        - Text enthält typische Abschluss-Formulierungen auf Deutsch oder Englisch
+        """
+        if "{" in text:
+            return False  # JSON vorhanden → normaler Tool-Call-Versuch
+        return bool(cls._COMPLETION_PATTERNS.search(text))
+
+    # ------------------------------------------------------------------
     # Loop-Detection
     # ------------------------------------------------------------------
 
@@ -1621,6 +1649,30 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             messages.append({"role": "assistant", "content": reply})
 
             if not action:
+                # Implicit Final Answer: LLM schrieb Abschluss-Text ohne Action-JSON
+                if self._looks_like_implicit_final_answer(reply):
+                    final_result = reply
+                    final_result = await self._finalize_list_output(task, final_result)
+                    self._emit_live_status(
+                        phase="final",
+                        detail=f"implicit final answer ({len(final_result)} chars)",
+                        step=step,
+                        total_steps=self.max_iterations,
+                    )
+                    self._emit_step_trace(
+                        action="implicit_final_answer",
+                        output_data={
+                            "step": step,
+                            "final_preview": self._preview_value(final_result, 800),
+                            "final_chars": len(final_result),
+                        },
+                        status="completed",
+                    )
+                    if roi_set:
+                        self._clear_roi()
+                    await self._run_reflection(task, final_result, success=True)
+                    return final_result
+
                 self._emit_live_status(
                     phase="parse_error",
                     detail=(err or "Kein JSON")[:120],
