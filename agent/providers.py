@@ -127,7 +127,7 @@ class AgentModelConfig:
     """Konfiguration welches Modell/Provider jeder Agent-Typ nutzt."""
 
     AGENT_CONFIGS = {
-        "executor": ("FAST_MODEL", "FAST_MODEL_PROVIDER", "gpt-5-mini", ModelProvider.OPENAI),
+        "executor": ("FAST_MODEL", "FAST_MODEL_PROVIDER", "claude-haiku-4-5-20251001", ModelProvider.ANTHROPIC),
         "deep_research": ("RESEARCH_MODEL", "RESEARCH_MODEL_PROVIDER", "deepseek-reasoner", ModelProvider.DEEPSEEK),
         "creative": ("CREATIVE_MODEL", "CREATIVE_MODEL_PROVIDER", "gpt-5.2", ModelProvider.OPENAI),
         "developer": ("CODE_MODEL", "CODE_MODEL_PROVIDER", "mercury-coder-small", ModelProvider.INCEPTION),

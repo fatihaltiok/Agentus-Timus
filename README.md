@@ -433,7 +433,7 @@ Timus verfügt über **13 spezialisierte Agenten** in zwei Gruppen: die ursprün
 ### Kern-Agenten
 
 #### ExecutorAgent
-- **Modell:** gpt-5-mini (OpenAI) — via `FAST_MODEL`
+- **Modell:** claude-haiku-4-5-20251001 (Anthropic) — via `FAST_MODEL` / `FAST_MODEL_PROVIDER`
 - **Aufgabe:** Schnelle einfache Tasks — Dateien lesen/schreiben, Websuche, Zusammenfassungen, einfache Fragen
 - **Max Iterationen:** 30 | **Tools:** 60
 
