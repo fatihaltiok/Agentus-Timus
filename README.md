@@ -986,7 +986,7 @@ Beispiel fuer Live-Status-Ausgabe:
 timus/
 ├── agent/
 │   ├── shared/              # Shared Utilities (MCP Client, Screenshot, Parser)
-│   ├── agents/              # 12 spezialisierte Agenten
+│   ├── agents/              # 13 spezialisierte Agenten
 │   │   ├── executor.py
 │   │   ├── research.py
 │   │   ├── reasoning.py
@@ -1000,7 +1000,7 @@ timus/
 │   │   ├── system.py        # M3: SystemAgent (read-only Monitoring)
 │   │   ├── shell.py         # M4: ShellAgent (5-Schicht-Policy)
 │   │   └── image.py         # M5: ImageAgent (Bild-Analyse, Qwen3.5+)
-│   ├── agent_registry.py    # Agent-Registry mit Factory-Pattern + Delegation
+│   ├── agent_registry.py    # Agent-Registry: 13 Agenten, Timeout, Retry, Partial-Results
 │   ├── base_agent.py        # BaseAgent + AGENT_CAPABILITY_MAP (präzise Tool-Sets)
 │   ├── providers.py         # LLM Provider-Infrastruktur (7 Provider)
 │   ├── prompts.py           # System Prompts (inkl. SYSTEM_PROMPT_TEMPLATE, SHELL_PROMPT_TEMPLATE, IMAGE_PROMPT_TEMPLATE)
@@ -1041,8 +1041,8 @@ timus/
 │   ├── system_monitor.py       # CPU/RAM/Disk Monitor mit Telegram-Alerts
 │   └── rss_poller.py           # RSS-Feed Polling
 ├── server/
-│   ├── mcp_server.py        # MCP Server (FastAPI, Port 5000, 80+ Tools, 12 Agent-LEDs)
-│   └── canvas_ui.py         # Canvas Web-UI v2 (Chat, 12 LEDs, Upload, SSE)
+│   ├── mcp_server.py        # MCP Server (FastAPI, Port 5000, 80+ Tools, 13 Agent-LEDs)
+│   └── canvas_ui.py         # Canvas Web-UI v2 (Chat, 13 LEDs, Upload, SSE)
 ├── skills/                  # Erlernbare Skills
 │   └── templates/           # UI-Pattern Templates (8 Patterns)
 ├── memory/
@@ -1054,6 +1054,12 @@ timus/
 ├── tests/
 │   ├── test_milestone5_quality_gates.py
 │   ├── test_milestone6_e2e_readiness.py
+│   ├── test_delegation_hardening.py      # Loop-Prevention, Session-Propagation, Canvas-Logging
+│   ├── test_m1_registry_vollstaendigkeit.py
+│   ├── test_m2_delegation_resilience.py  # Timeout + Retry
+│   ├── test_m3_partial_results.py        # Partial-Result-Erkennung
+│   ├── test_m4_meta_orchestrator.py
+│   ├── test_v3_vollstaendige_architektur.py
 │   └── ...                  # Weitere Test-Suites
 ├── verify_milestone6.py     # Go/No-Go Schnellcheck fuer Milestone 6
 ├── utils/
@@ -1074,10 +1080,12 @@ timus/
     ├── MEMORY_ARCHITECTURE.md
     ├── MILESTONE6_RUNBOOK.md
     ├── RELEASE_NOTES_MILESTONE6.md
+    ├── ARCHITEKTUR_ANALYSE_AGENTEN_KOMMUNIKATION_2026-02-23.md
     ├── SESSION_LOG_2026-02-17_MILESTONES_0_TO_6.md
     ├── SESSION_LOG_2026-02-21_AUTONOMIE_MILESTONES.md
     ├── SESSION_LOG_2026-02-22_CANVAS_V2_PROFIL.md
     ├── SESSION_LOG_2026-02-22_M1_M4_AGENTS_MEMORY.md
+    ├── SESSION_LOG_2026-02-23_AGENTEN_KOMMUNIKATION_M1_M4.md
     └── ABSCHLUSSBERICHT_Florence2_Integration_2026-02-19.md
 ```
 
