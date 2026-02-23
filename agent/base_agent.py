@@ -173,6 +173,7 @@ class BaseAgent(DynamicToolMixin):
         self._remote_tool_names: set[str] = set()
         self._remote_tools_fetched: bool = False
         self.conversation_session_id: Optional[str] = None
+        self._bug_logger = None  # Lazy-Init: erst beim ersten Fehler
 
         # Multi-Provider Setup
         self.provider_client = get_provider_client()
@@ -346,6 +347,11 @@ class BaseAgent(DynamicToolMixin):
         "add_interaction",
         "end_session",
         "get_memory_stats",
+        "run_tool",
+        "communicate",
+        "final_answer",
+        "task_complete",
+        "no_action_needed",
     }
     NAVIGATION_TASK_PATTERNS = (
         r"\bbrowser\b",
@@ -566,6 +572,16 @@ class BaseAgent(DynamicToolMixin):
                 detail="Policy blockiert",
                 tool_name=method,
             )
+            if self._bug_logger is None:
+                from utils.bug_logger import BugLogger
+                self._bug_logger = BugLogger()
+            self._bug_logger.log_bug(
+                bug_id=f"policy_block_{method}",
+                severity="low",
+                agent=getattr(self, "agent_type", "unknown"),
+                error_msg=f"Policy blockiert: {method} — {policy_reason}",
+                context={"method": method, "params": str(params)[:300]},
+            )
             return {"error": policy_reason, "blocked_by_policy": True}
 
         await self._ensure_remote_tool_names()
@@ -646,6 +662,18 @@ class BaseAgent(DynamicToolMixin):
                 phase="tool_error",
                 detail=str(e)[:120],
                 tool_name=method,
+            )
+            if self._bug_logger is None:
+                from utils.bug_logger import BugLogger
+                self._bug_logger = BugLogger()
+            import traceback as _tb
+            self._bug_logger.log_bug(
+                bug_id=f"tool_exception_{method}",
+                severity="high",
+                agent=getattr(self, "agent_type", "unknown"),
+                error_msg=str(e),
+                stack_trace=_tb.format_exc(),
+                context={"method": method, "params": str(params)[:300]},
             )
             return {"error": str(e)}
 

@@ -28,6 +28,7 @@ from enum import Enum
 from dotenv import load_dotenv
 from openai import OpenAI, RateLimitError
 from utils.openai_compat import prepare_openai_params
+from agent.shared.json_utils import extract_json_robust
 
 # V2 Tool-Registry
 from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
@@ -508,7 +509,7 @@ async def _deep_verify_facts(session: DeepResearchSession, verification_mode: st
             use_corroborator = True
 
         corroborator_result = None
-        if use_corroborator and group_idx < 10:  # Limit auf erste 10 wichtige Fakten (Performance)
+        if use_corroborator and group_idx < 3:  # Limit auf erste 3 wichtige Fakten (Performance)
             logger.info(f"🔬 Extra-Verifikation für Fakt #{group_idx+1}: {fact_text[:60]}...")
             corroborator_result = await _verify_fact_with_corroborator(fact_text, session.query)
 
@@ -629,7 +630,7 @@ Antworte als JSON:
             {"role": "user", "content": thesis_prompt}
         ], use_json=True, max_tokens=2000)
 
-        thesis_data = json.loads(response.choices[0].message.content)
+        thesis_data = extract_json_robust(response.choices[0].message.content) or {}
         theses_raw = thesis_data.get("theses", [])
 
         if not theses_raw:
@@ -686,7 +687,7 @@ Antworte als JSON:
                 {"role": "user", "content": antithesis_prompt}
             ], use_json=True, max_tokens=1500)
 
-            antithesis_data = json.loads(response.choices[0].message.content)
+            antithesis_data = extract_json_robust(response.choices[0].message.content) or {}
         except Exception as e:
             logger.warning(f"Fehler bei Antithese-Analyse: {e}")
 
@@ -714,7 +715,7 @@ Antworte als JSON:
                 {"role": "user", "content": synthesis_prompt}
             ], use_json=True, max_tokens=1500)
 
-            synthesis_data = json.loads(response.choices[0].message.content)
+            synthesis_data = extract_json_robust(response.choices[0].message.content) or {}
         except Exception as e:
             logger.warning(f"Fehler bei Synthese-Bildung: {e}")
 
@@ -952,7 +953,7 @@ Regeln:
             ], use_json=True)
 
             content = response.choices[0].message.content
-            data = json.loads(content)
+            data = extract_json_robust(content) or {}
 
             for fact in data.get("facts", []):
                 fact["source_url"] = url

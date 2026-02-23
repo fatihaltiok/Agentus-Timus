@@ -55,6 +55,9 @@ NUR DEN PROMPT AUSGEBEN, KEINE ERKLAERUNGEN!"""
                 max_completion_tokens=200,
             )
             generated_prompt = response.choices[0].message.content.strip()
+            if not generated_prompt:
+                log.warning("GPT lieferte leeren Prompt — nutze Fallback")
+                return f"detailed image of {user_request}, high quality, professional"
             log.info(f"GPT-5.1 Prompt: {generated_prompt[:80]}...")
             return generated_prompt
         except Exception as e:

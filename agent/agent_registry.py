@@ -273,7 +273,10 @@ class AgentRegistry:
             payload={"stack_depth": len(next_stack)},
         )
 
-        timeout = float(os.getenv("DELEGATION_TIMEOUT", "120"))
+        if to_agent == "research":
+            timeout = float(os.getenv("RESEARCH_TIMEOUT", "180"))
+        else:
+            timeout = float(os.getenv("DELEGATION_TIMEOUT", "120"))
         max_retries = int(os.getenv("DELEGATION_MAX_RETRIES", "1"))
 
         agent = None

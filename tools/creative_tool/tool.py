@@ -33,16 +33,26 @@ except (ImportError, RuntimeError):
     description="Erstellt ein Bild mit DALL-E 3 oder neuer.",
     parameters=[
         P("prompt", "string", "Beschreibung des zu generierenden Bildes", required=True),
-        P("size", "string", "Bildgröße (z.B. 1024x1024)", required=False, default="1024x1024"),
-        P("quality", "string", "Bildqualität (standard oder hd)", required=False, default="standard"),
+        P("size", "string", "Bildgröße (z.B. 1024x1024, 1536x1024, 1024x1536)", required=False, default="1024x1024"),
+        P("quality", "string", "Bildqualität: low, medium, high, auto", required=False, default="high"),
     ],
     capabilities=["creative", "image"],
     category=C.CREATIVE
 )
-async def generate_image(prompt: str, size: str = "1024x1024", quality: str = "standard") -> dict:
+async def generate_image(prompt: str, size: str = "1024x1024", quality: str = "high") -> dict:
     """
     Erstellt ein Bild mit DALL-E 3 oder neuer. Der Parameter 'response_format' wird nicht mehr verwendet.
     """
+    # API-Parameter normalisieren auf neue DALL-E-Werte
+    SIZE_MAP = {
+        "1792x1024": "1536x1024",
+        "1024x1792": "1024x1536",
+        "1920x1080": "1536x1024",
+    }
+    QUALITY_MAP = {"standard": "medium", "hd": "high"}
+    size = SIZE_MAP.get(size, size)
+    quality = QUALITY_MAP.get(quality, quality)
+
     image_model = os.getenv("IMAGE_GENERATION_MODEL", "dall-e-3")
     log.info(f"🖼️ Erstelle Bild mit Modell '{image_model}' (Größe: {size}, Qualität: {quality})")
     log.debug(f"   Prompt: '{prompt[:80]}...'")
