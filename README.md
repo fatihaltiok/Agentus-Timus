@@ -421,7 +421,7 @@ flowchart TD
     CHR --> REM["remember text agent_id\nspeichert mit Agent-Label"]
     CHR --> REC["recall query agent_filter\nfiltert nach Agent"]
     MM --> CUR["Nemotron-Kurator curator_tool\nnvidia/nemotron-3-nano-30b-a3b"]
-    CUR --> CRD["4 Kriterien\nFaktenwissen Präferenz Selbsterkenntnis Kontext"]
+    CUR --> CRD["4 Kriterien\nFaktenwissen Praeferenz Selbsterkenntnis Kontext"]
 ```
 
 ---
