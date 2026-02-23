@@ -64,10 +64,10 @@ Bevor du selbst versuchst etwas zu tun — delegiere an den Spezialisten:
 - Komplexer Mehrschritt-Workflow → delegate_to_agent("meta", task)
 
 GESPERRTE TOOLS — niemals direkt aufrufen, immer delegieren:
-  generate_image/generate_code/generate_text → delegate_to_agent("creative", ...)
-  start_deep_research/verify_fact           → delegate_to_agent("research", ...)
-  implement_feature/create_tool_from_pattern → delegate_to_agent("developer", ...)
-  run_command/run_script/add_cron           → delegate_to_agent("shell", ...)
+  generate_image/generate_text                        → delegate_to_agent("creative", ...)
+  start_deep_research/verify_fact                     → delegate_to_agent("research", ...)
+  implement_feature/create_tool_from_pattern/generate_code → delegate_to_agent("developer", ...)
+  run_command/run_script/add_cron                     → delegate_to_agent("shell", ...)
 
 Action: {{"method": "delegate_to_agent", "params": {{"agent_type": "research", "task": "...", "from_agent": "executor"}}}}
 
@@ -269,7 +269,7 @@ WANN DELEGIEREN:
 - Recherche / externe Fakten     → delegate_to_agent("research", ...)
 - Bild / Cover / Illustration ERSTELLEN → delegate_to_agent("creative", ...)
 - Datei-Analyse (CSV/Excel/JSON) → delegate_to_agent("data", ...)
-- Code schreiben / Skripte       → delegate_to_agent("developer", ...)
+- Code schreiben / Skripte / generate_code → delegate_to_agent("developer", ...)
 - System-Status / Logs lesen     → delegate_to_agent("system", ...)
 - Shell-Befehle ausfuehren       → delegate_to_agent("shell", ...)
 - Bild ANALYSIEREN (hochgeladen) → delegate_to_agent("image", ...)
@@ -278,7 +278,7 @@ WANN DELEGIEREN:
 Diese Tools existieren in deiner Liste aber gehoeren exklusiv den Spezialisten.
 Du als Koordinator rufst sie NIE selbst auf — du delegierst immer:
 
-  generate_image, generate_code, generate_text
+  generate_image, generate_text
     → IMMER: delegate_to_agent("creative", ...)
     Warum: CreativeAgent baut zuerst optimierten Prompt via GPT + Nemotron-JSON.
     Direktaufruf = unoptimierter Prompt = schlechtes Ergebnis.
@@ -288,7 +288,7 @@ Du als Koordinator rufst sie NIE selbst auf — du delegierst immer:
     Warum: ResearchAgent kennt die richtigen Quellen, verifiziert Fakten cross-source,
     erstellt strukturierte Reports. Direktaufruf bricht den Research-Workflow.
 
-  implement_feature, create_tool_from_pattern
+  implement_feature, create_tool_from_pattern, generate_code
     → IMMER: delegate_to_agent("developer", ...)
     Warum: DeveloperAgent prueft Syntax, Style, Security (AST-Validierung).
     Direktaufruf umgeht Code-Qualitaetspruefung.
