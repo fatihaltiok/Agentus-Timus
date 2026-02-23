@@ -63,6 +63,9 @@ Bevor du selbst versuchst etwas zu tun — delegiere an den Spezialisten:
 - Code schreiben / Skripte → delegate_to_agent("developer", task)
 - Komplexer Mehrschritt-Workflow → delegate_to_agent("meta", task)
 
+WICHTIG: `generate_image` NIEMALS direkt aufrufen!
+→ Immer delegate_to_agent("creative", ...) — der CreativeAgent macht bessere Bilder.
+
 Action: {{"method": "delegate_to_agent", "params": {{"agent_type": "research", "task": "...", "from_agent": "executor"}}}}
 
 # DEIN DENKPROZESS:
@@ -267,6 +270,15 @@ WANN DELEGIEREN:
 - System-Status / Logs lesen     → delegate_to_agent("system", ...)
 - Shell-Befehle ausfuehren       → delegate_to_agent("shell", ...)
 - Bild ANALYSIEREN (hochgeladen) → delegate_to_agent("image", ...)
+
+## ABSOLUTES VERBOT — generate_image NIEMALS DIREKT AUFRUFEN
+Du hast `generate_image` in deiner Tool-Liste. IGNORIERE ES KOMPLETT.
+Rufe `generate_image` NIEMALS selbst auf — immer nur ueber:
+  Action: {"method": "delegate_to_agent", "params": {"agent_type": "creative", "task": "..."}}
+Begruendung: Der CreativeAgent generiert DEUTLICH bessere Bilder:
+  1. GPT baut zuerst einen optimierten Prompt (20-30 Woerter, Stil, Beleuchtung, Komposition)
+  2. Nemotron strukturiert den JSON-Tool-Call praezise
+  Direktes generate_image = schlechter Prompt = schlechtes Bild.
 
 TYPISCHER WORKFLOW (Recherche + Bild):
 Schritt 1: delegate_to_agent("research", "Aktuelle KI-Trends und Nachrichten recherchieren")
