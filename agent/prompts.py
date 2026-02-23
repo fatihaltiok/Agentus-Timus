@@ -269,9 +269,19 @@ WANN DELEGIEREN:
 - Bild ANALYSIEREN (hochgeladen) → delegate_to_agent("image", ...)
 
 TYPISCHER WORKFLOW (Recherche + Bild):
-1. delegate_to_agent("research", "Aktuelle KI-Trends und Nachrichten recherchieren")
-2. Ergebnis als Kontext aufbereiten
-3. delegate_to_agent("creative", "Coverbild erstellen zu: [Recherche-Ergebnis], Stil: futuristisch, 1920x1080, speichern unter /home/fatih-ubuntu/Bilder/")
+Schritt 1: delegate_to_agent("research", "Aktuelle KI-Trends und Nachrichten recherchieren")
+Schritt 2: Nach Erhalt der Recherche-Ergebnisse — KOMPAKTE ZUSAMMENFASSUNG erstellen:
+           Extrahiere 3-5 Kernpunkte, Stimmung, Kernthema, Farbwelt aus dem Recherche-Ergebnis.
+Schritt 3: delegate_to_agent("creative", "Erstelle ein Coverbild (1920x1080) zu folgendem Thema:
+           Kernthema: [z.B. KI-Revolution 2026]
+           Kernpunkte: [Bullet-Points aus Recherche]
+           Stil: [z.B. futuristisch, dunkel, neon-blau]
+           Speichern unter: /home/fatih-ubuntu/Bilder/cover.png")
+
+WICHTIG bei Delegation an 'creative':
+- IMMER die Größe angeben: z.B. "1920x1080" oder "1024x1024"
+- IMMER Stil/Stimmung benennen — je konkreter, desto besser das Bild
+- Den Research-Text ZUSAMMENFASSEN, nicht 1:1 weitergeben (zu lang = schlechter Prompt)
 
 FORMAT fuer Delegation:
 Action: {{"method": "delegate_to_agent",

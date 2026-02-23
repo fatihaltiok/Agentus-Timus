@@ -1,6 +1,7 @@
 """CreativeAgent - Bilder, kreative Texte (HYBRID: GPT-5.1 + Nemotron)."""
 
 import os
+import re
 import asyncio
 import logging
 
@@ -171,20 +172,37 @@ Gib NUR das Action-JSON zurueck!"""
             return f"{base}. {safety_clause}"
         return safety_clause
 
+    @staticmethod
+    def _parse_size_from_task(task: str) -> str:
+        """Extrahiert eine Bildgröße aus dem Task-String (z.B. '1920x1080')."""
+        match = re.search(r'\b(\d{3,4})[x×](\d{3,4})\b', task, re.IGNORECASE)
+        if match:
+            w, h = int(match.group(1)), int(match.group(2))
+            # DALL-E 3 unterstützt: 1024x1024, 1792x1024, 1024x1792
+            if w > h:
+                return "1792x1024"
+            elif h > w:
+                return "1024x1792"
+        return "1024x1024"
+
     async def run(self, task: str) -> str:
         log.info(f"{self.__class__.__name__} - HYBRID MODE (GPT-5.1 + Nemotron)")
 
         task_lower = task.lower()
         is_image_request = any(kw in task_lower for kw in [
             "mal", "bild", "generiere bild", "erstelle bild", "zeichne", "image",
+            "cover", "poster", "thumbnail", "illustration",
         ])
 
         if not is_image_request:
             log.info("Keine Bild-Anfrage, nutze Standard-Logik")
             return await super().run(task)
 
+        size = self._parse_size_from_task(task)
+        log.info(f"Bildgröße erkannt: {size}")
+
         detailed_prompt = await self._generate_image_prompt_with_gpt(task)
-        observation = await self._execute_with_nemotron(detailed_prompt, size="1024x1024", quality="high")
+        observation = await self._execute_with_nemotron(detailed_prompt, size=size, quality="high")
         self._handle_file_artifacts(observation)
 
         if isinstance(observation, dict):
