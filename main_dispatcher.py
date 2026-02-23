@@ -1020,8 +1020,8 @@ Schritte: {steps_executed} ausgeführt{f" von {steps_planned} geplant" if steps_
 
         try:
             setattr(agent_instance, "conversation_session_id", effective_session_id)
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"Konnte conversation_session_id nicht setzen: {e}")
         try:
             if hasattr(agent_instance, "set_audit_step_logger"):
                 agent_instance.set_audit_step_logger(audit.log_step)

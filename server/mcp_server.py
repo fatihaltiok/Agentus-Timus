@@ -121,7 +121,14 @@ def _broadcast_sse(event: dict) -> None:
         for q in _sse_queues:
             try:
                 q.put_nowait(payload)
-            except Exception:
+            except asyncio.QueueFull:
+                log.warning(
+                    f"SSE-Queue voll (maxsize={q.maxsize}) — Event verworfen: "
+                    f"{event.get('type', '?')}"
+                )
+                dead.append(q)
+            except Exception as e:
+                log.debug(f"SSE-Queue Fehler: {e}")
                 dead.append(q)
         for q in dead:
             try:
@@ -767,33 +774,45 @@ async def health_check():
     }
 
 
+async def _build_tools_description() -> str:
+    """Erstellt vollständige Tool+Skills-Beschreibung.
+
+    Zentrale Hilfsfunktion — genutzt von /get_tool_descriptions UND /chat,
+    damit beide exakt dieselbe Beschreibung erhalten.
+    """
+    try:
+        descriptions = registry_v2.get_tool_manifest()
+    except Exception as e:
+        log.error(f"get_tool_manifest() fehlgeschlagen: {e}", exc_info=True)
+        descriptions = "Tool-Beschreibungen konnten nicht geladen werden."
+
+    # Skills anhängen
+    skills_section = "\n\n# VERFÜGBARE SKILLS (Wiederverwendbare Workflows)\n"
+    skills_section += "Nutze 'run_skill' um einen Skill auszuführen.\n\n"
+    try:
+        skills_result = await async_dispatch(
+            '{"jsonrpc":"2.0","method":"list_available_skills","id":99}',
+            serializer=numpy_aware_serializer,
+        )
+        import json as _json_local
+        skills_data = _json_local.loads(skills_result)
+        if "result" in skills_data and "skills" in skills_data["result"]:
+            for skill in skills_data["result"]["skills"]:
+                skills_section += f"- **{skill['name']}**: {skill['description']}\n"
+            skills_section += (
+                '\nBeispiel: Action: {"method": "run_skill", "params": '
+                '{"name": "search_google", "params": {"query": "Suchbegriff"}}}\n'
+            )
+    except Exception as e:
+        log.warning(f"Skills konnten nicht geladen werden: {e}")
+
+    return descriptions + skills_section
+
+
 @app.get("/get_tool_descriptions", summary="Get Tool Descriptions for Agents")
 async def get_tool_descriptions():
     try:
-        descriptions = registry_v2.get_tool_manifest()
-
-        # === SKILLS HINZUFÜGEN ===
-        skills_section = "\n\n# VERFÜGBARE SKILLS (Wiederverwendbare Workflows)\n"
-        skills_section += "Nutze 'run_skill' um einen Skill auszuführen.\n\n"
-
-        try:
-            skills_result = await async_dispatch(
-                '{"jsonrpc":"2.0","method":"list_available_skills","id":99}',
-                serializer=numpy_aware_serializer
-            )
-            import json
-
-            skills_data = json.loads(skills_result)
-            if "result" in skills_data and "skills" in skills_data["result"]:
-                for skill in skills_data["result"]["skills"]:
-                    skills_section += f"- **{skill['name']}**: {skill['description']}\n"
-                skills_section += '\nBeispiel: Action: {"method": "run_skill", "params": {"name": "search_google", "params": {"query": "Suchbegriff"}}}\n'
-        except Exception as e:
-            log.warning(f"Skills konnten nicht geladen werden: {e}")
-
-        descriptions += skills_section
-        # === ENDE SKILLS ===
-
+        descriptions = await _build_tools_description()
         return {
             "status": "success",
             "descriptions": descriptions,
@@ -1106,7 +1125,7 @@ async def get_agent_status_endpoint():
 @app.get("/events/stream", summary="SSE-Stream für Echtzeit-Canvas-Updates")
 async def events_stream(request: Request):
     """Server-Sent Events: Pushing agent-status, thinking-LED und Chat-Events."""
-    queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+    queue: asyncio.Queue = asyncio.Queue(maxsize=500)
     with _sse_lock:
         _sse_queues.append(queue)
 
@@ -1169,14 +1188,8 @@ async def canvas_chat(request: Request):
     try:
         from main_dispatcher import run_agent, get_agent_decision
 
-        # Tool-Beschreibungen direkt aus dem Registry (kein HTTP-Self-Call)
-        try:
-            tools_list = registry_v2.list_tools()
-            tools_desc = "\n".join(
-                f"- {t.name}: {t.description}" for t in tools_list
-            )
-        except Exception:
-            tools_desc = ""
+        # Tool-Beschreibungen — identisch zu /get_tool_descriptions
+        tools_desc = await _build_tools_description()
 
         agent = await get_agent_decision(query)
         _set_agent_status(agent, "thinking", query)
