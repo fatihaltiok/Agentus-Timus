@@ -320,6 +320,83 @@ MCP-Server :5000 (FastAPI + JSON-RPC)
             └─ Nemotron-Kurator (4 Kriterien)
 ```
 
+```mermaid
+flowchart TD
+    U["User Input\nCLI / Telegram / Canvas / Terminal"] --> D["main_dispatcher.py"]
+    D --> DS["Query Sanitizing"]
+    D --> DI["Intent Analyse LLM"]
+    D --> DP["Policy Gate"]
+    D --> DL["Lane + Session"]
+    DL --> A["AGENT_CLASS_MAP\n13 Agenten"]
+
+    A --> AR["AgentRegistry"]
+    AR --> ARD["delegate — sequenziell\nasyncio.wait_for 120s"]
+    ARD --> ARDR["Retry expon. Backoff\nDELEGATION_MAX_RETRIES"]
+    ARD --> ARDP["Partial-Erkennung\nLimit erreicht → partial"]
+    ARD --> ARDL["Loop-Prevention\nStack + MAX_DEPTH 3"]
+
+    AR --> ARP["delegate_parallel — Fan-Out NEU v2.5\nasyncio.gather + Semaphore max 10"]
+    ARP --> ARPI["Frische Instanz pro Task\nkein Singleton-Problem"]
+    ARP --> ARPM["MemoryAccessGuard\nContextVar — thread-safe read-only"]
+    ARP --> ARPT["asyncio.wait_for pro Task\nTimeout konfigurierbar"]
+    ARP --> ARPA["ResultAggregator\nFan-In Markdown-Formatierung"]
+
+    A --> B["agent/base_agent.py\nDynamicToolMixin"]
+    B --> BW["Working Memory inject"]
+    B --> BR["Recall Fast-Path\nagent_filter aware"]
+    B --> BT["Loop Guard + Telemetrie\nmax_iterations"]
+    B --> BCM["AGENT_CAPABILITY_MAP\nfiltert Tools pro Agent"]
+    B --> BL["BugLogger\nlogs/bugs/ + buglog.md"]
+
+    B --> M["MCP Server :5000\nFastAPI + JSON-RPC\n80+ Tools"]
+    M --> TR["tool_registry_v2\nSchema + Validierung"]
+
+    M --> FH["VisualNemotron v4\nVision-Pipeline"]
+    FH --> FC["Florence-2 PRIMARY\nUI-Elemente + BBoxes lokal"]
+    FH --> QV["Qwen3.5 Plus FALLBACK 1\nScreenshot-Analyse OpenRouter"]
+    FH --> PO["PaddleOCR CPU\nText + BBox + Confidence"]
+    FC --> FM["Merge + Summary"]
+    QV --> FM
+    PO --> FM
+    FM --> ND["Qwen3.5 Plus\nDecision-LLM"]
+    ND --> PTE["Plan-then-Execute\n_execute_step_with_retry 3x"]
+    PTE --> PA["PyAutoGUI + MCP\nKlick Tastatur Scroll"]
+
+    M --> HI["hybrid_input_tool\nDOM-First"]
+    HI --> AE["activeElement-Check\nSPA React Vue Angular"]
+    AE --> KT["keyboard.type\nINPUT TEXTAREA"]
+    AE --> EF["element.fill\nStandard HTML"]
+    HI --> VF["VISION_FALLBACK\nLegacy fill"]
+
+    M --> SYS["SystemAgent M3\nread-only Monitoring"]
+    SYS --> SL["read_log search_log"]
+    SYS --> SP["get_processes\nget_system_stats"]
+    SYS --> SS["get_service_status\nsystemctl"]
+
+    M --> SH["ShellAgent M4\n5-Schicht-Policy"]
+    SH --> SHB["Blacklist\nrm-rf dd fork-bomb"]
+    SH --> SHW["Whitelist\nSHELL_WHITELIST_MODE"]
+    SH --> SHA["Audit-Log\nlogs/shell_audit.log"]
+    SH --> SHD["Dry-Run\nadd_cron default"]
+
+    M --> E["Externe Systeme\nDesktop PyAutoGUI\nBrowser Playwright\nAPIs"]
+
+    M --> MM["memory/memory_system.py\nMemory v2.1 + WAL"]
+    MM --> WAL["SQLite WAL-Modus\nParallele Reads + ein Writer"]
+    MM --> MAG["MemoryAccessGuard\nContextVar — Worker read-only"]
+    MM --> IE["interaction_events\ndeterministisches Logging"]
+    MM --> UR["unified_recall\nepisodisch + semantisch"]
+    MM --> WM["working_memory_context\nBudget + Decay + Relevanz"]
+    MM --> CHR["ChromaDB\nEmbeddings + agent_id-Isolation"]
+    CHR --> REM["remember text agent_id\nspeichert mit Agent-Label"]
+    CHR --> REC["recall query agent_filter\nfiltert nach Agent"]
+    MM --> CUR["Nemotron-Kurator\nnvidia/nemotron-3-nano-30b-a3b"]
+    CUR --> CRD["4 Kriterien\nFaktenwissen Präferenz\nSelbsterkenntnis Kontext"]
+
+    ARP -.->|"read-only Worker"| MAG
+    WAL -.->|"ermöglicht"| ARP
+```
+
 ---
 
 ## Agenten
