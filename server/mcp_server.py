@@ -1229,6 +1229,24 @@ async def get_chat_history_endpoint():
         return {"status": "success", "history": list(_chat_history)}
 
 
+@app.get("/agent_models", summary="Aktive Modell-Konfiguration pro Agent")
+async def get_agent_models():
+    """Gibt Provider und Modell-Name für jeden Agenten zurück (für Canvas LEDs)."""
+    from agent.providers import AgentModelConfig
+    agents = ["executor", "research", "reasoning", "creative", "development",
+              "meta", "visual", "data", "document", "communication", "system",
+              "shell", "image"]
+    models = {}
+    for agent in agents:
+        key = agent if agent != "research" else "deep_research"
+        try:
+            model, provider = AgentModelConfig.get_model_and_provider(key)
+            models[agent] = {"provider": provider.value, "model": model}
+        except Exception:
+            models[agent] = {"provider": "unknown", "model": ""}
+    return {"status": "success", "models": models}
+
+
 @app.post("/upload", summary="Datei-Upload für Canvas-Chat")
 async def canvas_upload(request: Request):
     """Nimmt eine Datei per multipart/form-data entgegen und speichert sie."""

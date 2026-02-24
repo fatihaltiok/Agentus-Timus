@@ -150,6 +150,7 @@ def build_canvas_ui_html(poll_ms: int = 2000) -> str:
     .led.completed { background: var(--ok); }
     .led.error     { background: var(--err); }
     .agent-name    { flex: 1; font-size: 12px; }
+    .agent-model   { font-size: 9px; color: #5a9; max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .agent-st      { font-size: 10px; color: var(--muted); }
 
     /* Canvas list */
@@ -391,7 +392,24 @@ def build_canvas_ui_html(poll_ms: int = 2000) -> str:
       flex-shrink: 0;
       align-items: center;
     }
-    #chatInput { flex: 1; }
+    #chatInput {
+      flex: 1;
+      resize: none;
+      min-height: 38px;
+      max-height: 120px;
+      overflow-y: auto;
+      font-family: inherit;
+      font-size: 13px;
+      line-height: 1.4;
+      padding: 6px 8px;
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      box-sizing: border-box;
+    }
+    #chatInput:focus { outline: none; border-color: var(--ok); }
+    .chat-input-bar { align-items: flex-end; }
     #fileInput  { display: none; }
 
     .upload-label {
@@ -533,7 +551,8 @@ def build_canvas_ui_html(poll_ms: int = 2000) -> str:
           <div class="empty">Stelle Timus eine Frage…</div>
         </div>
         <div class="chat-input-bar">
-          <input id="chatInput" placeholder="Nachricht eingeben… (Enter = Senden)" />
+          <textarea id="chatInput" rows="1"
+            placeholder="Nachricht eingeben… (Enter = Senden, Shift+Enter = Neue Zeile)"></textarea>
           <label class="upload-label" title="Datei hochladen">
             📎
             <input type="file" id="fileInput" />
@@ -611,6 +630,10 @@ function renderToolActivity() {
 const AGENTS = ["executor","research","reasoning","creative","development","meta","visual","data","document","communication","system","shell","image"];
 const agentState = Object.fromEntries(AGENTS.map(a => [a, "idle"]));
 
+// Modell-Info vom Server (wird in init() geladen)
+let agentModels = {};
+const PROVIDER_BADGE = { nvidia: "🟢", anthropic: "🔵", openai: "⚪", deepseek: "🟠", inception: "🟣", openrouter: "🔴" };
+
 function renderAgentLeds(agents) {
   const wrap = document.getElementById("agentLeds");
   wrap.innerHTML = "";
@@ -618,12 +641,16 @@ function renderAgentLeds(agents) {
     const info   = (agents && agents[name]) || { status: "idle", last_query: "" };
     const status = info.status || "idle";
     agentState[name] = status;
+    const minfo  = agentModels[name] || {};
+    const badge  = PROVIDER_BADGE[minfo.provider] || "";
+    const mshort = minfo.model ? minfo.model.split("/").pop() : "";
     const row = document.createElement("div");
     row.className = "agent-row";
     row.id        = "agent-row-" + name;
     row.innerHTML =
       `<div class="led ${esc(status)}" id="led-${esc(name)}"></div>` +
       `<span class="agent-name">${esc(name)}</span>` +
+      `<span class="agent-model" title="${esc(minfo.provider||'')} / ${esc(minfo.model||'')}">${badge} ${esc(mshort)}</span>` +
       `<span class="agent-st"  id="ledst-${esc(name)}">${esc(status)}</span>`;
     if (info.last_query) row.title = info.last_query;
     wrap.appendChild(row);
@@ -957,10 +984,25 @@ async function init() {
   // SSE verbinden
   connectSSE();
 
+  // Modell-Info für Agent-LEDs laden
+  try {
+    const mdata = await api("/agent_models");
+    if (mdata.models) {
+      agentModels = mdata.models;
+      renderAgentLeds({});
+    }
+  } catch {}
+
   // Event-Listener
   document.getElementById("sendBtn").addEventListener("click", sendChat);
-  document.getElementById("chatInput").addEventListener("keydown", (e) => {
+  const chatInput = document.getElementById("chatInput");
+  chatInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
+  });
+  // Textarea Auto-Resize
+  chatInput.addEventListener("input", () => {
+    chatInput.style.height = "auto";
+    chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + "px";
   });
   document.getElementById("fileInput").addEventListener("change", (e) => {
     handleFileUpload(e.target.files[0]);

@@ -468,6 +468,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         agent = await get_agent_decision(text)
         log.info(f"  Agent gewählt: {agent.upper()}")
 
+        # Multi-Step-Tasks (META) brauchen mehr Zeit — Status-Update senden
+        if agent == "meta":
+            try:
+                await thinking_msg.edit_text(
+                    "🧠 Timus plant & koordiniert… (mehrstufiger Auftrag, bitte warten)"
+                )
+            except Exception:
+                pass
+
         typing_task = asyncio.create_task(_keep_typing(update))
         try:
             result = await run_agent(
