@@ -1143,6 +1143,24 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 kwargs["temperature"] = 1.0
                 kwargs["top_p"] = 1.0
 
+        if "seed-oss" in self.model.lower():
+            budget = int(os.getenv("META_THINKING_BUDGET", "1000"))
+            kwargs["extra_body"] = {"thinking_budget": budget}
+
+        if "glm5" in self.model.lower().replace("-", "").replace("/", ""):
+            # NVIDIA NIM: Thinking via chat_template_kwargs steuern
+            # OpenRouter: Thinking ist automatisch eingebaut, kein extra_body nötig
+            if self.provider == ModelProvider.NVIDIA:
+                enable = os.getenv("META_ENABLE_THINKING", "true").lower() == "true"
+                kwargs["extra_body"] = {
+                    "chat_template_kwargs": {"enable_thinking": enable}
+                }
+                if enable:
+                    kwargs["temperature"] = 1.0
+
+        if self.provider == ModelProvider.NVIDIA:
+            kwargs["timeout"] = int(os.getenv("NVIDIA_TIMEOUT", "120"))
+
         kwargs = prepare_openai_params(kwargs)
 
         resp = await asyncio.to_thread(client.chat.completions.create, **kwargs)
