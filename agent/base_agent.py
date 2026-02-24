@@ -1684,10 +1684,13 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                         "role": "user",
                         "content": (
                             f"Fehler: {err}. "
-                            "Antworte jetzt ENTWEDER mit "
-                            "Action: {\"method\":\"tool_name\",\"params\":{...}} "
-                            "ODER mit Final Answer: ... "
-                            "Nutze NICHT das System-Tool add_interaction."
+                            "Antworte AUSSCHLIESSLICH mit einem dieser zwei Formate:\n\n"
+                            "Format 1 — Tool aufrufen:\n"
+                            "Action: {\"method\": \"tool_name\", \"params\": {...}}\n\n"
+                            "Format 2 — Aufgabe abschliessen:\n"
+                            "Final Answer: [deine Antwort hier]\n\n"
+                            "KEIN erklaerenden Text davor oder danach. "
+                            "Kein Markdown. Nur eines der beiden Formate."
                         ),
                     }
                 )

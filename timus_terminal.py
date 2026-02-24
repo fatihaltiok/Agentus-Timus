@@ -90,7 +90,14 @@ async def cli_loop(tools_desc: str) -> None:
 
     while True:
         try:
-            q = await asyncio.to_thread(input, "\033[32mDu> \033[0m")
+            # Multi-Zeilen-Eingabe: Zeile mit \ am Ende = Fortsetzung.
+            # Normale Zeilen (kein \) werden sofort gesendet — keine UX-Änderung.
+            first_line = await asyncio.to_thread(input, "\033[32mDu> \033[0m")
+            lines = [first_line.rstrip("\\")]
+            while first_line.rstrip().endswith("\\"):
+                first_line = await asyncio.to_thread(input, "\033[32m... \033[0m")
+                lines.append(first_line.rstrip("\\"))
+            q = " ".join(line.strip() for line in lines if line.strip())
             q_clean = _sanitize_user_query(q)
             if not q_clean:
                 continue

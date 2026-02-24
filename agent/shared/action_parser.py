@@ -45,10 +45,12 @@ def parse_action(text: str) -> Tuple[Optional[dict], Optional[str]]:
 
     # PRIORITAET 3: Regex Fallback
     patterns = [
-        r"```json\s*([\s\S]*?)\s*```",
-        r'Action:\s*(\{[\s\S]*?\})\s*(?:\n|$)',
-        r'(\{[^{}]*"method"[^{}]*\})',
-        r"(\{[^{}]+\})",
+        r"```json\s*([\s\S]*?)\s*```",          # Markdown-Code-Block
+        r"```\s*([\s\S]*?)\s*```",               # Ungetypter Code-Block
+        r'Action:\s*(\{[\s\S]*?\})\s*(?:\n|$)', # Action: {...} einzeilig
+        r'Action:\s*(\{[\s\S]+\})',              # Action: {...} mehrzeilig
+        r'(\{[^{}]*"method"[^{}]*\})',           # {"method": ...} flach
+        r"(\{[^{}]+\})",                         # Beliebiges flaches JSON
     ]
 
     for pattern in patterns:
@@ -63,5 +65,18 @@ def parse_action(text: str) -> Tuple[Optional[dict], Optional[str]]:
                     return data, None
             except (json.JSONDecodeError, ValueError):
                 continue
+
+    # PRIORITAET 4: Verschachteltes JSON — größten {}-Block extrahieren
+    brace_match = re.search(r'(\{(?:[^{}]|\{[^{}]*\})*\})', text, re.DOTALL)
+    if brace_match:
+        try:
+            json_str = re.sub(r",\s*([\}\]])", r"\1", brace_match.group(1).strip())
+            data = json.loads(json_str)
+            if "action" in data:
+                return data["action"], None
+            if "method" in data:
+                return data, None
+        except (json.JSONDecodeError, ValueError):
+            pass
 
     return None, "Kein JSON gefunden"
