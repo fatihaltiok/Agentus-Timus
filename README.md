@@ -42,7 +42,17 @@ Kein Warten mehr auf Eingaben. Heartbeat-Scheduler (15 min), SQLite Task-Queue, 
 
 Primäres lokales Vision-Modell (Florence-2, ~3GB VRAM) für UI-Erkennung + PaddleOCR. Decision-LLM (Qwen3.5 Plus) erstellt To-Do-Liste, führt jeden Schritt mit 3 Retries aus. Browser-Automatisierung über SPA-kompatiblen DOM-First Input.
 
-### Phase 6 — Parallele Multi-Agenten-Delegation ← *aktuell, v2.5*
+### Phase 7 — NVIDIA NIM Provider-Integration ← *aktuell, v2.6*
+
+Timus nutzt jetzt **NVIDIA's Inference Microservices (NIM)** als dritten KI-Provider neben OpenAI und Anthropic. 186 Modelle stehen über eine einheitliche OpenAI-kompatible API zur Verfügung. Drei Agenten laufen jetzt auf NVIDIA-Hardware:
+
+```
+Visual Agent   → Qwen3.5-397B-A17B    (397B MoE, Vision+Video, 262K Context)
+Meta Agent     → Seed-OSS-36B         (ByteDance, Agentic Intelligence, 512K Context)
+Reasoning Agent→ Nemotron-49B         (NVIDIA-eigenes Flagship-Modell)
+```
+
+### Phase 6 — Parallele Multi-Agenten-Delegation *(v2.5)*
 
 Bisher arbeiteten Agenten sequenziell: Meta wartet auf Research (60s), dann Developer (30s), dann Creative (20s) — **110s gesamt**. Jetzt starten alle gleichzeitig — **60s gesamt** (das längste dauert). Fan-Out / Fan-In als natives Architektur-Muster.
 
@@ -57,6 +67,46 @@ Meta → Research  ┐
      → Creative  ┘
 Gesamtzeit: 60s  (3–6× schneller)
 ```
+
+---
+
+## Aktueller Stand — Version 2.6 (2026-02-24)
+
+### NVIDIA NIM Multi-Provider Integration
+
+Timus hat ab heute **NVIDIA NIM** als vollwertigen KI-Provider. Der Provider war bereits in `agent/providers.py` als `ModelProvider.NVIDIA` vorbereitet — heute wurde er mit echten Modellen aktiviert.
+
+**186 Modelle** stehen über `https://integrate.api.nvidia.com/v1` bereit (OpenAI-kompatibel).
+
+#### Neue Modell-Konfiguration
+
+| Agent | Provider | Modell | Besonderheit |
+|-------|----------|--------|--------------|
+| `visual` | **NVIDIA** | `qwen/qwen3.5-397b-a17b` | 397B MoE (17B aktiv), Vision+Video, 262K Context, Thinking Mode |
+| `meta` | **NVIDIA** | `bytedance/seed-oss-36b-instruct` | Agentic Intelligence, 512K Context, Thinking Budget |
+| `reasoning` | **NVIDIA** | `nvidia/llama-3.3-nemotron-super-49b-v1` | NVIDIA-eigenes Flagship-Modell |
+| `developer` | Inception | `mercury-coder-small` | Diffusion LLM, 2.5× schneller als Qwen Coder (getestet) |
+| `executor` | Anthropic | `claude-haiku-4-5-20251001` | Zuverlässige JSON-Action-Ausgabe |
+| `deep_research` | DeepSeek | `deepseek-reasoner` | Tiefes Reasoning, günstig |
+| `creative` | OpenAI | `gpt-5.2` | Bild + Text-Generierung |
+
+#### Mercury vs. Qwen 2.5 Coder 32B — Benchmark
+
+Direktvergleich (gleiche Aufgabe: `sort_and_deduplicate()` Funktion):
+
+| Modell | Zeit | Qualität |
+|--------|------|----------|
+| Mercury Coder (Diffusion) | **2.47s** | NumPy-Docstring, Raises-Sektion |
+| Qwen 2.5 Coder 32B (NVIDIA) | 6.22s | Vollständig, korrekt |
+
+Mercury ist **2.5× schneller** bei gleicher Qualität → bleibt Developer Agent.
+
+#### Warum Seed-OSS-36B für Meta Agent?
+
+ByteDance Seed-OSS-36B ist explizit für *„Agentic Intelligence"* optimiert:
+- **512K Context** — längster aller Timus-Agenten, ideal für Multi-Agent-Koordination
+- **Thinking Budget** dynamisch steuerbar — tieferes Reasoning bei komplexen Plänen
+- **Tool-Calling nativ** — direkte Unterstützung für `delegate_to_agent` / `delegate_multiple_agents`
 
 ---
 
