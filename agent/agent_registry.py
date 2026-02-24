@@ -11,6 +11,7 @@ FEATURES:
 import asyncio
 import logging
 import os
+import uuid
 import httpx
 from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass, field
@@ -394,6 +395,186 @@ class AgentRegistry:
             "type": spec.agent_type,
             "capabilities": spec.capabilities,
             "instantiated": name in self._instances,
+        }
+
+    async def delegate_parallel(
+        self,
+        tasks: List[Dict[str, Any]],
+        from_agent: str = "meta",
+        max_parallel: int = 5,
+    ) -> Dict[str, Any]:
+        """
+        Fan-Out: Startet mehrere unabhaengige Tasks parallel.
+        Fan-In:  Bündelt alle Ergebnisse strukturiert zurueck.
+
+        Jeder Task bekommt eine FRISCHE Agenten-Instanz (kein Singleton-Conflict
+        wenn z.B. 2x research gleichzeitig laeuft).
+
+        MemoryAccessGuard setzt read-only pro asyncio-Task via ContextVar —
+        Worker A und B beeinflussen sich gegenseitig nicht.
+
+        Gibt zurueck:
+            {
+                "trace_id": "abc123def",
+                "total_tasks": 3,
+                "success": 2, "partial": 0, "errors": 1,
+                "results": [...],
+                "summary": "2/3 erfolgreich | 0 partiell | 1 Fehler"
+            }
+        """
+        from memory.memory_guard import MemoryAccessGuard
+
+        trace_id = uuid.uuid4().hex[:12]
+        semaphore = asyncio.Semaphore(max(1, min(10, int(max_parallel))))
+
+        log.info(
+            f"[delegate_parallel] Start | {len(tasks)} Tasks | "
+            f"TraceID: {trace_id} | MaxParallel: {max_parallel}"
+        )
+
+        async def run_single(task: Dict[str, Any]) -> Dict[str, Any]:
+            task_id    = task.get("task_id") or f"t{uuid.uuid4().hex[:6]}"
+            agent_name = self.normalize_agent_name(task.get("agent", ""))
+            task_desc  = task.get("task", "")
+            timeout    = float(task.get("timeout", 120))
+            subtrace   = f"{trace_id}-{task_id}"
+
+            if not agent_name or not task_desc:
+                return {
+                    "task_id": task_id, "agent": agent_name,
+                    "status": "error",
+                    "error": "Fehlende 'agent' oder 'task' Felder",
+                    "trace": subtrace,
+                }
+
+            async with semaphore:
+                try:
+                    # Schritt 1: Spec prüfen
+                    spec = self._specs.get(agent_name)
+                    if not spec:
+                        return {
+                            "task_id": task_id, "agent": agent_name,
+                            "status": "error",
+                            "error": (
+                                f"Agent '{agent_name}' nicht registriert. "
+                                f"Verfuegbar: {list(self._specs.keys())}"
+                            ),
+                            "trace": subtrace,
+                        }
+
+                    # Schritt 2: FRISCHE Instanz erstellen (kein Singleton-Conflict)
+                    tools_desc = self._tools_description or ""
+                    fresh_agent = spec.factory(tools_desc, **spec.extra_kwargs)
+
+                    # Schritt 3: read-only fuer diesen Task setzen (ContextVar — nur dieser Task)
+                    MemoryAccessGuard.set_read_only(True)
+
+                    # Schritt 4: Canvas-Logging (Fan-Out Start)
+                    self._log_canvas_delegation(
+                        from_agent=from_agent,
+                        to_agent=agent_name,
+                        session_id=None,
+                        status="running",
+                        task=task_desc,
+                        message=f"[Parallel] {from_agent} -> {agent_name} | trace={subtrace}",
+                        payload={"trace_id": subtrace, "parallel": True},
+                    )
+
+                    # Schritt 5: Task ausfuehren
+                    raw = await asyncio.wait_for(
+                        fresh_agent.run(task_desc), timeout=timeout
+                    )
+
+                    # Schritt 6: read-only zuruecksetzen
+                    MemoryAccessGuard.set_read_only(False)
+
+                    # Schritt 7: Partial-Result-Erkennung
+                    result_str = str(raw)
+                    status = "partial" if result_str in self._PARTIAL_MARKERS else "success"
+
+                    self._log_canvas_delegation(
+                        from_agent=from_agent,
+                        to_agent=agent_name,
+                        session_id=None,
+                        status="completed",
+                        task=task_desc,
+                        message=f"[Parallel] Abgeschlossen: {agent_name} | status={status}",
+                        payload={"trace_id": subtrace, "parallel": True},
+                    )
+
+                    log.info(f"[delegate_parallel] {agent_name} fertig | status={status} | trace={subtrace}")
+
+                    return {
+                        "task_id":  task_id,
+                        "agent":    agent_name,
+                        "status":   status,
+                        "result":   result_str,
+                        "trace":    subtrace,
+                    }
+
+                except asyncio.TimeoutError:
+                    MemoryAccessGuard.set_read_only(False)
+                    log.warning(
+                        f"[delegate_parallel] Timeout: {agent_name} nach {timeout}s | trace={subtrace}"
+                    )
+                    return {
+                        "task_id": task_id, "agent": agent_name,
+                        "status":  "partial",
+                        "error":   f"Timeout nach {timeout}s",
+                        "trace":   subtrace,
+                    }
+
+                except Exception as e:
+                    MemoryAccessGuard.set_read_only(False)
+                    log.error(
+                        f"[delegate_parallel] Fehler: {agent_name}: {e} | trace={subtrace}"
+                    )
+                    return {
+                        "task_id": task_id, "agent": agent_name,
+                        "status":  "error",
+                        "error":   str(e),
+                        "trace":   subtrace,
+                    }
+
+        # ── Fan-Out ────────────────────────────────────────────────────────────
+        raw_results = await asyncio.gather(
+            *[run_single(t) for t in tasks],
+            return_exceptions=True,
+        )
+
+        # ── Fan-In ─────────────────────────────────────────────────────────────
+        results: List[Dict[str, Any]] = []
+        success_count = partial_count = error_count = 0
+
+        for r in raw_results:
+            if isinstance(r, Exception):
+                results.append({"status": "error", "error": str(r)})
+                error_count += 1
+            else:
+                results.append(r)
+                s = r.get("status", "error")
+                if s == "success":
+                    success_count += 1
+                elif s == "partial":
+                    partial_count += 1
+                else:
+                    error_count += 1
+
+        summary = (
+            f"{success_count}/{len(tasks)} erfolgreich | "
+            f"{partial_count} partiell | {error_count} Fehler"
+        )
+
+        log.info(f"[delegate_parallel] Abgeschlossen | TraceID: {trace_id} | {summary}")
+
+        return {
+            "trace_id":    trace_id,
+            "total_tasks": len(tasks),
+            "success":     success_count,
+            "partial":     partial_count,
+            "errors":      error_count,
+            "results":     results,
+            "summary":     summary,
         }
 
 

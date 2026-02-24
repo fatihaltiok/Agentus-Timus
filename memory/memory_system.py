@@ -138,6 +138,8 @@ class SemanticMemoryStore:
     
     def store_embedding(self, item: MemoryItem) -> Optional[str]:
         """Speichert MemoryItem mit Embedding in ChromaDB."""
+        from memory.memory_guard import MemoryAccessGuard
+        MemoryAccessGuard.check_write_permission()
         if not self.is_available():
             log.debug("ChromaDB nicht verfügbar, überspringe Embedding")
             return None
@@ -505,9 +507,12 @@ class PersistentMemory:
         except:
             return datetime.now()   
     def _init_db(self):
-
         """Initialisiert die Datenbank-Tabellen."""
         with sqlite3.connect(self.db_path) as conn:
+            # WAL-Modus: erlaubt gleichzeitige Reads + einen Writer (für parallele Agenten)
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
+            conn.execute("PRAGMA cache_size=-64000;")  # 64 MB Cache
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS facts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -575,6 +580,8 @@ class PersistentMemory:
     
     def store_fact(self, fact: Fact):
         """Speichert oder aktualisiert einen Fakt."""
+        from memory.memory_guard import MemoryAccessGuard
+        MemoryAccessGuard.check_write_permission()
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("""
                 INSERT INTO facts (category, key, value, confidence, source, created_at, last_used)
@@ -654,6 +661,8 @@ class PersistentMemory:
 
     def store_memory_item(self, item: MemoryItem):
         """Speichert oder aktualisiert ein MemoryItem."""
+        from memory.memory_guard import MemoryAccessGuard
+        MemoryAccessGuard.check_write_permission()
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("""
                 INSERT INTO memory_items (
@@ -734,6 +743,8 @@ class PersistentMemory:
     
     def store_summary(self, summary: ConversationSummary):
         """Speichert eine Zusammenfassung."""
+        from memory.memory_guard import MemoryAccessGuard
+        MemoryAccessGuard.check_write_permission()
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("""
                 INSERT INTO summaries (summary, topics, facts_extracted, message_count, created_at)
@@ -769,6 +780,8 @@ class PersistentMemory:
     
     def store_conversation(self, session_id: str, messages: List[Message]):
         """Speichert eine komplette Konversation."""
+        from memory.memory_guard import MemoryAccessGuard
+        MemoryAccessGuard.check_write_permission()
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("""
                 INSERT INTO conversations (session_id, messages, created_at)

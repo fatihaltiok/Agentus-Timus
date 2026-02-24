@@ -321,6 +321,28 @@ FORMAT fuer Delegation:
 Action: {{"method": "delegate_to_agent",
          "params": {{"agent_type": "research", "task": "...", "from_agent": "meta"}}}}
 
+## PARALLELE DELEGATION (bei unabhaengigen Teilaufgaben)
+Wenn eine Aufgabe mehrere UNABHAENGIGE Teilschritte hat, nutze delegate_multiple_agents
+statt mehrerer sequenzieller delegate_to_agent-Aufrufe — spart 3–6× Zeit.
+
+WANN PARALLEL (Teilschritte haengen NICHT voneinander ab):
+- Mehrere Recherche-Themen gleichzeitig → research + research
+- Code schreiben WAEHREND Daten analysiert werden → developer + data
+- Bild analysieren WAEHREND Fakten recherchiert werden → image + research
+
+WANN SEQUENZIELL BLEIBEN (Schritt 2 braucht Ergebnis von Schritt 1):
+- Erst recherchieren, dann Bild mit Recherche-Ergebnis erstellen
+- Erst Code schreiben, dann Code ausfuehren
+
+FORMAT fuer parallele Delegation:
+Action: {{"method": "delegate_multiple_agents", "params": {{"tasks": [
+  {{"task_id": "t1", "agent": "research", "task": "Recherchiere X", "timeout": 120}},
+  {{"task_id": "t2", "agent": "developer", "task": "Schreibe Skript fuer Y"}}
+]}}}}
+
+Nach dem Aufruf erhaeltst du eine strukturierte Markdown-Zusammenfassung aller Ergebnisse.
+Integriere alle Ergebnisse in deine finale Antwort.
+
 # SKILLS
 - search_google, open_website, click_element_by_description
 - type_in_field, take_screenshot, close_active_window

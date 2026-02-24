@@ -212,8 +212,9 @@ TOOL_MODULES = [
     "tools.hybrid_detection_tool.tool",
     "tools.visual_agent_tool.tool",
     "tools.cookie_banner_tool.tool",
-    # NEU: Agent-zu-Agent Delegation
+    # NEU: Agent-zu-Agent Delegation (sequenziell + parallel)
     "tools.delegation_tool.tool",
+    "tools.delegation_tool.parallel_delegation_tool",
     # NEU: Vision Stability System v1.0 (GPT-5.2 Empfehlungen)
     "tools.screen_change_detector.tool",
     "tools.screen_contract_tool.tool",
