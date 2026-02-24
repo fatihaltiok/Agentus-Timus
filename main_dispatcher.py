@@ -663,6 +663,17 @@ def quick_intent_check(query: str) -> Optional[str]:
         if os.path.isfile(_candidate):
             return "image"
 
+    # HÖCHSTE PRIORITÄT: Compound Multi-Step Tasks → immer META
+    # (verhindert dass "architektur" REASONING triggert wenn "danach"/"erstelle" auch da ist)
+    _MULTI_STEP_TRIGGERS = ("danach", "anschließend", "und dann", "dann erstelle",
+                            "dann generiere", "im anschluss", "abschließend erstelle")
+    _TASK_STARTERS = ("recherchiere", "suche nach", "finde heraus", "analysiere",
+                      "schreibe", "erstelle", "generiere", "berechne")
+    _has_multi_step = any(t in query_lower for t in _MULTI_STEP_TRIGGERS)
+    _has_task_starter = any(t in query_lower for t in _TASK_STARTERS)
+    if _has_multi_step and _has_task_starter:
+        return "meta"
+
     # REASONING zuerst prüfen (höchste Priorität für komplexe Fragen)
     for keyword in REASONING_KEYWORDS:
         if keyword in query_lower:
