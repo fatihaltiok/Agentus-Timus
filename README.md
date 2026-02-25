@@ -4,7 +4,7 @@
   <img src="assets/branding/timus-logo-glow.png" alt="Timus Logo" width="760">
 </p>
 
-**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.7 hat Timus ein **gehärtetes Memory-System** mit 8× mehr Kontext und vollständig autonomer Zusammenfassung.
+**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen).
 
 ---
 
@@ -52,7 +52,27 @@ Meta Agent     → Seed-OSS-36B         (ByteDance, Agentic Intelligence, 512K C
 Reasoning Agent→ Nemotron-49B         (NVIDIA-eigenes Flagship-Modell)
 ```
 
-### Phase 8 — Memory Hardening ← *aktuell, v2.7*
+### Phase 9 — Curiosity Engine + Soul Engine ← *aktuell, v2.8*
+
+Timus entwickelt eine Persönlichkeit und sucht proaktiv nach Wissen.
+
+**Soul Engine:** 5 Achsen (`confidence`, `formality`, `humor`, `verbosity`, `risk_appetite`) driften nach jeder Session basierend auf Interaktionssignalen. Der System-Prompt wird dynamisch angepasst. Drift ist gedämpft (×0.1) — spürbare Veränderung nach ~1-2 Wochen.
+
+**Curiosity Engine:** Wacht in unregelmäßigen Abständen auf (3–14h), extrahiert dominante Themen der letzten 72h, generiert eine Edge-Suchanfrage via LLM, bewertet Ergebnisse mit einem Gatekeeper-Filter (Score ≥ 7/10) und schreibt den User proaktiv per Telegram an — im Ton der aktuellen Soul-Achsen.
+
+```
+Soul Engine:
+  confidence=50 → formality=65 → humor=15 → verbosity=50 → risk_appetite=40
+  [Drift nach Task-Reflexion: ±0.1–0.3 pro Session, Clamp 5–95]
+  → get_system_prompt_prefix() generiert dynamisches Prompt-Fragment
+
+Curiosity Engine:
+  Sleep(3–14h fuzzy) → Topics(72h DB) → LLM-Query-Gen → DataForSEO
+  → Gatekeeper-LLM(Score≥7) → Duplikat-Check → Telegram-Push(Soul-Ton)
+  → curiosity_sent SQLite-Log (Anti-Spam: max 2/Tag, 14-Tage-Duplikate)
+```
+
+### Phase 8 — Memory Hardening *(v2.7)*
 
 Fünf strukturelle Schwachstellen im Memory-System behoben: Kontextfenster von 2.000 auf **16.000 Token** erweitert, Working Memory von 3.200 auf **10.000 Zeichen** erhöht, ChromaDB läuft jetzt **direkt** (kein mcp_server.py nötig), **Auto-Summarize** löst bei jedem N-ten Nachrichten automatisch aus, Reflection ist durch `asyncio.wait_for(30s)` abgesichert — kein stiller Absturz mehr.
 
@@ -77,6 +97,68 @@ Meta → Research  ┐
      → Developer ├── gleichzeitig → ResultAggregator → Meta wertet aus
      → Creative  ┘
 Gesamtzeit: 60s  (3–6× schneller)
+```
+
+---
+
+## Aktueller Stand — Version 2.8 (2026-02-25)
+
+### Curiosity Engine + Soul Engine (Persönlichkeitsentwicklung)
+
+#### Soul Engine
+
+| Feature | Detail |
+|---------|--------|
+| **5 Achsen** | `confidence`, `formality`, `humor`, `verbosity`, `risk_appetite` |
+| **Startwerte** | confidence=50, formality=65, humor=15, verbosity=50, risk_appetite=40 |
+| **Drift-Dämpfung** | ×0.1 (effektiv 0.1–0.3 Punkte/Session) |
+| **Clamp** | [5, 95] — kein Extrem-Verhalten |
+| **7 Signale** | user_rejection, task_success, user_emoji, user_short_input, user_long_input, multiple_failures, creative_success |
+| **System-Prompt** | `get_system_prompt_prefix()` injiziert 1-2 Sätze bei Achswerten außerhalb Neutral-Zone |
+| **Persistenz** | SOUL.md YAML-Frontmatter (`axes` + `drift_history`, max. 30 Einträge) |
+
+#### Curiosity Engine
+
+| Feature | Detail |
+|---------|--------|
+| **Fuzzy Sleep** | 3–14h (CURIOSITY_MIN_HOURS, CURIOSITY_MAX_HOURS) |
+| **Topic-Extraktion** | Session-State (top_topics) + SQLite 72h (interaction_events) |
+| **Query-Generierung** | LLM: "Edge-Suchanfrage — neu, unbekannt, 2026" |
+| **Suche** | DataForSEO Google Organic, Top-3 bewertet |
+| **Gatekeeper** | LLM-Score 0-10 (Score ≥ 7 = sendenswert) |
+| **Anti-Spam** | max. 2 Nachrichten/Tag + 14-Tage-Duplikat-Sperre |
+| **Ton** | Soul-Engine-Achsen bestimmen Einstiegssatz (vorsichtig / neutral / direkt) |
+| **Logging** | `curiosity_sent` SQLite-Tabelle + `interaction_events` (agent=curiosity) |
+
+#### Neue/geänderte Dateien
+
+| Datei | Art | Beschreibung |
+|-------|-----|--------------|
+| `memory/soul_engine.py` | Neu | SoulEngine: `get_axes()`, `apply_drift()`, `get_tone_config()` |
+| `orchestration/curiosity_engine.py` | Neu | CuriosityEngine: Fuzzy-Loop, Gatekeeper, Telegram-Push |
+| `memory/markdown_store/SOUL.md` | Geändert | YAML-Frontmatter: `axes` + `drift_history` |
+| `memory/markdown_store/store.py` | Geändert | SoulProfile: `axes: Dict` + `drift_history: List[Dict]`, PyYAML |
+| `config/personality_loader.py` | Geändert | `get_system_prompt_prefix()` liest Soul-Achsen |
+| `memory/reflection_engine.py` | Geändert | `reflect_on_task()` → `soul_engine.apply_drift()` |
+| `memory/memory_system.py` | Geändert | `curiosity_sent` Tabelle in `_init_db()` |
+| `orchestration/autonomous_runner.py` | Geändert | `start()` startet CuriosityEngine als asyncio.Task |
+| `.env.example` | Geändert | CURIOSITY_* + SOUL_* Variablen dokumentiert |
+
+#### Neue ENV-Variablen
+
+```bash
+# Soul Engine
+SOUL_DRIFT_ENABLED=true          # false = Achsen einfrieren
+SOUL_DRIFT_DAMPING=0.1           # Dämpfungsfaktor
+SOUL_AXES_CLAMP_MIN=5            # Untergrenze
+SOUL_AXES_CLAMP_MAX=95           # Obergrenze
+
+# Curiosity Engine
+CURIOSITY_ENABLED=true           # false = deaktiviert
+CURIOSITY_MIN_HOURS=3            # Frühestes Aufwachen
+CURIOSITY_MAX_HOURS=14           # Spätestes Aufwachen
+CURIOSITY_GATEKEEPER_MIN=7       # Score-Minimum (1-10)
+CURIOSITY_MAX_PER_DAY=2          # Anti-Spam Limit
 ```
 
 ---
@@ -290,7 +372,7 @@ Timus läuft als 24/7-Dienst — wacht auf neue Tasks, sendet Ergebnisse via Tel
 
 ```
                     ┌──────────────────────────────────────────────────────────────┐
-                    │                    TIMUS v2.5                                │
+                    │                    TIMUS v2.8                                │
                     │                                                              │
   Telegram ──────→  │  TelegramGateway                                             │
   Webhook  ──────→  │  WebhookServer  → EventRouter                                │
@@ -299,44 +381,28 @@ Timus läuft als 24/7-Dienst — wacht auf neue Tasks, sendet Ergebnisse via Tel
   Canvas    ──────→ │  /chat  (SSE-Push, 13 Agent-LEDs)                            │
                     │       ↓                                                      │
                     │  AutonomousRunner                                            │
-                    │       ↓                                                      │
-                    │  SQLite TaskQueue  ←── /task, /remind                        │
-                    │       ↓                                                      │
-                    │  failover_run_agent()                                        │
-                    │       ↓                                                      │
+                    │  ├─ _worker_loop() → SQLite TaskQueue                       │
+                    │  └─ CuriosityEngine._curiosity_loop() ← NEU v2.8            │
+                    │       Sleep(3–14h fuzzy) → Topics → LLM-Query              │
+                    │       → DataForSEO → Gatekeeper(≥7) → Telegram             │
+                    │       Anti-Spam: 2/Tag + 14-Tage-Duplikat-Schutz           │
+                    │       Ton: Soul-Engine-Achsen (vorsichtig/neutral/direkt)  │
+                    │                                                              │
                     │  ┌────────────────────────────────────────────────────────┐  │
                     │  │ AgentRegistry — 13 Agenten                              │  │
-                    │  │                                                         │  │
-                    │  │  delegate(to_agent, task)          ← sequenziell       │  │
-                    │  │  ├─ Timeout (asyncio.wait_for, 120s)                   │  │
-                    │  │  ├─ Retry (expon. Backoff)                              │  │
-                    │  │  ├─ Partial-Erkennung ("Limit erreicht." → partial)    │  │
-                    │  │  └─ Loop-Prevention (Stack, MAX_DEPTH=3)               │  │
-                    │  │                                                         │  │
-                    │  │  delegate_parallel(tasks, max_parallel=5) ← NEU v2.5  │  │
-                    │  │  ├─ asyncio.gather() — Fan-Out                         │  │
-                    │  │  ├─ Semaphore (max 10 parallel)                        │  │
-                    │  │  ├─ Frische Instanz pro Task (kein Singleton)          │  │
-                    │  │  ├─ MemoryAccessGuard (ContextVar, thread-safe)        │  │
-                    │  │  ├─ asyncio.wait_for pro Task (timeout konfigurierbar) │  │
-                    │  │  └─ ResultAggregator — Fan-In Markdown-Formatierung    │  │
-                    │  │                                                         │  │
-                    │  │  executor  │ research  │ reasoning │ creative           │  │
-                    │  │  developer │ meta      │ visual    │ image              │  │
-                    │  │  data      │ document  │ communication                  │  │
-                    │  │  system (read-only) │ shell (5-Schicht-Policy)         │  │
+                    │  │  delegate() sequenziell | delegate_parallel() Fan-Out  │  │
                     │  └────────────────────────────────────────────────────────┘  │
                     │       ↓                                                      │
                     │  MCP Server :5000 (FastAPI + JSON-RPC, 80+ Tools)           │
                     │       ↓                          ↓                          │
-                    │  Memory v2.1 + WAL          SystemMonitor                   │
-                    │  ├─ SessionMemory            → Telegram Alert               │
-                    │  ├─ SQLite + WAL-Modus                                      │
-                    │  ├─ ChromaDB (agent_id-Isolation)                           │
-                    │  ├─ MemoryAccessGuard (ContextVar) — NEU v2.5              │
-                    │  ├─ FTS5 Hybrid-Suche                                       │
-                    │  ├─ MarkdownStore                                           │
-                    │  └─ Nemotron-Kurator (nvidia/nemotron-3-nano-30b-a3b)      │
+                    │  Memory v2.2 + WAL          SoulEngine ← NEU v2.8          │
+                    │  ├─ SessionMemory            ├─ 5 Achsen (SOUL.md)         │
+                    │  ├─ SQLite + WAL             ├─ apply_drift() nach Reflect  │
+                    │  ├─ ChromaDB (direkt)        ├─ get_system_prompt_prefix() │
+                    │  ├─ MemoryAccessGuard        └─ get_tone_config() → Curio  │
+                    │  ├─ FTS5 Hybrid-Suche                                      │
+                    │  ├─ MarkdownStore (SOUL.md bidirektional)                  │
+                    │  └─ ReflectionEngine → soul_engine.apply_drift()           │
                     └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -433,71 +499,56 @@ flowchart TD
 
     A --> AR["AgentRegistry"]
     AR --> ARD["delegate — sequenziell\nasyncio.wait_for 120s"]
-    ARD --> ARDR["Retry expon. Backoff\nDELEGATION_MAX_RETRIES"]
-    ARD --> ARDP["Partial-Erkennung\nLimit erreicht → partial"]
-    ARD --> ARDL["Loop-Prevention\nStack + MAX_DEPTH 3"]
+    ARD --> ARDR["Retry expon. Backoff"]
+    ARD --> ARDP["Partial-Erkennung"]
+    ARD --> ARDL["Loop-Prevention MAX_DEPTH 3"]
 
-    AR --> ARP["delegate_parallel — Fan-Out NEU v2.5\nasyncio.gather + Semaphore max 10"]
-    ARP --> ARPI["Frische Instanz pro Task\nkein Singleton-Problem"]
-    ARP --> ARPM["MemoryAccessGuard\nContextVar — thread-safe read-only"]
-    ARP --> ARPT["asyncio.wait_for pro Task\nTimeout konfigurierbar"]
-    ARP --> ARPA["ResultAggregator\nFan-In Markdown-Formatierung"]
+    AR --> ARP["delegate_parallel — Fan-Out v2.5\nasyncio.gather + Semaphore max 10"]
+    ARP --> ARPM["MemoryAccessGuard\nContextVar — thread-safe"]
+    ARP --> ARPA["ResultAggregator\nFan-In Markdown"]
 
     A --> B["agent/base_agent.py\nDynamicToolMixin"]
-    B --> BW["Working Memory inject"]
-    B --> BR["Recall Fast-Path\nagent_filter aware"]
-    B --> BT["Loop Guard + Telemetrie\nmax_iterations"]
-    B --> BCM["AGENT_CAPABILITY_MAP\nfiltert Tools pro Agent"]
-    B --> BL["BugLogger\nlogs/bugs/ + buglog.md"]
+    B --> BW["Working Memory inject\nSoul-Prefix NEU v2.8"]
+    B --> BR["Recall Fast-Path"]
+    B --> BL["BugLogger"]
 
     B --> M["MCP Server :5000\nFastAPI + JSON-RPC\n80+ Tools"]
-    M --> TR["tool_registry_v2\nSchema + Validierung"]
 
-    M --> FH["VisualNemotron v4\nVision-Pipeline"]
-    FH --> FC["Florence-2 PRIMARY\nUI-Elemente + BBoxes lokal"]
-    FH --> QV["Qwen3.5 Plus FALLBACK 1\nScreenshot-Analyse OpenRouter"]
-    FH --> PO["PaddleOCR CPU\nText + BBox + Confidence"]
-    FC --> FM["Merge + Summary"]
-    QV --> FM
-    PO --> FM
-    FM --> ND["Qwen3.5 Plus\nDecision-LLM"]
-    ND --> PTE["Plan-then-Execute\n_execute_step_with_retry 3x"]
-    PTE --> PA["PyAutoGUI + MCP\nKlick Tastatur Scroll"]
+    M --> FH["VisualNemotron v4\nFlorence-2 + PaddleOCR\nPlan-then-Execute"]
 
-    M --> HI["hybrid_input_tool\nDOM-First"]
-    HI --> AE["activeElement-Check\nSPA React Vue Angular"]
-    AE --> KT["keyboard.type\nINPUT TEXTAREA"]
-    AE --> EF["element.fill\nStandard HTML"]
-    HI --> VF["VISION_FALLBACK\nLegacy fill"]
+    M --> SYS["SystemAgent\nread-only Monitoring"]
+    M --> SH["ShellAgent\n5-Schicht-Policy"]
+    M --> E["Externe Systeme\nPyAutoGUI / Playwright / APIs"]
 
-    M --> SYS["SystemAgent M3\nread-only Monitoring"]
-    SYS --> SL["read_log search_log"]
-    SYS --> SP["get_processes\nget_system_stats"]
-    SYS --> SS["get_service_status\nsystemctl"]
-
-    M --> SH["ShellAgent M4\n5-Schicht-Policy"]
-    SH --> SHB["Blacklist\nrm-rf dd fork-bomb"]
-    SH --> SHW["Whitelist\nSHELL_WHITELIST_MODE"]
-    SH --> SHA["Audit-Log\nlogs/shell_audit.log"]
-    SH --> SHD["Dry-Run\nadd_cron default"]
-
-    M --> E["Externe Systeme\nDesktop PyAutoGUI\nBrowser Playwright\nAPIs"]
-
-    M --> MM["memory/memory_system.py\nMemory v2.2 + WAL + Hardening"]
-    MM --> WAL["SQLite WAL-Modus\nParallele Reads + ein Writer"]
-    MM --> MAG["MemoryAccessGuard\nContextVar — Worker read-only"]
+    M --> MM["memory/memory_system.py\nMemory v2.2 + WAL"]
+    MM --> WAL["SQLite WAL\ncuriosity_sent NEU v2.8"]
+    MM --> MAG["MemoryAccessGuard\nContextVar"]
     MM --> IE["interaction_events\ndeterministisches Logging"]
-    MM --> UR["unified_recall\nepisodisch + semantisch\n200-Scan v2.7"]
-    MM --> WM["working_memory_context\n16K Token · 10K Chars · 50 Msgs\nBudget + Decay + Relevanz v2.7"]
-    MM --> CHR["ChromaDB Direktverbindung\nFallback: shared_context → PersistentClient\nkein mcp_server nötig v2.7"]
-    CHR --> REM["remember text agent_id\nspeichert mit Agent-Label"]
-    CHR --> REC["recall query agent_filter\nfiltert nach Agent"]
-    MM --> CUR["Nemotron-Kurator\nnvidia/nemotron-3-nano-30b-a3b"]
-    CUR --> CRD["4 Kriterien\nFaktenwissen Präferenz\nSelbsterkenntnis Kontext"]
-    MM --> AUS["Auto-Summarize v2.7\nalle 20 Nachrichten\nasyncio.create_task"]
-    MM --> RFT["Reflection 30s Timeout v2.7\nasyncio.wait_for\nlog.warning bei Fehler"]
+    MM --> UR["unified_recall\n200-Scan"]
+    MM --> CHR["ChromaDB Direktverbindung"]
+    MM --> CUR["Nemotron-Kurator\n4 Kriterien"]
+    MM --> AUS["Auto-Summarize\nalle 20 Nachrichten"]
+    MM --> RFT["Reflection 30s Timeout\n→ soul_engine.apply_drift NEU v2.8"]
 
-    ARP -.->|"read-only Worker"| MAG
+    MM --> SE["SoulEngine NEU v2.8\nmemory/soul_engine.py"]
+    SE --> SEA["5 Achsen\nconfidence formality humor\nverbosity risk_appetite"]
+    SE --> SED["apply_drift\n7 Signale · ×0.1 Dämpfung\nClamp 5–95"]
+    SE --> SET["get_tone_config\nvorsichtig neutral direkt"]
+    SE --> SEP["get_system_prompt_prefix\ndynamisches Prompt-Fragment"]
+
+    MM --> CE["CuriosityEngine NEU v2.8\norchestration/curiosity_engine.py"]
+    CE --> CEL["Fuzzy Sleep\n3–14h zufällig"]
+    CE --> CET["Topic-Extraktion\nSession + SQLite 72h"]
+    CE --> CEQ["LLM Query-Gen\nEdge-Suchanfrage 2026"]
+    CE --> CES["DataForSEO\nTop-3 Ergebnisse"]
+    CE --> CEG["Gatekeeper-LLM\nScore 0-10 · ≥7 = senden"]
+    CE --> CED["Duplikat-Check\n14 Tage · 2/Tag Limit"]
+    CE --> CEP["Telegram Push\nSoul-Ton als Einstieg"]
+
+    SET -.->|"Ton für Push"| CEP
+    SEP -.->|"Injiziert in"| BW
+    SED -.->|"nach Reflexion"| RFT
+    ARP -.->|"read-only"| MAG
     WAL -.->|"ermöglicht"| ARP
 ```
 
@@ -742,15 +793,19 @@ timus/
 │   ├── document_creator/    # M1: DOCX/TXT
 │   └── ...                  # 70+ weitere Tools
 ├── memory/
-│   ├── memory_system.py     # Memory v2.2 — Konstanten per os.getenv, ChromaDB-Direkt, Auto-Summarize
-│   ├── memory_guard.py      # MemoryAccessGuard (ContextVar, thread-safe, NEU v2.5)
-│   ├── reflection_engine.py # Post-Task Reflexion (30s Timeout-Schutz v2.7)
-│   └── markdown_store/      # USER.md, SOUL.md, MEMORY.md
+│   ├── memory_system.py     # Memory v2.2 — curiosity_sent Tabelle (NEU v2.8)
+│   ├── memory_guard.py      # MemoryAccessGuard (ContextVar, thread-safe, v2.5)
+│   ├── reflection_engine.py # Post-Task Reflexion + soul_engine.apply_drift() (NEU v2.8)
+│   ├── soul_engine.py       # SoulEngine — 5 Achsen + apply_drift() (NEU v2.8)
+│   └── markdown_store/
+│       ├── SOUL.md          # axes + drift_history im YAML-Frontmatter (NEU v2.8)
+│       └── store.py         # SoulProfile: axes + drift_history (NEU v2.8)
 ├── orchestration/
 │   ├── scheduler.py            # Heartbeat-Scheduler (15 min)
-│   ├── autonomous_runner.py    # Scheduler↔Agent Bridge
+│   ├── autonomous_runner.py    # startet CuriosityEngine als asyncio.Task (NEU v2.8)
+│   ├── curiosity_engine.py     # CuriosityEngine — Fuzzy Loop + Gatekeeper (NEU v2.8)
 │   ├── task_queue.py           # SQLite Task-Queue + Prioritäten + Retry
-│   ├── canvas_store.py         # Canvas-Logging (auch für parallele Delegation)
+│   ├── canvas_store.py         # Canvas-Logging
 │   └── lane_manager.py
 ├── gateway/
 │   ├── telegram_gateway.py     # @agentustimus_bot
@@ -841,15 +896,28 @@ HEARTBEAT_INTERVAL_MINUTES=15
 TELEGRAM_BOT_TOKEN=...
 TELEGRAM_ALLOWED_IDS=<deine_id>
 
-# Memory System (v2.7 — alle Werte haben Defaults, .env optional)
-MAX_SESSION_MESSAGES=50       # Nachrichten im Kontext (Standard: 50)
-MAX_CONTEXT_TOKENS=16000      # Token-Limit Memory-Kontext (Standard: 16000)
-SUMMARIZE_THRESHOLD=20        # Auto-Summarize-Intervall (Standard: 20)
-WM_MAX_CHARS=10000            # Working Memory Zeichen (Standard: 10000)
-WM_MAX_RELATED=8              # Verwandte Erinnerungen (Standard: 8)
-WM_MAX_EVENTS=15              # Events im Working Memory (Standard: 15)
-UNIFIED_RECALL_MAX_SCAN=200   # Recall-Scan-Tiefe (Standard: 200)
-MAX_OUTPUT_TOKENS=16000       # ContextGuard Output-Limit (Standard: 16000)
+# Memory System (v2.7)
+MAX_SESSION_MESSAGES=50
+MAX_CONTEXT_TOKENS=16000
+SUMMARIZE_THRESHOLD=20
+WM_MAX_CHARS=10000
+WM_MAX_RELATED=8
+WM_MAX_EVENTS=15
+UNIFIED_RECALL_MAX_SCAN=200
+MAX_OUTPUT_TOKENS=16000
+
+# Curiosity Engine (v2.8)
+CURIOSITY_ENABLED=true
+CURIOSITY_MIN_HOURS=3
+CURIOSITY_MAX_HOURS=14
+CURIOSITY_GATEKEEPER_MIN=7
+CURIOSITY_MAX_PER_DAY=2
+
+# Soul Engine (v2.8)
+SOUL_DRIFT_ENABLED=true
+SOUL_DRIFT_DAMPING=0.1
+SOUL_AXES_CLAMP_MIN=5
+SOUL_AXES_CLAMP_MAX=95
 ```
 
 ### Starten

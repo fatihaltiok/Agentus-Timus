@@ -61,6 +61,14 @@ class SoulProfile:
     communication_style: str = ""
     behavior_hooks: List[str] = field(default_factory=list)
     updated_at: str = ""
+    axes: Dict[str, float] = field(default_factory=lambda: {
+        "confidence": 50.0,
+        "formality": 65.0,
+        "humor": 15.0,
+        "verbosity": 50.0,
+        "risk_appetite": 40.0,
+    })
+    drift_history: List[Dict] = field(default_factory=list)
 
 
 @dataclass
@@ -302,16 +310,57 @@ Sie kann manuell editiert werden und wird automatisch mit Timus synchronisiert.
             return SoulProfile()
 
         try:
+            import yaml as _yaml
             content = self.soul_path.read_text(encoding="utf-8")
             frontmatter, body = self._parse_frontmatter(content)
-            data = self._parse_yaml_simple(frontmatter)
+
+            # PyYAML für korrekte Verarbeitung von axes (Dict) und drift_history (List[Dict])
+            try:
+                data = _yaml.safe_load(frontmatter) or {}
+            except Exception:
+                data = self._parse_yaml_simple(frontmatter)
+
+            # axes: Werte sicher als float konvertieren
+            axes_raw = data.get("axes", {})
+            if isinstance(axes_raw, dict) and axes_raw:
+                axes = {}
+                for k, v in axes_raw.items():
+                    try:
+                        axes[k] = float(v)
+                    except (ValueError, TypeError):
+                        axes[k] = 50.0
+            else:
+                axes = {
+                    "confidence": 50.0,
+                    "formality": 65.0,
+                    "humor": 15.0,
+                    "verbosity": 50.0,
+                    "risk_appetite": 40.0,
+                }
+
+            # drift_history: Liste von Dicts
+            drift_raw = data.get("drift_history", [])
+            if isinstance(drift_raw, list):
+                drift_history = []
+                for item in drift_raw:
+                    if isinstance(item, dict):
+                        drift_history.append(item)
+                    elif isinstance(item, str):
+                        try:
+                            drift_history.append(json.loads(item))
+                        except Exception:
+                            pass
+            else:
+                drift_history = []
 
             return SoulProfile(
-                persona=data.get("persona", ""),
-                traits=data.get("traits", []),
-                communication_style=data.get("communication_style", ""),
-                behavior_hooks=data.get("behavior_hooks", []),
-                updated_at=data.get("updated_at", ""),
+                persona=data.get("persona", "") or "",
+                traits=data.get("traits", []) or [],
+                communication_style=data.get("communication_style", "") or "",
+                behavior_hooks=data.get("behavior_hooks", []) or [],
+                updated_at=str(data.get("updated_at", "")),
+                axes=axes,
+                drift_history=drift_history,
             )
         except Exception as e:
             log.error(f"Fehler beim Lesen von SOUL.md: {e}")
@@ -336,19 +385,33 @@ Sie kann manuell editiert werden und wird automatisch mit Timus synchronisiert.
             return False
 
     def _write_soul_profile(self, profile: SoulProfile):
-        """Schreibt die Persona in SOUL.md."""
-        frontmatter = self._dict_to_yaml(
-            {
-                "persona": profile.persona,
-                "traits": profile.traits,
-                "communication_style": profile.communication_style,
-                "behavior_hooks": profile.behavior_hooks,
-                "updated_at": profile.updated_at or datetime.now().isoformat(),
-            }
+        """Schreibt die Persona in SOUL.md (PyYAML für korrekte Serialisierung)."""
+        import yaml as _yaml
+
+        # Maximale drift_history auf 30 Einträge begrenzen
+        drift_history = list(profile.drift_history or [])[-30:]
+
+        frontmatter_data = {
+            "persona": profile.persona or [],
+            "traits": profile.traits or [],
+            "communication_style": profile.communication_style or {},
+            "behavior_hooks": profile.behavior_hooks or [],
+            "updated_at": profile.updated_at or datetime.now().isoformat(),
+            "axes": {k: float(v) for k, v in (profile.axes or {}).items()},
+            "axes_updated_at": date.today().isoformat(),
+            "drift_history": drift_history,
+        }
+
+        frontmatter = _yaml.dump(
+            frontmatter_data,
+            allow_unicode=True,
+            default_flow_style=False,
+            sort_keys=False,
+            indent=2,
         )
 
         content = f"""---
-{frontmatter}
+{frontmatter.rstrip()}
 ---
 
 # Timus Persona

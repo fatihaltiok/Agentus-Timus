@@ -444,16 +444,26 @@ class ReflectionEngine:
             
             # Learnings speichern
             await self._store_learnings(parsed, task)
-            
+
+            # Soul-Drift: Persönlichkeit nach Reflexion anpassen
+            try:
+                from memory.soul_engine import get_soul_engine
+                get_soul_engine().apply_drift(
+                    reflection=parsed,
+                    user_input=task.get("description", "") if isinstance(task, dict) else str(task),
+                )
+            except Exception as soul_err:
+                log.warning("Soul-Drift fehlgeschlagen (nicht kritisch): %s", soul_err)
+
             self._reflection_count += 1
             self._last_reflection = parsed
-            
+
             log.info(
                 f"🪞 Reflexion abgeschlossen: "
                 f"{'ERFOLG' if parsed.success else 'TEILERFOLG'} "
                 f"({len(parsed.what_worked)} positiv, {len(parsed.what_failed)} negativ)"
             )
-            
+
             return parsed
             
         except Exception as e:

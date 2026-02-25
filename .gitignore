@@ -66,3 +66,22 @@ sys
 =1.0.0
 Öffne
 secrets.yaml
+
+# SQLite-Datenbanken (Laufzeit-Daten)
+tasks.db
+memory/markdown_store/search_index.db
+
+# Shell-Agent-Bug: fehlerhafte Output-Dateien im Root
+hier
+ich
+\{\}
+\{session_id\:*
+\{target_elements\:*
+\{text_to_find\:*
+\{url\:*
+
+# Sonstige Temp-Dateien
+debug_failed_clicks/
+server/*.png
+reports/
+.zai/

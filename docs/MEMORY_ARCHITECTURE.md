@@ -210,3 +210,171 @@ MAX_OUTPUT_TOKENS=16000
 - [x] Auto-Summarize implementiert — create_task() in add_interaction().
 - [x] .env Sektion `# MEMORY SYSTEM` vollständig dokumentiert.
 - [x] README.md und MEMORY_ARCHITECTURE.md auf v2.2 / v2.7 aktualisiert.
+
+---
+
+## Milestone 8 — Curiosity Engine + Soul Engine (2026-02-25)
+
+### Kontext
+
+Timus erhält zwei neue Fähigkeiten, die auf dem Memory-System aufbauen:
+
+1. **Soul Engine** — Persönlichkeitsentwicklung durch Rückkopplungsschleife (5 Achsen)
+2. **Curiosity Engine** — Autonome Wissensdurchsuchung mit proaktivem Telegram-Push
+
+### M8.1 — Soul Engine (`memory/soul_engine.py`)
+
+**Designentscheidung:** SoulEngine liest/schreibt SOUL.md direkt via PyYAML (nicht über den custom `_parse_yaml_simple`-Parser in store.py, der list-of-dicts nicht korrekt serialisieren kann).
+
+**5 Achsen** (Wertebereich 5–95, Clamp fest verdrahtet):
+
+| Achse | Startwert | Bedeutung |
+|-------|-----------|-----------|
+| `confidence` | 50 | Selbstsicherheit: 0=zögerlich, 100=direkt |
+| `formality` | 65 | Förmlichkeit: 0=umgangssprachlich, 100=formell |
+| `humor` | 15 | Humor: 0=seriös, 100=witzig |
+| `verbosity` | 50 | Ausführlichkeit: 0=minimal, 100=ausführlich |
+| `risk_appetite` | 40 | Risikobereitschaft: 0=konservativ, 100=experimentell |
+
+**7 Drift-Signale:**
+
+| Signal | Erkennungsmethode | Achse | Δ (roh) |
+|--------|-------------------|-------|---------|
+| `user_rejection` | Schlüsselwörter: "nein, falsch, das stimmt nicht" | confidence | -2 |
+| `task_success` | `success=True` + `len(what_worked) >= 2` | confidence | +3 |
+| `user_emoji` | Unicode U+1F600–U+1F9FF in user_input | formality, humor | -2, +1 |
+| `user_slang` | "hey, ok, jo, yep, lol" | formality | -1 |
+| `user_short_input` | `len(words) < 8` | verbosity | -2 |
+| `user_long_input` | `len(words) > 60` | verbosity | +2 |
+| `multiple_failures` | `len(what_failed) >= 3` | confidence, risk_appetite | -3, -2 |
+| `creative_success` | `len(what_worked) >= 3` + task_type creative/development | risk_appetite | +2 |
+
+**Dämpfung:** alle Δ-Werte × `SOUL_DRIFT_DAMPING=0.1` → effektiv 0.1–0.3 Punkte/Session.
+
+**Integration in Reflexionspfad:**
+
+```
+reflect_on_task() [reflection_engine.py]
+  → _store_learnings()
+  → soul_engine.apply_drift(reflection, user_input)  ← NEU
+    → Signale erkennen → Δ berechnen → dämpfen → clampen
+    → SOUL.md axes + drift_history schreiben (PyYAML)
+```
+
+**Dynamic System Prompt (`config/personality_loader.py`):**
+
+```python
+get_system_prompt_prefix()
+  → _build_axes_fragment()        # liest soul_engine.get_axes()
+    → confidence > 70 → "Du bist direkt und proaktiv."
+    → formality < 35  → "Du kommunizierst locker und informell."
+    → humor > 60      → "Du erlaubst dir gelegentlich trockenen Humor."
+    → verbosity < 30  → "Du antwortest knapp."
+    → verbosity > 70  → "Du erklärst Zusammenhänge ausführlich."
+  → Fragment + statische Persönlichkeit (sarcastic/professional/minimal)
+```
+
+**Persistenz in SOUL.md:**
+
+```yaml
+axes:
+  confidence: 50.3
+  formality: 65.0
+  humor: 15.0
+  verbosity: 50.0
+  risk_appetite: 40.0
+axes_updated_at: '2026-02-25'
+drift_history:
+- date: '2026-02-25'
+  axis: confidence
+  delta: 0.3
+  reason: task_success
+```
+
+### M8.2 — SoulProfile Dataclass (`memory/markdown_store/store.py`)
+
+`SoulProfile` bekommt:
+- `axes: Dict[str, float]` mit Default-Factory (Startwerte)
+- `drift_history: List[Dict]` mit Default-Factory (leer)
+
+`read_soul_profile()` nutzt jetzt `yaml.safe_load()` statt `_parse_yaml_simple()` für korrekte dict/list Deserialisierung.
+
+`_write_soul_profile()` nutzt `yaml.dump()` für das Frontmatter (bidirektional korrekt).
+
+### M8.3 — Curiosity Engine (`orchestration/curiosity_engine.py`)
+
+**Datenpfad:**
+
+```
+_curiosity_loop() [asyncio.Task in AutonomousRunner.start()]
+  → sleep(random(MIN_HOURS, MAX_HOURS) * 60)
+  → _run_curiosity_cycle()
+    → _is_daily_limit_reached()      # SELECT COUNT(*) FROM curiosity_sent WHERE sent_at > date('now')
+    → _extract_topics()              # Session.get_dynamic_state() + SQLite 72h interaction_events
+    → _generate_search_query(topics) # LLM: JSON {"query": "..."}
+    → _search_and_gate(query, topics)
+      → _search_sync() via DataForSEO [asyncio.to_thread]
+      → _gatekeeper_score() via LLM × max 3 Ergebnisse
+      → bestes Ergebnis mit score >= GATEKEEPER_MIN zurückgeben
+    → _is_duplicate(url)             # SELECT 1 FROM curiosity_sent WHERE url=? AND sent_at > -14days
+    → _push_telegram(result, topics)
+      → soul_engine.get_tone_config() → Ton-Deskriptor
+      → LLM: Nachricht im Timus-Stil formulieren
+      → Bot.send_message(chat_id, text, parse_mode="Markdown")
+    → _log_sent() + memory_manager.log_interaction_event(agent_name="curiosity")
+```
+
+**Neue SQLite-Tabelle `curiosity_sent`** (in `data/timus_memory.db`):
+
+```sql
+CREATE TABLE IF NOT EXISTS curiosity_sent (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    topic    TEXT NOT NULL,
+    url      TEXT NOT NULL UNIQUE,
+    title    TEXT,
+    score    INTEGER,
+    sent_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_curiosity_sent_at ON curiosity_sent(sent_at);
+```
+
+### M8.4 — Integration in AutonomousRunner
+
+```python
+# orchestration/autonomous_runner.py — start()
+if os.getenv("CURIOSITY_ENABLED", "true").lower() == "true":
+    self._curiosity_engine = CuriosityEngine(telegram_app=None)
+    asyncio.create_task(
+        self._curiosity_engine._curiosity_loop(),
+        name="curiosity-engine",
+    )
+```
+
+CuriosityEngine läuft als **isolierter asyncio.Task** — ein Absturz dort stoppt nicht den Haupt-Worker.
+
+### Neue ENV-Variablen
+
+```bash
+# Soul Engine
+SOUL_DRIFT_ENABLED=true     SOUL_DRIFT_DAMPING=0.1
+SOUL_AXES_CLAMP_MIN=5       SOUL_AXES_CLAMP_MAX=95
+
+# Curiosity Engine
+CURIOSITY_ENABLED=true      CURIOSITY_MIN_HOURS=3
+CURIOSITY_MAX_HOURS=14      CURIOSITY_GATEKEEPER_MIN=7
+CURIOSITY_MAX_PER_DAY=2
+```
+
+### Abnahme Milestone 8
+
+- [x] Test 1.1 — `soul.axes["confidence"] == 50.0` via MarkdownStore ✅
+- [x] Test 1.2 — `_apply_single_signal("task_success", +3)` → confidence steigt ✅
+- [x] Test 1.3 — `get_system_prompt_prefix()` liefert Direkt-Fragment bei confidence=80 ✅
+- [x] Test 1.4 — `drift_history` nach `apply_drift()` in SOUL.md (yaml.safe_load) ✅
+- [x] Test 2.1 — `curiosity_sent` Tabelle in SQLite vorhanden ✅
+- [x] Test 2.2 — `_extract_topics()`, `_is_duplicate()`, `_is_daily_limit_reached()` ✅
+- [x] Test 3.1 — Duplikat-Schutz: gleiche URL blockiert ✅
+- [x] Test 3.2 — Tagesgrenze: `daily_limit` nach 2 Einträgen ✅
+- [x] Test 3.3 — Soul↔Curiosity Ton: vorsichtig/neutral/direkt korrekt gemappt ✅
+- [x] README.md Phase 9 + v2.8 Tabellen + Mermaid aktualisiert ✅
+- [x] MEMORY_ARCHITECTURE.md Milestone 8 dokumentiert ✅

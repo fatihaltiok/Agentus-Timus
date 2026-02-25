@@ -305,7 +305,58 @@ _loader = PersonalityLoader()
 # === PUBLIC API ===
 
 def get_system_prompt_prefix() -> str:
-    return _loader.get_prompt_prefix()
+    """
+    Gibt den System-Prompt-Prefix zurück.
+
+    Kombiniert die statische Persönlichkeit (sarcastic/professional/minimal)
+    mit dynamischen Achsen-Fragmenten aus der Soul Engine.
+    """
+    base = _loader.get_prompt_prefix()
+    axes_fragment = _build_axes_fragment()
+    if axes_fragment:
+        return axes_fragment + base
+    return base
+
+
+def _build_axes_fragment() -> str:
+    """
+    Liest Soul Engine Achsen und generiert einen kurzen Injektions-Satz (max. 2 Sätze).
+    Alle Achsen bei Neutral-Werten (40-65) → kein Fragment.
+    """
+    try:
+        from memory.soul_engine import get_soul_engine
+        axes = get_soul_engine().get_axes()
+    except Exception:
+        return ""
+
+    fragments = []
+
+    confidence = axes.get("confidence", 50.0)
+    if confidence < 40:
+        fragments.append("Du bist derzeit vorsichtig und hinterfragst deine Annahmen.")
+    elif confidence > 70:
+        fragments.append("Du bist direkt und proaktiv.")
+
+    formality = axes.get("formality", 65.0)
+    if formality < 35:
+        fragments.append("Du kommunizierst locker und informell.")
+    elif formality > 75:
+        fragments.append("Du kommunizierst präzise und professionell.")
+
+    humor = axes.get("humor", 15.0)
+    if humor > 60:
+        fragments.append("Du erlaubst dir gelegentlich trockenen Humor.")
+
+    verbosity = axes.get("verbosity", 50.0)
+    if verbosity < 30:
+        fragments.append("Du antwortest knapp.")
+    elif verbosity > 70:
+        fragments.append("Du erklärst Zusammenhänge ausführlich.")
+
+    if not fragments:
+        return ""
+
+    return " ".join(fragments) + "\n\n"
 
 def get_greeting(user_name: Optional[str] = None) -> str:
     if user_name:

@@ -575,6 +575,17 @@ class PersistentMemory:
                 CREATE INDEX IF NOT EXISTS idx_interaction_events_created ON interaction_events(created_at);
                 CREATE INDEX IF NOT EXISTS idx_memory_category ON memory_items(category);
                 CREATE INDEX IF NOT EXISTS idx_memory_key ON memory_items(key);
+
+                CREATE TABLE IF NOT EXISTS curiosity_sent (
+                    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                    topic    TEXT NOT NULL,
+                    url      TEXT NOT NULL UNIQUE,
+                    title    TEXT,
+                    score    INTEGER,
+                    sent_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_curiosity_sent_at ON curiosity_sent(sent_at);
             """)
     
     # === FACTS ===

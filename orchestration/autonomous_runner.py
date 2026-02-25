@@ -8,6 +8,7 @@ Bei jedem Heartbeat werden pending Tasks aus der SQLite-Queue autonom ausgeführ
 import asyncio
 import io
 import logging
+import os
 import uuid
 from typing import Optional
 
@@ -30,6 +31,7 @@ class AutonomousRunner:
         self._tools_desc: Optional[str] = None
         self._running = False
         self._work_signal: asyncio.Event = asyncio.Event()
+        self._curiosity_engine = None
 
     # ------------------------------------------------------------------
     # Öffentliche API
@@ -51,6 +53,19 @@ class AutonomousRunner:
 
         asyncio.create_task(self._worker_loop(), name="autonomous-worker")
         log.info(f"AutonomousRunner gestartet (Intervall: {self.interval_minutes} min)")
+
+        # Curiosity Engine als separaten asyncio.Task starten
+        if os.getenv("CURIOSITY_ENABLED", "true").lower() == "true":
+            try:
+                from orchestration.curiosity_engine import CuriosityEngine
+                self._curiosity_engine = CuriosityEngine(telegram_app=None)
+                asyncio.create_task(
+                    self._curiosity_engine._curiosity_loop(),
+                    name="curiosity-engine",
+                )
+                log.info("🔍 Curiosity Engine gestartet")
+            except Exception as e:
+                log.warning("Curiosity Engine konnte nicht gestartet werden: %s", e)
 
     async def stop(self) -> None:
         """Stoppt den Runner."""
