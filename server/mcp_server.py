@@ -87,7 +87,11 @@ load_dotenv(dotenv_path=project_root / ".env", override=False)
 # --- Lokale Module und Kontext importieren ---
 import tools.shared_context as shared_context
 from tools.tool_registry_v2 import registry_v2, ValidationError
-from utils.policy_gate import check_tool_policy
+from utils.policy_gate import (
+    audit_policy_decision,
+    check_tool_policy,
+    evaluate_policy_gate,
+)
 from orchestration.canvas_store import canvas_store
 from server.canvas_ui import build_canvas_ui_html
 
@@ -1304,14 +1308,21 @@ async def handle_jsonrpc(request: Request):
         method = req_data.get("method", "")
         params = req_data.get("params", {})
 
-        allowed, policy_reason = check_tool_policy(method, params)
-        if not allowed:
+        policy_decision = evaluate_policy_gate(
+            gate="tool",
+            subject=method,
+            payload={"method": method, "params": params},
+            source="server.mcp_server.handle_jsonrpc",
+        )
+        audit_policy_decision(policy_decision)
+        if bool(policy_decision.get("blocked")):
+            policy_reason = str(policy_decision.get("reason") or "Policy violation")
             log.warning(f"[server-policy] Tool blockiert: {method}")
             error_response = {
                 "jsonrpc": "2.0",
                 "error": {
                     "code": -32600,
-                    "message": policy_reason or "Policy violation",
+                    "message": policy_reason,
                 },
                 "id": req_data.get("id", 1),
             }

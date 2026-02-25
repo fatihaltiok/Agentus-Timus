@@ -795,7 +795,11 @@ async def run_agent(
 ):
     """Instanziiert den Agenten und führt ihn aus."""
     from utils.audit_logger import AuditLogger
-    from utils.policy_gate import check_query_policy, audit_tool_call
+    from utils.policy_gate import (
+        audit_policy_decision,
+        audit_tool_call,
+        evaluate_policy_gate,
+    )
 
     raw_query = "" if query is None else str(query)
     query = _sanitize_user_query(raw_query)
@@ -854,9 +858,49 @@ async def run_agent(
         )
         return result
 
-    # Policy Gate: Destruktive Anfragen pruefen
-    safe, warning = check_query_policy(query)
-    if not safe:
+    # Policy Gate: formale Entscheidung fuer Query-Pfad (M4.1)
+    policy_decision = evaluate_policy_gate(
+        gate="query",
+        subject=query,
+        payload={"query": query, "agent": agent_name},
+        source="main_dispatcher.run_agent",
+    )
+    audit_policy_decision(policy_decision)
+    runtime_metadata["policy_gate"] = {
+        "gate": policy_decision.get("gate"),
+        "action": policy_decision.get("action"),
+        "blocked": bool(policy_decision.get("blocked")),
+        "reason": policy_decision.get("reason"),
+        "violations": policy_decision.get("violations", []),
+        "strict_mode": bool(policy_decision.get("strict_mode")),
+    }
+
+    if policy_decision.get("blocked"):
+        warning = str(policy_decision.get("reason") or "Policy blockiert Anfrage.")
+        log.warning(f"[policy] {warning}")
+        audit.log_end(f"Abgebrochen: {warning}", "cancelled")
+        result = _ret(
+            f"Abgebrochen: {warning}",
+            {"cancelled_by_policy": True, "policy_blocked": True},
+        )
+        _log_interaction_deterministic(
+            user_input=query,
+            assistant_output=final_output,
+            agent_name=agent_name,
+            session_id=effective_session_id,
+            metadata=runtime_metadata,
+        )
+        _log_canvas_agent_event(
+            session_id=effective_session_id,
+            agent_name=agent_name,
+            status="cancelled",
+            message=str(final_output or "")[:200],
+            payload={"reason": "policy_blocked", "policy_gate": runtime_metadata.get("policy_gate", {})},
+        )
+        return result
+
+    if policy_decision.get("action") == "observe":
+        warning = str(policy_decision.get("reason") or "Potenziell kritische Anfrage erkannt.")
         log.warning(f"[policy] {warning}")
         print(f"\n⚠️  {warning}")
         try:
@@ -865,7 +909,7 @@ async def run_agent(
                 audit.log_end(f"Abgebrochen: {warning}", "cancelled")
                 result = _ret(
                     f"Abgebrochen: {warning}",
-                    {"cancelled_by_policy": True},
+                    {"cancelled_by_policy": True, "policy_observe_cancelled": True},
                 )
                 _log_interaction_deterministic(
                     user_input=query,
@@ -879,7 +923,7 @@ async def run_agent(
                     agent_name=agent_name,
                     status="cancelled",
                     message=str(final_output or "")[:200],
-                    payload={"reason": "policy_cancelled"},
+                    payload={"reason": "policy_observe_cancelled"},
                 )
                 return result
         except Exception:
@@ -1250,6 +1294,8 @@ async def _cli_loop(tools_desc: str) -> None:
     print("  • 'Öffne Firefox' → VISUAL")
     print("  • 'Wie spät ist es?' → EXECUTOR")
     print("  • '/tasks' → Offene autonome Tasks anzeigen")
+    print("  • '/approvals' → Offene Audit-Freigaben anzeigen")
+    print("  • '/approve <id> [note]' / '/reject <id> [note]' → Freigabe entscheiden")
     print("\nTipp: 'exit' zum Beenden\n")
 
     conversation_session_id = f"chat_{uuid.uuid4().hex[:8]}"
@@ -1281,6 +1327,35 @@ async def _cli_loop(tools_desc: str) -> None:
                 _print_tasks()
                 continue
 
+            if q_clean.lower().startswith("/approvals"):
+                parts = q_clean.split(maxsplit=1)
+                limit = 10
+                if len(parts) == 2:
+                    try:
+                        limit = max(1, min(50, int(parts[1].strip())))
+                    except Exception:
+                        limit = 10
+                _print_pending_approvals(limit=limit)
+                continue
+
+            if q_clean.lower().startswith("/approve"):
+                parts = q_clean.split(maxsplit=2)
+                if len(parts) < 2:
+                    print("   Verwendung: /approve <request_id_prefix> [note]")
+                    continue
+                note = parts[2] if len(parts) > 2 else None
+                _resolve_pending_approval(request_id=parts[1], approved=True, note=note)
+                continue
+
+            if q_clean.lower().startswith("/reject"):
+                parts = q_clean.split(maxsplit=2)
+                if len(parts) < 2:
+                    print("   Verwendung: /reject <request_id_prefix> [note]")
+                    continue
+                note = parts[2] if len(parts) > 2 else None
+                _resolve_pending_approval(request_id=parts[1], approved=False, note=note)
+                continue
+
             print("   🤔 Timus denkt...")
             agent = await get_agent_decision(q_clean)
             print(f"   📌 Agent: {agent.upper()}")
@@ -1301,12 +1376,138 @@ def _print_tasks() -> None:
     """Zeigt alle Tasks aus der SQLite-Queue an."""
     try:
         from orchestration.task_queue import get_queue
-        tasks = get_queue().get_all(limit=20)
+        queue = get_queue()
+        tasks = queue.get_all(limit=20)
         if not tasks:
             print("   Keine Tasks vorhanden.")
             return
-        stats = get_queue().stats()
+        stats = queue.stats()
+        goal_metrics = queue.get_goal_alignment_metrics(include_conflicts=False)
+        planning_metrics = queue.get_planning_metrics()
+        replanning_metrics = queue.get_replanning_metrics()
+        review_metrics = queue.get_commitment_review_metrics()
+        healing_metrics = queue.get_self_healing_metrics()
+        try:
+            from utils.policy_gate import get_policy_decision_metrics
+
+            policy_metrics = get_policy_decision_metrics(window_hours=24)
+        except Exception:
+            policy_metrics = {
+                "decisions_total": 0,
+                "blocked_total": 0,
+                "observed_total": 0,
+                "canary_deferred_total": 0,
+            }
+        try:
+            from orchestration.autonomy_scorecard import build_autonomy_scorecard
+
+            scorecard_window = max(1, int(os.getenv("AUTONOMY_SCORECARD_WINDOW_HOURS", "24")))
+            autonomy_scorecard = build_autonomy_scorecard(queue=queue, window_hours=scorecard_window)
+        except Exception:
+            autonomy_scorecard = {
+                "overall_score": 0.0,
+                "overall_score_10": 0.0,
+                "autonomy_level": "low",
+                "ready_for_very_high_autonomy": False,
+            }
         print(f"\n   Queue: {stats}")
+        print(
+            "   Goal-Alignment (offen): "
+            f"{goal_metrics.get('open_aligned_tasks', 0)}/{goal_metrics.get('open_tasks', 0)} "
+            f"({goal_metrics.get('open_alignment_rate', 0.0)}%)"
+        )
+        print(
+            "   Planung: "
+            f"{planning_metrics.get('active_plans', 0)} aktive Plaene | "
+            f"{planning_metrics.get('commitments_total', 0)} Commitments | "
+            f"{planning_metrics.get('overdue_commitments', 0)} overdue | "
+            f"Deviation {planning_metrics.get('plan_deviation_score', 0.0)}"
+        )
+        print(
+            "   Replanning: "
+            f"{replanning_metrics.get('events_total', 0)} Events | "
+            f"{replanning_metrics.get('events_last_24h', 0)} in 24h | "
+            f"{replanning_metrics.get('overdue_candidates', 0)} overdue-Kandidaten | "
+            f"Top-Priority {replanning_metrics.get('top_priority_score', 0.0)}"
+        )
+        print(
+            "   Reviews: "
+            f"Due {review_metrics.get('due_reviews', 0)} | "
+            f"Scheduled {review_metrics.get('scheduled_reviews', 0)} | "
+            f"Escalated(7d) {review_metrics.get('escalated_last_7d', 0)} | "
+            f"Gap(7d) {review_metrics.get('avg_gap_last_7d', 0.0)}"
+        )
+        print(
+            "   Healing: "
+            f"Mode {healing_metrics.get('degrade_mode', 'normal')} | "
+            f"Open {healing_metrics.get('open_incidents', 0)} | "
+            f"EscalatedOpen {healing_metrics.get('open_escalated_incidents', 0)} | "
+            f"BreakerOpen {healing_metrics.get('circuit_breakers_open', 0)} | "
+            f"Created24h {healing_metrics.get('created_last_24h', 0)} | "
+            f"Recovered24h {healing_metrics.get('recovered_last_24h', 0)} | "
+            f"RecoveryRate {healing_metrics.get('recovery_rate_24h', 0.0)}%"
+        )
+        print(
+            "   Policy(24h): "
+            f"Decisions {policy_metrics.get('decisions_total', 0)} | "
+            f"Blocked {policy_metrics.get('blocked_total', 0)} | "
+            f"Observed {policy_metrics.get('observed_total', 0)} | "
+            f"CanaryDeferred {policy_metrics.get('canary_deferred_total', 0)}"
+        )
+        print(
+            "   Autonomy-Score: "
+            f"{autonomy_scorecard.get('overall_score', 0.0)}/100 "
+            f"({autonomy_scorecard.get('overall_score_10', 0.0)}/10) | "
+            f"Level {autonomy_scorecard.get('autonomy_level', 'low')} | "
+            f"Ready9/10 {autonomy_scorecard.get('ready_for_very_high_autonomy', False)}"
+        )
+        control_state = autonomy_scorecard.get("control", {}) if isinstance(autonomy_scorecard, dict) else {}
+        print(
+            "   Scorecard-Control: "
+            f"LastAction {control_state.get('scorecard_last_action', 'n/a')} | "
+            f"CanaryOverride {control_state.get('canary_percent_override', 'n/a')} | "
+            f"StrictOff {control_state.get('strict_force_off', False)} | "
+            f"Governance {control_state.get('scorecard_governance_state', 'n/a')}"
+        )
+        trend_state = autonomy_scorecard.get("trends", {}) if isinstance(autonomy_scorecard, dict) else {}
+        print(
+            "   Scorecard-Trend: "
+            f"Δ24h {trend_state.get('trend_delta', 0.0)} | "
+            f"Dir {trend_state.get('trend_direction', 'stable')} | "
+            f"Avg24h {trend_state.get('avg_score_window', 0.0)} | "
+            f"Vol24h {trend_state.get('volatility_window', 0.0)}"
+        )
+        audit_rec = queue.get_policy_runtime_state("audit_report_last_recommendation")
+        audit_exported = queue.get_policy_runtime_state("audit_report_last_exported_at")
+        audit_path = queue.get_policy_runtime_state("audit_report_last_path")
+        change_action = queue.get_policy_runtime_state("audit_change_last_action")
+        change_status = queue.get_policy_runtime_state("audit_change_last_status")
+        change_request_id = queue.get_policy_runtime_state("audit_change_last_request_id")
+        change_pending = queue.get_policy_runtime_state("audit_change_pending_approval_count")
+        change_approval_status = queue.get_policy_runtime_state("audit_change_last_approval_status")
+        hardening_state = queue.get_policy_runtime_state("hardening_last_state")
+        hardening_action = queue.get_policy_runtime_state("hardening_last_action")
+        hardening_reasons = queue.get_policy_runtime_state("hardening_last_reasons")
+        print(
+            "   Autonomy-Audit: "
+            f"Recommendation {str((audit_rec or {}).get('state_value') or 'n/a')} | "
+            f"ExportedAt {str((audit_exported or {}).get('state_value') or 'n/a')[:19]} | "
+            f"Path {str((audit_path or {}).get('state_value') or 'n/a')[:60]}"
+        )
+        print(
+            "   Audit-ChangeRequest: "
+            f"Action {str((change_action or {}).get('state_value') or 'n/a')} | "
+            f"Status {str((change_status or {}).get('state_value') or 'n/a')} | "
+            f"Request {str((change_request_id or {}).get('state_value') or 'n/a')[:12]} | "
+            f"PendingApproval {str((change_pending or {}).get('state_value') or '0')} | "
+            f"LastApproval {str((change_approval_status or {}).get('state_value') or 'n/a')}"
+        )
+        print(
+            "   Hardening: "
+            f"State {str((hardening_state or {}).get('state_value') or 'n/a')} | "
+            f"Action {str((hardening_action or {}).get('state_value') or 'n/a')} | "
+            f"Reasons {str((hardening_reasons or {}).get('state_value') or 'n/a')[:64]}"
+        )
         print(f"\n   {'ID':8} {'Prio':6} {'Status':12} {'Agent':12} Beschreibung")
         print("   " + "-" * 75)
         prio_names = {0: "CRIT", 1: "HIGH", 2: "NORM", 3: "LOW"}
@@ -1321,6 +1522,67 @@ def _print_tasks() -> None:
             print(f"   {tid:8} {prio:6} {icon} {status:10} {agent:12} {desc}")
     except Exception as e:
         print(f"   Fehler beim Lesen: {e}")
+
+
+def _print_pending_approvals(*, limit: int = 10) -> None:
+    """Zeigt offene Audit-ChangeRequest-Freigaben für Operatoren."""
+    try:
+        from orchestration.autonomy_change_control import list_pending_approval_change_requests
+        from orchestration.task_queue import get_queue
+
+        queue = get_queue()
+        listed = list_pending_approval_change_requests(queue=queue, limit=max(1, min(50, int(limit))))
+        items = listed.get("items", []) if isinstance(listed, dict) else []
+        if not items:
+            print("   Keine offenen Freigaben.")
+            return
+
+        print(f"\n   Pending Approvals: {len(items)}")
+        print(f"   {'ID':12} {'Rec':9} {'Min':8} Grund")
+        print("   " + "-" * 72)
+        for item in items:
+            rid = str(item.get("id", ""))[:12]
+            rec = str(item.get("recommendation", "hold"))[:9]
+            pending_min = item.get("pending_minutes")
+            min_txt = f"{pending_min:.1f}" if isinstance(pending_min, (int, float)) else "n/a"
+            reason = str(item.get("reason", ""))[:40]
+            print(f"   {rid:12} {rec:9} {min_txt:8} {reason}")
+        print("   Nutzung: /approve <id> [note] oder /reject <id> [note]")
+    except Exception as e:
+        print(f"   Fehler beim Lesen der Freigaben: {e}")
+
+
+def _resolve_pending_approval(*, request_id: str, approved: bool, note: str | None = None) -> None:
+    """Entscheidet eine offene Freigabe (approve/reject) inkl. Prefix-IDs."""
+    try:
+        from orchestration.autonomy_change_control import (
+            evaluate_and_apply_pending_approved_change_requests,
+            set_change_request_approval,
+        )
+        from orchestration.task_queue import get_queue
+
+        queue = get_queue()
+        decision = set_change_request_approval(
+            queue=queue,
+            request_id=str(request_id or "").strip(),
+            approved=bool(approved),
+            approver="cli_operator",
+            note=(str(note or "").strip() or None),
+        )
+        if decision.get("status") != "ok":
+            print(f"   Freigabe fehlgeschlagen: {decision}")
+            return
+
+        action = str(decision.get("action") or ("approved" if approved else "rejected"))
+        rid = str(decision.get("request_id") or request_id)[:12]
+        print(f"   Entscheidung gespeichert: {action} | request={rid}")
+        if approved:
+            applied = evaluate_and_apply_pending_approved_change_requests(queue=queue, limit=5)
+            processed = int(applied.get("processed", 0) or 0)
+            if processed > 0:
+                print(f"   Sofort angewendet: {processed} Request(s)")
+    except Exception as e:
+        print(f"   Fehler bei Freigabe-Entscheidung: {e}")
 
 
 async def main_loop():

@@ -14,6 +14,9 @@ Befehle:
     /task <text>            Task zur autonomen Queue hinzufügen
     /remind <zeit> <text>   Erinnerung setzen (z.B. /remind 09:00 Meeting)
     /status                 Runner-Status + System-Info anzeigen
+    /approvals [limit]      Offene Audit-Freigaben anzeigen
+    /approve <id> [note]    Freigabe erteilen
+    /reject <id> [note]     Freigabe ablehnen
     <normaler Text>         Wird direkt an Timus weitergegeben
 """
 
@@ -271,6 +274,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"  /tasks — offene Tasks anzeigen\n"
         f"  /task <text> — Task zur Queue hinzufügen\n"
         f"  /status — Runner-Status\n"
+        f"  /approvals — offene Audit-Freigaben\n"
+        f"  /approve <id> — Freigabe erteilen\n"
+        f"  /reject <id> — Freigabe ablehnen\n"
         f"  Oder einfach eine Frage stellen!",
         parse_mode=ParseMode.MARKDOWN,
     )
@@ -283,6 +289,34 @@ async def cmd_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         from orchestration.task_queue import get_queue
         queue = get_queue()
         stats = queue.stats()
+        goal_metrics = queue.get_goal_alignment_metrics(include_conflicts=False)
+        planning_metrics = queue.get_planning_metrics()
+        replanning_metrics = queue.get_replanning_metrics()
+        review_metrics = queue.get_commitment_review_metrics()
+        healing_metrics = queue.get_self_healing_metrics()
+        try:
+            from utils.policy_gate import get_policy_decision_metrics
+
+            policy_metrics = get_policy_decision_metrics(window_hours=24)
+        except Exception:
+            policy_metrics = {
+                "decisions_total": 0,
+                "blocked_total": 0,
+                "observed_total": 0,
+                "canary_deferred_total": 0,
+            }
+        try:
+            from orchestration.autonomy_scorecard import build_autonomy_scorecard
+
+            scorecard_window = max(1, int(os.getenv("AUTONOMY_SCORECARD_WINDOW_HOURS", "24")))
+            autonomy_scorecard = build_autonomy_scorecard(queue=queue, window_hours=scorecard_window)
+        except Exception:
+            autonomy_scorecard = {
+                "overall_score": 0.0,
+                "overall_score_10": 0.0,
+                "autonomy_level": "low",
+                "ready_for_very_high_autonomy": False,
+            }
         tasks = queue.get_all(limit=15)
         if not tasks:
             await update.message.reply_text("Keine Tasks vorhanden.")
@@ -290,6 +324,95 @@ async def cmd_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         icons = {"pending": "⏳", "in_progress": "🔄", "completed": "✅", "failed": "❌", "cancelled": "🚫"}
         prio_names = {0: "🔴", 1: "🟠", 2: "🟡", 3: "🟢"}
         lines = [f"📋 *Task-Queue* | {stats}\n"]
+        lines.append(
+            "🎯 Alignment offen: "
+            f"{goal_metrics.get('open_aligned_tasks', 0)}/{goal_metrics.get('open_tasks', 0)} "
+            f"({goal_metrics.get('open_alignment_rate', 0.0)}%)"
+        )
+        lines.append(
+            "🗓️ Planung: "
+            f"{planning_metrics.get('active_plans', 0)} aktive Plaene | "
+            f"{planning_metrics.get('commitments_total', 0)} Commitments | "
+            f"Deviation {planning_metrics.get('plan_deviation_score', 0.0)}"
+        )
+        lines.append(
+            "🔁 Replanning: "
+            f"{replanning_metrics.get('events_last_24h', 0)} Events/24h | "
+            f"Overdue-Kandidaten {replanning_metrics.get('overdue_candidates', 0)} | "
+            f"Top-Priority {replanning_metrics.get('top_priority_score', 0.0)}"
+        )
+        lines.append(
+            "📋 Reviews: "
+            f"Due {review_metrics.get('due_reviews', 0)} | "
+            f"Escalated(7d) {review_metrics.get('escalated_last_7d', 0)} | "
+            f"Gap(7d) {review_metrics.get('avg_gap_last_7d', 0.0)}"
+        )
+        lines.append(
+            "🛠️ Healing: "
+            f"Mode {healing_metrics.get('degrade_mode', 'normal')} | "
+            f"Open {healing_metrics.get('open_incidents', 0)} | "
+            f"EscalatedOpen {healing_metrics.get('open_escalated_incidents', 0)} | "
+            f"BreakerOpen {healing_metrics.get('circuit_breakers_open', 0)} | "
+            f"24h {healing_metrics.get('created_last_24h', 0)}/"
+            f"{healing_metrics.get('recovered_last_24h', 0)}"
+        )
+        lines.append(
+            "🛡️ Policy(24h): "
+            f"Decisions {policy_metrics.get('decisions_total', 0)} | "
+            f"Blocked {policy_metrics.get('blocked_total', 0)} | "
+            f"Observed {policy_metrics.get('observed_total', 0)} | "
+            f"CanaryDeferred {policy_metrics.get('canary_deferred_total', 0)}"
+        )
+        lines.append(
+            "🧭 Autonomy-Score: "
+            f"{autonomy_scorecard.get('overall_score', 0.0)}/100 "
+            f"({autonomy_scorecard.get('overall_score_10', 0.0)}/10) | "
+            f"Level {autonomy_scorecard.get('autonomy_level', 'low')} | "
+            f"Ready9/10 {autonomy_scorecard.get('ready_for_very_high_autonomy', False)}"
+        )
+        control_state = autonomy_scorecard.get("control", {}) if isinstance(autonomy_scorecard, dict) else {}
+        lines.append(
+            "🧭 Control: "
+            f"Action {control_state.get('scorecard_last_action', 'n/a')} | "
+            f"Canary {control_state.get('canary_percent_override', 'n/a')} | "
+            f"StrictOff {control_state.get('strict_force_off', False)} | "
+            f"Gov {control_state.get('scorecard_governance_state', 'n/a')}"
+        )
+        trend_state = autonomy_scorecard.get("trends", {}) if isinstance(autonomy_scorecard, dict) else {}
+        lines.append(
+            "🧭 Trend: "
+            f"Δ24h {trend_state.get('trend_delta', 0.0)} | "
+            f"Dir {trend_state.get('trend_direction', 'stable')} | "
+            f"Avg24h {trend_state.get('avg_score_window', 0.0)} | "
+            f"Vol24h {trend_state.get('volatility_window', 0.0)}"
+        )
+        audit_rec = queue.get_policy_runtime_state("audit_report_last_recommendation")
+        audit_exported = queue.get_policy_runtime_state("audit_report_last_exported_at")
+        change_action = queue.get_policy_runtime_state("audit_change_last_action")
+        change_status = queue.get_policy_runtime_state("audit_change_last_status")
+        change_pending = queue.get_policy_runtime_state("audit_change_pending_approval_count")
+        change_approval_status = queue.get_policy_runtime_state("audit_change_last_approval_status")
+        hardening_state = queue.get_policy_runtime_state("hardening_last_state")
+        hardening_action = queue.get_policy_runtime_state("hardening_last_action")
+        hardening_reasons = queue.get_policy_runtime_state("hardening_last_reasons")
+        lines.append(
+            "🧾 Audit: "
+            f"Rec {str((audit_rec or {}).get('state_value') or 'n/a')} | "
+            f"At {str((audit_exported or {}).get('state_value') or 'n/a')[:19]}"
+        )
+        lines.append(
+            "🧾 ChangeReq: "
+            f"Action {str((change_action or {}).get('state_value') or 'n/a')} | "
+            f"Status {str((change_status or {}).get('state_value') or 'n/a')} | "
+            f"PendingApproval {str((change_pending or {}).get('state_value') or '0')} | "
+            f"LastApproval {str((change_approval_status or {}).get('state_value') or 'n/a')}"
+        )
+        lines.append(
+            "🧱 Hardening: "
+            f"State {str((hardening_state or {}).get('state_value') or 'n/a')} | "
+            f"Action {str((hardening_action or {}).get('state_value') or 'n/a')} | "
+            f"Reasons {str((hardening_reasons or {}).get('state_value') or 'n/a')[:48]}"
+        )
         for t in tasks:
             icon = icons.get(t.get("status", ""), "•")
             prio = prio_names.get(t.get("priority", 2), "•")
@@ -420,12 +543,137 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             sched_line = "⚠️ Scheduler nicht aktiv"
 
         # Queue
-        stats = get_queue().stats()
+        queue = get_queue()
+        stats = queue.stats()
+        goal_metrics = queue.get_goal_alignment_metrics(include_conflicts=True)
+        planning_metrics = queue.get_planning_metrics()
+        replanning_metrics = queue.get_replanning_metrics()
+        review_metrics = queue.get_commitment_review_metrics()
+        healing_metrics = queue.get_self_healing_metrics()
+        try:
+            from utils.policy_gate import get_policy_decision_metrics
+
+            policy_metrics = get_policy_decision_metrics(window_hours=24)
+        except Exception:
+            policy_metrics = {
+                "decisions_total": 0,
+                "blocked_total": 0,
+                "observed_total": 0,
+                "canary_deferred_total": 0,
+            }
+        try:
+            from orchestration.autonomy_scorecard import build_autonomy_scorecard
+
+            scorecard_window = max(1, int(os.getenv("AUTONOMY_SCORECARD_WINDOW_HOURS", "24")))
+            autonomy_scorecard = build_autonomy_scorecard(queue=queue, window_hours=scorecard_window)
+        except Exception:
+            autonomy_scorecard = {
+                "overall_score": 0.0,
+                "overall_score_10": 0.0,
+                "autonomy_level": "low",
+                "ready_for_very_high_autonomy": False,
+            }
         queue_line = (
             f"📋 Queue: ⏳{stats.get('pending',0)} "
             f"🔄{stats.get('in_progress',0)} "
             f"✅{stats.get('completed',0)} "
             f"❌{stats.get('failed',0)}"
+        )
+        goal_line = (
+            "🎯 Goals: "
+            f"Ausrichtung {goal_metrics.get('open_aligned_tasks', 0)}/{goal_metrics.get('open_tasks', 0)} "
+            f"({goal_metrics.get('open_alignment_rate', 0.0)}%) | "
+            f"Aktiv {goal_metrics.get('goal_counts', {}).get('active', 0)} | "
+            f"Blocked {goal_metrics.get('goal_counts', {}).get('blocked', 0)} | "
+            f"Konflikte {goal_metrics.get('conflict_count', 0)}"
+        )
+        planning_line = (
+            "🗓️ Planning: "
+            f"Plaene {planning_metrics.get('active_plans', 0)} | "
+            f"Commitments {planning_metrics.get('commitments_total', 0)} | "
+            f"Overdue {planning_metrics.get('overdue_commitments', 0)} | "
+            f"Deviation {planning_metrics.get('plan_deviation_score', 0.0)}"
+        )
+        replanning_line = (
+            "🔁 Replanning: "
+            f"Events {replanning_metrics.get('events_total', 0)} | "
+            f"24h {replanning_metrics.get('events_last_24h', 0)} | "
+            f"Overdue-Kandidaten {replanning_metrics.get('overdue_candidates', 0)} | "
+            f"Top-Priority {replanning_metrics.get('top_priority_score', 0.0)}"
+        )
+        review_line = (
+            "📋 Reviews: "
+            f"Due {review_metrics.get('due_reviews', 0)} | "
+            f"Scheduled {review_metrics.get('scheduled_reviews', 0)} | "
+            f"Escalated(7d) {review_metrics.get('escalated_last_7d', 0)} | "
+            f"Gap(7d) {review_metrics.get('avg_gap_last_7d', 0.0)}"
+        )
+        healing_line = (
+            "🛠️ Healing: "
+            f"Mode {healing_metrics.get('degrade_mode', 'normal')} | "
+            f"Open {healing_metrics.get('open_incidents', 0)} | "
+            f"EscalatedOpen {healing_metrics.get('open_escalated_incidents', 0)} | "
+            f"BreakerOpen {healing_metrics.get('circuit_breakers_open', 0)} | "
+            f"Created24h {healing_metrics.get('created_last_24h', 0)} | "
+            f"Recovered24h {healing_metrics.get('recovered_last_24h', 0)} | "
+            f"RecoveryRate {healing_metrics.get('recovery_rate_24h', 0.0)}%"
+        )
+        policy_line = (
+            "🛡️ Policy(24h): "
+            f"Decisions {policy_metrics.get('decisions_total', 0)} | "
+            f"Blocked {policy_metrics.get('blocked_total', 0)} | "
+            f"Observed {policy_metrics.get('observed_total', 0)} | "
+            f"CanaryDeferred {policy_metrics.get('canary_deferred_total', 0)}"
+        )
+        autonomy_line = (
+            "🧭 Autonomy-Score: "
+            f"{autonomy_scorecard.get('overall_score', 0.0)}/100 "
+            f"({autonomy_scorecard.get('overall_score_10', 0.0)}/10) | "
+            f"Level {autonomy_scorecard.get('autonomy_level', 'low')} | "
+            f"Ready9/10 {autonomy_scorecard.get('ready_for_very_high_autonomy', False)}"
+        )
+        control_state = autonomy_scorecard.get("control", {}) if isinstance(autonomy_scorecard, dict) else {}
+        control_line = (
+            "🧭 Control: "
+            f"Action {control_state.get('scorecard_last_action', 'n/a')} | "
+            f"Canary {control_state.get('canary_percent_override', 'n/a')} | "
+            f"StrictOff {control_state.get('strict_force_off', False)} | "
+            f"Gov {control_state.get('scorecard_governance_state', 'n/a')}"
+        )
+        trend_state = autonomy_scorecard.get("trends", {}) if isinstance(autonomy_scorecard, dict) else {}
+        trend_line = (
+            "🧭 Trend: "
+            f"Δ24h {trend_state.get('trend_delta', 0.0)} | "
+            f"Dir {trend_state.get('trend_direction', 'stable')} | "
+            f"Avg24h {trend_state.get('avg_score_window', 0.0)} | "
+            f"Vol24h {trend_state.get('volatility_window', 0.0)}"
+        )
+        audit_rec = queue.get_policy_runtime_state("audit_report_last_recommendation")
+        audit_exported = queue.get_policy_runtime_state("audit_report_last_exported_at")
+        change_action = queue.get_policy_runtime_state("audit_change_last_action")
+        change_status = queue.get_policy_runtime_state("audit_change_last_status")
+        change_pending = queue.get_policy_runtime_state("audit_change_pending_approval_count")
+        change_approval_status = queue.get_policy_runtime_state("audit_change_last_approval_status")
+        hardening_state = queue.get_policy_runtime_state("hardening_last_state")
+        hardening_action = queue.get_policy_runtime_state("hardening_last_action")
+        hardening_reasons = queue.get_policy_runtime_state("hardening_last_reasons")
+        audit_line = (
+            "🧾 Audit: "
+            f"Rec {str((audit_rec or {}).get('state_value') or 'n/a')} | "
+            f"At {str((audit_exported or {}).get('state_value') or 'n/a')[:19]}"
+        )
+        change_line = (
+            "🧾 ChangeReq: "
+            f"Action {str((change_action or {}).get('state_value') or 'n/a')} | "
+            f"Status {str((change_status or {}).get('state_value') or 'n/a')} | "
+            f"PendingApproval {str((change_pending or {}).get('state_value') or '0')} | "
+            f"LastApproval {str((change_approval_status or {}).get('state_value') or 'n/a')}"
+        )
+        hardening_line = (
+            "🧱 Hardening: "
+            f"State {str((hardening_state or {}).get('state_value') or 'n/a')} | "
+            f"Action {str((hardening_action or {}).get('state_value') or 'n/a')} | "
+            f"Reasons {str((hardening_reasons or {}).get('state_value') or 'n/a')[:48]}"
         )
 
         # System
@@ -437,8 +685,111 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             f"Disk {sys_stats['disk_percent']}%"
         )
 
-        msg = f"🤖 *Timus Status*\n\n{sched_line}\n{queue_line}\n{sys_line}"
+        msg = f"🤖 *Timus Status*\n\n{sched_line}\n{queue_line}\n{goal_line}\n{planning_line}\n{replanning_line}\n{review_line}\n{healing_line}\n{policy_line}\n{autonomy_line}\n{control_line}\n{trend_line}\n{audit_line}\n{change_line}\n{hardening_line}\n{sys_line}"
         await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+    except Exception as e:
+        await update.message.reply_text(f"Fehler: {e}")
+
+
+async def cmd_approvals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update.effective_user.id):
+        return
+    try:
+        from orchestration.autonomy_change_control import list_pending_approval_change_requests
+        from orchestration.task_queue import get_queue
+
+        limit = 10
+        if context.args:
+            try:
+                limit = max(1, min(50, int(str(context.args[0]))))
+            except Exception:
+                limit = 10
+
+        queue = get_queue()
+        listed = list_pending_approval_change_requests(queue=queue, limit=limit)
+        items = listed.get("items", []) if isinstance(listed, dict) else []
+        if not items:
+            await update.message.reply_text("Keine offenen Freigaben.")
+            return
+
+        lines = [f"🧾 *Pending Approvals* ({len(items)})"]
+        for item in items:
+            rid = str(item.get("id") or "")
+            rec = str(item.get("recommendation") or "hold")
+            pending_min = item.get("pending_minutes")
+            min_txt = f"{pending_min:.1f}m" if isinstance(pending_min, (int, float)) else "n/a"
+            reason = str(item.get("reason") or "")[:48]
+            lines.append(f"`{rid[:12]}` | {rec} | {min_txt} | {reason}")
+        lines.append("")
+        lines.append("Nutze `/approve <id>` oder `/reject <id>`.")
+        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+    except Exception as e:
+        await update.message.reply_text(f"Fehler: {e}")
+
+
+async def cmd_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("Verwendung: `/approve <request_id_prefix> [note]`", parse_mode=ParseMode.MARKDOWN)
+        return
+    try:
+        from orchestration.autonomy_change_control import (
+            evaluate_and_apply_pending_approved_change_requests,
+            set_change_request_approval,
+        )
+        from orchestration.task_queue import get_queue
+
+        request_id = str(context.args[0]).strip()
+        note = " ".join(context.args[1:]).strip() or None
+        decision = set_change_request_approval(
+            request_id=request_id,
+            approved=True,
+            approver=f"telegram:{update.effective_user.id}",
+            note=note,
+        )
+        if decision.get("status") != "ok":
+            await update.message.reply_text(f"❌ Freigabe fehlgeschlagen: `{decision}`", parse_mode=ParseMode.MARKDOWN)
+            return
+
+        queue = get_queue()
+        applied = evaluate_and_apply_pending_approved_change_requests(queue=queue, limit=5)
+        processed = int(applied.get("processed", 0) or 0)
+        await update.message.reply_text(
+            "✅ Freigegeben\n"
+            f"Request: `{str(decision.get('request_id') or '')[:12]}`\n"
+            f"AppliedNow: `{processed}`",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+    except Exception as e:
+        await update.message.reply_text(f"Fehler: {e}")
+
+
+async def cmd_reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("Verwendung: `/reject <request_id_prefix> [note]`", parse_mode=ParseMode.MARKDOWN)
+        return
+    try:
+        from orchestration.autonomy_change_control import set_change_request_approval
+
+        request_id = str(context.args[0]).strip()
+        note = " ".join(context.args[1:]).strip() or None
+        decision = set_change_request_approval(
+            request_id=request_id,
+            approved=False,
+            approver=f"telegram:{update.effective_user.id}",
+            note=note,
+        )
+        if decision.get("status") != "ok":
+            await update.message.reply_text(f"❌ Ablehnung fehlgeschlagen: `{decision}`", parse_mode=ParseMode.MARKDOWN)
+            return
+        await update.message.reply_text(
+            "🛑 Abgelehnt\n"
+            f"Request: `{str(decision.get('request_id') or '')[:12]}`",
+            parse_mode=ParseMode.MARKDOWN,
+        )
     except Exception as e:
         await update.message.reply_text(f"Fehler: {e}")
 
@@ -681,6 +1032,9 @@ class TelegramGateway:
             self._app.add_handler(CommandHandler("task", cmd_task))
             self._app.add_handler(CommandHandler("remind", cmd_remind))
             self._app.add_handler(CommandHandler("status", cmd_status))
+            self._app.add_handler(CommandHandler("approvals", cmd_approvals))
+            self._app.add_handler(CommandHandler("approve", cmd_approve))
+            self._app.add_handler(CommandHandler("reject", cmd_reject))
             self._app.add_handler(
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
             )

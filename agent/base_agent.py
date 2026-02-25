@@ -35,7 +35,10 @@ from agent.shared.vision_formatter import build_openai_vision_message
 from agent.shared.json_utils import extract_json_robust
 
 from utils.openai_compat import prepare_openai_params
-from utils.policy_gate import check_tool_policy
+from utils.policy_gate import (
+    audit_policy_decision,
+    evaluate_policy_gate,
+)
 from agent.dynamic_tool_mixin import DynamicToolMixin
 from tools.tool_registry_v2 import registry_v2, ValidationError
 from orchestration.lane_manager import lane_manager, Lane, LaneStatus
@@ -592,7 +595,15 @@ class BaseAgent(DynamicToolMixin):
             tool_name=method,
         )
 
-        allowed, policy_reason = check_tool_policy(method, params)
+        policy_decision = evaluate_policy_gate(
+            gate="tool",
+            subject=method,
+            payload={"method": method, "params": params, "agent": self.agent_type},
+            source=f"agent.base_agent._call_tool:{self.agent_type}",
+        )
+        audit_policy_decision(policy_decision)
+        allowed = bool(policy_decision.get("allowed", True))
+        policy_reason = str(policy_decision.get("reason") or "Policy violation")
         if not allowed:
             log.error(f"Tool-Call durch Policy blockiert: {method}")
             self._emit_live_status(

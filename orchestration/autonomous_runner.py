@@ -18,6 +18,65 @@ from orchestration.task_queue import Priority, TaskType, get_queue
 log = logging.getLogger("AutonomousRunner")
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name, "true" if default else "false").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _goals_feature_enabled() -> bool:
+    if _env_bool("AUTONOMY_COMPAT_MODE", True):
+        return False
+    return _env_bool("AUTONOMY_GOALS_ENABLED", False)
+
+
+def _planning_feature_enabled() -> bool:
+    if _env_bool("AUTONOMY_COMPAT_MODE", True):
+        return False
+    return _env_bool("AUTONOMY_PLANNING_ENABLED", False)
+
+
+def _replanning_feature_enabled() -> bool:
+    if _env_bool("AUTONOMY_COMPAT_MODE", True):
+        return False
+    return _env_bool("AUTONOMY_REPLANNING_ENABLED", False)
+
+
+def _self_healing_feature_enabled() -> bool:
+    if _env_bool("AUTONOMY_COMPAT_MODE", True):
+        return False
+    return _env_bool("AUTONOMY_SELF_HEALING_ENABLED", False)
+
+
+def _policy_gates_feature_enabled() -> bool:
+    if _env_bool("AUTONOMY_COMPAT_MODE", True):
+        return False
+    return _env_bool("AUTONOMY_POLICY_GATES_STRICT", False) or _env_bool("AUTONOMY_AUDIT_DECISIONS_ENABLED", False)
+
+
+def _scorecard_feature_enabled() -> bool:
+    if _env_bool("AUTONOMY_COMPAT_MODE", True):
+        return False
+    return _env_bool("AUTONOMY_SCORECARD_ENABLED", False)
+
+
+def _hardening_feature_enabled() -> bool:
+    if _env_bool("AUTONOMY_COMPAT_MODE", True):
+        return False
+    return _env_bool("AUTONOMY_HARDENING_ENABLED", False)
+
+
+def _audit_report_feature_enabled() -> bool:
+    if _env_bool("AUTONOMY_COMPAT_MODE", True):
+        return False
+    return _env_bool("AUTONOMY_AUDIT_REPORT_ENABLED", False)
+
+
+def _audit_change_requests_feature_enabled() -> bool:
+    if _env_bool("AUTONOMY_COMPAT_MODE", True):
+        return False
+    return _env_bool("AUTONOMY_AUDIT_CHANGE_REQUESTS_ENABLED", False)
+
+
 class AutonomousRunner:
     """
     Führt pending Tasks autonom aus, ausgelöst durch den Scheduler-Heartbeat.
@@ -32,6 +91,11 @@ class AutonomousRunner:
         self._running = False
         self._work_signal: asyncio.Event = asyncio.Event()
         self._curiosity_engine = None
+        self._goal_generator = None
+        self._long_term_planner = None
+        self._commitment_review_engine = None
+        self._replanning_engine = None
+        self._self_healing_engine = None
 
     # ------------------------------------------------------------------
     # Öffentliche API
@@ -53,6 +117,54 @@ class AutonomousRunner:
 
         asyncio.create_task(self._worker_loop(), name="autonomous-worker")
         log.info(f"AutonomousRunner gestartet (Intervall: {self.interval_minutes} min)")
+
+        # Goal-Generator hinter Feature-Flags starten (M1.2)
+        if _goals_feature_enabled():
+            try:
+                from orchestration.goal_generator import GoalGenerator
+
+                self._goal_generator = GoalGenerator(queue=get_queue())
+                log.info("🎯 GoalGenerator aktiviert")
+            except Exception as e:
+                log.warning("GoalGenerator konnte nicht gestartet werden: %s", e)
+
+        # Long-Term-Planung hinter Feature-Flags starten (M2.1)
+        if _planning_feature_enabled():
+            try:
+                from orchestration.long_term_planner import LongTermPlanner
+
+                self._long_term_planner = LongTermPlanner(queue=get_queue())
+                log.info("🗓️ LongTermPlanner aktiviert")
+            except Exception as e:
+                log.warning("LongTermPlanner konnte nicht gestartet werden: %s", e)
+
+            try:
+                from orchestration.commitment_review_engine import CommitmentReviewEngine
+
+                self._commitment_review_engine = CommitmentReviewEngine(queue=get_queue())
+                log.info("📋 CommitmentReviewEngine aktiviert")
+            except Exception as e:
+                log.warning("CommitmentReviewEngine konnte nicht gestartet werden: %s", e)
+
+        # Replanning hinter Feature-Flags starten (M2.2)
+        if _replanning_feature_enabled():
+            try:
+                from orchestration.replanning_engine import ReplanningEngine
+
+                self._replanning_engine = ReplanningEngine(queue=get_queue())
+                log.info("🔁 ReplanningEngine aktiviert")
+            except Exception as e:
+                log.warning("ReplanningEngine konnte nicht gestartet werden: %s", e)
+
+        # Self-Healing hinter Feature-Flags starten (M3.1)
+        if _self_healing_feature_enabled():
+            try:
+                from orchestration.self_healing_engine import SelfHealingEngine
+
+                self._self_healing_engine = SelfHealingEngine(queue=get_queue())
+                log.info("🛠️ SelfHealingEngine aktiviert")
+            except Exception as e:
+                log.warning("SelfHealingEngine konnte nicht gestartet werden: %s", e)
 
         # Curiosity Engine als separaten asyncio.Task starten
         if os.getenv("CURIOSITY_ENABLED", "true").lower() == "true":
@@ -101,12 +213,644 @@ class AutonomousRunner:
     def _on_wake_sync(self, event: SchedulerEvent) -> None:
         """Wird vom Scheduler aufgerufen. Signalisiert dem Worker neue Arbeit."""
         queue = get_queue()
+
+        if self._self_healing_engine and _self_healing_feature_enabled():
+            try:
+                healing_summary = self._self_healing_engine.run_cycle()
+                if healing_summary.get("status") == "ok" and (
+                    healing_summary.get("incidents_opened", 0)
+                    or healing_summary.get("incidents_reopened", 0)
+                    or healing_summary.get("incidents_resolved", 0)
+                    or healing_summary.get("incidents_escalated", 0)
+                    or healing_summary.get("circuit_breaker_trips", 0)
+                    or healing_summary.get("playbooks_suppressed", 0)
+                    or healing_summary.get("playbook_attempts_blocked", 0)
+                    or healing_summary.get("degrade_mode_changed", False)
+                ):
+                    log.info(
+                        "🛠️ Heartbeat Self-Healing: opened=%s reopened=%s resolved=%s escalated=%s playbooks=%s suppressed=%s attempts_blocked=%s trips=%s degrade=%s reason=%s",
+                        healing_summary.get("incidents_opened", 0),
+                        healing_summary.get("incidents_reopened", 0),
+                        healing_summary.get("incidents_resolved", 0),
+                        healing_summary.get("incidents_escalated", 0),
+                        healing_summary.get("playbooks_triggered", 0),
+                        healing_summary.get("playbooks_suppressed", 0),
+                        healing_summary.get("playbook_attempts_blocked", 0),
+                        healing_summary.get("circuit_breaker_trips", 0),
+                        healing_summary.get("degrade_mode", "normal"),
+                        healing_summary.get("degrade_reason", ""),
+                    )
+            except Exception as e:
+                log.warning("Self-Healing-Zyklus fehlgeschlagen: %s", e)
+
+        if self._goal_generator and _goals_feature_enabled():
+            try:
+                generated = self._goal_generator.run_cycle(max_goals=3)
+                if generated:
+                    log.info("🎯 Heartbeat: %d Ziel-Signal(e) verarbeitet", len(generated))
+            except Exception as e:
+                log.warning("GoalGenerator-Zyklus fehlgeschlagen: %s", e)
+
+        if self._long_term_planner and _planning_feature_enabled():
+            try:
+                planning_summary = self._long_term_planner.run_cycle()
+                if planning_summary.get("status") == "ok":
+                    log.info(
+                        "🗓️ Heartbeat Planung: %s Planfenster | %s Commitments",
+                        planning_summary.get("plans_touched", 0),
+                        planning_summary.get("commitments_touched", 0),
+                    )
+            except Exception as e:
+                log.warning("LongTermPlanner-Zyklus fehlgeschlagen: %s", e)
+
+        if self._commitment_review_engine and _planning_feature_enabled():
+            try:
+                review_summary = self._commitment_review_engine.run_cycle()
+                if review_summary.get("status") == "ok" and review_summary.get("reviews_due", 0):
+                    log.info(
+                        "📋 Heartbeat Reviews: due=%s | escalated=%s | replan_events=%s",
+                        review_summary.get("reviews_due", 0),
+                        review_summary.get("reviews_escalated", 0),
+                        review_summary.get("replan_events_created", 0),
+                    )
+            except Exception as e:
+                log.warning("CommitmentReview-Zyklus fehlgeschlagen: %s", e)
+
+        if self._replanning_engine and _replanning_feature_enabled():
+            try:
+                replanning_summary = self._replanning_engine.run_cycle()
+                if replanning_summary.get("status") == "ok" and replanning_summary.get("events_detected", 0):
+                    log.info(
+                        "🔁 Heartbeat Replanning: detected=%s | created=%s | actions=%s",
+                        replanning_summary.get("events_detected", 0),
+                        replanning_summary.get("events_created", 0),
+                        replanning_summary.get("actions_applied", 0),
+                    )
+            except Exception as e:
+                log.warning("Replanning-Zyklus fehlgeschlagen: %s", e)
+
+        if _goals_feature_enabled():
+            try:
+                conflict_summary = queue.sync_goal_conflicts(auto_block=False, max_pairs=60)
+                detected = int(conflict_summary.get("conflicts_detected", 0))
+                if detected:
+                    log.warning("⚠️ Goal-Konflikte erkannt: %d", detected)
+            except Exception as e:
+                log.warning("Goal-Konflikt-Sync fehlgeschlagen: %s", e)
+
+            self._export_goal_kpi_snapshot()
+
+        if _planning_feature_enabled():
+            self._export_planning_kpi_snapshot()
+            self._export_commitment_review_kpi_snapshot()
+        if _replanning_feature_enabled():
+            self._export_replanning_kpi_snapshot()
+        if _self_healing_feature_enabled():
+            self._export_self_healing_kpi_snapshot()
+        if _policy_gates_feature_enabled():
+            self._apply_policy_rollout_guard()
+            self._export_policy_kpi_snapshot()
+        scorecard = None
+        if _scorecard_feature_enabled():
+            scorecard = self._export_autonomy_scorecard_snapshot()
+            self._apply_autonomy_scorecard_control(scorecard=scorecard)
+        if _hardening_feature_enabled():
+            self._evaluate_rollout_hardening(scorecard=scorecard)
+        if _scorecard_feature_enabled():
+            if _audit_report_feature_enabled():
+                export_payload = self._export_autonomy_audit_report(scorecard=scorecard)
+                if _audit_change_requests_feature_enabled() and isinstance(export_payload, dict):
+                    self._apply_autonomy_audit_change_request(export_payload=export_payload)
+        if _audit_change_requests_feature_enabled():
+            self._apply_pending_autonomy_audit_change_requests()
+
         pending = queue.get_pending()
         if not pending:
             log.debug("Heartbeat: keine offenen Tasks")
             return
         log.info(f"Heartbeat: {len(pending)} offene Task(s) | Top-Priorität: {pending[0]['priority']}")
         self._work_signal.set()
+
+    def _export_goal_kpi_snapshot(self) -> None:
+        """Exportiert Goal-KPIs in Log + Canvas (falls vorhanden)."""
+        try:
+            queue = get_queue()
+            metrics = queue.get_goal_alignment_metrics(include_conflicts=True)
+            log.info(
+                "🎯 Goal-KPI | open=%s/%s (%.2f%%) | conflicts=%s",
+                metrics.get("open_aligned_tasks", 0),
+                metrics.get("open_tasks", 0),
+                float(metrics.get("open_alignment_rate", 0.0)),
+                metrics.get("conflict_count", 0),
+            )
+        except Exception as e:
+            log.debug("Goal-KPI Berechnung fehlgeschlagen: %s", e)
+            return
+
+        try:
+            from orchestration.canvas_store import canvas_store
+
+            items = canvas_store.list_canvases(limit=1).get("items", [])
+            if not items:
+                return
+            canvas_id = str(items[0].get("id", ""))
+            if not canvas_id:
+                return
+            canvas_store.add_event(
+                canvas_id=canvas_id,
+                event_type="goal_kpi",
+                status="info",
+                message=(
+                    "goal-alignment "
+                    f"{metrics.get('open_aligned_tasks', 0)}/{metrics.get('open_tasks', 0)} "
+                    f"({metrics.get('open_alignment_rate', 0.0)}%)"
+                ),
+                payload=metrics,
+            )
+        except Exception:
+            # Canvas ist optional; fehlender Export darf den Runner nicht stoeren.
+            return
+
+    def _export_planning_kpi_snapshot(self) -> None:
+        """Exportiert Planungsmetriken in Log + Canvas (falls vorhanden)."""
+        try:
+            queue = get_queue()
+            metrics = queue.get_planning_metrics()
+            log.info(
+                "🗓️ Planning-KPI | active_plans=%s | commitments=%s | overdue=%s | deviation=%.2f",
+                metrics.get("active_plans", 0),
+                metrics.get("commitments_total", 0),
+                metrics.get("overdue_commitments", 0),
+                float(metrics.get("plan_deviation_score", 0.0)),
+            )
+        except Exception as e:
+            log.debug("Planning-KPI Berechnung fehlgeschlagen: %s", e)
+            return
+
+        try:
+            from orchestration.canvas_store import canvas_store
+
+            items = canvas_store.list_canvases(limit=1).get("items", [])
+            if not items:
+                return
+            canvas_id = str(items[0].get("id", ""))
+            if not canvas_id:
+                return
+            canvas_store.add_event(
+                canvas_id=canvas_id,
+                event_type="planning_kpi",
+                status="info",
+                message=(
+                    "planning "
+                    f"plans={metrics.get('active_plans', 0)} "
+                    f"commitments={metrics.get('commitments_total', 0)} "
+                    f"overdue={metrics.get('overdue_commitments', 0)} "
+                    f"deviation={metrics.get('plan_deviation_score', 0.0)}"
+                ),
+                payload=metrics,
+            )
+        except Exception:
+            return
+
+    def _export_replanning_kpi_snapshot(self) -> None:
+        """Exportiert Replanning-Metriken in Log + Canvas (falls vorhanden)."""
+        try:
+            queue = get_queue()
+            metrics = queue.get_replanning_metrics()
+            log.info(
+                "🔁 Replanning-KPI | events=%s | last24h=%s | overdue_candidates=%s | top_prio=%.2f",
+                metrics.get("events_total", 0),
+                metrics.get("events_last_24h", 0),
+                metrics.get("overdue_candidates", 0),
+                float(metrics.get("top_priority_score", 0.0)),
+            )
+        except Exception as e:
+            log.debug("Replanning-KPI Berechnung fehlgeschlagen: %s", e)
+            return
+
+        try:
+            from orchestration.canvas_store import canvas_store
+
+            items = canvas_store.list_canvases(limit=1).get("items", [])
+            if not items:
+                return
+            canvas_id = str(items[0].get("id", ""))
+            if not canvas_id:
+                return
+            canvas_store.add_event(
+                canvas_id=canvas_id,
+                event_type="replanning_kpi",
+                status="info",
+                message=(
+                    "replanning "
+                    f"events={metrics.get('events_total', 0)} "
+                    f"last24h={metrics.get('events_last_24h', 0)} "
+                    f"overdue={metrics.get('overdue_candidates', 0)} "
+                    f"top_prio={metrics.get('top_priority_score', 0.0)}"
+                ),
+                payload=metrics,
+            )
+        except Exception:
+            return
+
+    def _export_commitment_review_kpi_snapshot(self) -> None:
+        """Exportiert Commitment-Review-Metriken in Log + Canvas (falls vorhanden)."""
+        try:
+            queue = get_queue()
+            metrics = queue.get_commitment_review_metrics()
+            log.info(
+                "📋 Review-KPI | due=%s | scheduled=%s | escalated_7d=%s | avg_gap_7d=%.2f",
+                metrics.get("due_reviews", 0),
+                metrics.get("scheduled_reviews", 0),
+                metrics.get("escalated_last_7d", 0),
+                float(metrics.get("avg_gap_last_7d", 0.0)),
+            )
+        except Exception as e:
+            log.debug("Review-KPI Berechnung fehlgeschlagen: %s", e)
+            return
+
+        try:
+            from orchestration.canvas_store import canvas_store
+
+            items = canvas_store.list_canvases(limit=1).get("items", [])
+            if not items:
+                return
+            canvas_id = str(items[0].get("id", ""))
+            if not canvas_id:
+                return
+            canvas_store.add_event(
+                canvas_id=canvas_id,
+                event_type="commitment_review_kpi",
+                status="info",
+                message=(
+                    "reviews "
+                    f"due={metrics.get('due_reviews', 0)} "
+                    f"scheduled={metrics.get('scheduled_reviews', 0)} "
+                    f"escalated7d={metrics.get('escalated_last_7d', 0)} "
+                    f"avg_gap7d={metrics.get('avg_gap_last_7d', 0.0)}"
+                ),
+                payload=metrics,
+            )
+        except Exception:
+            return
+
+    def _export_self_healing_kpi_snapshot(self) -> None:
+        """Exportiert Self-Healing-Metriken in Log + Canvas (falls vorhanden)."""
+        try:
+            queue = get_queue()
+            metrics = queue.get_self_healing_metrics()
+            log.info(
+                "🛠️ SelfHealing-KPI | mode=%s | open=%s | escalated_open=%s | max_open_age_min=%s | breakers_open=%s | created24h=%s | recovered24h=%s | recovery_rate24h=%.2f%%",
+                metrics.get("degrade_mode", "normal"),
+                metrics.get("open_incidents", 0),
+                metrics.get("open_escalated_incidents", 0),
+                metrics.get("max_open_incident_age_min", 0.0),
+                metrics.get("circuit_breakers_open", 0),
+                metrics.get("created_last_24h", 0),
+                metrics.get("recovered_last_24h", 0),
+                float(metrics.get("recovery_rate_24h", 0.0)),
+            )
+        except Exception as e:
+            log.debug("SelfHealing-KPI Berechnung fehlgeschlagen: %s", e)
+            return
+
+        try:
+            from orchestration.canvas_store import canvas_store
+
+            items = canvas_store.list_canvases(limit=1).get("items", [])
+            if not items:
+                return
+            canvas_id = str(items[0].get("id", ""))
+            if not canvas_id:
+                return
+            canvas_store.add_event(
+                canvas_id=canvas_id,
+                event_type="self_healing_kpi",
+                status="info",
+                message=(
+                    "self-healing "
+                    f"mode={metrics.get('degrade_mode', 'normal')} "
+                    f"open={metrics.get('open_incidents', 0)} "
+                    f"escalated_open={metrics.get('open_escalated_incidents', 0)} "
+                    f"max_open_age_min={metrics.get('max_open_incident_age_min', 0.0)} "
+                    f"breakers_open={metrics.get('circuit_breakers_open', 0)} "
+                    f"created24h={metrics.get('created_last_24h', 0)} "
+                    f"recovered24h={metrics.get('recovered_last_24h', 0)} "
+                    f"recovery_rate24h={metrics.get('recovery_rate_24h', 0.0)}"
+                ),
+                payload=metrics,
+            )
+        except Exception:
+            return
+
+    def _export_policy_kpi_snapshot(self) -> None:
+        """Exportiert Policy-Entscheidungsmetriken in Log + Canvas (falls vorhanden)."""
+        try:
+            from utils.policy_gate import get_policy_decision_metrics
+
+            metrics = get_policy_decision_metrics(window_hours=24)
+            log.info(
+                "🛡️ Policy-KPI | decisions24h=%s | blocked24h=%s | observed24h=%s | strict24h=%s | canary_deferred24h=%s",
+                metrics.get("decisions_total", 0),
+                metrics.get("blocked_total", 0),
+                metrics.get("observed_total", 0),
+                metrics.get("strict_decisions", 0),
+                metrics.get("canary_deferred_total", 0),
+            )
+        except Exception as e:
+            log.debug("Policy-KPI Berechnung fehlgeschlagen: %s", e)
+            return
+
+        try:
+            from orchestration.canvas_store import canvas_store
+
+            items = canvas_store.list_canvases(limit=1).get("items", [])
+            if not items:
+                return
+            canvas_id = str(items[0].get("id", ""))
+            if not canvas_id:
+                return
+            canvas_store.add_event(
+                canvas_id=canvas_id,
+                event_type="policy_kpi",
+                status="info",
+                message=(
+                    "policy "
+                    f"decisions24h={metrics.get('decisions_total', 0)} "
+                    f"blocked24h={metrics.get('blocked_total', 0)} "
+                    f"observed24h={metrics.get('observed_total', 0)} "
+                    f"strict24h={metrics.get('strict_decisions', 0)} "
+                    f"canary_deferred24h={metrics.get('canary_deferred_total', 0)}"
+                ),
+                payload=metrics,
+            )
+        except Exception:
+            return
+
+    def _apply_policy_rollout_guard(self) -> None:
+        """Wendet bei Policy-Spikes automatische Rollback-Regeln an (M4.4)."""
+        try:
+            from utils.policy_gate import evaluate_and_apply_rollout_guard
+
+            guard = evaluate_and_apply_rollout_guard()
+            action = str(guard.get("action") or "none")
+            if action in {"rollback_applied", "cooldown_active"}:
+                log.warning(
+                    "🛡️ Policy-Rollout-Guard: action=%s | blocked=%s/%s | rate=%s%%",
+                    action,
+                    guard.get("blocked_total", 0),
+                    guard.get("decisions_total", 0),
+                    guard.get("block_rate_pct", 0.0),
+                )
+        except Exception as e:
+            log.debug("Policy-Rollout-Guard fehlgeschlagen: %s", e)
+
+    def _export_autonomy_scorecard_snapshot(self) -> Optional[dict]:
+        """Exportiert und persistiert den aggregierten Autonomie-Reifegrad (M5.3)."""
+        try:
+            from orchestration.autonomy_scorecard import build_autonomy_scorecard
+
+            window_hours = max(1, int(os.getenv("AUTONOMY_SCORECARD_WINDOW_HOURS", "24")))
+            queue = get_queue()
+            scorecard = build_autonomy_scorecard(queue=queue, window_hours=window_hours)
+            queue.record_autonomy_scorecard_snapshot(scorecard)
+            trend = scorecard.get("trends", {}) if isinstance(scorecard.get("trends"), dict) else {}
+            log.info(
+                "🧭 Autonomy-Score | overall=%s/100 (%.2f/10) | level=%s | ready_9_10=%s | goals=%s planning=%s healing=%s policy=%s | trend24h=%.2f (%s)",
+                scorecard.get("overall_score", 0.0),
+                scorecard.get("overall_score_10", 0.0),
+                scorecard.get("autonomy_level", "low"),
+                scorecard.get("ready_for_very_high_autonomy", False),
+                scorecard.get("pillars", {}).get("goals", {}).get("score", 0.0),
+                scorecard.get("pillars", {}).get("planning", {}).get("score", 0.0),
+                scorecard.get("pillars", {}).get("self_healing", {}).get("score", 0.0),
+                scorecard.get("pillars", {}).get("policy", {}).get("score", 0.0),
+                float(trend.get("trend_delta", 0.0) or 0.0),
+                str(trend.get("trend_direction", "stable") or "stable"),
+            )
+        except Exception as e:
+            log.debug("Autonomy-Scorecard Berechnung fehlgeschlagen: %s", e)
+            return None
+
+        try:
+            from orchestration.canvas_store import canvas_store
+
+            items = canvas_store.list_canvases(limit=1).get("items", [])
+            if not items:
+                return
+            canvas_id = str(items[0].get("id", ""))
+            if not canvas_id:
+                return
+            canvas_store.add_event(
+                canvas_id=canvas_id,
+                event_type="autonomy_scorecard",
+                status="info",
+                message=(
+                    "autonomy-score "
+                    f"overall={scorecard.get('overall_score', 0.0)} "
+                    f"level={scorecard.get('autonomy_level', 'low')} "
+                    f"ready9_10={scorecard.get('ready_for_very_high_autonomy', False)}"
+                ),
+                payload=scorecard,
+            )
+        except Exception:
+            return scorecard
+
+        return scorecard
+
+    def _apply_autonomy_scorecard_control(self, *, scorecard: Optional[dict] = None) -> None:
+        """M5.2/M5.3: Scorecard-Control mit optional adaptiven Schwellen anwenden."""
+        try:
+            from orchestration.autonomy_scorecard import evaluate_and_apply_scorecard_control
+
+            control = evaluate_and_apply_scorecard_control(scorecard=scorecard)
+            action = str(control.get("action") or "none")
+            governance = control.get("governance") if isinstance(control.get("governance"), dict) else {}
+            governance_state = str(governance.get("state", "allow") or "allow")
+            if action in {
+                "promote_canary",
+                "rollback_applied",
+                "cooldown_active",
+                "governance_hold",
+                "governance_force_rollback",
+            }:
+                log.warning(
+                    "🧭 Scorecard-Control: action=%s | score=%s | canary=%s->%s | strict_off=%s | thresholds=%.1f/%.1f | adaptive=%s | governance=%s",
+                    action,
+                    control.get("overall_score", 0.0),
+                    control.get("current_canary_percent"),
+                    control.get("next_canary_percent", control.get("current_canary_percent")),
+                    control.get("strict_force_off", False),
+                    float(control.get("promote_threshold", 0.0) or 0.0),
+                    float(control.get("rollback_threshold", 0.0) or 0.0),
+                    str(control.get("adaptive_mode", "off") or "off"),
+                    governance_state,
+                )
+        except Exception as e:
+            log.debug("Autonomy-Scorecard-Control fehlgeschlagen: %s", e)
+
+    def _evaluate_rollout_hardening(self, *, scorecard: Optional[dict] = None) -> None:
+        """M7: Bewertet Hardening-/Rollout-Reife und wendet optional Schutzaktionen an."""
+        try:
+            from orchestration.autonomy_hardening_engine import evaluate_and_apply_rollout_hardening
+
+            queue = get_queue()
+            result = evaluate_and_apply_rollout_hardening(queue=queue, scorecard=scorecard)
+            if result.get("status") != "ok":
+                return
+            state = str(result.get("state") or "green")
+            action = str(result.get("action") or "none")
+            reasons = result.get("reasons", []) if isinstance(result.get("reasons"), list) else []
+            if state != "green" or action != "none":
+                log.warning(
+                    "🧱 Hardening | state=%s | action=%s | reasons=%s",
+                    state,
+                    action,
+                    ",".join(str(r) for r in reasons[:5]),
+                )
+        except Exception as e:
+            log.debug("Rollout-Hardening fehlgeschlagen: %s", e)
+
+    def _export_autonomy_audit_report(self, *, scorecard: Optional[dict] = None) -> Optional[dict]:
+        """M6.1: Exportiert periodisch einen Autonomy-Audit-Report."""
+        try:
+            from orchestration.autonomy_audit_report import (
+                export_autonomy_audit_report,
+                should_export_audit_report,
+            )
+
+            queue = get_queue()
+            cadence_hours = max(1, int(os.getenv("AUTONOMY_AUDIT_REPORT_CADENCE_HOURS", "6")))
+            should = should_export_audit_report(queue=queue, cadence_hours=cadence_hours)
+            if not should.get("should_export", False):
+                return None
+
+            window_days = max(1, int(os.getenv("AUTONOMY_AUDIT_REPORT_WINDOW_DAYS", "7")))
+            baseline_days = max(2, int(os.getenv("AUTONOMY_AUDIT_REPORT_BASELINE_DAYS", "30")))
+            report_export = export_autonomy_audit_report(
+                queue=queue,
+                scorecard=scorecard,
+                window_days=window_days,
+                baseline_days=baseline_days,
+            )
+            recommendation = str(report_export.get("recommendation", "hold") or "hold")
+            report = report_export.get("report") if isinstance(report_export.get("report"), dict) else {}
+            rollout = report.get("rollout_policy") if isinstance(report.get("rollout_policy"), dict) else {}
+            log.info(
+                "🧾 Autonomy-Audit | recommendation=%s | reason=%s | risk_flags=%s | path=%s",
+                recommendation,
+                rollout.get("reason", "n/a"),
+                ",".join(rollout.get("risk_flags", [])[:5]) if isinstance(rollout.get("risk_flags"), list) else "",
+                report_export.get("path", ""),
+            )
+
+            try:
+                from orchestration.canvas_store import canvas_store
+
+                items = canvas_store.list_canvases(limit=1).get("items", [])
+                if items:
+                    canvas_id = str(items[0].get("id", ""))
+                    if canvas_id:
+                        canvas_store.add_event(
+                            canvas_id=canvas_id,
+                            event_type="autonomy_audit_report",
+                            status="info",
+                            message=(
+                                "autonomy-audit "
+                                f"recommendation={recommendation} "
+                                f"reason={rollout.get('reason', 'n/a')}"
+                            ),
+                            payload=report,
+                        )
+            except Exception:
+                return report_export
+            return report_export
+        except Exception as e:
+            log.debug("Autonomy-Audit-Export fehlgeschlagen: %s", e)
+            return None
+
+    def _apply_autonomy_audit_change_request(self, *, export_payload: Optional[dict] = None) -> None:
+        """M6.2: Uebersetzt Audit-Empfehlungen in formale Change-Requests."""
+        try:
+            from orchestration.autonomy_change_control import evaluate_and_apply_audit_change_request
+
+            queue = get_queue()
+            report = None
+            report_path = None
+            if isinstance(export_payload, dict):
+                report = export_payload.get("report") if isinstance(export_payload.get("report"), dict) else None
+                report_path = str(export_payload.get("path") or "").strip() or None
+
+            result = evaluate_and_apply_audit_change_request(
+                queue=queue,
+                report=report,
+                report_path=report_path,
+            )
+            action = str(result.get("action") or "none")
+            if action in {
+                "promote_canary",
+                "rollback",
+                "hold",
+                "skipped",
+                "duplicate_noop",
+                "awaiting_approval",
+            }:
+                log.info(
+                    "🧾 Audit-ChangeRequest | action=%s | request_id=%s | audit_id=%s | recommendation=%s | reason=%s",
+                    action,
+                    result.get("request_id", ""),
+                    result.get("audit_id", ""),
+                    result.get("recommendation", ""),
+                    result.get("reason", ""),
+                )
+
+            try:
+                from orchestration.canvas_store import canvas_store
+
+                items = canvas_store.list_canvases(limit=1).get("items", [])
+                if items:
+                    canvas_id = str(items[0].get("id", ""))
+                    if canvas_id:
+                        canvas_store.add_event(
+                            canvas_id=canvas_id,
+                            event_type="autonomy_audit_change_request",
+                            status="info",
+                            message=(
+                                "audit-change "
+                                f"action={action} "
+                                f"recommendation={result.get('recommendation', '')}"
+                            ),
+                            payload=result,
+                        )
+            except Exception:
+                return
+        except Exception as e:
+            log.debug("Autonomy-Audit-ChangeRequest fehlgeschlagen: %s", e)
+
+    def _apply_pending_autonomy_audit_change_requests(self) -> None:
+        """M6.3: Wendet zuvor freigegebene Change-Requests asynchron im Heartbeat an."""
+        try:
+            from orchestration.autonomy_change_control import (
+                enforce_pending_approval_sla,
+                evaluate_and_apply_pending_approved_change_requests,
+            )
+
+            queue = get_queue()
+            result = evaluate_and_apply_pending_approved_change_requests(queue=queue, limit=5)
+            processed = int(result.get("processed", 0) or 0)
+            if processed > 0:
+                log.info("🧾 Pending ChangeRequests verarbeitet: %s", processed)
+            sla_result = enforce_pending_approval_sla(queue=queue, limit=100)
+            if int(sla_result.get("timed_out", 0) or 0) > 0:
+                log.warning(
+                    "🧾 Approval-SLA | timed_out=%s | escalated=%s | auto_rejected=%s | tasks=%s",
+                    sla_result.get("timed_out", 0),
+                    sla_result.get("escalated", 0),
+                    sla_result.get("auto_rejected", 0),
+                    sla_result.get("escalation_tasks_created", 0),
+                )
+        except Exception as e:
+            log.debug("Pending Audit-ChangeRequests fehlgeschlagen: %s", e)
 
     # ------------------------------------------------------------------
     # Worker-Loop
@@ -143,6 +887,7 @@ class AutonomousRunner:
         description = task.get("description", "")
         target_agent = task.get("target_agent")
         priority = task.get("priority", Priority.NORMAL)
+        goal_id = task.get("goal_id")
         queue = get_queue()
 
         if not description:
@@ -151,6 +896,38 @@ class AutonomousRunner:
 
         prio_name = {0: "CRITICAL", 1: "HIGH", 2: "NORMAL", 3: "LOW"}.get(priority, str(priority))
         log.info(f"▶ [{prio_name}] Task [{task_id[:8]}]: {description[:80]}")
+
+        if _policy_gates_feature_enabled():
+            try:
+                from utils.policy_gate import audit_policy_decision, evaluate_policy_gate
+
+                policy_decision = evaluate_policy_gate(
+                    gate="autonomous_task",
+                    subject=description,
+                    payload={
+                        "task": description,
+                        "task_id": task_id,
+                        "target_agent": target_agent or "auto",
+                        "priority": priority,
+                    },
+                    source="autonomous_runner._execute_task",
+                )
+                audit_policy_decision(policy_decision)
+                if policy_decision.get("blocked"):
+                    reason = str(policy_decision.get("reason") or "Policy blockiert autonomen Task.")
+                    queue.fail(task_id, reason[:500])
+                    if goal_id and _goals_feature_enabled():
+                        queue.refresh_goal_progress(goal_id, last_task_id=task_id, last_event="task_policy_blocked")
+                    log.warning("🛡️ Task [%s] policy-blocked: %s", task_id[:8], reason)
+                    return
+                if policy_decision.get("action") == "observe":
+                    log.warning(
+                        "🛡️ Task [%s] policy-observe: %s",
+                        task_id[:8],
+                        str(policy_decision.get("reason") or ""),
+                    )
+            except Exception as e:
+                log.debug("Policy-Gate fuer autonomen Task fehlgeschlagen: %s", e)
 
         try:
             from main_dispatcher import get_agent_decision
@@ -170,14 +947,20 @@ class AutonomousRunner:
             if result is not None:
                 result_str = str(result)
                 queue.complete(task_id, result_str[:2000])
+                if goal_id and _goals_feature_enabled():
+                    queue.refresh_goal_progress(goal_id, last_task_id=task_id, last_event="task_completed")
                 log.info(f"✅ Task [{task_id[:8]}] abgeschlossen")
                 await self._send_result_to_telegram(description, result_str)
             else:
                 queue.fail(task_id, "Alle Failover-Versuche erschöpft")
+                if goal_id and _goals_feature_enabled():
+                    queue.refresh_goal_progress(goal_id, last_task_id=task_id, last_event="task_failover_exhausted")
 
         except Exception as e:
             log.error(f"❌ Task [{task_id[:8]}] Fehler: {e}", exc_info=True)
             queue.fail(task_id, str(e))
+            if goal_id and _goals_feature_enabled():
+                queue.refresh_goal_progress(goal_id, last_task_id=task_id, last_event="task_failed")
 
     async def _send_failure_alert(
         self,

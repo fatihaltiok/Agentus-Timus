@@ -230,6 +230,37 @@ class AgentRegistry:
             )
             return {"status": "error", "agent": to_agent, "error": error_msg}
 
+        # Formales Delegation-Policy-Gate (M4.1)
+        from utils.policy_gate import audit_policy_decision, evaluate_policy_gate
+
+        policy_decision = evaluate_policy_gate(
+            gate="delegation",
+            subject=f"{from_agent}->{to_agent}",
+            payload={"from_agent": from_agent, "to_agent": to_agent, "task": task},
+            source="agent_registry.delegate",
+        )
+        audit_policy_decision(policy_decision)
+        if bool(policy_decision.get("blocked")):
+            reason = str(policy_decision.get("reason") or "Policy blockiert Delegation.")
+            error_msg = f"FEHLER: Delegation blockiert — {reason}"
+            self._log_canvas_delegation(
+                from_agent=from_agent,
+                to_agent=to_agent,
+                session_id=effective_session_id,
+                status="cancelled",
+                task=task,
+                message=f"Delegation policy-blockiert: {from_agent} -> {to_agent}",
+                payload={
+                    "reason": "policy_blocked",
+                    "policy_gate": {
+                        "action": policy_decision.get("action"),
+                        "violations": policy_decision.get("violations", []),
+                        "strict_mode": bool(policy_decision.get("strict_mode")),
+                    },
+                },
+            )
+            return {"status": "error", "agent": to_agent, "error": error_msg, "blocked_by_policy": True}
+
         stack = list(self._delegation_stack_var.get())
 
         if to_agent in stack:
