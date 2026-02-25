@@ -21,6 +21,7 @@ v2.0 NEW:
 - Bidirectional sync with Markdown files
 """
 
+import asyncio
 import os
 import json
 import sqlite3
@@ -43,17 +44,17 @@ log = logging.getLogger("memory_system")
 
 # Konfiguration
 MEMORY_DB_PATH = Path.home() / "dev" / "timus" / "data" / "timus_memory.db"
-MAX_SESSION_MESSAGES = 20  # Letzte N Nachrichten im Kontext
-MAX_CONTEXT_TOKENS = 2000  # Max Tokens für Memory-Kontext
-SUMMARIZE_THRESHOLD = 10  # Nach N Nachrichten zusammenfassen
+MAX_SESSION_MESSAGES             = int(os.getenv("MAX_SESSION_MESSAGES",    "50"))   # war: 20
+MAX_CONTEXT_TOKENS               = int(os.getenv("MAX_CONTEXT_TOKENS",   "16000"))   # war: 2000
+SUMMARIZE_THRESHOLD              = int(os.getenv("SUMMARIZE_THRESHOLD",     "20"))   # war: 10
 SELF_MODEL_MIN_MESSAGES = 6
 SELF_MODEL_UPDATE_INTERVAL_HOURS = 12
-WORKING_MEMORY_MAX_CHARS = 3200
-WORKING_MEMORY_MAX_RELATED = 4
-WORKING_MEMORY_MAX_RECENT_EVENTS = 6
+WORKING_MEMORY_MAX_CHARS         = int(os.getenv("WM_MAX_CHARS",         "10000"))   # war: 3200
+WORKING_MEMORY_MAX_RELATED       = int(os.getenv("WM_MAX_RELATED",           "8"))   # war: 4
+WORKING_MEMORY_MAX_RECENT_EVENTS = int(os.getenv("WM_MAX_EVENTS",           "15"))   # war: 6
 WORKING_MEMORY_EVENT_HALF_LIFE_HOURS = 18
 WORKING_MEMORY_MEMORY_HALF_LIFE_DAYS = 21
-UNIFIED_RECALL_MAX_SCAN = 80
+UNIFIED_RECALL_MAX_SCAN          = int(os.getenv("UNIFIED_RECALL_MAX_SCAN", "200"))   # war: 80
 
 
 @dataclass
@@ -937,19 +938,40 @@ class MemoryManager:
         return dict(self._last_working_memory_stats)
     
     def _init_semantic_store(self):
-        """Initialisiert ChromaDB-Store wenn verfügbar."""
+        """Initialisiert ChromaDB-Store wenn verfügbar.
+
+        Strategie:
+        1. shared_context (mcp_server.py läuft) — bevorzugt
+        2. Direkter ChromaDB-Fallback (memory_db/) — unabhängig von mcp_server
+        """
+        # 1. Versuch: shared_context (mcp_server.py aktiv)
         try:
-            # Lazy import to avoid circular dependency
-            import tools.shared_context as shared_context
-            if hasattr(shared_context, 'memory_collection') and shared_context.memory_collection:
-                self.semantic_store = SemanticMemoryStore(shared_context.memory_collection)
-                log.info("✅ SemanticMemoryStore (ChromaDB) initialisiert")
-            else:
-                log.debug("ChromaDB Collection nicht verfügbar, Semantic Search deaktiviert")
-        except ImportError:
-            log.debug("shared_context nicht verfügbar, Semantic Search deaktiviert")
+            import tools.shared_context as sc
+            if hasattr(sc, 'memory_collection') and sc.memory_collection:
+                self.semantic_store = SemanticMemoryStore(sc.memory_collection)
+                log.info("✅ SemanticMemoryStore via shared_context initialisiert")
+                return
+        except Exception:
+            pass
+
+        # 2. Direkter ChromaDB-Fallback (immer verfügbar, kein mcp_server nötig)
+        try:
+            import chromadb
+            from utils.embedding_provider import get_embedding_function
+            db_path = Path(__file__).parent.parent / "memory_db"
+            db_path.mkdir(parents=True, exist_ok=True)
+            client = chromadb.PersistentClient(
+                path=str(db_path),
+                settings=chromadb.config.Settings(anonymized_telemetry=False),
+            )
+            collection = client.get_or_create_collection(
+                name="timus_long_term_memory",
+                embedding_function=get_embedding_function(),
+            )
+            self.semantic_store = SemanticMemoryStore(collection)
+            log.info("✅ SemanticMemoryStore direkt initialisiert (%s)", db_path)
         except Exception as e:
-            log.warning(f"SemanticMemoryStore Init fehlgeschlagen: {e}")
+            log.warning("ChromaDB-Direktverbindung fehlgeschlagen, nur FTS5: %s", e)
     
     def _get_markdown_store(self):
         """Lazy-Load Markdown Store."""
@@ -1010,6 +1032,17 @@ class MemoryManager:
         
         # Selektive Memory-Extraktion
         self._process_memory_candidates(user_input)
+
+        # Auto-Summarize: Threshold prüfen (nur wenn Event-Loop bereits läuft)
+        msg_count = len(self.session.messages)
+        if msg_count > 0 and msg_count % SUMMARIZE_THRESHOLD == 0:
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(self.summarize_session())
+                    log.info("Auto-Summarize nach %d Nachrichten getriggert", msg_count)
+            except RuntimeError:
+                pass
 
     def log_interaction_event(
         self,

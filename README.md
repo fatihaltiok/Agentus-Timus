@@ -4,7 +4,7 @@
   <img src="assets/branding/timus-logo-glow.png" alt="Timus Logo" width="760">
 </p>
 
-**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus.
+**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.7 hat Timus ein **gehärtetes Memory-System** mit 8× mehr Kontext und vollständig autonomer Zusammenfassung.
 
 ---
 
@@ -30,9 +30,9 @@ Ein `BaseAgent` entstand mit einem ReAct-Loop (Thought → Action → Observatio
 
 Jede Aufgabenkategorie bekam einen eigenen Spezialisten: Research, Reasoning, Creative, Developer, Meta (Orchestrator), Visual, Data, Document, Communication, System, Shell, Image. Jeder Agent sieht nur die für ihn relevanten Tools (`AGENT_CAPABILITY_MAP`).
 
-### Phase 3 — Gedächtnis: Memory v2.1
+### Phase 3 — Gedächtnis: Memory v2.2
 
-Timus erinnert sich. Vier-Ebenen-Architektur: SessionMemory (Kurzzeit) + SQLite (Langzeit) + ChromaDB (semantische Vektoren) + MarkdownStore (manuell editierbar). Nemotron entscheidet als Kurator was gespeichert wird. Post-Task-Reflexion speichert Lernmuster.
+Timus erinnert sich. Vier-Ebenen-Architektur: SessionMemory (Kurzzeit) + SQLite (Langzeit) + ChromaDB (semantische Vektoren) + MarkdownStore (manuell editierbar). Nemotron entscheidet als Kurator was gespeichert wird. Post-Task-Reflexion speichert Lernmuster. ChromaDB läuft seit v2.2 direkt — unabhängig vom MCP-Server.
 
 ### Phase 4 — Autonomie: Proaktiver Scheduler + Telegram
 
@@ -42,7 +42,7 @@ Kein Warten mehr auf Eingaben. Heartbeat-Scheduler (15 min), SQLite Task-Queue, 
 
 Primäres lokales Vision-Modell (Florence-2, ~3GB VRAM) für UI-Erkennung + PaddleOCR. Decision-LLM (Qwen3.5 Plus) erstellt To-Do-Liste, führt jeden Schritt mit 3 Retries aus. Browser-Automatisierung über SPA-kompatiblen DOM-First Input.
 
-### Phase 7 — NVIDIA NIM Provider-Integration ← *aktuell, v2.6*
+### Phase 7 — NVIDIA NIM Provider-Integration *(v2.6)*
 
 Timus nutzt jetzt **NVIDIA's Inference Microservices (NIM)** als dritten KI-Provider neben OpenAI und Anthropic. 186 Modelle stehen über eine einheitliche OpenAI-kompatible API zur Verfügung. Drei Agenten laufen jetzt auf NVIDIA-Hardware:
 
@@ -51,6 +51,17 @@ Visual Agent   → Qwen3.5-397B-A17B    (397B MoE, Vision+Video, 262K Context)
 Meta Agent     → Seed-OSS-36B         (ByteDance, Agentic Intelligence, 512K Context)
 Reasoning Agent→ Nemotron-49B         (NVIDIA-eigenes Flagship-Modell)
 ```
+
+### Phase 8 — Memory Hardening ← *aktuell, v2.7*
+
+Fünf strukturelle Schwachstellen im Memory-System behoben: Kontextfenster von 2.000 auf **16.000 Token** erweitert, Working Memory von 3.200 auf **10.000 Zeichen** erhöht, ChromaDB läuft jetzt **direkt** (kein mcp_server.py nötig), **Auto-Summarize** löst bei jedem N-ten Nachrichten automatisch aus, Reflection ist durch `asyncio.wait_for(30s)` abgesichert — kein stiller Absturz mehr.
+
+```
+Vorher:  MAX_CONTEXT_TOKENS=2000   WM_MAX_CHARS=3200   ChromaDB → nur mit mcp_server
+Jetzt:   MAX_CONTEXT_TOKENS=16000  WM_MAX_CHARS=10000  ChromaDB → direkt + Fallback
+```
+
+Alle Konstanten sind per `.env` überschreibbar — kein Code-Edit nötig.
 
 ### Phase 6 — Parallele Multi-Agenten-Delegation *(v2.5)*
 
@@ -66,6 +77,45 @@ Meta → Research  ┐
      → Developer ├── gleichzeitig → ResultAggregator → Meta wertet aus
      → Creative  ┘
 Gesamtzeit: 60s  (3–6× schneller)
+```
+
+---
+
+## Aktueller Stand — Version 2.7 (2026-02-25)
+
+### Memory Hardening — 5 Schwachstellen behoben
+
+| Schwachstelle | Vorher | Jetzt |
+|---------------|--------|-------|
+| Memory-Kontext | 2.000 Token | **16.000 Token** |
+| Working Memory | 3.200 Zeichen | **10.000 Zeichen** |
+| Session-Nachrichten | 20 | **50** |
+| Verwandte Erinnerungen | 4 | **8** |
+| Events im Kontext | 6 | **15** |
+| Recall-Scan | 80 Einträge | **200 Einträge** |
+| ChromaDB | nur mit mcp_server | **direkt + Fallback** |
+| Auto-Summarize | nur am Session-Ende | **automatisch alle N Nachrichten** |
+| Reflection bei Absturz | stiller Fehler | **log.warning + 30s Timeout** |
+
+#### Geänderte Dateien
+
+| Datei | Änderung |
+|-------|----------|
+| `memory/memory_system.py` | Konstanten per `os.getenv()`, ChromaDB-Direktverbindung, Auto-Summarize, `asyncio` Import |
+| `agent/base_agent.py` | `_run_reflection()` mit `asyncio.wait_for(30s)` + `log.warning` statt `log.debug` |
+| `.env` | Neue Sektion `# MEMORY SYSTEM` mit allen 7 Konstanten + `MAX_OUTPUT_TOKENS=16000` |
+
+#### Konfiguration (alle Werte per .env überschreibbar)
+
+```bash
+MAX_SESSION_MESSAGES=50      # Letzte N Nachrichten im Kontext (war: 20)
+MAX_CONTEXT_TOKENS=16000     # Max Token für Memory-Kontext (war: 2000)
+SUMMARIZE_THRESHOLD=20       # Nach N Nachrichten Auto-Summarize (war: 10)
+WM_MAX_CHARS=10000           # Working Memory max. Zeichen (war: 3200)
+WM_MAX_RELATED=8             # Verwandte Erinnerungen im Working Memory (war: 4)
+WM_MAX_EVENTS=15             # Aktuelle Events im Working Memory (war: 6)
+UNIFIED_RECALL_MAX_SCAN=200  # Recall-Scan-Tiefe (war: 80)
+MAX_OUTPUT_TOKENS=16000      # ContextGuard Output-Limit (war: implizit 8000)
 ```
 
 ---
@@ -361,13 +411,15 @@ MCP-Server :5000 (FastAPI + JSON-RPC)
       |     ├─ MemoryAccessGuard (ContextVar) → read-only Worker
       |     └─ ResultAggregator → Fan-In Markdown
       |
-      +--> memory/memory_system.py (Memory v2.1 + WAL)
+      +--> memory/memory_system.py (Memory v2.2 + WAL)
             ├─ WAL-Modus (gleichzeitige Reads + ein Writer)
             ├─ MemoryAccessGuard.check_write_permission() in allen Schreibops
-            ├─ SessionMemory + interaction_events
-            ├─ unified_recall (episodisch + semantisch)
-            ├─ ChromaDB (Embeddings + agent_id-Isolation)
-            └─ Nemotron-Kurator (4 Kriterien)
+            ├─ SessionMemory (50 Nachrichten) + interaction_events
+            ├─ unified_recall (episodisch + semantisch, 200-Scan)
+            ├─ Auto-Summarize (alle 20 Nachrichten, asyncio.create_task)
+            ├─ ChromaDB Direktverbindung (kein mcp_server nötig, v2.7)
+            ├─ Nemotron-Kurator (4 Kriterien)
+            └─ Reflection 30s-Timeout + log.warning Absicherung
 ```
 
 ```mermaid
@@ -431,17 +483,19 @@ flowchart TD
 
     M --> E["Externe Systeme\nDesktop PyAutoGUI\nBrowser Playwright\nAPIs"]
 
-    M --> MM["memory/memory_system.py\nMemory v2.1 + WAL"]
+    M --> MM["memory/memory_system.py\nMemory v2.2 + WAL + Hardening"]
     MM --> WAL["SQLite WAL-Modus\nParallele Reads + ein Writer"]
     MM --> MAG["MemoryAccessGuard\nContextVar — Worker read-only"]
     MM --> IE["interaction_events\ndeterministisches Logging"]
-    MM --> UR["unified_recall\nepisodisch + semantisch"]
-    MM --> WM["working_memory_context\nBudget + Decay + Relevanz"]
-    MM --> CHR["ChromaDB\nEmbeddings + agent_id-Isolation"]
+    MM --> UR["unified_recall\nepisodisch + semantisch\n200-Scan v2.7"]
+    MM --> WM["working_memory_context\n16K Token · 10K Chars · 50 Msgs\nBudget + Decay + Relevanz v2.7"]
+    MM --> CHR["ChromaDB Direktverbindung\nFallback: shared_context → PersistentClient\nkein mcp_server nötig v2.7"]
     CHR --> REM["remember text agent_id\nspeichert mit Agent-Label"]
     CHR --> REC["recall query agent_filter\nfiltert nach Agent"]
     MM --> CUR["Nemotron-Kurator\nnvidia/nemotron-3-nano-30b-a3b"]
     CUR --> CRD["4 Kriterien\nFaktenwissen Präferenz\nSelbsterkenntnis Kontext"]
+    MM --> AUS["Auto-Summarize v2.7\nalle 20 Nachrichten\nasyncio.create_task"]
+    MM --> RFT["Reflection 30s Timeout v2.7\nasyncio.wait_for\nlog.warning bei Fehler"]
 
     ARP -.->|"read-only Worker"| MAG
     WAL -.->|"ermöglicht"| ARP
@@ -592,17 +646,18 @@ formatted = ResultAggregator.format_results(result)
 
 ---
 
-## Memory-System v2.1 (+ WAL v2.5)
+## Memory-System v2.2 (+ WAL v2.5 + Hardening v2.7)
 
 Vier-Ebenen-Architektur:
 
 ```
-Memory System v2.1
+Memory System v2.2
 |
 +-- SessionMemory (Kurzzeit, RAM)
-|   +-- Letzte 20 Nachrichten
+|   +-- Letzte 50 Nachrichten (v2.7: war 20)
 |   +-- Aktuelle Entitäten (Pronomen-Auflösung)
 |   +-- Current Topic
+|   +-- Auto-Summarize (v2.7): alle 20 Nachrichten automatisch
 |
 +-- PersistentMemory (Langzeit — SQLite + WAL-Modus)
 |   +-- WAL-Pragma (v2.5): gleichzeitige Reads + ein Writer
@@ -612,7 +667,9 @@ Memory System v2.1
 |   +-- Benutzer-Profile und Präferenzen
 |
 +-- SemanticMemoryStore (ChromaDB)
-|   +-- Embedding-basierte semantische Suche
+|   +-- Direktverbindung (v2.7): unabhängig von mcp_server.py
+|   +-- Fallback-Kette: shared_context → PersistentClient(memory_db/)
+|   +-- Embedding-basierte semantische Suche (16.000 Token Kontext)
 |   +-- Hybrid-Suche: ChromaDB + FTS5 (Keywords)
 |   +-- agent_id-Isolation: recall(agent_filter="shell")
 |
@@ -623,6 +680,7 @@ Memory System v2.1
 +-- ReflectionEngine (Post-Task Analyse)
     +-- Pattern-Erkennung (was funktioniert, was nicht)
     +-- Speichert Learnings automatisch
+    +-- Timeout-Schutz (v2.7): asyncio.wait_for 30s + log.warning
 ```
 
 ---
@@ -684,9 +742,9 @@ timus/
 │   ├── document_creator/    # M1: DOCX/TXT
 │   └── ...                  # 70+ weitere Tools
 ├── memory/
-│   ├── memory_system.py     # Memory v2.1 + WAL-Modus + MemoryAccessGuard-Checks
+│   ├── memory_system.py     # Memory v2.2 — Konstanten per os.getenv, ChromaDB-Direkt, Auto-Summarize
 │   ├── memory_guard.py      # MemoryAccessGuard (ContextVar, thread-safe, NEU v2.5)
-│   ├── reflection_engine.py
+│   ├── reflection_engine.py # Post-Task Reflexion (30s Timeout-Schutz v2.7)
 │   └── markdown_store/      # USER.md, SOUL.md, MEMORY.md
 ├── orchestration/
 │   ├── scheduler.py            # Heartbeat-Scheduler (15 min)
@@ -782,6 +840,16 @@ HEARTBEAT_ENABLED=true
 HEARTBEAT_INTERVAL_MINUTES=15
 TELEGRAM_BOT_TOKEN=...
 TELEGRAM_ALLOWED_IDS=<deine_id>
+
+# Memory System (v2.7 — alle Werte haben Defaults, .env optional)
+MAX_SESSION_MESSAGES=50       # Nachrichten im Kontext (Standard: 50)
+MAX_CONTEXT_TOKENS=16000      # Token-Limit Memory-Kontext (Standard: 16000)
+SUMMARIZE_THRESHOLD=20        # Auto-Summarize-Intervall (Standard: 20)
+WM_MAX_CHARS=10000            # Working Memory Zeichen (Standard: 10000)
+WM_MAX_RELATED=8              # Verwandte Erinnerungen (Standard: 8)
+WM_MAX_EVENTS=15              # Events im Working Memory (Standard: 15)
+UNIFIED_RECALL_MAX_SCAN=200   # Recall-Scan-Tiefe (Standard: 200)
+MAX_OUTPUT_TOKENS=16000       # ContextGuard Output-Limit (Standard: 16000)
 ```
 
 ### Starten

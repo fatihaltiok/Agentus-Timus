@@ -132,3 +132,81 @@ Code-Referenzen:
 - [x] Memory-Ownership entschieden und dokumentiert.
 - [x] Laufzeitpfade und Konflikte explizit beschrieben.
 - [x] Verbindliche Rollen/Regeln fuer Folge-Meilensteine festgelegt.
+
+---
+
+## Milestone 7 — Memory Hardening v2.2 (2026-02-25)
+
+### Kontext
+
+Fünf strukturelle Schwachstellen wurden identifiziert und behoben:
+1. Zu kleines Kontextfenster (2.000 Token) schnitt Langzeitgedächtnis ab.
+2. Working Memory (3.200 Zeichen) zu eng für komplexe Tasks.
+3. ChromaDB nur aktiv wenn mcp_server.py läuft — semantische Suche fehlt bei Standalone-Betrieb.
+4. SUMMARIZE_THRESHOLD (10) wurde nie ausgelöst (nur bei Session-Ende).
+5. Reflection konnte bei Agent-Abstürzen unbemerkt verloren gehen.
+
+### Änderungen
+
+#### M7.1 — Konstanten per os.getenv() konfigurierbar
+**Datei:** `memory/memory_system.py:46-56`
+
+Alle Memory-Limits sind jetzt per `.env` überschreibbar ohne Code-Edit:
+
+| Konstante | Alt | Neu | ENV-Variable |
+|-----------|-----|-----|--------------|
+| `MAX_SESSION_MESSAGES` | 20 | 50 | `MAX_SESSION_MESSAGES` |
+| `MAX_CONTEXT_TOKENS` | 2.000 | 16.000 | `MAX_CONTEXT_TOKENS` |
+| `SUMMARIZE_THRESHOLD` | 10 | 20 | `SUMMARIZE_THRESHOLD` |
+| `WORKING_MEMORY_MAX_CHARS` | 3.200 | 10.000 | `WM_MAX_CHARS` |
+| `WORKING_MEMORY_MAX_RELATED` | 4 | 8 | `WM_MAX_RELATED` |
+| `WORKING_MEMORY_MAX_RECENT_EVENTS` | 6 | 15 | `WM_MAX_EVENTS` |
+| `UNIFIED_RECALL_MAX_SCAN` | 80 | 200 | `UNIFIED_RECALL_MAX_SCAN` |
+
+#### M7.2 — Reflection Timeout + explizites Fehler-Logging
+**Datei:** `agent/base_agent.py:1826`
+
+`engine.reflect_on_task()` ist in `asyncio.wait_for(timeout=30.0)` eingebettet.
+- Timeout → `log.warning("Reflection Timeout (>30s) — übersprungen")`
+- Exception → `log.warning("Reflection fehlgeschlagen (nicht kritisch): %s", e)`
+- Kein stiller Crash mehr (war: `log.debug`)
+
+#### M7.3 — ChromaDB Direktverbindung als Fallback
+**Datei:** `memory/memory_system.py:939 — _init_semantic_store()`
+
+Zwei-Phasen-Init:
+1. `shared_context.memory_collection` (mcp_server.py aktiv) — bevorzugt
+2. `chromadb.PersistentClient(memory_db/)` — Direktverbindung, immer verfügbar
+
+Collection-Name identisch zu mcp_server.py: `timus_long_term_memory`.
+Semantische Suche ist damit auch bei Standalone-Betrieb aktiv.
+
+#### M7.4 — Auto-Summarize in add_interaction()
+**Datei:** `memory/memory_system.py:1014 — add_interaction()`
+
+Nach jeder Interaktion: `if msg_count % SUMMARIZE_THRESHOLD == 0` → `loop.create_task(summarize_session())`.
+- Läuft asynchron im Hintergrund (kein Blocking)
+- Nur wenn Event-Loop bereits läuft (kein RuntimeError in Sync-Kontexten)
+- Logzeile: `"Auto-Summarize nach N Nachrichten getriggert"`
+
+### Neue ENV-Variablen (.env Sektion `# MEMORY SYSTEM`)
+
+```bash
+MAX_SESSION_MESSAGES=50
+MAX_CONTEXT_TOKENS=16000
+SUMMARIZE_THRESHOLD=20
+WM_MAX_CHARS=10000
+WM_MAX_RELATED=8
+WM_MAX_EVENTS=15
+UNIFIED_RECALL_MAX_SCAN=200
+MAX_OUTPUT_TOKENS=16000
+```
+
+### Abnahme Milestone 7
+
+- [x] Alle 7 Konstanten per os.getenv() konfigurierbar — Schnelltest bestätigt.
+- [x] ChromaDB `is_available()` → `True` ohne laufenden mcp_server — Schnelltest bestätigt.
+- [x] Reflection-Timeout implementiert — asyncio.wait_for(30.0) in base_agent.py.
+- [x] Auto-Summarize implementiert — create_task() in add_interaction().
+- [x] .env Sektion `# MEMORY SYSTEM` vollständig dokumentiert.
+- [x] README.md und MEMORY_ARCHITECTURE.md auf v2.2 / v2.7 aktualisiert.

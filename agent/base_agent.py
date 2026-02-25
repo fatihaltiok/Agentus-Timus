@@ -1822,18 +1822,23 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                     # Fallback: ReflectionEngine kann MultiProviderClient selbst auflösen
                     engine.set_llm_client(self.provider_client)
             
-            # Run reflection
-            reflection = await engine.reflect_on_task(
-                task={"description": task, "type": self.agent_type},
-                actions=self._task_action_history,
-                result={"success": success, "output": result}
+            # Run reflection (mit 30s Timeout, damit ein hängender LLM-Call nicht blockiert)
+            reflection = await asyncio.wait_for(
+                engine.reflect_on_task(
+                    task={"description": task, "type": self.agent_type},
+                    actions=self._task_action_history,
+                    result={"success": success, "output": result}
+                ),
+                timeout=30.0,
             )
-            
+
             if reflection:
                 log.debug(
                     f"🪞 Reflexion: {len(reflection.what_worked)} positiv, "
                     f"{len(reflection.what_failed)} negativ"
                 )
-                
+
+        except asyncio.TimeoutError:
+            log.warning("Reflection Timeout (>30s) — übersprungen")
         except Exception as e:
-            log.debug(f"Reflexion fehlgeschlagen (non-critical): {e}")
+            log.warning("Reflection fehlgeschlagen (nicht kritisch): %s", e)
