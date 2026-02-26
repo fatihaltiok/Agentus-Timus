@@ -24,6 +24,8 @@ beautifulsoup4==4.12.3
 lxml==5.2.2
 pypdfium2==4.30.0
 requests==2.32.5
+urllib3==2.3.0
+selenium==4.24.0
 fuzzywuzzy==0.18.0
 
 # --- Google AI ---
@@ -56,6 +58,7 @@ paddleocr==3.3.3
 
 # --- System Monitoring & Autonomie ---
 psutil==7.0.0
+kubernetes==34.1.0
 
 # --- Kommunikation (Gateway) ---
 python-telegram-bot==21.9

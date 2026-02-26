@@ -130,7 +130,7 @@ def run(params: Dict[str, Any]) -> Dict[str, Any]:
         try:
             dismiss_result = dismiss_overlays(max_secs=8)
             if dismiss_result is None or (isinstance(dismiss_result, dict) and "error" in dismiss_result):
-                raise RuntimeError(fdismissdismiss_overlays fehlgeschlagen: {dismiss_result}")
+                raise RuntimeError(f"dismiss_overlays fehlgeschlagen: {dismiss_result}")
             logger.info(f"Overlays entfernt (Versuch {attempt})")
             break
         except Exception as exc:

@@ -6,9 +6,9 @@ preferences:
   language: de
   style: precise
 goals:
-  - ein RAG System auf bauen im Dev Ordner ist schon eins drin schau dir das mal an und sag mir deine Meinung
+  - st du irgendwas wissen
 constraints: []
-updated_at: 2026-02-22T19:47:50.878583
+updated_at: 2026-02-26T07:48:03.009749
 ---
 
 # Benutzer-Profil
@@ -30,10 +30,10 @@ Nicht gesetzt
 - style: precise
 
 ## Ziele
-- ein RAG System auf bauen im Dev Ordner ist schon eins drin schau dir das mal an und sag mir deine Meinung
+- st du irgendwas wissen
 
 ## Constraints
 Keine Constraints
 
 ---
-*Zuletzt aktualisiert: 2026-02-22T19:47:50.878583*
+*Zuletzt aktualisiert: 2026-02-26T07:48:03.009749*

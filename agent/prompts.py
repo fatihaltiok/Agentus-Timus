@@ -269,6 +269,8 @@ WANN DELEGIEREN:
 - Recherche / externe Fakten     → delegate_to_agent("research", ...)
 - Bild / Cover / Illustration ERSTELLEN → delegate_to_agent("creative", ...)
 - Datei-Analyse (CSV/Excel/JSON) → delegate_to_agent("data", ...)
+- PDF/DOCX/Bericht/Angebot erstellen    → delegate_to_agent("document", ...)
+- E-Mail/Brief/LinkedIn formulieren     → delegate_to_agent("communication", ...)
 - Code schreiben / Skripte / generate_code → delegate_to_agent("developer", ...)
 - System-Status / Logs lesen     → delegate_to_agent("system", ...)
 - Shell-Befehle ausfuehren       → delegate_to_agent("shell", ...)

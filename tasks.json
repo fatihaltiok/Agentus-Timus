@@ -129,6 +129,36 @@
       "created_at": "2026-02-22T12:00:10.577948",
       "completed_at": null,
       "result_summary": null
+    },
+    {
+      "id": "26e408d3-3202-45cf-a174-4f0632534c42",
+      "description": "Klären Anforderungen für KI-Informationen & Coverbild. Bitte gib folgende Angaben als Antworten zu den Nummern: 1) Themenfokus (z. B. LLMs, bildgenerative KI, Ethik, Markttrends), 2) Detailtiefe (Kurz/Medium/Detailliert), 3) Zielgruppe (Laien/Techniker/Management), 4) Ausgabeformat (Text+PNG, Text+SVG, Nur PNG), 5) Cover-Stil (minimalistisch, futuristisch, verspielt, anderes), 6) Bildgröße/Auflösung (z. B. 1920x1080 oder 1080x1080), 7) Farbpalette / Markenrichtlinien / Text auf dem Cover (Titel, Untertitel), 8) Deadline (Datum/Uhrzeit). Optional: Referenzbild-Pfad oder Beispielvorlage angeben.",
+      "priority": 2,
+      "target_agent": "research",
+      "status": "pending",
+      "created_at": "2026-02-23T11:52:04.219489",
+      "completed_at": null,
+      "result_summary": null
+    },
+    {
+      "id": "4288b63b-fa38-4c5f-92de-005bf98f780a",
+      "description": "Remove secrets.yaml from repository and update .gitignore",
+      "priority": 1,
+      "target_agent": "devops",
+      "status": "pending",
+      "created_at": "2026-02-24T12:34:12.139907",
+      "completed_at": null,
+      "result_summary": null
+    },
+    {
+      "id": "d1f1cb52-8893-458a-aae4-ef3376e3df51",
+      "description": "Phase 2 — Finalisiere Coverbild: Erstelle finales Cover, das die wichtigsten Erkenntnisse aus den Research-Tasks (OpenAI, Anthropic, Google) visuell zusammenfasst. Anforderungen: 1920x1080 PNG (Hauptdatei), zusätzliche Varianten/Crops für Mobile (z.B. 1080x1350) und eine editierbare Quelldatei (PSD oder SVG). Stil: futuristisch, Tech-Ästhetik, dunkle Farben, klare Typografie, Platz für Titel/Subtitel. Nutze vorhandenes vorläufiges Cover als Basis falls vorhanden. Speichern unter: /home/fatih-ubuntu/Bilder/ki_cover_final.png und /home/fatih-ubuntu/Bilder/ki_cover_final.psd. Deliverables: PNG 1920x1080, mobile Variant(en), PSD/SVG, kurze Notiz zu verwendeten Assets/Schriften.",
+      "priority": 1,
+      "target_agent": "creative",
+      "status": "pending",
+      "created_at": "2026-02-24T14:32:20.506019",
+      "completed_at": null,
+      "result_summary": null
     }
   ]
 }

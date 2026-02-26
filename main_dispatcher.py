@@ -543,6 +543,106 @@ EXECUTOR_KEYWORDS = [
     "eben gesucht",
 ]
 
+# ─── M1-M4: Neue Agenten ─────────────────────────────────────────
+SHELL_KEYWORDS = [
+    "führe aus",
+    "führ aus",
+    "bash befehl",
+    "terminal befehl",
+    "skript ausführen",
+    "cron job",
+    "cronjob",
+    "cron einrichten",
+    "shell befehl",
+    "kommando ausführen",
+    "im terminal ausführen",
+    "befehl ausführen",
+]
+
+DATA_KEYWORDS = [
+    "csv analysieren",
+    "xlsx analysieren",
+    "excel analysieren",
+    "json analysieren",
+    "daten analysieren",
+    "datei auswerten",
+    "tabelle auswerten",
+    "statistik berechnen",
+    "korrelation berechnen",
+    "mittelwert berechnen",
+    "diagramm aus daten",
+    # Natürlichsprachige Varianten (umgekehrte Wortstellung)
+    "analysiere die datei",
+    "analysiere die csv",
+    "analysiere die excel",
+    "werte die datei aus",
+    ".csv",
+    ".xlsx",
+    ".xls",
+]
+
+DOCUMENT_KEYWORDS = [
+    "pdf erstellen",
+    "pdf schreiben",
+    "pdf erzeugen",
+    "docx erstellen",
+    "word dokument erstellen",
+    "bericht erstellen",
+    "angebot erstellen",
+    "rechnung erstellen",
+    "lebenslauf erstellen",
+    "protokoll erstellen",
+    "dokument erstellen",
+    # Natürlichsprachige Varianten
+    "ein pdf",
+    "pdf dokument",
+    "erstelle ein pdf",
+    "erstelle einen bericht",
+    "erstelle ein dokument",
+    "erstelle eine rechnung",
+    "erstelle ein angebot",
+]
+
+COMMUNICATION_KEYWORDS = [
+    "email schreiben",
+    "e-mail schreiben",
+    "mail schreiben",
+    "brief schreiben",
+    "anschreiben schreiben",
+    "linkedin post",
+    "bewerbung schreiben",
+    "nachricht formulieren",
+    "absage schreiben",
+    "einladung schreiben",
+    # Natürlichsprachige Varianten (umgekehrte Wortstellung)
+    "schreibe eine email",
+    "schreibe eine e-mail",
+    "schreibe einen brief",
+    "eine email an",
+    "eine e-mail an",
+    "schreibe eine bewerbung",
+    "schreibe eine absage",
+]
+
+SYSTEM_KEYWORDS = [
+    "logs analysieren",
+    "log prüfen",
+    "logs prüfen",
+    "prozesse anzeigen",
+    "systemstatus prüfen",
+    "cpu auslastung",
+    "speicher auslastung",
+    "service status",
+    "welche prozesse laufen",
+    "fehler im log",
+    "systemd status",
+    # Natürlichsprachige Varianten
+    "die logs",
+    "logs des",
+    "zeige die logs",
+    "zeige mir die logs",
+]
+
 
 def _structure_task(task: str, url: str) -> List[str]:
     """
@@ -649,6 +749,7 @@ def _structure_task(task: str, url: str) -> List[str]:
 
 
 _IMAGE_EXTENSIONS = re.compile(r"\.(jpg|jpeg|png|webp|gif|bmp|tiff?|avif)\b", re.IGNORECASE)
+_DATA_EXTENSIONS = re.compile(r"\.(csv|xlsx|xls|parquet)\b", re.IGNORECASE)
 
 
 def quick_intent_check(query: str) -> Optional[str]:
@@ -662,6 +763,10 @@ def quick_intent_check(query: str) -> Optional[str]:
         _candidate = query[_path_start:_img_match.end()].strip("\"'(),[]")
         if os.path.isfile(_candidate):
             return "image"
+
+    # DATA-Dateien — frühe Erkennung vor REASONING (CSV/Excel haben Vorrang)
+    if _DATA_EXTENSIONS.search(query):
+        return "data"
 
     # HÖCHSTE PRIORITÄT: Compound Multi-Step Tasks → immer META
     # (verhindert dass "architektur" REASONING triggert wenn "danach"/"erstelle" auch da ist)
@@ -713,6 +818,31 @@ def quick_intent_check(query: str) -> Optional[str]:
     for keyword in EXECUTOR_KEYWORDS:
         if keyword in query_lower:
             return "executor"
+
+    # Shell-Keywords (höchste Prio unter M1-M4 — konkrete Befehle)
+    for keyword in SHELL_KEYWORDS:
+        if keyword in query_lower:
+            return "shell"
+
+    # Data-Keywords
+    for keyword in DATA_KEYWORDS:
+        if keyword in query_lower:
+            return "data"
+
+    # Document-Keywords
+    for keyword in DOCUMENT_KEYWORDS:
+        if keyword in query_lower:
+            return "document"
+
+    # Communication-Keywords
+    for keyword in COMMUNICATION_KEYWORDS:
+        if keyword in query_lower:
+            return "communication"
+
+    # System-Keywords (niedrigste Prio — "log/prozess" können generisch sein)
+    for keyword in SYSTEM_KEYWORDS:
+        if keyword in query_lower:
+            return "system"
 
     return None  # LLM entscheiden lassen
 
