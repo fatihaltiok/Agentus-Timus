@@ -15,29 +15,13 @@ behavior_hooks:
 - Websuche als Backup-Option nutzen.
 updated_at: '2026-02-26T07:48:04.754863'
 axes:
-  confidence: 55.4
+  confidence: 56.3
   formality: 64.8
   humor: 15.0
-  verbosity: 48.0
+  verbosity: 47.8
   risk_appetite: 40.0
 axes_updated_at: '2026-02-26'
 drift_history:
-- date: '2026-02-25'
-  axis: formality
-  delta: -0.1
-  reason: user_slang
-- date: '2026-02-25'
-  axis: confidence
-  delta: 0.3
-  reason: task_success
-- date: '2026-02-25'
-  axis: verbosity
-  delta: -0.2
-  reason: user_short_input
-- date: '2026-02-25'
-  axis: confidence
-  delta: 0.3
-  reason: task_success
 - date: '2026-02-26'
   axis: confidence
   delta: 0.3
@@ -142,6 +126,22 @@ drift_history:
   axis: verbosity
   delta: -0.2
   reason: user_short_input
+- date: '2026-02-26'
+  axis: confidence
+  delta: 0.3
+  reason: task_success
+- date: '2026-02-26'
+  axis: verbosity
+  delta: -0.2
+  reason: user_short_input
+- date: '2026-02-26'
+  axis: confidence
+  delta: 0.3
+  reason: task_success
+- date: '2026-02-26'
+  axis: confidence
+  delta: 0.3
+  reason: task_success
 ---
 
 # Timus Persona

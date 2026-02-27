@@ -667,13 +667,14 @@ class TaskQueue:
 
     def _init_db(self) -> None:
         with self._conn() as conn:
-            conn.executescript(SCHEMA)
-            # Migration: fehlende Spalten ergänzen (für bestehende DBs)
+            # Migration VOR executescript: fehlende Spalten zuerst hinzufügen,
+            # damit idx_tasks_goal_id im SCHEMA nicht wegen fehlender Spalte scheitert.
             existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
             for col, definition in [("run_at", "TEXT"), ("goal_id", "TEXT")]:
-                if col not in existing_cols:
+                if existing_cols and col not in existing_cols:
                     conn.execute(f"ALTER TABLE tasks ADD COLUMN {col} {definition}")
                     log.info(f"Migration: Spalte '{col}' hinzugefügt")
+            conn.executescript(SCHEMA)
         log.info(f"TaskQueue initialisiert: {self.db_path}")
 
     # ------------------------------------------------------------------

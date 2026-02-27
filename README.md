@@ -4,7 +4,7 @@
   <img src="assets/branding/timus-logo-glow.png" alt="Timus Logo" width="760">
 </p>
 
-**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen).
+**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen). Seit **v2.9** sind die Autonomie-Schichten M1–M5 live: Zielgenerierung, Langzeitplanung, Self-Healing und Autonomie-Scorecard laufen aktiv im Produktivbetrieb.
 
 ---
 
@@ -52,7 +52,26 @@ Meta Agent     → Seed-OSS-36B         (ByteDance, Agentic Intelligence, 512K C
 Reasoning Agent→ Nemotron-49B         (NVIDIA-eigenes Flagship-Modell)
 ```
 
-### Phase 9 — Curiosity Engine + Soul Engine ← *aktuell, v2.8*
+### Phase 10 — Autonomie-Aktivierung: M1–M5 live ← *aktuell, v2.9*
+
+Timus plant eigenständig, heilt sich selbst und bewertet kontinuierlich seinen Autonomiegrad.
+
+**GoalGenerator (M1):** Erzeugt Ziele aus Memory-Signalen, Curiosity-Daten und unzugeordneten Event-Tasks — vollautomatisch, dedupliziert, priorisiert.
+
+**LongTermPlanner + ReplanningEngine (M2):** Plant in 3 Zeithorizonten (kurzfristig/mittelfristig/langfristig), erstellt Commitments und erkennt verpasste Deadlines — löst automatisches Replanning aus.
+
+**SelfHealingEngine (M3):** Überwacht MCP-Health, System-Ressourcen, Queue-Backlog und Failure-Rate. Öffnet Incidents, triggert Recovery-Playbooks und schützt sich per Circuit-Breaker vor Cascading-Failures.
+
+**AutonomyScorecard (M5):** Berechnet einen Score 0–100 aus 4 Pillars (Goals, Planning, Self-Healing, Policy). Der Control-Loop promotet oder rollt zurück — automatisch, mit Governance-Guards.
+
+```
+Autonomie-Loop (autonomous_runner.py):
+  SelfHealing → GoalGenerator → LongTermPlanner
+  → CommitmentReview → ReplanningEngine → AutonomyScorecard
+  → Score 33.1/100 (Erststart) → wächst mit Betrieb
+```
+
+### Phase 9 — Curiosity Engine + Soul Engine *(v2.8)*
 
 Timus entwickelt eine Persönlichkeit und sucht proaktiv nach Wissen.
 
@@ -98,6 +117,71 @@ Meta → Research  ┐
      → Creative  ┘
 Gesamtzeit: 60s  (3–6× schneller)
 ```
+
+---
+
+## Aktueller Stand — Version 2.9 (2026-02-27)
+
+### Autonomie-Aktivierung: M1 + M2 + M3 + M5 live
+
+Nach vollständiger Implementierung (M0–M7, v2.8) werden die vier zentralen Autonomie-Schichten jetzt aktiv im Produktivbetrieb ausgeführt — mit Gate-Tests zwischen jeder Phase.
+
+#### Aktivierte Module
+
+| Modul | Env-Flag | Funktion |
+|-------|----------|---------|
+| `orchestration/goal_generator.py` | `AUTONOMY_GOALS_ENABLED` | M1: Signal-basierte Zielgenerierung (Memory + Curiosity + Events) |
+| `orchestration/long_term_planner.py` | `AUTONOMY_PLANNING_ENABLED` | M2: 3-Horizont-Planung (kurzfristig / mittelfristig / langfristig) |
+| `orchestration/replanning_engine.py` | `AUTONOMY_REPLANNING_ENABLED` | M2: Automatisches Replanning bei verpassten Commitments |
+| `orchestration/self_healing_engine.py` | `AUTONOMY_SELF_HEALING_ENABLED` | M3: Incident-Erkennung + Recovery-Playbooks + Circuit-Breaker |
+| `orchestration/autonomy_scorecard.py` | `AUTONOMY_SCORECARD_ENABLED` | M5: Autonomie-Score 0–100 + Control-Loop (Promotion / Rollback) |
+
+#### Autonomie Feature-Flags
+
+```bash
+# Haupt-Gateway — false = M1-M7 aktiv, true = Safe-Mode (Hard-Default)
+AUTONOMY_COMPAT_MODE=false
+
+# M1: Zielhierarchie + Goal-Generator
+AUTONOMY_GOALS_ENABLED=true
+
+# M2: Rolling-Planung + Replanning
+AUTONOMY_PLANNING_ENABLED=true
+AUTONOMY_REPLANNING_ENABLED=true
+
+# M3: Self-Healing + Circuit-Breaker
+AUTONOMY_SELF_HEALING_ENABLED=true
+AUTONOMY_SELF_HEALING_PENDING_THRESHOLD=30     # Max. pending Tasks vor Incident
+AUTONOMY_SELF_HEALING_FAILURE_WINDOW_MIN=60    # Zeitfenster für Failure-Rate
+AUTONOMY_SELF_HEALING_FAILURE_THRESHOLD=6      # Failures/Stunde → Incident
+AUTONOMY_SELF_HEALING_BREAKER_COOLDOWN_SEC=600 # Circuit-Breaker Cooldown
+
+# M5: Autonomy-Scorecard + Control-Loop
+AUTONOMY_SCORECARD_ENABLED=true
+AUTONOMY_SCORECARD_CONTROL_ENABLED=true
+
+# Rollback jederzeit: AUTONOMY_COMPAT_MODE=true → Neustart → Safe-Mode
+```
+
+#### Autonomie Test-Suite (38 Dateien)
+
+| Gruppe | Dateien | Tests |
+|--------|---------|-------|
+| M0 Verträge | `test_m0_autonomy_contracts.py` | 5 |
+| M1 Goals | `test_m1_goal_generator/hierarchy/lifecycle_kpi.py` | 17 |
+| M2 Planung | `test_m2_long_term_planning/replanning/commitment_review.py` | 15 |
+| M3 Self-Healing | `test_m3_self_healing_baseline/circuit_breaker.py` | 9 |
+| M5 Scorecard | `test_m5_scorecard_baseline/control_loop/governance_guards.py` | 14 |
+| M6 Audit | `test_m6_audit_*.py` (4 Dateien) | 12 |
+| M7 Hardening | `test_m7_rollout_hardening_gate.py` | 4 |
+
+#### Geänderte Dateien
+
+| Datei | Art | Beschreibung |
+|-------|-----|--------------|
+| `.env` | Geändert | M1–M5 Feature-Flags aktiviert, Safe-Mode deaktiviert |
+| `orchestration/task_queue.py` | Gefixt | Migration `ALTER TABLE` VOR `executescript` — verhindert `goal_id`-Index-Fehler bei bestehenden DBs |
+| `tests/test_m1_goal_generator.py` | Gefixt | `curiosity_db_path` für Test-Isolation gesetzt |
 
 ---
 
@@ -372,7 +456,7 @@ Timus läuft als 24/7-Dienst — wacht auf neue Tasks, sendet Ergebnisse via Tel
 
 ```
                     ┌──────────────────────────────────────────────────────────────┐
-                    │                    TIMUS v2.8                                │
+                    │                    TIMUS v2.9                                │
                     │                                                              │
   Telegram ──────→  │  TelegramGateway                                             │
   Webhook  ──────→  │  WebhookServer  → EventRouter                                │
@@ -381,12 +465,14 @@ Timus läuft als 24/7-Dienst — wacht auf neue Tasks, sendet Ergebnisse via Tel
   Canvas    ──────→ │  /chat  (SSE-Push, 13 Agent-LEDs)                            │
                     │       ↓                                                      │
                     │  AutonomousRunner                                            │
-                    │  ├─ _worker_loop() → SQLite TaskQueue                       │
-                    │  └─ CuriosityEngine._curiosity_loop() ← NEU v2.8            │
-                    │       Sleep(3–14h fuzzy) → Topics → LLM-Query              │
-                    │       → DataForSEO → Gatekeeper(≥7) → Telegram             │
-                    │       Anti-Spam: 2/Tag + 14-Tage-Duplikat-Schutz           │
-                    │       Ton: Soul-Engine-Achsen (vorsichtig/neutral/direkt)  │
+                    │  ├─ _worker_loop() → SQLite TaskQueue (15 Tabellen)         │
+                    │  ├─ CuriosityEngine._curiosity_loop() (v2.8)                │
+                    │  │    Sleep(3–14h fuzzy) → Topics → LLM → DataForSEO       │
+                    │  │    → Gatekeeper(≥7) → Telegram (Anti-Spam)              │
+                    │  └─ Autonomie-Loop (NEU v2.9 — M1–M5 live)                 │
+                    │       SelfHealing → GoalGenerator → LongTermPlanner        │
+                    │       → CommitmentReview → ReplanningEngine                │
+                    │       → AutonomyScorecard (Score 0–100)                    │
                     │                                                              │
                     │  ┌────────────────────────────────────────────────────────┐  │
                     │  │ AgentRegistry — 13 Agenten                              │  │
@@ -550,6 +636,16 @@ flowchart TD
     SED -.->|"nach Reflexion"| RFT
     ARP -.->|"read-only"| MAG
     WAL -.->|"ermöglicht"| ARP
+
+    D --> RUN["autonomous_runner.py\nAutonomie-Loop v2.9"]
+    RUN --> G1["GoalGenerator M1\nMemory+Curiosity+Events"]
+    RUN --> G2["LongTermPlanner M2\n3-Horizont-Planung"]
+    RUN --> G3["ReplanningEngine M2\nCommitment-Überwachung"]
+    RUN --> G4["SelfHealingEngine M3\nCircuit-Breaker+Incidents"]
+    RUN --> G5["AutonomyScorecard M5\nScore 0–100·Control-Loop"]
+    G1 -.->|"Goals in"| WAL
+    G4 -.->|"Incidents in"| WAL
+    G5 -.->|"Snapshots in"| WAL
 ```
 
 ---
@@ -801,12 +897,21 @@ timus/
 │       ├── SOUL.md          # axes + drift_history im YAML-Frontmatter (NEU v2.8)
 │       └── store.py         # SoulProfile: axes + drift_history (NEU v2.8)
 ├── orchestration/
-│   ├── scheduler.py            # Heartbeat-Scheduler (15 min)
-│   ├── autonomous_runner.py    # startet CuriosityEngine als asyncio.Task (NEU v2.8)
-│   ├── curiosity_engine.py     # CuriosityEngine — Fuzzy Loop + Gatekeeper (NEU v2.8)
-│   ├── task_queue.py           # SQLite Task-Queue + Prioritäten + Retry
-│   ├── canvas_store.py         # Canvas-Logging
-│   └── lane_manager.py
+│   ├── scheduler.py                  # Heartbeat-Scheduler (15 min)
+│   ├── autonomous_runner.py          # Startet alle Engines + CuriosityEngine
+│   ├── curiosity_engine.py           # CuriosityEngine — Fuzzy Loop + Gatekeeper (v2.8)
+│   ├── task_queue.py                 # SQLite Task-Queue + 15 Tabellen (M1-M7 Schema)
+│   ├── canvas_store.py               # Canvas-Logging
+│   ├── lane_manager.py               # Orchestrierungs-Lanes
+│   ├── goal_generator.py             # M1: Signal-basierte Zielgenerierung
+│   ├── long_term_planner.py          # M2: 3-Horizont-Planung + Commitments
+│   ├── commitment_review_engine.py   # M2: Commitment-Review-Zyklus
+│   ├── replanning_engine.py          # M2: Replanning bei Commitment-Verletzungen
+│   ├── self_healing_engine.py        # M3: Incident-Erkennung + Circuit-Breaker
+│   ├── health_orchestrator.py        # M3: Recovery-Routing + Degrade-Mode
+│   ├── autonomy_scorecard.py         # M5: Score 0–100 + Control-Loop
+│   ├── autonomy_change_control.py    # M6: Change-Request-Flow + Audit
+│   └── autonomy_hardening_engine.py  # M7: Rollout-Gate (green/yellow/red)
 ├── gateway/
 │   ├── telegram_gateway.py     # @agentustimus_bot
 │   ├── webhook_gateway.py
@@ -835,7 +940,7 @@ timus/
 │   ├── shell_audit.log      # ShellAgent Audit-Trail
 │   └── bugs/                # BugLogger JSONL-Reports
 ├── docs/                    # Pläne, Runbooks, Session-Logs
-├── main_dispatcher.py       # Dispatcher v3.5 (13 Agenten)
+├── main_dispatcher.py       # Dispatcher v3.4 (13 Agenten + Autonomie M1-M5)
 ├── timus_terminal.py        # Terminal-Client (parallel zu systemd)
 ├── timus-mcp.service        # systemd Unit
 ├── timus-dispatcher.service # systemd Unit

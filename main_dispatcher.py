@@ -1,6 +1,12 @@
-# main_dispatcher.py (VERSION v3.3)
+# main_dispatcher.py (VERSION v3.4)
 """
 Verbesserter Dispatcher mit Developer Agent v2 und ReasoningAgent Support.
+
+v3.4 ÄNDERUNGEN (2026-02-27):
+- Autonomie M1-M5 live: GoalGenerator, LongTermPlanner, ReplanningEngine,
+  SelfHealingEngine, AutonomyScorecard hinter Feature-Flags aktiviert
+- AUTONOMY_COMPAT_MODE=false (war: true/nicht gesetzt)
+- task_queue.py Migration-Fix: ALTER TABLE VOR executescript
 
 v3.3 ÄNDERUNGEN (2026-02):
 - Lane-Manager Integration (Default serial, explicit parallel)

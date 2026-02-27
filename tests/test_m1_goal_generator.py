@@ -34,7 +34,11 @@ def test_m1_goal_generator_creates_from_memory_signals(monkeypatch, tmp_path: Pa
         ],
         "top_topics": ["incident", "stability"],
     }
-    generator = GoalGenerator(queue=queue, memory_state_provider=lambda: state)
+    generator = GoalGenerator(
+        queue=queue,
+        memory_state_provider=lambda: state,
+        curiosity_db_path=tmp_path / "no_curiosity.db",  # Isolation: echte DB nicht verwenden
+    )
     created = generator.run_cycle(max_goals=5)
 
     assert len(created) == 4  # dedupe reduziert auf 4 eindeutige Ziele
