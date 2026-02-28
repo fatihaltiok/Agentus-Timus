@@ -156,12 +156,17 @@ Du bist der zentrale Dispatcher für Timus. Analysiere die INTENTION des Nutzers
      - "asyncio vs threading" - Vergleichsfragen!
 
 2. **research**: Der FORSCHER
-   - Zuständigkeit: Tiefenrecherche, Faktensammlung, Quellenanalyse
+   - Zuständigkeit: Tiefenrecherche, Faktensammlung, Quellenanalyse, Internet-Erkundung
    - Wähle 'research' bei:
      - "Recherchiere aktuelle Entwicklungen zu X"
      - "Was gibt es Neues zu..."
      - "Sammle Fakten über Z"
+     - "Erkunde das Internet" / "Erkunde das Web" / "Erkunde X im Netz"
+     - "Erforsche das Internet" / "Erkundige dich über X"
+     - "Stöbere im Internet nach X" / "Durchsuche das Web nach X"
+     - "Schau online nach X" / "Suche im Internet nach X"
      - Anfragen die EXTERNE Informationen/Quellen brauchen
+     - WICHTIG: Jede Art von Internet-/Web-Erkundung → 'research', NICHT 'visual_nemotron'
 
 3. **executor**: Der HELFER für einfache Aufgaben
    - Zuständigkeit: Schnelle Websuche, einfache Fragen, Zusammenfassungen
@@ -288,6 +293,7 @@ Du bist der zentrale Dispatcher für Timus. Analysiere die INTENTION des Nutzers
 4. Bei RECHERCHE nach externen Fakten/News → 'research'
 5. Bei EINFACHEN Fragen ohne Analyse → 'executor'
 6. Bei BILDPFADEN nur 'image' wenn das Bild ANALYSIERT werden soll, NICHT bei Speicher-/Ausgabepfaden
+7. Bei INTERNET-ERKUNDUNG ("erkunde das internet", "erforsche das web", "stöbere online", "suche im netz") → IMMER 'research', NIEMALS 'visual_nemotron'. visual_nemotron ist nur für Desktop-UI-Automation (Maus, Klicks, Formulare), nicht für Recherche.
 
 Antworte NUR mit einem Wort: 'reasoning', 'research', 'executor', 'meta', 'visual', 'development', 'creative', 'data', 'document', 'communication', 'system', 'shell' oder 'image'.
 """
@@ -411,6 +417,34 @@ RESEARCH_KEYWORDS = [
     "was gibt es neues",
     "news zu",
     "nachrichten",
+    # Internet-Erkundung → immer Research-Agent, nie visual_nemotron
+    "erkunde das internet",
+    "erkundung",
+    "erkunde das web",
+    "erkunde das netz",
+    "erkunde ",          # "erkunde X" (Leerzeichen verhindert false positives)
+    "erforsche",
+    "erkundige",
+    "stöbere im",
+    "stöbern im",
+    "im internet stöbern",
+    "im web stöbern",
+    "im netz stöbern",
+    "internet erkunden",
+    "web erkunden",
+    "netz erkunden",
+    "im internet suchen",
+    "im web suchen",
+    "durchsuche das internet",
+    "durchsuche das web",
+    "internet durchsuchen",
+    "web durchsuchen",
+    "schaue im internet",
+    "schau im internet",
+    "schaue online",
+    "schau online",
+    "online nachschauen",
+    "online recherchieren",
 ]
 
 VISUAL_KEYWORDS = [

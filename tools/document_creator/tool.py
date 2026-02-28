@@ -24,10 +24,8 @@ from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 
 log = logging.getLogger(__name__)
 
-_PROJECT_ROOT     = Path(__file__).resolve().parent.parent.parent
-_RESULTS_DIR      = _PROJECT_ROOT / "results"
-_DEJAVU_SANS      = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-_DEJAVU_SANS_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_RESULTS_DIR  = _PROJECT_ROOT / "results"
 
 
 def _safe_filename(title: str, ext: str) -> Path:
@@ -48,88 +46,32 @@ def _rel(path: Path) -> str:
 @tool(
     name="create_pdf",
     description=(
-        "Erstellt ein PDF-Dokument aus einem Titel und Textinhalt (Markdown-ähnlich). "
-        "Zeilen die mit '# ' beginnen werden als Überschrift formatiert, "
-        "'## ' als Unterüberschrift, '- ' oder '* ' als Aufzählungspunkt. "
-        "Das fertige PDF wird in results/ gespeichert und der Pfad zurückgegeben."
+        "Erstellt ein hochwertiges PDF-Dokument aus Markdown-Inhalt via Playwright (Headless Chromium). "
+        "Unterstützt vollständiges Markdown: Überschriften (#, ##, ###), Tabellen, Code-Blöcke, "
+        "Listen, Fettschrift, Kursiv, Blockquotes. Saubere Seitenumbrüche, Kopf-/Fußzeile, "
+        "professionelles CSS-Design. Das PDF wird in results/ gespeichert."
     ),
     parameters=[
-        P("title",   "string", "Titel des Dokuments (erscheint oben auf Seite 1)", required=True),
-        P("content", "string", "Inhalt des Dokuments (Text, Überschriften mit #, Listen mit -)", required=True),
-        P("author",  "string", "Autor (optional, erscheint in PDF-Metadaten)", required=False),
+        P("title",   "string", "Titel des Dokuments (erscheint in Kopfzeile & Metadaten)", required=True),
+        P("content", "string", "Inhalt als Markdown (# = H1, ## = H2, | = Tabelle, ``` = Code)", required=True),
+        P("author",  "string", "Autor (optional, erscheint in Kopfzeile)", required=False),
     ],
     capabilities=["document", "pdf"],
     category=C.DOCUMENT
 )
 async def create_pdf(title: str, content: str, author: str = "Timus") -> dict:
-    def _build():
-        from fpdf import FPDF
-
-        pdf = FPDF(orientation="P", unit="mm", format="A4")
-        pdf.set_margins(left=20, top=20, right=20)
-        pdf.set_auto_page_break(auto=True, margin=20)
-
-        # Unicode-Font einbetten (fpdf2 v2.x: kein uni=True mehr nötig)
-        pdf.add_font("DejaVu",     fname=_DEJAVU_SANS)
-        pdf.add_font("DejaVuBold", fname=_DEJAVU_SANS_BOLD)
-
-        pdf.add_page()
-        w = pdf.epw  # effektive Seitenbreite (ohne Ränder)
-
-        pdf.set_title(title)
-        pdf.set_author(author)
-
-        # Titel
-        pdf.set_font("DejaVuBold", size=20)
-        pdf.set_text_color(30, 30, 30)
-        pdf.multi_cell(w, 12, title)
-        pdf.set_text_color(120, 120, 120)
-        pdf.set_font("DejaVu", size=9)
-        pdf.cell(w, 6, f"Erstellt: {datetime.now().strftime('%d.%m.%Y %H:%M')}  |  {author}",
-                 new_x="LMARGIN", new_y="NEXT")
-        pdf.ln(3)
-        pdf.set_draw_color(200, 200, 200)
-        y = pdf.get_y()
-        pdf.line(pdf.l_margin, y, pdf.l_margin + w, y)
-        pdf.ln(5)
-        pdf.set_text_color(30, 30, 30)
-
-        for raw_line in content.splitlines():
-            line = raw_line
-
-            if line.startswith("# "):
-                pdf.set_font("DejaVuBold", size=15)
-                pdf.set_text_color(20, 20, 120)
-                pdf.ln(2)
-                pdf.multi_cell(w, 9, line[2:])
-                pdf.set_text_color(30, 30, 30)
-            elif line.startswith("## "):
-                pdf.set_font("DejaVuBold", size=13)
-                pdf.set_text_color(30, 100, 30)
-                pdf.ln(1)
-                pdf.multi_cell(w, 8, line[3:])
-                pdf.set_text_color(30, 30, 30)
-            elif line.startswith("### "):
-                pdf.set_font("DejaVuBold", size=11)
-                pdf.set_text_color(100, 60, 10)
-                pdf.multi_cell(w, 7, line[4:])
-                pdf.set_text_color(30, 30, 30)
-            elif line.startswith(("- ", "* ")):
-                pdf.set_font("DejaVu", size=11)
-                pdf.multi_cell(w, 6, "  \u2022 " + line[2:])
-            elif line.strip() == "":
-                pdf.ln(3)
-            else:
-                pdf.set_font("DejaVu", size=11)
-                pdf.multi_cell(w, 6, line)
+    try:
+        from skills.create_clean_pdf_skill import CreateCleanPdfSkill
 
         out_path = _safe_filename(title, "pdf")
-        pdf.output(str(out_path))
-        return out_path
-
-    try:
-        out_path = await asyncio.to_thread(_build)
-        log.info(f"PDF erstellt: {out_path.name}")
+        skill = CreateCleanPdfSkill()
+        await skill.run_async({
+            "markdown_content": content,
+            "output_path": str(out_path),
+            "title": title,
+            "author": author,
+        })
+        log.info(f"PDF erstellt (Playwright): {out_path.name}")
         return {"status": "success", "format": "pdf", "path": _rel(out_path), "filename": out_path.name}
     except Exception as e:
         log.error(f"create_pdf Fehler: {e}", exc_info=True)
