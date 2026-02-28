@@ -4,7 +4,7 @@
   <img src="assets/branding/timus-logo-glow.png" alt="Timus Logo" width="760">
 </p>
 
-**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen). Seit **v2.9** sind die Autonomie-Schichten M1–M5 live: Zielgenerierung, Langzeitplanung, Self-Healing und Autonomie-Scorecard laufen aktiv im Produktivbetrieb.
+**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen). Seit **v2.9** sind die Autonomie-Schichten M1–M5 live: Zielgenerierung, Langzeitplanung, Self-Healing und Autonomie-Scorecard laufen aktiv im Produktivbetrieb. Seit **v3.0 (2026-02-28)** läuft im Canvas ein nativer Voice-Loop (Faster-Whisper STT + Inworld.AI TTS) über `/voice/*` Endpoints.
 
 ---
 
@@ -117,6 +117,25 @@ Meta → Research  ┐
      → Creative  ┘
 Gesamtzeit: 60s  (3–6× schneller)
 ```
+
+---
+
+## Aktueller Stand — Version 3.0 (2026-02-28)
+
+### Canvas Voice-Integration (native STT/TTS) live
+
+Der Canvas wurde heute auf den nativen Timus-Voice-Stack umgestellt. Browser-Web-Speech wurde entfernt; die Sprachsteuerung läuft jetzt serverseitig stabil über Faster-Whisper und Inworld.AI.
+
+| Bereich | Änderung |
+|--------|----------|
+| Voice API | Neue Endpoints in `server/mcp_server.py`: `GET /voice/status`, `POST /voice/listen`, `POST /voice/stop`, `POST /voice/speak` |
+| Request-Verhalten | `POST /voice/listen` ist non-blocking (`asyncio.create_task`) — sofortige HTTP-Antwort, Whisper-Init im Background |
+| Canvas UI | Mic-IIFE in `server/canvas_ui.py` neu: SSE-gesteuerte Zustände, Auto-Submit bei `voice_transcript`, Auto-Speak bei `chat_reply`, kontinuierlicher Dialog |
+| TTS | Provider-Wechsel in `tools/voice_tool/tool.py`: ElevenLabs → Inworld.AI (Basic Auth, Base64-MP3) |
+| Audio-Stabilität | Sample-Rate-Fix: Aufnahme in nativer Device-Rate (z.B. 44.1kHz), hochwertiges Resampling auf 16kHz via `scipy.signal.resample_poly` |
+| STT-Qualität | Robustere Transkription: vollständige Chunk-Erfassung, `vad_filter=False`, `beam_size=5` |
+
+**Canvas-Stand:** v3.3+ (3-Spalten Layout, Cytoscape.js, Markdown-Chat, Autonomy-Tab, Voice-Loop).
 
 ---
 
@@ -456,13 +475,13 @@ Timus läuft als 24/7-Dienst — wacht auf neue Tasks, sendet Ergebnisse via Tel
 
 ```
                     ┌──────────────────────────────────────────────────────────────┐
-                    │                    TIMUS v2.9                                │
+                    │                    TIMUS v3.0                                │
                     │                                                              │
   Telegram ──────→  │  TelegramGateway                                             │
   Webhook  ──────→  │  WebhookServer  → EventRouter                                │
   Heartbeat ─────→  │  ProactiveScheduler (15 min)                                 │
   CLI       ──────→ │  _cli_loop()  (nur mit TTY)                                  │
-  Canvas    ──────→ │  /chat  (SSE-Push, 13 Agent-LEDs)                            │
+  Canvas    ──────→ │  /chat + /voice/*  (SSE, 13 Agent-LEDs, Voice-Loop)          │
                     │       ↓                                                      │
                     │  AutonomousRunner                                            │
                     │  ├─ _worker_loop() → SQLite TaskQueue (15 Tabellen)         │
@@ -607,6 +626,10 @@ flowchart TD
     B --> M["MCP Server :5000\nFastAPI + JSON-RPC\n80+ Tools"]
 
     M --> FH["VisualNemotron v4\nFlorence-2 + PaddleOCR\nPlan-then-Execute"]
+    M --> VC["Voice REST API\n/voice/status|listen|stop|speak"]
+    VC --> VW["Faster-Whisper STT\ninit via Background-Task"]
+    VC --> VT["Inworld.AI TTS\nBase64-MP3 + Playback"]
+    VC --> CV["Canvas UI v3.3+\nSSE Voice-Loop"]
     M --> RS["RealSense Toolchain\nrealsense_camera_tool"]
     RS --> RSS["start_realsense_stream\nOpenCV Background Thread"]
     RS --> RSC["capture_realsense_snapshot\nrs-save-to-disk"]
@@ -759,6 +782,7 @@ formatted = ResultAggregator.format_results(result)
 | **hybrid_detection_tool** | DOM + Vision kombiniert |
 | **qwen_vl_tool** | Qwen2-VL (lokal, Fallback) |
 | **realsense_camera_tool** | Intel RealSense D435: Status, Snapshot-Capture, Live-Stream Start/Stop/Status, Frame-Export |
+| **voice_tool** | Faster-Whisper STT + Inworld.AI TTS, Mic-Aufnahme, Audio-Playback, Sprachstatus |
 
 ### Browser und Navigation
 
@@ -900,6 +924,7 @@ timus/
 │   ├── curator_tool/        # Nemotron-Kurator
 │   ├── system_tool/         # M3: System-Monitoring
 │   ├── shell_tool/          # M4: Shell-Ausführung
+│   ├── voice_tool/          # Native Voice: Faster-Whisper + Inworld.AI TTS
 │   ├── data_tool/           # M1: CSV/Excel/JSON
 │   ├── document_creator/    # M1: DOCX/TXT
 │   └── ...                  # 70+ weitere Tools
@@ -934,7 +959,7 @@ timus/
 │   └── system_monitor.py       # CPU/RAM/Disk + Telegram-Alerts
 ├── server/
 │   ├── mcp_server.py        # FastAPI, Port 5000, 80+ Tools, 13 LEDs
-│   └── canvas_ui.py         # Canvas Web-UI v2 (Chat, Upload, SSE)
+│   └── canvas_ui.py         # Canvas Web-UI v3.3+ (Chat, Upload, SSE, Voice-Loop)
 ├── data/
 │   ├── realsense_captures/  # Snapshot-Ausgaben (capture_realsense_snapshot)
 │   └── realsense_stream/    # Exportierte Live-Frames (capture_realsense_live_frame)
