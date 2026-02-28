@@ -768,15 +768,17 @@ class SelfHealingEngine:
     def _playbook_template(self, template: str, *, component: str, signal: str) -> Dict[str, Any]:
         catalog: Dict[str, Dict[str, Any]] = {
             "mcp_recovery": {
-                "headline": "MCP-Service pruefen, ggf. restarten und Health verifizieren.",
+                "headline": "MCP Health pruefen und bei echtem Ausfall sicher neu starten.",
                 "steps": [
-                    "Health endpoint pruefen (/health).",
-                    "Bei Ausfall Service restarten (timus-mcp.service).",
-                    "JSON-RPC Probe gegen root endpoint testen.",
+                    "ZUERST Health endpoint pruefen (GET /health) — bei 200er Antwort ist MCP gesund, ABBRUCH.",
+                    "KEIN kill, KEIN kill -9, KEIN systemctl ohne vorherige Health-Pruefung.",
+                    "Nur wenn /health tatsaechlich nicht antwortet: MCP per nohup neu starten.",
+                    "Nach 5 Sekunden erneut /health pruefen und Ergebnis melden.",
                 ],
                 "suggested_commands": [
                     "curl -sS http://127.0.0.1:5000/health",
-                    "systemctl restart timus-mcp.service",
+                    "cd /home/fatih-ubuntu/dev/timus && nohup python3 server/mcp_server.py > logs/mcp_restart.log 2>&1 &",
+                    "sleep 5 && curl -sS http://127.0.0.1:5000/health",
                 ],
             },
             "system_pressure_relief": {
@@ -832,6 +834,15 @@ class SelfHealingEngine:
         try:
             probe = self._mcp_probe() or {}
             ok = bool(probe.get("ok"))
+            if not ok:
+                # Post-Standby-Schutz: kurz warten und nochmal prüfen, bevor ein
+                # Incident geöffnet wird — vermeidet False-Positives nach Resume.
+                import time as _time
+                delay = _env_float("AUTONOMY_SELF_HEALING_MCP_RETRY_DELAY_SEC", 5.0)
+                _time.sleep(delay)
+                probe = self._mcp_probe() or {}
+                ok = bool(probe.get("ok"))
+                probe["retry_after_sec"] = delay
             return {"ok": ok, **probe}
         except Exception as e:
             return {"ok": False, "error": f"mcp_probe_error:{e}"}

@@ -49,6 +49,12 @@ FAILOVER_CHAINS: dict[str, list[str]] = {
     "visual_nemotron":  ["executor"],
     "vision_qwen":      ["executor"],
     "web_automation":   ["executor"],
+    # System- und Shell-Agenten dürfen NICHT auf executor fallen —
+    # executor hat run_command und könnte destruktive Playbook-Befehle ausführen
+    "system":           ["meta"],
+    "system_agent":     ["meta"],
+    "shell":            ["meta"],
+    "shell_agent":      ["meta"],
 }
 
 MAX_ATTEMPTS = 3      # Primär + max. 2 Failover-Schritte
