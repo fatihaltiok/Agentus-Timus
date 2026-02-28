@@ -552,6 +552,12 @@ MCP-Server :5000 (FastAPI + JSON-RPC)
       |     ├─ Qwen-VL (lokal MCP, FALLBACK 3): letzter Ausweg
       |     └─ Plan-then-Execute → PyAutoGUI/MCP
       |
+      +--> RealSense Kamera-Pipeline (D435)
+      |     ├─ realsense_status (Geräte-/Firmware-Check)
+      |     ├─ capture_realsense_snapshot (rs-save-to-disk)
+      |     ├─ start/stop_realsense_stream (OpenCV-Thread)
+      |     └─ capture_realsense_live_frame → data/realsense_stream
+      |
       +--> Browser-Input-Pipeline (hybrid_input_tool)
       |     ├─ DOM-First (Playwright Locator, höchste Zuverlässigkeit)
       |     ├─ activeElement-Check (React/Vue/Angular kompatibel)
@@ -601,6 +607,13 @@ flowchart TD
     B --> M["MCP Server :5000\nFastAPI + JSON-RPC\n80+ Tools"]
 
     M --> FH["VisualNemotron v4\nFlorence-2 + PaddleOCR\nPlan-then-Execute"]
+    M --> RS["RealSense Toolchain\nrealsense_camera_tool"]
+    RS --> RSS["start_realsense_stream\nOpenCV Background Thread"]
+    RS --> RSC["capture_realsense_snapshot\nrs-save-to-disk"]
+    RS --> RSL["capture_realsense_live_frame\nexport latest frame"]
+    RS --> RSM["utils/realsense_stream.py\nlatest frame + stream status"]
+    RSC --> RSD["data/realsense_captures\nSnapshot-Persistenz"]
+    RSL --> RSLD["data/realsense_stream\nLive-Frame Export"]
 
     M --> SYS["SystemAgent\nread-only Monitoring"]
     M --> SH["ShellAgent\n5-Schicht-Policy"]
@@ -745,6 +758,7 @@ formatted = ResultAggregator.format_results(result)
 | **screen_change_detector** | Nur bei Bildschirm-Änderungen analysieren |
 | **hybrid_detection_tool** | DOM + Vision kombiniert |
 | **qwen_vl_tool** | Qwen2-VL (lokal, Fallback) |
+| **realsense_camera_tool** | Intel RealSense D435: Status, Snapshot-Capture, Live-Stream Start/Stop/Status, Frame-Export |
 
 ### Browser und Navigation
 
@@ -881,6 +895,7 @@ timus/
 │   │   ├── tool.py                       # delegate_to_agent (sequenziell)
 │   │   └── parallel_delegation_tool.py   # delegate_multiple_agents (NEU v2.5)
 │   ├── florence2_tool/      # Florence-2 Vision (PRIMARY)
+│   ├── realsense_camera_tool/  # Intel RealSense Tools (Status, Snapshot, Stream)
 │   ├── memory_tool/         # Memory v2.1
 │   ├── curator_tool/        # Nemotron-Kurator
 │   ├── system_tool/         # M3: System-Monitoring
@@ -920,10 +935,15 @@ timus/
 ├── server/
 │   ├── mcp_server.py        # FastAPI, Port 5000, 80+ Tools, 13 LEDs
 │   └── canvas_ui.py         # Canvas Web-UI v2 (Chat, Upload, SSE)
+├── data/
+│   ├── realsense_captures/  # Snapshot-Ausgaben (capture_realsense_snapshot)
+│   └── realsense_stream/    # Exportierte Live-Frames (capture_realsense_live_frame)
 ├── utils/
 │   ├── bug_logger.py           # BugLogger — JSONL + logs/buglog.md
 │   ├── error_classifier.py     # Exception → ErrorType
 │   ├── model_failover.py       # Automatischer Agenten-Failover
+│   ├── realsense_capture.py    # rs-enumerate-devices + rs-save-to-disk Wrapper
+│   ├── realsense_stream.py     # D435 RGB-Stream Manager (OpenCV + Thread)
 │   ├── audit_logger.py
 │   └── policy_gate.py
 ├── tests/
@@ -935,6 +955,8 @@ timus/
 │   ├── test_delegation_hardening.py
 │   ├── test_milestone5_quality_gates.py
 │   ├── test_milestone6_e2e_readiness.py
+│   ├── test_realsense_capture.py            # Snapshot-/Status-Pfade
+│   ├── test_realsense_stream.py             # Stream-Lifecycle + Export
 │   └── ...                  # Weitere Test-Suites (184+ Tests gesamt)
 ├── logs/
 │   ├── shell_audit.log      # ShellAgent Audit-Trail
