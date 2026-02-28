@@ -52,7 +52,24 @@ Meta Agent     → Seed-OSS-36B         (ByteDance, Agentic Intelligence, 512K C
 Reasoning Agent→ Nemotron-49B         (NVIDIA-eigenes Flagship-Modell)
 ```
 
-### Phase 10 — Autonomie-Aktivierung: M1–M5 live ← *aktuell, v2.9*
+### Phase 11 — Native Voice im Canvas *(v3.0, aktuell)*
+
+Timus ist jetzt nicht nur visuell, sondern auch sprachlich im Canvas nativ integriert. Die browserseitige Web-Speech-API wurde durch den serverseitigen Voice-Stack ersetzt.
+
+**Neu in dieser Phase:**
+- Voice-Endpunkte im MCP-Server: `GET /voice/status`, `POST /voice/listen`, `POST /voice/stop`, `POST /voice/speak`
+- Non-blocking Listen-Start via `asyncio.create_task` (sofortige HTTP-Antwort)
+- STT mit Faster-Whisper, TTS mit Inworld.AI
+- Kontinuierlicher Canvas-Dialog über SSE-Events (`voice_transcript`, `voice_speaking_start/end`, `voice_error`)
+
+```
+Canvas Mic → /voice/listen (async)
+         → Whisper STT → chat auto-submit
+         → Timus reply → /voice/speak
+         → Inworld TTS playback → optional auto-relisten
+```
+
+### Phase 10 — Autonomie-Aktivierung: M1–M5 live *(v2.9)*
 
 Timus plant eigenständig, heilt sich selbst und bewertet kontinuierlich seinen Autonomiegrad.
 
