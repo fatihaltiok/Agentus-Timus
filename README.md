@@ -42,6 +42,17 @@ Kein Warten mehr auf Eingaben. Heartbeat-Scheduler (15 min), SQLite Task-Queue, 
 
 Primäres lokales Vision-Modell (Florence-2, ~3GB VRAM) für UI-Erkennung + PaddleOCR. Decision-LLM (Qwen3.5 Plus) erstellt To-Do-Liste, führt jeden Schritt mit 3 Retries aus. Browser-Automatisierung über SPA-kompatiblen DOM-First Input.
 
+### Phase 5.1 — Sensorik: Intel RealSense D435 *(v3.0)*
+
+Timus erhielt einen dedizierten Kamera-Sensorpfad für die physische Umgebung. Damit ergänzt RealSense die reine Desktop-/Browser-Sicht um echte RGB-Kameradaten.
+
+**Neu in dieser Phase:**
+- `realsense_camera_tool` als MCP-Toolmodul
+- Geräte-/Firmware-Erkennung via `realsense_status`
+- Snapshot-Capture via `capture_realsense_snapshot` (rs-save-to-disk)
+- Kontinuierlicher RGB-Live-Stream (`start_realsense_stream` / `stop_realsense_stream`)
+- Live-Frame-Export für Folge-Analyse (`capture_realsense_live_frame`)
+
 ### Phase 7 — NVIDIA NIM Provider-Integration *(v2.6)*
 
 Timus nutzt jetzt **NVIDIA's Inference Microservices (NIM)** als dritten KI-Provider neben OpenAI und Anthropic. 186 Modelle stehen über eine einheitliche OpenAI-kompatible API zur Verfügung. Drei Agenten laufen jetzt auf NVIDIA-Hardware:
