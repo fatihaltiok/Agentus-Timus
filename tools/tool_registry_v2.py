@@ -376,9 +376,9 @@ class ToolRegistryV2:
             else:
 
                 @wraps(fn)
-                def jsonrpc_wrapper(*args, **kwargs):
+                async def jsonrpc_wrapper(*args, **kwargs):
                     try:
-                        result = fn(*args, **kwargs)
+                        result = await asyncio.to_thread(fn, *args, **kwargs)
                         if isinstance(result, (Right, Left)):
                             return result
                         return Success(result)
