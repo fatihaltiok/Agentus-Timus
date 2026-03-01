@@ -909,6 +909,16 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
         agent = await get_agent_decision(user_text)
         log.info(f"  Voice-Agent: {agent.upper()}")
 
+        # Meta braucht länger — Status-Update
+        if agent == "meta":
+            try:
+                await thinking_msg.edit_text(
+                    f"🎤 _{user_text}_\n\n🧠 Timus plant & koordiniert… (bitte warten)",
+                    parse_mode=ParseMode.MARKDOWN,
+                )
+            except Exception:
+                pass
+
         typing_task = asyncio.create_task(_keep_typing(update))
         try:
             result = await run_agent(
@@ -931,7 +941,7 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
         image_sent = await _try_send_image(update, response)
         doc_sent   = await _try_send_document(update, response)
 
-        # 5. TTS → Sprachnachricht zurück
+        # 5. TTS → Sprachnachricht zurück (nur wenn kein Dokument/Bild bereits gesendet)
         await update.message.chat.send_action(ChatAction.RECORD_VOICE)
         ogg_audio = await _synthesize_voice(response)
 
@@ -940,11 +950,11 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
             caption = response[:200] + ("…" if len(response) > 200 else "")
             await update.message.reply_voice(
                 voice=io.BytesIO(ogg_audio),
-                caption=caption if not image_sent else None,
+                caption=caption if not image_sent and not doc_sent else None,
             )
         else:
-            # Kein TTS konfiguriert → Textantwort
-            if not image_sent:
+            # Kein TTS konfiguriert → Textantwort (nur wenn kein Bild/Dok gesendet)
+            if not image_sent and not doc_sent:
                 await _send_long(update, response)
 
     except Exception as e:
