@@ -531,7 +531,19 @@ _TEMPLATE = r"""<!doctype html>
     .tab-content.active { display: flex; }
 
     /* ── CANVAS TAB (Cytoscape) ──────────────────────────────────── */
-    #cy { flex: 1; background: transparent; }
+    #cy-wrap {
+      flex: 1;
+      min-height: 0;
+      position: relative;
+      overflow: hidden;
+    }
+    #cy { position: absolute; inset: 0; background: transparent; }
+    #cy-beam-overlay {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 5;
+    }
 
     .cy-toolbar {
       display: flex;
@@ -1126,7 +1138,10 @@ _TEMPLATE = r"""<!doctype html>
           <button class="sec" style="font-size:10px;padding:3px 10px;" onclick="fitGraph()">Fit</button>
           <button class="sec" style="font-size:10px;padding:3px 10px;" onclick="reloadGraph()">↺ Reload</button>
         </div>
-        <div id="cy"></div>
+        <div id="cy-wrap">
+          <div id="cy"></div>
+          <canvas id="cy-beam-overlay"></canvas>
+        </div>
         <div class="node-detail" id="nodeDetail">
           <span class="nd-close" onclick="closeNodeDetail()">✕</span>
           <h4 id="ndTitle">–</h4>
@@ -1359,6 +1374,7 @@ function handleSSE(d) {
     return;
   }
   if (d.type === "autonomy_score") { updateSidebarScore(d.score, d.level); return; }
+  if (d.type === "delegation")    { animateDelegationBeam(d.from, d.to);  return; }
 }
 
 // ── Chat ──────────────────────────────────────────────────────────────────────
@@ -1652,52 +1668,198 @@ function updateGraphNodeColor(agent, status) {
   if (!cy) return;
   const bg  = STATUS_COLOR[status]  || STATUS_COLOR.idle;
   const brd = STATUS_BORDER[status] || STATUS_BORDER.idle;
-  cy.nodes().forEach(node => {
-    if (node.data("label") === agent || node.data("agentName") === agent) {
-      node.data("bgColor",     bg);
-      node.data("borderColor", brd);
-      node.data("status",      status);
-    }
+  // Direkte ID-Suche (Knoten-ID = Agent-Name)
+  const idMap = { development: "development", developer: "development" };
+  const nodeId = idMap[agent] || agent;
+  const node = cy.getElementById(nodeId);
+  if (node && node.length) {
+    node.data("bgColor",     bg);
+    node.data("borderColor", brd);
+    node.data("status",      status);
+  }
+}
+
+// ── 13-Agenten-Kreis ──────────────────────────────────────────────────────────
+// Statische Whitelist — nur diese Agenten werden im Canvas-Graph gezeigt.
+const REAL_AGENTS_RING = [
+  "executor","research","reasoning","creative","development",
+  "visual","data","document","communication","system","shell","image",
+];
+
+function initAgentCircle() {
+  if (!cy) return;
+  cy.elements().remove();
+
+  const R = 220; // Radius des Außenrings
+  const elements = [];
+
+  // Meta im Mittelpunkt
+  elements.push({
+    group: "nodes",
+    data: {
+      id: "meta", label: "meta", agentName: "meta",
+      bgColor: "#1a1500", borderColor: "#ffd700",
+      type: "agent", status: "idle",
+    },
+    position: { x: 0, y: 0 },
   });
+
+  // 12 Agenten gleichmäßig auf dem Kreis
+  REAL_AGENTS_RING.forEach((name, i) => {
+    const angle = (2 * Math.PI * i) / REAL_AGENTS_RING.length - Math.PI / 2;
+    elements.push({
+      group: "nodes",
+      data: {
+        id: name, label: name, agentName: name,
+        bgColor: "#1b2e42", borderColor: "#243748",
+        type: "agent", status: "idle",
+      },
+      position: { x: Math.cos(angle) * R, y: Math.sin(angle) * R },
+    });
+  });
+
+  cy.add(elements);
+  cy.layout({ name: "preset", padding: 50, animate: false }).run();
+  cy.fit(50);
+  syncBeamOverlay();
+}
+
+function syncBeamOverlay() {
+  const overlay = document.getElementById("cy-beam-overlay");
+  const wrap    = document.getElementById("cy-wrap");
+  if (overlay && wrap) {
+    overlay.width  = wrap.clientWidth;
+    overlay.height = wrap.clientHeight;
+  }
+}
+
+// ── Delegation-Lichtstrahl-Animation ──────────────────────────────────────────
+let _beamRAF = null;
+
+function animateDelegationBeam(fromId, toId) {
+  if (!cy) return;
+
+  // Aliases auflösen (z.B. "developer" → "development")
+  const idMap = { developer: "development" };
+  const src = idMap[fromId] || fromId;
+  const tgt = idMap[toId]   || toId;
+
+  const fromNode = cy.getElementById(src);
+  const toNode   = cy.getElementById(tgt);
+  if (!fromNode.length || !toNode.length) return;
+
+  syncBeamOverlay();
+  const overlay = document.getElementById("cy-beam-overlay");
+  if (!overlay) return;
+  const ctx = overlay.getContext("2d");
+
+  const fromPos = fromNode.renderedPosition();
+  const toPos   = toNode.renderedPosition();
+
+  const startTime = performance.now();
+  const duration  = 700; // ms
+
+  if (_beamRAF) cancelAnimationFrame(_beamRAF);
+
+  function draw(now) {
+    const t  = Math.min((now - startTime) / duration, 1.0);
+    const px = fromPos.x + (toPos.x - fromPos.x) * t;
+    const py = fromPos.y + (toPos.y - fromPos.y) * t;
+    const dx = toPos.x - fromPos.x;
+    const dy = toPos.y - fromPos.y;
+    const angle = Math.atan2(dy, dx);
+    const dist  = Math.hypot(dx, dy);
+    const bLen  = Math.max(28, Math.min(60, dist * 0.22));
+    const bW    = 5.5;
+
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate(angle);
+
+    // Äußere Glut
+    const glowGrad = ctx.createLinearGradient(-bLen * 1.4, 0, bLen * 1.4, 0);
+    glowGrad.addColorStop(0,   "rgba(255,180,0,0)");
+    glowGrad.addColorStop(0.4, "rgba(255,215,0,0.35)");
+    glowGrad.addColorStop(0.5, "rgba(255,215,0,0.55)");
+    glowGrad.addColorStop(0.6, "rgba(255,215,0,0.35)");
+    glowGrad.addColorStop(1,   "rgba(255,180,0,0)");
+    ctx.beginPath();
+    ctx.ellipse(0, 0, bLen * 1.4, bW * 2.2, 0, 0, Math.PI * 2);
+    ctx.fillStyle = glowGrad;
+    ctx.fill();
+
+    // Strahl-Körper
+    const beamGrad = ctx.createLinearGradient(-bLen, 0, bLen, 0);
+    beamGrad.addColorStop(0,   "rgba(255,200,0,0)");
+    beamGrad.addColorStop(0.3, "rgba(255,215,0,0.85)");
+    beamGrad.addColorStop(0.5, "rgba(255,255,200,1)");
+    beamGrad.addColorStop(0.7, "rgba(255,215,0,0.85)");
+    beamGrad.addColorStop(1,   "rgba(255,200,0,0)");
+    ctx.beginPath();
+    ctx.ellipse(0, 0, bLen, bW, 0, 0, Math.PI * 2);
+    ctx.fillStyle = beamGrad;
+    ctx.fill();
+
+    // Heller Kern
+    const coreGrad = ctx.createLinearGradient(-bLen * 0.45, 0, bLen * 0.45, 0);
+    coreGrad.addColorStop(0,   "rgba(255,255,255,0)");
+    coreGrad.addColorStop(0.5, "rgba(255,255,255,0.92)");
+    coreGrad.addColorStop(1,   "rgba(255,255,255,0)");
+    ctx.beginPath();
+    ctx.ellipse(0, 0, bLen * 0.45, bW * 0.32, 0, 0, Math.PI * 2);
+    ctx.fillStyle = coreGrad;
+    ctx.fill();
+
+    ctx.restore();
+
+    if (t < 1.0) {
+      _beamRAF = requestAnimationFrame(draw);
+    } else {
+      ctx.clearRect(0, 0, overlay.width, overlay.height);
+      _beamRAF = null;
+      flashNode(tgt);
+    }
+  }
+
+  _beamRAF = requestAnimationFrame(draw);
+}
+
+function flashNode(agentId) {
+  if (!cy) return;
+  const node = cy.getElementById(agentId);
+  if (!node.length) return;
+
+  node.style({
+    "border-color":     "#ffd700",
+    "border-width":     5,
+    "shadow-color":     "#ffd700",
+    "shadow-opacity":   0.95,
+    "shadow-blur":      28,
+    "background-color": "#2a2000",
+  });
+
+  setTimeout(() => {
+    const curStatus = node.data("status") || "idle";
+    node.style({
+      "border-color":     STATUS_BORDER[curStatus] || "#243748",
+      "border-width":     2,
+      "shadow-color":     STATUS_BORDER[curStatus] || "#243748",
+      "shadow-opacity":   0.45,
+      "shadow-blur":      12,
+      "background-color": STATUS_COLOR[curStatus]  || "#1b2e42",
+    });
+  }, 600);
 }
 
 async function reloadGraph() {
-  if (!selectedCanvasId || !cy) return;
-  try {
-    const { canvas } = await api(`/canvas/${encodeURIComponent(selectedCanvasId)}`);
-    if (!canvas) return;
-
-    const agentSet   = new Set(AGENTS);
-    const cyElements = [];
-
-    for (const n of Object.values(canvas.nodes || {})) {
-      const label      = n.title || n.id || "?";
-      const liveStatus = agentSet.has(label) ? _agentStatusFromLed(label) : (n.status || "idle");
-      cyElements.push({
-        group: "nodes",
-        data: {
-          id:          "node-" + n.id,
-          label,
-          status:      liveStatus,
-          bgColor:     STATUS_COLOR[liveStatus]  || STATUS_COLOR.idle,
-          borderColor: STATUS_BORDER[liveStatus] || STATUS_BORDER.idle,
-          type:        n.node_type || "generic",
-          agentName:   agentSet.has(label) ? label : "",
-        },
-      });
-    }
-    for (const e of (canvas.edges || [])) {
-      cyElements.push({
-        group: "edges",
-        data: { id:"edge-"+e.id, source:"node-"+e.source, target:"node-"+e.target, label:e.kind||"" },
-      });
-    }
-
-    cy.elements().remove();
-    cy.add(cyElements);
-    cy.layout({ name: document.getElementById("cyLayout").value || "cose", padding: 40, animate: false }).run();
-    cy.fit(40);
-  } catch {}
+  if (!cy) return;
+  // Nur Farben der 13 festen Agenten aktualisieren
+  for (const name of ["meta", ...REAL_AGENTS_RING]) {
+    const status = _agentStatusFromLed(name);
+    updateGraphNodeColor(name, status);
+  }
 }
 
 // ── Canvas List ───────────────────────────────────────────────────────────────
@@ -1749,6 +1911,7 @@ async function init() {
   renderAgentLeds({});
   renderToolActivity();
   initCytoscape();
+  initAgentCircle();
 
   try { const s = await api("/agent_status"); renderAgentLeds(s.agents||{}); setThinking(!!s.thinking); } catch {}
   try { const m = await api("/agent_models"); if (m.models) { agentModels = m.models; renderAgentLeds({}); } } catch {}
@@ -1806,6 +1969,12 @@ async function init() {
   });
 
   setPolling(true);
+
+  // Overlay-Canvas mit cy-wrap synchron halten
+  const _cyWrap = document.getElementById("cy-wrap");
+  if (_cyWrap && window.ResizeObserver) {
+    new ResizeObserver(syncBeamOverlay).observe(_cyWrap);
+  }
 }
 
 init().catch(err => console.error("Canvas-Init-Fehler:", err));

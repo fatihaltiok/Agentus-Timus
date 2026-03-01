@@ -623,9 +623,16 @@ async def lifespan(app: FastAPI):
     # Agent-Registry: Alle Agenten als Specs registrieren (Lazy-Instantiierung)
     try:
         from agent.agent_registry import register_all_agents
+        import agent.agent_registry as _agent_reg_mod
 
         register_all_agents()
-        log.info("✅ Agent-Registry: Alle Agenten-Specs registriert.")
+
+        # SSE-Hook für Delegation-Animationen im Canvas
+        def _delegation_sse_event(from_agent: str, to_agent: str, status: str) -> None:
+            _broadcast_sse({"type": "delegation", "from": from_agent, "to": to_agent, "status": status})
+
+        _agent_reg_mod._delegation_sse_hook = _delegation_sse_event
+        log.info("✅ Agent-Registry: Alle Agenten-Specs registriert. Delegation-SSE-Hook aktiv.")
     except Exception as e:
         log.warning(f"⚠️ Agent-Registry konnte nicht initialisiert werden: {e}")
 

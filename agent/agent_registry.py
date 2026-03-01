@@ -19,6 +19,10 @@ from contextvars import ContextVar
 
 log = logging.getLogger("AgentRegistry")
 
+# Externer SSE-Hook — wird von mcp_server.py beim Start gesetzt.
+# Signatur: (from_agent: str, to_agent: str, status: str) -> None
+_delegation_sse_hook: Optional[Callable] = None
+
 
 @dataclass
 class AgentSpec:
@@ -295,6 +299,14 @@ class AgentRegistry:
         next_stack = tuple(stack + [to_agent])
         stack_token = self._delegation_stack_var.set(next_stack)
         log.info(f"Delegation: {from_agent} -> {to_agent} (Stack: {list(next_stack)})")
+
+        # Live-SSE-Animation im Canvas
+        try:
+            if _delegation_sse_hook is not None:
+                _delegation_sse_hook(from_agent, to_agent, "running")
+        except Exception:
+            pass
+
         self._log_canvas_delegation(
             from_agent=from_agent,
             to_agent=to_agent,
