@@ -168,20 +168,23 @@ Du bist der zentrale Dispatcher für Timus. Analysiere die INTENTION des Nutzers
      - Anfragen die EXTERNE Informationen/Quellen brauchen
      - WICHTIG: Jede Art von Internet-/Web-Erkundung → 'research', NICHT 'visual_nemotron'
 
-3. **executor**: Der HELFER für einfache Aufgaben
-   - Zuständigkeit: Schnelle Websuche, einfache Fragen, Zusammenfassungen
-   - Wähle 'executor' bei:
-     - "Wie spät ist es?"
-     - "Was ist die Hauptstadt von..."
-     - "Fasse diesen Text zusammen"
-     - Einfache, schnelle Anfragen OHNE komplexe Analyse
+3. **executor**: Der HELFER für TRIVIALE Anfragen
+   - Zuständigkeit: NUR reine Informationsfragen ohne Aktion, Erinnerungsfragen, Begrüßungen
+   - Wähle 'executor' NUR bei:
+     - Begrüßungen: "Hallo", "Hi", "Guten Tag"
+     - Erinnerungsfragen: "Erinnerst du dich?", "Was haben wir gemacht?", "Kennst du mich?"
+     - "Wie spät ist es?", "Datum?", "Uhrzeit?"
+     - Vorstellungen: "Ich heiße...", "Mein Name ist..."
+     - NIEMALS bei Aufgaben die Handlungen oder Werkzeuge erfordern!
 
-4. **meta**: Der ARCHITEKT für Workflows
-   - Zuständigkeit: Mehrstufige Aufgaben koordinieren, Workflows planen
-   - Wähle 'meta' bei:
-     - "Erstelle einen Plan für..."
-     - "Zuerst X, dann Y, dann Z"
-     - Komplexe mehrstufige Aufgaben
+4. **meta**: Der HAUPT-ORCHESTRATOR — STANDARD FÜR ALLE AUFGABEN
+   - Zuständigkeit: ALLE Aufgaben die Handlungen, Recherche, Code, Dateien, E-Mails, Planung oder Spezialistenwissen erfordern. Meta analysiert die Aufgabe und delegiert an den passenden Spezialisten.
+   - Wähle 'meta' bei ALLEM was nicht eindeutig ein anderer Spezialist ist:
+     - Jede Aufgabe mit mehreren Schritten: "Zuerst X, dann Y"
+     - Aufgaben bei denen unklar ist welcher Spezialist zuständig ist
+     - Allgemeine Anfragen wie "Hilf mir mit...", "Kannst du..."
+     - Komplexe Fragen die Koordination brauchen
+     - Bei Unsicherheit welcher Agent zuständig ist: IMMER 'meta'
 
 5. **visual**: Der OPERATOR (Maus & Tastatur)
    - Zuständigkeit: Computer steuern, Apps öffnen, UI-Automation
@@ -294,6 +297,12 @@ Du bist der zentrale Dispatcher für Timus. Analysiere die INTENTION des Nutzers
 5. Bei EINFACHEN Fragen ohne Analyse → 'executor'
 6. Bei BILDPFADEN nur 'image' wenn das Bild ANALYSIERT werden soll, NICHT bei Speicher-/Ausgabepfaden
 7. Bei INTERNET-ERKUNDUNG ("erkunde das internet", "erforsche das web", "stöbere online", "suche im netz") → IMMER 'research', NIEMALS 'visual_nemotron'. visual_nemotron ist nur für Desktop-UI-Automation (Maus, Klicks, Formulare), nicht für Recherche.
+
+### ENTSCHEIDUNGSREGEL
+- Ist die Anfrage eine TRIVIALE Frage ohne Aktion (Begrüßung, Uhrzeit, Name)? → 'executor'
+- Ist der zuständige Spezialist EINDEUTIG (Code schreiben → development, Bild erstellen → creative, Browser steuern → visual)? → Direkt zum Spezialisten
+- Ist die Aufgabe komplex, mehrstufig oder unklar welcher Spezialist zuständig ist? → 'meta'
+- BEI UNSICHERHEIT: IMMER 'meta', NIEMALS 'executor'
 
 Antworte NUR mit einem Wort: 'reasoning', 'research', 'executor', 'meta', 'visual', 'development', 'creative', 'data', 'document', 'communication', 'system', 'shell' oder 'image'.
 """
@@ -577,12 +586,14 @@ DEVELOPMENT_KEYWORDS = [
 ]
 
 META_KEYWORDS = [
+    # Explizite Planung / Workflow
     "plane",
     "erstelle einen plan",
     "koordiniere",
     "automatisiere",
     "workflow",
     "mehrere schritte",
+    # Mehrstufige Sequenzen
     "und dann",
     "danach",
     "anschließend",
@@ -613,29 +624,45 @@ META_KEYWORDS = [
     "mehrere agenten",
     "fan-out",
     "wide research",
+    # Aufgaben die Koordination / mehrere Spezialisten erfordern
+    "hilf mir bei",
+    "erledige für mich",
+    "kümmere dich um",
+    "organisiere",
+    "übernimm",
+    "mach das für mich",
+    "tue das für mich",
+    "koordiniere",
+    "kombiniere",
+    "verknüpfe",
+    "fasse zusammen und",
+    "analysiere und erstelle",
+    "recherchiere und schreibe",
+    "prüfe und",
+    "überprüfe und",
 ]
 
 EXECUTOR_KEYWORDS = [
+    # Begrüßungen / Vorstellungen
     "ich heiße",
     "mein name",
-    "ich bin",
-    "ich mag",
-    "was weißt du",
+    "ich bin ",
+    "ich mag ",
     "wer bin ich",
     "kennst du mich",
     "hallo",
     "hi ",
     "guten tag",
+    "guten morgen",
+    "guten abend",
     "wie geht",
     "danke",
-    "bitte",
+    # Triviale Informationsfragen
     "wie spät",
     "uhrzeit",
-    "datum",
-    "wetter",
-    "hauptstadt von",
-    "was ist ein",
-    "definiere",
+    "welches datum",
+    "welcher tag",
+    # Erinnerungsfragen (kein Tool nötig)
     "vorhin",
     "erinnerst du dich",
     "was haben wir",
@@ -644,6 +671,7 @@ EXECUTOR_KEYWORDS = [
     "was habe ich",
     "was suche ich",
     "eben gesucht",
+    "was weißt du über mich",
 ]
 
 # ─── M1-M4: Neue Agenten ─────────────────────────────────────────
@@ -1043,10 +1071,10 @@ async def get_agent_decision(user_query: str) -> str:
         decision = raw_content.strip().lower().replace(".", "")
         if not decision:
             log.warning(
-                "⚠️ Leere Dispatcher-Antwort. Fallback auf 'executor'. "
+                "⚠️ Leere Dispatcher-Antwort. Fallback auf 'meta'. "
                 f"(raw_len={len(raw_content)}, raw_preview={repr(raw_content[:120])})"
             )
-            return "executor"
+            return "meta"
 
         # Direkter Treffer
         if decision in AGENT_CLASS_MAP:
@@ -1060,14 +1088,14 @@ async def get_agent_decision(user_query: str) -> str:
                 return key
 
         log.warning(
-            f"⚠️ Unsicher ({decision}). Fallback auf 'executor'. "
+            f"⚠️ Unsicher ({decision}). Fallback auf 'meta'. "
             f"(raw_len={len(raw_content)}, raw_preview={repr(raw_content[:160])})"
         )
-        return "executor"
+        return "meta"
 
     except Exception as e:
         log.error(f"❌ Dispatcher-Fehler: {e}")
-        return "executor"
+        return "meta"
 
 
 async def run_agent(
