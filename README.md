@@ -4,7 +4,7 @@
   <img src="assets/branding/timus-logo-glow.png" alt="Timus Logo" width="760">
 </p>
 
-**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen). Seit **v2.9** sind die Autonomie-Schichten M1–M5 live: Zielgenerierung, Langzeitplanung, Self-Healing und Autonomie-Scorecard laufen aktiv im Produktivbetrieb. Seit **v3.0 (2026-02-28)** läuft im Canvas ein nativer Voice-Loop (Faster-Whisper STT + Inworld.AI TTS) über `/voice/*` Endpoints.
+**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen). Seit **v2.9** sind die Autonomie-Schichten M1–M5 live: Zielgenerierung, Langzeitplanung, Self-Healing und Autonomie-Scorecard laufen aktiv im Produktivbetrieb. Seit **v3.0 (2026-02-28)** läuft im Canvas ein nativer Voice-Loop (Faster-Whisper STT + Inworld.AI TTS) über `/voice/*` Endpoints. Seit **v3.1 (2026-03-01)** sendet und empfängt Timus eigenständig E-Mails über Microsoft Graph OAuth2 — alle 13 Agenten sind vollständig per Delegation erreichbar.
 
 ---
 
@@ -63,7 +63,25 @@ Meta Agent     → Seed-OSS-36B         (ByteDance, Agentic Intelligence, 512K C
 Reasoning Agent→ Nemotron-49B         (NVIDIA-eigenes Flagship-Modell)
 ```
 
-### Phase 11 — Native Voice im Canvas *(v3.0, aktuell)*
+### Phase 12 — E-Mail-Integration + vollständige Agent-Delegation *(v3.1, aktuell)*
+
+Timus kommuniziert eigenständig per E-Mail. Microsoft Graph OAuth2 ersetzt Basic Auth (von Outlook.com blockiert). Alle 13 Agenten sind über `delegate_to_agent` vollständig erreichbar — ein kritischer Bug im `jsonrpc_wrapper` (sync-Methoden nicht awaitable in `async_dispatch`) wurde behoben.
+
+**Neu in dieser Phase:**
+- `tools/email_tool/tool.py`: `send_email`, `read_emails`, `get_email_status` als MCP-Tools
+- `utils/timus_mail_oauth.py`: OAuth2 Device Code Flow (kein MSAL, raw HTTP)
+- `utils/timus_mail_cli.py`: CLI für manuelles Testen und Debugging
+- `tools/tool_registry_v2.py`: sync `jsonrpc_wrapper` → `async def + asyncio.to_thread()` (systemweiter Fix)
+- Alle 13 Agenten (inkl. data, document, communication, system, shell) per Delegation getestet
+
+```
+OAuth2-Flow (einmalig):
+  python utils/timus_mail_oauth.py
+  → Browser: microsoft.com/link → Code eingeben → timus.assistent@outlook.com
+  → Token-Cache: data/timus_token_cache.bin (JSON, auto-renewed via Refresh-Token)
+```
+
+### Phase 11 — Native Voice im Canvas *(v3.0)*
 
 Timus ist jetzt nicht nur visuell, sondern auch sprachlich im Canvas nativ integriert. Die browserseitige Web-Speech-API wurde durch den serverseitigen Voice-Stack ersetzt.
 
@@ -144,6 +162,34 @@ Meta → Research  ┐
      → Developer ├── gleichzeitig → ResultAggregator → Meta wertet aus
      → Creative  ┘
 Gesamtzeit: 60s  (3–6× schneller)
+```
+
+---
+
+## Aktueller Stand — Version 3.1 (2026-03-01)
+
+### E-Mail-Integration + Vollständige Agent-Delegation
+
+Timus sendet und empfängt jetzt eigenständig E-Mails über sein eigenes Outlook-Konto (`timus.assistent@outlook.com`) — vollständig OAuth2-basiert via Microsoft Graph API. Kein SMTP/IMAP Basic Auth, kein Passwort im Klartext.
+
+| Bereich | Detail |
+|---------|--------|
+| Auth | OAuth2 Device Code Flow — einmalige Browser-Autorisierung, dann automatische Token-Erneuerung |
+| API | Microsoft Graph `/me/sendMail`, `/me/mailFolders/{mailbox}/messages` |
+| Tools | `send_email`, `read_emails`, `get_email_status` (alle als MCP-Tools registriert) |
+| CLI | `python utils/timus_mail_oauth.py` (Auth) · `python utils/timus_mail_cli.py status/send/read` |
+| Agent | CommunicationAgent delegiert direkt an die Email-Tools |
+
+**Kritischer Fix (async_dispatch):** `jsonrpcserver 5.x` macht in `async_dispatch` immer `await method(...)` — auch für sync-Methoden. Der sync `jsonrpc_wrapper` gab ein nicht-awaitbares `Right`-Objekt zurück → `TypeError: object Right can't be used in 'await' expression`. Alle sync-Tools waren via Canvas blockiert. Fix: wrapper auf `async def + asyncio.to_thread()` umgestellt (`tools/tool_registry_v2.py`).
+
+**Alle 13 Agenten per Delegation erreichbar** — `delegate_to_agent` wurde für alle Spezialisten getestet und funktioniert vollständig.
+
+```
+User: "Schick eine E-Mail an fatih@..."
+  → Dispatcher → CommunicationAgent
+  → Tool-Call: send_email(to, subject, body)
+  → Microsoft Graph POST /me/sendMail
+  → ✅ E-Mail zugestellt
 ```
 
 ---
