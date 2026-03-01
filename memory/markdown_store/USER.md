@@ -8,7 +8,7 @@ preferences:
 goals:
   - in kontaktieren
 constraints: []
-updated_at: 2026-03-01T14:19:18.595968
+updated_at: 2026-03-01T18:20:31.824186
 ---
 
 # Benutzer-Profil
@@ -36,4 +36,4 @@ Nicht gesetzt
 Keine Constraints
 
 ---
-*Zuletzt aktualisiert: 2026-03-01T14:19:18.595968*
+*Zuletzt aktualisiert: 2026-03-01T18:20:31.824186*
