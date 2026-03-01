@@ -1022,11 +1022,10 @@ _TEMPLATE = r"""<!doctype html>
     #voiceCanvas {
       position: absolute;
       top: 50%;
-      left: 50%;
+      left: 9%;
       transform: translate(-50%, -50%);
       pointer-events: none;
       z-index: 5;
-      /* Größe wird per JS gesetzt */
     }
 
     /* ── RESPONSIVE ──────────────────────────────────────────────── */
@@ -1125,7 +1124,7 @@ _TEMPLATE = r"""<!doctype html>
       <!-- Canvas Tab (position:relative für Voice-Canvas-Overlay) -->
       <div class="tab-content active" id="tab-canvas" style="position:relative;">
         <!-- Voice Pulse Canvas (zentriert, pointer-events:none) -->
-        <canvas id="voiceCanvas" width="420" height="420"></canvas>
+        <canvas id="voiceCanvas" width="504" height="504"></canvas>
         <div class="cy-toolbar">
           <span style="color:var(--text3);font-size:10px;letter-spacing:1px;text-transform:uppercase;">Layout</span>
           <select id="cyLayout" onchange="applyCyLayout()">
