@@ -725,6 +725,36 @@ COMMUNICATION_KEYWORDS = [
     "eine e-mail an",
     "schreibe eine bewerbung",
     "schreibe eine absage",
+    # Senden (explizite Varianten)
+    "sende eine email",
+    "sende eine e-mail",
+    "schick eine email",
+    "schick eine e-mail",
+    "schicke eine email",
+    # Empfangen / Lesen
+    "lies meine emails",
+    "lies meine e-mails",
+    "zeig meine emails",
+    "zeig meine e-mails",
+    "neue emails",
+    "neue e-mails",
+    "posteingang",
+    "ungelesene mails",
+    "ungelesene emails",
+    "hast du emails bekommen",
+    "hast du e-mails bekommen",
+    "check emails",
+    "email lesen",
+    "e-mail lesen",
+    "emails lesen",
+    "e-mails lesen",
+    "was steht in meinen emails",
+    "was steht in meinen e-mails",
+    "gibt es neue emails",
+    "gibt es neue e-mails",
+    # Status
+    "email verbindung prüfen",
+    "e-mail status",
 ]
 
 SYSTEM_KEYWORDS = [

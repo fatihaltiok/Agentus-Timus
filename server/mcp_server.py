@@ -235,6 +235,8 @@ TOOL_MODULES = [
     "tools.system_tool.tool",
     # M4: Shell-Operator Tools
     "tools.shell_tool.tool",
+    # E-Mail (SMTP + IMAP via Outlook)
+    "tools.email_tool.tool",
 ]
 
 # --- Hilfsfunktionen für den Lifespan-Manager ---
