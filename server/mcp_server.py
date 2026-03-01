@@ -223,6 +223,8 @@ TOOL_MODULES = [
     "tools.screen_change_detector.tool",
     "tools.screen_contract_tool.tool",
     "tools.opencv_template_matcher_tool.tool",
+    # RealSense Kamera (D435): Status + Snapshot-Capture
+    "tools.realsense_camera_tool.tool",
     # NEU: DOM-First Browser Controller v2.0 (2026-02-10)
     "tools.browser_controller.tool",
     # NEU: JSON-Nemotron Tool für AI-gestützte JSON-Verarbeitung
@@ -716,6 +718,33 @@ async def lifespan(app: FastAPI):
     else:
         log.info("ℹ️ Heartbeat-Scheduler deaktiviert (HEARTBEAT_ENABLED=false)")
 
+    # === OPTIONAL: REALSENSE LIVE-STREAM AUTO-START ===
+    app.state.realsense_stream_manager = None
+    if os.getenv("REALSENSE_STREAM_AUTO_START", "false").lower() in {"1", "true", "yes", "on"}:
+        try:
+            from utils.realsense_stream import get_realsense_stream_manager
+
+            width = int(os.getenv("REALSENSE_STREAM_WIDTH", "1280"))
+            height = int(os.getenv("REALSENSE_STREAM_HEIGHT", "720"))
+            fps = float(os.getenv("REALSENSE_STREAM_FPS", "10"))
+            device_raw = (os.getenv("REALSENSE_STREAM_DEVICE") or "").strip()
+            device_index = int(device_raw) if device_raw else None
+
+            stream_manager = get_realsense_stream_manager()
+            status = await asyncio.to_thread(
+                stream_manager.start,
+                width,
+                height,
+                fps,
+                device_index,
+            )
+            app.state.realsense_stream_manager = stream_manager
+            log.info(f"✅ RealSense-Stream gestartet: {status}")
+        except Exception as e:
+            log.warning(f"⚠️ RealSense-Stream Auto-Start fehlgeschlagen: {e}")
+    else:
+        log.info("ℹ️ RealSense-Stream Auto-Start deaktiviert (REALSENSE_STREAM_AUTO_START=false)")
+
     yield  # Server läuft
 
     # === SHUTDOWN: Browser Contexts speichern ===
@@ -733,6 +762,14 @@ async def lifespan(app: FastAPI):
             log.info("✅ Heartbeat-Scheduler gestoppt")
         except Exception as e:
             log.warning(f"⚠️ Fehler beim Scheduler-Shutdown: {e}")
+
+    # === SHUTDOWN: RealSense Stream stoppen ===
+    if getattr(app.state, "realsense_stream_manager", None):
+        try:
+            status = await asyncio.to_thread(app.state.realsense_stream_manager.stop)
+            log.info(f"✅ RealSense-Stream gestoppt: {status}")
+        except Exception as e:
+            log.warning(f"⚠️ Fehler beim RealSense-Stream Shutdown: {e}")
 
     # === SHUTDOWN: Canvas mirror logger stoppen ===
     if app.state.canvas_mirror_task:
@@ -1249,6 +1286,183 @@ async def get_agent_models():
         except Exception:
             models[agent] = {"provider": "unknown", "model": ""}
     return {"status": "success", "models": models}
+
+
+# ── AUTONOMY ENDPOINTS ────────────────────────────────────────────────────────
+
+@app.get("/autonomy/scorecard", summary="Autonomy Scorecard (M1-M5)")
+async def autonomy_scorecard_endpoint(window_hours: int = 24):
+    """Liefert die aggregierte Autonomie-Scorecard aus M1-M5."""
+    try:
+        from orchestration.autonomy_scorecard import build_autonomy_scorecard
+        card = build_autonomy_scorecard(window_hours=max(1, window_hours))
+        return {"status": "success", "scorecard": card}
+    except Exception as e:
+        log.error(f"Autonomy scorecard Fehler: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.get("/autonomy/goals", summary="Aktive Autonomy-Ziele (M1)")
+async def autonomy_goals_endpoint(status: str = "", limit: int = 20):
+    """Gibt die Liste der Autonomie-Ziele zurück (aus goals-Tabelle)."""
+    try:
+        from orchestration.task_queue import get_queue
+        queue = get_queue()
+        goals = queue.list_goals(status=status or None, limit=max(1, min(200, limit)))
+        return {"status": "success", "goals": goals, "count": len(goals)}
+    except Exception as e:
+        log.error(f"Autonomy goals Fehler: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.get("/autonomy/plans", summary="Aktive Autonomy-Pläne (M2)")
+async def autonomy_plans_endpoint(horizon: str = ""):
+    """Gibt aktive Pläne mit Horizont, Items und Commitments zurück."""
+    try:
+        from orchestration.task_queue import get_queue
+        queue = get_queue()
+        planning = queue.get_planning_metrics()
+        # Kompakte Plan-Übersicht aus planning_metrics ableiten
+        plans_data = {
+            "active_plans": planning.get("active_plans", 0),
+            "overdue_commitments": planning.get("overdue_commitments", 0),
+            "commitments_total": planning.get("commitments_total", 0),
+            "plan_deviation_score": planning.get("plan_deviation_score", 0.0),
+            "planning_metrics": planning,
+        }
+        return {"status": "success", "plans": plans_data}
+    except Exception as e:
+        log.error(f"Autonomy plans Fehler: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.get("/autonomy/health", summary="Autonomy Health Überblick (M1-M4)")
+async def autonomy_health_endpoint():
+    """Kompakter Gesundheitsüberblick: Goal-Alignment + Planning + Self-Healing."""
+    try:
+        from orchestration.task_queue import get_queue
+        queue = get_queue()
+        goal_metrics = queue.get_goal_alignment_metrics(include_conflicts=True)
+        planning_metrics = queue.get_planning_metrics()
+        healing_metrics = queue.get_self_healing_metrics()
+        return {
+            "status": "success",
+            "health": {
+                "goals": {
+                    "open_alignment_rate": goal_metrics.get("open_alignment_rate", 0.0),
+                    "conflict_count": goal_metrics.get("conflict_count", 0),
+                    "open_tasks": goal_metrics.get("open_tasks", 0),
+                },
+                "planning": {
+                    "active_plans": planning_metrics.get("active_plans", 0),
+                    "overdue_commitments": planning_metrics.get("overdue_commitments", 0),
+                    "plan_deviation_score": planning_metrics.get("plan_deviation_score", 0.0),
+                },
+                "healing": {
+                    "degrade_mode": healing_metrics.get("degrade_mode", "normal"),
+                    "open_incidents": healing_metrics.get("open_incidents", 0),
+                    "circuit_breakers_open": healing_metrics.get("circuit_breakers_open", 0),
+                    "recovery_rate_24h": healing_metrics.get("recovery_rate_24h", 0.0),
+                },
+            },
+        }
+    except Exception as e:
+        log.error(f"Autonomy health Fehler: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+# ── VOICE ENDPOINTS ───────────────────────────────────────────────────────────
+_voice_listen_task: asyncio.Task | None = None
+
+
+@app.get("/voice/status", summary="Voice-System Status")
+async def voice_status_endpoint():
+    """Gibt den aktuellen Status des Voice-Systems zurück."""
+    try:
+        from tools.voice_tool.tool import voice_engine
+        return {
+            "status": "success",
+            "voice": {
+                "initialized": voice_engine._initialized,
+                "listening": voice_engine.is_listening,
+                "speaking": voice_engine.is_speaking,
+            },
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.post("/voice/listen", summary="Spracheingabe starten (Whisper STT)")
+async def voice_listen_endpoint():
+    """Startet die Spracheingabe mit Faster-Whisper — gibt SOFORT zurück, Ergebnis per SSE."""
+    global _voice_listen_task
+    try:
+        from tools.voice_tool.tool import voice_engine  # Import, noch kein Block
+
+        async def _listen_and_broadcast():
+            global _voice_listen_task
+            _broadcast_sse({"type": "voice_listening_start"})
+            try:
+                # Initialisierung im Hintergrund — blockiert nicht den HTTP-Request
+                if not voice_engine._initialized:
+                    _broadcast_sse({"type": "voice_status", "message": "Lade Sprachmodell…"})
+                    await asyncio.to_thread(voice_engine.initialize)
+                text = await voice_engine.listen_async()
+                _broadcast_sse({"type": "voice_transcript", "text": text, "success": bool(text)})
+            except asyncio.CancelledError:
+                _broadcast_sse({"type": "voice_listening_stop"})
+            except Exception as ex:
+                log.error(f"Voice listen Fehler (task): {ex}", exc_info=True)
+                _broadcast_sse({"type": "voice_error", "error": str(ex)})
+            finally:
+                _voice_listen_task = None
+
+        # Vorherigen Task abbrechen falls noch aktiv
+        if _voice_listen_task and not _voice_listen_task.done():
+            _voice_listen_task.cancel()
+        _voice_listen_task = asyncio.create_task(_listen_and_broadcast())
+        # Sofortige Antwort — kein Warten auf Whisper-Init oder Aufnahme
+        return {"status": "success", "message": "Höre zu…"}
+    except Exception as e:
+        log.error(f"Voice listen Fehler: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.post("/voice/stop", summary="Spracheingabe stoppen")
+async def voice_stop_endpoint():
+    """Bricht eine laufende Spracheingabe ab."""
+    global _voice_listen_task
+    try:
+        from tools.voice_tool.tool import voice_engine
+        voice_engine.stop_listening()
+        if _voice_listen_task and not _voice_listen_task.done():
+            _voice_listen_task.cancel()
+            _voice_listen_task = None
+        _broadcast_sse({"type": "voice_listening_stop"})
+        return {"status": "success", "message": "Aufnahme gestoppt"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.post("/voice/speak", summary="Text-to-Speech (Inworld.AI)")
+async def voice_speak_endpoint(payload: dict):
+    """Spricht den übergebenen Text mit Inworld.AI TTS."""
+    text = (payload or {}).get("text", "").strip()
+    if not text:
+        return JSONResponse(status_code=400, content={"status": "error", "error": "Kein Text angegeben"})
+    try:
+        from tools.voice_tool.tool import voice_engine
+        # speak_async enthält eigene Initialisierung — hier nicht blockierend init
+        _broadcast_sse({"type": "voice_speaking_start", "text": text})
+        if not voice_engine._initialized:
+            await asyncio.to_thread(voice_engine.initialize)
+        success = await voice_engine.speak_async(text)
+        _broadcast_sse({"type": "voice_speaking_end", "success": success})
+        return {"status": "success", "spoke": success}
+    except Exception as e:
+        log.error(f"Voice speak Fehler: {e}", exc_info=True)
+        _broadcast_sse({"type": "voice_speaking_end", "success": False})
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
 
 @app.post("/upload", summary="Datei-Upload für Canvas-Chat")

@@ -1,7 +1,7 @@
 [Unit]
 Description=Timus MCP Server (Tool Registry)
-After=network.target
-Wants=network.target
+After=network.target graphical.target
+Wants=network.target graphical.target
 
 [Service]
 Type=simple
@@ -20,6 +20,8 @@ SyslogIdentifier=timus-mcp
 
 # Umgebungsvariablen (lädt .env automatisch via python-dotenv im Code)
 Environment=PYTHONUNBUFFERED=1
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/fatih-ubuntu/.Xauthority
 
 [Install]
 WantedBy=multi-user.target

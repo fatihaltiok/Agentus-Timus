@@ -43,7 +43,10 @@ load_dotenv(dotenv_path=PROJECT_ROOT / ".env", override=True)
 
 # Shared Utilities
 from agent.shared.mcp_client import MCPClient as _SharedMCPClient
-from agent.shared.screenshot import capture_screenshot_image as _shared_screenshot_image
+from agent.shared.screenshot import (
+    capture_screenshot_image as _shared_screenshot_image,
+    get_last_screenshot_error as _shared_last_screenshot_error,
+)
 from agent.shared.action_parser import parse_action as _shared_parse_action
 
 logging.basicConfig(
@@ -164,7 +167,8 @@ class DesktopController:
         if img is not None:
             self.last_screenshot = img
             return img
-        raise RuntimeError("Screenshot fehlgeschlagen: mss/PIL nicht verfuegbar")
+        detail = _shared_last_screenshot_error() or "unbekannter Fehler"
+        raise RuntimeError(f"Screenshot fehlgeschlagen: {detail}")
     
     async def find_element_by_type(self, element_type: str) -> Optional[Tuple[int, int]]:
         """Findet Element nach Typ und gibt Koordinaten zurück."""

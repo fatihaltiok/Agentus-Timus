@@ -1,0 +1,66 @@
+ Was der Shell-Agent kann                                                                                                                                                                    
+                                                                                                                                                                                              
+  5 Tools                                                                                                                                                                                     
+                                                                                                                                                                                              
+  ┌────────────────┬─────────────────────────────────────────────────────────────┐
+  │      Tool      │                         Was es tut                          │
+  ├────────────────┼─────────────────────────────────────────────────────────────┤
+  │ run_command    │ Beliebigen Bash-Befehl ausführen                            │
+  ├────────────────┼─────────────────────────────────────────────────────────────┤
+  │ run_script     │ Python- oder Bash-Skript aus dem Projektverzeichnis starten │
+  ├────────────────┼─────────────────────────────────────────────────────────────┤
+  │ list_cron      │ Aktuelle Cron-Jobs anzeigen (read-only)                     │
+  ├────────────────┼─────────────────────────────────────────────────────────────┤
+  │ add_cron       │ Neuen Cron-Job anlegen                                      │
+  ├────────────────┼─────────────────────────────────────────────────────────────┤
+  │ read_audit_log │ Alle ausgeführten Befehle im Audit-Log nachschlagen         │
+  └────────────────┴─────────────────────────────────────────────────────────────┘
+
+  ---
+  Konkrete Anwendungsfälle
+
+  System-Info & Navigation
+  "Zeige mir alle Dateien im dev-Verzeichnis"
+  "Wie viel Speicherplatz ist noch frei?"
+  "Welche Python-Pakete sind installiert?"
+  "Zeige mir die letzten 20 Zeilen des Timus-Logs"
+
+  Dateien verwalten
+  "Erstelle einen Ordner 'backup' in meinem Home-Verzeichnis"
+  "Kopiere alle PNG-Dateien aus results/ nach ~/Bilder"
+  "Benenne alle Dateien mit Leerzeichen im Namen um"
+  "Komprimiere den results-Ordner als ZIP"
+
+  Skripte & Automatisierung
+  "Führe mein Python-Skript ai_agents_research.py aus"
+  "Starte das Backup-Skript mit --verbose"
+  "Führe die Tests mit pytest aus und zeige das Ergebnis"
+
+  Cron-Jobs (Zeitplaner)
+  "Zeige mir meine aktuellen Cron-Jobs"
+  "Lege einen täglichen Backup-Job um 02:00 Uhr an"
+  "Starte alle 30 Minuten einen Monitoring-Check"
+
+  Git-Operationen
+  "git status — was hat sich geändert?"
+  "Zeige mir den letzten Commit"
+  "Welche Branches gibt es?"
+
+  ---
+  Eingebaute Sicherheit (automatisch, kann nicht umgangen werden)
+
+  - Blacklist — rm -rf, dd if=, shutdown, reboot, Fork-Bombs → sofort blockiert
+  - Dry-Run — bei verändernden Befehlen zeigt der Agent immer zuerst was passieren würde, bevor er ausführt
+  - Timeout — jeder Befehl max. 30 Sekunden, dann automatischer Abbruch
+  - Audit-Log — jede Ausführung wird in logs/shell_audit.log protokolliert
+  - Whitelist-Modus — optional mit SHELL_WHITELIST_MODE=1 nur explizit erlaubte Befehle
+
+  ---
+  Aufruf aus dem Canvas/CLI
+
+  "führe den Befehl [xyz] aus"
+  "starte mein Skript [name]"
+  "richte einen Cron-Job ein der..."
+  Oder via Delegation vom Meta-Agent:
+  delegate_to_agent("shell", "erstelle täglich um 8 Uhr einen Backup-Job")
+

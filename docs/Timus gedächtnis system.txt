@@ -1,0 +1,104 @@
+ Timus gedächtnis system 
+ 
+ Timus hat ein mehrschichtiges Gedächtnis aufgebaut:
+
+  1. Kurzzeit (RAM / Session)
+
+  - SessionMemory hält die letzten Nachrichten, Themen, offene Threads, Entitäten.
+  - Implementiert in memory_system.py (/home/fatih-ubuntu/dev/timus/memory/memory_system.py:288).
+  - Limits sind konfigurierbar (MAX_SESSION_MESSAGES=50, usw.) in memory_system.py (/home/fatih-ubuntu/dev/timus/memory/memory_system.py:46).
+
+  2. Langzeit (SQLite)
+
+  - PersistentMemory speichert dauerhaft Fakten, Summaries, Konversationen, Interaktions-Events und Memory-Items.
+  - Tabellen/Schema in memory_system.py (/home/fatih-ubuntu/dev/timus/memory/memory_system.py:483) und memory_system.py (/home/fatih-ubuntu/dev/timus/memory/memory_system.py:510).
+
+  3. Semantischer Speicher (ChromaDB)
+
+  - Vektorbasierte Suche über SemanticMemoryStore.
+  - Wenn shared_context nicht verfügbar ist, wird Chroma direkt aus memory_db/ initialisiert.
+  - Siehe memory_system.py (/home/fatih-ubuntu/dev/timus/memory/memory_system.py:124) und memory_system.py (/home/fatih-ubuntu/dev/timus/memory/memory_system.py:951).
+
+  4. Markdown-Store (menschlich editierbar)
+
+  - USER.md, SOUL.md, MEMORY.md plus tägliche Logs.
+  - Mit Suchindex (search_index.db) für Keyword/FTS-Suche.
+  - Siehe store.py (/home/fatih-ubuntu/dev/timus/memory/markdown_store/store.py:83) und store.py (/home/fatih-ubuntu/dev/timus/memory/markdown_store/store.py:833).
+
+  5. Hybrid-Retrieval
+
+  - Timus kombiniert semantische Treffer (Chroma) + Keyword-Treffer (FTS/Markdown-Index).
+  - Kernlogik in memory_system.py (/home/fatih-ubuntu/dev/timus/memory/memory_system.py:1303).
+
+  6. Working-Memory pro Anfrage
+
+  - Für jeden Turn wird ein budgetierter Kontextblock gebaut (Short-term + Long-term + stabiler Kontext).
+  - Kernlogik in memory_system.py (/home/fatih-ubuntu/dev/timus/memory/memory_system.py:1809).
+  - Wird im Agentenlauf vor dem LLM-Call injiziert: base_agent.py (/home/fatih-ubuntu/dev/timus/agent/base_agent.py:1335).
+
+  7. Lernschleife (Reflection + Soul)
+
+  - Nach Aufgaben reflektiert Timus Ergebnisse und speichert Learnings.
+  - reflection_engine.py (/home/fatih-ubuntu/dev/timus/memory/reflection_engine.py:398).
+  - Daraus driftet auch die Persönlichkeit (SOUL.md Achsen/Drift-History): soul_engine.py (/home/fatih-ubuntu/dev/timus/memory/soul_engine.py:45), soul_engine.py (/home/fatih-ubuntu/dev/
+    timus/memory/soul_engine.py:86).
+
+  8. Deterministisches Logging pro Turn
+
+  - Jeder Turn wird zentral ins Memory geloggt (nicht nur Tool-abhängig).
+  - main_dispatcher.py (/home/fatih-ubuntu/dev/timus/main_dispatcher.py:1122), memory_system.py (/home/fatih-ubuntu/dev/timus/memory/memory_system.py:1058).
+
+Datenfluss eines Chat-Turns (End-to-End)
+
+  1. Input kommt rein
+     Der Text landet im Dispatcher-Flow (z. B. über Terminal/Telegram) und wird als Query weitergegeben:
+     main_dispatcher.py (/home/fatih-ubuntu/dev/timus/main_dispatcher.py:793)
+  2. Routing auf Agent
+     Erst Keyword-Check, sonst LLM-Dispatcher entscheidet den Zielagenten:
+     main_dispatcher.py (/home/fatih-ubuntu/dev/timus/main_dispatcher.py:654)
+     main_dispatcher.py (/home/fatih-ubuntu/dev/timus/main_dispatcher.py:718)
+  3. Session + Lane + Agent-Instanz
+     run_agent() setzt/führt session_id, Lane und Agent aus:
+     main_dispatcher.py (/home/fatih-ubuntu/dev/timus/main_dispatcher.py:793)
+  4. Working Memory wird gebaut
+     Vor dem eigentlichen Denken zieht der Agent Memory-Kontext:
+     base_agent.py (/home/fatih-ubuntu/dev/timus/agent/base_agent.py:1335)
+     Die eigentliche Konstruktion (Short-term Events + Related Memories + Stable Context) passiert hier:
+     memory_system.py (/home/fatih-ubuntu/dev/timus/memory/memory_system.py:1809)
+  5. LLM-ReAct-Loop startet
+     Agent nutzt Systemprompt + Task(+Memory), erzeugt Thought/Action oder Final Answer:
+     base_agent.py (/home/fatih-ubuntu/dev/timus/agent/base_agent.py:1480)
+  6. Tool-Calls über MCP (falls nötig)
+     Aktionen werden als JSON-RPC gegen den MCP-Server ausgeführt:
+     base_agent.py (/home/fatih-ubuntu/dev/timus/agent/base_agent.py:657)
+     mcp_server.py (/home/fatih-ubuntu/dev/timus/server/mcp_server.py:1294)
+  7. Antwortabschluss
+     Bei Final Answer (oder Fehler/Limit) endet der Turn im Agentenlauf:
+     base_agent.py (/home/fatih-ubuntu/dev/timus/agent/base_agent.py:1621)
+     base_agent.py (/home/fatih-ubuntu/dev/timus/agent/base_agent.py:1784)
+  8. Reflection nach dem Turn
+     Automatisch mit Timeout-Schutz; analysiert Aktionen/Ergebnis:
+     base_agent.py (/home/fatih-ubuntu/dev/timus/agent/base_agent.py:1787)
+     reflection_engine.py (/home/fatih-ubuntu/dev/timus/memory/reflection_engine.py:398)
+  9. Learnings werden gespeichert
+     Reflection schreibt Muster/Verbesserungen in Memory:
+     reflection_engine.py (/home/fatih-ubuntu/dev/timus/memory/reflection_engine.py:445)
+  10. Soul-Drift wird angewendet
+     Aus Reflection-Signalen driften Achsen und werden in SOUL.md persistiert:
+     reflection_engine.py (/home/fatih-ubuntu/dev/timus/memory/reflection_engine.py:448)
+     soul_engine.py (/home/fatih-ubuntu/dev/timus/memory/soul_engine.py:86)
+  11. Deterministisches Turn-Logging
+     Dispatcher loggt jede Runde zentral (inkl. Memory-Snapshot-Metadaten):
+     main_dispatcher.py (/home/fatih-ubuntu/dev/timus/main_dispatcher.py:1122)
+  12. Session + Persistenz-Write
+     log_interaction_event() macht:
+      - Session-Update + Topic/Open-Thread-Update
+      - selektive Memory-Extraktion (SQLite + Chroma)
+      - persistentes interaction_events-Write
+        memory_system.py (/home/fatih-ubuntu/dev/timus/memory/memory_system.py:1058)
+  13. Nächster Turn nutzt das sofort
+     Beim nächsten Query wird genau dieses Event wieder als Kontext berücksichtigt (Working Memory / Hybrid Recall):
+     memory_system.py (/home/fatih-ubuntu/dev/timus/memory/memory_system.py:1863)
+     memory_system.py (/home/fatih-ubuntu/dev/timus/memory/memory_system.py:1303)
+
+

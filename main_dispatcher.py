@@ -459,6 +459,69 @@ VISUAL_KEYWORDS = [
     "bildschirm",
 ]
 
+CAMERA_KEYWORDS = [
+    "kamera",
+    "camera",
+    "realsense",
+    "d435",
+    "webcam",
+    "tiefenkamera",
+]
+
+CAMERA_ANALYSIS_KEYWORDS = [
+    "was siehst",
+    "was siehst du",
+    "analysiere",
+    "beschreibe",
+    "erkenne",
+    "schau",
+    "sieh",
+    "zeige",
+    "snapshot",
+    "aufnahme",
+    "foto",
+]
+
+CAMERA_SHORTCUT_KEYWORDS = [
+    "kannst du mich sehen",
+    "kannst du mich gerade sehen",
+    "siehst du mich",
+    "was siehst du",
+    "schau dir das an",
+    "sieh dir das an",
+    "schau mal hier",
+]
+
+CAMERA_NON_INTENT_HINTS = [
+    "http://",
+    "https://",
+    "www.",
+    ".py",
+    ".js",
+    ".ts",
+    ".csv",
+    ".xlsx",
+    "datei",
+    "code",
+    "skript",
+    "recherchiere",
+    "google",
+]
+
+CAMERA_SETUP_KEYWORDS = [
+    "install",
+    "einrichten",
+    "einbinden",
+    "konfig",
+    "treiber",
+    "firmware",
+    "update",
+]
+
+
+def _has_any_local_camera_device() -> bool:
+    return any(os.path.exists(f"/dev/video{i}") for i in range(12))
+
 # NEU: Keywords für VisualNemotronAgent (Multi-Step Web-Automation)
 VISUAL_NEMOTRON_KEYWORDS = [
     # Multi-Step Sequenzen
@@ -807,6 +870,23 @@ def quick_intent_check(query: str) -> Optional[str]:
     # DATA-Dateien — frühe Erkennung vor REASONING (CSV/Excel haben Vorrang)
     if _DATA_EXTENSIONS.search(query):
         return "data"
+
+    # Kameraanalyse (RealSense/D435/Webcam) -> ImageAgent
+    _has_camera = any(keyword in query_lower for keyword in CAMERA_KEYWORDS)
+    if _has_camera:
+        _is_setup_question = any(keyword in query_lower for keyword in CAMERA_SETUP_KEYWORDS)
+        _wants_camera_analysis = any(
+            keyword in query_lower for keyword in CAMERA_ANALYSIS_KEYWORDS
+        )
+
+        if _wants_camera_analysis and not _is_setup_question:
+            return "image"
+
+    # Natürliche Kurzformen ("kannst du mich sehen?", "schau dir das an")
+    _camera_shortcut = any(keyword in query_lower for keyword in CAMERA_SHORTCUT_KEYWORDS)
+    _has_non_camera_hint = any(keyword in query_lower for keyword in CAMERA_NON_INTENT_HINTS)
+    if _camera_shortcut and not _has_non_camera_hint and _has_any_local_camera_device():
+        return "image"
 
     # HÖCHSTE PRIORITÄT: Compound Multi-Step Tasks → immer META
     # (verhindert dass "architektur" REASONING triggert wenn "danach"/"erstelle" auch da ist)

@@ -14,32 +14,32 @@ cp .env.d435.preview .env
 # 3. Moondream3 Server starten
 python -m moondream.server --model moondream3-2b --port 2021
 
-# 4. D435 starten (im Hintergrund)
-python tools/d435_tool/d435_server.py &
-
-# 5. Timus starten
+# 4. Timus starten (MCP lädt RealSense-Tools automatisch)
 python server/mcp_server.py
+
+# 5. Kamera testen
+rs-enumerate-devices
+# optional via MCP Tool: realsense_status / capture_realsense_snapshot
+
+# 6. Live-Stream aktivieren (dauerhaftes Sehen)
+# via MCP Tool: start_realsense_stream
+# oder ENV vor Server-Start:
+# REALSENSE_STREAM_AUTO_START=true
 ```
 
 ## Architektur
 
 ```
-┌─────────────┐    USB 3.0     ┌──────────────┐
-│ Intel D435  │───────────────→│ D435 Tool    │
-│ (RGB+Depth) │                │ (Frame Grab) │
-└─────────────┘                └──────┬───────┘
-                                    │
-                                    ▼
-┌──────────────┐              ┌──────────────┐
-│ Moondream3   │←─────────────│ Frame Buffer │
-│ (2B Model)   │   HTTP API   │ (640x480)    │
-│ ~2-3GB VRAM  │              └──────────────┘
-└──────┬───────┘
-       │
-       ▼
-┌──────────────┐
-│ Vision Agent │←→ Tasks
-└──────────────┘
+┌─────────────┐    USB 3.0     ┌──────────────────────┐
+│ Intel D435  │───────────────→│ RealSense MCP Tool   │
+│ (RGB+Depth) │                │ (status + snapshot)  │
+└─────────────┘                └──────────┬───────────┘
+                                          │
+                                          ▼
+┌──────────────┐                    ┌──────────────┐
+│ Moondream3   │←──────────────────→│ Vision Agent │
+│ (2B Model)   │      Frames        │ (Image/Visual)│
+└──────────────┘                    └──────────────┘
 ```
 
 ## Speicher-Nutzung

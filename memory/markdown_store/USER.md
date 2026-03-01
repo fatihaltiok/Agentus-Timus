@@ -6,9 +6,9 @@ preferences:
   language: de
   style: precise
 goals:
-  - st du irgendwas wissen
+  - in kontaktieren
 constraints: []
-updated_at: 2026-02-26T07:48:03.009749
+updated_at: 2026-03-01T14:19:18.595968
 ---
 
 # Benutzer-Profil
@@ -30,10 +30,10 @@ Nicht gesetzt
 - style: precise
 
 ## Ziele
-- st du irgendwas wissen
+- in kontaktieren
 
 ## Constraints
 Keine Constraints
 
 ---
-*Zuletzt aktualisiert: 2026-02-26T07:48:03.009749*
+*Zuletzt aktualisiert: 2026-03-01T14:19:18.595968*

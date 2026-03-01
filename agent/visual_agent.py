@@ -48,7 +48,10 @@ from openai import OpenAI
 from utils.openai_compat import prepare_openai_params
 
 # Shared Utilities
-from agent.shared.screenshot import capture_screenshot_base64 as _shared_screenshot_b64
+from agent.shared.screenshot import (
+    capture_screenshot_base64 as _shared_screenshot_b64,
+    get_last_screenshot_error as _shared_last_screenshot_error,
+)
 from agent.shared.mcp_client import MCPClient as _SharedMCPClient
 from agent.shared.action_parser import parse_action as _shared_parse_action
 
@@ -724,7 +727,7 @@ async def run_visual_task(task: str, max_iterations: int = 30) -> str:
     log.info(f"   Mouse Feedback: {'AKTIV' if USE_MOUSE_FEEDBACK else 'DEAKTIVIERT'}")
     
     if not MSS_AVAILABLE:
-        return "Fehler: mss/PIL nicht installiert. Screenshots nicht möglich."
+        return "Fehler: mss/PIL nicht installiert oder nicht importierbar."
     
     # State
     history = [
@@ -747,7 +750,8 @@ async def run_visual_task(task: str, max_iterations: int = 30) -> str:
             # Screenshot machen
             screenshot = await asyncio.to_thread(get_screenshot_base64)
             if not screenshot:
-                return "Fehler: Screenshot nicht möglich"
+                detail = _shared_last_screenshot_error() or "unbekannter Fehler"
+                return f"Fehler: Screenshot nicht möglich ({detail})"
         
         # Kontext-Hinweise für LLM
         context_hints = []

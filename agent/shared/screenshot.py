@@ -12,6 +12,17 @@ log = logging.getLogger("screenshot")
 _mss = None
 _Image = None
 _available: Optional[bool] = None
+_last_error: str = ""
+
+
+def _set_last_error(message: str) -> None:
+    global _last_error
+    _last_error = (message or "").strip()
+
+
+def get_last_screenshot_error() -> str:
+    """Liefert den letzten Screenshot-Fehlertext (falls vorhanden)."""
+    return _last_error
 
 
 def _ensure_loaded() -> bool:
@@ -26,6 +37,7 @@ def _ensure_loaded() -> bool:
         _available = True
     except ImportError:
         _available = False
+        _set_last_error("ImportError: mss/PIL nicht installiert.")
     return _available
 
 
@@ -48,6 +60,8 @@ def capture_screenshot_base64(
     """
     if not _ensure_loaded():
         log.error("mss/PIL nicht verfuegbar")
+        if not _last_error:
+            _set_last_error("mss/PIL nicht verfügbar.")
         return ""
 
     if monitor_index is None:
@@ -72,6 +86,7 @@ def capture_screenshot_base64(
         return base64.b64encode(buf.getvalue()).decode()
     except Exception as e:
         log.debug(f"Screenshot fehlgeschlagen: {e}")
+        _set_last_error(str(e))
         return ""
 
 
@@ -82,6 +97,8 @@ def capture_screenshot_image(monitor_index: Optional[int] = None):
         PIL.Image.Image oder None bei Fehler.
     """
     if not _ensure_loaded():
+        if not _last_error:
+            _set_last_error("mss/PIL nicht verfügbar.")
         return None
 
     if monitor_index is None:
@@ -98,4 +115,5 @@ def capture_screenshot_image(monitor_index: Optional[int] = None):
             return _Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
     except Exception as e:
         log.debug(f"Screenshot fehlgeschlagen: {e}")
+        _set_last_error(str(e))
         return None

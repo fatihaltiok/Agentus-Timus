@@ -1,0 +1,282 @@
+---                                                                                                                                                                                         
+  Timus Autonomie-Roadmap                                                                                                                                                                     
+                                                                                                                                                                                              
+  Wichtige Entdeckung vorab                                                                                                                                                                   
+                                                                                                                                                                                              
+  Der Scheduler (orchestration/scheduler.py) existiert bereits — aber ist nicht vollständig mit dem Dispatcher verbunden. Das ist unser Startpunkt, nicht null.                               
+                                                                                                                                                                                              
+  ---
+  Meilenstein 0 — Basis-Audit & Aufräumen                                                                                                                                                     
+                                                                                                                                                                                              
+  Ziel: Sicherstellen dass alles was schon da ist, wirklich funktioniert                                                                                                                      
+                                                                                                                                                                                              
+  Aufgaben:                                                                                                                                                                                   
+  - Scheduler testen: Feuert der Heartbeat wirklich?
+  - MCP-Server starten und alle 46 Tools validieren
+  - run_agent() mit allen 9 Agent-Typen einmal durchlaufen
+  - .env vs .env.example abgleichen — fehlen API-Keys?
+
+  Tests M0 → M1:
+  ✓ pytest tests/test_scheduler.py → alle grün
+  ✓ pytest tests/test_orchestration_lanes.py → alle grün
+  ✓ pytest tests/test_canvas_store.py → alle grün
+  ✓ Manuell: python main_dispatcher.py → 1 Frage stellen, Antwort erhalten
+  Erst wenn das alles grün ist → weiter zu M1.
+
+  ---
+  Meilenstein 1 — Scheduler vollständig aktivieren
+
+  Ziel: Timus handelt alle 15 Minuten ohne User-Input
+
+  Was fehlt:
+  - Scheduler läuft isoliert, führt aber keine echten Agent-Tasks aus
+  - _check_pending_tasks() liest tasks.json — aber wer schreibt da rein?
+  - on_wake Callback ist nicht mit run_agent() verbunden
+
+  Aufgaben:
+  1. Scheduler-Hook in main_dispatcher.py einbauen: on_wake → run_agent()
+  2. tasks.json Schema definieren (Format für autonome Tasks)
+  3. CLI-Befehl: timus task add "Recherchiere Bitcoin-Preis täglich um 9 Uhr"
+  4. Scheduler beim Server-Start automatisch starten
+
+  Tests M1 → M2:
+  ✓ pytest tests/test_scheduler.py (erweitert)
+  ✓ Integrationstest: Task in tasks.json schreiben → 15 min warten → wurde ausgeführt?
+  ✓ Kompatibilitätstest: Läuft Scheduler parallel zu main_loop() ohne Race-Condition?
+  ✓ Edge-Case: Was passiert wenn ein Task länger als 15 min dauert?
+
+  ---
+  Meilenstein 2 — Telegram-Bot als Kommunikationskanal
+
+  Ziel: Du schreibst Timus auf Telegram → er arbeitet autonom → antwortet wenn fertig
+
+  Was gebaut wird:
+  - gateway/telegram_gateway.py — neues Modul
+  - Telegram-Bot empfängt Nachricht → run_agent() → Antwort zurück
+  - Langläufige Tasks: "Arbeite daran, ich melde mich..." mit Fortschritts-Updates
+  - Session-Mapping: Telegram-User-ID ↔ Timus-Session-ID
+
+  Abhängigkeit von M1: Scheduler muss stabil laufen (Tasks können via Telegram hinzugefügt werden)
+
+  Tests M2 → M3:
+  ✓ Unit: Telegram-Message-Parsing korrekt?
+  ✓ Integration: Nachricht senden → Agent antwortet?
+  ✓ Kompatibilität: Telegram-Session und CLI-Session gleichzeitig → kein Conflict?
+  ✓ Stress: 5 Nachrichten gleichzeitig → Lane-Manager verhindert Race-Conditions?
+  ✓ Edge-Case: Telegram offline → graceful degradation?
+
+  ---
+  Meilenstein 3 — Autonome Task-Queue & Priorisierung
+
+  Ziel: Timus verwaltet eine echte Aufgabenliste, die er selbstständig abarbeitet
+
+  Was gebaut wird:
+  - orchestration/task_queue.py — persistente Queue (SQLite statt JSON)
+  - Prioritäten: CRITICAL > HIGH > NORMAL > LOW
+  - Task-Typen: scheduled (Cron-Zeit), triggered (Webhook), delegated (von Agent)
+  - Timus kann selbst Sub-Tasks erstellen und delegieren
+  - Fortschritts-Tracking im Canvas-Store
+
+  Abhängigkeit von M2: Telegram als Kontrollkanal für Queue-Verwaltung
+
+  Tests M3 → M4:
+  ✓ pytest tests/test_task_queue.py (neu)
+  ✓ Integration: Agent erstellt Sub-Task → wird ausgeführt → Ergebnis in Canvas?
+  ✓ Kompatibilität: Tasks.json Migration → SQLite (Rückwärtskompatibilität)
+  ✓ Edge-Case: Task schlägt fehl → bleibt in Queue oder wird dropped?
+  ✓ Load-Test: 20 Tasks gleichzeitig → Priorisierung korrekt?
+
+  ---
+  Meilenstein 4 — Self-Healing & Model-Failover
+
+  Ziel: Wenn ein Agent/Model versagt, macht Timus automatisch weiter
+
+  Was gebaut wird:
+  - Model-Failover-Tabelle: z.B. deepseek-reasoner → claude-sonnet → gpt-5-mini
+  - Retry-Policy pro Task-Typ (3 Versuche, exponential backoff)
+  - Fehler-Klassifizierung: API_ERROR, TIMEOUT, CONTENT_FILTER, TOOL_FAIL
+  - Bei TOOL_FAIL: alternativen Tool-Pfad versuchen
+  - Alert via Telegram wenn alle Retries erschöpft
+
+  Abhängigkeit von M3: Task-Queue muss Retry-Status tracken
+
+  Tests M4 → M5:
+  ✓ pytest tests/test_model_failover.py (neu)
+  ✓ Simulierter API-Ausfall → Failover-Model übernimmt?
+  ✓ Kompatibilität: Failover-Antwort ist gleich formatiert wie Primär-Antwort?
+  ✓ Edge-Case: Alle Models down → Telegram-Alert wird gesendet?
+  ✓ Integration: Fehlgeschlagener Task landet wieder korrekt in Queue?
+
+  ---
+  Meilenstein 5 — Proaktive Skills & Event-Trigger
+
+  Ziel: Timus beobachtet die Welt und handelt von selbst, ohne dass du was tust
+
+  Was gebaut wird:
+  - gateway/webhook_gateway.py — FastAPI Webhook-Endpoint
+  - Event-Types: RSS_NEW_ITEM, PRICE_ALERT, EMAIL_RECEIVED, WEBHOOK_PUSH
+  - Skill-Trigger: Event-Typ ↔ Skill-Mapping (konfigurierbar)
+  - Beispiel: Neuer Artikel auf Heise.de → Research-Agent fasst zusammen → Telegram
+
+  Abhängigkeit von M4: Self-Healing muss stabil sein, da proaktive Triggers keine User-Aufsicht haben
+
+  Tests M5:
+  ✓ pytest tests/test_webhook_gateway.py (neu)
+  ✓ E2E: Webhook-Event → Skill ausgelöst → Ergebnis via Telegram?
+  ✓ Kompatibilität: Webhook-Auth (HMAC) korrekt?
+  ✓ Security-Test: Ungültiger Webhook → abgelehnt, kein Agent-Start?
+  ✓ Integration: Proaktiver Task erscheint im Canvas-Store?
+
+  ---
+  Übersicht
+
+  M0: Basis-Audit (1-2 Tage)
+   └─ Tests grün → M1
+
+  M1: Scheduler aktiviert (2-3 Tage)
+   └─ Timus handelt autonom alle 15 min
+   └─ Tests grün → M2
+
+  M2: Telegram-Bot (3-4 Tage)
+   └─ Fernsteuerung + Feedback via Telegram
+   └─ Tests grün → M3
+
+  M3: Task-Queue (3-4 Tage)
+   └─ Priorisierte, persistente Aufgabenliste
+   └─ Tests grün → M4
+
+  M4: Self-Healing (2-3 Tage)
+   └─ Timus überlebt API-Ausfälle alleine
+   └─ Tests grün → M5
+
+  M5: Proaktive Events (4-5 Tage)
+   └─ Timus beobachtet + handelt ohne Trigger
+
+  ---
+  Womit fangen wir an — M0 (Audit) oder direkt M1?
+
+  M0 wäre meine Empfehlung — damit wir wissen was wirklich funktioniert bevor wir draufbauen.
+
+ Gesamte Roadmap — Alle Meilensteine abgeschlossen 🎉                                                                                                                                        
+                                                                                                                                                                                              
+  ┌─────────────────────┬────────┬─────────────────────────────────────────┐                                                                                                                  
+  │     Meilenstein     │ Status │            Was wurde gebaut             │                                                                                                                  
+  ├─────────────────────┼────────┼─────────────────────────────────────────┤                                                                                                                  
+  │ M0 Basis-Audit      │ ✅     │ 1 Bug gefixt, OpenAI-Key erneuert       │                                                                                                                  
+  ├─────────────────────┼────────┼─────────────────────────────────────────┤
+  │ M1 Scheduler        │ ✅     │ Autonome Task-Ausführung alle 15 min    │                                                                                                                  
+  ├─────────────────────┼────────┼─────────────────────────────────────────┤                                                                                                                  
+  │ M2 Telegram         │ ✅     │ @agentustimus_bot empfängt Befehle      │                                                                                                                  
+  ├─────────────────────┼────────┼─────────────────────────────────────────┤                                                                                                                  
+  │ M3 Task-Queue       │ ✅     │ SQLite mit Prioritäten + atomares Claim │                                                                                                                  
+  ├─────────────────────┼────────┼─────────────────────────────────────────┤                                                                                                                  
+  │ M4 Self-Healing     │ ✅     │ Failover + Retry + Telegram-Alert       │                                                                                                                  
+  ├─────────────────────┼────────┼─────────────────────────────────────────┤
+  │ M5 Proaktive Events │ ✅     │ RSS-Poller + Webhook-Gateway            │
+  └─────────────────────┴────────┴─────────────────────────────────────────┘
+
+
+
+  Timus jetzt aktivieren — 2 Befehle:
+  # Terminal 1
+  python server/mcp_server.py
+
+  # Terminal 2
+  python main_dispatcher.py
+
+  RSS-Feed aktivieren — in .env:
+  RSS_FEEDS=https://www.heise.de/rss/heise-atom.xml
+  RSS_POLL_INTERVAL=30
+
+  Webhook aktivieren — in .env:
+  WEBHOOK_ENABLED=true
+  WEBHOOK_SECRET=dein-geheimes-wort
+
+
+                                                                                                                                                                                             
+  # 1. Service-Dateien installieren                                                                                                                                                           
+  sudo cp /home/fatih-ubuntu/dev/timus/timus-mcp.service /etc/systemd/system/                                                                                                                 
+  sudo cp /home/fatih-ubuntu/dev/timus/timus-dispatcher.service /etc/systemd/system/                                                                                                          
+                                                                                                                                                                                              
+  # 2. systemd neu laden                                                                                                                                                                      
+  sudo systemctl daemon-reload
+
+  # 3. Services aktivieren (Autostart beim Boot)
+  sudo systemctl enable timus-mcp.service
+  sudo systemctl enable timus-dispatcher.service
+
+  # 4. Services starten
+  sudo systemctl start timus-mcp.service
+  sleep 3  # MCP-Server Zeit geben hochzufahren
+  sudo systemctl start timus-dispatcher.service
+
+  # 5. Status prüfen
+  sudo systemctl status timus-mcp.service
+  sudo systemctl status timus-dispatcher.service
+
+  Zum Überwachen der Logs:
+  # MCP-Server Logs
+  journalctl -u timus-mcp -f
+
+  # Dispatcher Logs (Telegram, Scheduler, etc.)
+  journalctl -u timus-dispatcher -f
+
+  Nützliche Befehle:
+  # Neustart nach Code-Änderungen
+  sudo systemctl restart timus-dispatcher.service
+
+  # Nur MCP neu starten (Dispatcher hängt davon ab)
+  sudo systemctl restart timus-mcp.service && sudo systemctl restart timus-dispatcher.service
+
+  # Services stoppen
+  sudo systemctl stop timus-dispatcher.service timus-mcp.service
+  Du kannst jetzt /start an @agentustimus_bot schicken und mit /status prüfen ob alles korrekt gemeldet wird.
+  
+  
+    Wichtig für die Zukunft: Wenn du Timus als systemd-Service laufen hast, nicht zusätzlich manuell starten. Zum Debuggen stattdessen:
+  sudo systemctl stop timus-dispatcher   # Service stoppen
+  python main_dispatcher.py              # Manuell starten
+  # ...
+  sudo systemctl start timus-dispatcher  # Danach wieder Service starten
+
+ Oder alles in einem:
+  sudo systemctl daemon-reload && sudo systemctl restart timus-mcp && sleep 5 && sudo systemctl restart timus-dispatcher && sudo systemctl status timus-mcp timus-dispatcher
+  
+   Verfügbare Befehle:
+
+  ┌──────────────────────┬──────────────────────────────────────┐
+  │        Befehl        │               Funktion               │
+  ├──────────────────────┼──────────────────────────────────────┤
+  │ /start               │ Begrüßung + Session-ID               │
+  ├──────────────────────┼──────────────────────────────────────┤
+  │ /status              │ Scheduler, Queue-Stats, CPU/RAM/Disk │
+  ├──────────────────────┼──────────────────────────────────────┤
+  │ /tasks               │ Alle Tasks in der Queue              │
+  ├──────────────────────┼──────────────────────────────────────┤
+  │ /task <text>         │ Neuen Task hinzufügen                │
+  ├──────────────────────┼──────────────────────────────────────┤
+  │ /remind HH:MM <text> │ Erinnerung setzen                    │
+  ├──────────────────────┼──────────────────────────────────────┤
+  │ <normaler Text>      │ Direkt an Timus Agent-Pipeline       │
+  └──────────────────────┴──────────────────────────────────────┘
+
+nvidia buld api key 
+
+
+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
+
+
+
+# Produktionsbetrieb: systemd
+sudo systemctl start timus-mcp
+sleep 3
+sudo systemctl start timus-dispatcher
+
+# Entwicklung: 3 Terminals
+./start_timus_three_terminals.sh
+
+# Terminal-Client (zum laufenden Service verbinden)
+python timus_terminal.py
+
+# Canvas Web-UI
+xdg-open http://localhost:5000/canvas/ui

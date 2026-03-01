@@ -1,32 +1,30 @@
 # tools/voice_tool/tool.py
 """
-Timus Voice Tool v1.0
+Timus Voice Tool v2.0
 
 Spracheingabe: Faster-Whisper (lokal, GPU)
-Sprachausgabe: ElevenLabs (Cloud, beste Qualität)
+Sprachausgabe: Inworld.AI TTS (günstiger als ElevenLabs)
 
 Features:
 - listen() - Nimmt Sprache auf und transkribiert
-- speak(text) - Spricht Text mit ElevenLabs
+- speak(text) - Spricht Text mit Inworld.AI
 - voice_chat() - Kontinuierlicher Dialog mit Timus
-- set_voice(voice_id) - Wechselt ElevenLabs Stimme
+- set_voice(voice_id) - Wechselt Inworld Stimme
 """
 
 import logging
 import asyncio
 import os
 import io
-import tempfile
-import threading
+import base64
 import queue
 import time
-from typing import Optional, Union, Callable
+import requests
+from typing import Optional
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 import sounddevice as sd
-from elevenlabs.client import ElevenLabs
 from faster_whisper import WhisperModel
 from dotenv import load_dotenv
 
@@ -37,54 +35,44 @@ load_dotenv()
 log = logging.getLogger("voice_tool")
 
 # Konfiguration
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "medium")  # small, medium, large-v3
 WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cuda")  # cuda oder cpu
 SAMPLE_RATE = 16000
-DEFAULT_VOICE_ID = "pNInz6obpgDQGcFmaJgB"  # Adam
-DEFAULT_MODEL_ID = "eleven_multilingual_v2"
 
-# Verfügbare ElevenLabs Stimmen
-VOICES = {
-    "adam": "pNInz6obpgDQGcFmaJgB",
-    "rachel": "21m00Tcm4TlvDq8ikWAM",
-    "domi": "AZnzlk1XvdvUeBnXmlld",
-    "bella": "EXAVITQu4vr4xnSDxMaL",
-    "antoni": "ErXwobaYiN019PkySvjV",
-    "elli": "MF3mGyEYCl7XYWbV9V6O",
-    "josh": "TxGEqnHWrfWFTfGW9XjX",
-    "arnold": "VR6AewLTigWG4xSOukaG",
-    "sam": "yoZ06aMxZJJ28mfd3POQ",
-}
+# Inworld.AI TTS
+INWORLD_API_KEY     = os.getenv("INWORLD_API_KEY")
+INWORLD_VOICE       = os.getenv("INWORLD_VOICE", "Lennart")
+INWORLD_MODEL       = os.getenv("INWORLD_MODEL", "inworld-tts-1.5-max")
+INWORLD_SPEAKING_RATE = float(os.getenv("INWORLD_SPEAKING_RATE", "1.3"))
+INWORLD_TEMPERATURE   = float(os.getenv("INWORLD_TEMPERATURE", "1.5"))
+INWORLD_TTS_URL     = "https://api.inworld.ai/tts/v1/voice"
 
 
 @dataclass
 class VoiceConfig:
     """Konfiguration für Voice-Tool."""
-    voice_id: str = DEFAULT_VOICE_ID
-    model_id: str = DEFAULT_MODEL_ID
+    inworld_voice: str = INWORLD_VOICE
     listen_duration: float = 5.0  # Sekunden
-    silence_threshold: float = 0.01
-    silence_duration: float = 1.5  # Sekunden Stille = Ende
+    silence_threshold: float = 0.003  # niedrig: bei 44.1 kHz float32 ist Sprache oft 0.01-0.1
+    silence_duration: float = 1.8   # Sekunden Stille nach Sprache = Ende
     language: str = "de"
 
 
 class VoiceEngine:
     """
-    Engine für Spracheingabe und -ausgabe.
+    Engine für Spracheingabe (Faster-Whisper) und -ausgabe (Inworld.AI TTS).
     """
 
     def __init__(self):
         self.config = VoiceConfig()
         self.whisper_model: Optional[WhisperModel] = None
-        self.elevenlabs_client: Optional[ElevenLabs] = None
         self.is_listening = False
         self.is_speaking = False
         self._audio_queue = queue.Queue()
         self._initialized = False
 
     def initialize(self):
-        """Initialisiert Whisper und ElevenLabs."""
+        """Initialisiert Whisper und prüft Inworld.AI Konfiguration."""
         if self._initialized:
             return
 
@@ -98,72 +86,92 @@ class VoiceEngine:
             log.info("✅ Whisper Modell geladen")
         except Exception as e:
             log.error(f"❌ Whisper Fehler: {e}")
-            # Fallback auf CPU
             log.info("Versuche CPU-Fallback...")
             self.whisper_model = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
 
-        if ELEVENLABS_API_KEY:
-            self.elevenlabs_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
-            log.info("✅ ElevenLabs Client initialisiert")
+        if INWORLD_API_KEY:
+            log.info(f"✅ Inworld.AI TTS bereit (Voice: {INWORLD_VOICE}, Model: {INWORLD_MODEL})")
         else:
-            log.warning("⚠️ ELEVENLABS_API_KEY nicht gesetzt - Sprachausgabe deaktiviert")
+            log.warning("⚠️ INWORLD_API_KEY nicht gesetzt - Sprachausgabe deaktiviert")
 
         self._initialized = True
 
+    def _device_rate(self) -> int:
+        """Gibt die native Samplerate des Standard-Eingabegeräts zurück."""
+        try:
+            info = sd.query_devices(kind='input')
+            rate = int(info['default_samplerate'])
+            log.debug(f"Gerät native Samplerate: {rate} Hz")
+            return rate
+        except Exception:
+            return SAMPLE_RATE
+
+    def _resample(self, audio: np.ndarray, from_rate: int) -> np.ndarray:
+        """Resampled Audio von from_rate auf SAMPLE_RATE (16 kHz) via scipy (hohe Qualität)."""
+        if from_rate == SAMPLE_RATE or len(audio) == 0:
+            return audio
+        from scipy.signal import resample_poly
+        import math
+        g = math.gcd(SAMPLE_RATE, from_rate)
+        up, down = SAMPLE_RATE // g, from_rate // g
+        resampled = resample_poly(audio, up, down)
+        return resampled.astype('float32')
+
     def _record_audio(self, duration: float) -> np.ndarray:
-        """Nimmt Audio für eine bestimmte Dauer auf."""
-        log.debug(f"Aufnahme für {duration}s...")
-        audio = sd.rec(
-            int(duration * SAMPLE_RATE),
-            samplerate=SAMPLE_RATE,
-            channels=1,
-            dtype='float32'
-        )
+        """Nimmt Audio für eine bestimmte Dauer auf (native Rate, dann resampeln)."""
+        rate = self._device_rate()
+        log.debug(f"Aufnahme für {duration}s bei {rate} Hz...")
+        audio = sd.rec(int(duration * rate), samplerate=rate, channels=1, dtype='float32')
         sd.wait()
-        return audio.flatten()
+        return self._resample(audio.flatten(), rate)
 
     def _record_until_silence(self, max_duration: float = 30.0) -> np.ndarray:
-        """
-        Nimmt Audio auf bis Stille erkannt wird.
-        Intelligenter als feste Dauer.
-        """
+        """Nimmt kontinuierlich Audio auf bis Stille erkannt wird (native Rate → 16 kHz)."""
         log.debug("Aufnahme bis Stille...")
+        rate = self._device_rate()
 
-        chunk_duration = 0.5  # 500ms Chunks
-        chunk_samples = int(chunk_duration * SAMPLE_RATE)
+        chunk_duration = 0.4  # 400ms Chunks
+        chunk_samples = int(chunk_duration * rate)
 
-        audio_chunks = []
+        all_chunks = []       # ALLE Chunks (Sprache + Stille) für Whisper
         silence_start = None
+        speech_detected = False
         total_duration = 0
 
         self.is_listening = True
 
         while total_duration < max_duration and self.is_listening:
-            chunk = sd.rec(chunk_samples, samplerate=SAMPLE_RATE, channels=1, dtype='float32')
+            chunk = sd.rec(chunk_samples, samplerate=rate, channels=1, dtype='float32')
             sd.wait()
             chunk = chunk.flatten()
 
-            # Lautstärke prüfen
             volume = np.abs(chunk).mean()
+            all_chunks.append(chunk)  # immer speichern
 
-            if volume < self.config.silence_threshold:
-                if silence_start is None:
-                    silence_start = time.time()
-                elif time.time() - silence_start > self.config.silence_duration:
-                    log.debug("Stille erkannt - Aufnahme beendet")
-                    break
-            else:
+            if volume >= self.config.silence_threshold:
+                speech_detected = True
                 silence_start = None
-                audio_chunks.append(chunk)
+            else:
+                # Stille zählen — aber erst nach erster Sprache stoppen
+                if speech_detected:
+                    if silence_start is None:
+                        silence_start = time.time()
+                    elif time.time() - silence_start > self.config.silence_duration:
+                        log.debug(f"Stille erkannt nach {total_duration:.1f}s — Aufnahme beendet")
+                        break
 
             total_duration += chunk_duration
 
         self.is_listening = False
 
-        if not audio_chunks:
+        if not all_chunks:
             return np.array([], dtype='float32')
 
-        return np.concatenate(audio_chunks)
+        audio = np.concatenate(all_chunks)
+        log.info(f"🎤 Aufnahme: {total_duration:.1f}s, Peak: {np.abs(audio).max():.4f}, RMS: {np.abs(audio).mean():.4f}")
+
+        # Auf 16 kHz resampeln für Whisper
+        return self._resample(audio, rate)
 
     def listen(self, duration: Optional[float] = None, wait_for_silence: bool = True) -> str:
         """
@@ -192,71 +200,89 @@ class VoiceEngine:
             log.warning("Keine Audio-Daten aufgenommen")
             return ""
 
-        log.debug("Transkribiere...")
+        log.info(f"🔍 Whisper: {len(audio)} Samples ({len(audio)/SAMPLE_RATE:.1f}s), Peak={np.abs(audio).max():.4f}")
         segments, info = self.whisper_model.transcribe(
             audio,
             language=self.config.language,
-            vad_filter=True  # Filtert Stille
+            vad_filter=False,   # Kein VAD — wir übergeben bereits aufbereitetes Audio
+            beam_size=5,
         )
 
-        text = " ".join([s.text.strip() for s in segments])
-        log.info(f"📝 Erkannt: {text}")
+        text = " ".join([s.text.strip() for s in segments]).strip()
+        log.info(f"📝 Erkannt: '{text}'")
 
         return text
 
     def speak(self, text: str, voice: Optional[str] = None) -> bool:
         """
-        Spricht Text mit ElevenLabs.
+        Spricht Text mit Inworld.AI TTS.
 
         Args:
             text: Zu sprechender Text
-            voice: Stimmen-Name oder ID (optional)
+            voice: Inworld Stimmen-Name (optional, überschreibt .env INWORLD_VOICE)
 
         Returns:
             True wenn erfolgreich
         """
-        if not self.elevenlabs_client:
-            log.error("ElevenLabs nicht initialisiert")
+        if not INWORLD_API_KEY:
+            log.error("INWORLD_API_KEY nicht gesetzt")
             return False
 
         if not text.strip():
             return True
 
-        # Voice ID bestimmen
-        voice_id = self.config.voice_id
-        if voice:
-            voice_id = VOICES.get(voice.lower(), voice)
-
-        log.info(f"🔊 Spreche: {text[:50]}...")
         self.is_speaking = True
+        voice_name = voice or self.config.inworld_voice
+
+        # Länge begrenzen (API-Limit)
+        if len(text) > 500:
+            text = text[:500] + "..."
+
+        log.info(f"🔊 Inworld.AI spricht ({voice_name}): {text[:60]}…")
 
         try:
-            # Audio generieren
-            audio = self.elevenlabs_client.text_to_speech.convert(
-                text=text,
-                voice_id=voice_id,
-                model_id=self.config.model_id
+            response = requests.post(
+                INWORLD_TTS_URL,
+                json={
+                    "text": text,
+                    "voiceId": voice_name,
+                    "modelId": INWORLD_MODEL,
+                    "voiceSettings": {"speaking_rate": INWORLD_SPEAKING_RATE},
+                    "temperature": INWORLD_TEMPERATURE,
+                },
+                headers={
+                    "Authorization": f"Basic {INWORLD_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                timeout=30,
             )
+            response.raise_for_status()
 
-            # In temporäre Datei speichern und abspielen
-            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
-                for chunk in audio:
-                    f.write(chunk)
-                temp_path = f.name
+            audio_bytes = base64.b64decode(response.json()["audioContent"])
 
-            # Abspielen mit ffplay (leise, ohne Fenster)
-            os.system(f"ffplay -nodisp -autoexit -loglevel quiet '{temp_path}' 2>/dev/null")
+            from pydub import AudioSegment
+            audio_segment = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
+            samples = np.array(audio_segment.get_array_of_samples(), dtype=np.float32)
+            samples = samples / (np.max(np.abs(samples)) or 1.0)
+            if audio_segment.channels == 2:
+                samples = samples.reshape((-1, 2)).mean(axis=1)
 
-            # Aufräumen
-            os.unlink(temp_path)
+            sd.play(samples, samplerate=audio_segment.frame_rate)
+            sd.wait()
 
             self.is_speaking = False
             return True
 
+        except requests.exceptions.HTTPError as e:
+            log.error(f"❌ Inworld.AI HTTP-Fehler: {e}")
+            if e.response is not None and e.response.status_code == 401:
+                log.error("Authentifizierung fehlgeschlagen — prüfe INWORLD_API_KEY in .env")
         except Exception as e:
             log.error(f"❌ Sprachausgabe Fehler: {e}")
+        finally:
             self.is_speaking = False
-            return False
+
+        return False
 
     async def speak_async(self, text: str, voice: Optional[str] = None) -> bool:
         """Asynchrone Version von speak()."""
@@ -267,22 +293,10 @@ class VoiceEngine:
         return await asyncio.to_thread(self.listen, duration)
 
     def set_voice(self, voice_name: str) -> bool:
-        """
-        Wechselt die ElevenLabs Stimme.
-
-        Args:
-            voice_name: Name (adam, rachel, etc.) oder Voice ID
-        """
-        if voice_name.lower() in VOICES:
-            self.config.voice_id = VOICES[voice_name.lower()]
-            log.info(f"✅ Stimme gewechselt zu: {voice_name}")
-            return True
-        elif len(voice_name) > 10:  # Wahrscheinlich eine Voice ID
-            self.config.voice_id = voice_name
-            return True
-        else:
-            log.warning(f"Unbekannte Stimme: {voice_name}")
-            return False
+        """Wechselt die Inworld.AI Stimme."""
+        self.config.inworld_voice = voice_name
+        log.info(f"✅ Inworld-Stimme gesetzt: {voice_name}")
+        return True
 
     def set_language(self, language: str):
         """Setzt die Sprache für Whisper (de, en, etc.)."""
@@ -294,8 +308,12 @@ class VoiceEngine:
         self.is_listening = False
 
     def get_available_voices(self) -> dict:
-        """Gibt verfügbare Stimmen zurück."""
-        return VOICES.copy()
+        """Gibt bekannte Inworld.AI Stimmen zurück (nicht abschließend)."""
+        return {
+            "Lennart": "de-DE männlich, natürlich",
+            "Ashley": "en-US weiblich, freundlich",
+            "Derek": "en-US männlich, professionell",
+        }
 
 
 # Globale Engine-Instanz
@@ -344,21 +362,21 @@ async def voice_listen(duration: Optional[float] = None) -> dict:
 
 @tool(
     name="voice_speak",
-    description="Spricht Text mit ElevenLabs Stimme.",
+    description="Spricht Text mit Inworld.AI TTS.",
     parameters=[
         P("text", "string", "Zu sprechender Text", required=True),
-        P("voice", "string", "Optional - Stimmen-Name (adam, rachel, domi, bella, etc.)", required=False, default=None),
+        P("voice", "string", "Optional - Inworld Stimmen-Name (z.B. Lennart, Ashley, Derek)", required=False, default=None),
     ],
     capabilities=["voice", "speech"],
     category=C.VOICE
 )
 async def voice_speak(text: str, voice: Optional[str] = None) -> dict:
     """
-    Spricht Text mit ElevenLabs.
+    Spricht Text mit Inworld.AI TTS.
 
     Args:
         text: Zu sprechender Text
-        voice: Optional - Stimmen-Name (adam, rachel, domi, bella, etc.)
+        voice: Optional - Inworld Stimmen-Name
 
     Returns:
         Erfolgs-Status
@@ -372,7 +390,7 @@ async def voice_speak(text: str, voice: Optional[str] = None) -> dict:
         return {
             "success": success,
             "text": text,
-            "voice": voice or "default",
+            "voice": voice or voice_engine.config.inworld_voice,
             "message": "Gesprochen" if success else "Fehler bei Sprachausgabe"
         }
     except Exception as e:
@@ -382,33 +400,17 @@ async def voice_speak(text: str, voice: Optional[str] = None) -> dict:
 
 @tool(
     name="voice_set_voice",
-    description="Wechselt die Stimme für Sprachausgabe.",
+    description="Wechselt die Inworld.AI Stimme für Sprachausgabe.",
     parameters=[
-        P("voice_name", "string", "Name der Stimme (adam, rachel, domi, bella, antoni, elli, josh, arnold, sam)", required=True),
+        P("voice_name", "string", "Inworld Stimmen-Name (z.B. Lennart, Ashley, Derek)", required=True),
     ],
     capabilities=["voice", "speech"],
     category=C.VOICE
 )
 async def voice_set_voice(voice_name: str) -> dict:
-    """
-    Wechselt die Stimme für Sprachausgabe.
-
-    Args:
-        voice_name: Name der Stimme (adam, rachel, domi, bella, antoni, elli, josh, arnold, sam)
-
-    Returns:
-        Erfolgs-Status
-    """
-    success = voice_engine.set_voice(voice_name)
-
-    if success:
-        return {
-            "success": True,
-            "voice": voice_name,
-            "message": f"Stimme gewechselt zu: {voice_name}"
-        }
-    else:
-        raise Exception(f"Unbekannte Stimme: {voice_name}. Verfügbar: {list(VOICES.keys())}")
+    """Wechselt die Inworld.AI Stimme."""
+    voice_engine.set_voice(voice_name)
+    return {"success": True, "voice": voice_name, "message": f"Stimme gesetzt: {voice_name}"}
 
 
 @tool(
@@ -419,15 +421,11 @@ async def voice_set_voice(voice_name: str) -> dict:
     category=C.VOICE
 )
 async def voice_list_voices() -> dict:
-    """
-    Listet alle verfügbaren Stimmen auf.
-
-    Returns:
-        Dictionary mit Stimmen-Namen und IDs
-    """
+    """Listet bekannte Inworld.AI Stimmen auf."""
     return {
         "voices": voice_engine.get_available_voices(),
-        "current": voice_engine.config.voice_id
+        "current": voice_engine.config.inworld_voice,
+        "provider": "Inworld.AI",
     }
 
 
@@ -529,7 +527,8 @@ async def voice_initialize() -> dict:
             "initialized": True,
             "whisper_model": WHISPER_MODEL,
             "whisper_device": WHISPER_DEVICE,
-            "elevenlabs": bool(voice_engine.elevenlabs_client),
+            "inworld_tts": bool(INWORLD_API_KEY),
+            "inworld_voice": voice_engine.config.inworld_voice,
             "message": "Voice-System bereit"
         }
     except Exception as e:
