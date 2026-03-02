@@ -49,7 +49,7 @@ Timus erinnert sich. Vier-Ebenen-Architektur: SessionMemory (Kurzzeit) + SQLite 
 
 ### Phase 4 — Autonomie: Proaktiver Scheduler + Telegram
 
-Kein Warten mehr auf Eingaben. Heartbeat-Scheduler (15 min), SQLite Task-Queue, Telegram-Gateway (`@agentustimus_bot`), systemd-Dienste für 24/7-Betrieb. Timus arbeitet auch wenn niemand zuschaut.
+Kein Warten mehr auf Eingaben. Heartbeat-Scheduler (5 min), SQLite Task-Queue, Telegram-Gateway (`@agentustimus_bot`), systemd-Dienste für 24/7-Betrieb. Timus arbeitet auch wenn niemand zuschaut.
 
 ### Phase 5 — Vision: Florence-2 + Plan-then-Execute
 
@@ -619,7 +619,7 @@ Timus läuft als 24/7-Dienst — wacht auf neue Tasks, sendet Ergebnisse via Tel
                     │                                                              │
   Telegram ──────→  │  TelegramGateway                                             │
   Webhook  ──────→  │  WebhookServer  → EventRouter                                │
-  Heartbeat ─────→  │  ProactiveScheduler (15 min)                                 │
+  Heartbeat ─────→  │  ProactiveScheduler (5 min)                                  │
   CLI       ──────→ │  _cli_loop()  (nur mit TTY)                                  │
   Canvas    ──────→ │  /chat + /voice/*  (SSE, 13 Agent-LEDs, Voice-Loop)          │
                     │       ↓                                                      │
@@ -1077,7 +1077,7 @@ timus/
 │       ├── SOUL.md          # axes + drift_history im YAML-Frontmatter (NEU v2.8)
 │       └── store.py         # SoulProfile: axes + drift_history (NEU v2.8)
 ├── orchestration/
-│   ├── scheduler.py                  # Heartbeat-Scheduler (15 min)
+│   ├── scheduler.py                  # Heartbeat-Scheduler (5 min)
 │   ├── autonomous_runner.py          # Startet alle Engines + CuriosityEngine
 │   ├── curiosity_engine.py           # CuriosityEngine — Fuzzy Loop + Gatekeeper (v2.8)
 │   ├── task_queue.py                 # SQLite Task-Queue + 15 Tabellen (M1-M7 Schema)
@@ -1184,7 +1184,7 @@ SHELL_TIMEOUT=30
 
 # Autonomie
 HEARTBEAT_ENABLED=true
-HEARTBEAT_INTERVAL_MINUTES=15
+HEARTBEAT_INTERVAL_MINUTES=5
 TELEGRAM_BOT_TOKEN=...
 TELEGRAM_ALLOWED_IDS=<deine_id>
 
