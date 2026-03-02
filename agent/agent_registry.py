@@ -629,10 +629,11 @@ def register_all_agents():
     """Registriert alle Standard-Timus-Agenten als Specs (ohne Instanziierung)."""
     from agent.agents import (
         ExecutorAgent, DeepResearchAgent, ReasoningAgent,
-        CreativeAgent, DeveloperAgent, MetaAgent, VisualAgent,
+        CreativeAgent, MetaAgent, VisualAgent,
         DataAgent, DocumentAgent, CommunicationAgent, SystemAgent, ShellAgent,
     )
     from agent.agents.image import ImageAgent
+    from agent.developer_agent_v2 import DeveloperAgentV2
 
     registry = agent_registry
 
@@ -660,7 +661,7 @@ def register_all_agents():
     registry.register_spec(
         "developer", "developer",
         ["code", "development", "files", "refactoring"],
-        DeveloperAgent,
+        DeveloperAgentV2,
     )
     registry.register_spec(
         "visual", "visual",
