@@ -4,7 +4,20 @@
   <img src="assets/branding/timus-logo-glow.png" alt="Timus Logo" width="760">
 </p>
 
-**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen). Seit **v2.9** sind die Autonomie-Schichten M1–M5 live: Zielgenerierung, Langzeitplanung, Self-Healing und Autonomie-Scorecard laufen aktiv im Produktivbetrieb. Seit **v3.0 (2026-02-28)** läuft im Canvas ein nativer Voice-Loop (Faster-Whisper STT + Inworld.AI TTS) über `/voice/*` Endpoints. Seit **v3.1 (2026-03-01)** sendet und empfängt Timus eigenständig E-Mails über Microsoft Graph OAuth2 — alle 13 Agenten sind vollständig per Delegation erreichbar.
+**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen). Seit **v2.9** sind die Autonomie-Schichten M1–M5 live: Zielgenerierung, Langzeitplanung, Self-Healing und Autonomie-Scorecard laufen aktiv im Produktivbetrieb. Seit **v3.0 (2026-02-28)** läuft im Canvas ein nativer Voice-Loop (Faster-Whisper STT + Inworld.AI TTS) über `/voice/*` Endpoints. Seit **v3.1 (2026-03-01)** sendet und empfängt Timus eigenständig E-Mails über Microsoft Graph OAuth2 — alle 13 Agenten sind vollständig per Delegation erreichbar. Seit **v3.2 (2026-03-02)** visualisiert der Canvas jede Agent-Delegation mit einem goldenen Lichtstrahl-Animation in Echtzeit — und beide Routing-Pfade (direkt + delegiert) nutzen einheitlich `DeveloperAgentV2`.
+
+---
+
+## Canvas — Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/canvas_agent_circle.png" alt="Timus Canvas – 13-Agenten-Kreis mit goldenem Lichtstrahl" width="49%">
+  <img src="docs/screenshots/canvas_autonomy_tab.png" alt="Timus Canvas – Autonomy Scorecard 83.8/100 HIGH" width="49%">
+</p>
+
+<p align="center">
+  <em>Links: 13-Agenten-Kreis — Meta im Zentrum, goldener Lichtstrahl bei Delegation, Voice-Orb links &nbsp;|&nbsp; Rechts: Autonomy-Scorecard (83.8/100 HIGH) mit Goals, Planning, Self-Healing, Policy</em>
+</p>
 
 ---
 
@@ -63,7 +76,11 @@ Meta Agent     → Seed-OSS-36B         (ByteDance, Agentic Intelligence, 512K C
 Reasoning Agent→ Nemotron-49B         (NVIDIA-eigenes Flagship-Modell)
 ```
 
-### Phase 12 — E-Mail-Integration + vollständige Agent-Delegation *(v3.1, aktuell)*
+### Phase 13 — Canvas-Delegation-Animation + DeveloperAgentV2 unified *(v3.2, aktuell)*
+
+Jede Agent-Delegation wird im Canvas mit einem goldenen Lichtstrahl-Animation visualisiert (SSE → `requestAnimationFrame`, 700ms). Beide Routing-Pfade (direkt via Dispatcher + delegiert via Meta) nutzen einheitlich `DeveloperAgentV2` (gpt-5 + mercury-coder via Inception). Autonomy-Score nach Self-Healing-Diagnose auf **83.75/100 HIGH** stabilisiert.
+
+### Phase 12 — E-Mail-Integration + vollständige Agent-Delegation *(v3.1)*
 
 Timus kommuniziert eigenständig per E-Mail. Microsoft Graph OAuth2 ersetzt Basic Auth (von Outlook.com blockiert). Alle 13 Agenten sind über `delegate_to_agent` vollständig erreichbar — ein kritischer Bug im `jsonrpc_wrapper` (sync-Methoden nicht awaitable in `async_dispatch`) wurde behoben.
 
@@ -163,6 +180,55 @@ Meta → Research  ┐
      → Creative  ┘
 Gesamtzeit: 60s  (3–6× schneller)
 ```
+
+---
+
+## Aktueller Stand — Version 3.2 (2026-03-02)
+
+### Canvas-Delegation Animation + DeveloperAgentV2 unified
+
+#### Goldener Lichtstrahl bei Agent-Delegation
+
+Jede Delegation zwischen Agenten wird jetzt live im Canvas sichtbar: Ein elongierter goldener Strahl schießt vom Quell- zum Zielagenten über ein transparentes Canvas-Overlay (`requestAnimationFrame`, 700ms, drei Schichten: Glut → Strahl → Weißkern). Bei Ankunft leuchtet der Zielknoten 600ms golden auf.
+
+```
+delegate() → _delegation_sse_hook → SSE-Event "delegation"
+  → Browser → animateDelegationBeam(from, to)
+  → Canvas-Overlay (requestAnimationFrame, 700ms)
+  → flashNode(to, 600ms)
+```
+
+**13 echte Agenten im Kreis** — Meta im Mittelpunkt (x:0, y:0), die anderen 12 gleichmäßig auf dem Außenring (R=220px, Preset-Layout). Alle Dummy-/Geister-Knoten wurden entfernt.
+
+#### DeveloperAgentV2 jetzt auf beiden Pfaden
+
+Bisher gab es zwei parallele Developer-Implementierungen mit unterschiedlichen Modellen:
+
+| Pfad | Vorher | Jetzt |
+|------|--------|-------|
+| Direkt (Telegram/Canvas) | `DeveloperAgentV2` (gpt-5 + mercury-coder via Inception) | `DeveloperAgentV2` ✅ |
+| Delegiert (von Meta) | `DeveloperAgent` (mercury-coder-small, BaseAgent) | `DeveloperAgentV2` ✅ |
+
+Beide Pfade nutzen jetzt `DeveloperAgentV2`: gpt-5 für Planung/Orchestrierung + mercury-coder via Inception für Code-Generierung, AST-Validierung, Fehler-Recovery-Strategien, 12-Step-Loop.
+
+#### Weitere Verbesserungen
+
+| Bereich | Änderung |
+|---------|----------|
+| Telegram Voice | Meta-spezifische Statusmeldung `🧠 Timus plant & koordiniert…` im Voice-Handler ergänzt |
+| Telegram Voice | `doc_sent`-Bug: Variable wurde berechnet aber nie geprüft → Dokument + Text wurde doppelt gesendet. Behoben: `if not image_sent and not doc_sent` |
+| Voice-Orb | Position: `left: 50%` (überlagerte Meta) → `left: 9%` (links, zwischen Rand und System-Agent) |
+| Voice-Orb | Größe: 420×420 → 504×504 (+20%) |
+| Autonomy-Score | 6 Tage altes Self-Healing-Incident (`m3_mcp_health_unavailable`) hatte `status='open'` obwohl MCP längst healthy war → Circuit-Breaker offen (failure_streak=18) → Score 64.5. Nach Diagnose und Bereinigung: **83.75 / HIGH** |
+
+#### Geänderte Dateien
+
+| Datei | Änderung |
+|-------|----------|
+| `agent/agent_registry.py` | `_delegation_sse_hook` Modul-Variable + Aufruf in `delegate()`; `DeveloperAgentV2` als Factory |
+| `server/mcp_server.py` | Hook im Lifespan registriert → SSE-Event `delegation` gebroadcastet |
+| `server/canvas_ui.py` | 13-Agenten-Kreis, Canvas-Overlay, Beam-Animation, SSE-Handler, Voice-Orb-Position/Größe |
+| `gateway/telegram_gateway.py` | Voice-Handler meta-Status + doc_sent-Bug |
 
 ---
 
