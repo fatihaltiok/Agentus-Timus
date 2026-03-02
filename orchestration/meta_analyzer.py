@@ -1,0 +1,151 @@
+"""
+orchestration/meta_analyzer.py
+
+Schicht 3 — Zeitbasierte Meta-Analyse des Autonomie-Zustands.
+deepseek-v3.2 analysiert 24h Scorecard-History + letzte Incidents alle 60 Minuten
+und speichert Erkenntnisse als canvas_store-Event.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+from datetime import datetime
+from typing import Any, Dict, List
+
+from orchestration.task_queue import TaskQueue, get_queue
+
+log = logging.getLogger("MetaAnalyzer")
+
+
+class MetaAnalyzer:
+    """Erkennt Trends und strukturelle Schwächen im Autonomie-Zustand."""
+
+    def __init__(self, queue: TaskQueue | None = None):
+        self.queue = queue or get_queue()
+
+    def run_analysis(self) -> Dict[str, Any]:
+        """Haupteinstieg: Daten sammeln, LLM aufrufen, Ergebnis speichern."""
+        try:
+            history = self._get_scorecard_history(hours=24)
+            incidents = self._get_recent_incidents(limit=15)
+            insights = self._call_llm(history=history, incidents=incidents)
+            if insights:
+                self._store_insights(insights)
+            return {"status": "ok", "insights": insights, "analyzed_at": datetime.now().isoformat()}
+        except Exception as e:
+            log.warning("Meta-Analyse fehlgeschlagen (nicht kritisch): %s", e)
+            return {"status": "error", "error": str(e)}
+
+    # ------------------------------------------------------------------
+    # Datensammlung
+    # ------------------------------------------------------------------
+
+    def _get_scorecard_history(self, hours: int = 24) -> List[Dict[str, Any]]:
+        rows = self.queue.list_autonomy_scorecard_snapshots(window_hours=hours, limit=50)
+        result = []
+        for row in rows:
+            pillars_raw = row.get("pillars")
+            pillars = {}
+            if isinstance(pillars_raw, str):
+                try:
+                    pillars = json.loads(pillars_raw)
+                except Exception:
+                    pass
+            elif isinstance(pillars_raw, dict):
+                pillars = pillars_raw
+            result.append({
+                "created_at": str(row.get("created_at", "")),
+                "overall_score": float(row.get("overall_score") or 0.0),
+                "autonomy_level": str(row.get("autonomy_level") or "low"),
+                "pillars": {
+                    k: round(float(v.get("score", 0) if isinstance(v, dict) else 0), 1)
+                    for k, v in pillars.items()
+                },
+            })
+        return result
+
+    def _get_recent_incidents(self, limit: int = 15) -> List[Dict[str, Any]]:
+        rows = self.queue.list_self_healing_incidents(limit=limit)
+        result = []
+        for row in rows:
+            result.append({
+                "incident_key": str(row.get("incident_key", "")),
+                "component": str(row.get("component", "")),
+                "signal": str(row.get("signal", "")),
+                "severity": str(row.get("severity", "")),
+                "status": str(row.get("status", "")),
+                "title": str(row.get("title", "")),
+                "first_seen_at": str(row.get("first_seen_at", "")),
+            })
+        return result
+
+    # ------------------------------------------------------------------
+    # LLM-Aufruf
+    # ------------------------------------------------------------------
+
+    def _call_llm(
+        self,
+        history: List[Dict[str, Any]],
+        incidents: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        from agent.providers import ModelProvider, get_provider_client
+
+        client = get_provider_client().get_client(ModelProvider.OPENROUTER)
+
+        history_summary = json.dumps(history[-10:], ensure_ascii=False)
+        incidents_summary = json.dumps(incidents, ensure_ascii=False)
+
+        prompt = (
+            "Du bist ein Autonomie-Analyst für das KI-System Timus.\n"
+            "Analysiere die folgenden Daten und antworte NUR mit validem JSON.\n\n"
+            f"Scorecard-Verlauf (letzte 10 Snapshots):\n{history_summary}\n\n"
+            f"Letzte Incidents (bis 15):\n{incidents_summary}\n\n"
+            "Antworte mit genau diesem JSON-Schema (keine weiteren Erklärungen):\n"
+            '{"trend": "rising|stable|falling", '
+            '"weakest_pillar": "planning|goals|self_healing|policy", '
+            '"key_insight": "2-3 Sätze über aktuellen Zustand", '
+            '"action_suggestion": "Konkrete Empfehlung für nächsten Zyklus", '
+            '"risk_level": "low|medium|high"}'
+        )
+
+        response = client.chat.completions.create(
+            model="deepseek/deepseek-v3.2",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=400,
+        )
+        raw = (response.choices[0].message.content or "").strip()
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        return {}
+
+    # ------------------------------------------------------------------
+    # Persistenz
+    # ------------------------------------------------------------------
+
+    def _store_insights(self, insights: Dict[str, Any]) -> None:
+        try:
+            from orchestration.canvas_store import canvas_store
+
+            items = canvas_store.list_canvases(limit=1).get("items", [])
+            if not items:
+                return
+            canvas_id = str(items[0].get("id", ""))
+            if not canvas_id:
+                return
+            canvas_store.add_event(
+                canvas_id=canvas_id,
+                event_type="meta_analysis",
+                status="info",
+                message=(
+                    f"meta-analysis trend={insights.get('trend','?')} "
+                    f"risk={insights.get('risk_level','?')} "
+                    f"weakest={insights.get('weakest_pillar','?')}"
+                ),
+                payload=insights,
+            )
+        except Exception as e:
+            log.debug("Meta-Analyse canvas_store-Speicherung fehlgeschlagen: %s", e)

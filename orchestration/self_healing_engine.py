@@ -347,6 +347,33 @@ class SelfHealingEngine:
         )
         if upsert.get("created"):
             summary["incidents_opened"] += 1
+            if _env_bool("AUTONOMY_LLM_DIAGNOSIS_ENABLED", True):
+                llm_diag = self._diagnose_incident_with_llm(
+                    component=component,
+                    signal=signal,
+                    severity=severity,
+                    title=title,
+                    details=details,
+                )
+                if llm_diag:
+                    self.queue.upsert_self_healing_incident(
+                        incident_key=incident_key,
+                        component=component,
+                        signal=signal,
+                        severity=severity,
+                        status=SelfHealingIncidentStatus.OPEN,
+                        title=title,
+                        details={"llm_diagnosis": llm_diag},
+                        observed_at=now.isoformat(),
+                    )
+                    summary.setdefault("llm_diagnoses", 0)
+                    summary["llm_diagnoses"] += 1
+                    log.info(
+                        "🧠 LLM-Diagnose: %s → %s (confidence=%s)",
+                        incident_key,
+                        llm_diag.get("root_cause", "?")[:60],
+                        llm_diag.get("confidence", "?"),
+                    )
         if upsert.get("reopened"):
             summary["incidents_reopened"] += 1
 
@@ -876,6 +903,49 @@ class SelfHealingEngine:
                 "suggested_commands": [],
             },
         )
+
+    def _diagnose_incident_with_llm(
+        self,
+        *,
+        component: str,
+        signal: str,
+        severity: str,
+        title: str,
+        details: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Schicht 2: Analysiert einen neuen Incident mit qwen3.5-plus via OpenRouter."""
+        import re
+
+        try:
+            from agent.providers import ModelProvider, get_provider_client
+
+            client = get_provider_client().get_client(ModelProvider.OPENROUTER)
+            prompt = (
+                "Du bist ein KI-System-Diagnostiker für den autonomen Agenten Timus.\n"
+                "Analysiere folgenden Incident und antworte NUR mit validem JSON.\n\n"
+                f"Component: {component}\n"
+                f"Signal: {signal}\n"
+                f"Severity: {severity}\n"
+                f"Title: {title}\n"
+                f"Details: {json.dumps(details, ensure_ascii=False)[:600]}\n\n"
+                "Antworte mit genau diesem JSON-Schema (keine weiteren Erklärungen):\n"
+                '{"root_cause": "...", "confidence": "low|medium|high", '
+                '"recommended_action": "...", "urgency": "low|medium|high|immediate", '
+                '"pattern_hint": "..."}'
+            )
+            response = client.chat.completions.create(
+                model="qwen/qwen3.5-plus-02-15",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=300,
+            )
+            raw = (response.choices[0].message.content or "").strip()
+            match = re.search(r"\{.*\}", raw, re.DOTALL)
+            if match:
+                return json.loads(match.group(0))
+        except Exception as e:
+            log.debug("LLM-Diagnose fehlgeschlagen (nicht kritisch): %s", e)
+        return {}
 
     def _check_mcp_health(self) -> Dict[str, Any]:
         try:

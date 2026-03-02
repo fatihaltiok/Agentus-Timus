@@ -4,7 +4,7 @@
   <img src="assets/branding/timus-logo-glow.png" alt="Timus Logo" width="760">
 </p>
 
-**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen). Seit **v2.9** sind die Autonomie-Schichten M1–M5 live: Zielgenerierung, Langzeitplanung, Self-Healing und Autonomie-Scorecard laufen aktiv im Produktivbetrieb. Seit **v3.0 (2026-02-28)** läuft im Canvas ein nativer Voice-Loop (Faster-Whisper STT + Inworld.AI TTS) über `/voice/*` Endpoints. Seit **v3.1 (2026-03-01)** sendet und empfängt Timus eigenständig E-Mails über Microsoft Graph OAuth2 — alle 13 Agenten sind vollständig per Delegation erreichbar. Seit **v3.2 (2026-03-02)** visualisiert der Canvas jede Agent-Delegation mit einem goldenen Lichtstrahl-Animation in Echtzeit — und beide Routing-Pfade (direkt + delegiert) nutzen einheitlich `DeveloperAgentV2`.
+**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen). Seit **v2.9** sind die Autonomie-Schichten M1–M5 live: Zielgenerierung, Langzeitplanung, Self-Healing und Autonomie-Scorecard laufen aktiv im Produktivbetrieb. Seit **v3.0 (2026-02-28)** läuft im Canvas ein nativer Voice-Loop (Faster-Whisper STT + Inworld.AI TTS) über `/voice/*` Endpoints. Seit **v3.1 (2026-03-01)** sendet und empfängt Timus eigenständig E-Mails über Microsoft Graph OAuth2 — alle 13 Agenten sind vollständig per Delegation erreichbar. Seit **v3.2 (2026-03-02)** visualisiert der Canvas jede Agent-Delegation mit einem goldenen Lichtstrahl-Animation in Echtzeit — und beide Routing-Pfade (direkt + delegiert) nutzen einheitlich `DeveloperAgentV2`. Seit **v3.3 (2026-03-03)** überwacht Timus sich selbst mit LLMs: Jeder neue Incident wird sofort von `qwen3.5-plus` diagnostiziert (Schicht 2), alle 60 Minuten analysiert `deepseek-v3.2` Trends und strukturelle Schwächen im Autonomie-Zustand (Schicht 3).
 
 ---
 
@@ -76,7 +76,45 @@ Meta Agent     → Seed-OSS-36B         (ByteDance, Agentic Intelligence, 512K C
 Reasoning Agent→ Nemotron-49B         (NVIDIA-eigenes Flagship-Modell)
 ```
 
-### Phase 13 — Canvas-Delegation-Animation + DeveloperAgentV2 unified *(v3.2, aktuell)*
+### Phase 14 — LLM-Selbstüberwachung: 3-Schichten-Diagnose *(v3.3, aktuell)*
+
+Timus überwacht sich ab v3.3 nicht mehr nur regelbasiert, sondern mit zwei eigenständigen LLM-Schichten:
+
+**Schicht 1 (pre-existent):** Regelbasierter 5-Minuten-Heartbeat — Schwellwerte, DB-Counts, Circuit-Breaker.
+
+**Schicht 2 — Event-getrieben (`qwen3.5-plus`, ~0.5s):**
+Jeder neue Incident triggert sofort eine LLM-Diagnose. Das Ergebnis (`root_cause`, `confidence`, `recommended_action`, `urgency`, `pattern_hint`) wird direkt in der Incident-DB persistiert und steht dem Recovery-Playbook zur Verfügung.
+
+**Schicht 3 — Zeitbasiert (`deepseek-v3.2`, alle 60 min):**
+`MetaAnalyzer` liest 24h Scorecard-Snapshots + letzte 15 Incidents und erkennt strukturelle Muster: sinkende Score-Trends, der schwächste Autonomie-Pillar, konkrete Anpassungsempfehlungen für ENV-Parameter. Ergebnisse erscheinen als `meta_analysis`-Event im Canvas.
+
+```
+Schicht 2 (neuer Incident):
+  SelfHealingEngine._register_incident()
+  → upsert(created=True)
+  → _diagnose_incident_with_llm() [qwen3.5-plus, OpenRouter, sync]
+  → {"root_cause": "Port 5000 belegt", "confidence": "high", "urgency": "immediate"}
+  → details["llm_diagnosis"] in Incident-DB gemergt
+
+Schicht 3 (alle 60 min = 12 × 5-min-Heartbeats):
+  AutonomousRunner._on_wake_sync() → heartbeat_count % META_INTERVAL == 0
+  → MetaAnalyzer.run_analysis() [deepseek-v3.2, OpenRouter, sync]
+  → {"trend": "falling", "weakest_pillar": "planning",
+     "key_insight": "...", "action_suggestion": "...", "risk_level": "medium"}
+  → canvas_store.add_event(event_type="meta_analysis")
+```
+
+**Neue Dateien / Änderungen:**
+- `orchestration/meta_analyzer.py` *(neu)*: `MetaAnalyzer`-Klasse mit `run_analysis()`, `_call_llm()`, `_store_insights()`
+- `orchestration/self_healing_engine.py`: `_diagnose_incident_with_llm()` + Integration in `_register_incident()`
+- `orchestration/autonomous_runner.py`: `_meta_analysis_feature_enabled()`, `_heartbeat_count`, MetaAnalyzer-Init + Aufruf
+- `.env`: `AUTONOMY_LLM_DIAGNOSIS_ENABLED`, `AUTONOMY_META_ANALYSIS_ENABLED`, `AUTONOMY_META_ANALYSIS_INTERVAL_HEARTBEATS`
+
+**Architektur-Besonderheit:** Beide LLM-Schichten sind vollständig fehlertolerant — ein LLM-Timeout oder API-Fehler blockiert den Monitoring-Zyklus nie. Feature-Flags erlauben Rollback ohne Code-Änderung.
+
+---
+
+### Phase 13 — Canvas-Delegation-Animation + DeveloperAgentV2 unified *(v3.2)*
 
 Jede Agent-Delegation wird im Canvas mit einem goldenen Lichtstrahl-Animation visualisiert (SSE → `requestAnimationFrame`, 700ms). Beide Routing-Pfade (direkt via Dispatcher + delegiert via Meta) nutzen einheitlich `DeveloperAgentV2` (gpt-5 + mercury-coder via Inception). Autonomy-Score nach Self-Healing-Diagnose auf **83.75/100 HIGH** stabilisiert.
 

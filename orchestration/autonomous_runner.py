@@ -23,6 +23,13 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)).strip())
+    except Exception:
+        return default
+
+
 def _goals_feature_enabled() -> bool:
     if _env_bool("AUTONOMY_COMPAT_MODE", True):
         return False
@@ -77,6 +84,12 @@ def _audit_change_requests_feature_enabled() -> bool:
     return _env_bool("AUTONOMY_AUDIT_CHANGE_REQUESTS_ENABLED", False)
 
 
+def _meta_analysis_feature_enabled() -> bool:
+    if _env_bool("AUTONOMY_COMPAT_MODE", True):
+        return False
+    return _env_bool("AUTONOMY_META_ANALYSIS_ENABLED", False)
+
+
 class AutonomousRunner:
     """
     Führt pending Tasks autonom aus, ausgelöst durch den Scheduler-Heartbeat.
@@ -96,6 +109,8 @@ class AutonomousRunner:
         self._commitment_review_engine = None
         self._replanning_engine = None
         self._self_healing_engine = None
+        self._meta_analyzer = None
+        self._heartbeat_count = 0
 
     # ------------------------------------------------------------------
     # Öffentliche API
@@ -166,6 +181,16 @@ class AutonomousRunner:
             except Exception as e:
                 log.warning("SelfHealingEngine konnte nicht gestartet werden: %s", e)
 
+        # Meta-Analyzer hinter Feature-Flag starten (Schicht 3)
+        if _meta_analysis_feature_enabled():
+            try:
+                from orchestration.meta_analyzer import MetaAnalyzer
+
+                self._meta_analyzer = MetaAnalyzer(queue=get_queue())
+                log.info("🔬 MetaAnalyzer aktiviert")
+            except Exception as e:
+                log.warning("MetaAnalyzer konnte nicht gestartet werden: %s", e)
+
         # Curiosity Engine als separaten asyncio.Task starten
         if os.getenv("CURIOSITY_ENABLED", "true").lower() == "true":
             try:
@@ -212,6 +237,7 @@ class AutonomousRunner:
 
     def _on_wake_sync(self, event: SchedulerEvent) -> None:
         """Wird vom Scheduler aufgerufen. Signalisiert dem Worker neue Arbeit."""
+        self._heartbeat_count += 1
         queue = get_queue()
 
         if self._self_healing_engine and _self_healing_feature_enabled():
@@ -323,6 +349,21 @@ class AutonomousRunner:
                     self._apply_autonomy_audit_change_request(export_payload=export_payload)
         if _audit_change_requests_feature_enabled():
             self._apply_pending_autonomy_audit_change_requests()
+
+        if self._meta_analyzer and _meta_analysis_feature_enabled():
+            meta_interval = max(1, _env_int("AUTONOMY_META_ANALYSIS_INTERVAL_HEARTBEATS", 12))
+            if self._heartbeat_count % meta_interval == 0:
+                try:
+                    meta_result = self._meta_analyzer.run_analysis()
+                    insights = meta_result.get("insights") or {}
+                    log.info(
+                        "🔬 Meta-Analyse: trend=%s risk=%s insight=%s...",
+                        insights.get("trend", "?"),
+                        insights.get("risk_level", "?"),
+                        str(insights.get("key_insight", "?"))[:80],
+                    )
+                except Exception as e:
+                    log.warning("Meta-Analyse-Zyklus fehlgeschlagen: %s", e)
 
         pending = queue.get_pending()
         if not pending:
