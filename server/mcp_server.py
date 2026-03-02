@@ -237,6 +237,8 @@ TOOL_MODULES = [
     "tools.shell_tool.tool",
     # E-Mail (SMTP + IMAP via Outlook)
     "tools.email_tool.tool",
+    # Web-Fetch: URL-Inhalte abrufen (requests → Playwright-Fallback, v3.3)
+    "tools.web_fetch_tool.tool",
 ]
 
 # --- Hilfsfunktionen für den Lifespan-Manager ---

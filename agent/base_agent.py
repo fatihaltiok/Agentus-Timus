@@ -105,6 +105,7 @@ AGENT_CAPABILITY_MAP = {
         "automation", "application",            # Apps + Automatisierung
         "adaptive", "timing",                   # Timing-Anpassung
         "memory", "results",                    # Kontext + Speichern
+        "fetch", "http",                        # Web-Fetch (JS-Seiten via Playwright)
     ],
     "development": [
         "code", "development", "inception",     # Code schreiben + Inception-API
@@ -121,6 +122,7 @@ AGENT_CAPABILITY_MAP = {
         "analysis", "fact_check",              # Analyse
         "results", "report",                   # Speichern
         "memory",                              # Kontext
+        "fetch", "http",                        # Web-Fetch (CSV/JSON von URLs laden)
     ],
     "document": [
         "document", "pdf", "docx",             # Haupt-Ausgabe-Formate
