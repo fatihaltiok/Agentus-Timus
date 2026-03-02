@@ -307,6 +307,21 @@ class RealSenseStreamManager:
             ),
         }
 
+    def get_frame_jpeg(self, quality: int = 75) -> Optional[bytes]:
+        """Gibt den neuesten Frame als JPEG-Bytes zurück (für MJPEG-Streaming).
+
+        Returns:
+            JPEG-kodierte Bytes oder None wenn kein Frame verfügbar / cv2 fehlt.
+        """
+        if cv2 is None or np is None:
+            return None
+        with self._lock:
+            frame = None if self._latest_frame is None else self._latest_frame.copy()
+        if frame is None:
+            return None
+        ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+        return buf.tobytes() if ok else None
+
     def export_latest_frame(
         self,
         output_dir: Optional[str] = None,

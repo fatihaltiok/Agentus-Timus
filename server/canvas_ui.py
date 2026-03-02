@@ -1018,6 +1018,31 @@ _TEMPLATE = r"""<!doctype html>
     }
     .mic-transcript.visible { display: block; }
 
+    /* ── KAMERA TAB ──────────────────────────────────────────────── */
+    #tab-kamera { padding: 0; background: #000; }
+    .cam-wrap {
+      flex: 1; display: flex; flex-direction: column; align-items: center;
+      justify-content: center; overflow: hidden; position: relative; gap: 0;
+    }
+    #camFeed {
+      max-width: 100%; max-height: 100%; object-fit: contain;
+      border-radius: 0; display: block;
+    }
+    .cam-offline {
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; gap: 12px; color: var(--text3); font-size: 13px;
+    }
+    .cam-offline svg { opacity: 0.3; }
+    .cam-bar {
+      flex-shrink: 0; display: flex; align-items: center; gap: 10px;
+      padding: 6px 14px; background: rgba(0,0,0,0.7);
+      border-top: 1px solid var(--border); font-size: 10px; color: var(--text3);
+    }
+    .cam-bar .cam-dot { width: 7px; height: 7px; border-radius: 50%; background: #555; }
+    .cam-bar .cam-dot.live { background: #22c55e; box-shadow: 0 0 6px #22c55e; animation: pulse-dot 1.5s infinite; }
+    @keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:0.4} }
+    .cam-bar button { font-size: 10px; padding: 2px 10px; }
+
     /* ── VOICE PULSE CANVAS ──────────────────────────────────────── */
     #voiceCanvas {
       position: absolute;
@@ -1119,6 +1144,7 @@ _TEMPLATE = r"""<!doctype html>
       <div class="tab-bar">
         <button class="tab-btn active" id="tab-canvas-btn"   onclick="switchTab('canvas')">Canvas</button>
         <button class="tab-btn"        id="tab-autonomy-btn" onclick="switchTab('autonomy')">Autonomy</button>
+        <button class="tab-btn"        id="tab-kamera-btn"   onclick="switchTab('kamera')">Kamera</button>
       </div>
 
       <!-- Canvas Tab (position:relative für Voice-Canvas-Overlay) -->
@@ -1147,6 +1173,34 @@ _TEMPLATE = r"""<!doctype html>
           <div class="nd-row"><span class="nd-key">ID</span>    <span class="nd-val" id="ndId">–</span></div>
           <div class="nd-row"><span class="nd-key">Typ</span>   <span class="nd-val" id="ndType">–</span></div>
           <div class="nd-row"><span class="nd-key">Status</span><span class="nd-val" id="ndStatus">–</span></div>
+        </div>
+      </div>
+
+      <!-- Kamera Tab -->
+      <div class="tab-content" id="tab-kamera">
+        <div class="cam-wrap" id="camWrap">
+          <!-- Offline-Platzhalter (sichtbar bis Kamera bereit) -->
+          <div class="cam-offline" id="camOffline">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+              <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+              <line x1="1" y1="1" x2="23" y2="23"/>
+            </svg>
+            <span id="camOfflineMsg">Kamera nicht verbunden</span>
+            <button class="sec" onclick="camStart()" style="font-size:11px;padding:4px 16px;margin-top:4px;">
+              Stream starten
+            </button>
+          </div>
+          <!-- Live-Bild -->
+          <img id="camFeed" src="" alt="RealSense Live" style="display:none;"
+               onerror="camHandleError()" onload="camHandleLoad()">
+        </div>
+        <!-- Status-Leiste -->
+        <div class="cam-bar">
+          <span class="cam-dot" id="camDot"></span>
+          <span id="camInfo">–</span>
+          <span style="flex:1;"></span>
+          <button class="sec" onclick="camStart()" id="camBtnStart">▶ Start</button>
+          <button class="sec" onclick="camStop()"  id="camBtnStop" style="display:none;">⏹ Stop</button>
         </div>
       </div>
 
@@ -1274,6 +1328,86 @@ function switchTab(tab) {
   document.getElementById("tab-" + tab + "-btn").classList.add("active");
   if (tab === "autonomy") loadAutonomyData();
   else if (tab === "canvas" && cy) setTimeout(() => cy.fit(), 60);
+  else if (tab === "kamera") camCheckStatus();
+}
+
+// ── Kamera ────────────────────────────────────────────────────────────────────
+let camLive = false;
+
+function camCheckStatus() {
+  fetch("/camera/status").then(r => r.json()).then(d => {
+    if (d.running) {
+      camActivate();
+    } else {
+      camSetOffline(d.last_error || "Kamera nicht verbunden");
+    }
+  }).catch(() => camSetOffline("Server nicht erreichbar"));
+}
+
+function camActivate() {
+  camLive = true;
+  const feed = document.getElementById("camFeed");
+  const offline = document.getElementById("camOffline");
+  feed.src = "/camera/stream?" + Date.now();  // Cache-Buster
+  feed.style.display = "block";
+  offline.style.display = "none";
+  document.getElementById("camDot").classList.add("live");
+  document.getElementById("camBtnStart").style.display = "none";
+  document.getElementById("camBtnStop").style.display  = "";
+  camPollStatus();
+}
+
+function camSetOffline(msg) {
+  camLive = false;
+  const feed = document.getElementById("camFeed");
+  feed.src = "";
+  feed.style.display = "none";
+  document.getElementById("camOffline").style.display = "flex";
+  document.getElementById("camOfflineMsg").textContent = msg || "Kamera nicht verbunden";
+  document.getElementById("camDot").classList.remove("live");
+  document.getElementById("camInfo").textContent = "–";
+  document.getElementById("camBtnStart").style.display = "";
+  document.getElementById("camBtnStop").style.display  = "none";
+}
+
+function camHandleLoad() {
+  document.getElementById("camInfo").textContent = "Live";
+}
+
+function camHandleError() {
+  if (camLive) camSetOffline("Stream unterbrochen");
+}
+
+function camStart() {
+  document.getElementById("camOfflineMsg").textContent = "Verbinde…";
+  fetch("/camera/start", {method:"POST"}).then(r => r.json()).then(d => {
+    if (d.status === "started" || d.status === "already_running") {
+      setTimeout(camActivate, 500);
+    } else {
+      camSetOffline(d.error || "Start fehlgeschlagen");
+    }
+  }).catch(e => camSetOffline("Fehler: " + e));
+}
+
+function camStop() {
+  fetch("/camera/stop", {method:"POST"}).then(() => camSetOffline("Stream gestoppt"));
+}
+
+function camPollStatus() {
+  if (!camLive || activeTab !== "kamera") return;
+  fetch("/camera/status").then(r => r.json()).then(d => {
+    if (d.running) {
+      const age = d.latest_frame_age_sec != null ? d.latest_frame_age_sec.toFixed(1) + "s" : "–";
+      const res = (d.width && d.height) ? d.width + "×" + d.height : "";
+      const fps = d.fps ? d.fps + " fps" : "";
+      document.getElementById("camInfo").textContent =
+        [res, fps, "Frame-Alter: " + age].filter(Boolean).join(" · ");
+    } else {
+      camSetOffline("Stream nicht mehr aktiv");
+      return;
+    }
+    setTimeout(camPollStatus, 3000);
+  }).catch(() => setTimeout(camPollStatus, 5000));
 }
 
 // ── Agent LEDs ────────────────────────────────────────────────────────────────

@@ -1474,6 +1474,126 @@ async def voice_speak_endpoint(payload: dict):
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
 
+@app.get("/camera/status", summary="RealSense Kamera-Status")
+async def camera_status_endpoint():
+    """Status des RealSense Live-Streams."""
+    try:
+        from utils.realsense_stream import get_realsense_stream_manager
+        manager = get_realsense_stream_manager()
+        st = manager.status()
+        return JSONResponse({
+            "available": st.get("running", False),
+            "running": st.get("running", False),
+            "width": st.get("width"),
+            "height": st.get("height"),
+            "fps": st.get("fps"),
+            "frame_count": st.get("frame_count"),
+            "latest_frame_age_sec": st.get("latest_frame_age_sec"),
+            "last_error": st.get("last_error"),
+        })
+    except Exception as e:
+        return JSONResponse({"available": False, "running": False, "error": str(e)})
+
+
+@app.post("/camera/start", summary="RealSense Stream starten")
+async def camera_start_endpoint():
+    """Startet den RealSense Live-Stream (idempotent)."""
+    try:
+        from utils.realsense_stream import get_realsense_stream_manager
+        manager = get_realsense_stream_manager()
+        if manager.status().get("running"):
+            return JSONResponse({"status": "already_running"})
+        width  = int(os.getenv("REALSENSE_STREAM_WIDTH",  "1280"))
+        height = int(os.getenv("REALSENSE_STREAM_HEIGHT", "720"))
+        fps    = float(os.getenv("REALSENSE_STREAM_FPS",  "15"))
+        result = await asyncio.to_thread(manager.start, width, height, fps, None)
+        app.state.realsense_stream_manager = manager
+        return JSONResponse({"status": "started", "detail": result})
+    except Exception as e:
+        log.warning(f"camera/start Fehler: {e}")
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.post("/camera/stop", summary="RealSense Stream stoppen")
+async def camera_stop_endpoint():
+    """Stoppt den RealSense Live-Stream."""
+    try:
+        from utils.realsense_stream import get_realsense_stream_manager
+        manager = get_realsense_stream_manager()
+        result = await asyncio.to_thread(manager.stop)
+        return JSONResponse({"status": "stopped", "detail": result})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.get("/camera/stream", summary="RealSense MJPEG Live-Stream")
+async def camera_stream_endpoint(request: Request):
+    """MJPEG-Stream des RealSense RGB-Kamerabilds für Canvas-Einbettung.
+
+    Startet den Stream automatisch falls noch nicht aktiv.
+    Gibt 503 zurück wenn cv2 nicht verfügbar ist.
+    """
+    try:
+        from utils.realsense_stream import get_realsense_stream_manager
+        import cv2 as _cv2_check  # noqa – nur Verfügbarkeits-Check
+        if _cv2_check is None:
+            raise ImportError("cv2 ist None")
+    except (ImportError, Exception):
+        return JSONResponse(
+            status_code=503,
+            content={"error": "OpenCV (cv2) nicht verfügbar – RealSense-Stream nicht möglich."},
+        )
+
+    manager = get_realsense_stream_manager()
+
+    # Auto-Start falls Stream nicht läuft
+    if not manager.status().get("running"):
+        try:
+            width  = int(os.getenv("REALSENSE_STREAM_WIDTH",  "1280"))
+            height = int(os.getenv("REALSENSE_STREAM_HEIGHT", "720"))
+            fps    = float(os.getenv("REALSENSE_STREAM_FPS",  "15"))
+            result = await asyncio.to_thread(manager.start, width, height, fps, None)
+            if not result.get("running"):
+                err = result.get("last_error", "Unbekannter Fehler")
+                log.warning(f"📷 RealSense Auto-Start fehlgeschlagen: {err}")
+                return JSONResponse(
+                    status_code=503,
+                    content={"error": f"Kein RealSense-Gerät gefunden: {err}"},
+                )
+            app.state.realsense_stream_manager = manager
+            log.info("📷 RealSense-Stream via /camera/stream auto-gestartet")
+        except Exception as e:
+            log.warning(f"📷 RealSense Auto-Start fehlgeschlagen: {e}")
+            return JSONResponse(
+                status_code=503,
+                content={"error": f"Kein RealSense-Gerät gefunden: {e}"},
+            )
+
+    target_fps   = float(os.getenv("REALSENSE_STREAM_FPS", "15"))
+    frame_delay  = 1.0 / max(1.0, target_fps)
+    boundary     = b"--frame"
+
+    async def mjpeg_generator():
+        while True:
+            if await request.is_disconnected():
+                break
+            jpg = manager.get_frame_jpeg(quality=75)
+            if jpg:
+                yield (
+                    boundary + b"\r\n"
+                    b"Content-Type: image/jpeg\r\n"
+                    b"Content-Length: " + str(len(jpg)).encode() + b"\r\n\r\n"
+                    + jpg + b"\r\n"
+                )
+            await asyncio.sleep(frame_delay)
+
+    return StreamingResponse(
+        mjpeg_generator(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/upload", summary="Datei-Upload für Canvas-Chat")
 async def canvas_upload(request: Request):
     """Nimmt eine Datei per multipart/form-data entgegen und speichert sie."""
