@@ -15,8 +15,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-import cv2
-import numpy as np
+try:
+    import cv2
+    import numpy as np
+except ImportError:
+    cv2 = None  # type: ignore[assignment]
+    np = None   # type: ignore[assignment]
 
 
 log = logging.getLogger("timus.realsense_stream")
