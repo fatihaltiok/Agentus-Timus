@@ -266,6 +266,7 @@ class SelfHealingEngine:
             )
 
         self._run_escalation_control_loop(summary=summary)
+        self._cleanup_overdue_commitments(summary=summary)
 
         metrics_snapshot = self.queue.get_self_healing_metrics()
         previous_mode = str(metrics_snapshot.get("degrade_mode") or SelfHealingDegradeMode.NORMAL)
@@ -564,6 +565,52 @@ class SelfHealingEngine:
         )
         if breaker_result.get("recovered"):
             summary["circuit_breaker_recoveries"] += 1
+
+    def _cleanup_overdue_commitments(self, *, summary: Dict[str, Any]) -> None:
+        """Bricht Commitments ab, deren Deadline um mehr als 2h überschritten ist.
+
+        Verhindert dauerhaften Planning-Score-Abfall durch nie abgeräumte
+        autonome Commitments (z.B. CuriosityEngine-Ziele mit Midnight-Deadline).
+        """
+        threshold_hours = max(
+            0.5,
+            float(os.environ.get("AUTONOMY_COMMITMENT_OVERDUE_CANCEL_HOURS", "2.0")),
+        )
+        try:
+            result = self.queue.cancel_overdue_commitments(
+                overdue_threshold_hours=threshold_hours,
+            )
+            cancelled = int(result.get("cancelled", 0))
+            if cancelled > 0:
+                summary.setdefault("commitments_cancelled", 0)
+                summary["commitments_cancelled"] += cancelled
+                log.info(
+                    "🧹 Self-Healing: %d abgelaufene Commitments abgebrochen "
+                    "(Threshold: %.1fh)",
+                    cancelled,
+                    threshold_hours,
+                )
+        except Exception as e:
+            log.warning("⚠️ Self-Healing: Commitment-Cleanup fehlgeschlagen: %s", e)
+
+        # Stale eskalierte Reviews schließen (sonst -10 Abzug im Planning-Score)
+        stale_review_hours = max(
+            1.0,
+            float(os.environ.get("AUTONOMY_REVIEW_STALE_CLOSE_HOURS", "48.0")),
+        )
+        try:
+            r = self.queue.close_stale_escalated_reviews(stale_after_hours=stale_review_hours)
+            closed = int(r.get("closed", 0))
+            if closed > 0:
+                summary.setdefault("reviews_closed", 0)
+                summary["reviews_closed"] += closed
+                log.info(
+                    "🧹 Self-Healing: %d stale eskalierte Reviews geschlossen (Threshold: %.1fh)",
+                    closed,
+                    stale_review_hours,
+                )
+        except Exception as e:
+            log.warning("⚠️ Self-Healing: Review-Cleanup fehlgeschlagen: %s", e)
 
     def _run_escalation_control_loop(self, *, summary: Dict[str, Any]) -> None:
         now = self._now()

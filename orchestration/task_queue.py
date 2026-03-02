@@ -1887,6 +1887,87 @@ class TaskQueue:
             "avg_review_gap_7d": review_metrics.get("avg_gap_last_7d", 0.0),
         }
 
+    def cancel_overdue_commitments(
+        self,
+        overdue_threshold_hours: float = 2.0,
+    ) -> Dict[str, Any]:
+        """Bricht Commitments ab, deren Deadline oder Plan-Fenster abgelaufen ist.
+
+        Bedingungen (ODER-verknüpft, threshold_hours Toleranz):
+          1. commitment.deadline < now - threshold_hours
+          2. plan.window_end   < now - threshold_hours  (treibt plan_deviation_score)
+
+        Betrifft nur Status: pending, in_progress, blocked.
+        Trägt den Grund in die Metadaten ein.
+        """
+        cutoff = (datetime.now() - timedelta(hours=overdue_threshold_hours)).isoformat()
+        now = datetime.now().isoformat()
+        cancelled_ids: list = []
+
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT c.id,
+                          CASE
+                            WHEN c.deadline IS NOT NULL AND c.deadline < ? THEN 'deadline_expired'
+                            ELSE 'plan_window_expired'
+                          END AS cancel_reason
+                   FROM commitments c
+                   LEFT JOIN plans p ON p.id = c.plan_id
+                   WHERE c.status IN (?, ?, ?)
+                     AND (
+                       (c.deadline IS NOT NULL AND c.deadline < ?)
+                       OR
+                       (p.window_end IS NOT NULL AND p.window_end < ?)
+                     )""",
+                (
+                    cutoff,
+                    CommitmentStatus.PENDING, CommitmentStatus.IN_PROGRESS, CommitmentStatus.BLOCKED,
+                    cutoff, cutoff,
+                ),
+            ).fetchall()
+
+            for row in rows:
+                cid = str(row["id"])
+                meta_update = json.dumps(
+                    {"cancelled_reason": row["cancel_reason"], "cancelled_at": now},
+                    ensure_ascii=True,
+                )
+                conn.execute(
+                    """UPDATE commitments
+                       SET status=?, updated_at=?,
+                           metadata=json_patch(COALESCE(metadata, '{}'), ?)
+                       WHERE id=?""",
+                    (CommitmentStatus.CANCELLED, now, meta_update, cid),
+                )
+                cancelled_ids.append(cid)
+
+        return {"cancelled": len(cancelled_ids), "ids": cancelled_ids}
+
+    def close_stale_escalated_reviews(
+        self,
+        stale_after_hours: float = 48.0,
+    ) -> Dict[str, Any]:
+        """Schließt eskalierte Commitment-Reviews die älter als stale_after_hours sind.
+
+        Verhindert dass escalated_reviews_7d den Planning-Score dauerhaft drückt.
+        Eskalierte Reviews, die durch den Self-Healing-Zyklus nie manuell geschlossen
+        wurden (z.B. weil das zugehörige Commitment bereits abgebrochen wurde),
+        werden automatisch auf 'closed' gesetzt.
+        """
+        cutoff = (datetime.now() - timedelta(hours=stale_after_hours)).isoformat()
+        now = datetime.now().isoformat()
+
+        with self._conn() as conn:
+            result = conn.execute(
+                """UPDATE commitment_reviews
+                   SET status='closed', updated_at=?
+                   WHERE status='escalated' AND created_at < ?""",
+                (now, cutoff),
+            )
+            closed = result.rowcount
+
+        return {"closed": closed}
+
     def log_replan_event(
         self,
         *,

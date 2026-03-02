@@ -42,14 +42,35 @@ MAX_PER_DAY = int(os.getenv("CURIOSITY_MAX_PER_DAY", "2"))
 
 # Stopwörter für Topic-Extraktion
 _STOPWORDS = {
+    # Artikel, Pronomen, Konjunktionen (DE)
     "und", "oder", "aber", "eine", "einer", "einem", "einen", "der", "die",
-    "das", "den", "dem", "dass", "ist", "sind", "war", "ich", "du", "wir",
-    "sie", "es", "ein", "auf", "mit", "von", "zu", "in", "an", "bei", "für",
-    "aus", "nach", "über", "unter", "vor", "als", "wie", "wenn", "dann",
-    "also", "noch", "auch", "schon", "nur", "ja", "nein", "ok", "bitte",
+    "das", "den", "dem", "dass", "ich", "du", "wir", "sie", "es", "ein",
+    "auf", "mit", "von", "zu", "in", "an", "bei", "für", "aus", "nach",
+    "über", "unter", "vor", "als", "wie", "wenn", "dann", "also", "noch",
+    "auch", "schon", "nur", "ja", "nein", "ok", "bitte", "kein", "keine",
+    "keinen", "diesem", "dieser", "dieses", "jetzt", "hier", "dort", "mal",
+    "sehr", "mehr", "jetzt", "immer", "nicht", "kann", "wird", "wird",
+    "sein", "beim", "beim", "habe", "haben", "hatte", "hatten", "worden",
+    # Verbformen (DE) — häufig in Gesprächen extrahiert
+    "läuft", "laufen", "steht", "stehen", "geht", "gehen", "macht", "machen",
+    "sehen", "schau", "schaut", "lesen", "lies", "liest", "schreib", "schreibt",
+    "sagst", "sagen", "sagst", "zeigt", "zeigen", "prüfe", "prüft", "prüfen",
+    "teste", "testet", "testen", "starte", "startet", "starten", "stoppe",
+    "kannst", "könnte", "könnten", "sollte", "sollten", "müsste", "dürfte",
+    "warte", "warten", "suche", "suchen", "finde", "finden", "öffne", "öffnen",
+    "erstell", "erstelle", "erstellen", "änder", "ändere", "ändern", "schick",
+    "schicke", "schicken", "zeige", "zeigen", "nehme", "nehmen", "geben",
+    # Kurzwörter und Gesprächsfüller (DE/EN)
+    "bitte", "danke", "okay", "alles", "etwas", "einfach", "kurz", "genau",
+    "richtig", "falsch", "stimmt", "passt", "klar", "super", "gut", "schlecht",
+    "toll", "cool", "nice", "sure", "yes", "yep", "nope", "hmm", "aha",
+    # Artikel, Pronomen, Hilfswörter (EN)
     "the", "a", "an", "is", "are", "was", "be", "to", "of", "and", "in",
     "it", "for", "on", "with", "at", "by", "this", "that", "have", "has",
     "not", "do", "can", "will", "from", "or", "but", "what", "how",
+    "just", "also", "now", "here", "there", "then", "than", "when", "if",
+    "so", "me", "my", "we", "he", "she", "they", "you", "your", "its",
+    "been", "had", "did", "get", "got", "let", "make", "use", "see",
 }
 
 
@@ -215,7 +236,7 @@ class CuriosityEngine:
             from memory.memory_system import memory_manager
             state = memory_manager.session.get_dynamic_state()
             for topic in state.get("top_topics", []):
-                if topic and topic.lower() not in _STOPWORDS and len(topic) >= 3:
+                if topic and topic.lower() not in _STOPWORDS and len(topic) >= 5:
                     topics_combined[topic.lower()] += 3  # Session-Boost
         except Exception as e:
             log.debug("Session-Topics fehlgeschlagen: %s", e)
@@ -234,7 +255,7 @@ class CuriosityEngine:
                 text = row[0] or ""
                 terms = memory_manager.session._extract_topic_terms(text)
                 for term in terms:
-                    if term and len(term) >= 3 and term.lower() not in _STOPWORDS:
+                    if term and len(term) >= 5 and term.lower() not in _STOPWORDS:
                         topics_combined[term.lower()] += 1
         except Exception as e:
             log.debug("DB-Topics fehlgeschlagen: %s", e)
