@@ -1,0 +1,14 @@
+# /etc/sudoers.d/timus-restart
+# Erlaubt Timus-User passwortfreien Restart der eigenen Services
+# Installation:
+#   sudo cp scripts/sudoers_timus /etc/sudoers.d/timus-restart
+#   sudo chmod 440 /etc/sudoers.d/timus-restart
+
+fatih-ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl start timus-mcp.service
+fatih-ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop timus-mcp.service
+fatih-ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart timus-mcp.service
+fatih-ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl start timus-dispatcher.service
+fatih-ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop timus-dispatcher.service
+fatih-ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart timus-dispatcher.service
+fatih-ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl status timus-mcp.service
+fatih-ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl status timus-dispatcher.service

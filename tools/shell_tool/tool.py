@@ -579,3 +579,119 @@ async def read_audit_log(lines: int = 50) -> dict:
     except Exception as e:
         log.error(f"read_audit_log Fehler: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
+
+
+# ── restart_timus ───────────────────────────────────────────────────
+
+_MCP_SERVICE        = "timus-mcp.service"
+_DISPATCHER_SERVICE = "timus-dispatcher.service"
+_MCP_HEALTH_URL     = "http://127.0.0.1:5000/health"
+
+
+@tool(
+    name="restart_timus",
+    description=(
+        "Startet den Timus MCP-Server und/oder den Dispatcher neu. "
+        "Nutze dies wenn Timus traege reagiert, Tools nicht laden oder der MCP-Server ausgefallen ist. "
+        "Prueft nach dem Start automatisch die MCP-Health. "
+        "Benoetigt: sudo NOPASSWD fuer systemctl (scripts/sudoers_timus einrichten)."
+    ),
+    parameters=[
+        P(
+            "mode",
+            "string",
+            "Neustart-Modus: full (MCP + Dispatcher, Standard) | mcp (nur MCP-Server) | dispatcher (nur Dispatcher) | status (nur Status anzeigen)",
+            required=False,
+        ),
+    ],
+    capabilities=["shell", "system"],
+    category=C.SYSTEM
+)
+async def restart_timus(mode: str = "full") -> dict:
+    def _restart():
+        mode_clean = (mode or "full").strip().lower()
+        if mode_clean not in ("full", "mcp", "dispatcher", "status"):
+            mode_clean = "full"
+
+        results: dict = {"mode": mode_clean, "steps": []}
+
+        def _run_cmd(cmd: str) -> tuple[int, str]:
+            try:
+                proc = subprocess.run(
+                    cmd, shell=True, capture_output=True,
+                    text=True, timeout=30,
+                )
+                return proc.returncode, (proc.stdout + proc.stderr).strip()
+            except subprocess.TimeoutExpired:
+                return -1, "Timeout"
+            except Exception as ex:
+                return -1, str(ex)
+
+        def _health_check(retries: int = 8, wait: int = 3) -> bool:
+            import urllib.request
+            for _ in range(retries):
+                try:
+                    with urllib.request.urlopen(_MCP_HEALTH_URL, timeout=2) as r:
+                        if r.status == 200:
+                            return True
+                except Exception:
+                    pass
+                time.sleep(wait)
+            return False
+
+        def _stop(service: str):
+            rc, out = _run_cmd(f"sudo systemctl stop {service}")
+            results["steps"].append({"action": f"stop {service}", "rc": rc, "out": out[:200]})
+            time.sleep(1)
+
+        def _start(service: str):
+            rc, out = _run_cmd(f"sudo systemctl start {service}")
+            results["steps"].append({"action": f"start {service}", "rc": rc, "out": out[:200]})
+
+        def _svc_status(service: str) -> str:
+            rc, _ = _run_cmd(f"systemctl is-active {service}")
+            _, active = _run_cmd(f"systemctl is-active {service}")
+            return active.strip()
+
+        if mode_clean == "status":
+            results["mcp_active"]        = _svc_status(_MCP_SERVICE)
+            results["dispatcher_active"] = _svc_status(_DISPATCHER_SERVICE)
+            results["mcp_healthy"]       = _health_check(retries=1, wait=1)
+            results["status"] = "ok"
+            return results
+
+        # full oder mcp: Dispatcher zuerst stoppen (haengt von MCP ab)
+        if mode_clean in ("full", "mcp"):
+            if mode_clean == "full":
+                _stop(_DISPATCHER_SERVICE)
+            _stop(_MCP_SERVICE)
+            _start(_MCP_SERVICE)
+            healthy = _health_check()
+            results["mcp_healthy"] = healthy
+            results["steps"].append({"action": "health_check", "healthy": healthy})
+            if not healthy:
+                results["status"] = "error"
+                results["message"] = "MCP-Server antwortet nicht nach Neustart"
+                _audit(f"restart_timus mode={mode_clean}", dry_run=False, blocked=False,
+                       result="mcp_health_failed")
+                return results
+
+        if mode_clean in ("full", "dispatcher"):
+            _start(_DISPATCHER_SERVICE)
+            time.sleep(3)
+            disp_active = _svc_status(_DISPATCHER_SERVICE)
+            results["dispatcher_active"] = disp_active
+            results["steps"].append({"action": "dispatcher_active_check", "active": disp_active})
+
+        results["status"] = "ok"
+        results["message"] = f"Timus neugestartet (Modus: {mode_clean})"
+        _audit(f"restart_timus mode={mode_clean}", dry_run=False, blocked=False,
+               result=results["message"])
+        log.info("🔄 restart_timus abgeschlossen: %s", results["message"])
+        return results
+
+    try:
+        return await asyncio.to_thread(_restart)
+    except Exception as e:
+        log.error(f"restart_timus Fehler: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
