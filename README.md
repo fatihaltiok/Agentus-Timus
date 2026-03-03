@@ -4,7 +4,7 @@
   <img src="assets/branding/timus-logo-glow.png" alt="Timus Logo" width="760">
 </p>
 
-**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen). Seit **v2.9** sind die Autonomie-Schichten M1–M5 live: Zielgenerierung, Langzeitplanung, Self-Healing und Autonomie-Scorecard laufen aktiv im Produktivbetrieb. Seit **v3.0 (2026-02-28)** läuft im Canvas ein nativer Voice-Loop (Faster-Whisper STT + Inworld.AI TTS) über `/voice/*` Endpoints. Seit **v3.1 (2026-03-01)** sendet und empfängt Timus eigenständig E-Mails über Microsoft Graph OAuth2 — alle 13 Agenten sind vollständig per Delegation erreichbar. Seit **v3.2 (2026-03-02)** visualisiert der Canvas jede Agent-Delegation mit einem goldenen Lichtstrahl-Animation in Echtzeit — und beide Routing-Pfade (direkt + delegiert) nutzen einheitlich `DeveloperAgentV2`. Seit **v3.3 (2026-03-03)** überwacht Timus sich selbst mit LLMs: Jeder neue Incident wird sofort von `qwen3.5-plus` diagnostiziert (Schicht 2), alle 60 Minuten analysiert `deepseek-v3.2` Trends und strukturelle Schwächen im Autonomie-Zustand (Schicht 3).
+**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen). Seit **v2.9** sind die Autonomie-Schichten M1–M5 live: Zielgenerierung, Langzeitplanung, Self-Healing und Autonomie-Scorecard laufen aktiv im Produktivbetrieb. Seit **v3.0 (2026-02-28)** läuft im Canvas ein nativer Voice-Loop (Faster-Whisper STT + Inworld.AI TTS) über `/voice/*` Endpoints. Seit **v3.1 (2026-03-01)** sendet und empfängt Timus eigenständig E-Mails über Microsoft Graph OAuth2 — alle 13 Agenten sind vollständig per Delegation erreichbar. Seit **v3.2 (2026-03-02)** visualisiert der Canvas jede Agent-Delegation mit einem goldenen Lichtstrahl-Animation in Echtzeit — und beide Routing-Pfade (direkt + delegiert) nutzen einheitlich `DeveloperAgentV2`. Seit **v3.3 (2026-03-03)** überwacht Timus sich selbst mit LLMs: Jeder neue Incident wird sofort von `qwen3.5-plus` diagnostiziert (Schicht 2), alle 60 Minuten analysiert `deepseek-v3.2` Trends und strukturelle Schwächen im Autonomie-Zustand (Schicht 3). Außerdem können alle Agenten ab v3.3 eigenständig URLs öffnen — Hybrid-Fetch mit automatischem Playwright-Fallback für JavaScript-Seiten.
 
 ---
 
@@ -76,7 +76,32 @@ Meta Agent     → Seed-OSS-36B         (ByteDance, Agentic Intelligence, 512K C
 Reasoning Agent→ Nemotron-49B         (NVIDIA-eigenes Flagship-Modell)
 ```
 
-### Phase 14 — LLM-Selbstüberwachung: 3-Schichten-Diagnose *(v3.3, aktuell)*
+### Phase 15 — Web-Fetch: Agenten öffnen eigenständig URLs *(v3.3, aktuell)*
+
+Timus-Agenten konnten bisher keine URLs direkt abrufen — sie konnten nur suchen (DataForSEO) oder den Desktop-Browser steuern. Ab v3.3 gibt es ein dediziertes `web_fetch_tool` mit intelligentem Fallback:
+
+```
+fetch_url("https://example.com")
+  → requests + BeautifulSoup  (~1s, 90% aller Seiten)
+  → 401/403 oder SPA erkannt?
+    → Playwright Chromium     (~5s, JavaScript-Rendering)
+```
+
+**MCP-Tools:**
+- `fetch_url` — eine URL abrufen, gibt `title`, `content`, `markdown`, `links[]` zurück
+- `fetch_multiple_urls` — bis zu 10 URLs **parallel** via `asyncio.gather`
+
+**Agenten mit Zugriff (7 von 13):**
+`executor`, `research`, `reasoning`, `meta`, `development` → über bestehende `"web"`-Capability
+`visual`, `data` → `"fetch"`-Capability neu in `AGENT_CAPABILITY_MAP` ergänzt
+
+**Sicherheit:** Blacklist für `localhost`, private IP-Ranges, `file://`, Path-Traversal-Encoding. SPA-Erkennung via Heuristik (wenig sichtbarer Text + viel JS-Code → Playwright).
+
+**26 offline-fähige Tests** in `tests/test_web_fetch_tool.py` — kein echter HTTP-Call nötig.
+
+---
+
+### Phase 14 — LLM-Selbstüberwachung: 3-Schichten-Diagnose *(v3.3)*
 
 Timus überwacht sich ab v3.3 nicht mehr nur regelbasiert, sondern mit zwei eigenständigen LLM-Schichten:
 
