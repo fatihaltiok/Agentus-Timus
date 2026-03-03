@@ -97,12 +97,20 @@ class ResearchPDFBuilder:
         # Wortanzahl
         word_count = len(narrative_md.split())
 
+        # Deutsches Datum (strftime %B ist systemabhängig englisch)
+        _MONTHS_DE = [
+            "", "Januar", "Februar", "März", "April", "Mai", "Juni",
+            "Juli", "August", "September", "Oktober", "November", "Dezember"
+        ]
+        now = datetime.now()
+        date_str = f"{now.day:02d}. {_MONTHS_DE[now.month]} {now.year}"
+
         # Template rendern
         env = Environment(loader=FileSystemLoader(str(_TEMPLATE_DIR)))
         tmpl = env.get_template(_TEMPLATE_FILE)
         html_content = tmpl.render(
             query=str(session.query),
-            date=datetime.now().strftime("%d. %B %Y"),
+            date=date_str,
             web_count=len(web_sources),
             yt_count=len(yt_sources),
             image_count=len(images),
@@ -132,20 +140,29 @@ class ResearchPDFBuilder:
         current_lines: List[str] = []
 
         for line in md.splitlines():
+            # H2-Überschrift → neuer Abschnitt
             if re.match(r"^##\s+", line):
                 if current_heading and current_lines:
                     sections.append((current_heading, "\n".join(current_lines).strip()))
                 current_heading = re.sub(r"^##\s+", "", line).strip()
                 current_lines = []
+            # H1 überspringen
             elif re.match(r"^#\s+", line):
-                continue  # H1 = Dokumenttitel, überspringen
-            elif re.match(r"^\*.*\*$", line.strip()) and not current_heading:
-                continue  # Metazeile unter H1 überspringen
+                continue
+            # Horizontale Linie überspringen
+            elif re.match(r"^-{3,}$", line.strip()):
+                continue
+            # Metazeile (*Erstellt am...*) überspringen
+            elif re.match(r"^\*[^*].*[^*]\*$", line.strip()):
+                continue
             else:
                 current_lines.append(line)
 
         if current_heading and current_lines:
             sections.append((current_heading, "\n".join(current_lines).strip()))
+
+        # Abschnitte ohne Inhalt entfernen
+        sections = [(h, t) for h, t in sections if t.strip()]
 
         return sections
 

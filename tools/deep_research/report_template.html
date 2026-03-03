@@ -45,7 +45,7 @@
   }
   .cover-header {
     background: #1a3a5c;
-    padding: 50mm 20mm 30mm;
+    padding: 40mm 20mm 20mm;
     flex: 0 0 auto;
   }
   .cover-badge {
@@ -79,7 +79,7 @@
     padding: 14mm 20mm;
     display: flex;
     flex-direction: column;
-    justify-content: flex-end;
+    justify-content: space-between;
   }
   .cover-stats {
     display: flex;
@@ -238,6 +238,20 @@
     <div class="cover-date">{{ date }}</div>
   </div>
   <div class="cover-body">
+    <div class="cover-intro">
+      <p style="font-size:10.5pt; color:#333; line-height:1.7; margin-bottom:5mm;">
+        Dieser Bericht wurde vollautomatisch durch <strong>Timus Deep Research v6.0</strong>
+        erstellt. Das System analysiert Web-Quellen, YouTube-Videos und wissenschaftliche
+        Artikel, verifiziert Fakten durch Quellenabgleich und synthetisiert die Ergebnisse
+        zu einem strukturierten Lesebericht.
+      </p>
+      <p style="font-size:9.5pt; color:#555; line-height:1.6;">
+        Die Recherche umfasst eine mehrstufige Analyse mit Quellenqualitätsbewertung,
+        These-Antithese-Synthese-Framework und narrativer Zusammenfassung auf
+        2.500–5.000 Wörter.
+      </p>
+    </div>
+    <div>
     <div class="cover-stats">
       <div class="stat-box">
         <div class="stat-num">{{ web_count }}</div>
@@ -263,6 +277,7 @@
     <div class="cover-footer-text">
       Automatisch generierter Recherchebericht &nbsp;·&nbsp;
       Alle Informationen basieren auf öffentlich zugänglichen Quellen.
+    </div>
     </div>
   </div>
 </div>
