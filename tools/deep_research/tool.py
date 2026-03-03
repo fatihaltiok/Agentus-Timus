@@ -1751,11 +1751,12 @@ FORMAT-VORGABEN:
 Wichtig: Schreibe NUR den Berichtstext. Kein Meta-Kommentar über den Schreibprozess."""
 
     def _call():
+        token_param = _get_token_param_name(SMART_MODEL)
         response = client.chat.completions.create(
             model=SMART_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.4,
-            max_tokens=6000,
+            **{token_param: 6000},
         )
         return response.choices[0].message.content or ""
 

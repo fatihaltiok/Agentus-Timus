@@ -164,20 +164,19 @@
 
   /* ── Abschnitt mit Bild ─────────────────────────────────── */
   .section-with-image {
-    display: flex;
-    gap: 6mm;
-    align-items: flex-start;
     margin-top: 3mm;
   }
-  .section-text { flex: 1; }
   .section-image-wrap {
-    flex: 0 0 75mm;
+    float: right;
+    width: 75mm;
+    margin: 0 0 4mm 6mm;
   }
   .section-image {
     width: 75mm;
     height: auto;
     border: 1px solid #dde2ea;
     border-radius: 2px;
+    display: block;
   }
   .image-caption {
     font-size: 7.5pt;
@@ -185,6 +184,11 @@
     font-style: italic;
     text-align: center;
     margin-top: 1.5mm;
+  }
+  .section-with-image::after {
+    content: "";
+    display: table;
+    clear: both;
   }
 
   /* ── Quellenverzeichnis ─────────────────────────────────── */
