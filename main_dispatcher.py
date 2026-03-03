@@ -266,17 +266,21 @@ Du bist der zentrale Dispatcher für Timus. Analysiere die INTENTION des Nutzers
       - NICHT bei: "starte den Service" (→ shell), "repariere den Code" (→ development)
 
 13. **shell**: Der SHELL-OPERATOR
-    - Zustaendigkeit: Bash-Befehle ausfuehren, Skripte starten, Cron-Jobs verwalten
-    - Wähle 'shell' ТОЛЬКО bei EXPLIZITEN Ausfuehrungs-Anfragen:
+    - Zustaendigkeit: Bash-Befehle ausfuehren, Skripte/Dateien starten, Cron-Jobs verwalten, Pakete installieren, Updates durchfuehren
+    - Wähle 'shell' bei EXPLIZITEN Ausfuehrungs-Anfragen:
       - "Fuehre diesen Befehl aus: ..."
-      - "Starte das Skript results/backup.py"
+      - "Starte das Skript results/backup.py" / "Fuehre die Datei aus"
       - "Lege einen Cron-Job an der taeglich um 08:00 laeuft"
       - "Fuehre im Terminal aus..."
       - "Zeig mir die Cron-Jobs"
       - "Starte den timus-Service neu" (mit systemctl)
+      - "Installiere das Paket X" / "pip install X" / "apt install X" / "conda install X"
+      - "Fuehre pip install -r requirements.txt aus"
+      - "Mach ein apt update" / "Spiele Updates ein" / "Update das System"
+      - "Installiere die fehlende Bibliothek / das fehlende Modul"
     - NICHT bei: "Lies die Datei" (→ executor), "Was laeuft?" (→ system),
                  "Schreib ein Skript" (→ development)
-    - WICHTIG: shell ist der maechtigste Agent — nur bei klarer Ausfuehrungs-Intention
+    - WICHTIG: shell hat install_package (pip/apt/conda mit 3-Min-Timeout), run_command (5-Min-Timeout) und run_script
 
 14. **image**: Der BILD-ANALYST
     - Zustaendigkeit: Hochgeladene Bilder analysieren und beschreiben
@@ -690,6 +694,34 @@ SHELL_KEYWORDS = [
     "kommando ausführen",
     "im terminal ausführen",
     "befehl ausführen",
+    # Installationen & Updates
+    "pip install",
+    "pip3 install",
+    "apt install",
+    "apt-get install",
+    "conda install",
+    "installiere das paket",
+    "installiere paket",
+    "paket installieren",
+    "package installieren",
+    "bibliothek installieren",
+    "modul installieren",
+    "requirements installieren",
+    "pip upgrade",
+    "pip update",
+    "apt update",
+    "apt upgrade",
+    "system update",
+    "updates einspielen",
+    # Dateien/Skripte starten
+    "starte die datei",
+    "starte das skript",
+    "starte das programm",
+    "führe die datei aus",
+    "führe das skript aus",
+    "python3 ausführen",
+    "datei ausführen",
+    "skript starten",
 ]
 
 DATA_KEYWORDS = [

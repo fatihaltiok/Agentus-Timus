@@ -27,7 +27,8 @@ log = logging.getLogger(__name__)
 _PROJECT_ROOT  = Path(__file__).resolve().parent.parent.parent
 _AUDIT_LOG     = _PROJECT_ROOT / "logs" / "shell_audit.log"
 _RESULTS_DIR   = _PROJECT_ROOT / "results"
-_MAX_TIMEOUT   = 30  # Sekunden
+_MAX_TIMEOUT   = int(os.getenv("SHELL_MAX_TIMEOUT", "300"))   # default 5 Minuten
+_INSTALL_TIMEOUT = int(os.getenv("SHELL_INSTALL_TIMEOUT", "180"))  # default 3 Minuten
 
 # Verzeichnis sicherstellen
 _AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
@@ -313,6 +314,115 @@ async def run_script(
         return await asyncio.to_thread(_run)
     except Exception as e:
         log.error(f"run_script Fehler: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+
+# ── install_package ────────────────────────────────────────────────
+
+_ALLOWED_MANAGERS = {"pip", "pip3", "apt", "apt-get", "conda"}
+
+
+@tool(
+    name="install_package",
+    description=(
+        "Installiert ein Python- oder System-Paket via pip, apt oder conda. "
+        "Längerer Timeout (3 Minuten) für Package-Manager. "
+        "Audit-Log protokolliert jede Installation. "
+        "Gefaehrliche Paket-Namen (Injection) werden blockiert."
+    ),
+    parameters=[
+        P("package",  "string",  "Paket-Name oder Version (z.B. 'requests', 'numpy==1.26.4', 'curl')", required=True),
+        P("manager",  "string",  "Package-Manager: pip (Standard) | pip3 | apt | apt-get | conda", required=False),
+        P("extra_args", "string", "Zusaetzliche Argumente (z.B. '--upgrade', '--user')", required=False),
+        P("dry_run",  "boolean", "Nur anzeigen, nicht installieren (Standard: false)", required=False),
+    ],
+    capabilities=["shell"],
+    category=C.SYSTEM
+)
+async def install_package(
+    package: str,
+    manager: str = "pip",
+    extra_args: str = "",
+    dry_run: bool = False,
+) -> dict:
+    def _install():
+        mgr = manager.strip().lower() if manager else "pip"
+        if mgr not in _ALLOWED_MANAGERS:
+            return {"status": "blocked", "reason": f"Unbekannter Package-Manager '{mgr}'. Erlaubt: {', '.join(sorted(_ALLOWED_MANAGERS))}"}
+
+        pkg = package.strip()
+        if not pkg:
+            return {"status": "error", "message": "Kein Paket angegeben"}
+
+        # Injection-Schutz: Paket-Name darf keine Shell-Sonderzeichen enthalten
+        if re.search(r"[;&|`$<>]", pkg):
+            reason = f"Ungueltige Zeichen im Paket-Namen: {pkg}"
+            _audit(f"{mgr} install {pkg}", dry_run=False, blocked=True, result=reason)
+            return {"status": "blocked", "reason": reason}
+
+        # Befehl zusammenbauen
+        if mgr in ("apt", "apt-get"):
+            command = f"DEBIAN_FRONTEND=noninteractive {mgr} install -y {pkg}"
+            if extra_args:
+                command += f" {extra_args.strip()}"
+        elif mgr == "conda":
+            command = f"conda install -y {pkg}"
+            if extra_args:
+                command += f" {extra_args.strip()}"
+        else:
+            command = f"{mgr} install {pkg}"
+            if extra_args:
+                command += f" {extra_args.strip()}"
+
+        # Blacklist pruefen (Schutz vor verschachtelten Injections)
+        block_reason = _check_blacklist(command)
+        if block_reason:
+            _audit(command, dry_run=False, blocked=True, result=block_reason)
+            return {"status": "blocked", "reason": block_reason, "command": command}
+
+        if dry_run:
+            _audit(command, dry_run=True, blocked=False, result="(dry-run)")
+            return {
+                "status":  "dry_run",
+                "command": command,
+                "message": "Dry-Run — Installation NICHT ausgefuehrt. Setze dry_run=false zur Bestaetigung.",
+            }
+
+        t_start = time.monotonic()
+        try:
+            proc = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=_INSTALL_TIMEOUT,
+                cwd=str(_PROJECT_ROOT),
+            )
+            duration = time.monotonic() - t_start
+            output = (proc.stdout + proc.stderr).strip()
+            _audit(command, dry_run=False, blocked=False, result=output[:200], duration=duration)
+            return {
+                "status":      "success" if proc.returncode == 0 else "error",
+                "command":     command,
+                "returncode":  proc.returncode,
+                "stdout":      proc.stdout.strip()[:4000],
+                "stderr":      proc.stderr.strip()[:1000],
+                "duration_s":  round(duration, 2),
+                "installed":   pkg,
+                "manager":     mgr,
+            }
+        except subprocess.TimeoutExpired:
+            duration = time.monotonic() - t_start
+            msg = f"Timeout nach {_INSTALL_TIMEOUT}s — Installation abgebrochen"
+            _audit(command, dry_run=False, blocked=False, result=msg, duration=duration)
+            return {"status": "timeout", "command": command, "message": msg}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    try:
+        return await asyncio.to_thread(_install)
+    except Exception as e:
+        log.error(f"install_package Fehler: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
 
