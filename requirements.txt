@@ -1,6 +1,6 @@
 # requirements.txt
 # Timus — Autonomous Multi-Agent Desktop AI
-# Zuletzt aktualisiert: 2026-02-21
+# Zuletzt aktualisiert: 2026-03-03
 
 # --- Core (FastAPI + MCP-Server) ---
 fastapi==0.118.3
