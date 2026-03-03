@@ -1696,8 +1696,10 @@ async def _create_narrative_synthesis_report(session: DeepResearchSession) -> st
 
     if session.unverified_claims:
         facts_text += "\nWEITERE HINWEISE (noch nicht durch mehrere Quellen bestätigt):\n"
-        for i, c in enumerate(session.unverified_claims[:10], 1):
-            facts_text += f"{i}. {c.get('fact', '')}\n"
+        for i, c in enumerate(session.unverified_claims[:20], 1):
+            source_type = c.get("source_type", "web")
+            prefix = "[YT] " if source_type == "youtube" else ""
+            facts_text += f"{i}. {prefix}{c.get('fact', '')}\n"
 
     syntheses_text = ""
     if session.thesis_analyses:
@@ -1708,28 +1710,42 @@ async def _create_narrative_synthesis_report(session: DeepResearchSession) -> st
 
     sources_text = ""
     if session.research_tree:
-        sources_text = "\nGENUTZTE QUELLEN:\n"
+        sources_text = "\nGENUTZTE WEB-QUELLEN:\n"
         for node in session.research_tree[:20]:
             sources_text += f"- {node.title} | {node.url}\n"
 
-    prompt = f"""Du erhältst Recherche-Ergebnisse zu folgendem Thema und sollst daraus einen gut lesbaren, zusammenfassenden Bericht schreiben.
+    yt_sources_text = ""
+    yt_claims = [c for c in session.unverified_claims if c.get("source_type") == "youtube"]
+    if yt_claims:
+        yt_sources_text = "\nYOUTUBE-QUELLEN:\n"
+        for c in yt_claims:
+            title = c.get("source_title", c.get("video_id", ""))
+            channel = c.get("channel", "")
+            url = c.get("source", "")
+            yt_sources_text += f"- [Video: {title}] | Kanal: {channel} | {url}\n"
+
+    prompt = f"""Du erhältst Recherche-Ergebnisse zu folgendem Thema und sollst daraus einen ausführlichen, gut lesbaren Bericht schreiben.
 
 THEMA: {session.query}
 
-{facts_text}{syntheses_text}{sources_text}
+{facts_text}{syntheses_text}{sources_text}{yt_sources_text}
 
 AUFGABE:
-Schreibe einen lesbaren Gesamtbericht auf Deutsch, der alle wichtigen Informationen aus den obigen Quellen zu einem kohärenten, fließenden Text zusammenfasst.
+Schreibe einen ausführlichen Lesebericht auf Deutsch, der alle wichtigen Informationen zu einem kohärenten, fließenden Text zusammenfasst.
 
 FORMAT-VORGABEN:
-- Beginne mit einer Einleitung die das Thema und seinen Kontext kurz erklärt
+- Beginne mit einer Einleitung, die das Thema und seinen Kontext erklärt (mindestens 2-3 Absätze)
 - Gliedere den Hauptteil nach inhaltlichen Schwerpunkten (nicht nach Quellen-Reihenfolge)
-- Nutze ## Überschriften für die Hauptabschnitte
+- Nutze ## Überschriften für die Hauptabschnitte (mindestens 4 Abschnitte)
+- Jeder Hauptabschnitt: mindestens 3-4 vollständige Absätze mit je 3-5 Sätzen
+- Nutze direkte Zitate aus den Quellen in Anführungszeichen
+- Erkläre Zusammenhänge und Widersprüche zwischen verschiedenen Quellen
+- YouTube-Quellen mit [Video: Titel] kennzeichnen, wenn du darauf Bezug nimmst
 - Schreibe in ganzen Sätzen und Absätzen — kein reines Bullet-Point-Staccato
 - Wo sinnvoll dürfen Aufzählungen zur Übersichtlichkeit eingesetzt werden
-- Beende mit einem knappen Fazit
+- Beende mit einem ausführlichen Fazit (mindestens 3 Absätze)
 - Füge am Ende ein Quellenverzeichnis als nummerierte Liste mit Titel und URL ein
-- Länge: 600–1500 Wörter je nach Materialmenge
+- Länge: 2500–5000 Wörter — lieber zu ausführlich als zu kurz
 - Ton: sachlich, informativ, gut lesbar — wie ein guter Wikipedia-Artikel oder Zeitungsfeature
 
 Wichtig: Schreibe NUR den Berichtstext. Kein Meta-Kommentar über den Schreibprozess."""
@@ -1739,7 +1755,7 @@ Wichtig: Schreibe NUR den Berichtstext. Kein Meta-Kommentar über den Schreibpro
             model=SMART_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.4,
-            max_tokens=2500,
+            max_tokens=6000,
         )
         return response.choices[0].message.content or ""
 
@@ -1751,10 +1767,12 @@ Wichtig: Schreibe NUR den Berichtstext. Kein Meta-Kommentar über den Schreibpro
 
     now = datetime.now().strftime("%d.%m.%Y %H:%M")
     source_count = len(session.research_tree)
+    yt_count = len([c for c in session.unverified_claims if c.get("source_type") == "youtube"])
+    yt_info = f", {yt_count} YouTube-Videos" if yt_count > 0 else ""
     header = (
         f"# Recherche-Bericht\n"
         f"## {session.query}\n\n"
-        f"*Erstellt am {now} | Timus Deep Research v5.0 | Basierend auf {source_count} Quellen*\n\n"
+        f"*Erstellt am {now} | Timus Deep Research v6.0 | Basierend auf {source_count} Web-Quellen{yt_info}*\n\n"
         f"---\n\n"
     )
     return header + narrative
