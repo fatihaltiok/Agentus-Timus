@@ -2103,6 +2103,7 @@ async def generate_research_report(
 
     # Lesbaren Gesamtbericht (Narrative Synthese) erstellen und separat speichern
     narrative_filepath = None
+    narrative_content = ""
     try:
         logger.info("📖 Erstelle lesbaren Gesamtbericht (Narrative Synthese)...")
         narrative_content = await _create_narrative_synthesis_report(session)
@@ -2119,6 +2120,40 @@ async def generate_research_report(
     except Exception as e:
         logger.warning(f"Lesebericht-Erstellung fehlgeschlagen: {e}")
 
+    # Bilder sammeln
+    images = []
+    if os.getenv("DEEP_RESEARCH_IMAGES_ENABLED", "true").lower() == "true":
+        try:
+            from pathlib import Path as _Path
+            from tools.deep_research.image_collector import ImageCollector
+            sections = re.findall(r"^##\s+(.+)$", narrative_content, re.MULTILINE)
+            images = await ImageCollector().collect_images_for_sections(
+                sections[:4], session.query, max_images=4
+            )
+            logger.info(f"🖼️ {len(images)} Bilder gesammelt")
+        except Exception as e:
+            logger.warning(f"Bilder-Sammlung fehlgeschlagen (unkritisch): {e}")
+
+    # PDF erstellen
+    pdf_filepath = None
+    if os.getenv("DEEP_RESEARCH_PDF_ENABLED", "true").lower() == "true":
+        try:
+            from pathlib import Path as _Path
+            from tools.deep_research.pdf_builder import ResearchPDFBuilder
+            base_dir_pdf = (
+                _Path(filepath).parent if filepath
+                else _Path("/home/fatih-ubuntu/dev/timus/results")
+            )
+            pdf_path = str(base_dir_pdf / f"DeepResearch_PDF_{actual_session_id}.pdf")
+            pdf_filepath = ResearchPDFBuilder().build_pdf(
+                narrative_content, images, session, pdf_path
+            )
+            logger.info(f"📄 PDF erstellt: {pdf_filepath}")
+        except Exception as e:
+            logger.warning(f"PDF-Erstellung fehlgeschlagen (unkritisch): {e}")
+
+    yt_count = len([c for c in session.unverified_claims if c.get("source_type") == "youtube"])
+
     if filepath:
         return {
             "session_id": actual_session_id,
@@ -2126,9 +2161,16 @@ async def generate_research_report(
             "format": actual_format,
             "filepath": filepath,
             "narrative_filepath": narrative_filepath,
-            "message": f"Akademischer Bericht erstellt. Lesebericht: {narrative_filepath or 'nicht verfügbar'}",
+            "pdf_filepath": pdf_filepath,
+            "youtube_videos_analyzed": yt_count,
+            "images_in_pdf": len(images),
+            "message": (
+                f"Akademischer Bericht erstellt. "
+                f"Lesebericht: {narrative_filepath or 'nicht verfügbar'}. "
+                f"PDF: {pdf_filepath or 'nicht verfügbar'}."
+            ),
             "summary": _get_research_metadata_summary(session),
-            "version": "5.0"
+            "version": "6.0"
         }
     else:
         # Fallback: Content im Response
@@ -2138,9 +2180,12 @@ async def generate_research_report(
             "format": actual_format,
             "content": content,
             "narrative_filepath": narrative_filepath,
+            "pdf_filepath": pdf_filepath,
+            "youtube_videos_analyzed": yt_count,
+            "images_in_pdf": len(images),
             "message": "Bericht erstellt, aber Speichern fehlgeschlagen. Content im Response.",
             "summary": _get_research_metadata_summary(session),
-            "version": "5.0"
+            "version": "6.0"
         }
 
 
