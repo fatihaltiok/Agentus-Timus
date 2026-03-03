@@ -1678,6 +1678,87 @@ def _create_text_report(session: DeepResearchSession, include_methodology: bool 
     return text
 
 
+async def _create_narrative_synthesis_report(session: DeepResearchSession) -> str:
+    """
+    Erstellt einen lesbaren Gesamtbericht durch LLM-Synthese aller Quellen.
+
+    Anders als der analytische Report: fließender Text, inhaltlich gegliedert,
+    wie ein guter Zeitungsartikel oder Wikipedia-Eintrag — direkt lesbar.
+    """
+    # Material für den LLM zusammenstellen
+    facts_text = ""
+    if session.verified_facts:
+        facts_text += "VERIFIZIERTE FAKTEN:\n"
+        for i, f in enumerate(session.verified_facts[:25], 1):
+            quotes = f.get("supporting_quotes", [])
+            quote_str = f' | Zitat: "{quotes[0][:150]}"' if quotes and quotes[0] else ""
+            facts_text += f"{i}. {f.get('fact', '')}{quote_str}\n"
+
+    if session.unverified_claims:
+        facts_text += "\nWEITERE HINWEISE (noch nicht durch mehrere Quellen bestätigt):\n"
+        for i, c in enumerate(session.unverified_claims[:10], 1):
+            facts_text += f"{i}. {c.get('fact', '')}\n"
+
+    syntheses_text = ""
+    if session.thesis_analyses:
+        syntheses_text = "\nSYNTHESEN AUS DER QUELLENANALYSE:\n"
+        for a in session.thesis_analyses:
+            if a.synthesis:
+                syntheses_text += f"• {a.topic}: {a.synthesis}\n"
+
+    sources_text = ""
+    if session.research_tree:
+        sources_text = "\nGENUTZTE QUELLEN:\n"
+        for node in session.research_tree[:20]:
+            sources_text += f"- {node.title} | {node.url}\n"
+
+    prompt = f"""Du erhältst Recherche-Ergebnisse zu folgendem Thema und sollst daraus einen gut lesbaren, zusammenfassenden Bericht schreiben.
+
+THEMA: {session.query}
+
+{facts_text}{syntheses_text}{sources_text}
+
+AUFGABE:
+Schreibe einen lesbaren Gesamtbericht auf Deutsch, der alle wichtigen Informationen aus den obigen Quellen zu einem kohärenten, fließenden Text zusammenfasst.
+
+FORMAT-VORGABEN:
+- Beginne mit einer Einleitung die das Thema und seinen Kontext kurz erklärt
+- Gliedere den Hauptteil nach inhaltlichen Schwerpunkten (nicht nach Quellen-Reihenfolge)
+- Nutze ## Überschriften für die Hauptabschnitte
+- Schreibe in ganzen Sätzen und Absätzen — kein reines Bullet-Point-Staccato
+- Wo sinnvoll dürfen Aufzählungen zur Übersichtlichkeit eingesetzt werden
+- Beende mit einem knappen Fazit
+- Füge am Ende ein Quellenverzeichnis als nummerierte Liste mit Titel und URL ein
+- Länge: 600–1500 Wörter je nach Materialmenge
+- Ton: sachlich, informativ, gut lesbar — wie ein guter Wikipedia-Artikel oder Zeitungsfeature
+
+Wichtig: Schreibe NUR den Berichtstext. Kein Meta-Kommentar über den Schreibprozess."""
+
+    def _call():
+        response = client.chat.completions.create(
+            model=SMART_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.4,
+            max_tokens=2500,
+        )
+        return response.choices[0].message.content or ""
+
+    try:
+        narrative = await asyncio.to_thread(_call)
+    except Exception as e:
+        logger.warning(f"Narrative-Synthese LLM-Call fehlgeschlagen: {e}")
+        narrative = "_Narrative Synthese konnte nicht erstellt werden._"
+
+    now = datetime.now().strftime("%d.%m.%Y %H:%M")
+    source_count = len(session.research_tree)
+    header = (
+        f"# Recherche-Bericht\n"
+        f"## {session.query}\n\n"
+        f"*Erstellt am {now} | Timus Deep Research v5.0 | Basierend auf {source_count} Quellen*\n\n"
+        f"---\n\n"
+    )
+    return header + narrative
+
 
 # ==============================================================================
 # ÖFFENTLICHE RPC-METHODEN (erweitert für v5.0)
@@ -1985,13 +2066,32 @@ async def generate_research_report(
     except Exception as e:
         logger.error(f"Report-Speicherung fehlgeschlagen: {e}")
 
+    # Lesbaren Gesamtbericht (Narrative Synthese) erstellen und separat speichern
+    narrative_filepath = None
+    try:
+        logger.info("📖 Erstelle lesbaren Gesamtbericht (Narrative Synthese)...")
+        narrative_content = await _create_narrative_synthesis_report(session)
+
+        from pathlib import Path
+        base_dir = Path(filepath).parent if filepath else Path("/home/fatih-ubuntu/dev/timus/results")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        narrative_filename = f"DeepResearch_Bericht_{actual_session_id}.md"
+        narrative_path = base_dir / narrative_filename
+        with open(narrative_path, "w", encoding="utf-8") as f:
+            f.write(narrative_content)
+        narrative_filepath = str(narrative_path)
+        logger.info(f"📖 Lesebericht gespeichert: {narrative_filepath}")
+    except Exception as e:
+        logger.warning(f"Lesebericht-Erstellung fehlgeschlagen: {e}")
+
     if filepath:
         return {
             "session_id": actual_session_id,
             "status": "report_created",
             "format": actual_format,
             "filepath": filepath,
-            "message": "Akademischer Bericht erfolgreich erstellt.",
+            "narrative_filepath": narrative_filepath,
+            "message": f"Akademischer Bericht erstellt. Lesebericht: {narrative_filepath or 'nicht verfügbar'}",
             "summary": _get_research_metadata_summary(session),
             "version": "5.0"
         }
@@ -2002,6 +2102,7 @@ async def generate_research_report(
             "status": "report_created_not_saved",
             "format": actual_format,
             "content": content,
+            "narrative_filepath": narrative_filepath,
             "message": "Bericht erstellt, aber Speichern fehlgeschlagen. Content im Response.",
             "summary": _get_research_metadata_summary(session),
             "version": "5.0"
