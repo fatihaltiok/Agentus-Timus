@@ -76,7 +76,32 @@ Meta Agent     → Seed-OSS-36B         (ByteDance, Agentic Intelligence, 512K C
 Reasoning Agent→ Nemotron-49B         (NVIDIA-eigenes Flagship-Modell)
 ```
 
-### Phase 15 — Web-Fetch: Agenten öffnen eigenständig URLs *(v3.3, aktuell)*
+### Phase 16 — Autonomer Service-Neustart *(v3.3, aktuell)*
+
+Falls Timus nicht reagiert oder träge ist, kann er sich jetzt selbst neu starten — ohne manuellen Eingriff:
+
+**MCP-Tool `restart_timus` (in Shell-Agent):**
+```
+restart_timus(mode="full")      → Dispatcher stoppen → MCP neu starten → Health-Check → Dispatcher neu starten
+restart_timus(mode="mcp")       → Nur MCP-Server neu starten
+restart_timus(mode="dispatcher") → Nur Dispatcher neu starten
+restart_timus(mode="status")    → Aktuellen Service-Status abfragen
+```
+
+**CLI-Skript `scripts/restart_timus.sh`:** Gleiche Modi, mit Farb-Output und journalctl-Logs.
+
+**Voraussetzung (einmalig manuell):**
+```bash
+sudo cp scripts/sudoers_timus /etc/sudoers.d/timus-restart
+sudo chmod 440 /etc/sudoers.d/timus-restart
+```
+Danach kann Timus passwortfrei `systemctl start/stop/restart` für seine eigenen Services ausführen.
+
+**Recovery-Flow:** Health-Check nach Neustart (8 Versuche × 3s auf `/health`), Audit-Log-Eintrag, strukturiertes Ergebnis-JSON zurück an den aufrufenden Agenten.
+
+---
+
+### Phase 15 — Web-Fetch: Agenten öffnen eigenständig URLs *(v3.3)*
 
 Timus-Agenten konnten bisher keine URLs direkt abrufen — sie konnten nur suchen (DataForSEO) oder den Desktop-Browser steuern. Ab v3.3 gibt es ein dediziertes `web_fetch_tool` mit intelligentem Fallback:
 
