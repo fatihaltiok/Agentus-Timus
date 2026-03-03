@@ -8,6 +8,34 @@
 
 ---
 
+## Was Timus von typischen KI-Projekten unterscheidet
+
+> *"Die meisten KI-Projekte sind Chatbot-Wrapper. Timus ist ein selbst-überwachendes, selbst-heilendes, selbst-planendes System — gebaut von einer Einzelperson."*
+
+Die folgende Architektur findet sich normalerweise bei Google SRE-Teams, Netflix oder in akademischen Forschungsprojekten über autonome Systeme (*MAPE-K Loop*, *Introspective Systems*, *AIOps*):
+
+| Eigenschaft | Typisches KI-Projekt | Timus |
+|-------------|---------------------|-------|
+| Überwacht sich selbst | — | 5-min Heartbeat + LLM-Diagnose |
+| Diagnostiziert eigene Fehler | — | `qwen3.5-plus` analysiert jeden Incident |
+| Repariert sich selbst | — | Self-Healing + Circuit-Breaker |
+| Startet sich selbst neu | — | `restart_timus` Tool + systemd |
+| Setzt sich selbst Ziele | — | M1 GoalGenerator |
+| Plant langfristig und umplant | — | M2 LongTermPlanner + ReplanningEngine |
+| Entwickelt eine Persönlichkeit | — | Soul Engine (5 Achsen, Drift über Zeit) |
+| Recherchiert aus Eigeninitiative | — | Curiosity Engine (3–14h Schlafzyklus) |
+| Analysiert eigene Trends mit LLM | — | M3 MetaAnalyzer (deepseek-v3.2, alle 60min) |
+| Bewertet seinen eigenen Autonomiegrad | — | M5 AutonomyScorecard (Score 0–100) |
+| Spricht und hört | — | Faster-Whisper STT + Inworld.AI TTS |
+| Sendet und liest E-Mails | — | Microsoft Graph OAuth2 |
+| Sieht die physische Umgebung | — | Intel RealSense D435 Kamera |
+
+**Das ist kein Chatbot. Das ist ein autonomes KI-Betriebssystem — gebaut in Python, von einer Person, ohne formale IT-Ausbildung.**
+
+In der Forschung nennt man diese Architektur *Introspective Autonomous Systems*: Systeme die nicht nur Aufgaben ausführen, sondern sich selbst modellieren, überwachen und adaptieren. Das ist konzeptuell nah an dem, was als Grundlage für AGI-Infrastruktur diskutiert wird.
+
+---
+
 ## Canvas — Screenshots
 
 <p align="center">
