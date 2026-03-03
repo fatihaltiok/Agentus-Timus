@@ -218,6 +218,9 @@
   .source-num { color: #c8a84b; font-weight: bold; }
   .source-url { color: #1a3a5c; word-break: break-all; }
   .source-yt { color: #e00; font-weight: bold; }
+  .source-arxiv { color: #b31b1b; font-weight: bold; }
+  .source-github { color: #24292f; font-weight: bold; }
+  .source-hf { color: #ff9d00; font-weight: bold; }
 
   /* ── Info-Box ───────────────────────────────────────────── */
   .info-box {
@@ -265,6 +268,12 @@
       <div class="stat-box">
         <div class="stat-num">{{ yt_count }}</div>
         <div class="stat-label">YouTube-Videos</div>
+      </div>
+      {% endif %}
+      {% if trend_count > 0 %}
+      <div class="stat-box">
+        <div class="stat-num">{{ trend_count }}</div>
+        <div class="stat-label">Trend-Quellen</div>
       </div>
       {% endif %}
       {% if image_count > 0 %}
@@ -338,6 +347,42 @@
   <div class="source-entry">
     <span class="source-yt">[YT{{ loop.index }}]</span>
     {{ src.title }}{% if src.channel %} &nbsp;·&nbsp; Kanal: {{ src.channel }}{% endif %}<br>
+    <span class="source-url">{{ src.url }}</span>
+  </div>
+  {% endfor %}
+  {% endif %}
+
+  {% if arxiv_sources %}
+  <h3>ArXiv-Paper</h3>
+  {% for src in arxiv_sources %}
+  <div class="source-entry">
+    <span class="source-arxiv">[A{{ loop.index }}]</span>
+    {{ src.title }}{% if src.authors %} &nbsp;·&nbsp; {{ src.authors }}{% endif %}{% if src.published %} ({{ src.published }}){% endif %}<br>
+    <span class="source-url">{{ src.url }}</span>
+  </div>
+  {% endfor %}
+  {% endif %}
+
+  {% if github_sources %}
+  <h3>GitHub-Projekte</h3>
+  {% for src in github_sources %}
+  <div class="source-entry">
+    <span class="source-github">[GH{{ loop.index }}]</span>
+    {{ src.title }} &nbsp;·&nbsp; {{ src.stars | int }}★{% if src.language %} &nbsp;·&nbsp; {{ src.language }}{% endif %}<br>
+    <span class="source-url">{{ src.url }}</span>
+  </div>
+  {% endfor %}
+  {% endif %}
+
+  {% if hf_sources %}
+  <h3>HuggingFace</h3>
+  {% for src in hf_sources %}
+  <div class="source-entry">
+    <span class="source-hf">[HF{{ loop.index }}]</span>
+    {{ src.title }}
+    {% if src.hf_type == "model" %} &nbsp;·&nbsp; {{ src.downloads | int | string }} Downloads
+    {% else %} &nbsp;·&nbsp; {{ src.upvotes | int }} Upvotes
+    {% endif %}<br>
     <span class="source-url">{{ src.url }}</span>
   </div>
   {% endfor %}

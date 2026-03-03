@@ -637,6 +637,25 @@ _TEMPLATE = r"""<!doctype html>
       border-bottom: 1px solid var(--border);
     }
 
+    /* ── RESEARCH SETTINGS TOGGLES ───────────────────────────────── */
+    .toggle-switch { position:relative; display:inline-block; width:40px; height:22px; flex-shrink:0; }
+    .toggle-switch input { opacity:0; width:0; height:0; }
+    .toggle-slider { position:absolute; cursor:pointer; inset:0; background:#333; border-radius:22px; transition:.25s; }
+    .toggle-slider:before { content:""; position:absolute; height:16px; width:16px; left:3px; bottom:3px; background:#888; border-radius:50%; transition:.25s; }
+    input:checked + .toggle-slider { background:#ff9d00; }
+    input:checked + .toggle-slider:before { background:white; transform:translateX(18px); }
+    .setting-row { display:flex; align-items:center; justify-content:space-between; padding:6px 0; border-bottom:1px solid rgba(255,255,255,0.04); }
+    .setting-row:last-child { border-bottom:none; }
+    .setting-info { flex:1; margin-right:12px; }
+    .setting-name { font-weight:600; font-size:10pt; color:var(--text1); }
+    .setting-desc { font-size:8pt; color:#666; display:block; margin-top:2px; }
+    /* Toast */
+    .toast { position:fixed; top:16px; right:16px; padding:8px 14px; border-radius:6px;
+             font-size:9pt; z-index:9999; animation:toastIn .2s; }
+    .toast.ok { background:#1b4332; color:#4ade80; border:1px solid #166534; }
+    .toast.error { background:#450a0a; color:#f87171; border:1px solid #7f1d1d; }
+    @keyframes toastIn { from{opacity:0;transform:translateY(-8px)} to{opacity:1;transform:none} }
+
     /* Scorecard-Header */
     .scorecard-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 18px; }
     .score-big-wrap { }
@@ -1208,6 +1227,51 @@ _TEMPLATE = r"""<!doctype html>
       <div class="tab-content" id="tab-autonomy">
         <div class="autonomy-view">
 
+          <!-- Research Settings -->
+          <div class="auto-card full" style="margin-bottom:10px;">
+            <h3 style="margin-bottom:8px;">Research Settings</h3>
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">ArXiv</span>
+                <span class="setting-desc">Wissenschaftliche Paper &middot; kostenlos</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="arxivToggle" onchange="onResearchToggle(this,'DEEP_RESEARCH_ARXIV_ENABLED','ArXiv')">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">GitHub</span>
+                <span class="setting-desc">Open-Source-Projekte &middot; kostenlos (60 req/h anonym)</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="githubToggle" onchange="onResearchToggle(this,'DEEP_RESEARCH_GITHUB_ENABLED','GitHub')">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">HuggingFace</span>
+                <span class="setting-desc">KI-Modelle &amp; Daily Papers &middot; kostenlos</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="hfToggle" onchange="onResearchToggle(this,'DEEP_RESEARCH_HF_ENABLED','HuggingFace')">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">Edison Scientific (PaperQA3)</span>
+                <span class="setting-desc">Wissenschaftliche Literatur &middot; &#9888; 10 Credits/Monat</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="edisonToggle" onchange="onResearchToggle(this,'DEEP_RESEARCH_EDISON_ENABLED','Edison')">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+
           <div class="auto-card full" style="margin-bottom:14px;">
             <h3>Autonomy Scorecard</h3>
             <div class="scorecard-header">
@@ -1603,9 +1667,43 @@ function updateSidebarScore(score, level) {
   fill.setAttribute("stroke", c);
 }
 
+// ── Research Settings ─────────────────────────────────────────────────────────
+async function loadSettings() {
+  try {
+    const s = await api("/settings");
+    document.getElementById("arxivToggle").checked  = s["DEEP_RESEARCH_ARXIV_ENABLED"]  !== "false";
+    document.getElementById("githubToggle").checked = s["DEEP_RESEARCH_GITHUB_ENABLED"] !== "false";
+    document.getElementById("hfToggle").checked     = s["DEEP_RESEARCH_HF_ENABLED"]     !== "false";
+    document.getElementById("edisonToggle").checked = s["DEEP_RESEARCH_EDISON_ENABLED"] === "true";
+  } catch(e) { console.warn("Settings laden fehlgeschlagen:", e); }
+}
+
+async function onResearchToggle(el, key, label) {
+  const val = el.checked ? "true" : "false";
+  try {
+    await api("/settings", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ key, value: val }),
+    });
+    showToast(label + (el.checked ? " aktiviert ✓" : " deaktiviert"));
+  } catch(e) {
+    el.checked = !el.checked;
+    showToast("Fehler: " + e.message, "error");
+  }
+}
+
+function showToast(msg, type) {
+  const t = document.createElement("div");
+  t.className = "toast " + (type || "ok");
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2500);
+}
+
 // ── Autonomy Dashboard ────────────────────────────────────────────────────────
 async function loadAutonomyData() {
-  await Promise.allSettled([ loadScorecard(), loadGoals(), loadPlans() ]);
+  await Promise.allSettled([ loadSettings(), loadScorecard(), loadGoals(), loadPlans() ]);
 }
 
 async function loadScorecard() {

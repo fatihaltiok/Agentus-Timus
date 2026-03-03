@@ -84,6 +84,9 @@ sys.path.insert(0, str(project_root))
 # .env frueh laden, damit env-basierte Pfade bereits bei Modul-Imports wirken.
 load_dotenv(dotenv_path=project_root / ".env", override=False)
 
+# Runtime-Settings: Persistenz ohne Server-Neustart (wird in lifespan geladen)
+_RUNTIME_SETTINGS_PATH = project_root / "data" / "runtime_settings.json"
+
 # --- Lokale Module und Kontext importieren ---
 import tools.shared_context as shared_context
 from tools.tool_registry_v2 import registry_v2, ValidationError
@@ -593,6 +596,16 @@ async def lifespan(app: FastAPI):
 
     load_dotenv(override=True)
     log.info("✅ .env-Datei geladen.")
+
+    # Runtime-Settings laden (überschreiben .env-Werte ohne Server-Neustart)
+    if _RUNTIME_SETTINGS_PATH.exists():
+        try:
+            with open(_RUNTIME_SETTINGS_PATH) as _f:
+                for _k, _v in _json.load(_f).items():
+                    os.environ[_k] = str(_v)
+            log.info(f"✅ Runtime-Settings geladen: {_RUNTIME_SETTINGS_PATH}")
+        except Exception as _e:
+            log.warning(f"⚠️ Runtime-Settings konnten nicht geladen werden: {_e}")
 
     # Canvas-MVP Bootstrap (best effort)
     try:
@@ -1384,6 +1397,59 @@ async def autonomy_health_endpoint():
 
 # ── VOICE ENDPOINTS ───────────────────────────────────────────────────────────
 _voice_listen_task: asyncio.Task | None = None
+
+
+@app.get("/settings", summary="Research-Settings auslesen (Runtime)")
+async def get_settings():
+    """Gibt die aktuellen Deep-Research-Feature-Flags zurück."""
+    return {
+        "DEEP_RESEARCH_ARXIV_ENABLED":   os.getenv("DEEP_RESEARCH_ARXIV_ENABLED",   "true"),
+        "DEEP_RESEARCH_GITHUB_ENABLED":  os.getenv("DEEP_RESEARCH_GITHUB_ENABLED",  "true"),
+        "DEEP_RESEARCH_HF_ENABLED":      os.getenv("DEEP_RESEARCH_HF_ENABLED",      "true"),
+        "DEEP_RESEARCH_EDISON_ENABLED":  os.getenv("DEEP_RESEARCH_EDISON_ENABLED",  "false"),
+        "DEEP_RESEARCH_YOUTUBE_ENABLED": os.getenv("DEEP_RESEARCH_YOUTUBE_ENABLED", "true"),
+    }
+
+
+@app.post("/settings", summary="Research-Setting ändern (Runtime, ohne Neustart)")
+async def update_setting(request: Request):
+    """Setzt einen Feature-Flag zur Laufzeit und persistiert ihn in data/runtime_settings.json."""
+    _ALLOWED = {
+        "DEEP_RESEARCH_ARXIV_ENABLED",
+        "DEEP_RESEARCH_GITHUB_ENABLED",
+        "DEEP_RESEARCH_HF_ENABLED",
+        "DEEP_RESEARCH_EDISON_ENABLED",
+        "DEEP_RESEARCH_YOUTUBE_ENABLED",
+    }
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Ungültiges JSON"})
+
+    key = payload.get("key")
+    value = str(payload.get("value", ""))
+
+    if key not in _ALLOWED:
+        return JSONResponse(status_code=400, content={"error": f"Key '{key}' nicht erlaubt"})
+
+    os.environ[key] = value
+    log.info(f"⚙️ Runtime-Setting geändert: {key}={value}")
+
+    # Persistieren in data/runtime_settings.json
+    try:
+        settings: dict = {}
+        if _RUNTIME_SETTINGS_PATH.exists():
+            with open(_RUNTIME_SETTINGS_PATH) as _f:
+                settings = _json.load(_f)
+        settings[key] = value
+        _RUNTIME_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(_RUNTIME_SETTINGS_PATH, "w") as _f:
+            _json.dump(settings, _f, indent=2)
+    except Exception as e:
+        log.warning(f"⚠️ Runtime-Settings konnten nicht persistiert werden: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+    return {"key": key, "value": value, "status": "ok"}
 
 
 @app.get("/voice/status", summary="Voice-System Status")

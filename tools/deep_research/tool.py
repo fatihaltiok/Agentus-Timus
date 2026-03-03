@@ -1645,6 +1645,56 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
 
     lines.append("")
 
+    # ==================== TREND-QUELLEN ====================
+    arxiv_claims = [c for c in session.unverified_claims if c.get("source_type") == "arxiv"]
+    github_claims = [c for c in session.unverified_claims if c.get("source_type") == "github"]
+    hf_claims = [c for c in session.unverified_claims if c.get("source_type") == "huggingface"]
+    yt_claims_report = [c for c in session.unverified_claims if c.get("source_type") == "youtube"]
+
+    if yt_claims_report or arxiv_claims or github_claims or hf_claims:
+        lines.extend(["### Trend-Quellen (YouTube / ArXiv / GitHub / HuggingFace)", ""])
+        lines.extend([
+            "| # | Typ | Titel | Details | URL |",
+            "|---|-----|-------|---------|-----|"
+        ])
+
+        idx = 1
+        for c in yt_claims_report[:10]:
+            title = c.get("source_title", "")[:50]
+            channel = c.get("channel", "")
+            url = c.get("source", "")
+            lines.append(f"| YT{idx} | YouTube | {title} | Kanal: {channel} | {url} |")
+            idx += 1
+
+        idx = 1
+        for c in arxiv_claims[:10]:
+            title = c.get("source_title", "")[:50]
+            authors = c.get("authors", "")[:40]
+            pub = c.get("published_date", "")
+            url = c.get("source", "")
+            lines.append(f"| A{idx} | ArXiv | {title} | {authors} ({pub}) | {url} |")
+            idx += 1
+
+        idx = 1
+        for c in github_claims[:10]:
+            name = c.get("full_name", c.get("source_title", ""))[:50]
+            stars = c.get("stars", 0)
+            lang = c.get("language", "")
+            url = c.get("source", "")
+            lines.append(f"| GH{idx} | GitHub | {name} | {stars:,}★ {lang} | {url} |")
+            idx += 1
+
+        idx = 1
+        for c in hf_claims[:10]:
+            title = c.get("source_title", "")[:50]
+            hf_type = c.get("hf_type", "model")
+            details = f"Downloads: {c.get('downloads', 0):,}" if hf_type == "model" else f"Upvotes: {c.get('upvotes', 0)}"
+            url = c.get("source", "")
+            lines.append(f"| HF{idx} | HuggingFace | {title} | {details} | {url} |")
+            idx += 1
+
+        lines.append("")
+
     # ==================== FOOTER ====================
     lines.extend([
         "---",
@@ -1698,7 +1748,14 @@ async def _create_narrative_synthesis_report(session: DeepResearchSession) -> st
         facts_text += "\nWEITERE HINWEISE (noch nicht durch mehrere Quellen bestätigt):\n"
         for i, c in enumerate(session.unverified_claims[:20], 1):
             source_type = c.get("source_type", "web")
-            prefix = "[YT] " if source_type == "youtube" else ""
+            prefix_map = {
+                "youtube": "[YT] ",
+                "arxiv": "[Paper] ",
+                "github": "[GitHub] ",
+                "huggingface": "[HF] ",
+                "edison": "[Literatur] ",
+            }
+            prefix = prefix_map.get(source_type, "")
             facts_text += f"{i}. {prefix}{c.get('fact', '')}\n"
 
     syntheses_text = ""
@@ -1724,11 +1781,34 @@ async def _create_narrative_synthesis_report(session: DeepResearchSession) -> st
             url = c.get("source", "")
             yt_sources_text += f"- [Video: {title}] | Kanal: {channel} | {url}\n"
 
+    # Trend-Quellen-Texte für Prompt aufbereiten
+    arxiv_items = [c for c in session.unverified_claims if c.get("source_type") == "arxiv"]
+    github_items = [c for c in session.unverified_claims if c.get("source_type") == "github"]
+    hf_items = [c for c in session.unverified_claims if c.get("source_type") == "huggingface"]
+
+    trend_sources_text = ""
+    if arxiv_items:
+        trend_sources_text += "\nARXIV-PAPER:\n"
+        for c in arxiv_items:
+            authors = c.get("authors", "")
+            pub = c.get("published_date", "")
+            trend_sources_text += f"- [Paper: {c.get('source_title', '')}] | {authors} ({pub}) | {c.get('source', '')}\n"
+    if github_items:
+        trend_sources_text += "\nGITHUB-PROJEKTE:\n"
+        for c in github_items:
+            stars = c.get("stars", 0)
+            lang = c.get("language", "")
+            trend_sources_text += f"- [GitHub: {c.get('full_name', c.get('source_title', ''))} ({stars:,}★, {lang})] | {c.get('source', '')}\n"
+    if hf_items:
+        trend_sources_text += "\nHUGGINGFACE-MODELLE/PAPER:\n"
+        for c in hf_items:
+            trend_sources_text += f"- [HF: {c.get('source_title', '')}] | {c.get('source', '')}\n"
+
     prompt = f"""Du erhältst Recherche-Ergebnisse zu folgendem Thema und sollst daraus einen ausführlichen, gut lesbaren Bericht schreiben.
 
 THEMA: {session.query}
 
-{facts_text}{syntheses_text}{sources_text}{yt_sources_text}
+{facts_text}{syntheses_text}{sources_text}{yt_sources_text}{trend_sources_text}
 
 AUFGABE:
 Schreibe einen ausführlichen Lesebericht auf Deutsch, der alle wichtigen Informationen zu einem kohärenten, fließenden Text zusammenfasst.
@@ -1741,6 +1821,9 @@ FORMAT-VORGABEN:
 - Nutze direkte Zitate aus den Quellen in Anführungszeichen
 - Erkläre Zusammenhänge und Widersprüche zwischen verschiedenen Quellen
 - YouTube-Quellen mit [Video: Titel] kennzeichnen, wenn du darauf Bezug nimmst
+- ArXiv-Paper mit [Paper: Titel] kennzeichnen, wenn du darauf Bezug nimmst
+- GitHub-Projekte mit [GitHub: Name (★)] kennzeichnen, wenn du darauf Bezug nimmst
+- HuggingFace-Modelle/-Paper mit [HF: Name] kennzeichnen, wenn du darauf Bezug nimmst
 - Schreibe in ganzen Sätzen und Absätzen — kein reines Bullet-Point-Staccato
 - Wo sinnvoll dürfen Aufzählungen zur Übersichtlichkeit eingesetzt werden
 - Beende mit einem ausführlichen Fazit (mindestens 3 Absätze)
@@ -1769,11 +1852,25 @@ Wichtig: Schreibe NUR den Berichtstext. Kein Meta-Kommentar über den Schreibpro
     now = datetime.now().strftime("%d.%m.%Y %H:%M")
     source_count = len(session.research_tree)
     yt_count = len([c for c in session.unverified_claims if c.get("source_type") == "youtube"])
-    yt_info = f", {yt_count} YouTube-Videos" if yt_count > 0 else ""
+    arxiv_count = len([c for c in session.unverified_claims if c.get("source_type") == "arxiv"])
+    github_count = len([c for c in session.unverified_claims if c.get("source_type") == "github"])
+    hf_count = len([c for c in session.unverified_claims if c.get("source_type") == "huggingface"])
+
+    extras = []
+    if yt_count > 0:
+        extras.append(f"{yt_count} YouTube-Videos")
+    if arxiv_count > 0:
+        extras.append(f"{arxiv_count} ArXiv-Paper")
+    if github_count > 0:
+        extras.append(f"{github_count} GitHub-Projekte")
+    if hf_count > 0:
+        extras.append(f"{hf_count} HuggingFace-Einträge")
+
+    extras_info = (", " + ", ".join(extras)) if extras else ""
     header = (
         f"# Recherche-Bericht\n"
         f"## {session.query}\n\n"
-        f"*Erstellt am {now} | Timus Deep Research v6.0 | Basierend auf {source_count} Web-Quellen{yt_info}*\n\n"
+        f"*Erstellt am {now} | Timus Deep Research v6.0 | Basierend auf {source_count} Web-Quellen{extras_info}*\n\n"
         f"---\n\n"
     )
     return header + narrative
@@ -1912,8 +2009,24 @@ async def start_deep_research(
             except Exception as e:
                 logger.warning(f"YouTube-Recherche fehlgeschlagen (unkritisch): {e}")
 
-        # PHASE 7: FINALE SYNTHESE
-        logger.info("📝 Phase 7: Finale Synthese...")
+        # PHASE 7: TREND-RECHERCHE (ArXiv + GitHub + HuggingFace)
+        trend_count = 0
+        if os.getenv("DEEP_RESEARCH_TRENDS_ENABLED", "true").lower() == "true":
+            try:
+                from tools.deep_research.trend_researcher import TrendResearcher
+                trend_count = await TrendResearcher().research_trends(
+                    query=query, session=current_session, max_per_source=3
+                )
+                logger.info(f"📊 Trends: {trend_count} Einträge analysiert")
+                if trend_count > 0:
+                    current_session.methodology_notes.append(
+                        f"Trend-Recherche: {trend_count} Einträge aus ArXiv/GitHub/HuggingFace"
+                    )
+            except Exception as e:
+                logger.warning(f"Trend-Recherche fehlgeschlagen (unkritisch): {e}")
+
+        # PHASE 8: FINALE SYNTHESE
+        logger.info("📝 Phase 8: Finale Synthese...")
         analysis = await _synthesize_findings(current_session, verified_data)
 
         logger.info(f"✅ Session {session_id} abgeschlossen")
@@ -1972,6 +2085,7 @@ async def start_deep_research(
             "sources_analyzed": len(current_session.visited_urls),
             "thesis_analyses_count": len(current_session.thesis_analyses),
             "youtube_videos_analyzed": yt_count,
+            "trend_sources_analyzed": trend_count,
             "source_quality_summary": current_session.source_quality_summary,
             "bias_summary": current_session.bias_summary,
             "analysis": analysis,

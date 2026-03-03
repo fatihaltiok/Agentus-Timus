@@ -93,6 +93,40 @@ class ResearchPDFBuilder:
             for c in session.unverified_claims
             if c.get("source_type") == "youtube"
         ]
+        arxiv_sources = [
+            {
+                "title": c.get("source_title", "")[:80],
+                "authors": c.get("authors", "")[:60],
+                "published": c.get("published_date", ""),
+                "arxiv_id": c.get("arxiv_id", ""),
+                "url": c.get("source", "")[:120],
+            }
+            for c in session.unverified_claims
+            if c.get("source_type") == "arxiv"
+        ]
+        github_sources = [
+            {
+                "title": c.get("full_name", c.get("source_title", ""))[:80],
+                "stars": c.get("stars", 0),
+                "language": c.get("language", ""),
+                "url": c.get("source", "")[:120],
+            }
+            for c in session.unverified_claims
+            if c.get("source_type") == "github"
+        ]
+        hf_sources = [
+            {
+                "title": c.get("source_title", "")[:80],
+                "hf_type": c.get("hf_type", "model"),
+                "downloads": c.get("downloads", 0),
+                "upvotes": c.get("upvotes", 0),
+                "url": c.get("source", "")[:120],
+            }
+            for c in session.unverified_claims
+            if c.get("source_type") == "huggingface"
+        ]
+
+        trend_count = len(arxiv_sources) + len(github_sources) + len(hf_sources)
 
         # Wortanzahl
         word_count = len(narrative_md.split())
@@ -113,12 +147,16 @@ class ResearchPDFBuilder:
             date=date_str,
             web_count=len(web_sources),
             yt_count=len(yt_sources),
+            trend_count=trend_count,
             image_count=len(images),
             word_count=word_count,
             toc=toc_titles,
             sections=template_sections,
             web_sources=web_sources,
             yt_sources=yt_sources,
+            arxiv_sources=arxiv_sources,
+            github_sources=github_sources,
+            hf_sources=hf_sources,
         )
 
         # PDF erzeugen

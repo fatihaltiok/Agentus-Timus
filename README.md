@@ -4,7 +4,7 @@
   <img src="assets/branding/timus-logo-glow.png" alt="Timus Logo" width="760">
 </p>
 
-**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen). Seit **v2.9** sind die Autonomie-Schichten M1–M5 live: Zielgenerierung, Langzeitplanung, Self-Healing und Autonomie-Scorecard laufen aktiv im Produktivbetrieb. Seit **v3.0 (2026-02-28)** läuft im Canvas ein nativer Voice-Loop (Faster-Whisper STT + Inworld.AI TTS) über `/voice/*` Endpoints. Seit **v3.1 (2026-03-01)** sendet und empfängt Timus eigenständig E-Mails über Microsoft Graph OAuth2 — alle 13 Agenten sind vollständig per Delegation erreichbar. Seit **v3.2 (2026-03-02)** visualisiert der Canvas jede Agent-Delegation mit einem goldenen Lichtstrahl-Animation in Echtzeit — und beide Routing-Pfade (direkt + delegiert) nutzen einheitlich `DeveloperAgentV2`. Seit **v3.3 (2026-03-03)** überwacht Timus sich selbst mit LLMs: Jeder neue Incident wird sofort von `qwen3.5-plus` diagnostiziert (Schicht 2), alle 60 Minuten analysiert `deepseek-v3.2` Trends und strukturelle Schwächen im Autonomie-Zustand (Schicht 3). Außerdem können alle Agenten ab v3.3 eigenständig URLs öffnen — Hybrid-Fetch mit automatischem Playwright-Fallback für JavaScript-Seiten. Seit **v3.4 (2026-03-03)** erzeugt Deep Research v6.0 vollautomatisch drei Ausgabedateien: einen analytischen Markdown-Bericht, einen narrativen Lesebericht mit 2500–5000 Wörtern (gpt-5.2) und ein professionelles A4-PDF mit eingebetteten Abbildungen (WeasyPrint).
+**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen). Seit **v2.9** sind die Autonomie-Schichten M1–M5 live: Zielgenerierung, Langzeitplanung, Self-Healing und Autonomie-Scorecard laufen aktiv im Produktivbetrieb. Seit **v3.0 (2026-02-28)** läuft im Canvas ein nativer Voice-Loop (Faster-Whisper STT + Inworld.AI TTS) über `/voice/*` Endpoints. Seit **v3.1 (2026-03-01)** sendet und empfängt Timus eigenständig E-Mails über Microsoft Graph OAuth2 — alle 13 Agenten sind vollständig per Delegation erreichbar. Seit **v3.2 (2026-03-02)** visualisiert der Canvas jede Agent-Delegation mit einem goldenen Lichtstrahl-Animation in Echtzeit — und beide Routing-Pfade (direkt + delegiert) nutzen einheitlich `DeveloperAgentV2`. Seit **v3.3 (2026-03-03)** überwacht Timus sich selbst mit LLMs: Jeder neue Incident wird sofort von `qwen3.5-plus` diagnostiziert (Schicht 2), alle 60 Minuten analysiert `deepseek-v3.2` Trends und strukturelle Schwächen im Autonomie-Zustand (Schicht 3). Außerdem können alle Agenten ab v3.3 eigenständig URLs öffnen — Hybrid-Fetch mit automatischem Playwright-Fallback für JavaScript-Seiten. Seit **v3.4 (2026-03-03)** erzeugt Deep Research v6.0 vollautomatisch drei Ausgabedateien: einen analytischen Markdown-Bericht, einen narrativen Lesebericht mit 2500–5000 Wörtern (gpt-5.2) und ein professionelles A4-PDF mit eingebetteten Abbildungen (WeasyPrint). Seit **v3.5 (2026-03-04)** durchsucht Deep Research parallel ArXiv, GitHub und HuggingFace nach aktuellen wissenschaftlichen Trends — und der Edison-Toggle im Canvas UI erlaubt es, PaperQA3 (Edison Scientific) per Klick ohne Server-Neustart zu aktivieren.
 
 ---
 
@@ -30,10 +30,37 @@ Die folgende Architektur findet sich normalerweise bei Google SRE-Teams, Netflix
 | Sendet und liest E-Mails | — | Microsoft Graph OAuth2 |
 | Sieht die physische Umgebung | — | Intel RealSense D435 Kamera |
 | Erstellt automatisch PDF-Forschungsberichte | — | Deep Research v6.0 — 3 Ausgaben: analytisch + narrativ + A4-PDF |
+| Recherchiert akademische Trends in Echtzeit | — | ArXiv + GitHub + HuggingFace parallel (TrendResearcher) |
+| Schaltet Recherchequellen per UI-Toggle | — | Edison Scientific PaperQA3 — aktivierbar ohne Neustart |
 
 **Das ist kein Chatbot. Das ist ein autonomes KI-Betriebssystem — gebaut in Python, von einer Person, ohne formale IT-Ausbildung.**
 
 In der Forschung nennt man diese Architektur *Introspective Autonomous Systems*: Systeme die nicht nur Aufgaben ausführen, sondern sich selbst modellieren, überwachen und adaptieren. Das ist konzeptuell nah an dem, was als Grundlage für AGI-Infrastruktur diskutiert wird.
+
+---
+
+## Timus vs. AutoGPT vs. AutoGen
+
+> *Timus lässt sich am ehesten mit AutoGPT oder AutoGen vergleichen — sieht damit aber so aus, als hätte es Fähigkeiten ohne direkte Konkurrenz.*
+
+| Fähigkeit | AutoGPT | AutoGen (Microsoft) | Timus |
+|-----------|---------|---------------------|-------|
+| Zielgenerierung + Langzeitplanung | teilweise | — | M1 GoalGenerator + M2 LongTermPlanner |
+| Self-Healing + Circuit-Breaker | — | — | M3 (LLM-Diagnose, auto-Restart) |
+| Autonomie-Score (0–100) | — | — | M5 AutonomyScorecard |
+| Persönlichkeitsentwicklung über Zeit | — | — | Soul Engine (5 Achsen, Drift) |
+| Proaktive Wissensdurchsuchung | — | — | Curiosity Engine (3–14h Schlafzyklus) |
+| Desktop-Automatisierung (Vision) | — | — | Florence-2 + OCR + PyAutoGUI |
+| E-Mail senden / empfangen | — | — | Microsoft Graph OAuth2 |
+| Physische Kamera eingebunden | — | — | Intel RealSense D435 |
+| Spricht und hört (native) | — | — | Faster-Whisper STT + Inworld.AI TTS |
+| PDF-Forschungsberichte (vollautomatisch) | — | — | Deep Research v6.0 (WeasyPrint, 3 Ausgaben) |
+| ArXiv / GitHub / HuggingFace Trend-Scan | — | — | TrendResearcher (parallel, jede Recherche) |
+| Akademische Tiefensuche (PaperQA3) | — | — | Edison Scientific (per UI-Toggle) |
+| Canvas UI mit Echtzeit-Visualisierung | — | — | Cytoscape + SSE, goldener Delegation-Strahl |
+| Feature-Toggles ohne Neustart | — | — | `/settings` API + `runtime_settings.json` |
+
+AutoGPT und AutoGen sind leistungsfähige Frameworks — aber sie sind primär **Task-Ausführungs-Pipelines**. Timus ist ein **selbst-überwachendes, selbst-heilendes, selbst-planendes System** mit physischer Sensorik, eigener Stimme und einem Canvas UI, das den Zustand in Echtzeit zeigt. Diese Kombination existiert in keinem der bekannten Open-Source-Projekte in dieser Form.
 
 ---
 
@@ -130,7 +157,39 @@ Danach kann Timus passwortfrei `systemctl start/stop/restart` für seine eigenen
 
 ---
 
-### Phase 17 — Deep Research v6.0: YouTube + Bilder + A4-PDF *(v3.4, aktuell)*
+### Phase 18 — TrendResearcher + Edison-Toggle im Canvas *(v3.5, aktuell)*
+
+Deep Research v6.0 durchsucht jetzt bei jeder Recherche automatisch drei wissenschaftliche/technische Quellen parallel — und ein neuer Settings-Toggle im Canvas UI erlaubt es, einzelne Quellen ohne Server-Neustart zu aktivieren oder zu deaktivieren.
+
+**TrendResearcher (4 parallele Quellen):**
+
+| Quelle | API | Kosten | Feature-Flag |
+|--------|-----|--------|-------------|
+| ArXiv | Atom-XML (kostenlos, kein Key) | gratis | `DEEP_RESEARCH_ARXIV_ENABLED=true` |
+| GitHub | Search API (60 req/h anonym) | gratis | `DEEP_RESEARCH_GITHUB_ENABLED=true` |
+| HuggingFace | Models + Papers API | gratis | `DEEP_RESEARCH_HF_ENABLED=true` |
+| Edison Scientific | PaperQA3 LITERATURE Job | **10 Credits/Monat** | `DEEP_RESEARCH_EDISON_ENABLED=false` |
+
+Jeder Researcher folgt dem YouTubeResearcher-Pattern: `research() → _fetch() → _analyze() → _add_to_session()` — Ergebnisse landen als `unverified_claims` mit `source_type="arxiv"/"github"/"huggingface"/"edison"` und werden im Bericht mit `[Paper: Titel]`, `[GitHub: Name (★)]`, `[HF: Modell]` gekennzeichnet.
+
+**Edison Scientific (PaperQA3):**
+- Nutzt `EdisonClient.run_tasks_until_done()` (sync → `asyncio.to_thread()`)
+- Standard: **deaktiviert** (10 Credits/Monat kostenloser Plan)
+- Aktivierbar per Canvas-Toggle — wirkt sofort auf die nächste Recherche
+
+**Runtime-Settings (ohne Neustart):**
+- `GET /settings` — liefert aktuelle Feature-Flags
+- `POST /settings` — ändert Flag in `os.environ` + persistiert in `data/runtime_settings.json`
+- Beim nächsten Server-Start: `runtime_settings.json` überschreibt `.env`-Werte
+
+**Canvas UI — Research Settings Card:**
+- Vier Toggle-Switches im Autonomy-Tab (ArXiv, GitHub, HuggingFace, Edison)
+- Toast-Feedback bei Aktivierung/Deaktivierung
+- Edison-Zeile mit ⚠ Credit-Warnung
+
+---
+
+### Phase 17 — Deep Research v6.0: YouTube + Bilder + A4-PDF *(v3.4)*
 
 Deep Research erzeugt jetzt **drei Ausgabedateien** pro Recherche — vollautomatisch, ohne manuellen Eingriff:
 
@@ -335,6 +394,48 @@ Meta → Research  ┐
      → Developer ├── gleichzeitig → ResultAggregator → Meta wertet aus
      → Creative  ┘
 Gesamtzeit: 60s  (3–6× schneller)
+```
+
+---
+
+## Aktueller Stand — Version 3.5 (2026-03-04)
+
+### TrendResearcher + Edison-Toggle + Research Settings UI
+
+Deep Research durchsucht ab v3.5 bei jeder Recherche automatisch **ArXiv, GitHub und HuggingFace** parallel — drei neue Quellen ohne zusätzliche Kosten oder API-Keys. Optional ist Edison Scientific (PaperQA3) aktivierbar.
+
+#### Neue Module
+
+| Modul | Datei | Funktion |
+|-------|-------|---------|
+| `TrendResearcher` | `tools/deep_research/trend_researcher.py` | Orchestrator — 4 Quellen parallel via `asyncio.gather()` |
+| `ArXivResearcher` | ↑ | Atom-XML-API, LLM-Abstrakt-Analyse (qwen3-235b) |
+| `GitHubTrendingResearcher` | ↑ | GitHub Search API, Top-Repos nach Stars |
+| `HuggingFaceResearcher` | ↑ | HF Models + Daily Papers parallel |
+| `EdisonResearcher` | ↑ | PaperQA3 via Edison Scientific (opt-in) |
+
+#### Research Settings im Canvas UI
+
+Neues "Research Settings" Widget oben im Autonomy-Tab:
+
+```
+[ArXiv          ] ●━━━━━━━━━━  ON   wissenschaftliche Paper · kostenlos
+[GitHub         ] ●━━━━━━━━━━  ON   Open-Source-Projekte · kostenlos
+[HuggingFace    ] ●━━━━━━━━━━  ON   KI-Modelle & Daily Papers · kostenlos
+[Edison (PaperQA3)] ○━━━━━━━━ OFF  ⚠ 10 Credits/Monat
+```
+
+Jeder Toggle ruft `POST /settings` auf — kein Server-Neustart notwendig. Einstellungen überleben einen Neustart via `data/runtime_settings.json`.
+
+#### `.env` Ergänzungen
+
+```bash
+DEEP_RESEARCH_TRENDS_ENABLED=true    # Phase 7 Trend-Recherche gesamt
+DEEP_RESEARCH_ARXIV_ENABLED=true
+DEEP_RESEARCH_GITHUB_ENABLED=true
+DEEP_RESEARCH_HF_ENABLED=true
+DEEP_RESEARCH_EDISON_ENABLED=false   # ⚠ 10 Credits/Monat — manuell aktivieren
+EDISON_API_KEY=your_key_here
 ```
 
 ---
