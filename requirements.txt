@@ -21,6 +21,7 @@ tokenizers==0.20.3
 # --- Web & Document Tools ---
 playwright==1.44.0
 beautifulsoup4==4.12.3
+html2text==2024.2.26
 lxml==5.2.2
 pypdfium2==4.30.0
 requests==2.32.5
