@@ -1877,8 +1877,24 @@ async def start_deep_research(
                 f"Zu wenige verifizierte Fakten ({len(current_session.verified_facts)}) für vollständige These-Antithese-Synthese Analyse"
             )
 
-        # PHASE 6: FINALE SYNTHESE
-        logger.info("📝 Phase 6: Finale Synthese...")
+        # PHASE 6: YOUTUBE-RECHERCHE (optional)
+        yt_count = 0
+        if os.getenv("DEEP_RESEARCH_YOUTUBE_ENABLED", "true").lower() == "true":
+            try:
+                from tools.deep_research.youtube_researcher import YouTubeResearcher
+                yt_count = await YouTubeResearcher().research_topic_on_youtube(
+                    query=query, session=current_session, max_videos=3
+                )
+                logger.info(f"📺 YouTube: {yt_count} Videos analysiert")
+                if yt_count > 0:
+                    current_session.methodology_notes.append(
+                        f"YouTube: {yt_count} Videos via DataForSEO analysiert"
+                    )
+            except Exception as e:
+                logger.warning(f"YouTube-Recherche fehlgeschlagen (unkritisch): {e}")
+
+        # PHASE 7: FINALE SYNTHESE
+        logger.info("📝 Phase 7: Finale Synthese...")
         analysis = await _synthesize_findings(current_session, verified_data)
 
         logger.info(f"✅ Session {session_id} abgeschlossen")
@@ -1929,13 +1945,14 @@ async def start_deep_research(
         return {
             "session_id": session_id,
             "status": "completed",
-            "version": "5.0",
+            "version": "6.0",
             "facts_extracted": len(current_session.all_extracted_facts_raw),
             "verified_count": len(current_session.verified_facts),
             "unverified_count": len(current_session.unverified_claims),
             "conflicts_count": len(current_session.conflicting_info),
             "sources_analyzed": len(current_session.visited_urls),
             "thesis_analyses_count": len(current_session.thesis_analyses),
+            "youtube_videos_analyzed": yt_count,
             "source_quality_summary": current_session.source_quality_summary,
             "bias_summary": current_session.bias_summary,
             "analysis": analysis,
