@@ -4,7 +4,7 @@
   <img src="assets/branding/timus-logo-glow.png" alt="Timus Logo" width="760">
 </p>
 
-**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen). Seit **v2.9** sind die Autonomie-Schichten M1–M5 live: Zielgenerierung, Langzeitplanung, Self-Healing und Autonomie-Scorecard laufen aktiv im Produktivbetrieb. Seit **v3.0 (2026-02-28)** läuft im Canvas ein nativer Voice-Loop (Faster-Whisper STT + Inworld.AI TTS) über `/voice/*` Endpoints. Seit **v3.1 (2026-03-01)** sendet und empfängt Timus eigenständig E-Mails über Microsoft Graph OAuth2 — alle 13 Agenten sind vollständig per Delegation erreichbar. Seit **v3.2 (2026-03-02)** visualisiert der Canvas jede Agent-Delegation mit einem goldenen Lichtstrahl-Animation in Echtzeit — und beide Routing-Pfade (direkt + delegiert) nutzen einheitlich `DeveloperAgentV2`. Seit **v3.3 (2026-03-03)** überwacht Timus sich selbst mit LLMs: Jeder neue Incident wird sofort von `qwen3.5-plus` diagnostiziert (Schicht 2), alle 60 Minuten analysiert `deepseek-v3.2` Trends und strukturelle Schwächen im Autonomie-Zustand (Schicht 3). Außerdem können alle Agenten ab v3.3 eigenständig URLs öffnen — Hybrid-Fetch mit automatischem Playwright-Fallback für JavaScript-Seiten.
+**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen). Seit **v2.9** sind die Autonomie-Schichten M1–M5 live: Zielgenerierung, Langzeitplanung, Self-Healing und Autonomie-Scorecard laufen aktiv im Produktivbetrieb. Seit **v3.0 (2026-02-28)** läuft im Canvas ein nativer Voice-Loop (Faster-Whisper STT + Inworld.AI TTS) über `/voice/*` Endpoints. Seit **v3.1 (2026-03-01)** sendet und empfängt Timus eigenständig E-Mails über Microsoft Graph OAuth2 — alle 13 Agenten sind vollständig per Delegation erreichbar. Seit **v3.2 (2026-03-02)** visualisiert der Canvas jede Agent-Delegation mit einem goldenen Lichtstrahl-Animation in Echtzeit — und beide Routing-Pfade (direkt + delegiert) nutzen einheitlich `DeveloperAgentV2`. Seit **v3.3 (2026-03-03)** überwacht Timus sich selbst mit LLMs: Jeder neue Incident wird sofort von `qwen3.5-plus` diagnostiziert (Schicht 2), alle 60 Minuten analysiert `deepseek-v3.2` Trends und strukturelle Schwächen im Autonomie-Zustand (Schicht 3). Außerdem können alle Agenten ab v3.3 eigenständig URLs öffnen — Hybrid-Fetch mit automatischem Playwright-Fallback für JavaScript-Seiten. Seit **v3.4 (2026-03-03)** erzeugt Deep Research v6.0 vollautomatisch drei Ausgabedateien: einen analytischen Markdown-Bericht, einen narrativen Lesebericht mit 2500–5000 Wörtern (gpt-5.2) und ein professionelles A4-PDF mit eingebetteten Abbildungen (WeasyPrint).
 
 ---
 
@@ -29,6 +29,7 @@ Die folgende Architektur findet sich normalerweise bei Google SRE-Teams, Netflix
 | Spricht und hört | — | Faster-Whisper STT + Inworld.AI TTS |
 | Sendet und liest E-Mails | — | Microsoft Graph OAuth2 |
 | Sieht die physische Umgebung | — | Intel RealSense D435 Kamera |
+| Erstellt automatisch PDF-Forschungsberichte | — | Deep Research v6.0 — 3 Ausgaben: analytisch + narrativ + A4-PDF |
 
 **Das ist kein Chatbot. Das ist ein autonomes KI-Betriebssystem — gebaut in Python, von einer Person, ohne formale IT-Ausbildung.**
 
@@ -126,6 +127,45 @@ sudo chmod 440 /etc/sudoers.d/timus-restart
 Danach kann Timus passwortfrei `systemctl start/stop/restart` für seine eigenen Services ausführen.
 
 **Recovery-Flow:** Health-Check nach Neustart (8 Versuche × 3s auf `/health`), Audit-Log-Eintrag, strukturiertes Ergebnis-JSON zurück an den aufrufenden Agenten.
+
+---
+
+### Phase 17 — Deep Research v6.0: YouTube + Bilder + A4-PDF *(v3.4, aktuell)*
+
+Deep Research erzeugt jetzt **drei Ausgabedateien** pro Recherche — vollautomatisch, ohne manuellen Eingriff:
+
+**Neue Ausgaben:**
+```
+DeepResearch_Academic_*.md   — analytischer Bericht mit Quellenqualität (wie bisher)
+DeepResearch_Bericht_*.md    — narrativer Lesebericht, 2500–5000 Wörter, gpt-5.2
+DeepResearch_PDF_*.pdf       — professionelles A4-PDF mit Abbildungen (WeasyPrint)
+```
+
+**YouTube-Integration (YouTubeResearcher):**
+- Video-Suche via DataForSEO (`search_youtube`) — Thumbnails, Kanal, Metadaten
+- Transkript-Abruf via DataForSEO (`get_youtube_subtitles`) — de/en Fallback
+- Fakten-Extraktion via `qwen/qwen3-235b-a22b` (OpenRouter)
+- Thumbnail-Analyse via NVIDIA NIM (`nvidia/llama-3.2-90b-vision-instruct`)
+- YouTube-Quellen im Bericht mit `[Video: Titel]`-Kennzeichnung
+
+**Bild-Integration (ImageCollector):**
+- Web-Bilder via DataForSEO Google Images — Pillow-Validierung, max 5 MB
+- DALL-E Fallback für Abschnitte ohne geeignetes Web-Bild
+- Max. 4 Bilder pro Bericht, für die 4 wichtigsten Abschnitte
+
+**PDF-Rendering (ResearchPDFBuilder):**
+- WeasyPrint 68.1 + Jinja2 — HTML/CSS → A4 PDF
+- Titelseite: dunkelblau (#1a3a5c) + Gold (#c8a84b), Statistik-Boxen
+- Inhaltsverzeichnis + Kopf-/Fußzeilen mit Seitennummern
+- Bilder rechtsbündig float (CSS float:right, WeasyPrint-kompatibel)
+- Quellenverzeichnis: Web-Quellen [1-n] + YouTube-Quellen [YT1-n]
+
+**Feature-Flags (alle aktivierbar/deaktivierbar):**
+```bash
+DEEP_RESEARCH_YOUTUBE_ENABLED=true   # Phase 2: YouTube-Videos analysieren
+DEEP_RESEARCH_IMAGES_ENABLED=true    # Phase 4: Bilder sammeln
+DEEP_RESEARCH_PDF_ENABLED=true       # Phase 5: PDF erstellen
+```
 
 ---
 
@@ -295,6 +335,39 @@ Meta → Research  ┐
      → Developer ├── gleichzeitig → ResultAggregator → Meta wertet aus
      → Creative  ┘
 Gesamtzeit: 60s  (3–6× schneller)
+```
+
+---
+
+## Aktueller Stand — Version 3.4 (2026-03-03)
+
+### Deep Research v6.0 — Drei Ausgabedateien automatisch
+
+Timus Deep Research erzeugt jetzt pro Recherche vollautomatisch drei Ausgabedateien.
+
+| Ausgabe | Format | Inhalt |
+|---------|--------|--------|
+| `DeepResearch_Academic_*.md` | Markdown | Analytischer Bericht mit Quellenqualität, These-Antithese-Synthese |
+| `DeepResearch_Bericht_*.md` | Markdown | Narrativer Lesebericht, 2500–5000 Wörter, gpt-5.2 |
+| `DeepResearch_PDF_*.pdf` | PDF | A4-PDF mit Titelseite, TOC, Bildern, Quellenverzeichnis |
+
+#### Neue Module
+
+| Modul | Datei | Funktion |
+|-------|-------|---------|
+| `YouTubeResearcher` | `tools/deep_research/youtube_researcher.py` | DataForSEO Video-Suche + Transkript + qwen3-235b Fakten-Extraktion + NVIDIA Vision |
+| `ImageCollector` | `tools/deep_research/image_collector.py` | Web-Bild-Suche + Pillow-Validierung + DALL-E Fallback |
+| `ResearchPDFBuilder` | `tools/deep_research/pdf_builder.py` | WeasyPrint + Jinja2 → professionelles A4-PDF |
+| `search_youtube` | `tools/search_tool/tool.py` | DataForSEO YouTube Organic Search |
+| `get_youtube_subtitles` | `tools/search_tool/tool.py` | DataForSEO YouTube Untertitel, de/en Fallback |
+
+#### PDF-Layout
+
+```
+Seite 1: Titelseite (dunkelblau + Gold, Statistik-Boxen: Quellen · Bilder · Wörter)
+Seite 2: Inhaltsverzeichnis (goldene Nummern, gepunktete Trennlinien)
+Seite 3+: Inhalt (Überschriften #1a3a5c, Fließtext justified, Bilder float:right 75mm)
+Letzte:  Quellenverzeichnis (Web [1-n] + YouTube [YT1-n])
 ```
 
 ---
@@ -896,6 +969,10 @@ flowchart TD
 
     M --> SYS["SystemAgent\nread-only Monitoring"]
     M --> SH["ShellAgent\n5-Schicht-Policy"]
+    M --> DR["Deep Research v6.0\nYouTube + Bilder + PDF"]
+    DR --> DRY["YouTubeResearcher\nDataForSEO + qwen3-235b\nNVIDIA Vision"]
+    DR --> DRI["ImageCollector\nWeb-Bild + DALL-E"]
+    DR --> DRP["ResearchPDFBuilder\nWeasyPrint A4-PDF\nJinja2 Template"]
     M --> E["Externe Systeme\nPyAutoGUI / Playwright / APIs"]
 
     M --> MM["memory/memory_system.py\nMemory v2.2 + WAL"]
@@ -1055,7 +1132,9 @@ formatted = ResultAggregator.format_results(result)
 | Tool | Funktionen |
 |------|-----------|
 | **search_tool** | Web-Suche via DataForSEO (Google, Bing, DuckDuckGo, Yahoo) |
-| **deep_research** | v5.0 — These-Antithese-Synthese, Source Quality Rating |
+| **deep_research** | v6.0 — YouTube + Bilder + A4-PDF + 2500–5000 Wörter Lesebericht |
+| **search_youtube** | YouTube-Suche via DataForSEO — Video-ID, Thumbnail, Kanal, Dauer |
+| **get_youtube_subtitles** | YouTube-Transkript via DataForSEO — de/en Fallback, full_text |
 | **document_parser** | Dokumenten-Analyse und Parsing |
 | **summarizer** | Text-Zusammenfassung |
 | **fact_corroborator** | Fakten-Verifizierung mit Cross-Checks |
@@ -1180,6 +1259,12 @@ timus/
 │   ├── curator_tool/        # Nemotron-Kurator
 │   ├── system_tool/         # M3: System-Monitoring
 │   ├── shell_tool/          # M4: Shell-Ausführung
+│   ├── deep_research/       # Deep Research v6.0
+│   │   ├── tool.py          # Hauptmodul — start_deep_research, generate_research_report
+│   │   ├── youtube_researcher.py  # YouTubeResearcher — DataForSEO + qwen3-235b + NVIDIA NIM
+│   │   ├── image_collector.py    # ImageCollector — Web-Bild + DALL-E Fallback
+│   │   ├── pdf_builder.py        # ResearchPDFBuilder — WeasyPrint + Jinja2
+│   │   └── report_template.html  # Jinja2 A4-Template (Titelseite, TOC, Bilder)
 │   ├── voice_tool/          # Native Voice: Faster-Whisper + Inworld.AI TTS
 │   ├── data_tool/           # M1: CSV/Excel/JSON
 │   ├── document_creator/    # M1: DOCX/TXT
@@ -1326,6 +1411,14 @@ SOUL_DRIFT_ENABLED=true
 SOUL_DRIFT_DAMPING=0.1
 SOUL_AXES_CLAMP_MIN=5
 SOUL_AXES_CLAMP_MAX=95
+
+# Deep Research v6.0
+DEEP_RESEARCH_YOUTUBE_ENABLED=true    # YouTube-Videos analysieren
+DEEP_RESEARCH_IMAGES_ENABLED=true     # Bilder für PDF sammeln
+DEEP_RESEARCH_PDF_ENABLED=true        # A4-PDF generieren
+SMART_MODEL=gpt-5.2                   # Modell für Lesebericht (max_completion_tokens)
+YOUTUBE_ANALYSIS_MODEL=qwen/qwen3-235b-a22b   # Fakten-Extraktion aus Transkripten
+YOUTUBE_VISION_MODEL=nvidia/llama-3.2-90b-vision-instruct  # Thumbnail-Analyse
 ```
 
 ### Starten
@@ -1353,6 +1446,7 @@ xdg-open http://localhost:5000/canvas/ui
 ```
 Du> Wie spät ist es?                             → ExecutorAgent
 Du> Recherchiere KI-Sicherheit 2026              → DeepResearchAgent
+Du> Recherchiere KI-Agenten 2025 (deep)            → DeepResearchAgent v6.0 → 3 Ausgabedateien
 Du> asyncio vs threading für 100 API-Calls?      → ReasoningAgent
 Du> Male ein Bild vom Frankfurter Römer          → CreativeAgent
 Du> Schreibe ein Python-Skript für...            → DeveloperAgent
