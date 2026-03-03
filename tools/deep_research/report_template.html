@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<style>
+  /* ── Basis ─────────────────────────────────────────────── */
+  @page {
+    size: A4;
+    margin: 20mm 20mm 22mm 20mm;
+    @top-center {
+      content: "{{ query | truncate(80) }}";
+      font-family: 'DejaVu Sans', sans-serif;
+      font-size: 8pt;
+      color: #888;
+    }
+    @bottom-center {
+      content: "Seite " counter(page) " | Timus Deep Research v6.0";
+      font-family: 'DejaVu Sans', sans-serif;
+      font-size: 8pt;
+      color: #888;
+    }
+  }
+  @page :first {
+    margin: 0;
+    @top-center { content: ""; }
+    @bottom-center { content: ""; }
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'DejaVu Sans', 'Liberation Sans', Arial, sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.65;
+    color: #1a1a1a;
+  }
+
+  /* ── Titelseite ─────────────────────────────────────────── */
+  .cover {
+    width: 210mm;
+    height: 297mm;
+    display: flex;
+    flex-direction: column;
+    page-break-after: always;
+  }
+  .cover-header {
+    background: #1a3a5c;
+    padding: 50mm 20mm 30mm;
+    flex: 0 0 auto;
+  }
+  .cover-badge {
+    font-size: 9pt;
+    font-weight: bold;
+    letter-spacing: 2px;
+    color: #c8a84b;
+    text-transform: uppercase;
+    margin-bottom: 14mm;
+  }
+  .cover-title {
+    font-size: 22pt;
+    font-weight: bold;
+    color: #ffffff;
+    line-height: 1.3;
+    margin-bottom: 8mm;
+  }
+  .cover-divider {
+    width: 60mm;
+    height: 2px;
+    background: #c8a84b;
+    margin-bottom: 8mm;
+  }
+  .cover-date {
+    font-size: 10pt;
+    color: #a8c8e8;
+  }
+  .cover-body {
+    background: #f4f6f9;
+    flex: 1;
+    padding: 14mm 20mm;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+  }
+  .cover-stats {
+    display: flex;
+    gap: 8mm;
+    margin-bottom: 10mm;
+  }
+  .stat-box {
+    background: white;
+    border-left: 3px solid #c8a84b;
+    padding: 4mm 6mm;
+    flex: 1;
+  }
+  .stat-num {
+    font-size: 18pt;
+    font-weight: bold;
+    color: #1a3a5c;
+  }
+  .stat-label {
+    font-size: 8pt;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .cover-footer-text {
+    font-size: 8pt;
+    color: #999;
+    border-top: 1px solid #ddd;
+    padding-top: 4mm;
+  }
+
+  /* ── Inhaltsverzeichnis ─────────────────────────────────── */
+  .toc {
+    page-break-after: always;
+  }
+  .toc h2 {
+    font-size: 16pt;
+    color: #1a3a5c;
+    border-bottom: 2px solid #c8a84b;
+    padding-bottom: 3mm;
+    margin-bottom: 7mm;
+  }
+  .toc-entry {
+    display: flex;
+    justify-content: space-between;
+    padding: 2mm 0;
+    border-bottom: 1px dotted #ccc;
+    font-size: 10pt;
+  }
+  .toc-num { color: #c8a84b; font-weight: bold; margin-right: 3mm; }
+
+  /* ── Inhaltsbereich ─────────────────────────────────────── */
+  .content { }
+
+  h2.section-heading {
+    font-size: 13pt;
+    font-weight: bold;
+    color: #1a3a5c;
+    margin-top: 9mm;
+    margin-bottom: 2mm;
+    padding-bottom: 1.5mm;
+    border-bottom: 1.5px solid #1a3a5c;
+    page-break-after: avoid;
+  }
+  p {
+    margin-bottom: 3mm;
+    text-align: justify;
+    hyphens: auto;
+  }
+  ul, ol {
+    margin: 2mm 0 3mm 6mm;
+  }
+  li { margin-bottom: 1.5mm; }
+
+  blockquote {
+    border-left: 3px solid #c8a84b;
+    padding: 2mm 4mm;
+    margin: 3mm 0;
+    color: #444;
+    font-style: italic;
+    background: #fdf9f0;
+  }
+
+  /* ── Abschnitt mit Bild ─────────────────────────────────── */
+  .section-with-image {
+    display: flex;
+    gap: 6mm;
+    align-items: flex-start;
+    margin-top: 3mm;
+  }
+  .section-text { flex: 1; }
+  .section-image-wrap {
+    flex: 0 0 75mm;
+  }
+  .section-image {
+    width: 75mm;
+    height: auto;
+    border: 1px solid #dde2ea;
+    border-radius: 2px;
+  }
+  .image-caption {
+    font-size: 7.5pt;
+    color: #777;
+    font-style: italic;
+    text-align: center;
+    margin-top: 1.5mm;
+  }
+
+  /* ── Quellenverzeichnis ─────────────────────────────────── */
+  .sources {
+    page-break-before: always;
+  }
+  .sources h2 {
+    font-size: 14pt;
+    color: #1a3a5c;
+    border-bottom: 2px solid #c8a84b;
+    padding-bottom: 3mm;
+    margin-bottom: 6mm;
+  }
+  .sources h3 {
+    font-size: 10pt;
+    color: #1a3a5c;
+    margin: 5mm 0 2mm;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .source-entry {
+    font-size: 8.5pt;
+    margin-bottom: 2.5mm;
+    padding-left: 6mm;
+    text-indent: -6mm;
+  }
+  .source-num { color: #c8a84b; font-weight: bold; }
+  .source-url { color: #1a3a5c; word-break: break-all; }
+  .source-yt { color: #e00; font-weight: bold; }
+
+  /* ── Info-Box ───────────────────────────────────────────── */
+  .info-box {
+    background: #eef3fa;
+    border: 1px solid #1a3a5c22;
+    border-radius: 3px;
+    padding: 4mm 5mm;
+    margin: 4mm 0;
+    font-size: 9pt;
+    color: #333;
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════ TITELSEITE ═══ -->
+<div class="cover">
+  <div class="cover-header">
+    <div class="cover-badge">Timus Deep Research &nbsp;·&nbsp; v6.0</div>
+    <div class="cover-title">{{ query }}</div>
+    <div class="cover-divider"></div>
+    <div class="cover-date">{{ date }}</div>
+  </div>
+  <div class="cover-body">
+    <div class="cover-stats">
+      <div class="stat-box">
+        <div class="stat-num">{{ web_count }}</div>
+        <div class="stat-label">Web-Quellen</div>
+      </div>
+      {% if yt_count > 0 %}
+      <div class="stat-box">
+        <div class="stat-num">{{ yt_count }}</div>
+        <div class="stat-label">YouTube-Videos</div>
+      </div>
+      {% endif %}
+      {% if image_count > 0 %}
+      <div class="stat-box">
+        <div class="stat-num">{{ image_count }}</div>
+        <div class="stat-label">Abbildungen</div>
+      </div>
+      {% endif %}
+      <div class="stat-box">
+        <div class="stat-num">{{ word_count }}</div>
+        <div class="stat-label">Wörter</div>
+      </div>
+    </div>
+    <div class="cover-footer-text">
+      Automatisch generierter Recherchebericht &nbsp;·&nbsp;
+      Alle Informationen basieren auf öffentlich zugänglichen Quellen.
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════ INHALTSVERZEICHNIS ═══ -->
+{% if toc %}
+<div class="toc">
+  <h2>Inhaltsverzeichnis</h2>
+  {% for entry in toc %}
+  <div class="toc-entry">
+    <span><span class="toc-num">{{ loop.index }}.</span> {{ entry }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<!-- ═══════════════════════════════════ INHALT ═══ -->
+<div class="content">
+{% for section in sections %}
+  <h2 class="section-heading">{{ section.heading }}</h2>
+
+  {% if section.image_path %}
+  <div class="section-with-image">
+    <div class="section-text">{{ section.text_html | safe }}</div>
+    <div class="section-image-wrap">
+      <img class="section-image" src="{{ section.image_path }}" alt="{{ section.heading }}">
+      <div class="image-caption">{{ section.image_caption }}</div>
+    </div>
+  </div>
+  {% else %}
+  <div>{{ section.text_html | safe }}</div>
+  {% endif %}
+{% endfor %}
+</div>
+
+<!-- ═══════════════════════════════════ QUELLENVERZEICHNIS ═══ -->
+<div class="sources">
+  <h2>Quellenverzeichnis</h2>
+
+  {% if web_sources %}
+  <h3>Web-Quellen</h3>
+  {% for src in web_sources %}
+  <div class="source-entry">
+    <span class="source-num">[{{ loop.index }}]</span>
+    {{ src.title }}<br>
+    <span class="source-url">{{ src.url }}</span>
+  </div>
+  {% endfor %}
+  {% endif %}
+
+  {% if yt_sources %}
+  <h3>YouTube-Quellen</h3>
+  {% for src in yt_sources %}
+  <div class="source-entry">
+    <span class="source-yt">[YT{{ loop.index }}]</span>
+    {{ src.title }}{% if src.channel %} &nbsp;·&nbsp; Kanal: {{ src.channel }}{% endif %}<br>
+    <span class="source-url">{{ src.url }}</span>
+  </div>
+  {% endfor %}
+  {% endif %}
+</div>
+
+</body>
+</html>
