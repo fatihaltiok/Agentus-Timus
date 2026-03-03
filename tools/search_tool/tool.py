@@ -415,3 +415,157 @@ async def search_scholar(
         max_results=max_results,
         language_code="en"  # Scholar ist meist englisch
     )
+
+
+def _call_dataforseo_youtube(endpoint: str, payload: list) -> dict:
+    """Führt einen DataForSEO YouTube-API-Aufruf durch und gibt die rohe Response zurück."""
+    url = DATAFORSEO_BASE_URL + endpoint
+    headers = _get_auth_header()
+    response = requests.post(url, json=payload, headers=headers, timeout=DEFAULT_API_TIMEOUT)
+    response.raise_for_status()
+    data = response.json()
+    if data.get("status_code") != 20000:
+        raise ValueError(f"DataForSEO API Fehler: {data.get('status_message', 'Unbekannt')}")
+    return data
+
+
+@tool(
+    name="search_youtube",
+    description="Sucht YouTube-Videos via DataForSEO und gibt Metadaten zurück.",
+    parameters=[
+        P("query", "string", "Suchanfrage"),
+        P("max_results", "integer", "Maximale Anzahl Videos (1-10)", required=False, default=5),
+        P("language_code", "string", "Sprachcode z.B. de, en", required=False, default="de"),
+    ],
+    capabilities=["search", "youtube"],
+    category=C.SEARCH
+)
+async def search_youtube(
+    query: str,
+    max_results: int = 5,
+    language_code: str = "de"
+) -> list:
+    """
+    Sucht YouTube-Videos via DataForSEO.
+
+    Returns:
+        Liste mit Dicts: {video_id, title, url, description,
+                          thumbnail_url, channel_name, duration_time_seconds, views_count}
+    """
+    if not (DATAFORSEO_USER and DATAFORSEO_PASS):
+        raise Exception("DataForSEO Credentials nicht konfiguriert.")
+
+    payload = [{
+        "keyword": query,
+        "language_code": language_code,
+        "depth": min(max_results, 10),
+    }]
+
+    def _call():
+        return _call_dataforseo_youtube(
+            "/v3/serp/youtube/organic/live/advanced", payload
+        )
+
+    data = await asyncio.to_thread(_call)
+
+    results = []
+    try:
+        tasks = data.get("tasks", [])
+        if not tasks:
+            return results
+        task = tasks[0]
+        if task.get("status_code") != 20000:
+            logger.warning(f"YouTube-Task Fehler: {task.get('status_message')}")
+            return results
+        for result_wrapper in task.get("result", []):
+            for item in result_wrapper.get("items", []):
+                if len(results) >= max_results:
+                    break
+                if not isinstance(item, dict):
+                    continue
+                video_id = item.get("video_id") or item.get("id", "")
+                if not video_id:
+                    continue
+                results.append({
+                    "video_id": video_id,
+                    "title": str(item.get("title", "")).strip(),
+                    "url": item.get("url") or f"https://www.youtube.com/watch?v={video_id}",
+                    "description": str(item.get("description", "")).strip(),
+                    "thumbnail_url": item.get("thumbnail_url") or item.get("thumbnail", ""),
+                    "channel_name": item.get("channel_name") or item.get("channel", ""),
+                    "duration_time_seconds": item.get("duration_time_seconds") or item.get("duration", 0),
+                    "views_count": item.get("views_count") or item.get("views", 0),
+                })
+    except Exception as e:
+        logger.error(f"Fehler beim Parsen der YouTube-Ergebnisse: {e}")
+
+    logger.info(f"📺 search_youtube: {len(results)} Videos für '{query}'")
+    return results
+
+
+@tool(
+    name="get_youtube_subtitles",
+    description="Ruft Untertitel/Transkript eines YouTube-Videos via DataForSEO ab.",
+    parameters=[
+        P("video_id", "string", "YouTube Video-ID (z.B. dQw4w9WgXcQ)"),
+        P("language_code", "string", "Bevorzugte Sprache, Fallback auf 'en'", required=False, default="de"),
+    ],
+    capabilities=["search", "youtube"],
+    category=C.SEARCH
+)
+async def get_youtube_subtitles(
+    video_id: str,
+    language_code: str = "de"
+) -> dict:
+    """
+    Ruft YouTube-Untertitel via DataForSEO ab.
+
+    Returns:
+        {video_id, full_text, items: [{text, start_time, end_time}]}
+    """
+    if not (DATAFORSEO_USER and DATAFORSEO_PASS):
+        raise Exception("DataForSEO Credentials nicht konfiguriert.")
+
+    async def _fetch(lang: str) -> dict:
+        payload = [{"video_id": video_id, "language_code": lang}]
+
+        def _call():
+            return _call_dataforseo_youtube(
+                "/v3/serp/youtube/video_subtitles/live/advanced", payload
+            )
+        return await asyncio.to_thread(_call)
+
+    # Erst gewünschte Sprache, Fallback auf Englisch
+    data = None
+    for lang in ([language_code] if language_code != "en" else []) + ["en"]:
+        try:
+            data = await _fetch(lang)
+            break
+        except Exception as e:
+            logger.warning(f"Untertitel-Abruf ({lang}) fehlgeschlagen: {e}")
+
+    if not data:
+        return {"video_id": video_id, "full_text": "", "items": []}
+
+    items = []
+    try:
+        tasks = data.get("tasks", [])
+        if tasks and tasks[0].get("status_code") == 20000:
+            for result_wrapper in tasks[0].get("result", []):
+                for item in result_wrapper.get("items", []):
+                    if isinstance(item, dict) and item.get("text"):
+                        items.append({
+                            "text": item["text"],
+                            "start_time": item.get("start_time", 0),
+                            "end_time": item.get("end_time", 0),
+                        })
+    except Exception as e:
+        logger.error(f"Fehler beim Parsen der Untertitel: {e}")
+
+    # Zusammengesetzter Text, max 8000 Zeichen
+    full_text = " ".join(i["text"] for i in items)
+    if len(full_text) > 8000:
+        full_text = full_text[:8000]
+
+    logger.info(f"📺 get_youtube_subtitles: {len(items)} Segmente, {len(full_text)} Zeichen")
+    return {"video_id": video_id, "full_text": full_text, "items": items}
