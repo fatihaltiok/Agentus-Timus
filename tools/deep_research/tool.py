@@ -16,6 +16,7 @@ DATUM: Januar 2026
 """
 
 import asyncio
+import html as html_module
 import json
 import logging
 import os
@@ -26,9 +27,16 @@ from urllib.parse import urljoin, urlparse, urlunparse, parse_qs, urlencode
 from dataclasses import dataclass, field
 from enum import Enum
 from dotenv import load_dotenv
+import httpx
 from openai import OpenAI, RateLimitError
 from utils.openai_compat import prepare_openai_params
 from agent.shared.json_utils import extract_json_robust
+
+try:
+    from bs4 import BeautifulSoup
+    HAS_BS4 = True
+except ImportError:
+    HAS_BS4 = False
 
 # V2 Tool-Registry
 from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
@@ -880,36 +888,85 @@ async def _evaluate_relevance(
     return relevant[:max_sources_to_return]
 
 
+_HTTP_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "de,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate",
+}
+
+
+def _html_to_text(html: str) -> str:
+    """Konvertiert HTML zu plain text — bevorzugt BeautifulSoup, sonst Regex-Fallback."""
+    if HAS_BS4:
+        try:
+            soup = BeautifulSoup(html, "html.parser")
+            # Script/Style-Tags entfernen
+            for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
+                tag.decompose()
+            return " ".join(soup.get_text(separator=" ").split())
+        except Exception:
+            pass
+    # Regex-Fallback
+    text = re.sub(r"<script[^>]*>.*?</script>", " ", html, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<style[^>]*>.*?</style>", " ", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html_module.unescape(text)
+    return " ".join(text.split())
+
+
 async def _fetch_page_content(url: str) -> str:
-    """Holt Seiteninhalt."""
-    content = ""
+    """
+    Holt Seiteninhalt via direktem HTTP-Request (kein Browser nötig).
 
+    Früher: call_tool_internal("open_url") + call_tool_internal("get_text")
+    Jetzt:  httpx direkt — funktioniert zuverlässig im Background-Kontext.
+    """
     try:
-        if url.lower().endswith(".pdf"):
-            result = await call_tool_internal("extract_text_from_pdf", {"pdf_url": url}, timeout=60)
+        url_lower = url.lower()
+
+        # PDF: weiterhin über Tool-Abstraction (spezielle Extraktion)
+        if url_lower.endswith(".pdf") or "arxiv.org/pdf" in url_lower:
+            result = await call_tool_internal(
+                "extract_text_from_pdf", {"pdf_url": url}, timeout=60
+            )
             if isinstance(result, dict):
-                content = result.get("text", "") or result.get("content", "")
+                return result.get("text", "") or result.get("content", "")
             elif isinstance(result, str):
-                content = result
-        else:
-            open_result = await call_tool_internal("open_url", {"url": url}, timeout=30)
+                return result
+            return ""
 
-            if isinstance(open_result, dict) and open_result.get("error"):
-                logger.warning(f"Fehler beim Öffnen von {url}")
-                return ""
+        # HTML-Seiten: direkt via httpx
+        async with httpx.AsyncClient(
+            timeout=25.0,
+            follow_redirects=True,
+            headers=_HTTP_HEADERS,
+        ) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
 
-            text_result = await call_tool_internal("get_text", {}, timeout=30)
+            # Encoding sicherstellen
+            content_type = resp.headers.get("content-type", "")
+            if "pdf" in content_type:
+                return ""  # PDF ohne .pdf-Endung → überspringen
 
-            if isinstance(text_result, dict):
-                content = text_result.get("text", "") or text_result.get("content", "")
-            elif isinstance(text_result, str):
-                content = text_result
+            text = _html_to_text(resp.text)
+            logger.debug(f"✅ Seite geladen: {url} ({len(text)} Zeichen)")
+            return text[:12000]  # Max 12k Zeichen pro Seite
 
+    except httpx.HTTPStatusError as e:
+        logger.warning(f"HTTP {e.response.status_code} für {url}")
+        return ""
+    except httpx.TimeoutException:
+        logger.warning(f"Timeout beim Abrufen von {url}")
+        return ""
     except Exception as e:
         logger.error(f"Fehler beim Abrufen von {url}: {e}")
         return ""
-
-    return content
 
 
 async def _extract_key_facts(text_content: str, query: str, url: str, config: Dict) -> List[Dict]:

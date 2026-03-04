@@ -93,7 +93,13 @@ class YouTubeResearcher:
         try:
             result = await call_tool_internal("search_youtube", {"query": query, "max_results": 5})
             if isinstance(result, list):
+                logger.info(f"📺 YouTube-Suche: {len(result)} Videos für '{query[:40]}'")
                 return result
+            # Fehler-Dict von call_tool_internal → detailliert loggen
+            if isinstance(result, dict) and result.get("error"):
+                logger.warning(f"📺 YouTube-Suche Fehler: {result['error']}")
+            else:
+                logger.warning(f"📺 YouTube-Suche: unerwartetes Format {type(result).__name__}: {str(result)[:100]}")
             return []
         except Exception as e:
             logger.warning(f"YouTube-Suche fehlgeschlagen: {e}")
