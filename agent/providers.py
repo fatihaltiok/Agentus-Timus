@@ -131,7 +131,7 @@ class AgentModelConfig:
         "deep_research": ("RESEARCH_MODEL", "RESEARCH_MODEL_PROVIDER", "deepseek-reasoner", ModelProvider.DEEPSEEK),
         "creative": ("CREATIVE_MODEL", "CREATIVE_MODEL_PROVIDER", "gpt-5.2", ModelProvider.OPENAI),
         "developer": ("CODE_MODEL", "CODE_MODEL_PROVIDER", "mercury-coder-small", ModelProvider.INCEPTION),
-        "meta": ("PLANNING_MODEL", "PLANNING_MODEL_PROVIDER", "claude-sonnet-4-6", ModelProvider.ANTHROPIC),
+        "meta": ("PLANNING_MODEL", "PLANNING_MODEL_PROVIDER", "z-ai/glm-5", ModelProvider.OPENROUTER),
         "visual": ("VISION_MODEL", "VISION_MODEL_PROVIDER", "claude-sonnet-4-5-20250929", ModelProvider.ANTHROPIC),
         "reasoning": ("REASONING_MODEL", "REASONING_MODEL_PROVIDER", "nvidia/nemotron-3-nano-30b-a3b", ModelProvider.OPENROUTER),
         # M1: neue Agenten

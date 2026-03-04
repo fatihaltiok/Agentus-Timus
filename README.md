@@ -1199,7 +1199,7 @@ Timus hat **13 spezialisierte Agenten** — jeder mit eigenem Modell, eigenem To
 | **ReasoningAgent** | nvidia/nemotron-3-nano-30b-a3b (OpenRouter) | Multi-Step-Analyse, Debugging, Architektur-Entscheidungen | 46 |
 | **CreativeAgent** | gpt-5.2 (OpenAI) | Bildgenerierung (DALL-E), kreative Texte — GPT generiert Prompt, DALL-E rendert | 44 |
 | **DeveloperAgent** | mercury-coder-small (Inception Labs) | Code-Generierung, Refactoring, AST-Validierung | 39 |
-| **MetaAgent v2** | claude-sonnet-4-5 (Anthropic) | Orchestrator — koordiniert andere Agenten, sequenziell + **parallel (v2.5)**, Autonomie-Kontext-Injektion (Ziele, Blackboard, Reflexion, Trigger) | 68 |
+| **MetaAgent v2** | z-ai/glm-5 (OpenRouter) | Orchestrator — koordiniert andere Agenten, sequenziell + **parallel (v2.5)**, Autonomie-Kontext-Injektion (Ziele, Blackboard, Reflexion, Trigger) | 68 |
 | **VisualAgent** | claude-sonnet-4-5 (Anthropic) | Desktop/Browser-Automatisierung — SoM, Mouse-Feedback, Screen-Change-Gate | 43 |
 | **VisualNemotronAgent v4** | Qwen3.5 Plus + Florence-2 + PaddleOCR | Komplexe Desktop-Automatisierung — Plan-then-Execute, 3 Retries | — |
 
@@ -1377,9 +1377,10 @@ Memory System v2.2
 | Provider | Modelle | Agenten |
 |----------|---------|---------|
 | **OpenAI** | gpt-5-mini, gpt-5.2 | Executor, Creative |
-| **Anthropic** | claude-sonnet-4-5, claude-sonnet-4-6 | Meta, Visual, Document, Communication, Shell |
+| **Anthropic** | claude-sonnet-4-5, claude-sonnet-4-6 | Visual, Document, Communication, Shell |
 | **DeepSeek** | deepseek-reasoner | Deep Research |
 | **Inception Labs** | mercury-coder-small | Developer |
+| **OpenRouter** | z-ai/glm-5 | Meta |
 | **OpenRouter** | qwen/qwen3.5-plus-02-15 | System, Image, Vision-Analyse, Decision-LLM |
 | **OpenRouter** | nvidia/nemotron-3-nano-30b-a3b | Reasoning, Memory-Kurator |
 | **OpenRouter** | deepseek/deepseek-v3.2 | Data |
