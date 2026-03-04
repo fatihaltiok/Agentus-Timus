@@ -36,6 +36,9 @@ _OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 _OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
 _ANALYSIS_MODEL = os.getenv("TREND_ANALYSIS_MODEL", "qwen/qwen3-235b-a22b")
 
+# Mindest-Relevanzscore für ArXiv-Paper (0–10); Paper darunter werden verworfen
+MIN_ARXIV_RELEVANCE = int(os.getenv("ARXIV_MIN_RELEVANCE", "6"))
+
 _GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 _HF_TOKEN = os.getenv("HF_TOKEN", "")
 _EDISON_KEY = os.getenv("EDISON_API_KEY", "")
@@ -66,20 +69,33 @@ class ArXivResearcher:
             return 0
 
         analyzed = 0
-        for paper in papers[:max_papers]:
+        for paper in papers:  # Alle gefetchten Paper prüfen (mehr als max_papers, s. _fetch_papers)
+            if analyzed >= max_papers:
+                break
             try:
                 analysis = await self._analyze_abstract(
                     paper["title"], paper["abstract"], query
                 )
+                relevance = int(analysis.get("relevance", 0))
+                if relevance < MIN_ARXIV_RELEVANCE:
+                    logger.info(
+                        f"📄 ArXiv: '{paper['title'][:50]}' verworfen "
+                        f"(Relevanz: {relevance}/10 < {MIN_ARXIV_RELEVANCE})"
+                    )
+                    continue
                 self._add_to_session(session, paper, analysis)
                 analyzed += 1
                 logger.info(
-                    f"📄 ArXiv: '{paper['title'][:60]}' analysiert "
-                    f"(Relevanz: {analysis.get('relevance', '?')}/10)"
+                    f"📄 ArXiv: '{paper['title'][:60]}' hinzugefügt "
+                    f"(Relevanz: {relevance}/10)"
                 )
             except Exception as e:
                 logger.warning(f"ArXiv-Paper übersprungen: {e}")
 
+        if analyzed == 0:
+            logger.info(
+                f"📄 ArXiv: Alle Paper verworfen (Relevanz < {MIN_ARXIV_RELEVANCE}/10)"
+            )
         return analyzed
 
     async def _fetch_papers(self, query: str, max_results: int) -> List[dict]:
@@ -149,20 +165,22 @@ class ArXivResearcher:
         Falls kein OPENROUTER_KEY: Fallback auf ersten Satz des Abstracts.
         """
         if not _OPENROUTER_KEY:
-            logger.debug("OPENROUTER_API_KEY fehlt — ArXiv-Analyse Fallback")
+            logger.debug("OPENROUTER_API_KEY fehlt — ArXiv-Analyse Fallback (keine Relevanzprüfung)")
             sentences = abstract.split(". ")
             key_finding = sentences[0][:300] if sentences else abstract[:300]
-            return {"key_finding": key_finding, "relevance": 5, "abstract_summary": abstract[:300]}
+            # Ohne LLM keine Relevanzprüfung möglich → Threshold-Wert setzen damit Paper nicht blockiert werden
+            return {"key_finding": key_finding, "relevance": MIN_ARXIV_RELEVANCE, "abstract_summary": abstract[:300]}
 
         prompt = (
             f"Thema: {query}\n\n"
             f"Paper-Titel: {title}\n\n"
             f"Abstract:\n{abstract[:2000]}\n\n"
-            "Extrahiere die wichtigste Kernaussage dieses Papers bezogen auf das Thema.\n"
-            "Antworte NUR als JSON:\n"
-            '{"key_finding": "Die wichtigste Erkenntnis in 1-2 Sätzen", '
-            '"abstract_summary": "Kurzzusammenfassung des Abstracts in 2-3 Sätzen", '
-            '"relevance": 8}'
+            "Bewerte die Relevanz dieses Papers für das Thema (0–10):\n"
+            "  0 = völlig themenfremd | 5 = teilweise verwandt | 10 = exakt zum Thema\n"
+            "Sei streng: Nur Papers die direkt zum Thema beitragen, erhalten ≥ 6.\n"
+            "Extrahiere außerdem die wichtigste Kernaussage bezogen auf das Thema.\n"
+            "Antworte NUR als JSON (keine weiteren Erklärungen):\n"
+            '{"key_finding": "...", "abstract_summary": "...", "relevance": <0-10>}'
         )
 
         def _call() -> str:
@@ -550,27 +568,31 @@ class TrendResearcher:
         Führt alle Trend-Recherchen parallel aus.
 
         Args:
-            query: Recherche-Thema
+            query: Recherche-Thema (wird automatisch ins Englische übersetzt)
             session: Laufende DeepResearchSession (in-place erweitert)
             max_per_source: Max. Einträge pro Quelle
 
         Returns:
             Gesamtanzahl hinzugefügter Einträge
         """
+        # ArXiv, GitHub und HuggingFace sind englischsprachige APIs —
+        # deutsche/nicht-englische Queries werden übersetzt
+        api_query = await self._translate_query_for_apis(query)
+
         tasks = []
         if os.getenv("DEEP_RESEARCH_ARXIV_ENABLED", "true").lower() != "false":
             tasks.append(self._run_safe(
-                ArXivResearcher().research(query, session, max_per_source),
+                ArXivResearcher().research(api_query, session, max_per_source),
                 "ArXiv",
             ))
         if os.getenv("DEEP_RESEARCH_GITHUB_ENABLED", "true").lower() != "false":
             tasks.append(self._run_safe(
-                GitHubTrendingResearcher().research(query, session, max_per_source),
+                GitHubTrendingResearcher().research(api_query, session, max_per_source),
                 "GitHub",
             ))
         if os.getenv("DEEP_RESEARCH_HF_ENABLED", "true").lower() != "false":
             tasks.append(self._run_safe(
-                HuggingFaceResearcher().research(query, session, max_per_source),
+                HuggingFaceResearcher().research(api_query, session, max_per_source),
                 "HuggingFace",
             ))
 
@@ -585,6 +607,57 @@ class TrendResearcher:
         total = sum(r for r in results if isinstance(r, int))
         logger.info(f"📊 Trend-Recherche abgeschlossen: {total} Einträge aus {len(tasks)} Quellen")
         return total
+
+    async def _translate_query_for_apis(self, query: str) -> str:
+        """
+        Übersetzt nicht-englische Queries ins Englische für ArXiv/GitHub/HuggingFace.
+
+        Heuristik: Deutsche Sonderzeichen oder häufige deutsche Wörter → übersetzen.
+        Ohne OPENROUTER_KEY: Query unverändert zurückgeben.
+        """
+        if not _OPENROUTER_KEY:
+            return query
+
+        # Schnelle Heuristik für deutschen Text
+        german_indicators = (
+            any(c in query for c in "äöüÄÖÜß")
+            or any(
+                f" {w} " in f" {query.lower()} "
+                for w in ("und", "der", "die", "das", "von", "für", "über", "mit",
+                          "auf", "bei", "nach", "aus", "ein", "eine", "ist")
+            )
+        )
+        if not german_indicators:
+            return query
+
+        def _call() -> str:
+            oc = OpenAI(api_key=_OPENROUTER_KEY, base_url=_OPENROUTER_BASE)
+            resp = oc.chat.completions.create(
+                model=_ANALYSIS_MODEL,
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        "Translate this search query to English for academic paper search. "
+                        "Reply ONLY with the translated query, nothing else:\n"
+                        f"{query}"
+                    ),
+                }],
+                temperature=0.1,
+                max_tokens=100,
+            )
+            return (resp.choices[0].message.content or "").strip()
+
+        try:
+            translated = await asyncio.to_thread(_call)
+            if translated and 3 < len(translated) < 500:
+                logger.info(
+                    f"🌐 Query übersetzt: '{query[:40]}' → '{translated[:40]}'"
+                )
+                return translated
+        except Exception as e:
+            logger.debug(f"Query-Übersetzung fehlgeschlagen: {e}")
+
+        return query
 
     async def _run_safe(self, coro, source_name: str = "") -> int:
         """Führt eine Coroutine aus und fängt alle Fehler ab (gibt 0 zurück)."""
