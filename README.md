@@ -85,6 +85,14 @@ AutoGPT und AutoGen sind leistungsfähige Frameworks — aber sie sind primär *
   <em>Links: 13-Agenten-Kreis — Meta im Zentrum, goldener Lichtstrahl bei Delegation, Voice-Orb links &nbsp;|&nbsp; Rechts: Autonomy-Scorecard (83.8/100 HIGH) mit Goals, Planning, Self-Healing, Policy</em>
 </p>
 
+<p align="center">
+  <img src="docs/screenshots/canvas_autonomy_m8_m12.png" alt="Timus Canvas – Autonomy Tab mit M8–M12 (Session-Reflexion, Blackboard, Trigger, Ziel-Hierarchie, Scorecard 85.8)" width="80%">
+</p>
+
+<p align="center">
+  <em>Autonomy Tab v4.0 — M8 Session-Reflexion · M9 Agent-Blackboard · M10 Proaktive Trigger (Morgen 08:00 + Abend 20:00) · M11 Ziel-Hierarchie · Scorecard 85.8/100 VERY HIGH</em>
+</p>
+
 ---
 
 ## Evolution von Timus
