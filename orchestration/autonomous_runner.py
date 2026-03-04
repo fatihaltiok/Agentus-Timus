@@ -90,6 +90,31 @@ def _meta_analysis_feature_enabled() -> bool:
     return _env_bool("AUTONOMY_META_ANALYSIS_ENABLED", False)
 
 
+def _reflection_feature_enabled() -> bool:
+    if _env_bool("AUTONOMY_COMPAT_MODE", True):
+        return False
+    return _env_bool("AUTONOMY_REFLECTION_ENABLED", False)
+
+
+def _trigger_feature_enabled() -> bool:
+    if _env_bool("AUTONOMY_COMPAT_MODE", True):
+        return False
+    return _env_bool("AUTONOMY_PROACTIVE_TRIGGERS_ENABLED", False)
+
+
+def _goal_queue_feature_enabled() -> bool:
+    # sofort aktiv (nutzt bestehende Tabellen), COMPAT_MODE respected
+    if _env_bool("AUTONOMY_COMPAT_MODE", True):
+        return False
+    return _env_bool("AUTONOMY_GOAL_QUEUE_ENABLED", True)
+
+
+def _improvement_feature_enabled() -> bool:
+    if _env_bool("AUTONOMY_COMPAT_MODE", True):
+        return False
+    return _env_bool("AUTONOMY_SELF_IMPROVEMENT_ENABLED", False)
+
+
 class AutonomousRunner:
     """
     Führt pending Tasks autonom aus, ausgelöst durch den Scheduler-Heartbeat.
@@ -111,6 +136,11 @@ class AutonomousRunner:
         self._self_healing_engine = None
         self._meta_analyzer = None
         self._heartbeat_count = 0
+        # M8–M12
+        self._reflection_loop = None
+        self._trigger_engine = None
+        self._goal_manager = None
+        self._improvement_engine = None
 
     # ------------------------------------------------------------------
     # Öffentliche API
@@ -190,6 +220,51 @@ class AutonomousRunner:
                 log.info("🔬 MetaAnalyzer aktiviert")
             except Exception as e:
                 log.warning("MetaAnalyzer konnte nicht gestartet werden: %s", e)
+
+        # M8: Session Reflection Loop
+        if _reflection_feature_enabled():
+            try:
+                from orchestration.session_reflection import SessionReflectionLoop
+                self._reflection_loop = SessionReflectionLoop()
+                log.info("🪞 SessionReflectionLoop aktiviert")
+            except Exception as e:
+                log.warning("SessionReflectionLoop konnte nicht gestartet werden: %s", e)
+
+        # M9: Agent Blackboard (immer initialisieren für cleanup)
+        if os.getenv("AUTONOMY_BLACKBOARD_ENABLED", "true").lower() == "true":
+            try:
+                from memory.agent_blackboard import get_blackboard
+                get_blackboard()  # Singleton initialisieren + Tabellen anlegen
+                log.info("📋 Agent Blackboard aktiviert")
+            except Exception as e:
+                log.warning("Agent Blackboard konnte nicht initialisiert werden: %s", e)
+
+        # M10: Proactive Triggers
+        if _trigger_feature_enabled():
+            try:
+                from orchestration.proactive_triggers import get_trigger_engine
+                self._trigger_engine = get_trigger_engine()
+                log.info("⏰ ProactiveTriggerEngine aktiviert")
+            except Exception as e:
+                log.warning("ProactiveTriggerEngine konnte nicht gestartet werden: %s", e)
+
+        # M11: Goal Queue Manager
+        if _goal_queue_feature_enabled():
+            try:
+                from orchestration.goal_queue_manager import get_goal_manager
+                self._goal_manager = get_goal_manager()
+                log.info("🎯 GoalQueueManager aktiviert")
+            except Exception as e:
+                log.warning("GoalQueueManager konnte nicht gestartet werden: %s", e)
+
+        # M12: Self-Improvement Engine
+        if _improvement_feature_enabled():
+            try:
+                from orchestration.self_improvement_engine import get_improvement_engine
+                self._improvement_engine = get_improvement_engine()
+                log.info("🔬 SelfImprovementEngine aktiviert")
+            except Exception as e:
+                log.warning("SelfImprovementEngine konnte nicht gestartet werden: %s", e)
 
         # Curiosity Engine als separaten asyncio.Task starten
         if os.getenv("CURIOSITY_ENABLED", "true").lower() == "true":
@@ -364,6 +439,55 @@ class AutonomousRunner:
                     )
                 except Exception as e:
                     log.warning("Meta-Analyse-Zyklus fehlgeschlagen: %s", e)
+
+        # M8: Session Reflection Loop
+        if _reflection_feature_enabled() and self._reflection_loop:
+            try:
+                _loop = asyncio.get_event_loop()
+                if _loop.is_running():
+                    asyncio.ensure_future(self._reflection_loop.check_and_reflect())
+            except RuntimeError:
+                pass
+            except Exception as e:
+                log.debug("SessionReflectionLoop fehlgeschlagen: %s", e)
+
+        # M9: Blackboard — abgelaufene Einträge bereinigen
+        if os.getenv("AUTONOMY_BLACKBOARD_ENABLED", "true").lower() == "true":
+            try:
+                from memory.agent_blackboard import get_blackboard
+                expired = get_blackboard().clear_expired()
+                if expired > 0:
+                    log.debug("Blackboard: %d abgelaufene Einträge gelöscht", expired)
+            except Exception as e:
+                log.debug("Blackboard clear_expired fehlgeschlagen: %s", e)
+
+        # M10: Proactive Triggers
+        if _trigger_feature_enabled() and self._trigger_engine:
+            try:
+                fired = self._trigger_engine.check_and_fire()
+                if fired:
+                    log.info("⏰ %d Trigger ausgelöst", len(fired))
+            except Exception as e:
+                log.debug("ProactiveTriggers fehlgeschlagen: %s", e)
+
+        # M11: Goal Queue Progress Rollup
+        if _goal_queue_feature_enabled() and self._goal_manager:
+            try:
+                self._goal_manager.run_progress_cycle()
+            except Exception as e:
+                log.debug("GoalQueueManager Rollup fehlgeschlagen: %s", e)
+
+        # M12: Self-Improvement Wochenanalyse
+        if _improvement_feature_enabled() and self._improvement_engine:
+            if self._improvement_engine._should_run_analysis():
+                try:
+                    _loop = asyncio.get_event_loop()
+                    if _loop.is_running():
+                        asyncio.ensure_future(self._improvement_engine.run_analysis_cycle())
+                except RuntimeError:
+                    pass
+                except Exception as e:
+                    log.debug("SelfImprovementEngine fehlgeschlagen: %s", e)
 
         pending = queue.get_pending()
         if not pending:

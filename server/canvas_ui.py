@@ -1272,6 +1272,30 @@ _TEMPLATE = r"""<!doctype html>
             </div>
           </div>
 
+          <!-- M8: Session-Reflexion -->
+          <div class="auto-card full" style="margin-bottom:10px;">
+            <h3>Session-Reflexion · M8</h3>
+            <div id="reflectionPanel"><div class="empty">Lade…</div></div>
+          </div>
+
+          <!-- M9: Agent Blackboard -->
+          <div class="auto-card full" style="margin-bottom:10px;">
+            <h3>Agent Blackboard · M9</h3>
+            <div id="blackboardPanel"><div class="empty">Lade…</div></div>
+          </div>
+
+          <!-- M10: Proaktive Trigger -->
+          <div class="auto-card full" style="margin-bottom:10px;">
+            <h3>Proaktive Trigger · M10</h3>
+            <div id="triggersPanel"><div class="empty">Lade…</div></div>
+          </div>
+
+          <!-- M11: Ziel-Hierarchie -->
+          <div class="auto-card full" style="margin-bottom:10px;">
+            <h3>Ziel-Hierarchie · M11</h3>
+            <div id="goalTreePanel" style="min-height:80px;"><div class="empty">Lade…</div></div>
+          </div>
+
           <div class="auto-card full" style="margin-bottom:14px;">
             <h3>Autonomy Scorecard</h3>
             <div class="scorecard-header">
@@ -1299,6 +1323,11 @@ _TEMPLATE = r"""<!doctype html>
             <div class="auto-card full">
               <h3>Planung · M2</h3>
               <div id="plansPanel"><div class="empty">Lade…</div></div>
+            </div>
+            <!-- M12: Self-Improvement -->
+            <div class="auto-card full">
+              <h3>Self-Improvement · M12</h3>
+              <div id="improvementPanel"><div class="empty">Lade…</div></div>
             </div>
           </div>
 
@@ -1703,7 +1732,133 @@ function showToast(msg, type) {
 
 // ── Autonomy Dashboard ────────────────────────────────────────────────────────
 async function loadAutonomyData() {
-  await Promise.allSettled([ loadSettings(), loadScorecard(), loadGoals(), loadPlans() ]);
+  await Promise.allSettled([
+    loadSettings(), loadScorecard(), loadGoals(), loadPlans(),
+    loadReflections(), loadBlackboard(), loadTriggers(), loadGoalTree(), loadImprovement()
+  ]);
+}
+
+// ── M8: Session-Reflexion ─────────────────────────────────────────────────────
+async function loadReflections() {
+  const el = document.getElementById("reflectionPanel");
+  if (!el) return;
+  try {
+    const data = await api("/autonomy/reflections?limit=3");
+    const refs = data.reflections || [];
+    if (!refs.length) { el.innerHTML = '<div class="empty">Noch keine Reflexionen</div>'; return; }
+    const latest = refs[0];
+    const rate = Math.round((latest.success_rate||0)*100);
+    const worked = (latest.what_worked||[]).slice(0,2).join(" · ") || "–";
+    const suggestions_data = await api("/autonomy/suggestions");
+    const sug = (suggestions_data.suggestions||[]).filter(s=>!s.applied);
+    el.innerHTML = `
+      <div style="display:flex;gap:16px;flex-wrap:wrap;">
+        <div><strong>Letzte Reflexion:</strong> ${(latest.reflected_at||"").substring(0,16).replace("T"," ")}</div>
+        <div><strong>Erfolgsrate:</strong> ${rate}%</div>
+        <div><strong>Tasks:</strong> ${latest.tasks_count||0}</div>
+      </div>
+      <div style="margin-top:6px;font-size:12px;opacity:.8">✅ ${worked}</div>
+      ${sug.length ? `<div style="margin-top:6px;font-size:12px;color:#f9c;opacity:.9">💡 ${sug[0].suggestion.substring(0,120)}</div>` : ""}
+      <div style="margin-top:4px;font-size:11px;opacity:.5">${refs.length} Reflexion(en) gespeichert · ${sug.length} offene Vorschläge</div>
+    `;
+  } catch(e) { el.innerHTML = `<div class="empty">Fehler: ${e.message}</div>`; }
+}
+
+// ── M9: Agent Blackboard ──────────────────────────────────────────────────────
+async function loadBlackboard() {
+  const el = document.getElementById("blackboardPanel");
+  if (!el) return;
+  try {
+    const data = await api("/blackboard");
+    const total = data.total_active || 0;
+    const byAgent = data.by_agent || {};
+    const last = data.last_entry;
+    const agentList = Object.entries(byAgent).slice(0,5).map(([a,n])=>`<span style="margin-right:8px">${a}: <strong>${n}</strong></span>`).join("");
+    el.innerHTML = `
+      <div style="display:flex;gap:16px;flex-wrap:wrap;">
+        <div><strong>Aktive Einträge:</strong> ${total}</div>
+        ${last ? `<div><strong>Letzter:</strong> [${last.agent}:${last.topic}] ${last.key}</div>` : ""}
+      </div>
+      ${agentList ? `<div style="margin-top:6px;font-size:12px;opacity:.8">${agentList}</div>` : ""}
+    `;
+  } catch(e) { el.innerHTML = `<div class="empty">Fehler: ${e.message}</div>`; }
+}
+
+// ── M10: Proaktive Trigger ────────────────────────────────────────────────────
+async function loadTriggers() {
+  const el = document.getElementById("triggersPanel");
+  if (!el) return;
+  try {
+    const data = await api("/triggers");
+    const triggers = data.triggers || [];
+    if (!triggers.length) { el.innerHTML = '<div class="empty">Keine Trigger konfiguriert</div>'; return; }
+    const rows = triggers.map(t => {
+      const lastFired = t.last_fired_at ? t.last_fired_at.substring(0,16).replace("T"," ") : "–";
+      const statusColor = t.enabled ? "#4ade80" : "#888";
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.05);">
+        <div>
+          <span style="color:${statusColor};margin-right:8px;">●</span>
+          <strong>${t.name}</strong>
+          <span style="margin-left:8px;opacity:.6;">${t.time_of_day} · ${t.target_agent}</span>
+        </div>
+        <div style="font-size:11px;opacity:.5">Letzter: ${lastFired}</div>
+      </div>`;
+    }).join("");
+    el.innerHTML = rows;
+  } catch(e) { el.innerHTML = `<div class="empty">Fehler: ${e.message}</div>`; }
+}
+
+// ── M11: Ziel-Hierarchie ──────────────────────────────────────────────────────
+async function loadGoalTree() {
+  const el = document.getElementById("goalTreePanel");
+  if (!el) return;
+  try {
+    const data = await api("/goals/tree");
+    const tree = data.tree || [];
+    const nodes = tree.filter(e => !e.data?.source);
+    if (!nodes.length) { el.innerHTML = '<div class="empty">Keine Ziele definiert</div>'; return; }
+    const rows = nodes.slice(0,6).map(n => {
+      const d = n.data || {};
+      const pct = Math.round((d.progress||0)*100);
+      const ms = (d.milestones||[]).length;
+      const done = (d.completed_milestones||[]).length;
+      return `<div style="padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05);">
+        <div style="display:flex;justify-content:space-between;">
+          <strong>${d.label||"–"}</strong>
+          <span style="font-size:12px;opacity:.7">${pct}%${ms > 0 ? ` · ${done}/${ms} MS` : ""}</span>
+        </div>
+        <div style="background:rgba(255,255,255,.1);border-radius:3px;height:4px;margin-top:4px;">
+          <div style="background:#22d3ee;height:4px;border-radius:3px;width:${pct}%;transition:width .4s;"></div>
+        </div>
+      </div>`;
+    }).join("");
+    const edgeCount = tree.filter(e=>e.data?.source).length;
+    el.innerHTML = rows + `<div style="margin-top:6px;font-size:11px;opacity:.4">${nodes.length} Ziele · ${edgeCount} Verknüpfungen</div>`;
+  } catch(e) { el.innerHTML = `<div class="empty">Fehler: ${e.message}</div>`; }
+}
+
+// ── M12: Self-Improvement ─────────────────────────────────────────────────────
+async function loadImprovement() {
+  const el = document.getElementById("improvementPanel");
+  if (!el) return;
+  try {
+    const data = await api("/autonomy/improvement");
+    const sug = data.top_suggestions || [];
+    const critical = data.critical_suggestions || 0;
+    const statusColor = critical > 0 ? "#f87171" : "#4ade80";
+    const rows = sug.slice(0,3).map(s => {
+      const emoji = s.severity === "high" ? "🔴" : s.severity === "medium" ? "🟡" : "🟢";
+      return `<div style="padding:3px 0;font-size:12px;">${emoji} <strong>${s.target}</strong>: ${(s.finding||"").substring(0,100)}</div>`;
+    }).join("");
+    el.innerHTML = `
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:6px;">
+        <div><strong>Tool-Stats:</strong> ${data.tool_stats_count||0} Einträge</div>
+        <div><strong>Routing:</strong> ${data.routing_decisions||0} Entscheidungen</div>
+        <div><strong style="color:${statusColor}">Kritisch:</strong> ${critical}</div>
+      </div>
+      ${rows || '<div style="opacity:.5;font-size:12px;">Noch keine Befunde</div>'}
+    `;
+  } catch(e) { el.innerHTML = `<div class="empty">Fehler: ${e.message}</div>`; }
 }
 
 async function loadScorecard() {

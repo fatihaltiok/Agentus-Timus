@@ -30,13 +30,37 @@ class MetaAnalyzer:
         try:
             history = self._get_scorecard_history(hours=24)
             incidents = self._get_recent_incidents(limit=15)
-            insights = self._call_llm(history=history, incidents=incidents)
+            # M12: Self-Improvement Befunde als zusätzlichen Input einbeziehen
+            improvement_context = self._get_improvement_context()
+            insights = self._call_llm(
+                history=history,
+                incidents=incidents,
+                improvement_context=improvement_context,
+            )
             if insights:
                 self._store_insights(insights)
             return {"status": "ok", "insights": insights, "analyzed_at": datetime.now().isoformat()}
         except Exception as e:
             log.warning("Meta-Analyse fehlgeschlagen (nicht kritisch): %s", e)
             return {"status": "error", "error": str(e)}
+
+    def _get_improvement_context(self) -> str:
+        """M12: Lädt kritische Self-Improvement Befunde für Meta-Analyse."""
+        try:
+            import os
+            if not os.getenv("AUTONOMY_SELF_IMPROVEMENT_ENABLED", "false").lower() in {"true", "1", "yes"}:
+                return ""
+            from orchestration.self_improvement_engine import get_improvement_engine
+            suggestions = get_improvement_engine().get_suggestions(applied=False)
+            critical = [s for s in suggestions if s.get("severity") == "high"][:5]
+            if not critical:
+                return ""
+            lines = ["Kritische Self-Improvement Befunde:"]
+            for s in critical:
+                lines.append(f"- [{s['type']}:{s['target']}] {s['finding'][:120]}")
+            return "\n".join(lines)
+        except Exception:
+            return ""
 
     # ------------------------------------------------------------------
     # Datensammlung
@@ -89,6 +113,7 @@ class MetaAnalyzer:
         self,
         history: List[Dict[str, Any]],
         incidents: List[Dict[str, Any]],
+        improvement_context: str = "",
     ) -> Dict[str, Any]:
         from agent.providers import ModelProvider, get_provider_client
 
@@ -97,11 +122,16 @@ class MetaAnalyzer:
         history_summary = json.dumps(history[-10:], ensure_ascii=False)
         incidents_summary = json.dumps(incidents, ensure_ascii=False)
 
+        improvement_section = ""
+        if improvement_context:
+            improvement_section = f"\n\n{improvement_context}"
+
         prompt = (
             "Du bist ein Autonomie-Analyst für das KI-System Timus.\n"
             "Analysiere die folgenden Daten und antworte NUR mit validem JSON.\n\n"
             f"Scorecard-Verlauf (letzte 10 Snapshots):\n{history_summary}\n\n"
-            f"Letzte Incidents (bis 15):\n{incidents_summary}\n\n"
+            f"Letzte Incidents (bis 15):\n{incidents_summary}"
+            f"{improvement_section}\n\n"
             "Antworte mit genau diesem JSON-Schema (keine weiteren Erklärungen):\n"
             '{"trend": "rising|stable|falling", '
             '"weakest_pillar": "planning|goals|self_healing|policy", '

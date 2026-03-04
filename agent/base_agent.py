@@ -1471,6 +1471,20 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
 
         roi_set = await self._detect_dynamic_ui_and_set_roi(task)
 
+        # M9: Blackboard-Kontext anreichern
+        if os.getenv("AUTONOMY_BLACKBOARD_ENABLED", "true").lower() == "true":
+            try:
+                from memory.agent_blackboard import get_blackboard
+                bb_entries = get_blackboard().search(task[:80], limit=3)
+                if bb_entries:
+                    bb_ctx = "\n# Bekannte Informationen (Agent-Blackboard):\n"
+                    for e in bb_entries:
+                        val_str = str(e["value"])[:200]
+                        bb_ctx += f"- [{e['agent']}:{e['topic']}] {e['key']}: {val_str}\n"
+                    task = task + "\n" + bb_ctx
+            except Exception:
+                pass
+
         task_lower = task.lower()
         is_memory_query = self._is_memory_recall_query(task_lower)
 

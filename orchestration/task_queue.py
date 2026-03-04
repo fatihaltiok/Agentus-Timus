@@ -628,6 +628,55 @@ CREATE INDEX IF NOT EXISTS idx_change_requests_status
 
 CREATE INDEX IF NOT EXISTS idx_change_requests_created
     ON autonomy_change_requests (created_at DESC);
+
+-- ── M10: Proaktive Trigger ──────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS proactive_triggers (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    time_of_day TEXT NOT NULL,
+    days_of_week TEXT DEFAULT '[]',
+    action_query TEXT NOT NULL,
+    target_agent TEXT DEFAULT 'meta',
+    enabled INTEGER DEFAULT 1,
+    last_fired_at TEXT DEFAULT ''
+);
+
+-- ── M12: Tool-Analytics ─────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS tool_analytics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tool_name TEXT NOT NULL,
+    agent TEXT NOT NULL,
+    task_type TEXT DEFAULT '',
+    success INTEGER NOT NULL DEFAULT 1,
+    duration_ms INTEGER DEFAULT 0,
+    timestamp TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_tool_analytics_agent
+    ON tool_analytics (agent, timestamp DESC);
+
+-- ── M12: Routing-Analytics ──────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS routing_analytics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_hash TEXT NOT NULL,
+    chosen_agent TEXT NOT NULL,
+    outcome TEXT NOT NULL DEFAULT 'success',
+    confidence REAL DEFAULT 0.5,
+    timestamp TEXT NOT NULL
+);
+
+-- ── M12: Improvement-Suggestions ────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS improvement_suggestions_m12 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    type TEXT NOT NULL,
+    target TEXT NOT NULL,
+    finding TEXT NOT NULL,
+    suggestion TEXT NOT NULL,
+    confidence REAL DEFAULT 0.5,
+    severity TEXT DEFAULT 'medium',
+    applied INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL
+);
 """
 
 

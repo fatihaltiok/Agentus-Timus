@@ -377,6 +377,8 @@ class AgentRegistry:
                     message=f"Delegation partiell: {from_agent} -> {to_agent}",
                     payload={"result_preview": result_str[:240]},
                 )
+                # M12: Routing-Analytics (partial)
+                self._record_routing_outcome(task, to_agent, "partial")
                 return {
                     "status": "partial",
                     "agent": to_agent,
@@ -393,6 +395,8 @@ class AgentRegistry:
                 message=f"Delegation abgeschlossen: {from_agent} -> {to_agent}",
                 payload={"result_preview": result_str[:240]},
             )
+            # M12: Routing-Analytics aufzeichnen
+            self._record_routing_outcome(task, to_agent, "success")
             return {"status": "success", "agent": to_agent, "result": result_str}
 
         except Exception as e:
@@ -406,6 +410,8 @@ class AgentRegistry:
                 message=f"Delegation fehlgeschlagen: {e}",
                 payload={"exception": str(e)[:300]},
             )
+            # M12: Routing-Analytics aufzeichnen
+            self._record_routing_outcome(task, to_agent, "error")
             return {
                 "status": "error",
                 "agent": to_agent,
@@ -415,6 +421,24 @@ class AgentRegistry:
             if target_has_session_attr and agent is not None:
                 setattr(agent, "conversation_session_id", previous_session_id)
             self._delegation_stack_var.reset(stack_token)
+
+    @staticmethod
+    def _record_routing_outcome(task: str, chosen_agent: str, outcome: str) -> None:
+        """M12: Routing-Entscheidung für Self-Improvement aufzeichnen."""
+        try:
+            if not os.getenv("AUTONOMY_SELF_IMPROVEMENT_ENABLED", "false").lower() in {"true", "1", "yes"}:
+                return
+            import hashlib
+            from orchestration.self_improvement_engine import get_improvement_engine, RoutingRecord
+            task_hash = hashlib.sha256(task.encode()).hexdigest()[:8]
+            get_improvement_engine().record_routing(RoutingRecord(
+                task_hash=task_hash,
+                chosen_agent=chosen_agent,
+                outcome=outcome,
+                confidence=0.75 if outcome == "success" else 0.3,
+            ))
+        except Exception:
+            pass
 
     def find_by_capability(self, capability: str) -> List[AgentSpec]:
         """Findet alle AgentSpecs mit einer bestimmten Capability."""

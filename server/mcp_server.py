@@ -242,6 +242,14 @@ TOOL_MODULES = [
     "tools.email_tool.tool",
     # Web-Fetch: URL-Inhalte abrufen (requests → Playwright-Fallback, v3.3)
     "tools.web_fetch_tool.tool",
+    # M9: Agent Blackboard
+    "tools.blackboard_tool.tool",
+    # M10: Proactive Triggers
+    "tools.trigger_tool.tool",
+    # M11: Goal Queue Manager
+    "tools.goal_tool.tool",
+    # M12: Self-Improvement Engine
+    "tools.self_improvement_tool.tool",
 ]
 
 # --- Hilfsfunktionen für den Lifespan-Manager ---
@@ -1392,6 +1400,101 @@ async def autonomy_health_endpoint():
         }
     except Exception as e:
         log.error(f"Autonomy health Fehler: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+# ── M8-M12 AUTONOMY ENDPOINTS ─────────────────────────────────────────────────
+
+@app.get("/autonomy/reflections", summary="Session-Reflexionen (M8)")
+async def autonomy_reflections_endpoint(limit: int = 10):
+    """Gibt die letzten Session-Reflexionen zurück."""
+    try:
+        from orchestration.session_reflection import SessionReflectionLoop
+        loop = SessionReflectionLoop()
+        reflections = await loop.get_recent_reflections(limit=min(50, limit))
+        return {"status": "success", "reflections": reflections, "count": len(reflections)}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.get("/autonomy/suggestions", summary="Verbesserungsvorschläge aus Reflexion (M8)")
+async def autonomy_suggestions_endpoint():
+    """Gibt offene Verbesserungsvorschläge zurück."""
+    try:
+        from orchestration.session_reflection import SessionReflectionLoop
+        loop = SessionReflectionLoop()
+        suggestions = await loop.get_improvement_suggestions()
+        return {"status": "success", "suggestions": suggestions, "count": len(suggestions)}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.get("/blackboard", summary="Agent Blackboard Übersicht (M9)")
+async def blackboard_summary_endpoint():
+    """Gibt Blackboard-Zusammenfassung zurück."""
+    try:
+        from memory.agent_blackboard import get_blackboard
+        summary = get_blackboard().get_summary()
+        return {"status": "success", **summary}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.get("/triggers", summary="Proaktive Trigger auflisten (M10)")
+async def triggers_list_endpoint():
+    """Gibt alle proaktiven Trigger zurück."""
+    try:
+        from orchestration.proactive_triggers import get_trigger_engine
+        triggers = get_trigger_engine().list_triggers()
+        return {"status": "success", "triggers": triggers, "count": len(triggers)}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.post("/triggers/{trigger_id}/enable", summary="Trigger aktivieren/deaktivieren (M10)")
+async def trigger_enable_endpoint(trigger_id: str, enabled: bool = True):
+    """Aktiviert oder deaktiviert einen Trigger."""
+    try:
+        from orchestration.proactive_triggers import get_trigger_engine
+        found = get_trigger_engine().enable_trigger(trigger_id, enabled)
+        return {
+            "status": "success" if found else "not_found",
+            "trigger_id": trigger_id,
+            "enabled": enabled,
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.get("/goals/tree", summary="Ziel-Hierarchie als Cytoscape-Tree (M11)")
+async def goals_tree_endpoint(root_id: str = ""):
+    """Gibt den Ziel-Baum zurück (Cytoscape-Format)."""
+    try:
+        from orchestration.goal_queue_manager import get_goal_manager
+        tree = get_goal_manager().get_goal_tree(root_id=root_id if root_id else None)
+        return {"status": "success", "tree": tree}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.get("/autonomy/improvement", summary="Self-Improvement Befunde (M12)")
+async def autonomy_improvement_endpoint():
+    """Gibt Self-Improvement Statistiken und Vorschläge zurück."""
+    try:
+        from orchestration.self_improvement_engine import get_improvement_engine
+        engine = get_improvement_engine()
+        tool_stats = engine.get_tool_stats(days=7)
+        routing_stats = engine.get_routing_stats(days=7)
+        suggestions = engine.get_suggestions(applied=False)
+        return {
+            "status": "success",
+            "tool_stats_count": len(tool_stats),
+            "routing_decisions": routing_stats.get("total_decisions", 0),
+            "open_suggestions": len(suggestions),
+            "critical_suggestions": sum(1 for s in suggestions if s.get("severity") == "high"),
+            "top_suggestions": suggestions[:5],
+        }
+    except Exception as e:
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
 

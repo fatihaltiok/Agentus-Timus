@@ -4,7 +4,7 @@
   <img src="assets/branding/timus-logo-glow.png" alt="Timus Logo" width="760">
 </p>
 
-**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen). Seit **v2.9** sind die Autonomie-Schichten M1–M5 live: Zielgenerierung, Langzeitplanung, Self-Healing und Autonomie-Scorecard laufen aktiv im Produktivbetrieb. Seit **v3.0 (2026-02-28)** läuft im Canvas ein nativer Voice-Loop (Faster-Whisper STT + Inworld.AI TTS) über `/voice/*` Endpoints. Seit **v3.1 (2026-03-01)** sendet und empfängt Timus eigenständig E-Mails über Microsoft Graph OAuth2 — alle 13 Agenten sind vollständig per Delegation erreichbar. Seit **v3.2 (2026-03-02)** visualisiert der Canvas jede Agent-Delegation mit einem goldenen Lichtstrahl-Animation in Echtzeit — und beide Routing-Pfade (direkt + delegiert) nutzen einheitlich `DeveloperAgentV2`. Seit **v3.3 (2026-03-03)** überwacht Timus sich selbst mit LLMs: Jeder neue Incident wird sofort von `qwen3.5-plus` diagnostiziert (Schicht 2), alle 60 Minuten analysiert `deepseek-v3.2` Trends und strukturelle Schwächen im Autonomie-Zustand (Schicht 3). Außerdem können alle Agenten ab v3.3 eigenständig URLs öffnen — Hybrid-Fetch mit automatischem Playwright-Fallback für JavaScript-Seiten. Seit **v3.4 (2026-03-03)** erzeugt Deep Research v6.0 vollautomatisch drei Ausgabedateien: einen analytischen Markdown-Bericht, einen narrativen Lesebericht mit 2500–5000 Wörtern (gpt-5.2) und ein professionelles A4-PDF mit eingebetteten Abbildungen (WeasyPrint). Seit **v3.5 (2026-03-04)** durchsucht Deep Research parallel ArXiv, GitHub und HuggingFace nach aktuellen wissenschaftlichen Trends — und der Edison-Toggle im Canvas UI erlaubt es, PaperQA3 (Edison Scientific) per Klick ohne Server-Neustart zu aktivieren.
+**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen). Seit **v2.9** sind die Autonomie-Schichten M1–M5 live: Zielgenerierung, Langzeitplanung, Self-Healing und Autonomie-Scorecard laufen aktiv im Produktivbetrieb. Seit **v3.0 (2026-02-28)** läuft im Canvas ein nativer Voice-Loop (Faster-Whisper STT + Inworld.AI TTS) über `/voice/*` Endpoints. Seit **v3.1 (2026-03-01)** sendet und empfängt Timus eigenständig E-Mails über Microsoft Graph OAuth2 — alle 13 Agenten sind vollständig per Delegation erreichbar. Seit **v3.2 (2026-03-02)** visualisiert der Canvas jede Agent-Delegation mit einem goldenen Lichtstrahl-Animation in Echtzeit — und beide Routing-Pfade (direkt + delegiert) nutzen einheitlich `DeveloperAgentV2`. Seit **v3.3 (2026-03-03)** überwacht Timus sich selbst mit LLMs: Jeder neue Incident wird sofort von `qwen3.5-plus` diagnostiziert (Schicht 2), alle 60 Minuten analysiert `deepseek-v3.2` Trends und strukturelle Schwächen im Autonomie-Zustand (Schicht 3). Außerdem können alle Agenten ab v3.3 eigenständig URLs öffnen — Hybrid-Fetch mit automatischem Playwright-Fallback für JavaScript-Seiten. Seit **v3.4 (2026-03-03)** erzeugt Deep Research v6.0 vollautomatisch drei Ausgabedateien: einen analytischen Markdown-Bericht, einen narrativen Lesebericht mit 2500–5000 Wörtern (gpt-5.2) und ein professionelles A4-PDF mit eingebetteten Abbildungen (WeasyPrint). Seit **v3.5 (2026-03-04)** durchsucht Deep Research parallel ArXiv, GitHub und HuggingFace nach aktuellen wissenschaftlichen Trends — und der Edison-Toggle im Canvas UI erlaubt es, PaperQA3 (Edison Scientific) per Klick ohne Server-Neustart zu aktivieren. Seit **v4.0 (2026-03-04)** denkt Timus mit: **M8–M12** bringen Session-Reflexion, ein geteiltes Agent-Blackboard, zeitgesteuerte Trigger, hierarchische Ziel-Verwaltung und eine Self-Improvement Engine — 14 neue MCP-Tools und 5 neue Canvas-Cards.
 
 ---
 
@@ -32,6 +32,11 @@ Die folgende Architektur findet sich normalerweise bei Google SRE-Teams, Netflix
 | Erstellt automatisch PDF-Forschungsberichte | — | Deep Research v6.0 — 3 Ausgaben: analytisch + narrativ + A4-PDF |
 | Recherchiert akademische Trends in Echtzeit | — | ArXiv + GitHub + HuggingFace parallel (TrendResearcher) |
 | Schaltet Recherchequellen per UI-Toggle | — | Edison Scientific PaperQA3 — aktivierbar ohne Neustart |
+| Reflektiert eigene Sessions automatisch | — | M8 Session-Reflexion (Muster-Akkumulation + Verbesserungsvorschläge) |
+| Teilt Wissen zwischen Agenten | — | M9 Agent-Blackboard (TTL-basierter Shared Memory, 3 MCP-Tools) |
+| Führt zeitgesteuerte Routinen aus | — | M10 Proactive Triggers (Morgen/Abend-Routinen, ±14-Min-Fenster) |
+| Verwaltet hierarchische Langzeit-Ziele | — | M11 Goal Queue Manager (Sub-Goals, Meilensteine, Fortschritts-Rollup) |
+| Verbessert eigene Tool-Entscheidungen | — | M12 Self-Improvement Engine (Tool-Erfolgsrate, Routing-Konfidenz, wöchentlich) |
 
 **Das ist kein Chatbot. Das ist ein autonomes KI-Betriebssystem — gebaut in Python, von einer Person, ohne formale IT-Ausbildung.**
 
@@ -59,6 +64,11 @@ In der Forschung nennt man diese Architektur *Introspective Autonomous Systems*:
 | Akademische Tiefensuche (PaperQA3) | — | — | Edison Scientific (per UI-Toggle) |
 | Canvas UI mit Echtzeit-Visualisierung | — | — | Cytoscape + SSE, goldener Delegation-Strahl |
 | Feature-Toggles ohne Neustart | — | — | `/settings` API + `runtime_settings.json` |
+| Session-Reflexion + Muster-Akkumulation | — | — | M8 SessionReflectionLoop (30-Min-Idle → LLM-Analyse) |
+| Geteiltes Agent-Gedächtnis | — | — | M9 AgentBlackboard (TTL-Einträge, automatisch im Task-Context) |
+| Zeitgesteuerte Trigger | — | — | M10 ProactiveTriggerEngine (Uhrzeit ± 14 Min, DB-persistent) |
+| Hierarchische Ziel-Verwaltung | — | — | M11 GoalQueueManager (Sub-Goals, Meilensteine, Cytoscape-Tree) |
+| Automatische Selbstoptimierung | — | — | M12 SelfImprovementEngine (Tool-Rate < 70% → Suggestion) |
 
 AutoGPT und AutoGen sind leistungsfähige Frameworks — aber sie sind primär **Task-Ausführungs-Pipelines**. Timus ist ein **selbst-überwachendes, selbst-heilendes, selbst-planendes System** mit physischer Sensorik, eigener Stimme und einem Canvas UI, das den Zustand in Echtzeit zeigt. Diese Kombination existiert in keinem der bekannten Open-Source-Projekte in dieser Form.
 
@@ -132,7 +142,7 @@ Meta Agent     → Seed-OSS-36B         (ByteDance, Agentic Intelligence, 512K C
 Reasoning Agent→ Nemotron-49B         (NVIDIA-eigenes Flagship-Modell)
 ```
 
-### Phase 16 — Autonomer Service-Neustart *(v3.3, aktuell)*
+### Phase 16 — Autonomer Service-Neustart *(v3.3)*
 
 Falls Timus nicht reagiert oder träge ist, kann er sich jetzt selbst neu starten — ohne manuellen Eingriff:
 
@@ -157,7 +167,53 @@ Danach kann Timus passwortfrei `systemctl start/stop/restart` für seine eigenen
 
 ---
 
-### Phase 18 — TrendResearcher + Edison-Toggle im Canvas *(v3.5, aktuell)*
+### Phase 19 — Meta-Agent Upgrades M8–M12: Selbst-Reflexion + Blackboard + Trigger + Ziele + Optimierung *(v4.0, aktuell)*
+
+Timus denkt jetzt mit sich selbst. Fünf neue Autonomie-Schichten (M8–M12) machen das System selbst-reflektierend, gedächtnisteilend, zeitgesteuert, zielgerichtet und selbstoptimierend.
+
+**M8 — Session Reflection Loop:**
+- Erkennt Idle-Phasen > 30 Minuten → startet automatisch LLM-Reflexion der letzten Session
+- Akkumuliert Muster über mehrere Sessions: `selbes Muster ≥ 3×` → erzeugt `improvement_suggestion`
+- Telegram-Push bei neuen Erkenntnissen; Canvas-Card zeigt letzte Reflexion + Top-Vorschlag
+
+**M9 — Agent Blackboard (Shared Memory):**
+- Geteilter, TTL-basierter Kurzspeicher für alle Agenten (Standard-TTL 60 Minuten)
+- Jeder Agent bekommt relevante Blackboard-Einträge automatisch als Kontext
+- 3 MCP-Tools: `write_to_blackboard`, `read_from_blackboard`, `search_blackboard`
+- `clear_expired()` läuft im Heartbeat; Feature-Flag `AUTONOMY_BLACKBOARD_ENABLED=true` (sofort aktiv)
+
+**M10 — Proactive Triggers (Zeitgesteuerte Routinen):**
+- Scheduler feuert Tasks basierend auf Uhrzeit ± 14-Minuten-Fenster (1× pro Tag, Duplikat-Schutz)
+- Built-in-Templates: Morgen-Routine (08:00, Mo–Fr) + Abend-Reflexion (20:00, täglich)
+- 4 MCP-Tools: `add_proactive_trigger`, `list_proactive_triggers`, `remove_proactive_trigger`, `enable_proactive_trigger`
+- Canvas-Card mit Enable/Disable-Toggle je Trigger
+
+**M11 — Goal Queue Manager (Hierarchische Ziele):**
+- Nutzergesteuertes Ziel-Management über bestehende M1-DB-Tabellen (`goals`, `goal_edges`, `goal_state`)
+- Sub-Goals, Meilensteine, Fortschritts-Rollup (Parent ← Ø aller Children), Telegram bei Abschluss
+- 4 MCP-Tools: `set_long_term_goal`, `add_subgoal`, `complete_milestone`, `get_goal_progress`
+- Canvas-Widget: Cytoscape Mini-Tree mit Fortschritts-Ringen + Milestone-Checkboxen
+
+**M12 — Self-Improvement Engine (Selbstoptimierung):**
+- Zeichnet Tool-Erfolgsrate und Routing-Konfidenz pro Agent auf (SQLite)
+- Wöchentliche Analyse: Tool-Rate < 70% → Suggestion; Routing-Konfidenz < 0.6 → Alternative; Ø-Dauer > 3s → Bottleneck-Hinweis
+- 3 MCP-Tools: `get_tool_analytics`, `get_routing_stats`, `get_improvement_suggestions`
+- Integration: `agent_registry.py` zeichnet jede Delegation auf; `meta_analyzer.py` nutzt Befunde als LLM-Input
+
+**Neue Dateien:** `orchestration/session_reflection.py`, `orchestration/proactive_triggers.py`, `orchestration/goal_queue_manager.py`, `orchestration/self_improvement_engine.py`, `memory/agent_blackboard.py`, `utils/telegram_notify.py`, 4 Tool-Pakete
+
+**Feature-Flags:**
+```bash
+AUTONOMY_REFLECTION_ENABLED=false        # M8 — Session-Reflexion
+AUTONOMY_BLACKBOARD_ENABLED=true         # M9 — sofort aktiv (non-breaking)
+AUTONOMY_PROACTIVE_TRIGGERS_ENABLED=false # M10 — Zeitgesteuerte Trigger
+AUTONOMY_GOAL_QUEUE_ENABLED=true         # M11 — sofort aktiv (bestehende Tabellen)
+AUTONOMY_SELF_IMPROVEMENT_ENABLED=false  # M12 — Selbstoptimierung
+```
+
+---
+
+### Phase 18 — TrendResearcher + Edison-Toggle im Canvas *(v3.5)*
 
 Deep Research v6.0 durchsucht jetzt bei jeder Recherche automatisch drei wissenschaftliche/technische Quellen parallel — und ein neuer Settings-Toggle im Canvas UI erlaubt es, einzelne Quellen ohne Server-Neustart zu aktivieren oder zu deaktivieren.
 

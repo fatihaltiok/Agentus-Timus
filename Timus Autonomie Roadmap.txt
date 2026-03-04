@@ -280,3 +280,9 @@ python timus_terminal.py
 
 # Canvas Web-UI
 xdg-open http://localhost:5000/canvas/ui
+
+
+email: timus.assistent@outlook.com
+passwort:s2!XhXZY6H7Zw4P
+
+
