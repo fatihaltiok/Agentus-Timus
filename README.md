@@ -1125,7 +1125,7 @@ flowchart TD
     RSL --> RSLD["data/realsense_stream\nLive-Frame Export"]
 
     M --> SYS["SystemAgent\nread-only Monitoring"]
-    M --> SH["ShellAgent\n5-Schicht-Policy"]
+    M --> SH["ShellAgent v2\n5-Schicht-Policy\nSystem-Kontext-Injektion"]
     M --> DR["Deep Research v6.0\nYouTube + Bilder + PDF"]
     DR --> DRY["YouTubeResearcher\nDataForSEO + qwen3-235b\nNVIDIA Vision"]
     DR --> DRI["ImageCollector\nWeb-Bild + DALL-E"]
@@ -1163,15 +1163,25 @@ flowchart TD
     ARP -.->|"read-only"| MAG
     WAL -.->|"ermöglicht"| ARP
 
-    D --> RUN["autonomous_runner.py\nAutonomie-Loop v2.9"]
+    D --> RUN["autonomous_runner.py\nAutonomie-Loop v4.0"]
     RUN --> G1["GoalGenerator M1\nMemory+Curiosity+Events"]
     RUN --> G2["LongTermPlanner M2\n3-Horizont-Planung"]
     RUN --> G3["ReplanningEngine M2\nCommitment-Überwachung"]
     RUN --> G4["SelfHealingEngine M3\nCircuit-Breaker+Incidents"]
     RUN --> G5["AutonomyScorecard M5\nScore 0–100·Control-Loop"]
+    RUN --> G6["SessionReflection M8\nIdle-Erkennung + LLM-Reflexion\nPattern-Akkumulation"]
+    RUN --> G7["AgentBlackboard M9\nTTL Shared Memory\nwrite/read/search"]
+    RUN --> G8["ProactiveTriggers M10\n±14-Min-Fenster\nMorgen + Abend-Routinen"]
+    RUN --> G9["GoalQueueManager M11\nHierarchische Ziele\nMeilenstein-Rollup"]
+    RUN --> G10["SelfImprovementEngine M12\nTool-/Routing-Analytics\nwöchentliche Analyse"]
     G1 -.->|"Goals in"| WAL
     G4 -.->|"Incidents in"| WAL
     G5 -.->|"Snapshots in"| WAL
+    G6 -.->|"Reflexionen in"| WAL
+    G7 -.->|"Shared Context"| B
+    G8 -.->|"Trigger in"| WAL
+    G9 -.->|"Ziele in"| WAL
+    G10 -.->|"Analytics in"| WAL
 ```
 
 ---
@@ -1189,7 +1199,7 @@ Timus hat **13 spezialisierte Agenten** — jeder mit eigenem Modell, eigenem To
 | **ReasoningAgent** | nvidia/nemotron-3-nano-30b-a3b (OpenRouter) | Multi-Step-Analyse, Debugging, Architektur-Entscheidungen | 46 |
 | **CreativeAgent** | gpt-5.2 (OpenAI) | Bildgenerierung (DALL-E), kreative Texte — GPT generiert Prompt, DALL-E rendert | 44 |
 | **DeveloperAgent** | mercury-coder-small (Inception Labs) | Code-Generierung, Refactoring, AST-Validierung | 39 |
-| **MetaAgent** | claude-sonnet-4-5 (Anthropic) | Orchestrator — koordiniert andere Agenten, sequenziell + **parallel (v2.5)** | 68 |
+| **MetaAgent v2** | claude-sonnet-4-5 (Anthropic) | Orchestrator — koordiniert andere Agenten, sequenziell + **parallel (v2.5)**, Autonomie-Kontext-Injektion (Ziele, Blackboard, Reflexion, Trigger) | 68 |
 | **VisualAgent** | claude-sonnet-4-5 (Anthropic) | Desktop/Browser-Automatisierung — SoM, Mouse-Feedback, Screen-Change-Gate | 43 |
 | **VisualNemotronAgent v4** | Qwen3.5 Plus + Florence-2 + PaddleOCR | Komplexe Desktop-Automatisierung — Plan-then-Execute, 3 Retries | — |
 
@@ -1197,10 +1207,10 @@ Timus hat **13 spezialisierte Agenten** — jeder mit eigenem Modell, eigenem To
 
 | Agent | Modell | Aufgabe | Tools |
 |-------|--------|---------|-------|
-| **DataAgent** *(M1)* | deepseek/deepseek-v3.2 (OpenRouter) | CSV/Excel/JSON Analyse, Statistiken, Diagramme | 42 |
+| **DataAgent v2** *(M1)* | deepseek/deepseek-v3.2 (OpenRouter) | CSV/Excel/JSON Analyse, Statistiken, Diagramme — Daten-Kontext-Injektion (Downloads, data/, results/) | 42 |
 | **CommunicationAgent** *(M2)* | claude-sonnet-4-5 (Anthropic) | E-Mails, Berichte, DOCX/TXT Export | 34 |
 | **SystemAgent** *(M3)* | qwen/qwen3.5-plus-02-15 (OpenRouter) | Read-only: Logs, Prozesse, CPU/RAM/Disk, Service-Status | 14 |
-| **ShellAgent** *(M4)* | claude-sonnet-4-6 (Anthropic) | Shell-Ausführung mit 5-Schicht-Policy (Blacklist, Whitelist, Timeout, Audit, Dry-Run) | 5 |
+| **ShellAgent v2** *(M4)* | claude-sonnet-4-6 (Anthropic) | Shell-Ausführung mit 5-Schicht-Policy (Blacklist, Whitelist, Timeout, Audit, Dry-Run) — System-Kontext-Injektion (Services, Disk, Audit-Log, Skripte) | 5 |
 | **ImageAgent** *(M5)* | qwen/qwen3.5-plus-02-15 (OpenRouter) | Bild-Analyse — automatisches Routing bei Bild-Dateipfaden, Base64 → Vision | 1 |
 
 ---

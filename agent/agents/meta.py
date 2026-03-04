@@ -1,10 +1,23 @@
-"""MetaAgent - Koordinator mit Skill-Orchestrierung."""
+"""
+MetaAgent — Koordinator mit Skill-Orchestrierung + Autonomie-Kontext.
+
+Erweiterungen gegenüber BaseAgent:
+  - Kontext: Aktive Ziele, offene Tasks, Blackboard, letzte Reflexion, Trigger
+  - max_iterations=30 für mehrstufige Koordinations-Workflows
+  - Skill-Orchestrierung: wählt automatisch passende Skills aus skills/
+  - create_visual_plan(): Nemotron-gestützte Browser-Planung
+  - Partial-Result-Erkennung mit Koordinator-Hinweis
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
 import os
 import re
-import json
-import logging
-from typing import List, Optional
+from datetime import datetime
 from pathlib import Path
+from typing import List, Optional
 
 from agent.base_agent import BaseAgent
 from agent.prompts import META_SYSTEM_PROMPT
@@ -17,7 +30,6 @@ from agent.shared.json_utils import extract_json_robust  # noqa: F401 - re-expor
 
 class MetaAgent(BaseAgent):
     # Koordinator darf Spezialisten-Tools NIE direkt aufrufen — nur per Delegation.
-    # Erbt alles aus BaseAgent.SYSTEM_ONLY_TOOLS und erweitert es.
     SYSTEM_ONLY_TOOLS = BaseAgent.SYSTEM_ONLY_TOOLS | {
         "run_command",
         "run_script",
@@ -31,10 +43,13 @@ class MetaAgent(BaseAgent):
         self.active_skills: list = []
         self._init_skill_system()
 
+    # ------------------------------------------------------------------
+    # Skill-System
+    # ------------------------------------------------------------------
+
     def _init_skill_system(self):
         try:
             from utils.skill_types import SkillRegistry
-            from utils.skill_parser import find_all_skills
 
             self.skill_registry = SkillRegistry()
 
@@ -84,31 +99,35 @@ class MetaAgent(BaseAgent):
 
         return "\n".join(context_parts)
 
+    # ------------------------------------------------------------------
+    # Erweiterter run()-Einstieg: Timus-Kontext + Skills injizieren
+    # ------------------------------------------------------------------
+
     async def run(self, task: str) -> str:
-        log.info(f"MetaAgent mit Skill-Orchestrierung: {task[:50]}...")
+        log.info(f"MetaAgent mit Kontext + Skill-Orchestrierung: {task[:50]}...")
 
+        # 1. Timus Autonomie-Kontext laden
+        meta_context = await self._build_meta_context()
+
+        # 2. Skills auswählen
         self.active_skills = self._select_skills_for_task(task, top_k=3)
+        skill_context = self._build_skill_context(self.active_skills, include_references=False)
 
-        skill_context = self._build_skill_context(
-            self.active_skills,
-            include_references=False,
-        )
-
+        # 3. Task anreichern
+        parts: list[str] = []
+        if meta_context:
+            parts.append(meta_context)
         if skill_context:
-            enhanced_task = f"""{skill_context}
+            parts.append(skill_context)
+        parts.append(f"# AUFGABE\n{task}")
+        if skill_context:
+            parts.append("Prüfe ob verfügbare Skills zur Aufgabe passen und nutze sie entsprechend.")
 
-# TASK
-{task}
-
-When executing this task, check if any of the available skills apply.
-If a skill matches, use its instructions and resources."""
-        else:
-            enhanced_task = task
+        enhanced_task = "\n\n".join(parts)
 
         result = await super().run(enhanced_task)
 
-        # Partial-Result-Erkennung: Falls ein delegierter Agent nur teilweise
-        # antworten konnte, kennzeichnen wir das Ergebnis entsprechend.
+        # Partial-Result-Erkennung
         _partial_markers = {"Limit erreicht.", "Max Iterationen."}
         if result in _partial_markers:
             log.warning(
@@ -118,6 +137,162 @@ If a skill matches, use its instructions and resources."""
             return result + "\n\n_(Koordinator-Hinweis: Ergebnis unvollstaendig)_"
 
         return result
+
+    # ------------------------------------------------------------------
+    # Timus Autonomie-Kontext aufbauen
+    # ------------------------------------------------------------------
+
+    async def _build_meta_context(self) -> str:
+        """
+        Erstellt Kontext für den Meta-Agent:
+        - Aktive Langzeit-Ziele (M11 GoalQueueManager)
+        - Offene Tasks in der Queue (TaskQueue)
+        - Blackboard-Zusammenfassung (M9 AgentBlackboard)
+        - Letzte Reflexion (M8 SessionReflectionLoop)
+        - Aktive Proaktive Trigger (M10)
+        - Verfügbare Agenten
+        - Aktuelle Zeit
+        """
+        lines: list[str] = ["# TIMUS SYSTEM-KONTEXT (automatisch geladen)"]
+
+        # 1. Aktive Ziele (M11)
+        goals_ctx = await asyncio.to_thread(self._get_active_goals)
+        if goals_ctx:
+            lines.append(f"Aktive Langzeit-Ziele: {goals_ctx}")
+
+        # 2. Offene Tasks in Queue
+        tasks_ctx = await asyncio.to_thread(self._get_pending_tasks)
+        if tasks_ctx:
+            lines.append(f"Offene Tasks: {tasks_ctx}")
+
+        # 3. Blackboard-Zusammenfassung (M9)
+        bb_ctx = await asyncio.to_thread(self._get_blackboard_summary)
+        if bb_ctx:
+            lines.append(f"Agent-Blackboard: {bb_ctx}")
+
+        # 4. Letzte Reflexion (M8)
+        reflection_ctx = await self._get_last_reflection()
+        if reflection_ctx:
+            lines.append(f"Letzte Reflexion: {reflection_ctx}")
+
+        # 5. Aktive Trigger (M10)
+        trigger_ctx = await asyncio.to_thread(self._get_active_triggers)
+        if trigger_ctx:
+            lines.append(f"Aktive Routinen: {trigger_ctx}")
+
+        # 6. Verfügbare Agenten
+        lines.append(
+            "Agenten: executor, research, reasoning, creative, developer, "
+            "meta, visual, data, document, communication, system, shell, image"
+        )
+
+        lines.append(f"Aktuelle Zeit: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+        return "\n".join(lines)
+
+    def _get_active_goals(self) -> str:
+        """Lädt aktive Ziele aus dem GoalQueueManager (M11)."""
+        if not os.getenv("AUTONOMY_GOAL_QUEUE_ENABLED", "true").lower() == "true":
+            return ""
+        try:
+            from orchestration.goal_queue_manager import GoalQueueManager
+            mgr = GoalQueueManager()
+            tree = mgr.get_goal_tree()
+            if not tree:
+                return ""
+            active = [
+                g for g in tree
+                if g.get("status") in ("active", "in_progress", "pending")
+            ][:5]
+            if not active:
+                return ""
+            parts = []
+            for g in active:
+                progress = int(g.get("progress", 0) * 100)
+                parts.append(f"{g['title']} ({progress}%)")
+            return " | ".join(parts)
+        except Exception as exc:
+            log.debug("GoalQueueManager nicht verfügbar: %s", exc)
+            return ""
+
+    def _get_pending_tasks(self) -> str:
+        """Gibt offene Tasks aus der TaskQueue zurück."""
+        try:
+            from orchestration.task_queue import TaskQueue
+            tq = TaskQueue()
+            pending = tq.get_pending()[:5]
+            if not pending:
+                return "0 offen"
+            parts = []
+            for t in pending:
+                desc = (t.get("description") or t.get("title") or "Task")[:40]
+                agent = t.get("agent_type") or "?"
+                parts.append(f"{desc} [{agent}]")
+            return f"{len(pending)} offen: " + " | ".join(parts)
+        except Exception as exc:
+            log.debug("TaskQueue nicht verfügbar: %s", exc)
+            return ""
+
+    def _get_blackboard_summary(self) -> str:
+        """Fasst den AgentBlackboard zusammen (M9)."""
+        if not os.getenv("AUTONOMY_BLACKBOARD_ENABLED", "true").lower() == "true":
+            return ""
+        try:
+            from memory.agent_blackboard import get_blackboard
+            summary = get_blackboard().get_summary()
+            total = summary.get("total_active", 0)
+            if not total:
+                return ""
+            by_agent = summary.get("by_agent", {})
+            agent_parts = [f"{a}:{c}" for a, c in list(by_agent.items())[:4]]
+            return f"{total} Einträge ({', '.join(agent_parts)})"
+        except Exception as exc:
+            log.debug("AgentBlackboard nicht verfügbar: %s", exc)
+            return ""
+
+    async def _get_last_reflection(self) -> str:
+        """Lädt die letzte Session-Reflexion (M8)."""
+        if not os.getenv("AUTONOMY_REFLECTION_ENABLED", "false").lower() == "true":
+            return ""
+        try:
+            from orchestration.session_reflection import SessionReflectionLoop
+            loop = SessionReflectionLoop()
+            reflections = await loop.get_recent_reflections(limit=1)
+            if not reflections:
+                return ""
+            r = reflections[0]
+            success = int(r.get("success_rate", 0) * 100)
+            patterns = r.get("patterns_json", "[]")
+            import json
+            pat_list = json.loads(patterns) if isinstance(patterns, str) else patterns
+            top_pattern = pat_list[0] if pat_list else ""
+            result = f"Erfolgsrate {success}%"
+            if top_pattern:
+                result += f", Top-Muster: {str(top_pattern)[:60]}"
+            return result
+        except Exception as exc:
+            log.debug("SessionReflectionLoop nicht verfügbar: %s", exc)
+            return ""
+
+    def _get_active_triggers(self) -> str:
+        """Listet aktive Proaktive Trigger (M10)."""
+        if not os.getenv("AUTONOMY_PROACTIVE_TRIGGERS_ENABLED", "false").lower() == "true":
+            return ""
+        try:
+            from orchestration.proactive_triggers import ProactiveTriggerEngine
+            engine = ProactiveTriggerEngine()
+            triggers = [t for t in engine.list_triggers() if t.get("enabled")]
+            if not triggers:
+                return ""
+            parts = [f"{t['name']} ({t['time_of_day']})" for t in triggers[:4]]
+            return " | ".join(parts)
+        except Exception as exc:
+            log.debug("ProactiveTriggerEngine nicht verfügbar: %s", exc)
+            return ""
+
+    # ------------------------------------------------------------------
+    # Visual-Plan-Erstellung (Nemotron-gestützt)
+    # ------------------------------------------------------------------
 
     async def create_visual_plan(self, task: str) -> dict:
         """Erstellt einen strukturierten Plan für Visual/Browser-Tasks.
@@ -130,7 +305,6 @@ If a skill matches, use its instructions and resources."""
         """
         log.info(f"MetaAgent: Erstelle Visual-Plan für: {task[:60]}...")
 
-        # Prompt für strukturierte Planung
         plan_prompt = f"""Erstelle einen DETAILLIERTEN Plan für diese Browser-Automatisierung:
 
 AUFGABE: {task}
@@ -169,11 +343,9 @@ WICHTIG:
 Antworte NUR mit dem JSON, keine Markdown, keine Erklärungen."""
 
         try:
-            # Nutze Reasoning-Modell (Nemotron) für bessere Planung
             old_model = self.model
             old_provider = self.provider
 
-            # Temporär auf Nemotron umschalten für Planung
             from agent.providers import ModelProvider
             self.model = os.getenv("REASONING_MODEL", "nvidia/nemotron-3-nano-30b-a3b")
             self.provider = ModelProvider.OPENROUTER
@@ -182,11 +354,9 @@ Antworte NUR mit dem JSON, keine Markdown, keine Erklärungen."""
                 {"role": "user", "content": plan_prompt}
             ])
 
-            # Restore original settings
             self.model = old_model
             self.provider = old_provider
 
-            # Parse JSON aus Response via robustes Brace-Counting
             plan = extract_json_robust(response)
             if plan and plan.get('steps'):
                 log.info(f"Visual-Plan erstellt: {plan.get('goal', 'N/A')} ({len(plan.get('steps', []))} Schritte)")
@@ -213,7 +383,6 @@ Antworte NUR mit dem JSON, keine Markdown, keine Erklärungen."""
 
     def _create_fallback_plan(self, task: str) -> dict:
         """Fallback-Plan wenn die AI-Planung fehlschlaegt."""
-        # Extrahiere URL aus Task
         url_match = re.search(r'https?://[^\s]+', task)
         domain_match = re.search(r'([a-zA-Z0-9.-]+\.(de|com|org|net|io))', task)
 
@@ -221,7 +390,6 @@ Antworte NUR mit dem JSON, keine Markdown, keine Erklärungen."""
             f"https://{domain_match.group(1)}" if domain_match else "https://www.google.com"
         )
 
-        # Suchbegriffe aus Task extrahieren
         search_terms = self._extract_search_terms(task)
 
         steps = [
@@ -245,7 +413,6 @@ Antworte NUR mit dem JSON, keine Markdown, keine Erklärungen."""
             },
         ]
 
-        # Wenn Suchbegriffe vorhanden, Suche als Steps einfuegen
         if search_terms:
             steps.append({
                 "step_number": 3,
@@ -266,7 +433,6 @@ Antworte NUR mit dem JSON, keine Markdown, keine Erklärungen."""
                 "fallback": "Enter druecken"
             })
 
-        # Verify-Step am Ende
         verify_step_number = len(steps) + 1
         steps.append({
             "step_number": verify_step_number,
