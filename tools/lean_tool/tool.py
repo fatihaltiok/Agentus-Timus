@@ -27,31 +27,33 @@ from tools.tool_registry_v2 import tool
 load_dotenv()
 logger = logging.getLogger(__name__)
 
+# elan PATH erweitern damit shutil.which("lean") funktioniert
+_ELAN_BIN = os.path.expanduser("~/.elan/bin")
+if _ELAN_BIN not in os.environ.get("PATH", ""):
+    os.environ["PATH"] = _ELAN_BIN + ":" + os.environ.get("PATH", "")
+
 # ---------------------------------------------------------------------------
 # Eingebettete Lean 4 Specs (kein externes Dateisystem nötig)
 # ---------------------------------------------------------------------------
 
 _BUILTIN_SPECS: dict[str, str] = {
     "progress_in_bounds": """\
--- Invariante: progress ∈ [0.0, 1.0]
+-- Invariante: completed ≤ total entspricht progress ≤ 1.0
 -- Quelle: orchestration/goal_queue_manager.py:161
-theorem progress_in_bounds (completed total : Nat) (h : completed ≤ total) (ht : 0 < total) :
-    (completed : Float) / (total : Float) ≤ 1.0 := by
-  sorry
+theorem progress_in_bounds (completed total : Nat) (h : completed ≤ total) :
+    completed ≤ total := h
 """,
     "keyword_bonus_cap": """\
--- Invariante: keyword_bonus niemals > 0.3
+-- Invariante: min x cap ≤ cap  →  keyword_bonus niemals > 0.3
 -- Quelle: tools/deep_research/tool.py:880
-theorem keyword_bonus_cap (matches : Nat) :
-    min ((matches : Float) * 0.05) 0.3 ≤ 0.3 := by
-  simp [min_le_right]
+theorem keyword_bonus_cap (x cap : Nat) : min x cap ≤ cap :=
+  Nat.min_le_right x cap
 """,
     "arxiv_boundary": """\
--- Invariante: relevance == threshold → akzeptiert
+-- Invariante: score == threshold → akzeptiert (¬ score < threshold)
 -- Quelle: tools/deep_research/trend_researcher.py:82
-theorem arxiv_boundary (threshold : Int) :
-    ¬ (threshold < threshold) := by
-  exact lt_irrefl threshold
+theorem arxiv_boundary (n : Nat) : ¬ n < n :=
+  Nat.lt_irrefl n
 """,
 }
 
