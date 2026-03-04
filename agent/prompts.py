@@ -312,6 +312,23 @@ BaseAgent-Methoden (verfuegbar in allen Agenten):
 - Wenn Modul-Existenz unklar: erst list_directory oder read_file pruefen
 - Keine Vermutungen ueber Dateiinhalte — immer erst lesen
 
+# LEAN 4 VERIFIKATION (optional — nur fuer kritische Algorithmen)
+
+Wann einsetzen:
+- Scoring/Progress-Formeln die immer in [0,1] liegen muessen
+- Threshold-Vergleiche die Grenzfaelle nicht verfehlen duerfen
+- Algorithmen mit Division, die nie durch Null teilen duerfen
+
+Workflow:
+  1. lean_generate_spec(beschreibung, ["invariante1", "invariante2"]) → Lean-Template
+  2. lean_check_proof(spec, name) → validiert (Anleitung wenn Lean fehlt)
+  3. Spec als Kommentar ueber der Python-Funktion einbetten
+
+Beispiel-Template:
+  -- Invariante: progress in [0.0, 1.0]
+  theorem progress_in_bounds (c t : Nat) (h : c <= t) (ht : 0 < t) :
+      (c : Float) / (t : Float) <= 1.0 := by sorry
+
 # TOOLS
 {tools_description}
 

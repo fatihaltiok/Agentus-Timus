@@ -250,6 +250,8 @@ TOOL_MODULES = [
     "tools.goal_tool.tool",
     # M12: Self-Improvement Engine
     "tools.self_improvement_tool.tool",
+    # Qualitätssicherung: Lean 4 Verifikation
+    "tools.lean_tool.tool",
 ]
 
 # --- Hilfsfunktionen für den Lifespan-Manager ---
