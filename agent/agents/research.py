@@ -1,17 +1,54 @@
-"""DeepResearchAgent - Tiefenrecherche."""
+"""
+DeepResearchAgent — Tiefenrecherche, Faktenprüfung, strukturierte Reports.
 
+Erweiterungen gegenüber BaseAgent:
+  - Kontext: Aktive Ziele (Recherche fokussieren), Blackboard (Duplikat vermeiden),
+    letzte CuriosityEngine-Topics
+  - max_iterations=8 bleibt (Research-Tools übernehmen die Schwerarbeit)
+  - _call_tool-Override: session_id automatisch weiterreichen (unverändert)
+  - Kompakter Kontext — Research produziert selbst viele Tokens
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+from datetime import datetime
 from typing import Optional
+
 import httpx
 
 from agent.base_agent import BaseAgent
 from agent.prompts import DEEP_RESEARCH_PROMPT_TEMPLATE
 
+log = logging.getLogger("DeepResearchAgent")
+
 
 class DeepResearchAgent(BaseAgent):
-    def __init__(self, tools_description_string: str):
-        super().__init__(DEEP_RESEARCH_PROMPT_TEMPLATE, tools_description_string, 8, "deep_research")
+    """
+    Tiefenrecherche-Agent von Timus (deepseek-reasoner).
+
+    Führt strukturierte Recherchen mit start_deep_research,
+    verify_fact und generate_research_report durch.
+    Lädt vor jedem Task aktive Ziele und Blackboard-Wissen
+    um Duplikate zu vermeiden und den Fokus zu schärfen.
+    """
+
+    def __init__(self, tools_description_string: str) -> None:
+        super().__init__(
+            DEEP_RESEARCH_PROMPT_TEMPLATE,
+            tools_description_string,
+            max_iterations=8,
+            agent_type="deep_research",
+        )
         self.http_client = httpx.AsyncClient(timeout=600.0)
         self.current_session_id: Optional[str] = None
+
+    # ------------------------------------------------------------------
+    # _call_tool-Override: session_id automatisch weiterreichen
+    # (Original-Logik unverändert)
+    # ------------------------------------------------------------------
 
     async def _call_tool(self, method: str, params: dict) -> dict:
         result = await super()._call_tool(method, params)
@@ -20,3 +57,114 @@ class DeepResearchAgent(BaseAgent):
         if method == "generate_research_report" and self.current_session_id:
             params.setdefault("session_id", self.current_session_id)
         return result
+
+    # ------------------------------------------------------------------
+    # Erweiterter run()-Einstieg: Recherche-Kontext injizieren
+    # ------------------------------------------------------------------
+
+    async def run(self, task: str) -> str:
+        """Reichert den Task mit Zielen und Blackboard-Vorwissen an."""
+        context = await self._build_research_context(task)
+        if context:
+            enriched_task = task + "\n\n" + context
+        else:
+            enriched_task = task
+        return await super().run(enriched_task)
+
+    # ------------------------------------------------------------------
+    # Recherche-Kontext aufbauen (kompakt — Research produziert viele Tokens)
+    # ------------------------------------------------------------------
+
+    async def _build_research_context(self, task: str) -> str:
+        """
+        Erstellt kompakten Kontext für den Research-Agent:
+        - Aktive Ziele (Recherche auf relevante Themen fokussieren)
+        - Blackboard-Einträge (bereits bekanntes Wissen, Duplikat-Schutz)
+        - Letzte CuriosityEngine-Topics (Verbindung zu laufenden Interessen)
+        - Aktuelle Zeit
+        """
+        lines: list[str] = ["# RECHERCHE-KONTEXT (automatisch geladen)"]
+        has_content = False
+
+        # 1. Aktive Ziele — Research soll ziel-relevant sein
+        goals = await asyncio.to_thread(self._get_active_goals)
+        if goals:
+            lines.append(f"Aktive Timus-Ziele (Recherche darauf ausrichten): {goals}")
+            has_content = True
+
+        # 2. Blackboard — bereits bekannte Infos zum Thema
+        bb = await asyncio.to_thread(self._get_blackboard_for_task, task)
+        if bb:
+            lines.append(f"Bereits bekannt (Blackboard, Duplikat vermeiden): {bb}")
+            has_content = True
+
+        # 3. Letzte Curiosity-Topics
+        curiosity = await asyncio.to_thread(self._get_recent_curiosity_topics)
+        if curiosity:
+            lines.append(f"Aktuelle Interessensgebiete: {curiosity}")
+            has_content = True
+
+        lines.append(f"Aktuelle Zeit: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+        # Kontext nur zurückgeben wenn er echten Inhalt hat
+        return "\n".join(lines) if has_content else ""
+
+    def _get_active_goals(self) -> str:
+        """Lädt aktive Ziele aus dem GoalQueueManager (M11)."""
+        if not os.getenv("AUTONOMY_GOAL_QUEUE_ENABLED", "true").lower() == "true":
+            return ""
+        try:
+            from orchestration.goal_queue_manager import GoalQueueManager
+
+            tree = GoalQueueManager().get_goal_tree()
+            active = [
+                g["title"] for g in tree
+                if g.get("status") in ("active", "in_progress", "pending")
+            ][:3]
+            return " | ".join(active) if active else ""
+        except Exception as exc:
+            log.debug("GoalQueueManager nicht abrufbar: %s", exc)
+            return ""
+
+    def _get_blackboard_for_task(self, task: str) -> str:
+        """Sucht relevante Blackboard-Einträge zum aktuellen Task."""
+        if not os.getenv("AUTONOMY_BLACKBOARD_ENABLED", "true").lower() == "true":
+            return ""
+        try:
+            from memory.agent_blackboard import get_blackboard
+
+            # Erste 60 Zeichen des Tasks als Suchquery
+            query = task[:60].strip()
+            entries = get_blackboard().search(query, limit=2)
+            if not entries:
+                return ""
+            parts = []
+            for e in entries:
+                agent = e.get("agent", "?")
+                key   = e.get("key", "")
+                value = str(e.get("value", ""))[:80]
+                parts.append(f"[{agent}:{key}] {value}")
+            return " | ".join(parts)
+        except Exception as exc:
+            log.debug("Blackboard nicht abrufbar: %s", exc)
+            return ""
+
+    def _get_recent_curiosity_topics(self) -> str:
+        """Gibt die letzten Curiosity-Topics aus der DB zurück."""
+        try:
+            import sqlite3
+            from pathlib import Path
+
+            db_path = Path(__file__).resolve().parents[2] / "data" / "timus_memory.db"
+            if not db_path.exists():
+                return ""
+            conn = sqlite3.connect(str(db_path))
+            cur = conn.execute(
+                "SELECT query FROM curiosity_sent ORDER BY sent_at DESC LIMIT 3"
+            )
+            topics = [row[0] for row in cur.fetchall() if row[0]]
+            conn.close()
+            return " | ".join(t[:40] for t in topics) if topics else ""
+        except Exception as exc:
+            log.debug("Curiosity-Topics nicht abrufbar: %s", exc)
+            return ""
