@@ -9,14 +9,17 @@ Verbesserter Developer Agent (D.A.V.E. v2) mit:
 - Fehler-Recovery Strategien
 - Dynamischer System-Prompt
 """
+import asyncio
 import logging
 import os
 import json
+import subprocess
 import textwrap
 import requests
 import sys
 import re
 import ast
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
 
@@ -781,31 +784,124 @@ class DeveloperAgentV2:
     Async-kompatible Wrapper-Klasse für developer_agent_v2.
 
     Ermöglicht Integration mit main_dispatcher.py, der async agents erwartet.
+    Reichert jeden Task automatisch mit Git-Status, Commits und offenen Dev-Tasks an.
     """
+
     def __init__(self, tools_description_string: str, dest_folder: str = ".", max_steps: int = 12):
         self.tools_description = tools_description_string
         self.dest_folder = dest_folder
         self.max_steps = max_steps
 
+    # ------------------------------------------------------------------
+    # Erweiterter run()-Einstieg: Entwicklungs-Kontext injizieren
+    # ------------------------------------------------------------------
+
     async def run(self, query: str) -> str:
-        """
-        Führt den Developer-Agenten aus (async wrapper).
-
-        Args:
-            query: Entwicklungsaufgabe
-
-        Returns:
-            Finale Antwort des Agenten
-        """
-        import asyncio
-        # Führe sync Funktion in thread pool aus
-        result = await asyncio.to_thread(
+        """Reichert den Task mit Git-Kontext an, dann ab in den Sync-Loop."""
+        context = await self._build_dev_context()
+        enriched_query = query + "\n\n" + context if context else query
+        return await asyncio.to_thread(
             run_developer_task,
-            query,
+            enriched_query,
             dest_folder=self.dest_folder,
-            max_steps=self.max_steps
+            max_steps=self.max_steps,
         )
-        return result
+
+    # ------------------------------------------------------------------
+    # Entwicklungs-Kontext aufbauen
+    # ------------------------------------------------------------------
+
+    async def _build_dev_context(self) -> str:
+        """
+        Git-Branch, geänderte Dateien, letzte Commits,
+        Projektpfade und offene Dev-Tasks.
+        """
+        lines: list[str] = ["# ENTWICKLUNGS-KONTEXT (automatisch geladen)"]
+        has_content = False
+
+        git_status = await asyncio.to_thread(self._get_git_status)
+        if git_status:
+            lines.append(git_status)
+            has_content = True
+
+        recent_commits = await asyncio.to_thread(self._get_recent_commits)
+        if recent_commits:
+            lines.append(f"Letzte Commits: {recent_commits}")
+            has_content = True
+
+        lines.append(
+            f"Projektpfad: {PROJECT_ROOT} | "
+            "Agenten: agent/agents/ | Tools: tools/ | "
+            "Orchestration: orchestration/ | Memory: memory/ | "
+            "Server: server/ | Tests: tests/"
+        )
+
+        pending = await asyncio.to_thread(self._get_pending_dev_tasks)
+        if pending:
+            lines.append(f"Offene Dev-Tasks: {pending}")
+            has_content = True
+
+        lines.append(f"Aktuelle Zeit: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+        return "\n".join(lines) if has_content else ""
+
+    def _get_git_status(self) -> str:
+        """Git-Branch + geänderte .py-Dateien (keine __pycache__)."""
+        try:
+            branch = subprocess.run(
+                ["git", "branch", "--show-current"],
+                capture_output=True, text=True, timeout=5, cwd=PROJECT_ROOT,
+            ).stdout.strip()
+
+            diff_out = subprocess.run(
+                ["git", "diff", "--name-only", "HEAD"],
+                capture_output=True, text=True, timeout=5, cwd=PROJECT_ROOT,
+            ).stdout.strip()
+
+            changed = [
+                f for f in diff_out.splitlines()
+                if f.endswith(".py") and "__pycache__" not in f
+            ] if diff_out else []
+
+            if changed:
+                preview = ", ".join(changed[:4])
+                suffix = f" (+{len(changed) - 4} weitere)" if len(changed) > 4 else ""
+                return f"Git-Branch: {branch} | Geändert: {preview}{suffix}"
+            return f"Git-Branch: {branch} | Keine ungestagten Änderungen"
+        except Exception as exc:
+            logger.debug("Git-Status nicht abrufbar: %s", exc)
+            return ""
+
+    def _get_recent_commits(self, n: int = 3) -> str:
+        """Letzte n Commit-Hashes + Messages."""
+        try:
+            result = subprocess.run(
+                ["git", "log", f"--{n}", "--oneline", "--no-decorate"],
+                capture_output=True, text=True, timeout=5, cwd=PROJECT_ROOT,
+            )
+            lines = result.stdout.strip().splitlines()
+            return " | ".join(lines[:n]) if lines else ""
+        except Exception as exc:
+            logger.debug("Git-Log nicht abrufbar: %s", exc)
+            return ""
+
+    def _get_pending_dev_tasks(self) -> str:
+        """Offene Tasks mit Code/Entwicklungs-Bezug aus der TaskQueue."""
+        try:
+            from orchestration.task_queue import TaskQueue
+
+            keywords = {"code", "skript", "tool", "agent", "implement", "fix",
+                        "bug", "feature", "python", "datei", "funktion", "klasse",
+                        "developer", "entwickl", "refactor"}
+            relevant = []
+            for t in TaskQueue().get_pending():
+                desc = (t.get("description") or t.get("title") or "").lower()
+                if any(kw in desc for kw in keywords):
+                    relevant.append((t.get("description") or t.get("title") or "Task")[:50])
+            return " | ".join(relevant[:3]) if relevant else ""
+        except Exception as exc:
+            logger.debug("TaskQueue nicht abrufbar: %s", exc)
+            return ""
 
 
 # -----------------------------------------------------------------------------
