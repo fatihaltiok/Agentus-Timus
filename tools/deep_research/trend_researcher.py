@@ -37,7 +37,8 @@ _OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
 _ANALYSIS_MODEL = os.getenv("TREND_ANALYSIS_MODEL", "qwen/qwen3-235b-a22b")
 
 # Mindest-Relevanzscore für ArXiv-Paper (0–10); Paper darunter werden verworfen
-MIN_ARXIV_RELEVANCE = int(os.getenv("ARXIV_MIN_RELEVANCE", "6"))
+# ENV: ARXIV_RELEVANCE_THRESHOLD — für strengere Filterung: 7 oder 8; für mehr Ergebnisse: 5
+_RELEVANCE_THRESHOLD = int(os.getenv("ARXIV_RELEVANCE_THRESHOLD", "6"))
 
 _GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 _HF_TOKEN = os.getenv("HF_TOKEN", "")
@@ -69,41 +70,42 @@ class ArXivResearcher:
             return 0
 
         analyzed = 0
-        for paper in papers:  # Alle gefetchten Paper prüfen (mehr als max_papers, s. _fetch_papers)
+        skipped = 0
+        for paper in papers:
             if analyzed >= max_papers:
                 break
             try:
                 analysis = await self._analyze_abstract(
                     paper["title"], paper["abstract"], query
                 )
-                relevance = int(analysis.get("relevance", 0))
-                if relevance < MIN_ARXIV_RELEVANCE:
+                relevance = analysis.get("relevance", 5)
+                if relevance < _RELEVANCE_THRESHOLD:
+                    skipped += 1
                     logger.info(
                         f"📄 ArXiv: '{paper['title'][:50]}' verworfen "
-                        f"(Relevanz: {relevance}/10 < {MIN_ARXIV_RELEVANCE})"
+                        f"(Relevanz {relevance}/10 < {_RELEVANCE_THRESHOLD})"
                     )
                     continue
                 self._add_to_session(session, paper, analysis)
                 analyzed += 1
                 logger.info(
-                    f"📄 ArXiv: '{paper['title'][:60]}' hinzugefügt "
+                    f"📄 ArXiv: '{paper['title'][:60]}' akzeptiert "
                     f"(Relevanz: {relevance}/10)"
                 )
             except Exception as e:
                 logger.warning(f"ArXiv-Paper übersprungen: {e}")
 
-        if analyzed == 0:
-            logger.info(
-                f"📄 ArXiv: Alle Paper verworfen (Relevanz < {MIN_ARXIV_RELEVANCE}/10)"
-            )
+        if skipped > 0:
+            logger.info(f"📄 ArXiv: {skipped} irrelevante Paper gefiltert")
+
         return analyzed
 
     async def _fetch_papers(self, query: str, max_results: int) -> List[dict]:
-        """Ruft Paper via Atom-XML-API ab und parst die Einträge."""
+        """Ruft Paper via Atom-XML-API ab — sortiert nach Relevanz, nicht Datum."""
         params = {
-            "search_query": f"all:{query}",
-            "max_results": max_results,
-            "sortBy": "submittedDate",
+            "search_query": f"ti:{query} OR abs:{query}",  # enger Suchbereich: nur Titel + Abstract
+            "max_results": max(max_results + 5, 10),        # mehr Kandidaten für den Relevanzfilter
+            "sortBy": "relevance",                           # relevanteste Paper zuerst
             "sortOrder": "descending",
         }
         try:
@@ -169,7 +171,7 @@ class ArXivResearcher:
             sentences = abstract.split(". ")
             key_finding = sentences[0][:300] if sentences else abstract[:300]
             # Ohne LLM keine Relevanzprüfung möglich → Threshold-Wert setzen damit Paper nicht blockiert werden
-            return {"key_finding": key_finding, "relevance": MIN_ARXIV_RELEVANCE, "abstract_summary": abstract[:300]}
+            return {"key_finding": key_finding, "relevance": _RELEVANCE_THRESHOLD, "abstract_summary": abstract[:300]}
 
         prompt = (
             f"Thema: {query}\n\n"
