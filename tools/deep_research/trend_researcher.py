@@ -37,8 +37,9 @@ _OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
 _ANALYSIS_MODEL = os.getenv("TREND_ANALYSIS_MODEL", "qwen/qwen3-235b-a22b")
 
 # Mindest-Relevanzscore für ArXiv-Paper (0–10); Paper darunter werden verworfen
-# ENV: ARXIV_RELEVANCE_THRESHOLD — für strengere Filterung: 7 oder 8; für mehr Ergebnisse: 5
-_RELEVANCE_THRESHOLD = int(os.getenv("ARXIV_RELEVANCE_THRESHOLD", "6"))
+# v7.0: Default 6 → 5 (mehr ArXiv-Paper landen im Report)
+# ENV: ARXIV_RELEVANCE_THRESHOLD — für strengere Filterung: 7 oder 8
+_RELEVANCE_THRESHOLD = int(os.getenv("ARXIV_RELEVANCE_THRESHOLD", "5"))
 
 _GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 _HF_TOKEN = os.getenv("HF_TOKEN", "")
@@ -59,16 +60,33 @@ class ArXivResearcher:
 
     async def research(self, query: str, session: "DeepResearchSession", max_papers: int = 3) -> int:
         """
-        Sucht Paper und fügt Kernaussagen als unverified_claims in die Session ein.
+        Sucht Paper und fügt Kernaussagen als unverified_claims in die Session ein (v7.0).
+
+        NEU: Mehr Kandidaten (25 statt 15), topic-aware Fallback-Score, Datum-Sortierung.
 
         Returns:
             Anzahl erfolgreich analysierter Paper
         """
-        papers = await self._fetch_papers(query, max_results=max(max_papers + 2, 5))
+        # v7.0: Max-Kandidaten erhöht von 15 → 25
+        papers = await self._fetch_papers(query, max_results=max(max_papers + 2, 25))
         if not papers:
             logger.info("📄 ArXiv: Keine Paper gefunden")
             return 0
 
+        # v7.0: Sekundäre Sortierung nach Datum (aktuellste bevorzugen)
+        papers.sort(key=lambda p: p.get("published", ""), reverse=True)
+
+        # Diagnostics
+        try:
+            from tools.deep_research.diagnostics import get_current
+            diag = get_current()
+            if diag is not None:
+                diag.arxiv_fetched = len(papers)
+                diag.arxiv_threshold = _RELEVANCE_THRESHOLD
+        except Exception:
+            pass
+
+        query_words = set(query.lower().split())
         analyzed = 0
         skipped = 0
         for paper in papers:
@@ -79,6 +97,18 @@ class ArXivResearcher:
                     paper["title"], paper["abstract"], query
                 )
                 relevance = analysis.get("relevance", 5)
+
+                # v7.0: Topic-aware Fallback-Score statt fixem Score=5
+                if relevance == 5:
+                    title_words = set(paper["title"].lower().split())
+                    overlap = len(query_words & title_words)
+                    relevance = min(10, 5 + overlap)
+                    analysis["relevance"] = relevance
+                    logger.debug(
+                        f"📄 ArXiv Fallback-Score: '{paper['title'][:40]}' "
+                        f"overlap={overlap} → relevance={relevance}"
+                    )
+
                 if relevance < _RELEVANCE_THRESHOLD:
                     skipped += 1
                     logger.info(
@@ -98,13 +128,22 @@ class ArXivResearcher:
         if skipped > 0:
             logger.info(f"📄 ArXiv: {skipped} irrelevante Paper gefiltert")
 
+        # Diagnostics
+        try:
+            from tools.deep_research.diagnostics import get_current
+            diag = get_current()
+            if diag is not None:
+                diag.arxiv_accepted = analyzed
+        except Exception:
+            pass
+
         return analyzed
 
     async def _fetch_papers(self, query: str, max_results: int) -> List[dict]:
-        """Ruft Paper via Atom-XML-API ab — sortiert nach Relevanz, nicht Datum."""
+        """Ruft Paper via Atom-XML-API ab — sortiert nach Relevanz, nicht Datum (v7.0)."""
         params = {
             "search_query": f"ti:{query} OR abs:{query}",  # enger Suchbereich: nur Titel + Abstract
-            "max_results": max(max_results + 5, 10),        # mehr Kandidaten für den Relevanzfilter
+            "max_results": max(max_results + 5, 25),        # v7.0: mind. 25 Kandidaten
             "sortBy": "relevance",                           # relevanteste Paper zuerst
             "sortOrder": "descending",
         }

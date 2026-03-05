@@ -63,6 +63,38 @@ MIN_SOURCES_FOR_THESIS = 3  # Mindestquellen für These-Bildung
 BIAS_KEYWORDS_POLITICAL = ["liberal", "conservative", "democrat", "republican", "left-wing", "right-wing"]
 BIAS_KEYWORDS_COMMERCIAL = ["sponsored", "advertisement", "affiliate", "paid promotion", "partner"]
 
+# v7.0: Language → Location Mapping (DataForSEO Location Codes)
+_LANG_LOCATION_MAP: Dict[str, int] = {
+    "en": 2840,   # United States
+    "de": 2276,   # Germany
+    "fr": 2250,   # France
+    "es": 2724,   # Spain
+    "it": 2380,   # Italy
+}
+_LANG_CODE_MAP: Dict[str, str] = {
+    "en": "en",
+    "de": "de",
+    "fr": "fr",
+    "es": "es",
+    "it": "it",
+}
+
+# v7.0: Tech-Keywords für Domain-aware Embedding-Threshold
+TECH_KEYWORDS = {
+    "ai", "llm", "neural", "model", "agent", "transformer", "machine learning",
+    "deep learning", "reinforcement", "diffusion", "multimodal", "rag", "vector",
+    "embedding", "fine-tuning", "inference", "benchmark", "architecture",
+    "attention", "gpt", "bert", "claude", "gemini", "llama", "mistral",
+    "autonomous", "self-supervised", "generative", "nlp", "computer vision",
+}
+
+# v7.0: Domain-aware Embedding-Thresholds
+EMBEDDING_THRESHOLDS: Dict[str, float] = {
+    "tech": float(os.getenv("DR_EMBEDDING_THRESHOLD_TECH", "0.72")),
+    "science": 0.75,
+    "default": 0.82,
+}
+
 # Modellwahl
 SMART_MODEL = os.getenv("SMART_MODEL", "gpt-4o")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
@@ -449,15 +481,33 @@ async def _verify_fact_with_corroborator(fact_text: str, context: str) -> Dict[s
         return {"status": "error", "confidence": 0.0}
 
 
+def _resolve_verification_mode(requested_mode: str, query: str) -> str:
+    """
+    v7.0: Auto-Mode Resolution.
+
+    Bei strict + Tech-Domain → moderate (damit KI-Fakten mit source_count=1 nicht verschwinden).
+    Gesteuert via DR_VERIFICATION_MODE_AUTO=true (default).
+    """
+    auto_mode = os.getenv("DR_VERIFICATION_MODE_AUTO", "true").lower() == "true"
+    if not auto_mode:
+        return requested_mode
+    if requested_mode == "strict" and _detect_domain(query) == "tech":
+        logger.info("🔧 Auto-Mode: strict → moderate für Tech-Domain")
+        return "moderate"
+    return requested_mode
+
+
 async def _deep_verify_facts(session: DeepResearchSession, verification_mode: str) -> Dict[str, Any]:
     """
-    Erweiterte Fakten-Verifikation mit Integration von fact_corroborator.
+    Erweiterte Fakten-Verifikation mit Integration von fact_corroborator (v7.0).
 
     WORKFLOW:
-    1. Gruppiere ähnliche Fakten (wie bisher)
-    2. Für wichtige Fakten: Zusätzliche Verifikation mit fact_corroborator
-    3. Vergleiche Ergebnisse und bilde Consensus
-    4. Identifiziere Konflikte
+    1. Auto-Mode Resolution (strict + Tech → moderate)
+    2. Gruppiere ähnliche Fakten (Domain-aware Threshold)
+    3. Basis-Verifizierung per source_count
+    4. Corroborator für ALLE Fakten mit source_count ≥ 1 (RC3-Fix: nicht nur verified)
+    5. Upgrade unverified → tentative wenn Corroborator Konsistenz bestätigt
+    6. Konflikte identifizieren
     """
     logger.info("🕵️ Starte erweiterte Fakten-Verifikation (mit fact_corroborator)...")
 
@@ -465,12 +515,37 @@ async def _deep_verify_facts(session: DeepResearchSession, verification_mode: st
     if not raw_facts:
         return {"verified_facts": [], "unverified_claims": [], "conflicts": []}
 
-    # 1. Gruppiere ähnliche Fakten
-    grouped = await _group_similar_facts(raw_facts)
+    # Diagnostics
+    try:
+        from tools.deep_research.diagnostics import get_current
+        diag = get_current()
+        if diag is not None:
+            diag.verification_mode_req = verification_mode
+            diag.n_facts_extracted = len(raw_facts)
+            diag.mark_phase("verification_start")
+    except Exception:
+        pass
+
+    # v7.0: Auto-Mode Resolution
+    effective_mode = _resolve_verification_mode(verification_mode, session.query)
+    logger.info(f"📋 Verifikations-Modus: {verification_mode} → effektiv: {effective_mode}")
+
+    # Diagnostics
+    try:
+        from tools.deep_research.diagnostics import get_current
+        diag = get_current()
+        if diag is not None:
+            diag.verification_mode_eff = effective_mode
+    except Exception:
+        pass
+
+    # 1. Gruppiere ähnliche Fakten (v7.0: Domain-aware Threshold)
+    grouped = await _group_similar_facts(raw_facts, query=session.query)
 
     verified: List[Dict] = []
     unverified: List[Dict] = []
     conflicts: List[Dict] = []
+    corroborator_call_count = 0
 
     # 2. Für jede Gruppe: Basis-Verifizierung
     for group_idx, group in enumerate(grouped):
@@ -481,12 +556,12 @@ async def _deep_verify_facts(session: DeepResearchSession, verification_mode: st
         sources = set(f.get("source_url") for f in group if f.get("source_url"))
         source_count = len(sources)
 
-        # Basis-Bewertung
+        # Basis-Bewertung nach effektivem Modus
         conf_numeric = 0.4
         status = "unverified"
         conf_text = "low"
 
-        if verification_mode == "strict":
+        if effective_mode == "strict":
             if source_count >= 3:
                 status = "verified"
                 conf_text = "high"
@@ -495,7 +570,7 @@ async def _deep_verify_facts(session: DeepResearchSession, verification_mode: st
                 status = "tentatively_verified"
                 conf_text = "medium"
                 conf_numeric = 0.65
-        else:  # moderate oder light
+        elif effective_mode == "moderate":
             if source_count >= 2:
                 status = "verified"
                 conf_text = "high"
@@ -504,36 +579,41 @@ async def _deep_verify_facts(session: DeepResearchSession, verification_mode: st
                 status = "tentatively_verified"
                 conf_text = "medium"
                 conf_numeric = 0.5
+        else:  # light
+            if source_count >= 1:
+                status = "verified"
+                conf_text = "medium"
+                conf_numeric = 0.6
 
         fact_text = main_fact.get("fact", "")
 
-        # 3. ERWEITERT: Für wichtige Fakten -> fact_corroborator
-        use_corroborator = False
-
-        # Kriterien für fact_corroborator Einsatz:
-        # - Fakten die bereits "verified" sind (extra Absicherung)
-        # - Oder Fakten mit hoher Relevanz (Statistiken, Daten)
-        if status == "verified" or any(indicator in fact_text.lower() for indicator in ["percent", "million", "billion", "study", "research"]):
-            use_corroborator = True
+        # 3. RC3-Fix: Corroborator für ALLE Fakten mit source_count ≥ 1
+        #    (nicht nur bereits "verified" — das war der Catch-22!)
+        use_corroborator = (
+            source_count >= 1 and
+            group_idx < 5 and  # Performance-Limit: erste 5 Fakten
+            any(indicator in fact_text.lower() for indicator in [
+                "percent", "million", "billion", "study", "research",
+                "%", "paper", "model", "published", "released"
+            ])
+        )
 
         corroborator_result = None
-        if use_corroborator and group_idx < 3:  # Limit auf erste 3 wichtige Fakten (Performance)
-            logger.info(f"🔬 Extra-Verifikation für Fakt #{group_idx+1}: {fact_text[:60]}...")
+        if use_corroborator:
+            logger.info(f"🔬 Corroborator für Fakt #{group_idx+1}: {fact_text[:60]}...")
             corroborator_result = await _verify_fact_with_corroborator(fact_text, session.query)
+            corroborator_call_count += 1
 
             if corroborator_result and corroborator_result.get("status") == "verified":
                 corroborator_conf = corroborator_result.get("confidence", 0.0)
 
                 # Consensus bilden
                 if corroborator_conf >= 0.7:
-                    # Beide Systeme stimmen überein -> Höhere Confidence
                     conf_numeric = min((conf_numeric + corroborator_conf) / 2 + 0.1, 1.0)
                     conf_text = "very_high" if conf_numeric > 0.9 else "high"
                     status = "verified_multiple_methods"
-
                     logger.info(f"✅ Consensus: {conf_numeric:.2f}")
                 elif abs(conf_numeric - corroborator_conf) > 0.3:
-                    # Widerspruch zwischen Methoden
                     conflicts.append({
                         "fact": fact_text,
                         "internal_confidence": conf_numeric,
@@ -541,6 +621,16 @@ async def _deep_verify_facts(session: DeepResearchSession, verification_mode: st
                         "note": "Conflicting confidence levels between verification methods"
                     })
                     logger.warning(f"⚠️ Konflikt erkannt für Fakt")
+
+            # v7.0: RC3-Fix Upgrade-Log — unverified → tentative wenn Corroborator konsistent
+            elif corroborator_result and status == "unverified":
+                corroborator_conf = corroborator_result.get("confidence", 0.0)
+                if corroborator_conf >= 0.5:
+                    old_status = status
+                    status = "tentatively_verified"
+                    conf_text = "medium"
+                    conf_numeric = max(conf_numeric, corroborator_conf * 0.8)
+                    logger.info(f"📈 Upgrade: {old_status} → tentatively_verified via Corroborator")
 
         # Ausgabe erstellen
         fact_output = {
@@ -571,7 +661,23 @@ async def _deep_verify_facts(session: DeepResearchSession, verification_mode: st
     session.unverified_claims = unverified
     session.conflicting_info = conflicts
 
-    logger.info(f"✅ Verifikation abgeschlossen: {len(verified)} verifiziert, {len(unverified)} unverifiziert, {len(conflicts)} Konflikte")
+    logger.info(
+        f"✅ Verifikation abgeschlossen: {len(verified)} verifiziert "
+        f"(Modus: {effective_mode}), {len(unverified)} unverifiziert, "
+        f"{len(conflicts)} Konflikte, {corroborator_call_count} Corroborator-Calls"
+    )
+
+    # Diagnostics
+    try:
+        from tools.deep_research.diagnostics import get_current
+        diag = get_current()
+        if diag is not None:
+            diag.n_verified = len([f for f in verified if f.get("status") in ["verified", "verified_multiple_methods"]])
+            diag.n_tentative = len([f for f in verified if f.get("status") == "tentatively_verified"])
+            diag.n_unverified = len(unverified)
+            diag.n_corroborator_calls = corroborator_call_count
+    except Exception:
+        pass
 
     return {
         "verified_facts": verified,
@@ -784,22 +890,87 @@ def get_adaptive_config(query: str, focus_areas: Optional[List[str]]) -> Dict[st
     }
 
 
+def _detect_language(query: str) -> str:
+    """
+    Einfache Spracherkennung via ASCII-Ratio.
+    >80% ASCII-Zeichen → englisch, sonst deutsch als Fallback.
+    """
+    if not query:
+        return "de"
+    ascii_chars = sum(1 for c in query if ord(c) < 128)
+    ratio = ascii_chars / len(query)
+    if ratio > 0.80:
+        return "en"
+    return "de"
+
+
+def _detect_domain(query: str) -> str:
+    """Erkennt ob die Anfrage Tech-Domain ist."""
+    q_lower = query.lower()
+    if any(kw in q_lower for kw in TECH_KEYWORDS):
+        return "tech"
+    return "default"
+
+
 async def _perform_initial_search(query: str, session: DeepResearchSession) -> List[Dict[str, Any]]:
-    """Führt initiale Websuche durch."""
+    """
+    Führt initiale Websuche durch (v7.0).
+
+    NEU: Language-Detection → US-Location für englische Queries.
+         5 Query-Varianten statt 3.
+         Diagnostics-Integration.
+    """
     logger.info(f"🔎 Initiale Suche: '{query}'")
 
+    # v7.0: Language-Detection
+    lang = _detect_language(query)
+    location_code = _LANG_LOCATION_MAP.get(lang, 2276)
+    language_code = _LANG_CODE_MAP.get(lang, "de")
+
+    logger.info(f"🌍 Sprache: {lang} → location_code={location_code}")
+
+    # Diagnostics aktualisieren
+    try:
+        from tools.deep_research.diagnostics import get_current
+        diag = get_current()
+        if diag is not None:
+            diag.language_detected = lang
+            diag.location_used = str(location_code)
+            diag.mark_phase("search_start")
+    except Exception:
+        pass
+
+    # v7.0: 5 Query-Varianten
     queries = [query]
     if session.focus_areas:
         queries.append(f"{query} {' '.join(session.focus_areas[:2])}")
-    queries.append(f"{query} Analyse Fakten")
+    if lang == "en":
+        queries.extend([
+            f"{query} research paper 2024 2025",
+            f"{query} architecture implementation",
+            f"{query} survey review",
+        ])
+    else:
+        queries.extend([
+            f"{query} Analyse Fakten",
+            f"{query} Forschung Studie",
+            f"{query} Übersicht Methoden",
+        ])
 
     all_results: List[Dict[str, Any]] = []
 
-    for q in queries[:3]:
+    for q in queries[:5]:
         try:
             result = await call_tool_internal(
                 "search_web",
-                {"query": q, "max_results": 8, "engine": "google", "vertical": "organic"},
+                {
+                    "query": q,
+                    "max_results": 8,
+                    "engine": "google",
+                    "vertical": "organic",
+                    "location_code": location_code,
+                    "language_code": language_code,
+                },
                 timeout=DEFAULT_TIMEOUT_SEARCH
             )
 
@@ -816,6 +987,14 @@ async def _perform_initial_search(query: str, session: DeepResearchSession) -> L
         except Exception as e:
             logger.error(f"Suchfehler: {e}")
             continue
+
+    try:
+        from tools.deep_research.diagnostics import get_current
+        diag = get_current()
+        if diag is not None:
+            diag.n_queries_issued = min(len(queries), 5)
+    except Exception:
+        pass
 
     # Deduplizierung
     unique_urls = set()
@@ -851,6 +1030,16 @@ async def _perform_initial_search(query: str, session: DeepResearchSession) -> L
     final_results.sort(key=lambda x: x.get("score", 0), reverse=True)
 
     logger.info(f"✅ {len(final_results)} Quellen gefunden")
+
+    # Diagnostics
+    try:
+        from tools.deep_research.diagnostics import get_current
+        diag = get_current()
+        if diag is not None:
+            diag.n_sources_found = len(final_results)
+    except Exception:
+        pass
+
     return final_results[:20]
 
 
@@ -885,7 +1074,18 @@ async def _evaluate_relevance(
             relevant.append((source, final_score))
 
     relevant.sort(key=lambda x: x[1], reverse=True)
-    return relevant[:max_sources_to_return]
+    result = relevant[:max_sources_to_return]
+
+    # Diagnostics
+    try:
+        from tools.deep_research.diagnostics import get_current
+        diag = get_current()
+        if diag is not None:
+            diag.n_sources_relevant = len(result)
+    except Exception:
+        pass
+
+    return result
 
 
 _HTTP_HEADERS = {
@@ -1000,7 +1200,7 @@ Gib die Fakten als JSON zurück:
 
 Regeln:
 - Nur verifizierbare Fakten
-- Maximal 5 Fakten pro Chunk
+- 8–15 Fakten pro Chunk (möglichst viele relevante Fakten extrahieren)
 - confidence: high = mit Zahlen/Quellen, medium = plausibel, low = unklar"""
 
         try:
@@ -1110,13 +1310,41 @@ async def _get_embeddings(texts: List[str]) -> List[List[float]]:
         return []
 
 
-async def _group_similar_facts(facts: List[Dict[str, Any]], threshold: float = 0.85) -> List[List[Dict[str, Any]]]:
-    """Gruppiert ähnliche Fakten."""
+async def _group_similar_facts(
+    facts: List[Dict[str, Any]],
+    threshold: float = 0.85,
+    query: str = "",
+) -> List[List[Dict[str, Any]]]:
+    """
+    Gruppiert ähnliche Fakten (v7.0).
+
+    NEU: Domain-aware Threshold — Tech-Queries nutzen 0.72 statt 0.85,
+         damit KI-Fakten die ähnlich aber nicht identisch sind gemergt werden.
+    """
     if len(facts) < 2:
         return [[f] for f in facts]
 
     if not HAS_NUMPY:
         return [[f] for f in facts]
+
+    # v7.0: Domain-aware Threshold
+    if query:
+        domain = _detect_domain(query)
+        effective_threshold = EMBEDDING_THRESHOLDS.get(domain, threshold)
+    else:
+        effective_threshold = threshold
+
+    logger.info(f"📐 Embedding-Threshold: {effective_threshold} (domain={_detect_domain(query) if query else 'unbekannt'})")
+
+    # Diagnostics
+    try:
+        from tools.deep_research.diagnostics import get_current
+        diag = get_current()
+        if diag is not None:
+            diag.embedding_threshold = effective_threshold
+            diag.domain_detected = _detect_domain(query) if query else "default"
+    except Exception:
+        pass
 
     texts = [f.get("fact", "") for f in facts]
     embeddings = await _get_embeddings(texts)
@@ -1137,12 +1365,21 @@ async def _group_similar_facts(facts: List[Dict[str, Any]], threshold: float = 0
         if i in processed:
             continue
 
-        sim_indices = np.where(sim_matrix[i] >= threshold)[0]
+        sim_indices = np.where(sim_matrix[i] >= effective_threshold)[0]
         group = [facts[idx] for idx in sim_indices if idx not in processed]
         processed.update(sim_indices.tolist())
 
         if group:
             groups.append(group)
+
+    # Diagnostics
+    try:
+        from tools.deep_research.diagnostics import get_current
+        diag = get_current()
+        if diag is not None:
+            diag.n_facts_grouped = len(groups)
+    except Exception:
+        pass
 
     return groups
 
@@ -1949,6 +2186,128 @@ Wichtig: Schreibe NUR den Berichtstext. Kein Meta-Kommentar über den Schreibpro
     capabilities=["research", "deep_research"],
     category=C.RESEARCH
 )
+async def _run_research_pipeline(
+    query: str,
+    session_id: str,
+    current_session: "DeepResearchSession",
+    verification_mode: str,
+    max_depth: Optional[int],
+    focus_areas: Optional[List[str]],
+) -> dict:
+    """
+    Interne Pipeline-Funktion — wird von start_deep_research aufgerufen
+    und ggf. mit light-Mode wiederholt (Fallback).
+    """
+    config = get_adaptive_config(query, current_session.focus_areas)
+
+    # PHASE 1: INITIALE SUCHE
+    logger.info("📡 Phase 1: Initiale Websuche...")
+    initial_sources = await _perform_initial_search(query, current_session)
+
+    if not initial_sources:
+        return {
+            "session_id": session_id,
+            "status": "no_results",
+            "message": "Keine Suchergebnisse gefunden."
+        }
+
+    # PHASE 2: RELEVANZ-BEWERTUNG
+    logger.info("⚖️ Phase 2: Relevanz-Bewertung...")
+    relevant_sources = await _evaluate_relevance(
+        initial_sources,
+        query,
+        current_session.focus_areas,
+        config["max_sources_to_deep_dive"]
+    )
+
+    if not relevant_sources:
+        return {
+            "session_id": session_id,
+            "status": "no_relevant_sources",
+            "message": "Keine relevanten Quellen gefunden."
+        }
+
+    # PHASE 3: DEEP DIVE MIT QUALITÄTSBEWERTUNG
+    logger.info(f"🏊 Phase 3: Deep Dive in {len(relevant_sources)} Quellen (mit Qualitätsbewertung)...")
+    await _deep_dive_sources(
+        relevant_sources,
+        current_session,
+        max_depth,
+        verification_mode,
+        config
+    )
+
+    current_session.methodology_notes.append(
+        f"Analysierte {len(current_session.research_tree)} Quellen mit Qualitätsbewertung"
+    )
+
+    # PHASE 4: ERWEITERTE FAKTEN-VERIFIKATION
+    logger.info("🔍 Phase 4: Erweiterte Fakten-Verifikation (mit fact_corroborator)...")
+    verified_data = await _deep_verify_facts(current_session, verification_mode)
+
+    current_session.methodology_notes.append(
+        f"Verifikation: {len(current_session.verified_facts)} von {len(current_session.all_extracted_facts_raw)} Fakten verifiziert"
+    )
+
+    # PHASE 5: THESE-ANTITHESE-SYNTHESE ANALYSE
+    logger.info("🎓 Phase 5: These-Antithese-Synthese Analyse...")
+    if len(current_session.verified_facts) >= MIN_SOURCES_FOR_THESIS:
+        thesis_analyses = await _analyze_thesis_antithesis_synthesis(current_session)
+        current_session.methodology_notes.append(
+            f"These-Antithese-Synthese: {len(thesis_analyses)} Analysen erstellt"
+        )
+    else:
+        logger.warning(f"Zu wenige Fakten für These-Analyse ({len(current_session.verified_facts)} < {MIN_SOURCES_FOR_THESIS})")
+        current_session.limitations.append(
+            f"Zu wenige verifizierte Fakten ({len(current_session.verified_facts)}) für vollständige These-Antithese-Synthese Analyse"
+        )
+
+    # PHASE 6: YOUTUBE-RECHERCHE (optional)
+    yt_count = 0
+    if os.getenv("DEEP_RESEARCH_YOUTUBE_ENABLED", "true").lower() == "true":
+        try:
+            from tools.deep_research.youtube_researcher import YouTubeResearcher
+            yt_count = await YouTubeResearcher().research_topic_on_youtube(
+                query=query, session=current_session, max_videos=3
+            )
+            logger.info(f"📺 YouTube: {yt_count} Videos analysiert")
+            if yt_count > 0:
+                current_session.methodology_notes.append(
+                    f"YouTube: {yt_count} Videos via DataForSEO analysiert"
+                )
+        except Exception as e:
+            logger.warning(f"YouTube-Recherche fehlgeschlagen (unkritisch): {e}")
+
+    # PHASE 7: TREND-RECHERCHE (ArXiv + GitHub + HuggingFace)
+    trend_count = 0
+    if os.getenv("DEEP_RESEARCH_TRENDS_ENABLED", "true").lower() == "true":
+        try:
+            from tools.deep_research.trend_researcher import TrendResearcher
+            trend_count = await TrendResearcher().research_trends(
+                query=query, session=current_session, max_per_source=3
+            )
+            logger.info(f"📊 Trends: {trend_count} Einträge analysiert")
+            if trend_count > 0:
+                current_session.methodology_notes.append(
+                    f"Trend-Recherche: {trend_count} Einträge aus ArXiv/GitHub/HuggingFace"
+                )
+        except Exception as e:
+            logger.warning(f"Trend-Recherche fehlgeschlagen (unkritisch): {e}")
+
+    # PHASE 8: FINALE SYNTHESE
+    logger.info("📝 Phase 8: Finale Synthese...")
+    analysis = await _synthesize_findings(current_session, verified_data)
+
+    return {
+        "_pipeline_ok": True,
+        "verified_data": verified_data,
+        "verified_count": len(current_session.verified_facts),
+        "yt_count": yt_count,
+        "trend_count": trend_count,
+        "analysis": analysis,
+    }
+
+
 async def start_deep_research(
     query: str,
     focus_areas: Optional[List[str]] = None,
@@ -1956,13 +2315,16 @@ async def start_deep_research(
     verification_mode: str = "strict"
 ) -> dict:
     """
-    Startet eine akademische Tiefenrecherche (v5.0).
+    Startet eine akademische Tiefenrecherche (v7.0).
 
-    NEU in v5.0:
-    - Quellenqualitätsbewertung
-    - These-Antithese-Synthese Analyse
-    - Erweiterte Fakten-Verifikation mit fact_corroborator
-    - Druckreife Reports
+    NEU in v7.0:
+    - Language-Detection → US-Location für englische Queries
+    - Domain-aware Embedding-Threshold (Tech: 0.72)
+    - Auto-Mode: strict + Tech → moderate
+    - Corroborator für alle Fakten mit source_count ≥ 1
+    - ArXiv Threshold 5 + topic-aware Fallback-Score
+    - Qualitäts-Gate (verified ≥ 3) + automatischer light-Fallback
+    - DrDiagnostics Integration
 
     Args:
         query: Die Hauptsuchanfrage
@@ -1977,116 +2339,94 @@ async def start_deep_research(
     current_session = DeepResearchSession(query, focus_areas)
     research_sessions[session_id] = current_session
 
+    # v7.0: Diagnostics initialisieren
+    try:
+        from tools.deep_research.diagnostics import reset as diag_reset
+        diag = diag_reset()
+        diag.query = query
+        diag.verification_mode_req = verification_mode
+    except Exception:
+        pass
+
     # Metadaten speichern
     current_session.research_metadata = {
         "verification_mode": verification_mode,
         "max_depth": max_depth,
-        "version": "5.0"
+        "version": "7.0"
     }
 
     try:
-        logger.info(f"🔬 Starte Deep Research v5.0 Session {session_id}: '{query}'")
-        config = get_adaptive_config(query, current_session.focus_areas)
+        logger.info(f"🔬 Starte Deep Research v7.0 Session {session_id}: '{query}'")
 
-        # PHASE 1: INITIALE SUCHE
-        logger.info("📡 Phase 1: Initiale Websuche...")
-        initial_sources = await _perform_initial_search(query, current_session)
-
-        if not initial_sources:
-            return {
-                "session_id": session_id,
-                "status": "no_results",
-                "message": "Keine Suchergebnisse gefunden."
-            }
-
-        # PHASE 2: RELEVANZ-BEWERTUNG
-        logger.info("⚖️ Phase 2: Relevanz-Bewertung...")
-        relevant_sources = await _evaluate_relevance(
-            initial_sources,
-            query,
-            current_session.focus_areas,
-            config["max_sources_to_deep_dive"]
+        # v7.0: Pipeline ausführen
+        pipe = await _run_research_pipeline(
+            query=query,
+            session_id=session_id,
+            current_session=current_session,
+            verification_mode=verification_mode,
+            max_depth=max_depth,
+            focus_areas=focus_areas,
         )
 
-        if not relevant_sources:
-            return {
-                "session_id": session_id,
-                "status": "no_relevant_sources",
-                "message": "Keine relevanten Quellen gefunden."
-            }
+        if not pipe.get("_pipeline_ok"):
+            return pipe  # no_results / no_relevant_sources
 
-        # PHASE 3: DEEP DIVE MIT QUALITÄTSBEWERTUNG
-        logger.info(f"🏊 Phase 3: Deep Dive in {len(relevant_sources)} Quellen (mit Qualitätsbewertung)...")
-        await _deep_dive_sources(
-            relevant_sources,
-            current_session,
-            max_depth,
-            verification_mode,
-            config
-        )
+        verified_data = pipe["verified_data"]
+        verified_count = pipe["verified_count"]
+        yt_count = pipe["yt_count"]
+        trend_count = pipe["trend_count"]
+        analysis = pipe["analysis"]
+        fallback_triggered = False
 
-        current_session.methodology_notes.append(
-            f"Analysierte {len(current_session.research_tree)} Quellen mit Qualitätsbewertung"
-        )
-
-        # PHASE 4: ERWEITERTE FAKTEN-VERIFIKATION
-        logger.info("🔍 Phase 4: Erweiterte Fakten-Verifikation (mit fact_corroborator)...")
-        verified_data = await _deep_verify_facts(current_session, verification_mode)
-
-        current_session.methodology_notes.append(
-            f"Verifikation: {len(current_session.verified_facts)} von {len(current_session.all_extracted_facts_raw)} Fakten verifiziert"
-        )
-
-        # PHASE 5: THESE-ANTITHESE-SYNTHESE ANALYSE
-        logger.info("🎓 Phase 5: These-Antithese-Synthese Analyse...")
-        if len(current_session.verified_facts) >= MIN_SOURCES_FOR_THESIS:
-            thesis_analyses = await _analyze_thesis_antithesis_synthesis(current_session)
+        # v7.0: Qualitäts-Gate + automatischer light-Fallback
+        quality_ok = verified_count >= 3
+        if not quality_ok and verification_mode != "light":
+            logger.warning(
+                f"⚠️ Qualitäts-Gate failed: {verified_count} verified < 3. "
+                f"Starte light-Mode Fallback..."
+            )
+            fallback_triggered = True
             current_session.methodology_notes.append(
-                f"These-Antithese-Synthese: {len(thesis_analyses)} Analysen erstellt"
+                f"Qualitäts-Gate failed ({verified_count} verified) → light-Mode Retry"
             )
-        else:
-            logger.warning(f"Zu wenige Fakten für These-Analyse ({len(current_session.verified_facts)} < {MIN_SOURCES_FOR_THESIS})")
-            current_session.limitations.append(
-                f"Zu wenige verifizierte Fakten ({len(current_session.verified_facts)}) für vollständige These-Antithese-Synthese Analyse"
+            try:
+                from tools.deep_research.diagnostics import get_current
+                diag = get_current()
+                if diag is not None:
+                    diag.fallback_triggered = True
+            except Exception:
+                pass
+
+            fallback_session = DeepResearchSession(query, focus_areas)
+            pipe2 = await _run_research_pipeline(
+                query=query,
+                session_id=session_id,
+                current_session=fallback_session,
+                verification_mode="light",
+                max_depth=max_depth,
+                focus_areas=focus_areas,
             )
+            if pipe2.get("_pipeline_ok") and pipe2["verified_count"] > verified_count:
+                current_session = fallback_session
+                research_sessions[session_id] = current_session
+                verified_data = pipe2["verified_data"]
+                verified_count = pipe2["verified_count"]
+                yt_count = pipe2["yt_count"]
+                trend_count = pipe2["trend_count"]
+                analysis = pipe2["analysis"]
+                quality_ok = verified_count >= 3
+                logger.info(f"✅ Fallback: {verified_count} verified nach light-Mode")
 
-        # PHASE 6: YOUTUBE-RECHERCHE (optional)
-        yt_count = 0
-        if os.getenv("DEEP_RESEARCH_YOUTUBE_ENABLED", "true").lower() == "true":
-            try:
-                from tools.deep_research.youtube_researcher import YouTubeResearcher
-                yt_count = await YouTubeResearcher().research_topic_on_youtube(
-                    query=query, session=current_session, max_videos=3
-                )
-                logger.info(f"📺 YouTube: {yt_count} Videos analysiert")
-                if yt_count > 0:
-                    current_session.methodology_notes.append(
-                        f"YouTube: {yt_count} Videos via DataForSEO analysiert"
-                    )
-            except Exception as e:
-                logger.warning(f"YouTube-Recherche fehlgeschlagen (unkritisch): {e}")
+        logger.info(f"✅ Session {session_id} abgeschlossen (verified={verified_count}, quality_gate={'OK' if quality_ok else 'WARN'})")
 
-        # PHASE 7: TREND-RECHERCHE (ArXiv + GitHub + HuggingFace)
-        trend_count = 0
-        if os.getenv("DEEP_RESEARCH_TRENDS_ENABLED", "true").lower() == "true":
-            try:
-                from tools.deep_research.trend_researcher import TrendResearcher
-                trend_count = await TrendResearcher().research_trends(
-                    query=query, session=current_session, max_per_source=3
-                )
-                logger.info(f"📊 Trends: {trend_count} Einträge analysiert")
-                if trend_count > 0:
-                    current_session.methodology_notes.append(
-                        f"Trend-Recherche: {trend_count} Einträge aus ArXiv/GitHub/HuggingFace"
-                    )
-            except Exception as e:
-                logger.warning(f"Trend-Recherche fehlgeschlagen (unkritisch): {e}")
-
-        # PHASE 8: FINALE SYNTHESE
-        logger.info("📝 Phase 8: Finale Synthese...")
-        analysis = await _synthesize_findings(current_session, verified_data)
-
-        logger.info(f"✅ Session {session_id} abgeschlossen")
+        # Diagnostics abschließen
+        try:
+            from tools.deep_research.diagnostics import get_current
+            diag = get_current()
+            if diag is not None:
+                diag.finish()
+        except Exception:
+            pass
 
         # PHASE 7: AUTOMATISCHER REPORT (NEU v5.0)
         filepath = None
@@ -2134,7 +2474,7 @@ async def start_deep_research(
         return {
             "session_id": session_id,
             "status": "completed",
-            "version": "6.0",
+            "version": "7.0",
             "facts_extracted": len(current_session.all_extracted_facts_raw),
             "verified_count": len(current_session.verified_facts),
             "unverified_count": len(current_session.unverified_claims),
@@ -2143,6 +2483,8 @@ async def start_deep_research(
             "thesis_analyses_count": len(current_session.thesis_analyses),
             "youtube_videos_analyzed": yt_count,
             "trend_sources_analyzed": trend_count,
+            "quality_gate_passed": quality_ok,
+            "fallback_triggered": fallback_triggered,
             "source_quality_summary": current_session.source_quality_summary,
             "bias_summary": current_session.bias_summary,
             "analysis": analysis,

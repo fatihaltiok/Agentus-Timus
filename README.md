@@ -4,7 +4,7 @@
   <img src="assets/branding/timus-logo-glow.png" alt="Timus Logo" width="760">
 </p>
 
-**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen). Seit **v2.9** sind die Autonomie-Schichten M1–M5 live: Zielgenerierung, Langzeitplanung, Self-Healing und Autonomie-Scorecard laufen aktiv im Produktivbetrieb. Seit **v3.0 (2026-02-28)** läuft im Canvas ein nativer Voice-Loop (Faster-Whisper STT + Inworld.AI TTS) über `/voice/*` Endpoints. Seit **v3.1 (2026-03-01)** sendet und empfängt Timus eigenständig E-Mails über Microsoft Graph OAuth2 — alle 13 Agenten sind vollständig per Delegation erreichbar. Seit **v3.2 (2026-03-02)** visualisiert der Canvas jede Agent-Delegation mit einem goldenen Lichtstrahl-Animation in Echtzeit — und beide Routing-Pfade (direkt + delegiert) nutzen einheitlich `DeveloperAgentV2`. Seit **v3.3 (2026-03-03)** überwacht Timus sich selbst mit LLMs: Jeder neue Incident wird sofort von `qwen3.5-plus` diagnostiziert (Schicht 2), alle 60 Minuten analysiert `deepseek-v3.2` Trends und strukturelle Schwächen im Autonomie-Zustand (Schicht 3). Außerdem können alle Agenten ab v3.3 eigenständig URLs öffnen — Hybrid-Fetch mit automatischem Playwright-Fallback für JavaScript-Seiten. Seit **v3.4 (2026-03-03)** erzeugt Deep Research v6.0 vollautomatisch drei Ausgabedateien: einen analytischen Markdown-Bericht, einen narrativen Lesebericht mit 2500–5000 Wörtern (gpt-5.2) und ein professionelles A4-PDF mit eingebetteten Abbildungen (WeasyPrint). Seit **v3.5 (2026-03-04)** durchsucht Deep Research parallel ArXiv, GitHub und HuggingFace nach aktuellen wissenschaftlichen Trends — und der Edison-Toggle im Canvas UI erlaubt es, PaperQA3 (Edison Scientific) per Klick ohne Server-Neustart zu aktivieren. Seit **v4.0 (2026-03-04)** denkt Timus mit: **M8–M12** bringen Session-Reflexion, ein geteiltes Agent-Blackboard, zeitgesteuerte Trigger, hierarchische Ziel-Verwaltung und eine Self-Improvement Engine — 14 neue MCP-Tools und 5 neue Canvas-Cards.
+**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen). Seit **v2.9** sind die Autonomie-Schichten M1–M5 live: Zielgenerierung, Langzeitplanung, Self-Healing und Autonomie-Scorecard laufen aktiv im Produktivbetrieb. Seit **v3.0 (2026-02-28)** läuft im Canvas ein nativer Voice-Loop (Faster-Whisper STT + Inworld.AI TTS) über `/voice/*` Endpoints. Seit **v3.1 (2026-03-01)** sendet und empfängt Timus eigenständig E-Mails über Microsoft Graph OAuth2 — alle 13 Agenten sind vollständig per Delegation erreichbar. Seit **v3.2 (2026-03-02)** visualisiert der Canvas jede Agent-Delegation mit einem goldenen Lichtstrahl-Animation in Echtzeit — und beide Routing-Pfade (direkt + delegiert) nutzen einheitlich `DeveloperAgentV2`. Seit **v3.3 (2026-03-03)** überwacht Timus sich selbst mit LLMs: Jeder neue Incident wird sofort von `qwen3.5-plus` diagnostiziert (Schicht 2), alle 60 Minuten analysiert `deepseek-v3.2` Trends und strukturelle Schwächen im Autonomie-Zustand (Schicht 3). Außerdem können alle Agenten ab v3.3 eigenständig URLs öffnen — Hybrid-Fetch mit automatischem Playwright-Fallback für JavaScript-Seiten. Seit **v3.4 (2026-03-03)** erzeugt Deep Research v6.0 vollautomatisch drei Ausgabedateien: einen analytischen Markdown-Bericht, einen narrativen Lesebericht mit 2500–5000 Wörtern (gpt-5.2) und ein professionelles A4-PDF mit eingebetteten Abbildungen (WeasyPrint). Seit **v3.5 (2026-03-04)** durchsucht Deep Research parallel ArXiv, GitHub und HuggingFace nach aktuellen wissenschaftlichen Trends — und der Edison-Toggle im Canvas UI erlaubt es, PaperQA3 (Edison Scientific) per Klick ohne Server-Neustart zu aktivieren. Seit **v4.0 (2026-03-04)** denkt Timus mit: **M8–M12** bringen Session-Reflexion, ein geteiltes Agent-Blackboard, zeitgesteuerte Trigger, hierarchische Ziel-Verwaltung und eine Self-Improvement Engine — 14 neue MCP-Tools und 5 neue Canvas-Cards. Seit **v3.6 (2026-03-05)** liefert **Deep Research v7.0** endlich echte Ergebnisse für englische KI-Themen: Language-Detection, US-Suchlocation, Domain-aware Embedding-Threshold (0.72 für Tech), automatischer moderate-Modus und ein Qualitäts-Gate mit light-Fallback beheben alle 5 strukturellen Root Causes systematisch.
 
 ---
 
@@ -29,9 +29,11 @@ Die folgende Architektur findet sich normalerweise bei Google SRE-Teams, Netflix
 | Spricht und hört | — | Faster-Whisper STT + Inworld.AI TTS |
 | Sendet und liest E-Mails | — | Microsoft Graph OAuth2 |
 | Sieht die physische Umgebung | — | Intel RealSense D435 Kamera |
-| Erstellt automatisch PDF-Forschungsberichte | — | Deep Research v6.0 — 3 Ausgaben: analytisch + narrativ + A4-PDF |
+| Erstellt automatisch PDF-Forschungsberichte | — | Deep Research v7.0 — 3 Ausgaben: analytisch + narrativ + A4-PDF |
 | Recherchiert akademische Trends in Echtzeit | — | ArXiv + GitHub + HuggingFace parallel (TrendResearcher) |
 | Schaltet Recherchequellen per UI-Toggle | — | Edison Scientific PaperQA3 — aktivierbar ohne Neustart |
+| Erkennt Sprache & wählt Suchregion automatisch | — | Deep Research v7.0 — US-Location für englische Queries |
+| Liefert verifizierte Fakten für Tech-Themen | — | Deep Research v7.0 — Domain-aware Threshold + moderate-Modus |
 | Reflektiert eigene Sessions automatisch | — | M8 Session-Reflexion (Muster-Akkumulation + Verbesserungsvorschläge) |
 | Teilt Wissen zwischen Agenten | — | M9 Agent-Blackboard (TTL-basierter Shared Memory, 3 MCP-Tools) |
 | Führt zeitgesteuerte Routinen aus | — | M10 Proactive Triggers (Morgen/Abend-Routinen, ±14-Min-Fenster) |
@@ -59,7 +61,7 @@ In der Forschung nennt man diese Architektur *Introspective Autonomous Systems*:
 | E-Mail senden / empfangen | — | — | Microsoft Graph OAuth2 |
 | Physische Kamera eingebunden | — | — | Intel RealSense D435 |
 | Spricht und hört (native) | — | — | Faster-Whisper STT + Inworld.AI TTS |
-| PDF-Forschungsberichte (vollautomatisch) | — | — | Deep Research v6.0 (WeasyPrint, 3 Ausgaben) |
+| PDF-Forschungsberichte (vollautomatisch) | — | — | Deep Research v7.0 (WeasyPrint, 3 Ausgaben) |
 | ArXiv / GitHub / HuggingFace Trend-Scan | — | — | TrendResearcher (parallel, jede Recherche) |
 | Akademische Tiefensuche (PaperQA3) | — | — | Edison Scientific (per UI-Toggle) |
 | Canvas UI mit Echtzeit-Visualisierung | — | — | Cytoscape + SSE, goldener Delegation-Strahl |
@@ -218,6 +220,57 @@ AUTONOMY_PROACTIVE_TRIGGERS_ENABLED=false # M10 — Zeitgesteuerte Trigger
 AUTONOMY_GOAL_QUEUE_ENABLED=true         # M11 — sofort aktiv (bestehende Tabellen)
 AUTONOMY_SELF_IMPROVEMENT_ENABLED=false  # M12 — Selbstoptimierung
 ```
+
+---
+
+### Phase 19 — Deep Research v7.0: Produktionstauglichkeit *(v3.6)*
+
+Deep Research lieferte bei englischen KI-Themen 0 verifizierte Fakten — nicht wegen eines einzelnen Bugs, sondern durch das Zusammenspiel von 5 strukturellen Problemen. v7.0 behebt alle fünf systematisch.
+
+**5 Root Causes & Fixes:**
+
+| # | Problem | Fix |
+|---|---------|-----|
+| RC1 | Verifikation zu streng: `source_count ≥ 3` nötig — KI-Fakten sind einzigartig pro Quelle | Domain-aware Modi: Tech-Queries → `moderate` (source_count ≥ 1 reicht) |
+| RC2 | Embedding-Threshold 0.85 zu hoch: ähnliche KI-Fakten wurden nicht gemergt | Domain-aware Threshold: Tech=0.72, Science=0.75, Default=0.82 |
+| RC3 | Corroborator Catch-22: nur bei `status="verified"` aufgerufen — aber nichts wurde verified | Corroborator jetzt für alle Fakten mit `source_count ≥ 1` + unverified→tentative Upgrade |
+| RC4 | DataForSEO bekam kein `location`-Parameter → lieferte DE-Ergebnisse für englische Queries | Language-Detection (ASCII-Ratio) → US-Location für englische Queries |
+| RC5 | ArXiv Fallback-Score=5 < Threshold=6 → alle ArXiv-Paper wurden gefiltert | Threshold 6→5 + topic-aware Fallback-Score (5 + Titel-Overlap) |
+
+**Neue Komponenten:**
+
+| Datei | Funktion |
+|-------|---------|
+| `tools/deep_research/diagnostics.py` | `DrDiagnostics` — Metriken jeder Phase (n_sources, n_facts, n_verified, ArXiv, Timing) |
+| `scripts/debug_deep_research.py` | CLI-Runner für vollständigen Diagnose-Output ohne Produktions-Eingriff |
+| `verify_deepresearch_v7.py` | 63 automatische Checks aller RC-Fixes, Lean-Specs, Konfiguration |
+
+**Pipeline-Architektur (Ist → Soll):**
+```
+Ist:  Query → [3 Web-Suchen (DE)] → Fakten (max 5) → Threshold=0.85
+           → strict-Verifikation → 0 verified → leerer Report
+
+Soll: Query → Language-Detect → [5 Web-Suchen (US/DE je Sprache)]
+           → Fakten (8–15) → Domain-Threshold (0.72 für Tech)
+           → moderate-Modus → Corroborator für alle Fakten
+           → ArXiv Threshold=5 + Fallback-Score → Qualitäts-Gate
+           → Report mit echtem Inhalt
+```
+
+**Qualitäts-Gate + Automatischer Fallback:**
+- Gate: `verified_count ≥ 3` → OK
+- Wenn Gate failed und Modus nicht bereits `light`: automatischer light-Mode Retry
+- Diagnostics-Report zeigt genau in welcher Phase Fakten verschwinden
+
+**Lean 4 Invarianten (CI-Specs):**
+```lean
+theorem dr_query_expansion        -- n_queries ≥ 1 nach Expansion
+theorem dr_embedding_threshold_lower/upper  -- Threshold ∈ [0,100]
+theorem dr_verify_moderate        -- source_count < 2 → nicht verified
+theorem dr_arxiv_score_lower/upper -- ArXiv-Score ∈ [0,10]
+```
+
+**Tests:** 6 neue Testdateien, 144 Tests, alle grün.
 
 ---
 

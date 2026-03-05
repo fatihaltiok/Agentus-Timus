@@ -37,3 +37,29 @@ theorem ambient_score_upper (v : Int) : max 0 (min 100 v) ≤ 100 := by omega
 -- Quelle: orchestration/ambient_context_engine.py:_process_signal
 theorem ambient_threshold_ci (score threshold : Int) (h : score < threshold) :
     ¬ threshold ≤ score := by omega
+
+-- 9. DR v7 M2: Query-Expansion — n_queries ≥ 1 nach Expansion (expanded ≥ 0)
+-- Quelle: tools/deep_research/tool.py:_perform_initial_search
+theorem dr_query_expansion (base expanded : Int) (h : 0 < base) (he : 0 ≤ expanded) :
+    0 < base + expanded := by omega
+
+-- 10. DR v7 M3: Embedding-Threshold (×100 als Int) immer ≥ 0
+-- Quelle: tools/deep_research/tool.py:_group_similar_facts
+theorem dr_embedding_threshold_lower (v : Int) : 0 ≤ max 0 (min 100 v) := by omega
+
+-- 11. DR v7 M3: Embedding-Threshold (×100 als Int) immer ≤ 100
+-- Quelle: tools/deep_research/tool.py:_group_similar_facts
+theorem dr_embedding_threshold_upper (v : Int) : max 0 (min 100 v) ≤ 100 := by omega
+
+-- 12. DR v7 M4: source_count < 2 → nicht verified (moderate mode)
+-- Quelle: tools/deep_research/tool.py:_deep_verify_facts
+theorem dr_verify_moderate (count : Int) (h : count < 2) :
+    ¬ 2 ≤ count := by omega
+
+-- 13. DR v7 M5: ArXiv-Score immer ≥ 0
+-- Quelle: tools/deep_research/trend_researcher.py
+theorem dr_arxiv_score_lower (v : Int) : 0 ≤ max 0 (min 10 v) := by omega
+
+-- 14. DR v7 M5: ArXiv-Score immer ≤ 10
+-- Quelle: tools/deep_research/trend_researcher.py
+theorem dr_arxiv_score_upper (v : Int) : max 0 (min 10 v) ≤ 10 := by omega
