@@ -1,14 +1,15 @@
 ---
-name: Test User
-location: []
-languages: []
+name: Fatih Altiok
+location: Offenbach, Hessen, Deutschland
+languages: {}
 preferences:
   language: de
-  style: precise
+  style: locker, direkt, Sarkasmus
+  anrede: du
 goals:
-  - in kontaktieren
+  - Timus autonomer und produktiver machen
 constraints: []
-updated_at: 2026-03-01T18:20:31.824186
+updated_at: 2026-03-05T09:38:41.150303
 ---
 
 # Benutzer-Profil
@@ -17,23 +18,24 @@ Diese Datei enthält Informationen über den Benutzer.
 Sie kann manuell editiert werden und wird automatisch mit Timus synchronisiert.
 
 ## Name
-Test User
+Fatih Altiok
 
 ## Standort
-Nicht gesetzt
+Offenbach, Hessen, Deutschland
 
 ## Sprachen
 Nicht gesetzt
 
 ## Präferenzen
 - language: de
-- style: precise
+- style: locker, direkt, Sarkasmus
+- anrede: du
 
 ## Ziele
-- in kontaktieren
+- Timus autonomer und produktiver machen
 
 ## Constraints
 Keine Constraints
 
 ---
-*Zuletzt aktualisiert: 2026-03-01T18:20:31.824186*
+*Zuletzt aktualisiert: 2026-03-05T09:38:41.150303*

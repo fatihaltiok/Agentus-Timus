@@ -65,10 +65,10 @@
       "description": "Sage mir das aktuelle Datum und die Uhrzeit.",
       "priority": 1,
       "target_agent": "executor",
-      "status": "pending",
+      "status": "completed",
       "created_at": "2026-02-21T20:20:35.287174",
-      "completed_at": null,
-      "result_summary": null
+      "completed_at": "2026-03-04T08:36:52.906699",
+      "result_summary": "Aktuelles Datum und Uhrzeit ermittelt: Mittwoch, 04. März 2026 - 08:36:28"
     },
     {
       "id": "6570bbb5-e9ab-42b7-9992-6673e3d28486",
@@ -145,10 +145,10 @@
       "description": "Remove secrets.yaml from repository and update .gitignore",
       "priority": 1,
       "target_agent": "devops",
-      "status": "pending",
+      "status": "completed",
       "created_at": "2026-02-24T12:34:12.139907",
-      "completed_at": null,
-      "result_summary": null
+      "completed_at": "2026-03-04T08:37:53.751252",
+      "result_summary": "secrets.yaml nicht im Projekt vorhanden, bereits in .gitignore eingetragen. Keine Änderungen erforderlich."
     },
     {
       "id": "d1f1cb52-8893-458a-aae4-ef3376e3df51",

@@ -115,6 +115,12 @@ def _improvement_feature_enabled() -> bool:
     return _env_bool("AUTONOMY_SELF_IMPROVEMENT_ENABLED", False)
 
 
+def _ambient_context_feature_enabled() -> bool:
+    if _env_bool("AUTONOMY_COMPAT_MODE", True):
+        return False
+    return _env_bool("AUTONOMY_AMBIENT_CONTEXT_ENABLED", True)
+
+
 class AutonomousRunner:
     """
     Führt pending Tasks autonom aus, ausgelöst durch den Scheduler-Heartbeat.
@@ -141,6 +147,8 @@ class AutonomousRunner:
         self._trigger_engine = None
         self._goal_manager = None
         self._improvement_engine = None
+        # M15
+        self._ambient_engine = None
 
     # ------------------------------------------------------------------
     # Öffentliche API
@@ -265,6 +273,15 @@ class AutonomousRunner:
                 log.info("🔬 SelfImprovementEngine aktiviert")
             except Exception as e:
                 log.warning("SelfImprovementEngine konnte nicht gestartet werden: %s", e)
+
+        # M15: Ambient Context Engine
+        if _ambient_context_feature_enabled():
+            try:
+                from orchestration.ambient_context_engine import get_ambient_engine
+                self._ambient_engine = get_ambient_engine()
+                log.info("🌐 AmbientContextEngine aktiviert")
+            except Exception as e:
+                log.warning("AmbientContextEngine konnte nicht gestartet werden: %s", e)
 
         # Curiosity Engine als separaten asyncio.Task starten
         if os.getenv("CURIOSITY_ENABLED", "true").lower() == "true":
@@ -488,6 +505,17 @@ class AutonomousRunner:
                     pass
                 except Exception as e:
                     log.debug("SelfImprovementEngine fehlgeschlagen: %s", e)
+
+        # M15: Ambient Context Engine
+        if _ambient_context_feature_enabled() and self._ambient_engine:
+            try:
+                _loop = asyncio.get_event_loop()
+                if _loop.is_running():
+                    asyncio.ensure_future(self._ambient_engine.run_cycle())
+            except RuntimeError:
+                pass
+            except Exception as e:
+                log.debug("AmbientContextEngine fehlgeschlagen: %s", e)
 
         pending = queue.get_pending()
         if not pending:

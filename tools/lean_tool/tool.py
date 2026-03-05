@@ -110,6 +110,31 @@ theorem m8_reflection_guard (gap threshold : ℝ) (h : gap < threshold) :
     ¬ threshold ≤ gap :=
   not_le.mpr h
 """,
+    "ambient_score_in_bounds": """\
+import Mathlib
+
+-- Invariante: Score ∈ [0, 1] nach Clamp (max 0 (min 1 score))
+-- Quelle: orchestration/ambient_context_engine.py (AmbientSignal.score)
+theorem ambient_score_in_bounds (score : ℝ) :
+    0 ≤ max 0 (min 1 score) ∧ max 0 (min 1 score) ≤ 1 :=
+  ⟨le_max_left 0 _, max_le (by norm_num) (min_le_left 1 score)⟩
+""",
+    "ambient_threshold_gate": """\
+import Mathlib
+
+-- Invariante: score < threshold → kein Task erstellt (¬ threshold ≤ score)
+-- Quelle: orchestration/ambient_context_engine.py:_process_signal
+theorem ambient_threshold_gate (score threshold : ℝ) (h : score < threshold) :
+    ¬ threshold ≤ score := not_le.mpr h
+""",
+    "ambient_confirm_guard": """\
+import Mathlib
+
+-- Invariante: score < confirm_thresh → kein Telegram-Push
+-- Quelle: orchestration/ambient_context_engine.py:_process_signal
+theorem ambient_confirm_guard (score confirm_thresh : ℝ) (h : score < confirm_thresh) :
+    ¬ confirm_thresh ≤ score := not_le.mpr h
+""",
 }
 
 
@@ -120,9 +145,10 @@ theorem m8_reflection_guard (gap threshold : ℝ) (h : gap < threshold) :
 @tool(
     name="lean_get_builtin_specs",
     description=(
-        "Gibt 7 eingebettete Lean 4 Spezifikationen für kritische Timus-Algorithmen zurück: "
+        "Gibt 10 eingebettete Lean 4 Spezifikationen für kritische Timus-Algorithmen zurück: "
         "progress_in_bounds, keyword_bonus_cap, arxiv_boundary (bestehend) + "
-        "soul_clamp_in_bounds, blackboard_ttl_positive, success_rate_bounded, m8_reflection_guard (neu). "
+        "soul_clamp_in_bounds, blackboard_ttl_positive, success_rate_bounded, m8_reflection_guard + "
+        "ambient_score_in_bounds, ambient_threshold_gate, ambient_confirm_guard (M15). "
         "Alle mit 'import Mathlib' — laufen via lake env lean."
     ),
     parameters=[],
