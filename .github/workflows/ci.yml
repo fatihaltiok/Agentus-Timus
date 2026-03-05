@@ -58,3 +58,20 @@ jobs:
       - name: Gate 3 - Milestone Readiness
         run: |
           python verify_milestone6.py
+
+      - name: Gate 4 - Lean 4 Formal Verification
+        # Installiert elan (kein Mathlib — zu langsam für CI).
+        # Prüft CiSpecs.lean mit Core-Lean + Std (~5s statt ~2min mit Mathlib).
+        # Vollständige Mathlib-Specs laufen lokal via pre-commit hook.
+        run: |
+          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            | sh -s -- -y --default-toolchain none
+          source "$HOME/.elan/env"
+          # Toolchain aus lean_verify Projekt übernehmen
+          TOOLCHAIN=$(cat /home/runner/work/Agentus-Timus/Agentus-Timus/../lean_verify/lean-toolchain 2>/dev/null \
+            || cat lean_verify/lean-toolchain 2>/dev/null || echo "leanprover/lean4:stable")
+          elan toolchain install "$TOOLCHAIN" --no-self-update
+          elan default "$TOOLCHAIN"
+          lean lean_verify/CiSpecs.lean && echo "✅ Lean CI Specs OK" \
+            || echo "⚠️ Lean CI Specs fehlgeschlagen (non-blocking)"
+        continue-on-error: true

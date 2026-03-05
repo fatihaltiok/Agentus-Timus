@@ -23,6 +23,27 @@ log = logging.getLogger("DeveloperAgent")
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+# Schlüsselwörter die auf numerische Invarianten hinweisen → Lean-Spec empfehlen
+_LEAN_TRIGGER: frozenset[str] = frozenset({
+    "score", "rate", "progress", "confidence", "clamp", "threshold",
+    "percent", "ratio", "bounds", "invariant", "average", "avg",
+    "min(", "max(", "/ total", "/ n", "between 0", "between 1",
+    "success_rate", "duration_ms", "ttl", "gap_minutes",
+})
+
+_LEAN_HINT = (
+    "\n\n## LEAN 4 HINWEIS (automatisch erkannt)\n"
+    "Dieser Task enthält numerische Invarianten (Score/Rate/Bounds/Clamp).\n"
+    "Nach dem Schreiben des Codes: `lean_generate_spec` aufrufen und die Invariante\n"
+    "als Lean 4 Theorem dokumentieren. Beispiel:\n"
+    "  lean_generate_spec('Beschreibung der Invariante', ['0 ≤ result ≤ 1'])\n"
+)
+
+
+def _needs_lean_hint(task: str) -> bool:
+    t = task.lower()
+    return any(kw in t for kw in _LEAN_TRIGGER)
+
 
 class DeveloperAgent(BaseAgent):
     """
@@ -48,8 +69,10 @@ class DeveloperAgent(BaseAgent):
     async def run(self, task: str) -> str:
         """Reichert den Task mit Git-Status und Projektkontext an."""
         context = await self._build_dev_context()
-        enriched_task = task + "\n\n" + context
-        return await super().run(enriched_task)
+        lean_hint = _LEAN_HINT if _needs_lean_hint(task) else ""
+        if lean_hint:
+            log.info("DeveloperAgent | Lean-Hint injiziert (numerische Invariante erkannt)")
+        return await super().run(task + "\n\n" + context + lean_hint)
 
     # ------------------------------------------------------------------
     # Entwicklungs-Kontext aufbauen

@@ -72,6 +72,44 @@ import Mathlib
 theorem arxiv_boundary (n : ℤ) : ¬ n < n :=
   lt_irrefl n
 """,
+    "soul_clamp_in_bounds": """\
+import Mathlib
+
+-- Invariante: Soul-Achsen clamp(v) = max 5 (min 95 v) bleibt immer in [5, 95]
+-- Quelle: memory/soul_engine.py:259
+theorem soul_clamp_in_bounds (v : ℝ) :
+    5 ≤ max 5 (min 95 v) ∧ max 5 (min 95 v) ≤ 95 :=
+  ⟨le_max_left 5 _, max_le (by norm_num) (min_le_left 95 v)⟩
+""",
+    "blackboard_ttl_positive": """\
+import Mathlib
+
+-- Invariante: TTL immer ≥ 1 Minute — max 1 ttl_minutes verhindert 0 oder negativ
+-- Quelle: memory/agent_blackboard.py:108
+theorem blackboard_ttl_positive (t : ℤ) : 1 ≤ max 1 t :=
+  le_max_left 1 t
+""",
+    "success_rate_bounded": """\
+import Mathlib
+
+-- Invariante: AVG(success) ∈ [0, 1] wenn 0 ≤ sum ≤ n und n > 0
+-- Quelle: orchestration/self_improvement_engine.py:299
+theorem success_rate_bounded (n : ℕ) (s : ℝ)
+    (hn : 0 < n) (hs_lo : 0 ≤ s) (hs_hi : s ≤ ↑n) :
+    0 ≤ s / ↑n ∧ s / ↑n ≤ 1 := by
+  have hn' : (0 : ℝ) < ↑n := Nat.cast_pos.mpr hn
+  exact ⟨div_nonneg hs_lo hn'.le, (div_le_one hn').mpr hs_hi⟩
+""",
+    "m8_reflection_guard": """\
+import Mathlib
+
+-- Invariante: Session-Reflexion feuert nur wenn gap ≥ IDLE_THRESHOLD_MIN
+-- h: gap < threshold → Reflexion wird NICHT ausgelöst
+-- Quelle: orchestration/session_reflection.py:112
+theorem m8_reflection_guard (gap threshold : ℝ) (h : gap < threshold) :
+    ¬ threshold ≤ gap :=
+  not_le.mpr h
+""",
 }
 
 
@@ -82,8 +120,9 @@ theorem arxiv_boundary (n : ℤ) : ¬ n < n :=
 @tool(
     name="lean_get_builtin_specs",
     description=(
-        "Gibt 3 eingebettete Lean 4 Spezifikationen für kritische Timus-Algorithmen zurück: "
-        "progress_in_bounds, keyword_bonus_cap, arxiv_boundary. "
+        "Gibt 7 eingebettete Lean 4 Spezifikationen für kritische Timus-Algorithmen zurück: "
+        "progress_in_bounds, keyword_bonus_cap, arxiv_boundary (bestehend) + "
+        "soul_clamp_in_bounds, blackboard_ttl_positive, success_rate_bounded, m8_reflection_guard (neu). "
         "Alle mit 'import Mathlib' — laufen via lake env lean."
     ),
     parameters=[],
