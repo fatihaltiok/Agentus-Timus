@@ -69,7 +69,9 @@ AGENT_CAPABILITY_MAP = {
         "file", "results",                       # Speichern
     ],
     "reasoning": [
-        "search", "web",                         # Recherche
+        # Kein "research" / "deep_research" — verhindert dass start_deep_research
+        # in der Tool-Liste des Reasoning-Agenten auftaucht. Delegation via Prompt.
+        "search", "web",                         # einfache Websuche (search_web)
         "document", "report",                    # Ausgabe
         "memory",                                # Kontext
         "code", "development",                   # Code-Analyse

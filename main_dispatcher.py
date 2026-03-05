@@ -991,7 +991,19 @@ def quick_intent_check(query: str) -> Optional[str]:
     if _has_multi_step and _has_task_starter:
         return "meta"
 
-    # REASONING zuerst prüfen (höchste Priorität für komplexe Fragen)
+    # RESEARCH-PRIORITÄT (vor REASONING prüfen!)
+    # "tiefenrecherche" / "deep research" schlagen "analysiere" immer, auch wenn
+    # beide im Query vorkommen — Reasoning-Agent darf KEINE deep_research-Tools nutzen.
+    _RESEARCH_PRIORITY = (
+        "tiefenrecherche", "deep research", "deep_research",
+        "recherchiere", "recherchier",
+        "fakten zu", "fakten über", "sammle informationen",
+        "informiere mich über", "was gibt es neues",
+    )
+    if any(kw in query_lower for kw in _RESEARCH_PRIORITY):
+        return "research"
+
+    # REASONING (komplexe Analyse, Debugging, Architektur)
     for keyword in REASONING_KEYWORDS:
         if keyword in query_lower:
             return "reasoning"
@@ -1001,7 +1013,7 @@ def quick_intent_check(query: str) -> Optional[str]:
         if keyword in query_lower:
             return "meta"
 
-    # Research-Keywords
+    # Research-Keywords (restliche)
     for keyword in RESEARCH_KEYWORDS:
         if keyword in query_lower:
             return "research"
