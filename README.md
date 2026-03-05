@@ -4,7 +4,7 @@
   <img src="assets/branding/timus-logo-glow.png" alt="Timus Logo" width="760">
 </p>
 
-**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen). Seit **v2.9** sind die Autonomie-Schichten M1–M5 live: Zielgenerierung, Langzeitplanung, Self-Healing und Autonomie-Scorecard laufen aktiv im Produktivbetrieb. Seit **v3.0 (2026-02-28)** läuft im Canvas ein nativer Voice-Loop (Faster-Whisper STT + Inworld.AI TTS) über `/voice/*` Endpoints. Seit **v3.1 (2026-03-01)** sendet und empfängt Timus eigenständig E-Mails über Microsoft Graph OAuth2 — alle 13 Agenten sind vollständig per Delegation erreichbar. Seit **v3.2 (2026-03-02)** visualisiert der Canvas jede Agent-Delegation mit einem goldenen Lichtstrahl-Animation in Echtzeit — und beide Routing-Pfade (direkt + delegiert) nutzen einheitlich `DeveloperAgentV2`. Seit **v3.3 (2026-03-03)** überwacht Timus sich selbst mit LLMs: Jeder neue Incident wird sofort von `qwen3.5-plus` diagnostiziert (Schicht 2), alle 60 Minuten analysiert `deepseek-v3.2` Trends und strukturelle Schwächen im Autonomie-Zustand (Schicht 3). Außerdem können alle Agenten ab v3.3 eigenständig URLs öffnen — Hybrid-Fetch mit automatischem Playwright-Fallback für JavaScript-Seiten. Seit **v3.4 (2026-03-03)** erzeugt Deep Research v6.0 vollautomatisch drei Ausgabedateien: einen analytischen Markdown-Bericht, einen narrativen Lesebericht mit 2500–5000 Wörtern (gpt-5.2) und ein professionelles A4-PDF mit eingebetteten Abbildungen (WeasyPrint). Seit **v3.5 (2026-03-04)** durchsucht Deep Research parallel ArXiv, GitHub und HuggingFace nach aktuellen wissenschaftlichen Trends — und der Edison-Toggle im Canvas UI erlaubt es, PaperQA3 (Edison Scientific) per Klick ohne Server-Neustart zu aktivieren. Seit **v4.0 (2026-03-04)** denkt Timus mit: **M8–M12** bringen Session-Reflexion, ein geteiltes Agent-Blackboard, zeitgesteuerte Trigger, hierarchische Ziel-Verwaltung und eine Self-Improvement Engine — 14 neue MCP-Tools und 5 neue Canvas-Cards. Seit **v3.6 (2026-03-05)** liefert **Deep Research v7.0** endlich echte Ergebnisse für englische KI-Themen: Language-Detection, US-Suchlocation, Domain-aware Embedding-Threshold (0.72 für Tech), automatischer moderate-Modus und ein Qualitäts-Gate mit light-Fallback beheben alle 5 strukturellen Root Causes systematisch.
+**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen). Seit **v2.9** sind die Autonomie-Schichten M1–M5 live: Zielgenerierung, Langzeitplanung, Self-Healing und Autonomie-Scorecard laufen aktiv im Produktivbetrieb. Seit **v3.0 (2026-02-28)** läuft im Canvas ein nativer Voice-Loop (Faster-Whisper STT + Inworld.AI TTS) über `/voice/*` Endpoints. Seit **v3.1 (2026-03-01)** sendet und empfängt Timus eigenständig E-Mails über Microsoft Graph OAuth2 — alle 13 Agenten sind vollständig per Delegation erreichbar. Seit **v3.2 (2026-03-02)** visualisiert der Canvas jede Agent-Delegation mit einem goldenen Lichtstrahl-Animation in Echtzeit — und beide Routing-Pfade (direkt + delegiert) nutzen einheitlich `DeveloperAgentV2`. Seit **v3.3 (2026-03-03)** überwacht Timus sich selbst mit LLMs: Jeder neue Incident wird sofort von `qwen3.5-plus` diagnostiziert (Schicht 2), alle 60 Minuten analysiert `deepseek-v3.2` Trends und strukturelle Schwächen im Autonomie-Zustand (Schicht 3). Außerdem können alle Agenten ab v3.3 eigenständig URLs öffnen — Hybrid-Fetch mit automatischem Playwright-Fallback für JavaScript-Seiten. Seit **v3.4 (2026-03-03)** erzeugt Deep Research v6.0 vollautomatisch drei Ausgabedateien: einen analytischen Markdown-Bericht, einen narrativen Lesebericht mit 2500–5000 Wörtern (gpt-5.2) und ein professionelles A4-PDF mit eingebetteten Abbildungen (WeasyPrint). Seit **v3.5 (2026-03-04)** durchsucht Deep Research parallel ArXiv, GitHub und HuggingFace nach aktuellen wissenschaftlichen Trends — und der Edison-Toggle im Canvas UI erlaubt es, PaperQA3 (Edison Scientific) per Klick ohne Server-Neustart zu aktivieren. Seit **v4.0 (2026-03-04)** denkt Timus mit: **M8–M12** bringen Session-Reflexion, ein geteiltes Agent-Blackboard, zeitgesteuerte Trigger, hierarchische Ziel-Verwaltung und eine Self-Improvement Engine — 14 neue MCP-Tools und 5 neue Canvas-Cards. Seit **v3.6 (2026-03-05)** liefert **Deep Research v7.0** endlich echte Ergebnisse für englische KI-Themen: Language-Detection, US-Suchlocation, Domain-aware Embedding-Threshold (0.72 für Tech), automatischer moderate-Modus und ein Qualitäts-Gate mit light-Fallback beheben alle 5 strukturellen Root Causes systematisch. Seit **v4.1 (2026-03-06)** lernt Timus aus Interaktionen (**M16 aktiviert**: 👍/👎/🤷 Feedback → Soul-Hook-Gewichtung), sendet eigenständig E-Mails nach Policy-Check (**M14** Whitelist + Confidence-Guard + SMTP-Backend), und generiert bei Bedarf neue Tools zur Laufzeit (**M13** AST-Validierung + Telegram-Review-Gate + importlib-Aktivierung).
 
 ---
 
@@ -39,6 +39,9 @@ Die folgende Architektur findet sich normalerweise bei Google SRE-Teams, Netflix
 | Führt zeitgesteuerte Routinen aus | — | M10 Proactive Triggers (Morgen/Abend-Routinen, ±14-Min-Fenster) |
 | Verwaltet hierarchische Langzeit-Ziele | — | M11 Goal Queue Manager (Sub-Goals, Meilensteine, Fortschritts-Rollup) |
 | Verbessert eigene Tool-Entscheidungen | — | M12 Self-Improvement Engine (Tool-Erfolgsrate, Routing-Konfidenz, wöchentlich) |
+| Lernt aus Nutzer-Feedback | — | M16 Feedback Loop (👍/👎/🤷 → Soul-Hook-Gewichtung, decay täglich) |
+| Sendet E-Mails autonom nach Policy | — | M14 Email-Autonomy (Whitelist + Topic + Confidence 0.85, SMTP/msgraph, Telegram-Approval) |
+| Generiert neue Tools zur Laufzeit | — | M13 Tool-Generator (AST-Check, MAX 5000 Zeichen, Review-Gate, importlib-Aktivierung) |
 
 **Das ist kein Chatbot. Das ist ein autonomes KI-Betriebssystem — gebaut in Python, von einer Person, ohne formale IT-Ausbildung.**
 
@@ -71,6 +74,9 @@ In der Forschung nennt man diese Architektur *Introspective Autonomous Systems*:
 | Zeitgesteuerte Trigger | — | — | M10 ProactiveTriggerEngine (Uhrzeit ± 14 Min, DB-persistent) |
 | Hierarchische Ziel-Verwaltung | — | — | M11 GoalQueueManager (Sub-Goals, Meilensteine, Cytoscape-Tree) |
 | Automatische Selbstoptimierung | — | — | M12 SelfImprovementEngine (Tool-Rate < 70% → Suggestion) |
+| Lernt aus Nutzer-Feedback | — | — | M16 FeedbackEngine (👍/👎/🤷 → Soul-Hook-Gewichtung, `send_with_feedback()`) |
+| Autonome E-Mails nach Policy | — | — | M14 EmailAutonomyEngine (Whitelist + Confidence 0.85, SMTP_SSL, Telegram-Approval) |
+| Neue Tools selbst schreiben | — | — | M13 ToolGeneratorEngine (AST-Sicherheitscheck, Telegram-Review, importlib-Load) |
 
 AutoGPT und AutoGen sind leistungsfähige Frameworks — aber sie sind primär **Task-Ausführungs-Pipelines**. Timus ist ein **selbst-überwachendes, selbst-heilendes, selbst-planendes System** mit physischer Sensorik, eigener Stimme und einem Canvas UI, das den Zustand in Echtzeit zeigt. Diese Kombination existiert in keinem der bekannten Open-Source-Projekte in dieser Form.
 
@@ -177,7 +183,54 @@ Danach kann Timus passwortfrei `systemctl start/stop/restart` für seine eigenen
 
 ---
 
-### Phase 19 — Meta-Agent Upgrades M8–M12: Selbst-Reflexion + Blackboard + Trigger + Ziele + Optimierung *(v4.0, aktuell)*
+### Phase 20 — M16 aktiv + M14 E-Mail-Autonomie + M13 Tool-Generierung *(v4.1, aktuell)*
+
+Timus lernt jetzt aus jeder Interaktion, handelt eigenständig per E-Mail und kann sich selbst neue Werkzeuge schreiben.
+
+**M16 — Echte Lernfähigkeit (aktiviert):**
+- Jede Ambient/Curiosity-Nachricht hat `👍 / 👎 / 🤷` InlineKeyboard-Buttons — Klick → `FeedbackEngine.record_signal()`
+- Positives Signal → Hook-Gewicht +15%, negatives → −15%, täglich Decay Richtung 1.0 (97%)
+- `CuriosityEngine.update_topic_score()` gewichtet Topics basierend auf akkumuliertem Feedback
+- `SessionReflectionLoop._apply_reflection_to_hooks()` wendet End-of-Session-Erkenntnisse auf Hooks an
+
+**M14 — E-Mail-Autonomie:**
+- 3-stufiger Policy-Check: Empfänger in `M14_EMAIL_WHITELIST` ✓ → Topic-Stichwort in Betreff ✓ → Confidence ≥ 0.85 ✓
+- Unter Threshold: Telegram-Approval-Request `[✅ Senden][❌ Abbrechen]` mit Callback-Dispatch in `telegram_gateway.py`
+- Duales Backend: `EMAIL_BACKEND=smtp` (SMTP_SSL + IMAP, keine OAuth2-Probleme) oder `msgraph` (bestehend)
+- 2 MCP-Tools: `evaluate_email_action`, `get_pending_email_approvals`
+
+**M13 — Tool-Generierung:**
+- `generate(name, description, parameters)` → valides Python-Tool-Template ohne Syntax-Fehler
+- `validate_ast()`: blockiert `eval`, `exec`, `__import__`, `__builtins__`, Code > 5000 Zeichen, fehlender `@tool`-Decorator
+- `request_review()`: Telegram-Code-Preview + `[✅ Genehmigen][❌ Ablehnen]` → `telegram_gateway.py` dispatcht `tool_approve/tool_reject`
+- `activate(action_id)`: schreibt `tools/<name>/tool.py` + `__init__.py` → `importlib.util.spec_from_file_location()` lädt zur Laufzeit
+- 3 MCP-Tools: `generate_tool`, `get_pending_tool_reviews`, `list_generated_tools`
+
+**Lean 4 Verifikation:** 4 neue Theoreme (24–27), alle `by omega` — gesamt 27 Theoreme, 0 Fehler:
+```lean
+theorem m14_whitelist_guard      -- in_list=0 → ¬(1 ≤ in_list)
+theorem m14_confidence_threshold -- conf < threshold → ¬(threshold ≤ conf)
+theorem m13_code_length_bound    -- len ≤ max_len ∧ 0 < max_len → 0 < len+1 ∨ len ≤ max_len
+theorem m13_tool_approval_guard  -- status < 1 → ¬(1 ≤ status)
+```
+
+**Tests:** 27/27 (M14) + 28/28 (M13) + 50/50 verify_m13.py Checks — alle grün.
+
+**Neue Dateien:** `orchestration/email_autonomy_engine.py`, `orchestration/tool_generator_engine.py`, `utils/smtp_email.py`, `tools/email_autonomy_tool/`, `tools/tool_generator_tool/`, `tests/test_m14_email_autonomy.py`, `tests/test_m13_tool_generator.py`, `verify_m13.py`
+
+**Feature-Flags:**
+```bash
+AUTONOMY_M16_ENABLED=true            # M16 — Feedback Loop jetzt aktiv
+AUTONOMY_M14_ENABLED=false           # M14 — E-Mail-Autonomie
+EMAIL_BACKEND=smtp                   # smtp (SMTP_SSL) oder msgraph
+M14_EMAIL_WHITELIST=user@example.com # Empfänger-Whitelist
+M14_EMAIL_CONFIDENCE=0.85            # Confidence-Schwellwert
+AUTONOMY_M13_ENABLED=false           # M13 — Tool-Generierung
+```
+
+---
+
+### Phase 19 — Meta-Agent Upgrades M8–M12: Selbst-Reflexion + Blackboard + Trigger + Ziele + Optimierung *(v4.0)*
 
 Timus denkt jetzt mit sich selbst. Fünf neue Autonomie-Schichten (M8–M12) machen das System selbst-reflektierend, gedächtnisteilend, zeitgesteuert, zielgerichtet und selbstoptimierend.
 
@@ -1235,6 +1288,9 @@ flowchart TD
     RUN --> G8["ProactiveTriggers M10\n±14-Min-Fenster\nMorgen + Abend-Routinen"]
     RUN --> G9["GoalQueueManager M11\nHierarchische Ziele\nMeilenstein-Rollup"]
     RUN --> G10["SelfImprovementEngine M12\nTool-/Routing-Analytics\nwöchentliche Analyse"]
+    RUN --> G11["FeedbackEngine M16\n👍/👎/🤷 → Soul-Hooks\nDecay täglich"]
+    RUN --> G12["EmailAutonomyEngine M14\nWhitelist+Confidence\nSMTP-Backend"]
+    RUN --> G13["ToolGeneratorEngine M13\nAST-Check+Review\nimportlib-Aktivierung"]
     G1 -.->|"Goals in"| WAL
     G4 -.->|"Incidents in"| WAL
     G5 -.->|"Snapshots in"| WAL

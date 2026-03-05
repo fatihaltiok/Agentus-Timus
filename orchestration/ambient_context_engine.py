@@ -192,8 +192,12 @@ class AmbientContextEngine:
                 f"{signal.description[:200]}"
             )
             try:
-                from utils.telegram_notify import send_telegram
-                await send_telegram(msg)
+                from utils.telegram_notify import send_with_feedback
+                await send_with_feedback(
+                    msg,
+                    action_id=signal.signal_id,
+                    hook_names=["ambient_trigger"],
+                )
             except Exception as e:
                 log.debug("Telegram-Benachrichtigung fehlgeschlagen: %s", e)
 

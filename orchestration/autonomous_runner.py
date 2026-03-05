@@ -121,6 +121,24 @@ def _ambient_context_feature_enabled() -> bool:
     return _env_bool("AUTONOMY_AMBIENT_CONTEXT_ENABLED", True)
 
 
+def _m16_feature_enabled() -> bool:
+    if _env_bool("AUTONOMY_COMPAT_MODE", True):
+        return False
+    return _env_bool("AUTONOMY_M16_ENABLED", False)
+
+
+def _m14_feature_enabled() -> bool:
+    if _env_bool("AUTONOMY_COMPAT_MODE", True):
+        return False
+    return _env_bool("AUTONOMY_M14_ENABLED", False)
+
+
+def _m13_feature_enabled() -> bool:
+    if _env_bool("AUTONOMY_COMPAT_MODE", True):
+        return False
+    return _env_bool("AUTONOMY_M13_ENABLED", False)
+
+
 class AutonomousRunner:
     """
     Führt pending Tasks autonom aus, ausgelöst durch den Scheduler-Heartbeat.
@@ -149,6 +167,8 @@ class AutonomousRunner:
         self._improvement_engine = None
         # M15
         self._ambient_engine = None
+        # M16
+        self._feedback_engine = None
 
     # ------------------------------------------------------------------
     # Öffentliche API
@@ -282,6 +302,15 @@ class AutonomousRunner:
                 log.info("🌐 AmbientContextEngine aktiviert")
             except Exception as e:
                 log.warning("AmbientContextEngine konnte nicht gestartet werden: %s", e)
+
+        # M16: Feedback Engine
+        if _m16_feature_enabled():
+            try:
+                from orchestration.feedback_engine import get_feedback_engine
+                self._feedback_engine = get_feedback_engine()
+                log.info("🧠 FeedbackEngine (M16) aktiviert")
+            except Exception as e:
+                log.warning("FeedbackEngine konnte nicht gestartet werden: %s", e)
 
         # Curiosity Engine als separaten asyncio.Task starten
         if os.getenv("CURIOSITY_ENABLED", "true").lower() == "true":
@@ -516,6 +545,37 @@ class AutonomousRunner:
                 pass
             except Exception as e:
                 log.debug("AmbientContextEngine fehlgeschlagen: %s", e)
+
+        # M16: FeedbackEngine + Soul Hook Decay (täglich)
+        if _m16_feature_enabled():
+            # process_pending: heute gesendete Feedbacks zählen
+            if self._feedback_engine:
+                try:
+                    count = self._feedback_engine.process_pending()
+                    if count > 0:
+                        log.debug("M16: %d Feedback-Events heute", count)
+                except Exception as e:
+                    log.debug("FeedbackEngine.process_pending fehlgeschlagen: %s", e)
+
+            # Täglicher Hook-Decay (1× pro Tag)
+            if self._heartbeat_count % 96 == 0:  # 96 × 15min = 24h
+                try:
+                    from memory.soul_engine import get_soul_engine
+                    changed = get_soul_engine().decay_hooks()
+                    if changed > 0:
+                        log.info("M16: Hook-Decay: %d Hooks angepasst", changed)
+                except Exception as e:
+                    log.debug("Hook-Decay fehlgeschlagen: %s", e)
+
+        # M14: E-Mail-Autonomie — pending Approvals loggen
+        if _m14_feature_enabled():
+            try:
+                from orchestration.email_autonomy_engine import get_email_autonomy_engine
+                count = get_email_autonomy_engine().process_pending()
+                if count > 0:
+                    log.debug("M14: %d E-Mail-Approvals ausstehend", count)
+            except Exception as e:
+                log.debug("EmailAutonomyEngine.process_pending fehlgeschlagen: %s", e)
 
         pending = queue.get_pending()
         if not pending:

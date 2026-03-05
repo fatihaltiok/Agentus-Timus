@@ -135,6 +135,29 @@ import Mathlib
 theorem ambient_confirm_guard (score confirm_thresh : ℝ) (h : score < confirm_thresh) :
     ¬ confirm_thresh ≤ score := not_le.mpr h
 """,
+    "m16_weighted_avg_in_bounds": """\
+import Mathlib
+
+-- M16: Hook-Weight Konvergenz — gewichteter Durchschnitt pos/(pos+neg) ∈ [0, 1]
+-- Zeigt dass der Feedback-Ratio immer bounded bleibt
+-- Quelle: orchestration/feedback_engine.py:get_hook_stats
+theorem m16_weighted_avg_in_bounds (pos neg total : ℝ)
+    (hp : 0 ≤ pos) (hn : 0 ≤ neg) (ht : pos + neg = total) (htpos : 0 < total) :
+    0 ≤ pos / total ∧ pos / total ≤ 1 := by
+  constructor
+  · exact div_nonneg hp (le_of_lt htpos)
+  · rw [div_le_one htpos]; linarith
+""",
+    "m16_feedback_ratio": """\
+import Mathlib
+
+-- M16: Feedback-Ratio — pos_rate + neg_rate ≤ 1 (neutral = Rest)
+-- Quelle: orchestration/feedback_engine.py:get_hook_stats
+theorem m16_feedback_ratio (pos neg total : ℝ)
+    (hp : 0 ≤ pos) (hn : 0 ≤ neg) (ht : pos + neg ≤ total) (htpos : 0 < total) :
+    pos / total + neg / total ≤ 1 := by
+  rw [div_add_div_same, div_le_one htpos]; linarith
+""",
 }
 
 
@@ -145,10 +168,11 @@ theorem ambient_confirm_guard (score confirm_thresh : ℝ) (h : score < confirm_
 @tool(
     name="lean_get_builtin_specs",
     description=(
-        "Gibt 10 eingebettete Lean 4 Spezifikationen für kritische Timus-Algorithmen zurück: "
+        "Gibt 12 eingebettete Lean 4 Spezifikationen für kritische Timus-Algorithmen zurück: "
         "progress_in_bounds, keyword_bonus_cap, arxiv_boundary (bestehend) + "
         "soul_clamp_in_bounds, blackboard_ttl_positive, success_rate_bounded, m8_reflection_guard + "
-        "ambient_score_in_bounds, ambient_threshold_gate, ambient_confirm_guard (M15). "
+        "ambient_score_in_bounds, ambient_threshold_gate, ambient_confirm_guard (M15) + "
+        "m16_weighted_avg_in_bounds, m16_feedback_ratio (M16). "
         "Alle mit 'import Mathlib' — laufen via lake env lean."
     ),
     parameters=[],

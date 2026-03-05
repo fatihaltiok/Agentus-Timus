@@ -147,6 +147,9 @@ class SessionReflectionLoop:
                 except Exception:
                     pass
 
+            # M16: Reflexion → Hook-Feedback
+            self._apply_reflection_to_hooks(summary)
+
             # Telegram-Push
             if os.getenv("REFLECTION_TELEGRAM_ENABLED", "true").lower() == "true":
                 await self._send_telegram(summary)
@@ -386,6 +389,56 @@ Antworte NUR als gültiges JSON:
                 conn.commit()
         except Exception as e:
             log.warning("_accumulate_patterns: %s", e)
+
+    def _apply_reflection_to_hooks(self, summary: ReflectionSummary) -> None:
+        """
+        M16: Verknüpft Reflexions-Ergebnisse mit behavior_hooks.
+
+        - what_worked-Einträge → positive Feedback-Signal
+        - what_failed-Einträge → negative Feedback-Signal
+
+        Sucht Hooks die thematisch zu den Einträgen passen.
+        """
+        if not os.getenv("AUTONOMY_M16_ENABLED", "false").lower() == "true":
+            return
+        try:
+            from orchestration.feedback_engine import get_feedback_engine
+            from memory.soul_engine import get_soul_engine
+
+            soul = get_soul_engine()
+            feedback = get_feedback_engine()
+            action_id = f"reflection_{summary.session_id}"
+
+            # Positive Signale aus what_worked
+            for item in summary.what_worked[:3]:
+                if not item:
+                    continue
+                # Hooks mit thematischer Überlappung finden
+                hooks_updated = soul.apply_hook_feedback(item[:30], "positive")
+                feedback.record_signal(
+                    action_id=f"{action_id}_pos",
+                    signal="positive",
+                    context={"source": "reflection", "item": item[:80]},
+                )
+
+            # Negative Signale aus what_failed
+            for item in summary.what_failed[:3]:
+                if not item:
+                    continue
+                soul.apply_hook_feedback(item[:30], "negative")
+                feedback.record_signal(
+                    action_id=f"{action_id}_neg",
+                    signal="negative",
+                    context={"source": "reflection", "item": item[:80]},
+                )
+
+            log.info(
+                "M16 Reflection→Hooks: %d positiv, %d negativ",
+                len(summary.what_worked[:3]),
+                len(summary.what_failed[:3]),
+            )
+        except Exception as e:
+            log.debug("_apply_reflection_to_hooks: %s", e)
 
     async def _send_telegram(self, summary: ReflectionSummary) -> None:
         """Telegram-Push mit Reflexions-Zusammenfassung."""

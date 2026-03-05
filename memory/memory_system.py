@@ -965,7 +965,20 @@ class MemoryManager:
         except Exception:
             pass
 
-        # 2. Direkter ChromaDB-Fallback (immer verfügbar, kein mcp_server nötig)
+        # 2. Backend-Switch: Qdrant oder ChromaDB (M16)
+        memory_backend = os.getenv("MEMORY_BACKEND", "chromadb").lower()
+
+        if memory_backend == "qdrant":
+            try:
+                from memory.qdrant_provider import QdrantProvider
+                qdrant = QdrantProvider()
+                self.semantic_store = SemanticMemoryStore(qdrant)
+                log.info("✅ SemanticMemoryStore via Qdrant initialisiert")
+                return
+            except Exception as e:
+                log.warning("Qdrant-Backend fehlgeschlagen, Fallback auf ChromaDB: %s", e)
+
+        # Direkter ChromaDB-Fallback (immer verfügbar, kein mcp_server nötig)
         try:
             import chromadb
             from utils.embedding_provider import get_embedding_function

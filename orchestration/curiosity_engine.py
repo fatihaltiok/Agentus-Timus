@@ -93,6 +93,9 @@ class CuriosityEngine:
         """
         self._app = telegram_app
         self._running = False
+        # M16: Topic-Scores für adaptive Auswahl (feedback-gewichtet)
+        self._topic_scores: Dict[str, float] = {}
+        self._topic_last_feedback: Dict[str, str] = {}  # topic → ISO timestamp
 
     # ---------------------------------------------------------------
     # Fuzzy Loop
@@ -260,8 +263,15 @@ class CuriosityEngine:
         except Exception as e:
             log.debug("DB-Topics fehlgeschlagen: %s", e)
 
+        # M16: Topic-Scores mit Feedback-Gewichtung kombinieren
+        self._decay_stale_topic_scores()
+        weighted: Counter = Counter()
+        for topic, base_count in topics_combined.items():
+            feedback_boost = self._topic_scores.get(topic, 1.0)
+            weighted[topic] = int(base_count * feedback_boost)
+
         # Top-3 zurückgeben
-        return [topic for topic, _ in topics_combined.most_common(3)]
+        return [topic for topic, _ in (weighted if weighted else topics_combined).most_common(3)]
 
     # ---------------------------------------------------------------
     # Suchanfrage via LLM
@@ -457,37 +467,80 @@ class CuriosityEngine:
                 f"🔗 {result.get('url', '')}"
             )
 
-        # Telegram senden
-        token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-        allowed_ids = os.getenv("TELEGRAM_ALLOWED_IDS", "")
-
-        if not token or not allowed_ids:
-            log.warning("Curiosity: TELEGRAM_BOT_TOKEN oder TELEGRAM_ALLOWED_IDS fehlt")
-            return raw_msg
-
-        chat_ids = [int(x.strip()) for x in allowed_ids.split(",") if x.strip()]
-        if not chat_ids:
-            log.warning("Curiosity: Keine Chat-IDs konfiguriert")
-            return raw_msg
-
+        # Telegram senden (M16: mit Feedback-Buttons)
+        action_id = result.get("url", "") or str(id(result))
         try:
-            from telegram import Bot
-            bot = Bot(token=token)
-            for chat_id in chat_ids:
-                try:
-                    await bot.send_message(
-                        chat_id=chat_id,
-                        text=raw_msg,
-                        parse_mode="Markdown",
-                    )
-                    log.info("Curiosity: Telegram-Nachricht an %d gesendet", chat_id)
-                except Exception as e:
-                    log.warning("Curiosity: Senden an %d fehlgeschlagen: %s", chat_id, e)
-            await bot.close()
+            from utils.telegram_notify import send_with_feedback
+            await send_with_feedback(
+                raw_msg,
+                action_id=action_id,
+                hook_names=["curiosity_push", topics[0] if topics else "curiosity"],
+            )
+            log.info("Curiosity: Telegram-Nachricht mit Feedback-Buttons gesendet")
         except Exception as e:
-            log.warning("Curiosity: Telegram-Bot-Fehler: %s", e)
+            log.warning("Curiosity: Telegram-Push fehlgeschlagen: %s", e)
 
         return raw_msg
+
+    # ---------------------------------------------------------------
+    # M16: Topic-Score Management (Feedback-adaptive)
+    # ---------------------------------------------------------------
+
+    def update_topic_score(self, topic: str, signal: str) -> None:
+        """
+        Aktualisiert den Score eines Topics basierend auf Feedback.
+
+        positive → score += 0.1
+        negative → score -= 0.1
+        neutral  → kein Effekt
+
+        Score wird in [0.1, 3.0] geclamped.
+        """
+        if signal not in {"positive", "negative", "neutral"}:
+            return
+
+        current = self._topic_scores.get(topic, 1.0)
+        if signal == "positive":
+            self._topic_scores[topic] = max(0.1, min(3.0, current + 0.1))
+        elif signal == "negative":
+            self._topic_scores[topic] = max(0.1, min(3.0, current - 0.1))
+
+        self._topic_last_feedback[topic] = datetime.now().isoformat()
+
+    def get_topic_score(self, topic: str) -> float:
+        """Gibt den aktuellen Score eines Topics zurück (default: 1.0)."""
+        return self._topic_scores.get(topic, 1.0)
+
+    def _decay_stale_topic_scores(self) -> None:
+        """
+        Reduziert Scores für Topics ohne Feedback seit > 7 Tagen.
+        Score × 0.9 (Richtung 1.0).
+        """
+        cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+        for topic in list(self._topic_scores.keys()):
+            last_fb = self._topic_last_feedback.get(topic)
+            if last_fb and last_fb < cutoff:
+                current = self._topic_scores[topic]
+                if current > 1.0:
+                    self._topic_scores[topic] = max(1.0, current * 0.9)
+                elif current < 1.0:
+                    self._topic_scores[topic] = min(1.0, current / 0.9)
+
+    def _load_topic_scores_from_feedback(self) -> None:
+        """
+        Initialisiert topic_scores aus FeedbackEngine-History.
+        Wird beim Start aufgerufen.
+        """
+        try:
+            from orchestration.feedback_engine import get_feedback_engine
+            engine = get_feedback_engine()
+            events = engine.get_recent_events(limit=100)
+            for event in events:
+                topic = event.context.get("topic")
+                if topic and event.signal in {"positive", "negative"}:
+                    self.update_topic_score(topic, event.signal)
+        except Exception as e:
+            log.debug("_load_topic_scores_from_feedback: %s", e)
 
     # ---------------------------------------------------------------
     # Anti-Spam / Duplicate Prevention

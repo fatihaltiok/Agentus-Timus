@@ -15,6 +15,7 @@ import os
 import re
 import json
 import logging
+from dataclasses import dataclass, field
 from datetime import datetime, date
 from pathlib import Path
 from typing import Dict, List, Any, Optional
@@ -30,6 +31,46 @@ DRIFT_ENABLED = os.getenv("SOUL_DRIFT_ENABLED", "true").lower() == "true"
 DRIFT_DAMPING = float(os.getenv("SOUL_DRIFT_DAMPING", "0.1"))
 CLAMP_MIN = float(os.getenv("SOUL_AXES_CLAMP_MIN", "5"))
 CLAMP_MAX = float(os.getenv("SOUL_AXES_CLAMP_MAX", "95"))
+
+# M16: Weighted Hooks
+FEEDBACK_DELTA = float(os.getenv("M16_FEEDBACK_DELTA", "0.15"))
+HOOK_MIN_WEIGHT = float(os.getenv("M16_HOOK_MIN_WEIGHT", "0.05"))
+HOOK_MAX_WEIGHT = 2.0
+HOOK_DECAY_RATE = float(os.getenv("M16_HOOK_DECAY_RATE", "0.97"))
+
+
+@dataclass
+class WeightedHook:
+    """Behavior Hook mit Feedback-Gewichtung (M16)."""
+    text: str
+    weight: float = 1.0
+    feedback_count: int = 0
+
+    def apply_feedback(self, signal: str, delta: float = FEEDBACK_DELTA) -> None:
+        """
+        Ändert weight basierend auf Feedback-Signal.
+
+        positive → weight + delta
+        negative → weight - delta
+        neutral  → kein Effekt (Noop)
+        """
+        if signal == "positive":
+            self.weight = max(HOOK_MIN_WEIGHT, min(HOOK_MAX_WEIGHT, self.weight + delta))
+            self.feedback_count += 1
+        elif signal == "negative":
+            self.weight = max(HOOK_MIN_WEIGHT, min(HOOK_MAX_WEIGHT, self.weight - delta))
+            self.feedback_count += 1
+        # neutral: keine Änderung
+
+    def decay(self, rate: float = HOOK_DECAY_RATE) -> None:
+        """Täglicher Decay: weight × rate (Richtung 1.0 normalisieren)."""
+        if self.weight > 1.0:
+            self.weight = max(1.0, self.weight * rate)
+        elif self.weight < 1.0:
+            self.weight = min(1.0, self.weight / rate)
+
+    def is_active(self, threshold: float = 0.3) -> bool:
+        return self.weight >= threshold
 
 DEFAULT_AXES: Dict[str, float] = {
     "confidence": 50.0,
@@ -217,6 +258,96 @@ class SoulEngine:
         data["axes_updated_at"] = date.today().isoformat()
         self._write_frontmatter(data)
         self._axes_cache = None
+
+    # ---------------------------------------------------------------
+    # M16: Weighted Hooks API
+    # ---------------------------------------------------------------
+
+    def get_weighted_hooks(self) -> List[WeightedHook]:
+        """
+        Liest weighted_hooks aus SOUL.md Frontmatter.
+        Fallback: behavior_hooks als ungewichtete Hooks (weight=1.0).
+        """
+        data = self._read_frontmatter()
+        weighted_raw = data.get("weighted_hooks", [])
+        if weighted_raw and isinstance(weighted_raw, list):
+            hooks = []
+            for item in weighted_raw:
+                if isinstance(item, dict):
+                    hooks.append(WeightedHook(
+                        text=item.get("text", ""),
+                        weight=float(item.get("weight", 1.0)),
+                        feedback_count=int(item.get("feedback_count", 0)),
+                    ))
+                elif isinstance(item, str):
+                    hooks.append(WeightedHook(text=item))
+            return hooks
+
+        # Fallback: behavior_hooks (plain list) → WeightedHook(weight=1.0)
+        behavior = data.get("behavior_hooks", [])
+        if isinstance(behavior, list):
+            return [WeightedHook(text=h) for h in behavior if h]
+        return []
+
+    def set_weighted_hooks(self, hooks: List[WeightedHook]) -> None:
+        """Schreibt weighted_hooks in SOUL.md Frontmatter."""
+        data = self._read_frontmatter()
+        data["weighted_hooks"] = [
+            {
+                "text": h.text,
+                "weight": round(h.weight, 4),
+                "feedback_count": h.feedback_count,
+            }
+            for h in hooks
+        ]
+        data["weighted_hooks_updated_at"] = date.today().isoformat()
+        self._write_frontmatter(data)
+
+    def apply_hook_feedback(self, hook_name: str, signal: str) -> bool:
+        """
+        Wendet Feedback-Signal auf einen Hook an (Suche nach Teilstring).
+
+        Args:
+            hook_name: Suchbegriff (Teilstring des Hook-Textes)
+            signal: "positive", "negative" oder "neutral"
+
+        Returns:
+            True wenn Hook gefunden und aktualisiert wurde
+        """
+        hooks = self.get_weighted_hooks()
+        updated = False
+        for hook in hooks:
+            if hook_name.lower() in hook.text.lower() or hook.text.lower() in hook_name.lower():
+                hook.apply_feedback(signal)
+                updated = True
+        if updated:
+            self.set_weighted_hooks(hooks)
+            log.info("Hook-Feedback angewendet: %r signal=%s", hook_name, signal)
+        return updated
+
+    def decay_hooks(self) -> int:
+        """
+        Täglicher Decay aller Hook-Weights (×HOOK_DECAY_RATE).
+        Gibt Anzahl der geänderten Hooks zurück.
+        """
+        hooks = self.get_weighted_hooks()
+        changed = 0
+        for hook in hooks:
+            old = hook.weight
+            hook.decay()
+            if abs(hook.weight - old) > 0.001:
+                changed += 1
+        if changed > 0:
+            self.set_weighted_hooks(hooks)
+            log.info("Hook-Decay: %d Hooks angepasst", changed)
+        return changed
+
+    def get_active_hooks(self, threshold: float = 0.3) -> List[WeightedHook]:
+        """
+        Gibt nur aktive Hooks zurück (weight >= threshold).
+        Hooks unter dem Threshold werden als inaktiv betrachtet.
+        """
+        return [h for h in self.get_weighted_hooks() if h.is_active(threshold)]
 
     def get_tone_descriptor(self) -> str:
         """

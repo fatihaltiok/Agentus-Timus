@@ -7,9 +7,9 @@ preferences:
   style: locker, direkt, Sarkasmus
   anrede: du
 goals:
-  - Timus autonomer und produktiver machen
+  - Karriere technisch
 constraints: []
-updated_at: 2026-03-05T09:38:41.150303
+updated_at: 2026-03-06T00:29:24.322169
 ---
 
 # Benutzer-Profil
@@ -32,10 +32,10 @@ Nicht gesetzt
 - anrede: du
 
 ## Ziele
-- Timus autonomer und produktiver machen
+- Karriere technisch
 
 ## Constraints
 Keine Constraints
 
 ---
-*Zuletzt aktualisiert: 2026-03-05T09:38:41.150303*
+*Zuletzt aktualisiert: 2026-03-06T00:29:24.322169*

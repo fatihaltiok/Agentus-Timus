@@ -36,6 +36,7 @@ from telegram import Update
 from telegram.constants import ChatAction, ParseMode
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -1009,6 +1010,113 @@ async def handle_document_message(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text(f"❌ Fehler beim Empfangen der Datei: {e}")
 
 
+async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    M16: Verarbeitet InlineKeyboard-Callbacks (👍/👎/🤷).
+    Speichert Signal in FeedbackEngine, bestätigt den Callback via Telegram ACK.
+    """
+    query = update.callback_query
+    if not query:
+        return
+
+    user = update.effective_user
+    if not _is_allowed(user.id):
+        await query.answer("⛔ Kein Zugriff")
+        return
+
+    try:
+        data = json.loads(query.data)
+    except (json.JSONDecodeError, TypeError):
+        await query.answer("❌ Ungültige Callback-Daten")
+        return
+
+    # Dispatch nach type-Feld (M14/M13 nutzen type-Feld; M16-Feedback hat keins)
+    cb_type = data.get("type", "feedback")
+
+    # M14: E-Mail-Approval
+    if cb_type == "email_approve":
+        action_id = data.get("aid", "")
+        try:
+            from orchestration.email_autonomy_engine import get_email_autonomy_engine
+            get_email_autonomy_engine().execute_if_approved(action_id, approved=True)
+            await query.answer("✅ E-Mail wird gesendet")
+            log.info("M14: E-Mail-Approval: aid=%s user=%d", action_id, user.id)
+        except Exception as e:
+            log.warning("M14: E-Mail-Approval fehlgeschlagen: %s", e)
+            await query.answer("⚠️ Fehler bei E-Mail-Approval")
+        return
+
+    if cb_type == "email_reject":
+        action_id = data.get("aid", "")
+        try:
+            from orchestration.email_autonomy_engine import get_email_autonomy_engine
+            get_email_autonomy_engine().execute_if_approved(action_id, approved=False)
+            await query.answer("❌ E-Mail abgebrochen")
+            log.info("M14: E-Mail abgelehnt: aid=%s user=%d", action_id, user.id)
+        except Exception as e:
+            log.warning("M14: E-Mail-Ablehnung fehlgeschlagen: %s", e)
+            await query.answer("⚠️ Fehler bei E-Mail-Ablehnung")
+        return
+
+    # M13: Tool-Approval
+    if cb_type == "tool_approve":
+        action_id = data.get("aid", "")
+        try:
+            from orchestration.tool_generator_engine import get_tool_generator_engine
+            success = get_tool_generator_engine().activate(action_id)
+            if success:
+                await query.answer("✅ Tool aktiviert!")
+            else:
+                await query.answer("⚠️ Aktivierung fehlgeschlagen")
+            log.info("M13: Tool-Approval: aid=%s user=%d success=%s", action_id, user.id, success)
+        except Exception as e:
+            log.warning("M13: Tool-Approval fehlgeschlagen: %s", e)
+            await query.answer("⚠️ Fehler bei Tool-Aktivierung")
+        return
+
+    if cb_type == "tool_reject":
+        action_id = data.get("aid", "")
+        try:
+            from orchestration.tool_generator_engine import get_tool_generator_engine
+            get_tool_generator_engine().reject(action_id)
+            await query.answer("❌ Tool abgelehnt")
+            log.info("M13: Tool abgelehnt: aid=%s user=%d", action_id, user.id)
+        except Exception as e:
+            log.warning("M13: Tool-Ablehnung fehlgeschlagen: %s", e)
+            await query.answer("⚠️ Fehler bei Tool-Ablehnung")
+        return
+
+    # M16-Feedback-Handler (Fallback für type="feedback" oder kein type-Feld)
+    signal = data.get("fb")
+    action_id = data.get("aid", "unknown")
+    hooks_raw = data.get("hooks", "[]")
+
+    if signal not in {"positive", "negative", "neutral"}:
+        await query.answer("❌ Unbekanntes Signal")
+        return
+
+    try:
+        hook_names = json.loads(hooks_raw) if isinstance(hooks_raw, str) else (hooks_raw or [])
+    except (json.JSONDecodeError, TypeError):
+        hook_names = []
+
+    # Signal in FeedbackEngine speichern
+    try:
+        from orchestration.feedback_engine import get_feedback_engine
+        get_feedback_engine().record_signal(
+            action_id=action_id,
+            signal=signal,
+            hook_names=hook_names,
+            context={"user_id": user.id, "username": getattr(user, "username", "")},
+        )
+        signal_emoji = {"positive": "👍", "negative": "👎", "neutral": "🤷"}.get(signal, "?")
+        await query.answer(f"{signal_emoji} Feedback gespeichert!")
+        log.info("M16 Feedback: user=%d action=%s signal=%s hooks=%s", user.id, action_id, signal, hook_names)
+    except Exception as e:
+        log.warning("M16 Feedback: Speichern fehlgeschlagen: %s", e)
+        await query.answer("⚠️ Feedback konnte nicht gespeichert werden")
+
+
 # ──────────────────────────────────────────────────────────────────
 # Gateway-Klasse
 # ──────────────────────────────────────────────────────────────────
@@ -1054,12 +1162,14 @@ class TelegramGateway:
             self._app.add_handler(
                 MessageHandler(filters.Document.ALL, handle_document_message)
             )
+            # M16: Feedback-Buttons
+            self._app.add_handler(CallbackQueryHandler(handle_callback_query))
 
             await self._app.initialize()
             await self._app.start()
             await self._app.updater.start_polling(
                 drop_pending_updates=True,
-                allowed_updates=["message"],
+                allowed_updates=["message", "callback_query"],
             )
             log.info("✅ Telegram-Bot aktiv (Polling läuft)")
             return True
