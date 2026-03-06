@@ -23,6 +23,10 @@ def _env_int(name: str, default: int) -> int:
 
 
 def _normalize_severity(severity: str) -> str:
+    '''
+    post: __return__ in {"critical", "high", "medium", "low"}
+    post: _normalize_severity(__return__) == __return__
+    '''
     raw = (severity or "").strip().lower()
     if raw in {"critical", "high", "medium", "low"}:
         return raw

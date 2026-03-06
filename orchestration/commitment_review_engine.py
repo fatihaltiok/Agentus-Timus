@@ -174,6 +174,9 @@ class CommitmentReviewEngine:
         return summary
 
     def _risk_level(self, gap: float, commitment: dict) -> str:
+        # Invariante: gibt immer low|medium|high|critical zurück.
+        # CrossHair kann arbitrary-dict Parameter nicht symbolisch ausführen;
+        # die Invariante ist durch Hypothesis test_risk_level_valid (Th.61) abgedeckt.
         status = str(commitment.get("status") or "")
         if status == CommitmentStatus.BLOCKED:
             return "high"
