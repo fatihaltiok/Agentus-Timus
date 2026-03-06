@@ -1290,6 +1290,166 @@ _TEMPLATE = r"""<!doctype html>
             </div>
           </div>
 
+          <!-- Autonomie-Kern -->
+          <div class="auto-card full" style="margin-bottom:10px;">
+            <h3 style="margin-bottom:8px;">Autonomie-Kern</h3>
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">M1 Zielhierarchie</span>
+                <span class="setting-desc">Eigenständige Zielgenerierung aus Memory + Curiosity</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="goalsToggle" onchange="onResearchToggle(this,'AUTONOMY_GOALS_ENABLED','M1 Zielhierarchie')">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">M2 Langzeit-Planung</span>
+                <span class="setting-desc">Mehrstufige Aufgabenplanung &uuml;ber mehrere Sessions</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="planningToggle" onchange="onResearchToggle(this,'AUTONOMY_PLANNING_ENABLED','M2 Langzeit-Planung')">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">M3 Self-Healing</span>
+                <span class="setting-desc">Automatische Fehlererkennung und Selbstreparatur</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="healingToggle" onchange="onResearchToggle(this,'AUTONOMY_SELF_HEALING_ENABLED','M3 Self-Healing')">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">M5 Scorecard</span>
+                <span class="setting-desc">Autonomie-Metriken: Aufgaben, Erfolgsrate, Uptime</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="scorecardToggle" onchange="onResearchToggle(this,'AUTONOMY_SCORECARD_ENABLED','M5 Scorecard')">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">LLM-Diagnose</span>
+                <span class="setting-desc">Ursachenanalyse bei Fehlern per LLM</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="llmDiagToggle" onchange="onResearchToggle(this,'AUTONOMY_LLM_DIAGNOSIS_ENABLED','LLM-Diagnose')">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">Meta-Analyse</span>
+                <span class="setting-desc">Systemweite Analyse alle 60 Min &mdash; Routing + Tool-Performance</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="metaAnalysisToggle" onchange="onResearchToggle(this,'AUTONOMY_META_ANALYSIS_ENABLED','Meta-Analyse')">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Autonomie-Erweiterungen -->
+          <div class="auto-card full" style="margin-bottom:10px;">
+            <h3 style="margin-bottom:8px;">Autonomie-Erweiterungen</h3>
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">M8 Session-Reflexion</span>
+                <span class="setting-desc">End-of-Session-Analyse &amp; Verbesserungsvorschl&auml;ge</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="reflectionToggle" onchange="onResearchToggle(this,'AUTONOMY_REFLECTION_ENABLED','M8 Session-Reflexion')">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">M9 Agent Blackboard</span>
+                <span class="setting-desc">Gemeinsamer Kontext-Speicher zwischen Agenten (TTL)</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="blackboardToggle" onchange="onResearchToggle(this,'AUTONOMY_BLACKBOARD_ENABLED','M9 Agent Blackboard')">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">M10 Proaktive Trigger</span>
+                <span class="setting-desc">Zeitgesteuerte Routinen (Morning 08:00 / Evening 20:00)</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="triggersToggle" onchange="onResearchToggle(this,'AUTONOMY_PROACTIVE_TRIGGERS_ENABLED','M10 Proaktive Trigger')">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">M11 Ziel-Queue</span>
+                <span class="setting-desc">Persistente Ziel-Hierarchie mit Fortschritts-Rollup</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="goalQueueToggle" onchange="onResearchToggle(this,'AUTONOMY_GOAL_QUEUE_ENABLED','M11 Ziel-Queue')">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">M12 Selbstoptimierung</span>
+                <span class="setting-desc">Tool-Erfolgsraten &amp; Routing-Konfidenz-Tracking</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="selfImproveToggle" onchange="onResearchToggle(this,'AUTONOMY_SELF_IMPROVEMENT_ENABLED','M12 Selbstoptimierung')">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">M13 Tool-Generierung</span>
+                <span class="setting-desc">Eigene Tools schreiben &amp; per Telegram reviewen</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="m13Toggle" onchange="onResearchToggle(this,'AUTONOMY_M13_ENABLED','M13 Tool-Generierung')">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">M14 E-Mail-Autonomie</span>
+                <span class="setting-desc">Eigenst&auml;ndige E-Mails (Whitelist + Telegram-Freigabe)</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="m14Toggle" onchange="onResearchToggle(this,'AUTONOMY_M14_ENABLED','M14 E-Mail-Autonomie')">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">M15 Ambient Context</span>
+                <span class="setting-desc">Eigeninitiative aus E-Mail / Dateien / Zielen (alle 15 Min)</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="ambientToggle" onchange="onResearchToggle(this,'AUTONOMY_AMBIENT_CONTEXT_ENABLED','M15 Ambient Context')">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">M16 Feedback-Lernen</span>
+                <span class="setting-desc">&#128077;/&#128078; aus Telegram gewichtet Soul-Hooks um</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="m16Toggle" onchange="onResearchToggle(this,'AUTONOMY_M16_ENABLED','M16 Feedback-Lernen')">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+
           <!-- M8: Session-Reflexion -->
           <div class="auto-card full" style="margin-bottom:10px;">
             <h3>Session-Reflexion · M8</h3>
@@ -1719,14 +1879,32 @@ function updateSidebarScore(score, level) {
   fill.setAttribute("stroke", c);
 }
 
-// ── Research Settings ─────────────────────────────────────────────────────────
+// ── Research Settings + Autonomie-Flags ───────────────────────────────────────
 async function loadSettings() {
   try {
     const s = await api("/settings");
+    // Deep Research
     document.getElementById("arxivToggle").checked  = s["DEEP_RESEARCH_ARXIV_ENABLED"]  !== "false";
     document.getElementById("githubToggle").checked = s["DEEP_RESEARCH_GITHUB_ENABLED"] !== "false";
     document.getElementById("hfToggle").checked     = s["DEEP_RESEARCH_HF_ENABLED"]     !== "false";
     document.getElementById("edisonToggle").checked = s["DEEP_RESEARCH_EDISON_ENABLED"] === "true";
+    // Autonomie-Kern
+    document.getElementById("goalsToggle").checked        = s["AUTONOMY_GOALS_ENABLED"]          === "true";
+    document.getElementById("planningToggle").checked     = s["AUTONOMY_PLANNING_ENABLED"]        === "true";
+    document.getElementById("healingToggle").checked      = s["AUTONOMY_SELF_HEALING_ENABLED"]    === "true";
+    document.getElementById("scorecardToggle").checked    = s["AUTONOMY_SCORECARD_ENABLED"]       === "true";
+    document.getElementById("llmDiagToggle").checked      = s["AUTONOMY_LLM_DIAGNOSIS_ENABLED"]   === "true";
+    document.getElementById("metaAnalysisToggle").checked = s["AUTONOMY_META_ANALYSIS_ENABLED"]   === "true";
+    // Autonomie-Erweiterungen
+    document.getElementById("reflectionToggle").checked   = s["AUTONOMY_REFLECTION_ENABLED"]         === "true";
+    document.getElementById("blackboardToggle").checked   = s["AUTONOMY_BLACKBOARD_ENABLED"]          !== "false";
+    document.getElementById("triggersToggle").checked     = s["AUTONOMY_PROACTIVE_TRIGGERS_ENABLED"]  === "true";
+    document.getElementById("goalQueueToggle").checked    = s["AUTONOMY_GOAL_QUEUE_ENABLED"]          !== "false";
+    document.getElementById("selfImproveToggle").checked  = s["AUTONOMY_SELF_IMPROVEMENT_ENABLED"]    === "true";
+    document.getElementById("m13Toggle").checked          = s["AUTONOMY_M13_ENABLED"]                 === "true";
+    document.getElementById("m14Toggle").checked          = s["AUTONOMY_M14_ENABLED"]                 === "true";
+    document.getElementById("ambientToggle").checked      = s["AUTONOMY_AMBIENT_CONTEXT_ENABLED"]     !== "false";
+    document.getElementById("m16Toggle").checked          = s["AUTONOMY_M16_ENABLED"]                 === "true";
   } catch(e) { console.warn("Settings laden fehlgeschlagen:", e); }
 }
 

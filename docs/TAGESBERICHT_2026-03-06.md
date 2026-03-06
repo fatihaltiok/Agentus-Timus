@@ -137,16 +137,104 @@ Neue Soul Engine Methoden:
 
 ---
 
+### M16 — Aktivierung (Phase 0: send_with_feedback live)
+
+**Ziel:** M16 nicht nur implementiert, sondern wirklich eingeschaltet. Feedback-Buttons erscheinen ab sofort bei Ambient-Context und Curiosity-Pushes.
+
+- `AUTONOMY_M16_ENABLED=true` in `.env` gesetzt
+- `orchestration/ambient_context_engine.py` + `orchestration/curiosity_engine.py`: Telegram-Nachrichten gehen jetzt über `send_with_feedback()` statt `send_telegram()`
+- Jede autonome Push-Aktion bekommt 👍 👎 🤷 Buttons — Signale fließen direkt in `FeedbackEngine` und `WeightedHooks` ein
+
+---
+
+### M13 — Eigene Tool-Generierung
+
+**Ziel:** Timus erkennt wenn ihm ein Tool fehlt und generiert es selbst via Developer-Agent. AST-geprüft, Telegram-reviewed, per importlib aktiviert.
+
+**Neue Dateien:**
+- `orchestration/tool_generator_engine.py` — Kern-Engine: LLM-Generierung, AST-Sicherheitscheck, importlib-Aktivierung
+- `tools/tool_generator_tool/tool.py` — MCP-Tool: `generate_tool`, `list_generated_tools`, `activate_tool`
+- `tests/test_m13_tool_generator.py` — 28/28 Tests grün
+- `verify_m13.py` — 50/50 Checks grün
+
+**Sicherheits-Layer:**
+- AST-Check blockiert `eval`, `exec`, `__import__` im generierten Code
+- `MAX_CODE_LENGTH=5000` — kein unbegrenzter Code
+- Telegram-Review [✅/❌] vor Aktivierung (Stufe 1)
+- `gateway/telegram_gateway.py`: `tool_approve`/`tool_reject` Callbacks
+- `autonomous_runner.py`: `_m13_feature_enabled()`
+
+**Lean:** Theoreme 26 (`code_length_bound`) + 27 (`tool_approval_guard`), gesamt 27 Theoreme
+
+**ENV:**
+```env
+AUTONOMY_M13_ENABLED=false
+```
+
+---
+
+### M14 — E-Mail-Autonomie
+
+**Ziel:** Timus entscheidet selbst wann E-Mails sinnvoll sind. Policy-Layer mit Whitelist + Topic-Klassen + Confidence-Schwelle schützt vor ungewollten Aktionen.
+
+**Neue Dateien:**
+- `orchestration/email_autonomy_engine.py` — Entscheidungslogik: Whitelist-Guard, Topic-Check, Confidence-Threshold
+- `utils/smtp_email.py` — SMTP-Backend (Dual-Backend: smtp | msgraph)
+- `tools/email_autonomy_tool/tool.py` — MCP-Tool: `send_autonomous_email`, `get_email_queue`
+- `tests/test_m14_email_autonomy.py` — 27/27 Tests grün
+
+**Flow:**
+1. Timus entscheidet: E-Mail sinnvoll? → Whitelist + Topic + Confidence prüfen
+2. Entwurf → Telegram-Bestätigung [✅/❌] (Stufe 1)
+3. Nach Bestätigung: senden via SMTP oder Microsoft Graph
+
+**Lean:** Theoreme 24 (`whitelist_guard`) + 25 (`confidence_threshold`)
+
+**ENV:**
+```env
+AUTONOMY_M14_ENABLED=false
+EMAIL_BACKEND=smtp
+M14_EMAIL_WHITELIST=email@example.com
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USER=...
+SMTP_PASSWORD=...
+```
+
+---
+
+### Canvas — Flow-Tab + Farbige Delegations-Strahlen
+
+**Ziel:** Live-Diagramm im Canvas das zeigt wie Agenten kommunizieren. Wanderndes Licht entlang der Delegationspfade mit Status-Farben.
+
+**`agent/agent_registry.py`:**
+- `_delegation_sse_hook` jetzt auch bei `"completed"` und `"error"` — vorher nur `"running"`
+
+**`server/canvas_ui.py`:**
+- `BEAM_COLORS` — gelb (running), grün (completed), rot (error)
+- `animateDelegationBeam(fromId, toId, status)` — alle 3 Canvas-Gradienten dynamisch coloriert
+- `flashNode(agentId, status)` — Zielknoten leuchtet statusfarben auf
+- `handleSSE` — ruft parallel `animateFlowBeam()` auf wenn Flow-Tab aktiv
+- **Neuer Flow-Tab** mit vollständigem System-Hierarchie-Graph:
+  - 23 Nodes: Telegram/Terminal → Dispatcher → MetaAgent → 11 Executor-Agenten + AutonomousRunner → 7 Autonomie-Motoren (M1/M3/M8/M13/M14/M15/M16)
+  - dagre LR-Layout, Zoom-Controls (＋/－/Fit), Minimap, Drag+Wheel-Zoom
+  - CDN: dagre@0.8.5 + cytoscape-dagre@2.5.0
+
+---
+
 ## Ergebnisse
 
 | Metrik | Wert |
 |--------|------|
-| Tests (pytest) | **78/78 grün** |
+| Tests (pytest) — M16 | **78/78 grün** |
 | verify_m16.py | **79/79 Checks grün** |
-| Lean CiSpecs.lean | **23 Theoreme, 0 Fehler** |
+| Tests — M13 | **28/28 grün** |
+| verify_m13.py | **50/50 Checks grün** |
+| Tests — M14 | **27/27 grün** |
+| Lean CiSpecs.lean | **27 Theoreme, 0 Fehler** |
 | Mathlib-Specs | **12 Specs** |
-| Neue Dateien | 8 |
-| Modifizierte Dateien | 9 |
+| Neue Dateien gesamt | 14 |
+| Modifizierte Dateien gesamt | 13 |
 
 ---
 
@@ -162,42 +250,68 @@ Neue Soul Engine Methoden:
 | `tests/test_m16_qdrant.py` | 17 Tests: QdrantProvider |
 | `tests/test_m16_integration.py` | 23 Tests: Curiosity + Reflexion |
 | `verify_m16.py` | 79 automatische Checks |
+| `orchestration/tool_generator_engine.py` | M13: LLM-Tool-Generierung + AST-Check |
+| `tools/tool_generator_tool/tool.py` | M13: MCP-Interface |
+| `tests/test_m13_tool_generator.py` | M13: 28 Tests |
+| `verify_m13.py` | M13: 50 Checks |
+| `orchestration/email_autonomy_engine.py` | M14: E-Mail-Entscheidungslogik |
+| `utils/smtp_email.py` | M14: SMTP-Backend |
+| `tools/email_autonomy_tool/tool.py` | M14: MCP-Interface |
+| `tests/test_m14_email_autonomy.py` | M14: 27 Tests |
 
 ## Neue ENV-Flags
 
 ```env
-AUTONOMY_M16_ENABLED=false   # Aktivierung
-M16_FEEDBACK_DELTA=0.15      # Weight-Änderung pro 👍/👎
-M16_HOOK_MIN_WEIGHT=0.05     # Boden-Gewicht
-M16_HOOK_DECAY_RATE=0.97     # Täglicher Decay-Faktor
+# M16 — Lernfähigkeit
+AUTONOMY_M16_ENABLED=true    # Heute aktiviert
+M16_FEEDBACK_DELTA=0.15
+M16_HOOK_MIN_WEIGHT=0.05
+M16_HOOK_DECAY_RATE=0.97
 MEMORY_BACKEND=chromadb      # chromadb oder qdrant
 QDRANT_PATH=./data/qdrant_db
 QDRANT_COLLECTION=timus_memory
+
+# M13 — Tool-Generierung
+AUTONOMY_M13_ENABLED=false
+
+# M14 — E-Mail-Autonomie
+AUTONOMY_M14_ENABLED=false
+EMAIL_BACKEND=smtp
+M14_EMAIL_WHITELIST=
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_USER=
+SMTP_PASSWORD=
 ```
 
 ---
 
 ## Commits heute
 
-Noch kein Commit — M16 wartet auf Commit-Freigabe.
+| Hash | Beschreibung |
+|------|-------------|
+| `b10646d` | feat(v4.1): M16 aktivieren + M14 E-Mail-Autonomie + M13 Tool-Generierung |
+| `26b8054` | chore: TIMUS_INVENTORY.md → docs/archive/ |
+| `966991c` | docs: ARCHITECTURE.md anlegen (v4.1, vollständig) |
+| `20be119` | feat(canvas): Flow-Tab + farbige Delegations-Strahlen (gelb/grün/rot) |
 
 ---
 
 ## Offene Aufgaben (Roadmap)
 
 ### 🔴 Sofort aktivierbar
-- `AUTONOMY_M16_ENABLED=true` setzen → Feedback-Loop live
 - `MEMORY_BACKEND=qdrant` testen → Migration mit `migrate_chromadb_to_qdrant.py`
+- `AUTONOMY_M13_ENABLED=true` + SMTP-Zugangsdaten → M14 live
+- `TRIGGER_EVENING_ENABLED=true` → automatischer Tagesbericht um 20:00
 
 ### 🟡 Mittelfristig
-- Demo-Video produzieren (M15 + M16 live zeigen)
-- GitHub: Architecture-Diagramm + CONTRIBUTING.md + Docker-Setup
-- M16-Stufe 2: `send_with_feedback()` in bestehende Autonomie-Aktionen einbauen
-  (Ambient Context Engine Nachrichten, Curiosity-Pushes)
+- Demo-Video produzieren (M15 + M16 live zeigen: Timus erkennt selbst, bekommt Feedback, lernt)
+- GitHub: CONTRIBUTING.md + Docker-Setup (damit jemand in 5 Min starten kann)
+- HuggingFace Space mit Live-Demo
 
 ### 🟢 Niedrig
-- M13 Eigene Tool-Generierung
-- M14 E-Mail-Autonomie vollständig
+- Qdrant Cloud / externe SSD als Speicher-Erweiterung
+- `TRIGGER_MORNING_ENABLED=true` → Morgen-Routine (E-Mail-Zusammenfassung 08:00)
 
 ---
 
@@ -211,9 +325,9 @@ Noch kein Commit — M16 wartet auf Commit-Freigabe.
 | M10 Proactive Triggers | ✅ implementiert (Flag: false) |
 | M11 Goal Queue | ✅ live |
 | M12 Self-Improvement | ✅ implementiert (Flag: false) |
+| M13 Tool-Generierung | ✅ implementiert (Flag: false) |
+| M14 E-Mail-Autonomie | ✅ implementiert (Flag: false) |
 | M15 Ambient Context Engine | ✅ live |
-| **M16 Echte Lernfähigkeit** | ✅ implementiert (Flag: false — Aktivierung jederzeit) |
-| M13 Tool-Generierung | ❌ geplant |
-| M14 E-Mail-Autonomie | ❌ geplant |
+| **M16 Echte Lernfähigkeit** | ✅ live (heute aktiviert) |
 
-**Nächster Schritt:** Demo-Video — M15 + M16 gemeinsam zeigen (Timus erkennt selbst was zu tun ist, bekommt Feedback, lernt).
+**Nächster Schritt:** Demo-Video — M15 + M16 gemeinsam zeigen (Timus erkennt selbst was zu tun ist, bekommt Feedback, lernt dauerhaft).

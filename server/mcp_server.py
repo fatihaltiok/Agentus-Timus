@@ -1504,15 +1504,33 @@ async def autonomy_improvement_endpoint():
 _voice_listen_task: asyncio.Task | None = None
 
 
-@app.get("/settings", summary="Research-Settings auslesen (Runtime)")
+@app.get("/settings", summary="Feature-Flags auslesen (Runtime)")
 async def get_settings():
-    """Gibt die aktuellen Deep-Research-Feature-Flags zurück."""
+    """Gibt alle Feature-Flags zurück (Deep-Research + Autonomie)."""
     return {
+        # -- Deep Research --
         "DEEP_RESEARCH_ARXIV_ENABLED":   os.getenv("DEEP_RESEARCH_ARXIV_ENABLED",   "true"),
         "DEEP_RESEARCH_GITHUB_ENABLED":  os.getenv("DEEP_RESEARCH_GITHUB_ENABLED",  "true"),
         "DEEP_RESEARCH_HF_ENABLED":      os.getenv("DEEP_RESEARCH_HF_ENABLED",      "true"),
         "DEEP_RESEARCH_EDISON_ENABLED":  os.getenv("DEEP_RESEARCH_EDISON_ENABLED",  "false"),
         "DEEP_RESEARCH_YOUTUBE_ENABLED": os.getenv("DEEP_RESEARCH_YOUTUBE_ENABLED", "true"),
+        # -- Autonomie-Kern (M1–M7) --
+        "AUTONOMY_GOALS_ENABLED":             os.getenv("AUTONOMY_GOALS_ENABLED",             "false"),
+        "AUTONOMY_PLANNING_ENABLED":          os.getenv("AUTONOMY_PLANNING_ENABLED",          "false"),
+        "AUTONOMY_SELF_HEALING_ENABLED":      os.getenv("AUTONOMY_SELF_HEALING_ENABLED",      "false"),
+        "AUTONOMY_SCORECARD_ENABLED":         os.getenv("AUTONOMY_SCORECARD_ENABLED",         "false"),
+        "AUTONOMY_LLM_DIAGNOSIS_ENABLED":     os.getenv("AUTONOMY_LLM_DIAGNOSIS_ENABLED",     "false"),
+        "AUTONOMY_META_ANALYSIS_ENABLED":     os.getenv("AUTONOMY_META_ANALYSIS_ENABLED",     "false"),
+        # -- Autonomie-Erweiterungen (M8–M16) --
+        "AUTONOMY_REFLECTION_ENABLED":         os.getenv("AUTONOMY_REFLECTION_ENABLED",         "false"),
+        "AUTONOMY_BLACKBOARD_ENABLED":         os.getenv("AUTONOMY_BLACKBOARD_ENABLED",         "true"),
+        "AUTONOMY_PROACTIVE_TRIGGERS_ENABLED": os.getenv("AUTONOMY_PROACTIVE_TRIGGERS_ENABLED", "false"),
+        "AUTONOMY_GOAL_QUEUE_ENABLED":         os.getenv("AUTONOMY_GOAL_QUEUE_ENABLED",         "true"),
+        "AUTONOMY_SELF_IMPROVEMENT_ENABLED":   os.getenv("AUTONOMY_SELF_IMPROVEMENT_ENABLED",   "false"),
+        "AUTONOMY_M13_ENABLED":                os.getenv("AUTONOMY_M13_ENABLED",                "false"),
+        "AUTONOMY_M14_ENABLED":                os.getenv("AUTONOMY_M14_ENABLED",                "false"),
+        "AUTONOMY_AMBIENT_CONTEXT_ENABLED":    os.getenv("AUTONOMY_AMBIENT_CONTEXT_ENABLED",    "true"),
+        "AUTONOMY_M16_ENABLED":                os.getenv("AUTONOMY_M16_ENABLED",                "false"),
     }
 
 
@@ -1520,11 +1538,29 @@ async def get_settings():
 async def update_setting(request: Request):
     """Setzt einen Feature-Flag zur Laufzeit und persistiert ihn in data/runtime_settings.json."""
     _ALLOWED = {
+        # Deep Research
         "DEEP_RESEARCH_ARXIV_ENABLED",
         "DEEP_RESEARCH_GITHUB_ENABLED",
         "DEEP_RESEARCH_HF_ENABLED",
         "DEEP_RESEARCH_EDISON_ENABLED",
         "DEEP_RESEARCH_YOUTUBE_ENABLED",
+        # Autonomie-Kern
+        "AUTONOMY_GOALS_ENABLED",
+        "AUTONOMY_PLANNING_ENABLED",
+        "AUTONOMY_SELF_HEALING_ENABLED",
+        "AUTONOMY_SCORECARD_ENABLED",
+        "AUTONOMY_LLM_DIAGNOSIS_ENABLED",
+        "AUTONOMY_META_ANALYSIS_ENABLED",
+        # Autonomie-Erweiterungen
+        "AUTONOMY_REFLECTION_ENABLED",
+        "AUTONOMY_BLACKBOARD_ENABLED",
+        "AUTONOMY_PROACTIVE_TRIGGERS_ENABLED",
+        "AUTONOMY_GOAL_QUEUE_ENABLED",
+        "AUTONOMY_SELF_IMPROVEMENT_ENABLED",
+        "AUTONOMY_M13_ENABLED",
+        "AUTONOMY_M14_ENABLED",
+        "AUTONOMY_AMBIENT_CONTEXT_ENABLED",
+        "AUTONOMY_M16_ENABLED",
     }
     try:
         payload = await request.json()
