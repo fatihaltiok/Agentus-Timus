@@ -149,6 +149,97 @@ class DeepResearchAgent(BaseAgent):
             log.debug("Blackboard nicht abrufbar: %s", exc)
             return ""
 
+    # ------------------------------------------------------------------
+    # 3a: Source-Ranking + Duplikat-Filter (Phase 3)
+    # ------------------------------------------------------------------
+
+    MAX_RANKING_SCORE = 10  # Lean: research_ranking_score_bound
+
+    _HIGH_AUTHORITY_DOMAINS = frozenset({
+        "arxiv.org", "nature.com", "science.org", "github.com",
+        "openai.com", "anthropic.com", "deepmind.com", "huggingface.co",
+        "ieee.org", "acm.org", "springer.com", "semanticscholar.org",
+    })
+
+    @staticmethod
+    def _normalize_url(url: str) -> str:
+        """Entfernt Query-Parameter und Trailing Slashes für Duplikat-Vergleich."""
+        url = (url or "").strip().lower()
+        for prefix in ("https://", "http://", "www."):
+            if url.startswith(prefix):
+                url = url[len(prefix):]
+        return url.split("?")[0].rstrip("/")
+
+    @classmethod
+    def _deduplicate_sources(cls, sources: list) -> list:
+        """
+        Entfernt Duplikate anhand normalisierter URL.
+        unique_count ≤ total_count — Lean Th.45: research_dedup_bound
+
+        Args:
+            sources: Liste von Dicts mit mindestens {'url': str}
+        Returns:
+            Deduplizierte Liste (unique ≤ len(sources))
+        """
+        seen: set = set()
+        unique: list = []
+        for s in sources:
+            key = cls._normalize_url(s.get("url", "") or s.get("link", ""))
+            if key and key not in seen:
+                seen.add(key)
+                unique.append(s)
+            elif not key:
+                unique.append(s)  # Ohne URL immer behalten
+        return unique
+
+    @classmethod
+    def _rank_sources(cls, sources: list) -> list:
+        """
+        Berechnet Ranking-Score ∈ [0, 10] für jede Quelle.
+        Lean Th.46: research_ranking_score_bound: 0 ≤ max 0 (min 10 score) ≤ 10
+
+        Score-Bestandteile:
+          +2 High-Authority-Domain (arxiv, nature, github, …)
+          +2 Verifiziert / relevance_score ≥ 0.8
+          +1 Aktualität (published_year >= aktuelles Jahr - 1)
+          Rest: Basis-Score aus relevance_score × 5
+        """
+        from datetime import datetime
+        current_year = datetime.now().year
+
+        result = []
+        for s in sources:
+            score = 0.0
+            url = (s.get("url") or s.get("link") or "").lower()
+
+            # Domain-Autorität
+            for domain in cls._HIGH_AUTHORITY_DOMAINS:
+                if domain in url:
+                    score += 2
+                    break
+
+            # Relevanz-Score (0–1) → 0–5
+            relevance = float(s.get("relevance_score") or s.get("score") or 0)
+            score += relevance * 5
+
+            # Verifizierung
+            if s.get("verified") or relevance >= 0.8:
+                score += 2
+
+            # Aktualität
+            year = s.get("published_year") or s.get("year")
+            try:
+                if year and int(year) >= current_year - 1:
+                    score += 1
+            except (ValueError, TypeError):
+                pass
+
+            # Clamp [0, MAX_RANKING_SCORE]
+            s["ranking_score"] = max(0, min(cls.MAX_RANKING_SCORE, round(score, 2)))
+            result.append(s)
+
+        return sorted(result, key=lambda x: x["ranking_score"], reverse=True)
+
     def _get_recent_curiosity_topics(self) -> str:
         """Gibt die letzten Curiosity-Topics aus der DB zurück."""
         try:

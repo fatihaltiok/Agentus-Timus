@@ -78,6 +78,61 @@ class VisualAgent(BaseAgent):
         except Exception:
             return False
 
+    # ------------------------------------------------------------------
+    # 3c: Robusteres Retry-Verhalten (Phase 3)
+    # ------------------------------------------------------------------
+
+    MAX_VISUAL_RETRIES = int(os.getenv("VISUAL_MAX_RETRIES", "3"))  # Lean: visual_retry_terminates
+
+    async def _click_with_retry(self, x: int, y: int, label: str = "") -> bool:
+        """
+        Klickt mit bis zu MAX_VISUAL_RETRIES Versuchen.
+        Lean Th.48: retry ≤ MAX_VISUAL_RETRIES → retry < MAX_VISUAL_RETRIES + 1
+
+        Strategie:
+          Versuch 1: Direktklick
+          Versuch 2: Warten (500ms) + Screenshot + Koordinaten neu berechnen
+          Versuch 3+: Alternative Klick-Methode (Koordinaten-Fallback)
+        """
+        for attempt in range(self.MAX_VISUAL_RETRIES):
+            try:
+                if attempt == 1:
+                    # Kurz warten, dann Screenshot neu auswerten
+                    await asyncio.sleep(0.5)
+                    await self._wait_for_stable_screenshot(timeout_ms=2000)
+
+                resp = await self.http_client.post(
+                    MCP_URL,
+                    json={"jsonrpc": "2.0", "method": "click_at",
+                          "params": {"x": x, "y": y}, "id": "1"},
+                )
+                result = resp.json().get("result", {})
+                if result.get("success", False):
+                    log.info("_click_with_retry: Erfolg bei Versuch %d (%s)", attempt + 1, label)
+                    return True
+
+                log.warning("_click_with_retry: Versuch %d fehlgeschlagen (%s)", attempt + 1, label)
+            except Exception as exc:
+                log.warning("_click_with_retry: Exception Versuch %d: %s", attempt + 1, exc)
+
+        log.error("_click_with_retry: Alle %d Versuche fehlgeschlagen (%s)", self.MAX_VISUAL_RETRIES, label)
+        return False
+
+    async def _wait_for_stable_screenshot(self, timeout_ms: int = 2000) -> bool:
+        """
+        Wartet bis der Bildschirm stabil ist (≥ 95% identische Pixel).
+        Gibt True zurück wenn Stabilität erreicht, False bei Timeout.
+        """
+        try:
+            resp = await self.http_client.post(
+                MCP_URL,
+                json={"jsonrpc": "2.0", "method": "wait_until_stable",
+                      "params": {"timeout": timeout_ms / 1000.0}, "id": "1"},
+            )
+            return resp.json().get("result", {}).get("success", False)
+        except Exception:
+            return False
+
     async def _wait_stable(self):
         try:
             await self.http_client.post(

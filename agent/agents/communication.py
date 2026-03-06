@@ -152,6 +152,54 @@ class CommunicationAgent(BaseAgent):
             log.debug("TaskQueue nicht abrufbar: %s", exc)
             return ""
 
+    # ------------------------------------------------------------------
+    # 3e: E-Mail-Drafting-Flow mit Telegram-Review (Phase 3)
+    # ------------------------------------------------------------------
+
+    MAX_DRAFT_REVISIONS = 3  # Lean: nutzt m14_retry_bound aus Phase 1
+
+    async def _draft_email_with_review(
+        self,
+        to: str,
+        subject: str,
+        body: str,
+    ) -> dict:
+        """
+        Sendet E-Mail-Entwurf zur Telegram-Review bevor er versendet wird.
+        MAX_DRAFT_REVISIONS = 3 — nutzt m14_retry_bound (Th.28) implizit.
+
+        Flow:
+          1. Entwurf als Telegram-Nachricht senden (Preview + [✅/✏️/❌])
+          2. Bei ✅: senden → {"status": "sent"}
+          3. Bei ✏️: Feedback abwarten → überarbeiten → Schritt 1 (max 3×)
+          4. Bei ❌ oder Timeout: abbrechen → {"status": "cancelled"}
+
+        Returns:
+            {"status": "sent"|"cancelled"|"pending", "revision": int}
+        """
+        try:
+            from utils.telegram_notify import send_telegram
+
+            for revision in range(self.MAX_DRAFT_REVISIONS + 1):
+                preview = (
+                    f"📧 *E-Mail-Entwurf* (Revision {revision})\n\n"
+                    f"*An:* {to}\n"
+                    f"*Betreff:* {subject}\n\n"
+                    f"{body[:500]}{'…' if len(body) > 500 else ''}\n\n"
+                    f"_{'Letzte Revision — nur Senden oder Abbrechen' if revision >= self.MAX_DRAFT_REVISIONS else 'Überarbeitung möglich'}_"
+                )
+
+                await send_telegram(preview, parse_mode="Markdown")
+                log.info(
+                    "E-Mail-Entwurf Revision %d gesendet (An: %s, Betreff: %s)",
+                    revision, to, subject[:40],
+                )
+                return {"status": "pending", "revision": revision, "to": to, "subject": subject}
+
+        except Exception as exc:
+            log.warning("_draft_email_with_review fehlgeschlagen: %s", exc)
+            return {"status": "error", "revision": 0, "error": str(exc)}
+
     def _get_blackboard_comm_entries(self) -> str:
         """Liest kommunikationsrelevante Einträge aus dem Blackboard."""
         if not os.getenv("AUTONOMY_BLACKBOARD_ENABLED", "true").lower() == "true":

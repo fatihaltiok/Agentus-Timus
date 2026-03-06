@@ -123,6 +123,11 @@ class MetaAgent(BaseAgent):
         if skill_context:
             parts.append("Prüfe ob verfügbare Skills zur Aufgabe passen und nutze sie entsprechend.")
 
+        # Decomposition-Hint für komplexe Aufgaben
+        if self._needs_decomposition_hint(task):
+            parts.append(self._DECOMPOSITION_HINT)
+            log.info("MetaAgent: Decomposition-Hint injiziert (komplexe Aufgabe erkannt)")
+
         enhanced_task = "\n\n".join(parts)
 
         result = await super().run(enhanced_task)
@@ -289,6 +294,35 @@ class MetaAgent(BaseAgent):
         except Exception as exc:
             log.debug("ProactiveTriggerEngine nicht verfügbar: %s", exc)
             return ""
+
+    # ------------------------------------------------------------------
+    # 3d: Strukturierte Decomposition komplexer Ziele (Phase 3)
+    # ------------------------------------------------------------------
+
+    MAX_DECOMPOSITION_DEPTH = 3  # Lean: meta_decomposition_depth
+
+    _DECOMPOSITION_HINT = (
+        "\n\n## DECOMPOSITION-REGEL (automatisch aktiviert)\n"
+        "Diese Aufgabe hat >3 Teilschritte. Verwende strukturierte Hierarchie:\n"
+        "1. Identifiziere Abhängigkeiten (A muss vor B fertig sein)\n"
+        "2. Gruppiere in max. 3 Phasen (Phase 1: Fundament | Phase 2: Kern | Phase 3: Finish)\n"
+        "3. Priorisiere: P0 (blockiert alles) → P1 (Kern) → P2 (optional)\n"
+        "4. Schätze Komplexität pro Teilschritt: S (< 30 Min) / M (< 2h) / L (> 2h)\n"
+        f"Maximale Hierarchietiefe: {MAX_DECOMPOSITION_DEPTH} Ebenen.\n"
+    )
+
+    @staticmethod
+    def _needs_decomposition_hint(task: str) -> bool:
+        """Prüft ob eine Aufgabe komplex genug für strukturierte Decomposition ist."""
+        # Indikatoren für komplexe Multi-Step-Aufgaben
+        triggers = {
+            "phase", "schritt", "step", "dann", "zuerst", "anschließend", "danach",
+            "implementier", "erstell", "baue", "entwickl", "plane", "analysier",
+            "und", "+", "sowie", "außerdem",
+        }
+        task_lower = task.lower()
+        trigger_count = sum(1 for t in triggers if t in task_lower)
+        return trigger_count >= 3 or len(task) > 200
 
     # ------------------------------------------------------------------
     # Visual-Plan-Erstellung (Nemotron-gestützt)

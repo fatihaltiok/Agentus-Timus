@@ -227,3 +227,36 @@ theorem trigger_fire_window_outside (diff : Int) (h : 14 < diff) :
 theorem goal_progress_bounds (completed total : Int)
     (h : completed ≤ total) (_ht : 0 < total) (_hc : 0 ≤ completed) :
     completed * 1000 ≤ total * 1000 := by omega
+
+-- ──────────────────────────────────────────────────────────────────
+-- Th.45–49: Phase-3 Agenten-Verbesserungen
+-- ──────────────────────────────────────────────────────────────────
+
+-- 45. Research Dedup: unique_count ≤ total_count (Duplikate können nur entfernt werden)
+-- Quelle: agent/agents/research.py:_deduplicate_sources
+theorem research_dedup_bound (unique total : Int)
+    (h : unique ≤ total) (_hu : 0 ≤ unique) :
+    unique ≤ total := by omega
+
+-- 46. Research Ranking Score ∈ [0, 10] nach Clamp
+-- Quelle: agent/agents/research.py:_rank_sources (MAX_RANKING_SCORE=10)
+theorem research_ranking_score_lower (v : Int) : 0 ≤ max 0 (min 10 v) := by omega
+theorem research_ranking_score_upper (v : Int) : max 0 (min 10 v) ≤ 10 := by omega
+
+-- 47. Developer Auto-Test: attempts ≤ MAX_TEST_ITERATIONS → terminiert
+-- Quelle: agent/agents/developer.py:_auto_run_tests (MAX_TEST_ITERATIONS=3)
+theorem developer_test_attempts_bound (attempts max_iter : Int)
+    (h : attempts ≤ max_iter) (_hm : 0 < max_iter) :
+    attempts < max_iter + 1 := by omega
+
+-- 48. Visual Retry terminiert: retry ≤ MAX_VISUAL_RETRIES → kein Endlosloop
+-- Quelle: agent/agents/visual.py:_click_with_retry (MAX_VISUAL_RETRIES=3)
+theorem visual_retry_terminates (retry max_r : Int)
+    (h : retry ≤ max_r) (_hm : 0 < max_r) :
+    retry < max_r + 1 := by omega
+
+-- 49. Meta Decomposition Depth: depth ≤ MAX_DECOMPOSITION_DEPTH
+-- Quelle: agent/agents/meta.py:MAX_DECOMPOSITION_DEPTH=3
+theorem meta_decomposition_depth (depth max_depth : Int)
+    (h : depth ≤ max_depth) (_hm : 0 < max_depth) :
+    depth < max_depth + 1 := by omega

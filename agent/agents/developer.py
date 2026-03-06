@@ -158,6 +158,79 @@ class DeveloperAgent(BaseAgent):
             log.debug("Git-Log nicht abrufbar: %s", exc)
             return ""
 
+    # ------------------------------------------------------------------
+    # 3b: Auto-Test nach Code-Generierung (Phase 3)
+    # ------------------------------------------------------------------
+
+    MAX_TEST_ITERATIONS = 3  # Lean: developer_test_attempts_bound
+
+    def _find_test_file(self, changed_file: str) -> str:
+        """
+        Leitet Test-Datei aus Quell-Pfad ab.
+        Pattern: tools/X/tool.py → tests/test_X*.py, tests/test_X.py
+        """
+        path = Path(changed_file)
+        stem = path.stem  # z.B. "tool" oder "engine"
+        parent_name = path.parent.name  # z.B. "email_tool" oder "autonomy_scorecard"
+
+        candidates = [
+            _PROJECT_ROOT / "tests" / f"test_{parent_name}.py",
+            _PROJECT_ROOT / "tests" / f"test_{parent_name}s.py",
+            _PROJECT_ROOT / "tests" / f"test_{stem}.py",
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return str(candidate)
+        return ""
+
+    def _auto_run_tests(self, changed_files: list) -> dict:
+        """
+        Führt Tests für geänderte Dateien aus.
+        Lean Th.47: attempts ≤ MAX_TEST_ITERATIONS → attempts < MAX_TEST_ITERATIONS + 1
+
+        Args:
+            changed_files: Liste geänderter Dateipfade
+        Returns:
+            {"status": "passed"|"failed"|"skipped", "test_file": str, "output": str}
+        """
+        for attempt in range(self.MAX_TEST_ITERATIONS):
+            for file in changed_files:
+                test_file = self._find_test_file(file)
+                if not test_file:
+                    continue
+
+                try:
+                    result = subprocess.run(
+                        ["python", "-m", "pytest", test_file, "-x", "--timeout=30", "-q"],
+                        capture_output=True, text=True, timeout=60, cwd=_PROJECT_ROOT,
+                    )
+                    status = "passed" if result.returncode == 0 else "failed"
+                    output = (result.stdout + result.stderr)[-500:]
+                    log.info(
+                        "Auto-Test [%s/%s]: %s → %s",
+                        attempt + 1, self.MAX_TEST_ITERATIONS, Path(test_file).name, status,
+                    )
+
+                    # Ergebnis im Blackboard speichern
+                    try:
+                        from memory.agent_blackboard import get_blackboard
+                        get_blackboard().write(
+                            agent="developer",
+                            topic="test_result",
+                            key=file,
+                            value=f"{status}: {output[:200]}",
+                        )
+                    except Exception:
+                        pass
+
+                    return {"status": status, "test_file": test_file, "output": output, "attempt": attempt + 1}
+                except subprocess.TimeoutExpired:
+                    log.warning("Auto-Test Timeout (Versuch %d)", attempt + 1)
+                except Exception as exc:
+                    log.debug("Auto-Test fehlgeschlagen: %s", exc)
+
+        return {"status": "skipped", "test_file": "", "output": "Keine Test-Datei gefunden", "attempt": 0}
+
     def _get_pending_dev_tasks(self) -> str:
         """Gibt offene Tasks mit Bezug zu Code/Entwicklung zurück."""
         try:
