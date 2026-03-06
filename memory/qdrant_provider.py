@@ -22,7 +22,7 @@ log = logging.getLogger("QdrantProvider")
 
 QDRANT_PATH = Path(os.getenv("QDRANT_PATH", "./data/qdrant_db"))
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "timus_memory")
-VECTOR_SIZE = 384  # sentence-transformers/all-MiniLM-L6-v2
+VECTOR_SIZE = int(os.getenv("QDRANT_VECTOR_SIZE", "1536"))  # OpenAI text-embedding-ada-002 (Standard)
 
 
 class QdrantProvider:
