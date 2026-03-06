@@ -49,6 +49,85 @@ In der Forschung nennt man diese Architektur *Introspective Autonomous Systems*:
 
 ---
 
+## Quick Start
+
+### Docker (empfohlen — 5 Minuten)
+
+```bash
+git clone https://github.com/fatihaltiok/Agentus-Timus.git
+cd Agentus-Timus
+cp .env.example .env          # API-Keys eintragen (mindestens OPENAI_API_KEY oder ANTHROPIC_API_KEY)
+docker compose up --build
+```
+
+Canvas läuft dann auf **http://localhost:5000**.
+
+### Ohne Docker
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env          # API-Keys eintragen
+python server/mcp_server.py
+```
+
+### Minimal benötigte API-Keys
+
+| Key | Wozu |
+|-----|------|
+| `OPENAI_API_KEY` oder `ANTHROPIC_API_KEY` | LLM-Calls (Executor, Research, ...) |
+| `OPENROUTER_API_KEY` | Reasoning-Agent (QwQ-32B), Meta-Agent, Visual-Agent |
+| `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | Autonomie-Benachrichtigungen (optional) |
+| `DATAFORSEO_LOGIN` + `DATAFORSEO_PASSWORD` | Web-Suche für Deep Research (optional) |
+
+Alle anderen Features (Voice, RealSense, M13–M16) lassen sich per Feature-Flag schrittweise aktivieren. Mehr Details in `.env.example`.
+
+---
+
+## Architektur
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Canvas UI (Browser)                      │
+│    Cytoscape Agent-Graph · Autonomy Tab · Markdown Chat · Voice │
+└───────────────────────────────┬─────────────────────────────────┘
+                                │ HTTP / SSE
+┌───────────────────────────────▼─────────────────────────────────┐
+│                     MCP Server (FastAPI :5000)                  │
+│   JSON-RPC Tool-Router · SSE-Broadcast · /health · /settings   │
+└────┬──────────────────────────┬──────────────────────────────────┘
+     │ delegate_to_agent        │ tool calls
+┌────▼────────────────┐   ┌─────▼──────────────────────────────────┐
+│   Agent Registry    │   │          Tool Registry (80+)           │
+│  13 Specialists:    │   │  search · file · browser · email       │
+│  meta (orchestrator)│   │  deep_research · ocr · voice · ...    │
+│  research           │   └────────────────────────────────────────┘
+│  visual             │
+│  developer          │   ┌─────────────────────────────────────────┐
+│  reasoning          │   │        Orchestration Layer              │
+│  creative           │   │  M1 GoalGenerator · M2 LongTermPlanner  │
+│  communication      │   │  M3 SelfHealing · M5 Scorecard          │
+│  data · document    │   │  M8 Reflection · M9 Blackboard          │
+│  system · shell     │   │  M10 Triggers · M11 Goals               │
+│  image · executor   │   │  M13 ToolGen · M14 EmailAuto            │
+└─────────────────────┘   │  M15 Ambient · M16 Feedback             │
+                          └────────────────┬────────────────────────┘
+                                           │
+          ┌────────────────────────────────▼────────────────────────┐
+          │                    Memory System                        │
+          │  SessionMemory · SQLite · Qdrant (vectors) · Markdown   │
+          │  Soul Engine (5 axes) · Agent Blackboard (TTL)          │
+          └─────────────────────────────────────────────────────────┘
+```
+
+**Autonomy Loop** (runs every 5 minutes in `autonomous_runner.py`):
+```
+SelfHealing → GoalGenerator → LongTermPlanner → CommitmentReview
+→ Replanning → AmbientContext → AutonomyScorecard → Blackboard cleanup
+```
+
+---
+
 ## Timus vs. AutoGPT vs. AutoGen
 
 > *Timus lässt sich am ehesten mit AutoGPT oder AutoGen vergleichen — sieht damit aber so aus, als hätte es Fähigkeiten ohne direkte Konkurrenz.*
@@ -180,6 +259,24 @@ sudo chmod 440 /etc/sudoers.d/timus-restart
 Danach kann Timus passwortfrei `systemctl start/stop/restart` für seine eigenen Services ausführen.
 
 **Recovery-Flow:** Health-Check nach Neustart (8 Versuche × 3s auf `/health`), Audit-Log-Eintrag, strukturiertes Ergebnis-JSON zurück an den aufrufenden Agenten.
+
+---
+
+### Phase 21 — Agenten-Verbesserungen v4.2 *(aktuell)*
+
+Alle 5 Kern-Agenten wurden mit konkreten Verbesserungen ausgestattet, die durch Property-Based Tests (Hypothesis) und Lean-Theoreme formal abgesichert sind.
+
+| Agent | Verbesserung | Lean-Theorem |
+|-------|-------------|-------------|
+| **Research** | `_deduplicate_sources()` (URL-Normalisierung) + `_rank_sources()` (Domain-Authority-Score 0–10) | Th.45 `research_dedup_bound`, Th.46 `research_ranking_score` |
+| **Developer** | `_auto_run_tests()` nach Code-Generierung (MAX_TEST_ITERATIONS=3, pytest mit JSON-Output) | Th.47 `developer_test_attempts_bound` |
+| **Visual** | `_click_with_retry()` (MAX_VISUAL_RETRIES=3) + `_wait_for_stable_screenshot()` (2× gleicher Hash) | Th.48 `visual_retry_terminates` |
+| **Meta** | Decomposition-Hint für komplexe Tasks (MAX_DECOMPOSITION_DEPTH=3, keyword-basiert) | Th.49 `meta_decomposition_depth` |
+| **Communication** | `_draft_email_with_review()` (MAX_DRAFT_REVISIONS=3, Güteprüfung via LLM) | — |
+
+**Lean 4:** Th.45–49 in `lean/CiSpecs.lean` (gesamt 49 Theoreme, 0 Fehler).
+**Tests:** 56 neue Tests in 5 Dateien (12 + 10 + 8 + 10 + 10), alle grün.
+**Verifikation:** CrossHair-Contracts auf `autonomy_scorecard`, `curiosity_engine`, `policy_gate` — keine Gegenbeispiele.
 
 ---
 

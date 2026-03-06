@@ -1,0 +1,23 @@
+version: "3.9"
+
+services:
+  timus:
+    build: .
+    container_name: timus
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./data:/app/data          # Persistent: SQLite DBs, ChromaDB, Qdrant, token cache
+      - ./memory:/app/memory      # Persistent: Markdown memory store (SOUL.md, USER.md, MEMORY.md)
+      - ./docs:/app/docs          # Persistent: generated research reports + PDFs
+      - ./.env:/app/.env:ro       # Secrets (read-only)
+    environment:
+      - PORT=5000
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
