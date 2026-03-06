@@ -30,10 +30,39 @@ from agent.shared.json_utils import extract_json_robust  # noqa: F401 - re-expor
 
 class MetaAgent(BaseAgent):
     # Koordinator darf Spezialisten-Tools NIE direkt aufrufen — nur per Delegation.
+    # Philosophie: Meta-Agent = Orchestrator, nicht Ausführer.
+    # Je mehr er direkt tut, desto weniger delegiert er — und desto mehr Fehler macht er.
     SYSTEM_ONLY_TOOLS = BaseAgent.SYSTEM_ONLY_TOOLS | {
+        # Shell / System — immer über shell- oder system-Agent
         "run_command",
         "run_script",
         "add_cron",
+        # Dateioperationen — über executor oder shell
+        "write_file",
+        "read_file",
+        "delete_file",
+        "list_directory",
+        # Code-Generierung — über developer-Agent (inkl. AST-Validierung)
+        "generate_code",
+        "implement_feature",
+        "create_tool_from_pattern",
+        # Tiefe Recherche — über research-Agent (inkl. Verifikation + Report)
+        "start_deep_research",
+        "generate_research_report",
+        "verify_fact",
+        "verify_multiple_facts",
+        # Bild-Generierung — über creative-Agent (inkl. Prompt-Optimierung)
+        "generate_image",
+        "generate_text",
+        # Dokumente — über document-Agent
+        "create_pdf",
+        "create_docx",
+        # E-Mail senden — über communication-Agent
+        "send_email",
+        # Screenshots / Browser — über visual-Agent
+        "take_screenshot",
+        "click_element",
+        "type_in_field",
     }
 
     def __init__(self, tools_description_string: str):
