@@ -7,7 +7,7 @@ Entscheidet selbstständig ob E-Mails sinnvoll sind:
 - Whitelist-Guard: Empfänger muss in M14_EMAIL_WHITELIST sein
 - Topic-Guard: Betreff muss Topic-Whitelist-Stichwort enthalten
 - Confidence-Threshold: ≥ 0.85 für sofortige Sendung, sonst Telegram-Approval
-- EMAIL_BACKEND: smtp (Standard) oder msgraph
+- EMAIL_BACKEND: resend (empfohlen) | smtp | msgraph
 
 Feature-Flag: AUTONOMY_M14_ENABLED=false
 """
@@ -63,7 +63,9 @@ class EmailAutonomyEngine:
         M14_EMAIL_WHITELIST         = kommagetrennte Empfänger-Adressen
         M14_EMAIL_TOPIC_WHITELIST   = kommagetrennte Themen-Stichwörter
         M14_EMAIL_CONFIDENCE        = Schwellwert 0.0–1.0 (default 0.85)
-        EMAIL_BACKEND               = smtp | msgraph (default smtp)
+        EMAIL_BACKEND               = resend | smtp | msgraph (default smtp)
+        RESEND_API_KEY              = re_xxxx  (nur bei EMAIL_BACKEND=resend)
+        RESEND_FROM                 = Timus <timus@deinedomain.com>
     """
 
     def __init__(self) -> None:
@@ -272,8 +274,15 @@ class EmailAutonomyEngine:
         return True
 
     async def _send(self, decision: EmailDecision) -> bool:
-        """Sendet E-Mail über konfigurierten Backend."""
-        if self.email_backend == "smtp":
+        """Sendet E-Mail über konfigurierten Backend (smtp | resend | msgraph)."""
+        if self.email_backend == "resend":
+            from utils.resend_email import send_email_resend
+            success = await send_email_resend(
+                to=decision.recipient,
+                subject=decision.subject,
+                body=decision.body,
+            )
+        elif self.email_backend == "smtp":
             from utils.smtp_email import send_email_smtp
             success = await send_email_smtp(
                 to=decision.recipient,

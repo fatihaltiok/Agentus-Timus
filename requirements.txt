@@ -71,6 +71,7 @@ pytest==8.4.1
 pytest-asyncio==1.3.0
 hypothesis
 crosshair-tool
+resend
 fpdf2
 python-docx
 openpyxl
