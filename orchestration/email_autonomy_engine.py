@@ -95,7 +95,11 @@ class EmailAutonomyEngine:
     # ── Policy-Checks ───────────────────────────────────────────────────────
 
     def _in_whitelist(self, recipient: str) -> bool:
-        """Prüft ob Empfänger in Whitelist ist."""
+        """Prüft ob Empfänger in Whitelist ist.
+
+        post: not __return__ or len(self.recipient_whitelist) > 0
+        post: __return__ == (recipient.strip().lower() in self.recipient_whitelist)
+        """
         if not self.recipient_whitelist:
             return False
         return recipient.strip().lower() in self.recipient_whitelist
@@ -119,6 +123,11 @@ class EmailAutonomyEngine:
     ) -> EmailDecision:
         """
         Bewertet ob eine E-Mail autonom gesendet werden soll.
+
+        pre: 0.0 <= confidence <= 1.0
+        post: 0.0 <= __return__.confidence <= 1.0
+        post: not __return__.should_send or self._in_whitelist(recipient)
+        post: not (__return__.confidence < self.confidence_threshold) or not __return__.should_send
 
         Returns:
             EmailDecision mit should_send, confidence, reason

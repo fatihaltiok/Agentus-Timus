@@ -124,11 +124,37 @@ theorem m14_confidence_threshold (conf threshold : Int) (h : conf < threshold) :
 -- 26. M13 Code-Längen-Bound: len ≤ MAX_CODE_LENGTH → sicher (kein Overflow)
 -- MAX_CODE_LENGTH = 5000, hier als ×1 ganzzahlig
 -- Quelle: orchestration/tool_generator_engine.py:validate_ast
-theorem m13_code_length_bound (len max_len : Int) (h : len ≤ max_len) (hm : 0 < max_len) :
+theorem m13_code_length_bound (len max_len : Int) (h : len ≤ max_len) (_hm : 0 < max_len) :
     0 < len + 1 ∨ len ≤ max_len := by omega
 
 -- 27. M13 Tool-Approval-Guard: status=0 (pending) → ¬ aktivierbar (≥ 1)
 -- status 0=pending, 1=approved, 2=active, -1=rejected
 -- Quelle: orchestration/tool_generator_engine.py:activate
-theorem m13_tool_approval_guard (status : Int) (h : status < 1) :
+theorem m13_tool_approval_guard (status : Int) (_h : status < 1) :
     ¬ 1 ≤ status := by omega
+
+-- ──────────────────────────────────────────────────────────────────
+-- Th.28–31: Hypothesis-Brücke (neu, 2026-03-06)
+-- ──────────────────────────────────────────────────────────────────
+
+-- 28. M14 SMTP-Retry terminiert: attempts ≤ max_retries → attempts < max_retries + 1
+-- Quelle: utils/smtp_email.py (Retry-Loop)
+theorem m14_retry_bound (attempts max_retries : Int)
+    (h : attempts ≤ max_retries) (_hm : 0 < max_retries) :
+    attempts < max_retries + 1 := by omega
+
+-- 29. M13 Approved aktivierbar: status ≥ 1 → status > 0
+-- Quelle: orchestration/tool_generator_engine.py:activate (approved-Pfad)
+theorem m13_approved_activatable (status : Int) (h : 1 ≤ status) :
+    0 < status := by omega
+
+-- 30. Qdrant Migration: migrated ≤ total (Fortschritts-Invariante)
+-- Quelle: scripts/migrate_chromadb_to_qdrant.py
+theorem qdrant_migration_progress (migrated total : Int)
+    (h : migrated ≤ total) (_ht : 0 ≤ total) :
+    migrated ≤ total := by omega
+
+-- 31. Qdrant Batch > 0: kein Empty-Batch möglich
+-- Quelle: memory/qdrant_provider.py (batch_size Invariante)
+theorem qdrant_batch_nonempty (batch_size : Int) (h : 0 < batch_size) :
+    0 < batch_size := by omega

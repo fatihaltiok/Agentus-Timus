@@ -119,6 +119,9 @@ class FeedbackEngine:
         """
         Gibt Feedback-Statistik für einen Hook zurück.
 
+        post: 0.05 <= __return__["weight"] <= 2.0
+        post: __return__["total"] == __return__["pos"] + __return__["neg"] + __return__["neutral"]
+
         Returns:
             {pos: n, neg: n, neutral: n, total: n, weight: float}
         """

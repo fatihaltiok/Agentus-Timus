@@ -185,6 +185,12 @@ class ToolGeneratorEngine:
         - Muss @tool-Decorator enthalten
         - Muss async def enthalten
 
+        post: not (len(code) > self.MAX_CODE_LENGTH) or not __return__[0]
+        post: isinstance(__return__[0], bool)
+        post: isinstance(__return__[1], str)
+        # Note: CrossHair kann ast.parse() nicht vollständig symbolisch ausführen.
+        # Der Length-Guard (erste Postcondition) ist CrossHair-verifizierbar.
+
         Returns:
             (True, "") wenn OK, (False, Fehlermeldung) bei Problem
         """
@@ -286,6 +292,9 @@ class ToolGeneratorEngine:
         Schreibt Tool-Dateien und lädt das Modul via importlib.
 
         Lean-Invariante: m13_tool_approval_guard — nur status="approved" wird aktiviert.
+
+        post: not __return__ or action_id in self._registry
+        post: isinstance(__return__, bool)
 
         Returns:
             True wenn erfolgreich aktiviert
