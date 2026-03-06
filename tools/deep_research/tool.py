@@ -2262,21 +2262,24 @@ async def _run_research_pipeline(
             f"Zu wenige verifizierte Fakten ({len(current_session.verified_facts)}) für vollständige These-Antithese-Synthese Analyse"
         )
 
-    # PHASE 6: YOUTUBE-RECHERCHE (optional)
+    # PHASE 6: YOUTUBE-RECHERCHE (Pflichtquelle — DE + EN, Podcasts + Interviews)
     yt_count = 0
-    if os.getenv("DEEP_RESEARCH_YOUTUBE_ENABLED", "true").lower() == "true":
+    if os.getenv("DEEP_RESEARCH_YOUTUBE_ENABLED", "true").lower() != "false":
         try:
             from tools.deep_research.youtube_researcher import YouTubeResearcher
+            yt_max = int(os.getenv("YOUTUBE_MAX_VIDEOS", "5"))
             yt_count = await YouTubeResearcher().research_topic_on_youtube(
-                query=query, session=current_session, max_videos=3
+                query=query, session=current_session, max_videos=yt_max
             )
-            logger.info(f"📺 YouTube: {yt_count} Videos analysiert")
+            logger.info(f"📺 YouTube: {yt_count} Videos analysiert (DE+EN, Podcasts/Interviews)")
             if yt_count > 0:
                 current_session.methodology_notes.append(
-                    f"YouTube: {yt_count} Videos via DataForSEO analysiert"
+                    f"YouTube: {yt_count} Videos analysiert (bilingual DE+EN, inkl. Podcasts & Interviews)"
                 )
+            else:
+                logger.warning("📺 YouTube: 0 Videos analysiert — DataForSEO oder Transkript prüfen")
         except Exception as e:
-            logger.warning(f"YouTube-Recherche fehlgeschlagen (unkritisch): {e}")
+            logger.warning(f"YouTube-Recherche fehlgeschlagen: {e}")
 
     # PHASE 7: TREND-RECHERCHE (ArXiv + GitHub + HuggingFace)
     trend_count = 0

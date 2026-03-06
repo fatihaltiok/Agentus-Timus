@@ -1,9 +1,15 @@
 # tools/deep_research/youtube_researcher.py
 """
-YouTubeResearcher — analysiert relevante YouTube-Videos für Deep Research v6.0.
+YouTubeResearcher — analysiert relevante YouTube-Videos für Deep Research v6.1.
+
+Änderungen v6.1:
+- Bilinguale Suche: deutschsprachige UND englischsprachige Queries
+- Transkript-Fallback: erst 'de', dann 'en' (erfasst internationale Podcasts + Interviews)
+- max_videos 3 → 5 (mehr Podcast-/Interview-Abdeckung)
+- Zusätzliche Query-Varianten: <Thema> podcast, <Thema> interview, <Thema> explained
 
 Für jedes Video:
-1. Transkript via DataForSEO abrufen
+1. Transkript via DataForSEO abrufen (de → en Fallback)
 2. Fakten per LLM aus dem Text extrahieren (qwen3.5-plus via OpenRouter)
 3. Thumbnail per NVIDIA NIM visuell analysieren (Fallback: leer)
 4. Fakten als unverified_claims in die Session eintragen
@@ -34,28 +40,47 @@ _NVIDIA_BASE = "https://integrate.api.nvidia.com/v1"
 _NVIDIA_KEY = os.getenv("NVIDIA_API_KEY", "")
 _VISION_MODEL = os.getenv("YOUTUBE_VISION_MODEL", "nvidia/llama-3.2-90b-vision-instruct")
 
+# Maximale Videos pro Recherche (konfigurierbar via ENV)
+_MAX_VIDEOS = int(os.getenv("YOUTUBE_MAX_VIDEOS", "5"))
+
+
+def _build_queries(query: str) -> List[str]:
+    """
+    Baut eine Liste von Such-Queries auf: deutsch + englisch + Inhaltstypen.
+    Ziel: Podcasts, Interviews, Erklärvideos auf beiden Sprachen erfassen.
+    """
+    q = query.strip()
+    return [
+        q,                                  # Original-Query (DE oder EN)
+        f"{q} podcast",                     # Podcast-Suche
+        f"{q} interview",                   # Interview-Suche
+        f"{q} explained",                   # Englischsprachige Erklärvideos
+        f"{q} erklärt",                     # Deutschsprachige Erklärvideos
+    ]
+
 
 class YouTubeResearcher:
-    """Analysiert YouTube-Videos und reichert eine DeepResearchSession mit Fakten an."""
+    """Analysiert YouTube-Videos bilingual und reichert eine DeepResearchSession mit Fakten an."""
 
     async def research_topic_on_youtube(
         self,
         query: str,
         session: "DeepResearchSession",
-        max_videos: int = 3,
+        max_videos: int = _MAX_VIDEOS,
     ) -> int:
         """
-        Sucht Videos zum Thema und analysiert Transkript + Thumbnail.
+        Sucht Videos zum Thema auf Deutsch UND Englisch und analysiert Transkript + Thumbnail.
 
         Args:
-            query: Recherche-Thema
-            session: Laufende DeepResearchSession (wird in-place erweitert)
-            max_videos: Maximal zu analysierende Videos
+            query:      Recherche-Thema
+            session:    Laufende DeepResearchSession (wird in-place erweitert)
+            max_videos: Maximal zu analysierende Videos (default: YOUTUBE_MAX_VIDEOS=5)
 
         Returns:
             Anzahl erfolgreich analysierter Videos
         """
-        videos = await self._search_videos(query)
+        # Bilinguale Suche: alle Query-Varianten, Duplikate nach video_id filtern
+        videos = await self._search_videos_multilingual(query, max_videos)
         if not videos:
             logger.info("📺 Keine YouTube-Videos gefunden")
             return 0
@@ -63,7 +88,7 @@ class YouTubeResearcher:
         analyzed = 0
         for video in videos[:max_videos]:
             try:
-                transcript = await self._get_transcript(video["video_id"])
+                transcript = await self._get_transcript_with_fallback(video["video_id"])
                 text_facts = {}
                 visual_info = {}
 
@@ -83,52 +108,73 @@ class YouTubeResearcher:
             except Exception as e:
                 logger.warning(f"Video {video['video_id']} übersprungen: {e}")
 
+        logger.info(f"📺 YouTube gesamt: {analyzed}/{len(videos)} Videos erfolgreich analysiert")
         return analyzed
 
     # ------------------------------------------------------------------
     # Interne Methoden
     # ------------------------------------------------------------------
 
-    async def _search_videos(self, query: str) -> List[dict]:
-        try:
-            result = await call_tool_internal("search_youtube", {"query": query, "max_results": 5})
-            if isinstance(result, list):
-                logger.info(f"📺 YouTube-Suche: {len(result)} Videos für '{query[:40]}'")
-                return result
-            # Fehler-Dict von call_tool_internal → detailliert loggen
-            if isinstance(result, dict) and result.get("error"):
-                logger.warning(f"📺 YouTube-Suche Fehler: {result['error']}")
-            else:
-                logger.warning(f"📺 YouTube-Suche: unerwartetes Format {type(result).__name__}: {str(result)[:100]}")
-            return []
-        except Exception as e:
-            logger.warning(f"YouTube-Suche fehlgeschlagen: {e}")
-            return []
+    async def _search_videos_multilingual(self, query: str, max_videos: int) -> List[dict]:
+        """
+        Durchsucht YouTube mit mehreren Query-Varianten (DE + EN + Podcast/Interview).
+        Dedupliziert nach video_id — jedes Video nur einmal.
+        """
+        seen_ids: set = set()
+        all_videos: List[dict] = []
 
-    async def _get_transcript(self, video_id: str) -> Optional[str]:
-        try:
-            result = await call_tool_internal(
-                "get_youtube_subtitles", {"video_id": video_id, "language_code": "de"}
-            )
-            if isinstance(result, dict):
-                return result.get("full_text") or ""
-            return ""
-        except Exception as e:
-            logger.warning(f"Transkript für {video_id} fehlgeschlagen: {e}")
-            return None
+        for q in _build_queries(query):
+            if len(all_videos) >= max_videos * 2:
+                break  # Genug Kandidaten gesammelt
+            try:
+                result = await call_tool_internal("search_youtube", {"query": q, "max_results": 5})
+                if isinstance(result, list):
+                    for v in result:
+                        vid = v.get("video_id", "")
+                        if vid and vid not in seen_ids:
+                            seen_ids.add(vid)
+                            all_videos.append(v)
+                    logger.info(f"📺 Query '{q[:50]}': {len(result)} Treffer")
+                elif isinstance(result, dict) and result.get("error"):
+                    logger.warning(f"📺 Query '{q[:50]}' Fehler: {result['error']}")
+            except Exception as e:
+                logger.warning(f"📺 Query '{q[:50]}' fehlgeschlagen: {e}")
+
+        logger.info(f"📺 Bilinguale Suche: {len(all_videos)} einzigartige Videos gefunden")
+        return all_videos
+
+    async def _get_transcript_with_fallback(self, video_id: str) -> Optional[str]:
+        """
+        Versucht Transkript auf Deutsch zu laden, fällt auf Englisch zurück.
+        Erfasst so deutsche Beiträge UND englische Podcasts/Interviews.
+        """
+        for lang in ("de", "en"):
+            try:
+                result = await call_tool_internal(
+                    "get_youtube_subtitles", {"video_id": video_id, "language_code": lang}
+                )
+                if isinstance(result, dict):
+                    text = result.get("full_text") or ""
+                    if len(text) > 100:
+                        logger.debug(f"📺 Transkript ({lang}) für {video_id}: {len(text)} Zeichen")
+                        return text
+            except Exception as e:
+                logger.warning(f"Transkript ({lang}) für {video_id} fehlgeschlagen: {e}")
+        return None
 
     async def _analyze_text(self, text: str, query: str) -> dict:
-        """Extrahiert Fakten aus dem Transkript via qwen3.5-plus (OpenRouter)."""
+        """Extrahiert Fakten aus dem Transkript via LLM (DE + EN Inhalte)."""
         if not _OPENROUTER_KEY:
             logger.warning("OPENROUTER_API_KEY fehlt — Text-Analyse übersprungen")
             return {}
 
         prompt = (
             f"Thema: {query}\n\n"
-            f"YouTube-Transkript (Auszug):\n{text[:4000]}\n\n"
-            "Extrahiere die wichtigsten Fakten aus diesem Transkript.\n"
+            f"YouTube-Transkript (Auszug — kann Deutsch oder Englisch sein):\n{text[:4000]}\n\n"
+            "Extrahiere die wichtigsten Fakten aus diesem Transkript. "
+            "Antworte auf DEUTSCH, auch wenn das Transkript auf Englisch ist.\n"
             "Antworte NUR als JSON:\n"
-            '{"facts": ["Fakt 1", "Fakt 2", ...], "key_quote": "wörtliches Zitat", "relevance": 7}'
+            '{"facts": ["Fakt 1", "Fakt 2", ...], "key_quote": "wörtliches Zitat (übersetzt wenn nötig)", "relevance": 7}'
         )
 
         def _call():
@@ -143,7 +189,6 @@ class YouTubeResearcher:
 
         try:
             raw = await asyncio.to_thread(_call)
-            # JSON aus Antwort extrahieren
             import json, re
             m = re.search(r"\{.*\}", raw, re.DOTALL)
             if m:
@@ -203,7 +248,6 @@ class YouTubeResearcher:
         relevance = text_facts.get("relevance", 5)
         visual_desc = visual_info.get("visual_description", "")
 
-        # Zusammenfassender Fakt mit Video-Kontext
         if facts or key_quote:
             combined = "; ".join(facts[:5])
             if key_quote:
