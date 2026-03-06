@@ -495,6 +495,8 @@ class CuriosityEngine:
         neutral  → kein Effekt
 
         Score wird in [0.1, 3.0] geclamped.
+
+        post[self._topic_scores]: not (topic in self._topic_scores) or (0.1 <= self._topic_scores.get(topic, 1.0) <= 3.0)
         """
         if signal not in {"positive", "negative", "neutral"}:
             return

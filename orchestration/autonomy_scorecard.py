@@ -10,6 +10,10 @@ from utils.policy_gate import get_policy_decision_metrics
 
 
 def _clamp(value: float, minimum: float = 0.0, maximum: float = 100.0) -> float:
+    '''
+    pre: minimum <= maximum
+    post: minimum <= __return__ <= maximum
+    '''
     return max(minimum, min(maximum, float(value)))
 
 

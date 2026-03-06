@@ -105,6 +105,9 @@ def _policy_canary_percent() -> int:
 
 
 def _canary_bucket_for_key(key: str) -> int:
+    '''
+    post: 0 <= __return__ <= 99
+    '''
     digest = hashlib.sha256((key or "").encode("utf-8", errors="ignore")).hexdigest()
     return int(digest[:8], 16) % 100
 

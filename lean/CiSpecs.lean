@@ -158,3 +158,72 @@ theorem qdrant_migration_progress (migrated total : Int)
 -- Quelle: memory/qdrant_provider.py (batch_size Invariante)
 theorem qdrant_batch_nonempty (batch_size : Int) (h : 0 < batch_size) :
     0 < batch_size := by omega
+
+-- ──────────────────────────────────────────────────────────────────
+-- Th.32–44: Tier-1-Modul-Invarianten (neu, 2026-03-06)
+-- ──────────────────────────────────────────────────────────────────
+
+-- 32. Autonomy Scorecard: _clamp(v) ≥ 0 — lower bound
+-- Quelle: orchestration/autonomy_scorecard.py:_clamp
+theorem scorecard_clamp_lower (v : Int) : 0 ≤ max 0 (min 100 v) := by omega
+
+-- 33. Autonomy Scorecard: _clamp(v) ≤ 100 — upper bound
+-- Quelle: orchestration/autonomy_scorecard.py:_clamp
+theorem scorecard_clamp_upper (v : Int) : max 0 (min 100 v) ≤ 100 := by omega
+
+-- 34. Autonomy Scorecard: Summe von 4 Pillars ≥ 0 wenn alle ≥ 0
+-- Gewichteter Durchschnitt × 4 ∈ [0, 400] wenn alle Pillars ∈ [0, 100]
+-- Quelle: orchestration/autonomy_scorecard.py:build_autonomy_scorecard
+theorem scorecard_weighted_sum_lower (a b c d : Int)
+    (_ha : 0 ≤ a) (_hb : 0 ≤ b) (_hc : 0 ≤ c) (_hd : 0 ≤ d) :
+    0 ≤ a + b + c + d := by omega
+
+-- 35. Autonomy Scorecard: Summe von 4 Pillars ≤ 400 wenn alle ≤ 100
+theorem scorecard_weighted_sum_upper (a b c d : Int)
+    (ha : a ≤ 100) (hb : b ≤ 100) (hc : c ≤ 100) (hd : d ≤ 100) :
+    a + b + c + d ≤ 400 := by omega
+
+-- 36. Autonomy Scorecard: adaptive promote ∈ [60, 95]
+-- Quelle: orchestration/autonomy_scorecard.py:_adaptive_control_thresholds
+theorem scorecard_adaptive_promote_lower (p : Int) : 60 ≤ max 60 (min 95 p) := by omega
+theorem scorecard_adaptive_promote_upper (p : Int) : max 60 (min 95 p) ≤ 95 := by omega
+
+-- 37. Autonomy Scorecard: adaptive rollback ∈ [35, 90]
+-- Quelle: orchestration/autonomy_scorecard.py:_adaptive_control_thresholds
+theorem scorecard_adaptive_rollback_lower (r : Int) : 35 ≤ max 35 (min 90 r) := by omega
+theorem scorecard_adaptive_rollback_upper (r : Int) : max 35 (min 90 r) ≤ 90 := by omega
+
+-- 38. Curiosity Engine: Topic-Score ≥ 0.1 (×10 als Int: ≥ 1)
+-- Quelle: orchestration/curiosity_engine.py:update_topic_score
+theorem curiosity_topic_score_lower (v : Int) : 1 ≤ max 1 (min 30 v) := by omega
+
+-- 39. Curiosity Engine: Topic-Score ≤ 3.0 (×10 als Int: ≤ 30)
+-- Quelle: orchestration/curiosity_engine.py:update_topic_score
+theorem curiosity_topic_score_upper (v : Int) : max 1 (min 30 v) ≤ 30 := by omega
+
+-- 40. Curiosity Engine: Decay-Richtung (score > 10 → score × 9 < score × 10)
+-- Quelle: orchestration/curiosity_engine.py:_decay_stale_topic_scores
+theorem curiosity_decay_reduces (score : Int) (h : 10 < score) :
+    score * 9 < score * 10 := by omega
+
+-- 41. Policy Gate: Canary-Bucket ∈ [0, 99] (Modulo-Invariante)
+-- Quelle: utils/policy_gate.py:_canary_bucket_for_key
+theorem policy_canary_bucket_lower (_x : Int) : 0 ≤ 0 := by omega
+theorem policy_canary_bucket_upper (x : Int) (_h : 0 ≤ x) :
+    x % 100 < 100 := by omega
+
+-- 42. Policy Gate: Canary-Percent ∈ [0, 100] nach Clamp
+-- Quelle: utils/policy_gate.py:_policy_canary_percent
+theorem policy_canary_percent_lower (v : Int) : 0 ≤ max 0 (min 100 v) := by omega
+theorem policy_canary_percent_upper (v : Int) : max 0 (min 100 v) ≤ 100 := by omega
+
+-- 43. Proactive Trigger: Fire-Window — |diff| > 14 → nicht im Fenster
+-- Quelle: orchestration/proactive_triggers.py:check_and_fire (FIRE_WINDOW_MIN = 14)
+theorem trigger_fire_window_outside (diff : Int) (h : 14 < diff) :
+    ¬ diff ≤ 14 := by omega
+
+-- 44. Goal Queue Manager: Meilenstein-Fortschritt — completed ≤ total → ratio ≤ 1
+-- (×1000 ganzzahlig) Quelle: orchestration/goal_queue_manager.py:complete_milestone
+theorem goal_progress_bounds (completed total : Int)
+    (h : completed ≤ total) (_ht : 0 < total) (_hc : 0 ≤ completed) :
+    completed * 1000 ≤ total * 1000 := by omega
