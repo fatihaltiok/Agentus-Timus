@@ -40,6 +40,8 @@ _TEMPLATE = r"""<!doctype html>
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/highlight.min.js"></script>
   <!-- Cytoscape.js -->
   <script src="https://cdn.jsdelivr.net/npm/cytoscape@3/dist/cytoscape.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
 
   <style>
     /* ═══════════════════════════════════════════════════
@@ -1164,6 +1166,7 @@ _TEMPLATE = r"""<!doctype html>
         <button class="tab-btn active" id="tab-canvas-btn"   onclick="switchTab('canvas')">Canvas</button>
         <button class="tab-btn"        id="tab-autonomy-btn" onclick="switchTab('autonomy')">Autonomy</button>
         <button class="tab-btn"        id="tab-kamera-btn"   onclick="switchTab('kamera')">Kamera</button>
+        <button class="tab-btn"        id="tab-flow-btn"     onclick="switchTab('flow')">Flow</button>
       </div>
 
       <!-- Canvas Tab (position:relative für Voice-Canvas-Overlay) -->
@@ -1221,6 +1224,21 @@ _TEMPLATE = r"""<!doctype html>
           <button class="sec" onclick="camStart()" id="camBtnStart">▶ Start</button>
           <button class="sec" onclick="camStop()"  id="camBtnStop" style="display:none;">⏹ Stop</button>
         </div>
+      </div>
+
+      <!-- Flow Tab -->
+      <div class="tab-content" id="tab-flow" style="position:relative;">
+        <div id="flow-cy" style="width:100%;height:100%;"></div>
+        <canvas id="flow-beam-overlay" style="position:absolute;top:0;left:0;pointer-events:none;"></canvas>
+        <!-- Zoom-Controls -->
+        <div style="position:absolute;top:8px;right:8px;z-index:10;display:flex;gap:6px;">
+          <button class="sec" style="font-size:12px;padding:3px 10px;" onclick="flowCy&&(flowCy.zoom(flowCy.zoom()*1.3),flowCy.center())">＋</button>
+          <button class="sec" style="font-size:12px;padding:3px 10px;" onclick="flowCy&&(flowCy.zoom(flowCy.zoom()*0.77),flowCy.center())">－</button>
+          <button class="sec" style="font-size:12px;padding:3px 10px;" onclick="flowCy&&flowCy.fit(40)">⊞ Fit</button>
+        </div>
+        <!-- Minimap -->
+        <div id="flow-minimap" style="position:absolute;bottom:8px;right:8px;width:150px;height:100px;
+             border:1px solid #334;background:#0d1117;border-radius:4px;z-index:10;"></div>
       </div>
 
       <!-- Autonomy Tab -->
@@ -1422,6 +1440,7 @@ function switchTab(tab) {
   if (tab === "autonomy") loadAutonomyData();
   else if (tab === "canvas" && cy) setTimeout(() => cy.fit(), 60);
   else if (tab === "kamera") camCheckStatus();
+  else if (tab === "flow") initFlowGraph();
 }
 
 // ── Kamera ────────────────────────────────────────────────────────────────────
@@ -1600,7 +1619,11 @@ function handleSSE(d) {
     return;
   }
   if (d.type === "autonomy_score") { updateSidebarScore(d.score, d.level); return; }
-  if (d.type === "delegation")    { animateDelegationBeam(d.from, d.to);  return; }
+  if (d.type === "delegation") {
+    animateDelegationBeam(d.from, d.to, d.status || "running");
+    if (typeof flowCy !== "undefined" && flowCy) animateFlowBeam(d.from, d.to, d.status || "running");
+    return;
+  }
 }
 
 // ── Chat ──────────────────────────────────────────────────────────────────────
@@ -1969,6 +1992,13 @@ const STATUS_BORDER = {
   running:   "#00e09a",
 };
 
+// Strahlfarben nach Delegations-Status
+const BEAM_COLORS = {
+  running:   { outer: [255,180,0],   core: [255,215,0],   white: [255,255,200] },
+  completed: { outer: [0,200,80],    core: [0,230,100],   white: [200,255,220] },
+  error:     { outer: [220,30,30],   core: [255,60,60],   white: [255,200,200] },
+};
+
 function initCytoscape() {
   cy = cytoscape({
     container: document.getElementById("cy"),
@@ -2122,7 +2152,8 @@ function syncBeamOverlay() {
 // ── Delegation-Lichtstrahl-Animation ──────────────────────────────────────────
 let _beamRAF = null;
 
-function animateDelegationBeam(fromId, toId) {
+function animateDelegationBeam(fromId, toId, status) {
+  status = status || "running";
   if (!cy) return;
 
   // Aliases auflösen (z.B. "developer" → "development")
@@ -2147,6 +2178,11 @@ function animateDelegationBeam(fromId, toId) {
 
   if (_beamRAF) cancelAnimationFrame(_beamRAF);
 
+  const colors = BEAM_COLORS[status] || BEAM_COLORS.running;
+  const [or, og, ob] = colors.outer;
+  const [cr, cg, cb] = colors.core;
+  const [wr, wg, wb] = colors.white;
+
   function draw(now) {
     const t  = Math.min((now - startTime) / duration, 1.0);
     const px = fromPos.x + (toPos.x - fromPos.x) * t;
@@ -2166,11 +2202,11 @@ function animateDelegationBeam(fromId, toId) {
 
     // Äußere Glut
     const glowGrad = ctx.createLinearGradient(-bLen * 1.4, 0, bLen * 1.4, 0);
-    glowGrad.addColorStop(0,   "rgba(255,180,0,0)");
-    glowGrad.addColorStop(0.4, "rgba(255,215,0,0.35)");
-    glowGrad.addColorStop(0.5, "rgba(255,215,0,0.55)");
-    glowGrad.addColorStop(0.6, "rgba(255,215,0,0.35)");
-    glowGrad.addColorStop(1,   "rgba(255,180,0,0)");
+    glowGrad.addColorStop(0,   `rgba(${or},${og},${ob},0)`);
+    glowGrad.addColorStop(0.4, `rgba(${cr},${cg},${cb},0.35)`);
+    glowGrad.addColorStop(0.5, `rgba(${cr},${cg},${cb},0.55)`);
+    glowGrad.addColorStop(0.6, `rgba(${cr},${cg},${cb},0.35)`);
+    glowGrad.addColorStop(1,   `rgba(${or},${og},${ob},0)`);
     ctx.beginPath();
     ctx.ellipse(0, 0, bLen * 1.4, bW * 2.2, 0, 0, Math.PI * 2);
     ctx.fillStyle = glowGrad;
@@ -2178,11 +2214,11 @@ function animateDelegationBeam(fromId, toId) {
 
     // Strahl-Körper
     const beamGrad = ctx.createLinearGradient(-bLen, 0, bLen, 0);
-    beamGrad.addColorStop(0,   "rgba(255,200,0,0)");
-    beamGrad.addColorStop(0.3, "rgba(255,215,0,0.85)");
-    beamGrad.addColorStop(0.5, "rgba(255,255,200,1)");
-    beamGrad.addColorStop(0.7, "rgba(255,215,0,0.85)");
-    beamGrad.addColorStop(1,   "rgba(255,200,0,0)");
+    beamGrad.addColorStop(0,   `rgba(${or},${og},${ob},0)`);
+    beamGrad.addColorStop(0.3, `rgba(${cr},${cg},${cb},0.85)`);
+    beamGrad.addColorStop(0.5, `rgba(${wr},${wg},${wb},1)`);
+    beamGrad.addColorStop(0.7, `rgba(${cr},${cg},${cb},0.85)`);
+    beamGrad.addColorStop(1,   `rgba(${or},${og},${ob},0)`);
     ctx.beginPath();
     ctx.ellipse(0, 0, bLen, bW, 0, 0, Math.PI * 2);
     ctx.fillStyle = beamGrad;
@@ -2205,25 +2241,30 @@ function animateDelegationBeam(fromId, toId) {
     } else {
       ctx.clearRect(0, 0, overlay.width, overlay.height);
       _beamRAF = null;
-      flashNode(tgt);
+      flashNode(tgt, status);
     }
   }
 
   _beamRAF = requestAnimationFrame(draw);
 }
 
-function flashNode(agentId) {
+function flashNode(agentId, status) {
   if (!cy) return;
   const node = cy.getElementById(agentId);
   if (!node.length) return;
 
+  const flashColorMap = { running: "#ffd700", completed: "#00e676", error: "#ff1744" };
+  const bgColorMap    = { running: "#2a2000",  completed: "#00200d",  error: "#200000"  };
+  const col = flashColorMap[status] || flashColorMap.running;
+  const bg  = bgColorMap[status]   || bgColorMap.running;
+
   node.style({
-    "border-color":     "#ffd700",
+    "border-color":     col,
     "border-width":     5,
-    "shadow-color":     "#ffd700",
+    "shadow-color":     col,
     "shadow-opacity":   0.95,
     "shadow-blur":      28,
-    "background-color": "#2a2000",
+    "background-color": bg,
   });
 
   setTimeout(() => {
@@ -2246,6 +2287,249 @@ async function reloadGraph() {
     const status = _agentStatusFromLed(name);
     updateGraphNodeColor(name, status);
   }
+}
+
+// ── Flow-Graph ────────────────────────────────────────────────────────────────
+let flowCy = null;
+let _flowBeamRAF = null;
+let _flowGraphInited = false;
+
+function initFlowGraph() {
+  const container = document.getElementById("flow-cy");
+  if (!container) return;
+  if (_flowGraphInited && flowCy) { flowCy.fit(40); return; }
+  _flowGraphInited = true;
+
+  const nodes = [
+    // Eingabe-Schicht
+    { data: { id: "telegram",  label: "Telegram",        bgColor: "#1b2e42", borderColor: "#243748" } },
+    { data: { id: "terminal",  label: "Terminal",         bgColor: "#1b2e42", borderColor: "#243748" } },
+    // Dispatcher
+    { data: { id: "dispatcher", label: "Dispatcher",      bgColor: "#1b314a", borderColor: "#2a4a6a" } },
+    // Meta
+    { data: { id: "meta",      label: "MetaAgent",        bgColor: "#1e2a40", borderColor: "#3a5080" } },
+    // Executor-Agenten
+    { data: { id: "executor",      label: "Executor",     bgColor: "#152030", borderColor: "#243748" } },
+    { data: { id: "research",      label: "Research",     bgColor: "#152030", borderColor: "#243748" } },
+    { data: { id: "reasoning",     label: "Reasoning",    bgColor: "#152030", borderColor: "#243748" } },
+    { data: { id: "creative",      label: "Creative",     bgColor: "#152030", borderColor: "#243748" } },
+    { data: { id: "development",   label: "Developer",    bgColor: "#152030", borderColor: "#243748" } },
+    { data: { id: "visual",        label: "Visual",       bgColor: "#152030", borderColor: "#243748" } },
+    { data: { id: "data",          label: "Data",         bgColor: "#152030", borderColor: "#243748" } },
+    { data: { id: "communication", label: "Comms",        bgColor: "#152030", borderColor: "#243748" } },
+    { data: { id: "system",        label: "System",       bgColor: "#152030", borderColor: "#243748" } },
+    { data: { id: "shell",         label: "Shell",        bgColor: "#152030", borderColor: "#243748" } },
+    { data: { id: "image",         label: "Image",        bgColor: "#152030", borderColor: "#243748" } },
+    // Autonomie-Runner
+    { data: { id: "runner",    label: "AutonomousRunner",  bgColor: "#1a1a35", borderColor: "#3a3a80" } },
+    // Autonomie-Motoren
+    { data: { id: "m1",        label: "M1 GoalGen",        bgColor: "#0d1a28", borderColor: "#1a3a50" } },
+    { data: { id: "m3",        label: "M3 Healing",        bgColor: "#0d1a28", borderColor: "#1a3a50" } },
+    { data: { id: "m8",        label: "M8 Reflect",        bgColor: "#0d1a28", borderColor: "#1a3a50" } },
+    { data: { id: "m13",       label: "M13 ToolGen",       bgColor: "#0d1a28", borderColor: "#1a3a50" } },
+    { data: { id: "m14",       label: "M14 Email",         bgColor: "#0d1a28", borderColor: "#1a3a50" } },
+    { data: { id: "m15",       label: "M15 Ambient",       bgColor: "#0d1a28", borderColor: "#1a3a50" } },
+    { data: { id: "m16",       label: "M16 Feedback",      bgColor: "#0d1a28", borderColor: "#1a3a50" } },
+  ];
+
+  const edges = [
+    { data: { id: "e-tg-d",  source: "telegram",  target: "dispatcher" } },
+    { data: { id: "e-tr-d",  source: "terminal",  target: "dispatcher" } },
+    { data: { id: "e-d-m",   source: "dispatcher", target: "meta" } },
+    { data: { id: "e-m-ex",  source: "meta", target: "executor" } },
+    { data: { id: "e-m-re",  source: "meta", target: "research" } },
+    { data: { id: "e-m-rz",  source: "meta", target: "reasoning" } },
+    { data: { id: "e-m-cr",  source: "meta", target: "creative" } },
+    { data: { id: "e-m-dv",  source: "meta", target: "development" } },
+    { data: { id: "e-m-vi",  source: "meta", target: "visual" } },
+    { data: { id: "e-m-da",  source: "meta", target: "data" } },
+    { data: { id: "e-m-co",  source: "meta", target: "communication" } },
+    { data: { id: "e-m-sy",  source: "meta", target: "system" } },
+    { data: { id: "e-m-sh",  source: "meta", target: "shell" } },
+    { data: { id: "e-m-im",  source: "meta", target: "image" } },
+    { data: { id: "e-r-m1",  source: "runner", target: "m1" } },
+    { data: { id: "e-r-m3",  source: "runner", target: "m3" } },
+    { data: { id: "e-r-m8",  source: "runner", target: "m8" } },
+    { data: { id: "e-r-m13", source: "runner", target: "m13" } },
+    { data: { id: "e-r-m14", source: "runner", target: "m14" } },
+    { data: { id: "e-r-m15", source: "runner", target: "m15" } },
+    { data: { id: "e-r-m16", source: "runner", target: "m16" } },
+    { data: { id: "e-m15-d", source: "m15", target: "dispatcher" } },
+  ];
+
+  flowCy = cytoscape({
+    container,
+    userZoomingEnabled: true,
+    userPanningEnabled: true,
+    elements: { nodes, edges },
+    style: [
+      {
+        selector: "node",
+        style: {
+          "background-color":  "data(bgColor)",
+          "border-color":      "data(borderColor)",
+          "border-width":      2,
+          "label":             "data(label)",
+          "color":             "#cce8db",
+          "font-family":       "JetBrains Mono, monospace",
+          "font-size":         "9px",
+          "font-weight":       "500",
+          "text-valign":       "center",
+          "text-halign":       "center",
+          "width":             65,
+          "height":            65,
+          "shape":             "roundrectangle",
+          "text-wrap":         "wrap",
+          "text-max-width":    58,
+          "shadow-blur":       10,
+          "shadow-color":      "data(borderColor)",
+          "shadow-opacity":    0.4,
+          "shadow-offset-x":   0,
+          "shadow-offset-y":   0,
+        },
+      },
+      {
+        selector: "edge",
+        style: {
+          "line-color":         "#1e3a50",
+          "target-arrow-color": "#1e3a50",
+          "target-arrow-shape": "triangle",
+          "curve-style":        "bezier",
+          "width":              1.5,
+          "opacity":            0.6,
+          "arrow-scale":        0.9,
+        },
+      },
+    ],
+    layout: {
+      name:     "dagre",
+      rankDir:  "LR",
+      nodeSep:  35,
+      rankSep:  80,
+      padding:  30,
+    },
+  });
+
+  flowCy.fit(40);
+
+  // Minimap initialisieren (falls cytoscape-navigator geladen)
+  try {
+    if (flowCy.navigator) {
+      flowCy.navigator({ container: "#flow-minimap", viewLiveFramerate: 0, thumbnailEventFramerate: 30 });
+    }
+  } catch (_) {}
+
+  // Sync Flow-Beam-Overlay
+  syncFlowBeamOverlay();
+  const ro = new ResizeObserver(syncFlowBeamOverlay);
+  ro.observe(container);
+}
+
+function syncFlowBeamOverlay() {
+  const container = document.getElementById("flow-cy");
+  const overlay   = document.getElementById("flow-beam-overlay");
+  if (!container || !overlay) return;
+  const r = container.getBoundingClientRect();
+  overlay.width  = r.width;
+  overlay.height = r.height;
+}
+
+function animateFlowBeam(fromId, toId, status) {
+  if (!flowCy) return;
+  status = status || "running";
+
+  const idMap = { developer: "development" };
+  const src = idMap[fromId] || fromId;
+  const tgt = idMap[toId]   || toId;
+
+  const fromNode = flowCy.getElementById(src);
+  const toNode   = flowCy.getElementById(tgt);
+  if (!fromNode.length || !toNode.length) return;
+
+  syncFlowBeamOverlay();
+  const overlay = document.getElementById("flow-beam-overlay");
+  if (!overlay) return;
+  const ctx = overlay.getContext("2d");
+
+  const fromPos = fromNode.renderedPosition();
+  const toPos   = toNode.renderedPosition();
+
+  const startTime = performance.now();
+  const duration  = 700;
+
+  if (_flowBeamRAF) cancelAnimationFrame(_flowBeamRAF);
+
+  const colors = BEAM_COLORS[status] || BEAM_COLORS.running;
+  const [or, og, ob] = colors.outer;
+  const [cr, cg, cb] = colors.core;
+  const [wr, wg, wb] = colors.white;
+
+  function draw(now) {
+    const t  = Math.min((now - startTime) / duration, 1.0);
+    const px = fromPos.x + (toPos.x - fromPos.x) * t;
+    const py = fromPos.y + (toPos.y - fromPos.y) * t;
+    const dx = toPos.x - fromPos.x;
+    const dy = toPos.y - fromPos.y;
+    const angle = Math.atan2(dy, dx);
+    const dist  = Math.hypot(dx, dy);
+    const bLen  = Math.max(22, Math.min(55, dist * 0.22));
+    const bW    = 4.5;
+
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate(angle);
+
+    const glowGrad = ctx.createLinearGradient(-bLen * 1.4, 0, bLen * 1.4, 0);
+    glowGrad.addColorStop(0,   `rgba(${or},${og},${ob},0)`);
+    glowGrad.addColorStop(0.4, `rgba(${cr},${cg},${cb},0.35)`);
+    glowGrad.addColorStop(0.5, `rgba(${cr},${cg},${cb},0.55)`);
+    glowGrad.addColorStop(0.6, `rgba(${cr},${cg},${cb},0.35)`);
+    glowGrad.addColorStop(1,   `rgba(${or},${og},${ob},0)`);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, bLen * 1.4, bW * 2.2, 0, 0, Math.PI * 2);
+    ctx.fillStyle = glowGrad;
+    ctx.fill();
+
+    const beamGrad = ctx.createLinearGradient(-bLen, 0, bLen, 0);
+    beamGrad.addColorStop(0,   `rgba(${or},${og},${ob},0)`);
+    beamGrad.addColorStop(0.3, `rgba(${cr},${cg},${cb},0.85)`);
+    beamGrad.addColorStop(0.5, `rgba(${wr},${wg},${wb},1)`);
+    beamGrad.addColorStop(0.7, `rgba(${cr},${cg},${cb},0.85)`);
+    beamGrad.addColorStop(1,   `rgba(${or},${og},${ob},0)`);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, bLen, bW, 0, 0, Math.PI * 2);
+    ctx.fillStyle = beamGrad;
+    ctx.fill();
+
+    const coreGrad = ctx.createLinearGradient(-bLen * 0.45, 0, bLen * 0.45, 0);
+    coreGrad.addColorStop(0,   "rgba(255,255,255,0)");
+    coreGrad.addColorStop(0.5, "rgba(255,255,255,0.92)");
+    coreGrad.addColorStop(1,   "rgba(255,255,255,0)");
+    ctx.beginPath();
+    ctx.ellipse(0, 0, bLen * 0.45, bW * 0.32, 0, 0, Math.PI * 2);
+    ctx.fillStyle = coreGrad;
+    ctx.fill();
+
+    ctx.restore();
+
+    if (t < 1.0) {
+      _flowBeamRAF = requestAnimationFrame(draw);
+    } else {
+      ctx.clearRect(0, 0, overlay.width, overlay.height);
+      _flowBeamRAF = null;
+      // Flash-Zielknoten im Flow-Graph
+      const node = flowCy.getElementById(tgt);
+      if (node.length) {
+        const flashColorMap = { running: "#ffd700", completed: "#00e676", error: "#ff1744" };
+        const col = flashColorMap[status] || flashColorMap.running;
+        node.style({ "border-color": col, "border-width": 4, "shadow-color": col, "shadow-opacity": 0.9, "shadow-blur": 20 });
+        setTimeout(() => node.style({ "border-color": node.data("borderColor") || "#243748", "border-width": 2, "shadow-opacity": 0.4, "shadow-blur": 10 }), 600);
+      }
+    }
+  }
+
+  _flowBeamRAF = requestAnimationFrame(draw);
 }
 
 // ── Canvas List ───────────────────────────────────────────────────────────────

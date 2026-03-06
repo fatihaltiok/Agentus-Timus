@@ -397,6 +397,11 @@ class AgentRegistry:
             )
             # M12: Routing-Analytics aufzeichnen
             self._record_routing_outcome(task, to_agent, "success")
+            try:
+                if _delegation_sse_hook is not None:
+                    _delegation_sse_hook(from_agent, to_agent, "completed")
+            except Exception:
+                pass
             return {"status": "success", "agent": to_agent, "result": result_str}
 
         except Exception as e:
@@ -412,6 +417,11 @@ class AgentRegistry:
             )
             # M12: Routing-Analytics aufzeichnen
             self._record_routing_outcome(task, to_agent, "error")
+            try:
+                if _delegation_sse_hook is not None:
+                    _delegation_sse_hook(from_agent, to_agent, "error")
+            except Exception:
+                pass
             return {
                 "status": "error",
                 "agent": to_agent,
