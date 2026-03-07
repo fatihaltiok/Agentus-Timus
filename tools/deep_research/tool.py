@@ -2177,18 +2177,6 @@ Wichtig: Schreibe NUR den Berichtstext. Kein Meta-Kommentar über den Schreibpro
 # ÖFFENTLICHE RPC-METHODEN (erweitert für v5.0)
 # ==============================================================================
 
-@tool(
-    name="start_deep_research",
-    description="Startet eine akademische Tiefenrecherche (v5.0) mit Quellenqualitätsbewertung, These-Antithese-Synthese Analyse und erweiterter Fakten-Verifikation.",
-    parameters=[
-        P("query", "string", "Die Hauptsuchanfrage"),
-        P("focus_areas", "array", "Optionale Liste von Fokusthemen", required=False),
-        P("max_depth", "integer", "Maximale Tiefe der Recherche (1-5)", required=False),
-        P("verification_mode", "string", "Verifikationsmodus: strict, moderate oder light", required=False, default="strict"),
-    ],
-    capabilities=["research", "deep_research"],
-    category=C.RESEARCH
-)
 async def _run_research_pipeline(
     query: str,
     session_id: str,
@@ -2314,6 +2302,18 @@ async def _run_research_pipeline(
     }
 
 
+@tool(
+    name="start_deep_research",
+    description="Startet eine akademische Tiefenrecherche (v7.0) mit Quellenqualitätsbewertung, These-Antithese-Synthese Analyse und erweiterter Fakten-Verifikation.",
+    parameters=[
+        P("query", "string", "Die Hauptsuchanfrage"),
+        P("focus_areas", "array", "Optionale Liste von Fokusthemen", required=False),
+        P("max_depth", "integer", "Maximale Tiefe der Recherche (1-5)", required=False),
+        P("verification_mode", "string", "Verifikationsmodus: strict, moderate oder light", required=False, default="strict"),
+    ],
+    capabilities=["research", "deep_research"],
+    category=C.RESEARCH
+)
 async def start_deep_research(
     query: str,
     focus_areas: Optional[List[str]] = None,
