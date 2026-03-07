@@ -60,15 +60,16 @@ class ImageCollector:
         """
         _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-        results: List[ImageResult] = []
-        for section in sections[:max_images]:
+        async def _safe_collect(section: str) -> Optional[ImageResult]:
             topic = f"{section} {query}".strip()
             try:
-                img = await self._collect_one(section, topic)
-                if img:
-                    results.append(img)
+                return await self._collect_one(section, topic)
             except Exception as e:
                 logger.warning(f"Bild für '{section}' fehlgeschlagen (unkritisch): {e}")
+                return None
+
+        gathered = await asyncio.gather(*[_safe_collect(s) for s in sections[:max_images]])
+        results: List[ImageResult] = [img for img in gathered if img is not None]
 
         logger.info(f"🖼️ {len(results)} Bilder gesammelt ({len(sections[:max_images])} Abschnitte)")
         return results
@@ -150,24 +151,18 @@ class ImageCollector:
             logger.warning(f"Download fehlgeschlagen ({url[:60]}...): {e}")
             return None
 
-        # Pillow-Validierung
-        try:
-            from PIL import Image
-            import io
-            img = Image.open(io.BytesIO(data))
-            img.verify()
-        except Exception as e:
-            logger.warning(f"Pillow-Validierung fehlgeschlagen: {e}")
-            return None
-
-        # Speichern
+        # Pillow-Validierung + Speichern (ein Import, eine BytesIO-Instanz)
         url_hash = hashlib.sha256(url.encode()).hexdigest()[:8]
         filename = f"img_{url_hash}.jpg"
         local_path = _RESULTS_DIR / filename
         try:
             from PIL import Image
             import io
-            img = Image.open(io.BytesIO(data)).convert("RGB")
+            buf = io.BytesIO(data)
+            img = Image.open(buf)
+            img.verify()          # Korruptionscheck (schließt intern)
+            buf.seek(0)           # Zurückspulen für convert
+            img = Image.open(buf).convert("RGB")
             img.save(str(local_path), "JPEG", quality=85)
             logger.info(f"🖼️ Bild gespeichert: {local_path}")
             return str(local_path)

@@ -47,16 +47,23 @@ _MAX_VIDEOS = int(os.getenv("YOUTUBE_MAX_VIDEOS", "5"))
 def _build_queries(query: str) -> List[str]:
     """
     Baut eine Liste von Such-Queries auf: deutsch + englisch + Inhaltstypen.
-    Ziel: Podcasts, Interviews, Erklärvideos auf beiden Sprachen erfassen.
+    Duplikate (z.B. wenn Query bereits "podcast" enthält) werden gefiltert.
     """
     q = query.strip()
-    return [
-        q,                                  # Original-Query (DE oder EN)
-        f"{q} podcast",                     # Podcast-Suche
-        f"{q} interview",                   # Interview-Suche
-        f"{q} explained",                   # Englischsprachige Erklärvideos
-        f"{q} erklärt",                     # Deutschsprachige Erklärvideos
+    candidates = [
+        q,
+        f"{q} podcast",
+        f"{q} interview",
+        f"{q} explained",
+        f"{q} erklärt",
     ]
+    seen: set = set()
+    unique: List[str] = []
+    for c in candidates:
+        if c not in seen:
+            seen.add(c)
+            unique.append(c)
+    return unique
 
 
 class YouTubeResearcher:
@@ -85,28 +92,39 @@ class YouTubeResearcher:
             logger.info("📺 Keine YouTube-Videos gefunden")
             return 0
 
-        analyzed = 0
-        for video in videos[:max_videos]:
+        async def _analyze_video(video: dict) -> bool:
+            """Transkript-Fetch und Thumbnail-Analyse laufen parallel."""
             try:
-                transcript = await self._get_transcript_with_fallback(video["video_id"])
-                text_facts = {}
-                visual_info = {}
+                thumbnail_url = video.get("thumbnail_url", "")
 
+                async def _maybe_thumbnail() -> dict:
+                    if thumbnail_url:
+                        return await self._analyze_thumbnail(thumbnail_url, query)
+                    return {}
+
+                transcript, visual_info = await asyncio.gather(
+                    self._get_transcript_with_fallback(video["video_id"]),
+                    _maybe_thumbnail(),
+                )
+                if not isinstance(visual_info, dict):
+                    visual_info = {}
+
+                text_facts: dict = {}
                 if transcript and len(transcript) > 100:
                     text_facts = await self._analyze_text(transcript, query)
 
-                thumbnail_url = video.get("thumbnail_url", "")
-                if thumbnail_url:
-                    visual_info = await self._analyze_thumbnail(thumbnail_url, query)
-
                 self._add_to_session(session, video, text_facts, visual_info)
-                analyzed += 1
                 logger.info(
                     f"📺 Video analysiert: '{video.get('title', video['video_id'])}' "
                     f"— {len(text_facts.get('facts', []))} Fakten"
                 )
+                return True
             except Exception as e:
                 logger.warning(f"Video {video['video_id']} übersprungen: {e}")
+                return False
+
+        results = await asyncio.gather(*[_analyze_video(v) for v in videos[:max_videos]])
+        analyzed = sum(1 for ok in results if ok)
 
         logger.info(f"📺 YouTube gesamt: {analyzed}/{len(videos)} Videos erfolgreich analysiert")
         return analyzed
@@ -145,10 +163,10 @@ class YouTubeResearcher:
 
     async def _get_transcript_with_fallback(self, video_id: str) -> Optional[str]:
         """
-        Versucht Transkript auf Deutsch zu laden, fällt auf Englisch zurück.
+        Lädt DE- und EN-Transkript parallel, bevorzugt Deutsch.
         Erfasst so deutsche Beiträge UND englische Podcasts/Interviews.
         """
-        for lang in ("de", "en"):
+        async def _fetch(lang: str) -> Optional[str]:
             try:
                 result = await call_tool_internal(
                     "get_youtube_subtitles", {"video_id": video_id, "language_code": lang}
@@ -160,7 +178,10 @@ class YouTubeResearcher:
                         return text
             except Exception as e:
                 logger.warning(f"Transkript ({lang}) für {video_id} fehlgeschlagen: {e}")
-        return None
+            return None
+
+        de_text, en_text = await asyncio.gather(_fetch("de"), _fetch("en"))
+        return de_text or en_text
 
     async def _analyze_text(self, text: str, query: str) -> dict:
         """Extrahiert Fakten aus dem Transkript via LLM (DE + EN Inhalte)."""

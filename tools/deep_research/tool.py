@@ -959,9 +959,9 @@ async def _perform_initial_search(query: str, session: DeepResearchSession) -> L
 
     all_results: List[Dict[str, Any]] = []
 
-    for q in queries[:5]:
+    async def _single_search(q: str) -> Optional[Any]:
         try:
-            result = await call_tool_internal(
+            return await call_tool_internal(
                 "search_web",
                 {
                     "query": q,
@@ -971,22 +971,24 @@ async def _perform_initial_search(query: str, session: DeepResearchSession) -> L
                     "location_code": location_code,
                     "language_code": language_code,
                 },
-                timeout=DEFAULT_TIMEOUT_SEARCH
+                timeout=DEFAULT_TIMEOUT_SEARCH,
             )
-
-            if isinstance(result, list):
-                all_results.extend(result)
-            elif isinstance(result, dict):
-                if "error" not in result and "results" in result:
-                    all_results.extend(result.get("results", []))
-                elif "error" not in result:
-                    all_results.append(result)
-
-            await asyncio.sleep(0.5)
-
         except Exception as e:
-            logger.error(f"Suchfehler: {e}")
+            logger.error(f"Suchfehler ({q[:40]}): {e}")
+            return None
+
+    search_results = await asyncio.gather(*[_single_search(q) for q in queries[:5]])
+
+    for result in search_results:
+        if result is None:
             continue
+        if isinstance(result, list):
+            all_results.extend(result)
+        elif isinstance(result, dict):
+            if "error" not in result and "results" in result:
+                all_results.extend(result.get("results", []))
+            elif "error" not in result:
+                all_results.append(result)
 
     try:
         from tools.deep_research.diagnostics import get_current
