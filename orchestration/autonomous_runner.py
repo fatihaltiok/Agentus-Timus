@@ -558,7 +558,7 @@ class AutonomousRunner:
                     log.debug("FeedbackEngine.process_pending fehlgeschlagen: %s", e)
 
             # Täglicher Hook-Decay (1× pro Tag)
-            if self._heartbeat_count % 96 == 0:  # 96 × 15min = 24h
+            if self._heartbeat_count % 288 == 0:  # 288 × 5min = 24h
                 try:
                     from memory.soul_engine import get_soul_engine
                     changed = get_soul_engine().decay_hooks()

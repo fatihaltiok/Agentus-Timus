@@ -1968,7 +1968,7 @@ async def main_loop():
 
     # 1. Autonomous Runner (Scheduler)
     from orchestration.autonomous_runner import AutonomousRunner
-    interval = int(os.getenv("HEARTBEAT_INTERVAL_MINUTES", "15"))
+    interval = int(os.getenv("HEARTBEAT_INTERVAL_MINUTES", "5"))
     runner = AutonomousRunner(interval_minutes=interval)
     await runner.start(tools_desc)
     log.info(f"🤖 AutonomousRunner aktiv (alle {interval} min)")
