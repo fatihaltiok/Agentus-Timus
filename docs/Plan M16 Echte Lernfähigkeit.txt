@@ -1,0 +1,324 @@
+Plan: M16 — Echte Lernfähigkeit (Feedback Loop + Qdrant Migration)
+
+ Kontext
+
+ Timus hat keine echte Lernfähigkeit: Aktionen werden ausgeführt, aber Timus lernt nicht ob sie gut
+ waren. Die Soul Engine hat behavior_hooks als Texte ohne Gewichtungen — kein einziges Feedback-Signal
+ verändert das Verhalten. ChromaDB als Vektordatenbank ist prototype-level (kein Payload-Filtering,
+ keine named Vectors, kein Production-Support). Timus analysiert sich selbst und identifiziert diese
+ Lücke als kritisch.
+
+ Ziel: Timus soll über Telegram-Buttons (👍/👎/🤷) Feedback erhalten und daraus lernen — durch
+ Anpassung der Hook-Gewichtungen im Soul Engine. Gleichzeitig wird ChromaDB durch Qdrant ersetzt
+ (lokal, kein Cloud-Account nötig, Rust-Core, 10–50× schneller).
+
+ ---
+ Architektur-Übersicht (Ist → Soll)
+
+ IST:  Timus-Aktion → Telegram-Nachricht (send-only)
+       Soul Engine: behavior_hooks = ["Sei direkt", "Prüfe zuerst"] (kein Gewicht)
+       ChromaDB: PersistentClient, kein Payload-Filter
+
+ SOLL: Timus-Aktion → Telegram + InlineKeyboard [👍][👎][🤷]
+       → callback_query → FeedbackEngine → WeightedHook.weight ± 0.15
+       → decay_hooks() täglich (×0.97) → langfristiger Drift
+       Soul Engine: WeightedHook(text, weight=1.0) mit apply_feedback()
+       Qdrant: drop-in via MEMORY_BACKEND=qdrant, migrate_chromadb_to_qdrant.py
+
+ ---
+ Kritische Dateien (Ist-Zustand)
+
+ ┌─────────────────────────────────────┬────────────────────────────────────────────┬────────────────────────────────┐
+ │                Datei                │             Relevante Zeile(n)             │            Problem             │
+ ├─────────────────────────────────────┼────────────────────────────────────────────┼────────────────────────────────┤
+ │ memory/soul_engine.py               │ 34–40 (DEFAULT_AXES), 86–186 (apply_drift) │ behavior_hooks ohne Gewicht    │
+ ├─────────────────────────────────────┼────────────────────────────────────────────┼────────────────────────────────┤
+ │ memory/memory_system.py             │ 970–982 (ChromaDB PersistentClient)        │ ChromaDB prototype-level       │
+ ├─────────────────────────────────────┼────────────────────────────────────────────┼────────────────────────────────┤
+ │ utils/telegram_notify.py            │ 19–77 (send_telegram)                      │ send-only, kein InlineKeyboard │
+ ├─────────────────────────────────────┼────────────────────────────────────────────┼────────────────────────────────┤
+ │ gateway/telegram_gateway.py         │ gesamte Datei                              │ kein callback_query handler    │
+ ├─────────────────────────────────────┼────────────────────────────────────────────┼────────────────────────────────┤
+ │ orchestration/curiosity_engine.py   │ GATEKEEPER_MIN=7, MAX_PER_DAY=2            │ mechanisch, kein Feedback      │
+ ├─────────────────────────────────────┼────────────────────────────────────────────┼────────────────────────────────┤
+ │ orchestration/autonomous_runner.py  │ Feature-Flag-Pattern                       │ M16 einhängen                  │
+ ├─────────────────────────────────────┼────────────────────────────────────────────┼────────────────────────────────┤
+ │ orchestration/session_reflection.py │ what_worked_json, what_failed_json         │ nicht mit Hooks verbunden      │
+ ├─────────────────────────────────────┼────────────────────────────────────────────┼────────────────────────────────┤
+ │ lean/CiSpecs.lean                   │ 14 Theoreme vorhanden                      │ +9 neue Theoreme               │
+ ├─────────────────────────────────────┼────────────────────────────────────────────┼────────────────────────────────┤
+ │ tools/lean_tool/tool.py             │ 10 Mathlib-Specs                           │ +2 neue Specs                  │
+ └─────────────────────────────────────┴────────────────────────────────────────────┴────────────────────────────────┘
+
+ ---
+ Lean 4 Invarianten
+
+ Neue CI-Theoreme (lean/CiSpecs.lean) — alle via by omega:
+
+ -- Hook-Weight nach Feedback immer in [0, 100] (×100 als Int)
+ theorem m16_hook_weight_lower (w delta : Int) :
+     0 ≤ max 0 (min 100 (w + delta)) := by omega
+ theorem m16_hook_weight_upper (w delta : Int) :
+     max 0 (min 100 (w + delta)) ≤ 100 := by omega
+
+ -- Decay: weight × decay_factor ≤ weight (monoton fallend)
+ theorem m16_decay_monotone (w decay : Int) (hw : 0 ≤ w) (hd : 0 ≤ decay) (hle : decay ≤ 100) :
+     w * decay / 100 ≤ w := by omega
+
+ -- Topic Score: immer in [0, 100] nach clamp
+ theorem m16_topic_score_lower (v : Int) : 0 ≤ max 0 (min 100 v) := by omega
+ theorem m16_topic_score_upper (v : Int) : max 0 (min 100 v) ≤ 100 := by omega
+
+ -- Negatives Signal senkt Topic Score streng
+ theorem m16_negative_signal (score delta : Int) (hd : 0 < delta) :
+     score - delta < score := by omega
+
+ -- Feedback count: mind. 1 nach erstem Signal
+ theorem m16_feedback_count (n : Int) (h : 0 ≤ n) : 0 ≤ n + 1 := by omega
+
+ -- Qdrant-Limit: immer ≥ 1 (kein Empty-Fetch)
+ theorem m16_qdrant_limit_positive (limit : Int) (h : 0 < limit) : 0 < limit := by omega
+
+ -- Neutral-Noop: 🤷 verändert weight nicht
+ theorem m16_neutral_noop (w : Int) : w = w := by omega
+
+ Neue Mathlib-Specs (tools/lean_tool/tool.py):
+
+ -- Hook-Weight Konvergenz: Unendliche 50/50 Feedbacks → weight konvergiert zu 0.5
+ -- (Darstellung als Grenzwert-Argument, nicht formal beweisbar via omega)
+ -- Stattdessen: Bounded-Range Invariante für gewichteten Durchschnitt
+ theorem m16_weighted_avg_in_bounds (pos neg total : ℝ)
+     (hp : 0 ≤ pos) (hn : 0 ≤ neg) (ht : pos + neg = total) (htpos : 0 < total) :
+     0 ≤ pos / total ∧ pos / total ≤ 1 := by
+   constructor
+   · exact div_nonneg hp (le_of_lt htpos)
+   · rw [div_le_one htpos]; linarith
+
+ -- Feedback-Ratio: pos_rate + neg_rate ≤ 1 (da neutral = 1 - pos - neg)
+ theorem m16_feedback_ratio (pos neg total : ℝ)
+     (hp : 0 ≤ pos) (hn : 0 ≤ neg) (ht : pos + neg ≤ total) (htpos : 0 < total) :
+     pos / total + neg / total ≤ 1 := by
+   rw [div_add_div_same, div_le_one htpos]; linarith
+
+ ---
+ Phase 1: Telegram Feedback Channel
+
+ Ziel: Timus sendet nach Aktionen Feedback-Buttons; Signale werden in DB gespeichert.
+
+ Neue Dateien:
+
+ - orchestration/feedback_engine.py (~150 Zeilen)
+   - FeedbackEngine Klasse mit record_signal(action_id, signal, context)
+   - signal ∈ {"positive", "negative", "neutral"}
+   - DB-Tabelle feedback_events in timus_memory.db (action_id, signal, hook_names, timestamp)
+   - get_hook_stats(hook_name) → {pos: n, neg: n, neutral: n, weight: float}
+
+ Modifizierte Dateien:
+
+ - utils/telegram_notify.py — send_with_feedback(msg, action_id, hook_names) Funktion
+   - Baut InlineKeyboardMarkup mit 3 Buttons: 👍, 👎, 🤷
+   - Callback-Data: {"fb": "positive", "aid": action_id, "hooks": hook_names}
+ - gateway/telegram_gateway.py — handle_callback_query(update) hinzufügen
+   - Parsed Callback-JSON → FeedbackEngine.record_signal()
+   - Antwortet mit answerCallbackQuery (Telegram ACK)
+
+ Tests: tests/test_m16_feedback.py
+
+ .env.example:
+
+ AUTONOMY_M16_ENABLED=false
+ M16_FEEDBACK_DELTA=0.15
+
+ Lean: m16_feedback_count, m16_neutral_noop
+
+ Checkpoint: Telegram-Button → DB-Eintrag in feedback_events.
+
+ ---
+ Phase 2: Weighted Behavior Hooks (Soul Engine)
+
+ Ziel: behavior_hooks bekommen Gewichtungen; Feedback ändert weights.
+
+ Modifizierte Dateien:
+
+ - memory/soul_engine.py
+   - WeightedHook dataclass: text: str, weight: float = 1.0, feedback_count: int = 0
+   - apply_feedback(hook_name, signal) — weight ± M16_FEEDBACK_DELTA, clamp [0.05, 1.0]
+   - decay_hooks() — alle weights × 0.97 (täglich im Heartbeat)
+   - get_active_hooks(threshold=0.3) — filtert Hooks unter threshold raus
+   - SOUL.md YAML-Format Migration: behavior_hooks → weighted_hooks Liste mit weight:
+
+ Tests: tests/test_m16_hooks.py
+
+ .env.example:
+
+ M16_HOOK_MIN_WEIGHT=0.05
+ M16_HOOK_DECAY_RATE=0.97
+
+ Lean: m16_hook_weight_lower, m16_hook_weight_upper, m16_decay_monotone
+
+ Checkpoint: 3× 👍 auf Hook → weight steigt von 1.0 auf ~1.45, 3× 👎 → sinkt auf ~0.55.
+
+ ---
+ Phase 3: Qdrant Migration
+
+ Ziel: ChromaDB durch Qdrant ersetzt (lokal, kein Cloud); Feature-Flag gesteuert.
+
+ Neue Dateien:
+
+ - memory/qdrant_provider.py (~200 Zeilen)
+   - Drop-in für ChromaDB-Interface: add(), query(), get(), delete()
+   - Nutzt qdrant-client im lokalen Modus (kein Server nötig)
+   - Named Vectors: "content" (sentence-transformers embedding)
+   - Payload-Filter: importance >= threshold, agent_type == filter
+ - scripts/migrate_chromadb_to_qdrant.py (~80 Zeilen)
+   - Liest alle ChromaDB-Einträge aus timus_memory collection
+   - Schreibt in Qdrant mit gleicher Payload-Struktur
+   - Fortschrittsanzeige + Validation (count vorher == count nachher)
+
+ Modifizierte Dateien:
+
+ - memory/memory_system.py — MEMORY_BACKEND Switch
+   - if MEMORY_BACKEND == "qdrant": from memory.qdrant_provider import QdrantProvider
+   - Interface bleibt identisch (duck typing)
+
+ Tests: tests/test_m16_qdrant.py
+
+ .env.example:
+
+ MEMORY_BACKEND=chromadb
+ QDRANT_PATH=./data/qdrant_db
+ QDRANT_COLLECTION=timus_memory
+
+ Lean: m16_qdrant_limit_positive
+
+ Checkpoint: MEMORY_BACKEND=qdrant → alle bestehenden Memory-Tests grün.
+
+ ---
+ Phase 4: Curiosity & Autonomer Feedback-Loop
+
+ Ziel: Curiosity Engine nutzt Feedback-History für adaptive Topic-Scores; Session-Reflexion
+          verbindet what_worked_json direkt mit Hook-Updates.
+
+ Modifizierte Dateien:
+
+ - orchestration/curiosity_engine.py
+   - topic_scores: dict[str, float] — initiert aus FeedbackEngine stats
+   - Nach positivem Feedback: topic_score += 0.1, nach negativem: topic_score -= 0.1
+   - _select_curiosity_topic() gewichtet nach topic_scores (nicht mehr rein mechanisch)
+   - TTL-basiertes neutrales Signal: Topic ohne Feedback nach 7 Tagen → score ×0.9
+ - orchestration/session_reflection.py
+   - _apply_reflection_to_hooks() — nach finish() wird what_worked_json geparst
+   - Erfolge → FeedbackEngine.record_signal(signal="positive") für beteiligte Hooks
+   - Fehler → signal="negative"
+
+ Tests: Teil von tests/test_m16_integration.py
+
+ Lean: m16_topic_score_lower, m16_topic_score_upper, m16_negative_signal
+
+ Checkpoint: 5× Topic "Python" angefragt + 👍 → Topic-Score steigt, häufiger in Curiosity gewählt.
+
+ ---
+ Phase 5: Integration, Verifikation & End-to-End
+
+ Ziel: Alles zusammen, 50 automatische Checks, MEMORY.md-Update.
+
+ Neue Dateien:
+
+ - verify_m16.py (~200 Zeilen) — 50 automatische Checks:
+   - Imports aller neuen Module
+   - WeightedHook Grundoperationen
+   - FeedbackEngine DB-Write/Read
+   - Qdrant Provider Interface
+   - Telegram InlineKeyboard Struktur
+   - Lean-Theorem-Zählung (≥23 in CiSpecs.lean)
+
+ Modifizierte Dateien:
+
+ - orchestration/autonomous_runner.py
+   - _m16_feature_enabled() — Feature-Flag-Funktion
+   - Heartbeat-Hook: soul_engine.decay_hooks() täglich
+   - Heartbeat-Hook: feedback_engine.process_pending() bei jedem Tick
+
+ Tests: tests/test_m16_integration.py (~120 Zeilen)
+
+ Vollständiger Test-Run:
+
+ pytest tests/test_m16_feedback.py tests/test_m16_hooks.py \
+        tests/test_m16_qdrant.py tests/test_m16_integration.py -v
+ python verify_m16.py
+ lean lean/CiSpecs.lean && echo "Lean OK (≥23 Theoreme)"
+ # Optional: Migration testen
+ MEMORY_BACKEND=qdrant python scripts/migrate_chromadb_to_qdrant.py
+
+ Checkpoint: verify_m16.py zeigt 50/50 grün. Telegram-Button-Flow end-to-end messbar.
+
+ ---
+ Neue Dateien (Übersicht)
+
+ ┌───────────────────────────────────────┬───────┐
+ │                 Datei                 │ Phase │
+ ├───────────────────────────────────────┼───────┤
+ │ orchestration/feedback_engine.py      │ P1    │
+ ├───────────────────────────────────────┼───────┤
+ │ tests/test_m16_feedback.py            │ P1    │
+ ├───────────────────────────────────────┼───────┤
+ │ memory/qdrant_provider.py             │ P3    │
+ ├───────────────────────────────────────┼───────┤
+ │ scripts/migrate_chromadb_to_qdrant.py │ P3    │
+ ├───────────────────────────────────────┼───────┤
+ │ tests/test_m16_qdrant.py              │ P3    │
+ ├───────────────────────────────────────┼───────┤
+ │ tests/test_m16_hooks.py               │ P2    │
+ ├───────────────────────────────────────┼───────┤
+ │ tests/test_m16_integration.py         │ P4–P5 │
+ ├───────────────────────────────────────┼───────┤
+ │ verify_m16.py                         │ P5    │
+ └───────────────────────────────────────┴───────┘
+
+ Modifizierte Dateien
+
+ ┌─────────────────────────────────────┬───────────────────────┐
+ │                Datei                │        Phasen         │
+ ├─────────────────────────────────────┼───────────────────────┤
+ │ utils/telegram_notify.py            │ P1                    │
+ ├─────────────────────────────────────┼───────────────────────┤
+ │ gateway/telegram_gateway.py         │ P1                    │
+ ├─────────────────────────────────────┼───────────────────────┤
+ │ memory/soul_engine.py               │ P2                    │
+ ├─────────────────────────────────────┼───────────────────────┤
+ │ memory/memory_system.py             │ P3                    │
+ ├─────────────────────────────────────┼───────────────────────┤
+ │ orchestration/curiosity_engine.py   │ P4                    │
+ ├─────────────────────────────────────┼───────────────────────┤
+ │ orchestration/session_reflection.py │ P4                    │
+ ├─────────────────────────────────────┼───────────────────────┤
+ │ orchestration/autonomous_runner.py  │ P5                    │
+ ├─────────────────────────────────────┼───────────────────────┤
+ │ lean/CiSpecs.lean                   │ +9 Theoreme (P1–P4)   │
+ ├─────────────────────────────────────┼───────────────────────┤
+ │ tools/lean_tool/tool.py             │ +2 Mathlib-Specs (P5) │
+ ├─────────────────────────────────────┼───────────────────────┤
+ │ .env.example                        │ +5 Flags              │
+ └─────────────────────────────────────┴───────────────────────┘
+
+ .env-Ergänzungen (gesamt)
+
+ # M16: Echte Lernfähigkeit
+ AUTONOMY_M16_ENABLED=false
+ M16_FEEDBACK_DELTA=0.15
+ M16_HOOK_MIN_WEIGHT=0.05
+ M16_HOOK_DECAY_RATE=0.97
+
+ # Speicher-Backend
+ MEMORY_BACKEND=chromadb
+ QDRANT_PATH=./data/qdrant_db
+ QDRANT_COLLECTION=timus_memory
+
+ Implementierungsreihenfolge
+
+ P1 → P2 → P3 → P4 → P5
+
+ P1 muss vor P2 kommen (FeedbackEngine ist Voraussetzung für apply_feedback).
+ P3 (Qdrant) ist unabhängig von P2 — kann parallel zu P2 entwickelt werden.
+ P4 braucht P1 (Feedback signals) und P2 (Hook weights).
+

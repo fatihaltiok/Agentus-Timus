@@ -1,0 +1,166 @@
+Plan: Timus E-Mail-Client (Outlook, eigene Adresse)    
+
+ Kontext
+
+ Timus soll eigenständig E-Mails senden und empfangen können — in seinem eigenen Namen,
+ über eine dedizierte Outlook-Adresse (z.B. timus.agent@outlook.com).
+ Der CommunicationAgent existiert bereits, aber die eigentliche SMTP/IMAP-Logik fehlt komplett
+ (IMAPReader/SMTPSender sind in skill_email.py nur Stubs). Es wird ein vollständiges
+ MCP-Tool gebaut, das nahtlos in den bestehenden Agent-Loop integriert wird.
+
+ ---
+ Architektur-Entscheidungen
+
+ - Anbieter: Microsoft Outlook.com (personal account, kostenlos)
+ - Protokolle: SMTP (Port 587, STARTTLS) + IMAP (Port 993, SSL)
+ - Auth: Username + Passwort (SMTP AUTH muss im Outlook-Konto aktiviert werden)
+ - Integration: @tool-Decorator → automatisch im MCP-Server verfügbar
+ - Python-Libraries: nur stdlib (smtplib, imaplib, email) — kein neues Paket nötig
+ - Absender-Identität: Timus Agent <timus.agent@outlook.com>
+
+ ---
+ Zu erstellende / ändernde Dateien
+
+ 1. tools/email_tool/__init__.py (neu)
+
+ Leere Init-Datei für das neue Tool-Modul.
+
+ 2. tools/email_tool/tool.py (neu) — Kernimplementierung
+
+ Drei MCP-Tools mit @tool-Decorator:
+
+ send_email
+
+ Parameter:
+   to         (string, required)  — Empfänger-Adresse
+   subject    (string, required)  — Betreff
+   body       (string, required)  — Plaintext-Body
+   cc         (string, optional)  — CC-Adresse(n), kommagetrennt
+   bcc        (string, optional)  — BCC-Adresse(n)
+   html_body  (string, optional)  — HTML-Alternativtext
+   reply_to   (string, optional)  — Reply-To Header
+
+ Intern:
+   - smtplib.SMTP("smtp-mail.outlook.com", 587)
+   - ehlo() + starttls() + login(TIMUS_EMAIL, TIMUS_EMAIL_PASSWORD)
+   - email.mime.multipart.MIMEMultipart("alternative") für HTML+Text
+   - From-Header: "Timus Agent <timus.agent@outlook.com>"
+   - Date: formatdate(localtime=True)
+   - Message-ID: make_msgid()
+
+ read_emails
+
+ Parameter:
+   mailbox     (string, optional, default="INBOX") — Postfach
+   limit       (integer, optional, default=10)     — max Anzahl E-Mails
+   unread_only (boolean, optional, default=False)  — nur ungelesene
+   search      (string, optional)                  — IMAP-Suchbegriff (z.B. "FROM fatih")
+
+ Intern:
+   - imaplib.IMAP4_SSL("outlook.office365.com", 993)
+   - login(TIMUS_EMAIL, TIMUS_EMAIL_PASSWORD)
+   - select(mailbox)
+   - search(None, "UNSEEN" oder "ALL")
+   - fetch UIDs, parse via email.message_from_bytes()
+   - Rückgabe: Liste mit {uid, from, to, subject, date, body, is_read}
+
+ get_email_status
+
+ Keine Parameter.
+ Prüft ob SMTP + IMAP erreichbar sind.
+ Rückgabe: {smtp_ok, imap_ok, address, display_name}
+
+ Hilfsfunktionen (privat, kein @tool):
+ - _smtp_connect() → SMTP-Session als Context Manager
+ - _imap_connect() → IMAP-Session als Context Manager
+ - _parse_message(raw) → dict aus raw IMAP-Bytes
+ - _decode_header(header) → UTF-8-safe Header-Dekodierung
+
+ 3. skills/skill_email.py (überarbeiten)
+
+ - Stubs IMAPReader/SMTPSender entfernen
+ - Direkt registry_v2.execute("send_email", ...) und registry_v2.execute("read_emails", ...)
+ aufrufen → kein Code-Duplikat, Tool-Logik an einer Stelle
+
+ 4. .env.example (erweitern)
+
+ # Timus E-Mail (Outlook)
+ TIMUS_EMAIL=timus.agent@outlook.com
+ TIMUS_EMAIL_PASSWORD=
+ TIMUS_EMAIL_DISPLAY_NAME=Timus Agent
+ TIMUS_EMAIL_IMAP_HOST=outlook.office365.com
+ TIMUS_EMAIL_IMAP_PORT=993
+ TIMUS_EMAIL_SMTP_HOST=smtp-mail.outlook.com
+ TIMUS_EMAIL_SMTP_PORT=587
+
+ 5. server/mcp_server.py (Import ergänzen)
+
+ from tools.email_tool import tool as _email_tool  # noqa — registriert @tool automatisch
+ (Eine Zeile, analog zu den anderen Tool-Importen)
+
+ 6. main_dispatcher.py (Keyword-Routing erweitern)
+
+ Neue Keywords für E-Mail-Empfang/Lesen:
+ EMAIL_READ_KEYWORDS = [
+     "lies meine emails", "zeig meine emails", "neue emails",
+     "posteingang", "ungelesene mails", "hast du emails bekommen",
+     "check emails", "email lesen"
+ ]
+ # → routen zu "communication"
+ Sende-Keywords existieren bereits, müssen nur um "sende eine email", "schick eine email" ergänzt werden.
+
+ 7. utils/timus_mail_cli.py (neu) — manuelles Testen
+
+ Kleines CLI-Skript das unabhängig von Timus funktioniert:
+ python utils/timus_mail_cli.py status
+ python utils/timus_mail_cli.py send --to x@y.de --subject "Test" --body "Hallo"
+ python utils/timus_mail_cli.py read --limit 5 --unread
+ Nützlich für den ersten Verbindungstest nach der Account-Erstellung.
+
+ ---
+ Setup-Schritte für den Nutzer (vor Implementierung)
+
+ 1. Outlook-Konto erstellen: timus.agent@outlook.com (oder ähnlich)
+ 2. SMTP AUTH aktivieren: Outlook.com → Einstellungen → E-Mail → Synchronisieren → POP und IMAP → SMTP aktivieren
+ 3. Passwort in .env eintragen: TIMUS_EMAIL_PASSWORD=<passwort>
+
+ ---
+ Datenfluss (Senden)
+
+ User: "Schick eine Email an fatih@example.com: ..."
+   → Dispatcher → communication
+   → CommunicationAgent formuliert E-Mail (Betreff, Body, Ton)
+   → Tool-Call: send_email(to=..., subject=..., body=...)
+   → tools/email_tool/tool.py
+   → smtplib → smtp-mail.outlook.com:587 (STARTTLS)
+   → Bestätigung zurück an Agent
+   → Agent antwortet: "E-Mail wurde versendet"
+
+ Datenfluss (Empfangen)
+
+ User: "Hast du neue Emails?"
+   → Dispatcher → communication
+   → CommunicationAgent → Tool-Call: read_emails(unread_only=True, limit=5)
+   → tools/email_tool/tool.py
+   → imaplib → outlook.office365.com:993 (SSL)
+   → Parsed E-Mails als Liste
+   → Agent fasst zusammen: "Du hast 2 neue E-Mails: ..."
+
+ ---
+ Verifikation
+
+ 1. python utils/timus_mail_cli.py status — Verbindung prüfen
+ 2. python utils/timus_mail_cli.py send --to <eigene-adresse> --subject "Timus Test" --body "Hallo Welt"
+ 3. Im Canvas: "Schick eine Test-Email an mich" → CommunicationAgent → send_email
+ 4. Im Canvas: "Lies deine Emails" → CommunicationAgent → read_emails
+ 5. python -m pytest tests/test_email_tool.py (wird miterstellt)
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+
+ Claude has written up a plan and is ready to execute. Would you like to proceed?
+
+ ❯ 1. Yes, clear context (32% used) and auto-accept edits (shift+tab)
+   2. Yes, auto-accept edits
+   3. Yes, manually approve edits
+   4. Type here to tell Claude what to change
+
+

@@ -1,0 +1,443 @@
+Plan: Deep Research v6.0 — Phasenplan mit Testgates                                                                                                                                        
+
+ Gesamtübersicht
+
+ Phase 1: DataForSEO YouTube-Tools    → Gate 1: Tools funktionieren
+ Phase 2: YouTubeResearcher           → Gate 2: Videos + Transkripte analysiert
+ Phase 3: Längerer Lesebericht        → Gate 3: 2500-5000 Wörter, YT integriert
+ Phase 4: ImageCollector              → Gate 4: Bilder lokal verfügbar
+ Phase 5: PDF-Builder                 → Gate 5: Sauberes A4-PDF mit Bildern
+ Phase 6: Vollintegration             → Gate 6: Alle 3 Ausgabedateien korrekt
+
+ Jede Phase wird committed und getestet bevor die nächste beginnt.
+ Fehler in Phase N blockieren Phase N+1.
+
+ ---
+ Phase 1 — DataForSEO YouTube-Tools
+
+ Ziel: Timus kann YouTube-Videos suchen und Transkripte abrufen.
+
+ Änderung: tools/search_tool/tool.py
+
+ Bestehende _call_dataforseo()-Funktion wird wiederverwendet.
+ Zwei neue @tool-Funktionen am Ende der Datei:
+
+ @tool(name="search_youtube", capabilities=["search", "youtube"], category=C.SEARCH)
+ async def search_youtube(query: str, max_results: int = 5, language_code: str = "de") -> dict:
+     # POST /v3/serp/youtube/organic/live/advanced
+     # Rückgabe: Liste mit {video_id, title, url, description,
+     #            thumbnail_url, channel_name, duration_time_seconds, views_count}
+
+ @tool(name="get_youtube_subtitles", capabilities=["search", "youtube"], category=C.SEARCH)
+ async def get_youtube_subtitles(video_id: str, language_code: str = "de") -> dict:
+     # POST /v3/serp/youtube/video_subtitles/live/advanced
+     # Versucht 'de', Fallback auf 'en'
+     # Rückgabe: {video_id, full_text: "...", items: [{text, start_time, end_time}]}
+     # full_text: alle Segmente zusammengesetzt, max 8000 Zeichen
+
+ Gate 1 — Tests (vor Phase 2)
+
+ # Test 1: YouTube-Suche funktioniert
+ result = await call_tool_internal("search_youtube", {"query": "KI Agenten 2025"})
+ assert len(result) > 0
+ assert "video_id" in result[0]
+ assert "thumbnail_url" in result[0]
+
+ # Test 2: Untertitel abrufbar
+ subtitles = await call_tool_internal("get_youtube_subtitles", {"video_id": result[0]["video_id"]})
+ assert "full_text" in subtitles
+ assert len(subtitles["full_text"]) > 100
+
+ # Test 3: Syntaxcheck
+ python3 -c "import ast; ast.parse(open('tools/search_tool/tool.py').read()); print('OK')"
+
+ # Test 4: Kein Breaking Change
+ pytest tests/ -x -q
+
+ Commit: feat(search): search_youtube + get_youtube_subtitles via DataForSEO
+
+ ---
+ Phase 2 — YouTubeResearcher
+
+ Ziel: Deep Research analysiert automatisch 2-3 relevante YouTube-Videos.
+
+ Neue Datei: tools/deep_research/youtube_researcher.py
+
+ class YouTubeResearcher:
+
+     async def research_topic_on_youtube(self, query, session, max_videos=3) -> int:
+         # Sucht Videos, analysiert Transkript + Thumbnail
+         # Fügt Fakten als unverified_claims zur session hinzu
+         # Gibt Anzahl analysierter Videos zurück
+
+     async def _search_videos(self, query) -> List[dict]:
+         # call_tool_internal("search_youtube", ...)
+
+     async def _get_transcript(self, video_id) -> Optional[str]:
+         # call_tool_internal("get_youtube_subtitles", ...)
+
+     async def _analyze_text(self, text, query) -> dict:
+         # qwen3.5-plus via OpenRouter
+         # Output: {"facts": [...], "key_quote": "...", "relevance": 0-10}
+
+     async def _analyze_thumbnail(self, thumbnail_url, query) -> dict:
+         # NVIDIA NIM — Nemotron Nano 2 VL (ModelProvider.NVIDIA)
+         # Message: Bild-URL + Frage zum Inhalt
+         # Fallback: {} bei Fehler
+
+     def _add_to_session(self, session, video, text_facts, visual_info):
+         # Fakten als unverified_claims, source_type="youtube"
+
+ Einbau in tools/deep_research/tool.py
+
+ In start_deep_research() nach Web-Phase:
+ if os.getenv("DEEP_RESEARCH_YOUTUBE_ENABLED", "true").lower() == "true":
+     try:
+         from tools.deep_research.youtube_researcher import YouTubeResearcher
+         yt_count = await YouTubeResearcher().research_topic_on_youtube(
+             query=session.query, session=session, max_videos=3
+         )
+         logger.info(f"📺 YouTube: {yt_count} Videos analysiert")
+     except Exception as e:
+         logger.warning(f"YouTube fehlgeschlagen (unkritisch): {e}")
+
+ Gate 2 — Tests (vor Phase 3)
+
+ # Test 1: Syntaxcheck
+ python3 -c "import ast; ast.parse(open('tools/deep_research/youtube_researcher.py').read()); print('OK')"
+
+ # Test 2: YouTubeResearcher instantiierbar
+ python3 -c "from tools.deep_research.youtube_researcher import YouTubeResearcher; print('Import OK')"
+
+ # Test 3: Feature-Flag deaktiviert → kein Fehler
+ DEEP_RESEARCH_YOUTUBE_ENABLED=false python3 -c "
+ import asyncio
+ from tools.deep_research.tool import start_deep_research
+ # Sollte starten ohne YouTube-Code zu berühren
+ print('Flag-Test OK')
+ "
+
+ # Test 4: Kein Breaking Change
+ pytest tests/ -x -q
+
+ # Test 5: Manuelle Prüfung (manuell, nicht automatisiert)
+ # Eine Recherche mit DEEP_RESEARCH_YOUTUBE_ENABLED=true starten
+ # → Logs auf "📺 YouTube: X Videos analysiert" prüfen
+ # → session.unverified_claims auf YouTube-Einträge prüfen
+
+ Commits:
+ - feat(deep_research): YouTubeResearcher — DataForSEO + qwen3.5-plus + Nemotron NIM
+ - feat(deep_research): YouTube-Recherche in start_deep_research() integriert
+
+ ---
+ Phase 3 — Längerer Lesebericht
+
+ Ziel: Narrative Synthese nutzt alle Quellen (inkl. YouTube) und schreibt 2500-5000 Wörter.
+
+ Änderung: tools/deep_research/tool.py — _create_narrative_synthesis_report()
+
+ # Prompt-Erweiterungen:
+ "- Länge: 2500–5000 Wörter — lieber zu ausführlich als zu kurz"
+ "- Jeder Hauptabschnitt: mindestens 3-4 vollständige Absätze"
+ "- Nutze direkte Zitate aus den Quellen in Anführungszeichen"
+ "- Erkläre Zusammenhänge und Widersprüche zwischen Quellen"
+ "- YouTube-Quellen mit [Video: Titel] kennzeichnen"
+
+ # Token-Limit erhöhen:
+ max_tokens=6000  # war: 2500
+
+ Gate 3 — Tests (vor Phase 4)
+
+ # Test 1: Syntaxcheck
+ python3 -c "import ast; ast.parse(open('tools/deep_research/tool.py').read()); print('OK')"
+
+ # Test 2: Wortanzahl-Check (manuell nach einer Recherche)
+ # results/DeepResearch_Bericht_*.md öffnen → Wortanzahl > 2000?
+
+ # Test 3: YouTube-Quellen im Bericht
+ # Grep auf "[Video:" in generiertem Bericht
+
+ # Test 4: Alle Tests grün
+ pytest tests/ -x -q
+
+ Commit: feat(deep_research): Längerer Lesebericht (2500-5000 Wörter, YouTube integriert)
+
+ ---
+ Phase 4 — ImageCollector
+
+ Ziel: Bilder für Hauptabschnitte sammeln — web-gefunden oder DALL-E generiert.
+
+ Neue Datei: tools/deep_research/image_collector.py
+
+ @dataclass
+ class ImageResult:
+     local_path: str    # Absoluter Pfad results/img_*.jpg
+     caption: str       # Bildunterschrift
+     section_title: str # Zugehöriger Abschnitt
+     source: str        # "web" | "dalle"
+
+ class ImageCollector:
+
+     async def collect_images_for_sections(
+         self, sections: List[str], query: str, max_images: int = 4
+     ) -> List[ImageResult]:
+         # Für jeden Abschnitt (max 4 total):
+         # 1. search_images (DataForSEO) → erste valide Bild-URL
+         # 2. Download via requests.get → results/img_{hash}.jpg
+         # 3. Pillow-Validierung (öffnen prüft ob valides Bild)
+         # 4. Wenn kein Web-Bild: generate_image (DALL-E) → lokal speichern
+         # 5. Wenn DALL-E auch fehlschlägt: Abschnitt ohne Bild
+
+     async def _find_web_image(self, topic: str) -> Optional[str]:
+         # call_tool_internal("search_images", {"query": topic, "max_results": 5})
+         # Filtert auf .jpg/.png/.webp, max 5MB
+
+     async def _download_image(self, url: str) -> Optional[str]:
+         # requests.get(url, timeout=10, stream=True)
+         # Speichert in results/img_{sha256[:8]}.jpg
+         # Pillow-Check: Image.open() muss funktionieren
+
+     async def _generate_dalle_image(self, topic: str) -> Optional[str]:
+         # call_tool_internal("generate_image", {
+         #   "prompt": f"Sachliche Illustration zu: {topic}. Clean, professionell, kein Text.",
+         #   "size": "1536x1024", "quality": "medium"
+         # })
+
+ Gate 4 — Tests (vor Phase 5)
+
+ # Test 1: Syntaxcheck
+ python3 -c "import ast; ast.parse(open('tools/deep_research/image_collector.py').read()); print('OK')"
+
+ # Test 2: Import-Test
+ python3 -c "from tools.deep_research.image_collector import ImageCollector, ImageResult; print('OK')"
+
+ # Test 3: Web-Bild downloaden
+ python3 -c "
+ import asyncio
+ from tools.deep_research.image_collector import ImageCollector
+ result = asyncio.run(ImageCollector()._find_web_image('Künstliche Intelligenz'))
+ print('Web-Bild URL:', result)
+ "
+
+ # Test 4: Vollständige Sammlung (2 Abschnitte)
+ python3 -c "
+ import asyncio
+ from tools.deep_research.image_collector import ImageCollector
+ imgs = asyncio.run(ImageCollector().collect_images_for_sections(
+     ['KI-Agenten', 'Machine Learning'], 'KI', max_images=2
+ ))
+ print(f'{len(imgs)} Bilder gesammelt')
+ for img in imgs: print(img.local_path, img.source)
+ "
+
+ # Test 5: Alle Tests grün
+ pytest tests/ -x -q
+
+ Commit: feat(deep_research): ImageCollector — Web-Bild + DALL-E Fallback
+
+ ---
+ Phase 5 — PDF-Builder
+
+ Ziel: Professionelles A4-PDF mit Titelseite, Abschnitten, Bildern und Quellenverzeichnis.
+
+ Neue Datei: tools/deep_research/pdf_builder.py
+
+ class ResearchPDFBuilder:
+
+     # Layout: A4, Ränder 20mm, Helvetica (fpdf2 builtin — kein Font-Download nötig)
+     # Farben: Überschriften #1a3a5c (dunkelblau), Text schwarz, Akzent #c8a84b (gold)
+
+     def build_pdf(self, narrative_md, images, session, output_path) -> str:
+
+     def _render_cover(self, pdf):
+         # Dunkelblauer Header-Balken
+         # Titel: session.query (Helvetica Bold 18pt)
+         # "Timus Deep Research v6.0 | {datum}"
+         # Quellen: {n} Web-Quellen, {m} YouTube-Videos
+
+     def _render_toc(self, pdf, sections: List[str]):
+         # Überschrift "Inhaltsverzeichnis"
+         # Nummerierte Abschnittsliste
+
+     def _render_section(self, pdf, heading, text, image: Optional[ImageResult]):
+         # Heading: Helvetica Bold 13pt, dunkelblau, mit Linie darunter
+         # Bild (falls vorhanden): max 80mm breit, rechtsbündig
+         # Text: multi_cell, Helvetica 11pt, Zeilenabstand 6mm
+         # Bildunterschrift: Helvetica Italic 9pt
+
+     def _render_source_list(self, pdf, session):
+         # Web-Quellen nummeriert
+         # YouTube-Quellen mit [YT]-Prefix
+
+     def _parse_markdown(self, md: str) -> List[Tuple[str, str]]:
+         # regex: ^## (.+) → Abschnittsgrenzen
+         # Absätze: \n\n trennt
+
+     def _markdown_to_plain(self, text: str) -> str:
+         # **bold** → bold (fpdf2 hat kein inline Markdown)
+         # *italic* → italic
+         # - Listen → Bullet-Zeichen
+
+ Gate 5 — Tests (vor Phase 6)
+
+ # Test 1: Syntaxcheck
+ python3 -c "import ast; ast.parse(open('tools/deep_research/pdf_builder.py').read()); print('OK')"
+
+ # Test 2: Import-Test
+ python3 -c "from tools.deep_research.pdf_builder import ResearchPDFBuilder; print('OK')"
+
+ # Test 3: PDF mit Dummy-Daten erstellen
+ python3 -c "
+ from tools.deep_research.pdf_builder import ResearchPDFBuilder
+ from tools.deep_research.image_collector import ImageResult
+
+ dummy_md = '''# Test-Bericht
+ ## Einleitung
+ Dies ist ein Test-Absatz mit ausreichend Text für die PDF-Generierung.
+ Zweiter Satz im Absatz.
+
+ ## Hauptteil
+ Weiterer Text für den zweiten Abschnitt.
+ '''
+
+ class FakeSession:
+     query = 'Test-Thema'
+     research_tree = []
+     unverified_claims = []
+
+ builder = ResearchPDFBuilder()
+ path = builder.build_pdf(dummy_md, [], FakeSession(), '/tmp/test_research.pdf')
+ print('PDF erstellt:', path)
+ import os; print('Dateigröße:', os.path.getsize(path), 'bytes')
+ "
+
+ # Test 4: PDF mit Bild erstellen (falls Bild aus Gate 4 vorhanden)
+ # Visuell prüfen: PDF öffnen, Layout korrekt?
+
+ # Test 5: Alle Tests grün
+ pytest tests/ -x -q
+
+ Commit: feat(deep_research): ResearchPDFBuilder — A4 PDF mit Bildern (fpdf2)
+
+ ---
+ Phase 6 — Vollintegration
+
+ Ziel: generate_research_report() erzeugt automatisch alle 3 Ausgabedateien.
+
+ Änderung: tools/deep_research/tool.py — generate_research_report()
+
+ # Nach narrative_content erstellt:
+
+ # Abschnitte extrahieren
+ sections = re.findall(r'^##\s+(.+)$', narrative_content, re.MULTILINE)
+
+ # Bilder sammeln
+ images = []
+ if os.getenv("DEEP_RESEARCH_IMAGES_ENABLED", "true").lower() == "true":
+     try:
+         from tools.deep_research.image_collector import ImageCollector
+         images = await ImageCollector().collect_images_for_sections(
+             sections[:4], session.query, max_images=4
+         )
+         logger.info(f"🖼️  {len(images)} Bilder gesammelt"
+     except Exception as e:
+         logger.warning(f"Bilder-Sammlung fehlgeschlagen (unkritisch): {e}")
+
+ # PDF erstellen
+ pdf_filepath = None
+ if os.getenv("DEEP_RESEARCH_PDF_ENABLED", "true").lower() == "true":
+     try:
+         from tools.deep_research.pdf_builder import ResearchPDFBuilder
+         pdf_path = str(base_dir / f"DeepResearch_PDF_{actual_session_id}.pdf")
+         pdf_filepath = ResearchPDFBuilder().build_pdf(
+             narrative_content, images, session, pdf_path
+         )
+         logger.info(f"📄 PDF erstellt: {pdf_filepath}")
+     except Exception as e:
+         logger.warning(f"PDF-Erstellung fehlgeschlagen (unkritisch): {e}")
+
+ # Return mit allen Ausgabedateien
+ return {
+     "status": "report_created",
+     "filepath": filepath,                      # Analytischer Bericht
+     "narrative_filepath": narrative_filepath,  # Lesebericht
+     "pdf_filepath": pdf_filepath,              # NEU
+     "youtube_videos_analyzed": yt_count,       # NEU
+     "images_in_pdf": len(images),              # NEU
+     ...
+ }
+
+ Neue .env-Flags dokumentieren
+
+ DEEP_RESEARCH_YOUTUBE_ENABLED=true
+ DEEP_RESEARCH_IMAGES_ENABLED=true
+ DEEP_RESEARCH_PDF_ENABLED=true
+
+ Gate 6 — Integrations-Tests
+
+ # Test 1: Syntaxcheck tool.py
+ python3 -c "import ast; ast.parse(open('tools/deep_research/tool.py').read()); print('OK')"
+
+ # Test 2: Alle neuen Module importierbar
+ python3 -c "
+ from tools.deep_research.youtube_researcher import YouTubeResearcher
+ from tools.deep_research.image_collector import ImageCollector
+ from tools.deep_research.pdf_builder import ResearchPDFBuilder
+ print('Alle Importe OK')
+ "
+
+ # Test 3: Feature-Flags alle deaktiviert → kein Fehler
+ DEEP_RESEARCH_YOUTUBE_ENABLED=false \
+ DEEP_RESEARCH_IMAGES_ENABLED=false \
+ DEEP_RESEARCH_PDF_ENABLED=false \
+ python3 -c "from tools.deep_research.tool import generate_research_report; print('OK')"
+
+ # Test 4: Kompletter Run (manuell)
+ # → Timus: "Recherchiere über KI-Agenten 2025"
+ # → Erwartete Dateien prüfen:
+ #   results/DeepResearch_Academic_*.md  (vorhanden, wie bisher)
+ #   results/DeepResearch_Bericht_*.md   (> 2500 Wörter, [Video:] Einträge vorhanden)
+ #   results/DeepResearch_PDF_*.pdf      (öffnet, Bilder sichtbar, Titelseite korrekt)
+
+ # Test 5: Alle Tests grün
+ pytest tests/ -x -q
+
+ # Test 6: CI-Pipeline
+ git push → GitHub Actions grün
+
+ Commit: feat(deep_research): v6.0 Vollintegration — YouTube+Bilder+PDF+5000-Wörter-Bericht
+
+ ---
+ Rollback-Strategie
+
+ Jede Phase ist additiv — bestehender Code wird nicht entfernt, nur ergänzt.
+ Feature-Flags ermöglichen sofortiges Deaktivieren:
+ DEEP_RESEARCH_YOUTUBE_ENABLED=false   # Phase 2 deaktivieren
+ DEEP_RESEARCH_IMAGES_ENABLED=false    # Phase 4 deaktivieren
+ DEEP_RESEARCH_PDF_ENABLED=false       # Phase 5 deaktivieren
+ Bei Problemen in Phase N → Flag setzen → System läuft auf v5.1-Stand.
+
+ ---
+ Übersicht: Dateien und Abhängigkeiten
+
+ ┌───────────────────────────────────────────┬─────────────────────────┬───────┐
+ │                   Datei                   │         Aktion          │ Phase │
+ ├───────────────────────────────────────────┼─────────────────────────┼───────┤
+ │ tools/search_tool/tool.py                 │ Erweitert: 2 neue Tools │ 1     │
+ ├───────────────────────────────────────────┼─────────────────────────┼───────┤
+ │ tools/deep_research/youtube_researcher.py │ Neu                     │ 2     │
+ ├───────────────────────────────────────────┼─────────────────────────┼───────┤
+ │ tools/deep_research/tool.py               │ YouTube eingebaut       │ 2     │
+ ├───────────────────────────────────────────┼─────────────────────────┼───────┤
+ │ tools/deep_research/tool.py               │ Wortlimit erhöht        │ 3     │
+ ├───────────────────────────────────────────┼─────────────────────────┼───────┤
+ │ tools/deep_research/image_collector.py    │ Neu                     │ 4     │
+ ├───────────────────────────────────────────┼─────────────────────────┼───────┤
+ │ tools/deep_research/pdf_builder.py        │ Neu                     │ 5     │
+ ├───────────────────────────────────────────┼─────────────────────────┼───────┤
+ │ tools/deep_research/tool.py               │ PDF+Bilder eingebaut    │ 6     │
+ └───────────────────────────────────────────┴─────────────────────────┴───────┘
+
+ Keine neuen Abhängigkeiten — fpdf2, requests, Pillow bereits installiert.
+ DataForSEO ersetzt youtube-transcript-api vollständig.
+

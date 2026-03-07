@@ -1,0 +1,222 @@
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Plan: Hypothesis + Formale Python-Verifikation (Lean ↔ Python Brücke)                                                                                                                      
+
+ Kontext
+
+ Timus hat 27 Lean-Theoreme die mathematisch Invarianten beweisen — aber bisher ohne direkte Verbindung zum Python-Code. Lean beweist die Invariante isoliert; Python könnte sie trotzdem
+ verletzen. Ziel: Diese Lücke schließen durch (1) Hypothesis property-based Tests die aktiv Gegenbeispiele suchen, und (2) CrossHair-Contracts direkt in Python-Funktionen.
+
+ Was bereits existiert (wird genutzt):
+ - hypothesis in requirements.txt ✅, .hypothesis/ Verzeichnis vorhanden
+ - tests/test_hypothesis_algorithms.py — 180 Zeilen, bewährtes Pattern (@given, @settings, assume)
+ - Vollständige Type Hints in M14/M13/M16 ✅
+ - 27 Lean-Theoreme in lean/CiSpecs.lean (alle by omega) ✅
+ - Python 3.11.13, pytest asyncio_mode=auto, conftest.py mit Integration-Flag
+
+ Warum CrossHair statt Nagini:
+ Nagini unterstützt offiziell max. Python 3.10. CrossHair unterstützt Python 3.8–3.12 ✅, symbolische Ausführung via Docstring-Contracts, pip install crosshair-tool ohne Java/Viper.
+
+ ---
+ Phase 1 — Hypothesis: Lean-Theoreme als Property-Based Tests
+
+ Neue Datei: tests/test_hypothesis_formal.py (~180 Zeilen)
+
+ Mappt jeden relevanten Lean-Theorem 1:1 auf einen @given-Test. Hypothesis generiert 100–500 Inputs und sucht aktiv Gegenbeispiele in der Python-Implementierung.
+
+ Test-Mapping (Lean-Theorem → Hypothesis-Test)
+
+ M14 E-Mail-Autonomie (Th. 24–25):
+ # Th.24 m14_whitelist_guard: in_list=0 → should_send=False
+ @given(recipient=st.emails())
+ def test_m14_whitelist_guard(recipient):
+     os.environ["M14_EMAIL_WHITELIST"] = "allowed@test.com"
+     engine = EmailAutonomyEngine()
+     if not engine._in_whitelist(recipient):
+         decision = engine.evaluate("ctx", recipient, "Research", "body")
+         assert not decision.should_send
+         assert decision.confidence == 0.0
+
+ # Th.25 m14_confidence_threshold: conf < threshold → ¬should_send
+ @given(conf=st.floats(0.0, 0.84, allow_nan=False))
+ def test_m14_confidence_threshold(conf):
+     os.environ["M14_EMAIL_WHITELIST"] = "user@test.com"
+     os.environ["M14_EMAIL_CONFIDENCE"] = "0.85"
+     engine = EmailAutonomyEngine()
+     decision = engine.evaluate("ctx", "user@test.com", "Research", "body", confidence=conf)
+     assert not decision.should_send
+
+ M13 Tool-Generator (Th. 26–27):
+ # Th.26 m13_code_length_bound: len > MAX → rejected
+ @given(extra=st.integers(min_value=1, max_value=1000))
+ def test_m13_code_length_bound(extra):
+     engine = ToolGeneratorEngine()
+     long_code = "x" * (engine.MAX_CODE_LENGTH + extra)
+     valid, _ = engine.validate_ast(long_code)
+     assert not valid
+
+ # Th.27 m13_tool_approval_guard: status=pending → ¬aktivierbar
+ def test_m13_tool_approval_guard():
+     engine = ToolGeneratorEngine()
+     tool = GeneratedTool(name="x", description="x", code="x", status="pending")
+     engine._tools[tool.action_id] = tool
+     assert not engine.activate(tool.action_id)
+
+ M16 Feedback-Engine (Th. 15–16, 20–23):
+ # Th.15+16: weight ∈ [0.05, 2.0] — egal wieviele Signale
+ @given(signals=st.lists(st.sampled_from(["positive","negative"]), min_size=1, max_size=100))
+ def test_m16_weight_bounds(signals, tmp_path):
+     engine = FeedbackEngine(db_path=tmp_path / "fb.db")
+     for i, s in enumerate(signals):
+         engine.record_signal(f"a{i}", s, hook_names=["hook"])
+     stats = engine.get_hook_stats("hook")
+     assert 0.05 <= stats["weight"] <= 2.0
+
+ # Th.23: neutral ändert weight nicht
+ @given(n=st.integers(min_value=1, max_value=50))
+ def test_m16_neutral_noop(n, tmp_path):
+     engine = FeedbackEngine(db_path=tmp_path / "fb.db")
+     for i in range(n):
+         engine.record_signal(f"a{i}", "neutral", hook_names=["hook"])
+     stats = engine.get_hook_stats("hook")
+     assert stats["weight"] == 1.0
+
+ # Th.21: feedback_count monoton wachsend
+ @given(n=st.integers(min_value=0, max_value=200))
+ def test_m16_feedback_count_monotone(n):
+     from memory.soul_engine import WeightedHook
+     h = WeightedHook(text="test", feedback_count=n)
+     before = h.feedback_count
+     h.apply_feedback("positive")
+     assert h.feedback_count >= before
+
+ Soul Engine (Th. 1–2):
+ @given(v=st.integers(-1000, 1000))
+ def test_soul_clamp_invariant(v):
+     result = max(5, min(95, v))
+     assert 5 <= result <= 95
+
+ Gesamt: ~35 Tests, @settings(max_examples=200) für kritische Tests.
+
+ ---
+ Phase 2 — CrossHair: Pre/Postconditions in Python-Funktionen
+
+ Installation: pip install crosshair-tool + in requirements.txt eintragen.
+
+ CrossHair liest Contracts aus dem Docstring (PEP 316-Style) und verifiziert sie symbolisch.
+
+ orchestration/email_autonomy_engine.py
+
+ def _in_whitelist(self, recipient: str) -> bool:
+     '''
+     post: not __return__ or len(self.recipient_whitelist) > 0
+     post: __return__ == any(r.lower() == recipient.lower() for r in self.recipient_whitelist)
+     '''
+
+ def evaluate(self, context, recipient, subject, body, confidence=0.9) -> EmailDecision:
+     '''
+     post: 0.0 <= __return__.confidence <= 1.0
+     post: not __return__.should_send or self._in_whitelist(__return__.recipient)
+     post: not (__return__.confidence < self.confidence_threshold) or not __return__.should_send
+     '''
+
+ orchestration/tool_generator_engine.py
+
+ def validate_ast(self, code: str) -> tuple:
+     '''
+     post: not (len(code) > self.MAX_CODE_LENGTH) or not __return__[0]
+     post: isinstance(__return__[0], bool) and isinstance(__return__[1], str)
+     '''
+
+ def activate(self, action_id: str) -> bool:
+     '''
+     pre: action_id in self._tools
+     post: not __return__ or self._tools[action_id].status in ("active",)
+     '''
+
+ orchestration/feedback_engine.py
+
+ def get_hook_stats(self, hook_name: str) -> dict:
+     '''
+     post: 0.05 <= __return__["weight"] <= 2.0
+     post: __return__["total"] == __return__["pos"] + __return__["neg"] + __return__["neutral"]
+     '''
+
+ Ausführen:
+ crosshair check orchestration/email_autonomy_engine.py
+ crosshair check orchestration/tool_generator_engine.py
+ crosshair check orchestration/feedback_engine.py
+ # Erwartet: "No counterexamples found" für alle 3 Dateien
+
+ ---
+ Phase 3 — 4 neue Lean-Theoreme (gesamt: 31)
+
+ -- 28. M14 SMTP-Retry terminiert
+ theorem m14_retry_bound (attempts max_retries : Int)
+     (h : attempts ≤ max_retries) (hm : 0 < max_retries) :
+     attempts < max_retries + 1 := by omega
+
+ -- 29. M13 Approval aktivierbar
+ theorem m13_approved_activatable (status : Int) (h : 1 ≤ status) :
+     0 < status := by omega
+
+ -- 30. Qdrant Migration: migrated ≤ total
+ theorem qdrant_migration_progress (migrated total : Int)
+     (h : migrated ≤ total) (ht : 0 ≤ total) :
+     migrated ≤ total := by omega
+
+ -- 31. Qdrant Batch > 0
+ theorem qdrant_batch_nonempty (batch_size : Int) (h : 0 < batch_size) :
+     0 < batch_size := by omega
+
+ Dazu 4 passende Hypothesis-Tests in test_hypothesis_formal.py für Th.28–31.
+
+ ---
+ Implementierungsreihenfolge
+
+ 1. pip install crosshair-tool + requirements.txt
+ 2. tests/test_hypothesis_formal.py — ~35 Tests (Th.1–27 gemappt)
+ 3. lean/CiSpecs.lean — Th.28–31 ergänzen + 4 Hypothesis-Tests dazu
+ 4. CrossHair-Contracts in email_autonomy_engine.py, tool_generator_engine.py, feedback_engine.py
+ 5. Verifikations-Gate ausführen
+ 6. Commit + Push
+
+ ---
+ Kritische Dateien
+
+ ┌────────────────────────────────────────┬─────────────────────────────────┐
+ │                 Datei                  │            Änderung             │
+ ├────────────────────────────────────────┼─────────────────────────────────┤
+ │ tests/test_hypothesis_formal.py        │ NEU — ~35 Property-Based Tests  │
+ ├────────────────────────────────────────┼─────────────────────────────────┤
+ │ lean/CiSpecs.lean                      │ +4 Theoreme (28–31)             │
+ ├────────────────────────────────────────┼─────────────────────────────────┤
+ │ orchestration/email_autonomy_engine.py │ CrossHair-Contracts (Docstring) │
+ ├────────────────────────────────────────┼─────────────────────────────────┤
+ │ orchestration/tool_generator_engine.py │ CrossHair-Contracts (Docstring) │
+ ├────────────────────────────────────────┼─────────────────────────────────┤
+ │ orchestration/feedback_engine.py       │ CrossHair-Contracts (Docstring) │
+ ├────────────────────────────────────────┼─────────────────────────────────┤
+ │ requirements.txt                       │ crosshair-tool ergänzen         │
+ └────────────────────────────────────────┴─────────────────────────────────┘
+
+ ---
+ Verifikations-Gate
+
+ # 1. Hypothesis
+ pytest tests/test_hypothesis_formal.py -v --hypothesis-seed=0
+ # Erwartet: ~35 Tests grün
+
+ # 2. CrossHair
+ crosshair check orchestration/email_autonomy_engine.py
+ crosshair check orchestration/tool_generator_engine.py
+ crosshair check orchestration/feedback_engine.py
+ # Erwartet: "No counterexamples found"
+
+ # 3. Lean
+ lean lean/CiSpecs.lean
+ # Erwartet: 31 Theoreme, 0 Fehler
+
+ # 4. Regression
+ pytest tests/ -x -q --timeout=60
+ # Alle bestehenden Tests weiterhin grün
+

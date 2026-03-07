@@ -1,0 +1,383 @@
+Ich habe mich in den Ist-Zustand von timus eingearbeitet. Ich habe nichts geändert.
+
+  Kurzbild
+  timus ist im Kern ein Python-Multi-Agent-System mit FastAPI/MCP-Server als Zentrale, einem Dispatcher für Intent-Routing, spezialisierten Agenten auf einer gemeinsamen BaseAgent-
+  Architektur, einem großen Tool-Layer, plus Autonomie-, Memory- und Canvas-UI-Schicht.
+
+  Tatsächlicher Hauptfluss
+
+  1. HTTP/UI/JSON-RPC kommt im MCP-Server an: server/mcp_server.py:602
+  2. Der Server lädt Tools, registriert Agent-Spezifikationen lazy und exponiert Chat, SSE, Voice, Camera, Settings, Autonomy und JSON-RPC: server/mcp_server.py:820
+  3. Für Chat-Anfragen ruft der Server den Dispatcher auf: server/mcp_server.py:1237
+  4. Der Dispatcher entscheidet per Keyword-Fastpath oder LLM den Agenten und startet ihn: main_dispatcher.py:1091, main_dispatcher.py:1164
+  5. Der Agent läuft in einem ReAct-ähnlichen Loop, ruft Tools via JSON-RPC auf und beendet mit Final Answer: agent/base_agent.py:1486
+  6. Delegation zwischen Agenten läuft über die Registry, inkl. Loop-Schutz, Timeout, Blackboard-Write und Parallel-Fanout: agent/agent_registry.py:50, agent/agent_registry.py:770
+
+  Architektur in Schichten
+
+  - Infrastruktur:
+    server/mcp_server.py, tools/tool_registry_v2.py, utils/policy_gate.py
+  - Routing/Orchestrierung:
+    main_dispatcher.py, agent/agent_registry.py, orchestration/lane_manager.py
+  - Agenten:
+    agent/base_agent.py, agent/agents
+  - Tools:
+    tools
+  - Memory/Autonomie:
+    memory, orchestration
+  - UI:
+    server/canvas_ui.py
+
+  Agenten-Modell
+  Es gibt real 13 aktive Spezialisten, registriert in agent/agent_registry.py:773:
+
+  - executor
+  - research
+  - reasoning
+  - creative
+  - developer
+  - visual
+  - meta
+  - image
+  - data
+  - document
+  - communication
+  - system
+  - shell
+
+  Wichtig:
+
+  - Der Dispatcher spricht teils von development, die Registry intern von developer. Das ist über Aliase abgefangen, aber konzeptionell leicht inkonsistent: main_dispatcher.py:330, agent/
+    agent_registry.py:61
+  - MetaAgent ist klar als Orchestrator gebaut und blendet viele Ausführungstools absichtlich aus: agent/agents/meta.py:31
+
+  Basislogik der Agenten
+  Die Kernlogik sitzt fast vollständig in agent/base_agent.py:
+
+  - Capability-gesteuerte Tool-Sicht pro Agent
+  - LLM-Loop mit Action: {...} oder Final Answer: ...
+  - Tool-Calls über MCP
+  - Policy-Gates vor Tool-Nutzung
+  - Loop-Detection
+  - optional strukturierte Navigation / Vision
+  - Blackboard-Kontext vor Task
+  - Post-Task-Reflection nach Task
+
+  Das ist die eigentliche “Runtime-Engine” des Projekts.
+
+  Tool-Architektur
+  Tools sind nicht lose Skripte, sondern registrierte RPC-Funktionen mit Metadaten:
+
+  - Registry/Decorator: tools/tool_registry_v2.py
+  - Tool-Pattern über @tool(...)
+  - Capability-Tags steuern, welche Agenten welche Tools sehen
+
+  Relevante Tool-Gruppen:
+
+  - Web/Recherche: search_tool, web_fetch_tool, deep_research
+  - Files/Docs/Data: file_system_tool, document_creator, data_tool
+  - Vision/UI: florence2_tool, ocr_tool, som_tool, visual_browser_tool, browser_controller
+  - System/Shell: system_tool, system_monitor_tool, shell_tool
+  - Memory/Autonomy: memory_tool, blackboard_tool, goal_tool, trigger_tool, self_improvement_tool
+
+  Memory-Architektur
+  Der Memory-Layer ist eigenständig und relativ ausgebaut:
+
+  - Hauptmodul: memory/memory_system.py:915
+  - Blackboard: memory/agent_blackboard.py
+  - Soul/Personality: memory/soul_engine.py
+  - Reflection: memory/reflection_engine.py
+
+  Ist-Zustand:
+
+  - SQLite ist der Kern
+  - semantische Suche unterstützt ChromaDB und optional Qdrant
+  - Markdown-Sync existiert über memory/markdown_store
+  - Blackboard ist TTL-basiertes Shared Short-Term Memory zwischen Agenten
+
+  Autonomie-Layer
+  Der Autonomie-Teil ist real im Code vorhanden und nicht nur Dokumentation:
+
+  - Runner: orchestration/autonomous_runner.py:177
+  - Engines: Goal Generator, Planner, Replanning, Self-Healing, Reflection, Triggers, Goal Queue, Improvement, Ambient Context, Feedback
+
+  Wichtig:
+
+  - Vieles hängt an Feature-Flags
+  - Der tatsächliche Heartbeat im Code ist standardmäßig 15 Minuten, nicht 5: orchestration/autonomous_runner.py:141
+
+  Canvas/UI
+  Die UI ist serverseitig als HTML-Template eingebettet:
+
+  - server/canvas_ui.py
+  - Echtzeit-Status kommt über SSE aus server/mcp_server.py:1201
+
+  Das UI ist also kein separates Frontend-Build-System, sondern ein im FastAPI-Server ausgeliefertes Canvas.
+
+  Projektstruktur, praktisch gelesen
+
+  - agent/: Agenten, Basisklasse, Provider, Shared Utilities
+  - tools/: registrierte MCP-Tools
+  - server/: FastAPI/MCP-Server und Canvas-UI
+  - memory/: persistentes Gedächtnis, Blackboard, Soul, Reflection
+  - orchestration/: Autonomie-Engines, Scheduler, Goal/Task-Steuerung
+  - utils/: Policy, Audit, Embeddings, Mail, Telegram, Guardrails
+  - tests/: sehr breit, mit Fokus auf Milestones, Autonomie, Delegation, Memory, Vision
+  - docs/: viel Entwicklungs- und Architekturhistorie
+
+  Wichtige Beobachtungen
+
+  - Die Architektur ist funktional modularisiert, aber historisch gewachsen.
+  - README.md und ARCHITECTURE.md beschreiben viel korrekt, aber nicht alles ist auf exakt demselben Versionsstand wie der Code.
+  - Es gibt Legacy-/Shim-Spuren:
+      - agent/timus_consolidated.py ist nur noch Re-Export-Shim
+      - run_autonomous.py wirkt älter/stärker legacy als der aktuelle Server- und Dispatcher-Pfad
+      - pyproject.toml wirkt nicht wie das echte Projektmanifest, sondern wie ein Skill-/Poetry-Relikt
+  - Das echte operative Zentrum ist nicht pyproject, sondern requirements.txt + FastAPI/MCP + Python-Module: requirements.txt
+
+  Belastbare Zusammenfassung
+  Wenn ich timus auf eine saubere Architekturformel reduziere, dann ist es:
+
+  FastAPI MCP Server -> Dispatcher -> spezialisierte Agenten auf BaseAgent -> Tool Registry/RPC -> Memory + Autonomy + Canvas
+
+  und dazu kommen drei prägende Designentscheidungen:
+
+  - Capability-basierte Tool-Isolation pro Agent
+  - Delegation zwischen Agenten als First-Class-Mechanismus
+  - starker Fokus auf Autonomie-, Reflexions- und Sicherheitslayer
+
+  Wenn du willst, kann ich als Nächstes eines davon im Detail aufschlüsseln:
+
+  1. Agentenfluss Ende-zu-Ende
+  2. Tool-System und MCP-Protokoll
+  3. Memory- und Autonomie-Architektur
+  4. konkrete Datei-/Ordnerlandkarte mit Priorisierung, was wichtig vs. Legacy ist
+
+
+› 1. Agentenfluss Ende-zu-Ende
+  da müssen wir die kommumikation und die delegation optimieren damit die agenten ihre aufgaben korrekt ausführen können 2. Tool-System und MCP-Protokoll
+
+
+• I’m considering checking out more files related to the delegation tool and the MCP client/protocol. I think it’ll be helpful to dive into the details about the delegation tool, the MCP
+  client, and the JSON-RPC handler. I'll also look into the result aggregator. Using the tools for this will be essential to gather the right information. Let’s get started on that!
+
+• Ich zerlege jetzt die zwei Themen technisch: zuerst den Agentenfluss inklusive Kommunikation und Delegation, danach das Tool-/MCP-Protokoll. Ich lese dafür noch die Delegationstools, den
+  MCP-Client und die Result-Aggregation, damit die Optimierungsvorschläge direkt an den realen Engstellen hängen.
+
+• Explored
+  └ Read tool.py, parallel_delegation_tool.py, mcp_server.py, mcp_client.py, result_aggregator.py
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Ich habe die Protokoll- und Delegationspfade. Ich prüfe noch, ob die vorhandene Result-Aggregation überhaupt im produktiven Pfad verwendet wird oder ob da eine Lücke zwischen Architektur
+  und Implementierung existiert.
+
+• Explored
+  └ Search Action: \{|Final Answer:|delegate_to_agent|delegate_multiple_agents in prompts.py
+    Search delegate_multiple_agents|delegate_to_agent\(|find_agent_by_capability\( in agent
+    Search ResultAggregator|format_results\(|inject_into_session\( in .
+
+• I'm noticing that there's a comment in MCPClient mentioning duplicates needing to be replaced, even though the unified client still relies on BaseAgent posting manually.
+
+  I found some naming mismatches and error semantics that aren't consistent across agents. Also, it seems there's a delegation issue with tools regarding unknown defaults unless specified.
+  Additionally, there's possibly a bug in the blackboard write method; the parameters seem incorrect, which leads to warnings during execution. I need to verify this further as it appears
+  significant.
+
+  Optimizing delegation communication
+
+  I'm realizing that the delegation results in blackboard are affected, and since the user wants to optimize communication and delegation, that's great. I should probably mention the exact
+  file line reference for clarity. It’s essential to have the line number, so I could use 'rg -n' to locate where the _auto_write_to_blackboard method is defined. That way, I can provide
+  more specific details to help improve the situation.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Ich habe eine relevante konkrete Lücke im Delegationspfad gefunden und prüfe die genaue Stelle: das automatische Blackboard-Schreiben der Delegationsergebnisse scheint aktuell nicht zur
+  Blackboard-API zu passen. Ich hole dafür noch die exakten Zeilen.
+
+• Explored
+  └ Read agent_registry.py, agent_blackboard.py, result_aggregator.py
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 1. Agentenfluss Ende-zu-Ende
+
+  Der produktive Hauptpfad ist:
+
+  1. Eingang
+     User-Input kommt über /chat oder Terminal rein und landet im Server: server/mcp_server.py:1237, timus_terminal.py
+  2. Routing
+     Der Server ruft get_agent_decision() auf. Das ist ein zweistufiger Router:
+      - schneller Keyword-Fastpath
+      - sonst LLM-basierte Agentenwahl
+        Siehe main_dispatcher.py:1091
+  3. Agent-Start
+     run_agent() setzt Policy-Gates, Session/Lane, Canvas-Logging und instanziiert den Zielagenten oder einen Spezialpfad wie VisualNemotron: main_dispatcher.py:1164
+  4. Agentenlauf
+     Normale Agenten laufen über BaseAgent.run():
+      - Blackboard-Kontext anhängen
+      - Memory-Fastpath prüfen
+      - evtl. strukturierte Navigation
+      - LLM-ReAct-Loop
+      - Action: {...} parsen
+      - Tool per JSON-RPC aufrufen
+      - Observation zurück an LLM
+      - Abschluss per Final Answer: ...
+        Siehe agent/base_agent.py:1486
+  5. Tool-Aufruf
+     _call_tool() validiert lokal, prüft Policy, sendet dann HTTP-JSON-RPC an den MCP-Server: agent/base_agent.py:594
+  6. Server-seitiger Tool-Dispatch
+     Der MCP-Server prüft Policy und Parametervalidierung erneut und dispatcht dann via async_dispatch in die globale Tool-Registry: server/mcp_server.py:1849
+  7. Delegation
+     Wenn ein Agent delegate_to_agent aufruft, landet das in der Registry:
+      - Alias-Normalisierung
+      - Delegation-Policy-Gate
+      - Loop-Prevention
+      - Timeout/Retry
+      - Session-Weitergabe
+      - Canvas/SSE-Events
+      - Rückgabe als strukturiertes Dict
+        Siehe tools/delegation_tool/tool.py, agent/agent_registry.py
+  8. Parallel-Delegation
+     Für unabhängige Subtasks gibt es delegate_multiple_agents, das auf agent_registry.delegate_parallel() geht: tools/delegation_tool/parallel_delegation_tool.py, agent/
+     agent_registry.py:582
+
+  Wo Kommunikation und Delegation heute konkret schwach sind
+
+  1. Blackboard-Write im Delegationspfad ist faktisch kaputt
+     In agent/agent_registry.py:483 ruft _auto_write_to_blackboard() bb.write(...) mit agent_id= auf und ohne topic=.
+     Die echte Signatur erwartet aber agent, topic, key, value...: memory/agent_blackboard.py:86
+     Ergebnis: Delegationsergebnisse landen wahrscheinlich nicht im Blackboard. Das ist ein echter Kommunikationsverlust zwischen Agenten.
+  2. Der Delegationsvertrag ist nur halb strukturiert
+     Die Registry liefert zwar status, agent, quality, metadata, blackboard_key, aber das eigentliche Arbeitsergebnis bleibt meistens ein Freitext in result: agent/agent_registry.py:424
+     Danach wird metadata per Regex aus Text extrahiert: agent/agent_registry.py:502
+     Das ist fragil. Für Orchestrierung ist das zu weich.
+  3. Parallel-Fan-In ist gebaut, aber im Hauptpfad nicht sauber integriert
+     ResultAggregator existiert: agent/result_aggregator.py
+     Ich finde aber keinen produktiven Aufrufpfad dafür, nur Tests und Doku.
+     Das heißt: Parallel-Ergebnisse werden zwar gebündelt, aber nicht systematisch in eine Meta-lesbare, kompakte Form überführt.
+  4. Session-Kontext ist nicht durchgehend einheitlich
+     Es gibt mehrere Session-Mechaniken:
+      - conversation_session_id auf Agenten
+      - session_id in Delegation/Research
+      - Blackboard
+      - Canvas-Session
+        Das funktioniert teilweise, aber nicht als ein klarer trace_id/session_id/delegation_id-Vertrag.
+  5. Es gibt mehrere MCP-Client-Pfade statt einer sauberen Transport-Schicht
+     Es existiert ein vereinheitlichter Client in agent/shared/mcp_client.py, aber BaseAgent postet weiterhin selbst direkt via httpx, und andere Agenten haben teils eigene Pfade.
+     Das erschwert Timeouts, Retries, Observability und Fehlernormalisierung.
+  6. Agent-Namensraum ist leicht inkonsistent
+     Dispatcher spricht häufig von development, Registry intern von developer: main_dispatcher.py:330, agent/agent_registry.py:61
+     Das ist lösbar, aber für Delegation und Prompting unnötige Reibung.
+
+  Was ich für die Optimierung priorisieren würde
+
+  1. Delegationsergebnisse als hartes JSON-Schema statt Freitext plus Regex
+     Jeder delegierte Agent sollte neben result verpflichtend artifacts, facts, next_actions, files, confidence, needs_followup liefern.
+  2. Blackboard-Fix im Registry-Pfad
+     Das ist ein direkter Bug und sollte zuerst weg.
+  3. Fan-In wirklich anschließen
+     delegate_multiple_agents() sollte seine Rückgabe direkt mit ResultAggregator oder einem ähnlichen kompakten Envelope für den Meta-Agenten aufbereiten.
+  4. Einheitliche IDs pro Task
+     session_id, trace_id, delegation_id, parent_task_id sollten durchgängig durch Dispatcher, Registry, Tools, Canvas und Blackboard laufen.
+  5. Transport vereinheitlichen
+     Alle Agenten sollten denselben MCP-Client und dieselben Retry-/Timeout-/Error-Regeln nutzen.
+
+  ———
+
+  2. Tool-System und MCP-Protokoll
+
+  Praktisch ist timus kein klassisches externes MCP wie STDIO-Tooling, sondern ein eigener FastAPI-basierter JSON-RPC-Server. Intern heißt das zwar MCP, technisch ist es primär:
+
+  HTTP + JSON-RPC 2.0 + ToolRegistryV2
+
+  Tool-Lebenszyklus
+
+  1. Tool definieren
+     Ein Tool wird mit @tool(...) registriert und bekommt:
+      - Name
+      - Beschreibung
+      - Parameter
+      - Capabilities
+      - Kategorie
+      - optional Timeout/Priorität
+        Siehe tools/tool_registry_v2.py
+  2. Tool laden
+     Der Server importiert beim Start alle Tool-Module aus TOOL_MODULES: server/mcp_server.py:145
+  3. Dual-Registrierung
+     Die Registry hängt Tools nicht nur intern ein, sondern bridged sie auch in jsonrpcserver.global_methods: tools/tool_registry_v2.py
+     Das ist der Kern des Protokolls.
+  4. Schema-Export
+     Der Server kann Tool-Schemas für OpenAI und Anthropic ausgeben:
+      - server/mcp_server.py:911
+      - server/mcp_server.py:927
+  5. Tool-Beschreibungen für Agenten
+     Agenten bekommen nicht blind alle Tools, sondern eine textuelle Manifest-Beschreibung plus Capability-Filter: server/mcp_server.py:888, agent/base_agent.py:40
+
+  MCP-/JSON-RPC-Aufruffluss
+
+  1. Agent erzeugt Action: {"method": "...", "params": {...}}
+  2. BaseAgent._call_tool() validiert und sendet POST auf /: agent/base_agent.py:594
+  3. Server prüft Policy und Params: server/mcp_server.py:1849
+  4. async_dispatch() ruft die registrierte Toolfunktion auf
+  5. JSON-RPC-Resultat geht zurück an den Agenten
+  6. Der Agent füttert die Observation wieder in den LLM-Loop ein
+
+  Stärken des aktuellen Tool-Systems
+
+  - saubere Metadaten-Registry
+  - Capability-basierte Tool-Sicht
+  - doppelte Validierung: Agent-seitig und Server-seitig
+  - Schema-Export für verschiedene LLM-Provider
+  - gute Grundlage für Policy-Gates und Observability
+
+  Schwächen des aktuellen Protokolls
+
+  1. Zu viel Text statt strukturierter Semantik zwischen Agent und Tool
+  2. Kein einheitlicher Response-Envelope über alle Tools hinweg
+  3. Mehrere Client-Implementierungen statt einer Transport-Schicht
+  4. Parallel-Ergebnisse werden nicht als First-Class-Protokollobjekt weitergereicht
+  5. Tool-Antworten sind für LLM lesbar, aber nicht immer für Orchestrierung stabil genug
+
+  Saubere Zielrichtung
+  Ich würde das Tool-/Delegationsprotokoll auf einen festen Envelope bringen, etwa:
+
+  {
+    "status": "success|partial|error",
+    "summary": "...",
+    "data": {},
+    "artifacts": [],
+    "metadata": {},
+    "warnings": [],
+    "next_actions": []
+  }
+
+  Dann:
+
+  - Tools liefern diesen Envelope
+  - Agenten liefern denselben Envelope bei Delegation
+  - Meta orchestration arbeitet auf data/artifacts/next_actions, nicht auf Freitext
+  - Regex-Metadatenextraktion kann fast komplett weg
+
+  Fazit
+  Für korrekte Agentenausführung liegt das Hauptproblem nicht im groben Architekturmodell, sondern in der Qualität des Kommunikationsvertrags zwischen:
+
+  - Dispatcher
+  - Agent
+  - Tool
+  - delegiertem Agent
+  - Meta-Agent beim Fan-In
+
+  Die kritischsten echten Punkte sind:
+
+  1. kaputter Blackboard-Write im Delegationspfad
+  2. zu weicher Delegationsvertrag
+  3. fehlende produktive Fan-In-Aufbereitung
+  4. uneinheitliche MCP-Transportpfade
+
+  Wenn du willst, kann ich im nächsten Schritt direkt die technische Umsetzungsstrategie dafür ausarbeiten oder gleich mit Phase 1 anfangen:
+
+  1. Blackboard-Bug fixen
+  2. ein hartes AgentResult/Tool-Envelope-Schema einziehen
+  3. delegate_multiple_agents() mit ResultAggregator produktiv verdrahten
+
+

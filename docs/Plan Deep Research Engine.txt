@@ -1,0 +1,304 @@
+Plan: Deep Research Engine — Produktionstauglichkeit (v6.0 → v7.0)
+
+ Kontext
+
+ Die Deep Research Engine liefert bei englischen technischen Themen (KI, ML, ArXiv) 0 verifizierte Fakten
+ und irrelevante Inhalte. Ursache ist kein einzelner Bug, sondern ein Zusammenspiel von 5 strukturellen
+ Problemen in der Verifikations-Pipeline. Das System ist ein "Schwergewicht" — 2700 Zeilen, 7 Quellen,
+ 3 LLM-Provider, DataForSEO-API — daher Milesteine mit Checkpoints.
+
+ Lean 4 wird für formale Verifikation kritischer Algorithmus-Invarianten eingesetzt:
+ - lean/CiSpecs.lean — CI-Theoreme (Std + omega, kein Mathlib, läuft in ~5s)
+ - tools/lean_tool/tool.py — Mathlib-Specs (per Pre-Commit-Hook verifiziert)
+
+ ---
+ 5 Root Causes (Diagnose)
+
+ ┌─────┬───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┬─────────────────────┬─────────┬────────────────────┐
+ │  #  │                                                        Problem                                                        │        Datei        │ Zeilen  │     Auswirkung     │
+ ├─────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────┼─────────┼────────────────────┤
+ │ RC1 │ Verifikation zu streng: braucht source_count≥3, KI-Fakten sind einzigartig pro Quelle → immer source_count=1          │ tool.py             │ 489–506 │ 0 verified facts   │
+ ├─────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────┼─────────┼────────────────────┤
+ │ RC2 │ Embedding-Schwelle zu hoch: Threshold=0.85 für Fakt-Gruppierung; KI-Fakten ähnlich aber nicht identisch               │ tool.py             │ 1140    │ Kein Gruppen-Merge │
+ ├─────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────┼─────────┼────────────────────┤
+ │ RC3 │ Corroborator Catch-22: Wird nur bei status=="verified" aufgerufen — aber nichts wird verified                         │ tool.py             │ 516–522 │ Nie ausgeführt     │
+ ├─────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────┼─────────┼────────────────────┤
+ │ RC4 │ Suchlocation fehlt: DataForSEO bekommt kein location-Parameter → liefert Deutschland-Ergebnisse für englische Queries │ tool.py             │ 800–804 │ Deutsche Resultate │
+ ├─────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────┼─────────┼────────────────────┤
+ │ RC5 │ ArXiv Fallback-Score=5 < Threshold=6: Ohne OpenRouter-Analyse landen alle ArXiv-Paper unter Threshold                 │ trend_researcher.py │ 81–88   │ ArXiv ignoriert    │
+ └─────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┴─────────────────────┴─────────┴────────────────────┘
+
+ ---
+ Architektur-Übersicht (Ist-Zustand → Soll-Zustand)
+
+ Ist:  Query → [3 Web-Suchen (Location=DE)] → Relevanz (Score 0.4+) → DeepDive
+            → Fakten (~5 pro Quelle) → Embedding-Gruppen (Threshold=0.85)
+            → Verifikation (braucht 3+ Quellen) → 0 verified → leerer Report
+
+ Soll: Query → [Language-Detect] → [5 Web-Suchen (Location=US wenn englisch)]
+            → Relevanz (verbessert) → DeepDive
+            → Fakten (~15 pro Quelle) → Embedding-Gruppen (Threshold=0.72)
+            → Domain-aware Verifikation (moderate für Tech, strict für Fakten)
+            → Corroborator als eigenständige Phase
+            → ArXiv (Threshold=5 + Topic-aware Fallback)
+            → Qualitäts-Gate: mind. 3 verified facts als Erfolg
+            → Report mit echtem Inhalt
+
+ ---
+ Lean 4 Invarianten (geplant)
+
+ Neue CI-Theoreme (lean/CiSpecs.lean) — alle via by omega:
+
+ -- RC1-Fix: source_count < 2 → nicht verified (moderate mode)
+ theorem dr_verify_moderate (count : Int) (h : count < 2) :
+     ¬ 2 ≤ count := by omega
+
+ -- RC2-Fix: Embedding-Threshold immer in [0, 100] (×100 als Int)
+ theorem dr_embedding_threshold_lower (v : Int) : 0 ≤ max 0 (min 100 v) := by omega
+ theorem dr_embedding_threshold_upper (v : Int) : max 0 (min 100 v) ≤ 100 := by omega
+
+ -- RC5-Fix: ArXiv-Score in [0, 10]
+ theorem dr_arxiv_score_lower (v : Int) : 0 ≤ max 0 (min 10 v) := by omega
+ theorem dr_arxiv_score_upper (v : Int) : max 0 (min 10 v) ≤ 10 := by omega
+
+ -- Query-Count: n_queries ≥ 1 nach Expansion
+ theorem dr_query_expansion (base expanded : Int) (h : 0 < base) :
+     0 < base + expanded := by omega
+
+ Neue Mathlib-Specs (tools/lean_tool/tool.py):
+
+ -- Gewichtete Qualitäts-Score Invariante: 0 ≤ weighted_avg ≤ 1
+ -- Gewichtung: authority=35%, bias=25%, transparency=15%, citations=15%, recency=10%
+ theorem dr_weighted_score_in_bounds
+     (a b c d e : ℝ)
+     (ha : 0 ≤ a ∧ a ≤ 1) (hb : 0 ≤ b ∧ b ≤ 1) (hc : 0 ≤ c ∧ c ≤ 1)
+     (hd : 0 ≤ d ∧ d ≤ 1) (he : 0 ≤ e ∧ e ≤ 1) :
+     0 ≤ 0.35*a + 0.25*b + 0.15*c + 0.15*d + 0.10*e ∧
+     0.35*a + 0.25*b + 0.15*c + 0.15*d + 0.10*e ≤ 1 := by
+   constructor <;> nlinarith [ha.1, ha.2, hb.1, hb.2, hc.1, hc.2, hd.1, hd.2, he.1, he.2]
+
+ -- Fact-Threshold Gate
+ theorem dr_fact_threshold_gate (score threshold : ℝ) (h : score < threshold) :
+     ¬ threshold ≤ score := not_le.mpr h
+
+ ---
+ Milesteine
+
+ ---
+ Milestone 1: Diagnose & Beobachtbarkeit
+
+ Ziel: Verstehe exakt wo und warum 0 Fakten entstehen. Jede Phase wird messbar.
+
+ Neue Dateien:
+ - tools/deep_research/diagnostics.py (~120 Zeilen) — DrDiagnostics Klasse
+ - scripts/debug_deep_research.py (~60 Zeilen) — CLI-Runner
+ - tests/test_dr_diagnostics.py (~80 Zeilen)
+
+ Was genau:
+ - DrDiagnostics wraps jede Phase mit Metriken: n_sources_found, n_sources_relevant,
+ n_facts_extracted, n_facts_grouped, n_verified, n_tentative, n_unverified,
+ arxiv_fetched, arxiv_accepted, location_used
+ - debug_deep_research.py: Startet Research mit Diagnose-Ausgabe (kein Produktions-Eingriff)
+ - Keine Änderungen an Produktions-Logik
+
+ Tests:
+ pytest tests/test_dr_diagnostics.py -v
+ python scripts/debug_deep_research.py "self-monitoring AI agents"
+
+ Lean 4: Noch keine neuen Specs — M1 ist rein diagnostisch.
+
+ Checkpoint: Ausgabe zeigt genau in welcher Phase die Fakten verschwinden.
+
+ ---
+ Milestone 2: Suchlocation & Query-Expansion (RC4)
+
+ Ziel: Englische Queries → US-Suchergebnisse + 5 Queries statt 3.
+
+ Modifizierte Dateien:
+ - tools/deep_research/tool.py — _perform_initial_search() (Z. 791–850)
+ - tools/search_tool/tool.py — search_web() Location-Parameter
+
+ Was genau:
+ 1. Language-Detection via ASCII-Ratio: >80% ASCII → "en" → location="us"
+ 2. Location-Mapping: {"en": "us", "de": "de", "fr": "fr"}
+ 3. Query-Expansion von 3 → 5:
+   - Original
+   - query + " research paper 2024 2025"
+   - query + " architecture implementation"
+   - query + " survey review"
+   - query + " state of the art"
+
+ Neue Tests: tests/test_dr_search_location.py
+
+ Lean 4 (CiSpecs.lean):
+ theorem dr_query_expansion (base expanded : Int) (h : 0 < base) :
+     0 < base + expanded := by omega
+
+ Checkpoint: Diagnose zeigt location=us, ≥8 englische Quellen.
+
+ ---
+ Milestone 3: Fact-Extraktion & Embedding-Threshold (RC2)
+
+ Ziel: 15 Fakten pro Quelle statt 5; Threshold 0.72 für Tech-Domain.
+
+ Modifizierte Datei: tools/deep_research/tool.py
+ - _extract_facts_from_source() (Z. 972–1025): Prompt → "8–15 Fakten"
+ - Embedding-Gruppen-Logik (Z. 1113–1147): Domain-aware Threshold
+
+ Was genau:
+ - TECH_KEYWORDS = {"ai", "llm", "neural", "model", "agent", "transformer", "machine learning", ...}
+ - Domain-Detection: domain = "tech" if any(w in query_lower for w in TECH_KEYWORDS) else "default"
+ - EMBEDDING_THRESHOLDS = {"tech": 0.72, "science": 0.75, "default": 0.82}
+ - Domain + verwendeter Threshold werden in Session und Diagnose protokolliert
+
+ Neue Tests: tests/test_dr_fact_extraction.py (inkl. Hypothesis)
+
+ Lean 4 (CiSpecs.lean):
+ theorem dr_embedding_threshold_lower (v : Int) : 0 ≤ max 0 (min 100 v) := by omega
+ theorem dr_embedding_threshold_upper (v : Int) : max 0 (min 100 v) ≤ 100 := by omega
+
+ .env.example: DR_EMBEDDING_THRESHOLD_TECH=0.72
+
+ Checkpoint: Diagnose zeigt ≥12 gruppierte Fakten, source_count ≥ 2 für die Hälfte.
+
+ ---
+ Milestone 4: Verifikation & Corroborator (RC1 + RC3) — KERN-FIX
+
+ Ziel: Domain-aware Verifikation + Corroborator vor dem Threshold-Filter.
+
+ Modifizierte Datei: tools/deep_research/tool.py
+ - _deep_verify_facts() (Z. 452–580): Domain-aware Modi
+ - Corroborator-Aufruf (Z. 516–522): Aus Catch-22 befreien
+
+ Was genau:
+ 1. Verifikations-Schwellen:
+   - strict:   verified ≥ 3, tentative ≥ 2
+   - moderate: verified ≥ 2, tentative ≥ 1  ← NEU
+   - light:    verified ≥ 1, tentative ≥ 1
+ 2. Auto-Mode: Tech-Domain + strict-Input → effective_mode = "moderate"
+ 3. Corroborator für ALLE Fakten mit source_count ≥ 1 (nicht nur verified)
+ 4. Upgrade-Log: unverified → tentative wenn Corroborator Konsistenz bestätigt
+
+ Neue Tests: tests/test_dr_verification.py
+
+ Lean 4 (CiSpecs.lean):
+ theorem dr_verify_moderate (count : Int) (h : count < 2) :
+     ¬ 2 ≤ count := by omega
+
+ Lean 4 (Mathlib, tool.py):
+ theorem dr_fact_threshold_gate (score threshold : ℝ) (h : score < threshold) :
+     ¬ threshold ≤ score := not_le.mpr h
+
+ .env.example: DR_VERIFICATION_MODE_AUTO=true
+
+ Checkpoint: verified_count ≥ 3 für echte englische KI-Anfrage.
+
+ ---
+ Milestone 5: ArXiv-Qualität (RC5)
+
+ Ziel: ArXiv-Paper landen tatsächlich im Report.
+
+ Modifizierte Datei: tools/deep_research/trend_researcher.py (Z. 54–212)
+
+ Was genau:
+ 1. ARXIV_RELEVANCE_THRESHOLD Default: 6 → 5
+ 2. Topic-aware Fallback-Score statt fixem Score=5:
+ overlap = len(query_words & title_words)
+ fallback_score = min(10, 5 + overlap)  # 5–10 je nach Titel-Match
+ 3. Max-Kandidaten: 15 → 25
+ 4. Sekundäre Sortierung nach Datum (aktuellste Paper bevorzugen)
+
+ Neue Tests: tests/test_dr_arxiv.py
+
+ Lean 4 (CiSpecs.lean):
+ theorem dr_arxiv_score_lower (v : Int) : 0 ≤ max 0 (min 10 v) := by omega
+ theorem dr_arxiv_score_upper (v : Int) : max 0 (min 10 v) ≤ 10 := by omega
+
+ Checkpoint: Bei "self-monitoring AI agents" kommen ≥3 ArXiv-Paper in den Report.
+
+ ---
+ Milestone 6: Integration, Qualitäts-Gate & End-to-End-Verifikation
+
+ Ziel: Vollständige Qualitätssicherung, automatischer Fallback, schöner Report.
+
+ Neue Dateien:
+ - verify_deepresearch_v7.py (~120 Zeilen) — 40 automatische Checks
+ - tests/test_dr_integration.py (~150 Zeilen)
+
+ Modifizierte Datei: tools/deep_research/tool.py
+ - start_deep_research(): Qualitäts-Gate + Fallback
+ - _create_academic_markdown_report() (Z. 1219–1776): Report-Verbesserung
+
+ Was genau:
+ 1. Qualitäts-Gate: quality_ok = verified_count >= 3
+ 2. Fallback: Wenn quality_insufficient → automatisch light-Mode Retry
+ 3. Report: ArXiv-Paper in eigenem Abschnitt mit DOI-Links; Qualitäts-Warnung sichtbar
+ 4. Lean 4 Mathlib-Spec: Gewichtete Qualitäts-Score Invariante (Z. oben)
+
+ Vollständiger Test-Run:
+ pytest tests/test_dr_diagnostics.py tests/test_dr_search_location.py \
+        tests/test_dr_fact_extraction.py tests/test_dr_verification.py \
+        tests/test_dr_arxiv.py tests/test_dr_integration.py -v
+ python verify_deepresearch_v7.py
+ lean lean/CiSpecs.lean && echo "CI-Specs OK"
+ python scripts/debug_deep_research.py "self-monitoring AI agents"
+ # Erwartet: verified_count ≥ 3, ≥3 ArXiv-Paper, vollständiger Report
+
+ Checkpoint: debug_deep_research.py zeigt grünen Output. Report hat echten Inhalt.
+ Commit mit allen Lean-Specs → Push.
+
+ ---
+ Neue Dateien (Übersicht)
+
+ ┌────────────────────────────────────┬───────────┐
+ │               Datei                │ Milestone │
+ ├────────────────────────────────────┼───────────┤
+ │ tools/deep_research/diagnostics.py │ M1        │
+ ├────────────────────────────────────┼───────────┤
+ │ scripts/debug_deep_research.py     │ M1        │
+ ├────────────────────────────────────┼───────────┤
+ │ tests/test_dr_diagnostics.py       │ M1        │
+ ├────────────────────────────────────┼───────────┤
+ │ tests/test_dr_search_location.py   │ M2        │
+ ├────────────────────────────────────┼───────────┤
+ │ tests/test_dr_fact_extraction.py   │ M3        │
+ ├────────────────────────────────────┼───────────┤
+ │ tests/test_dr_verification.py      │ M4        │
+ ├────────────────────────────────────┼───────────┤
+ │ tests/test_dr_arxiv.py             │ M5        │
+ ├────────────────────────────────────┼───────────┤
+ │ tests/test_dr_integration.py       │ M6        │
+ ├────────────────────────────────────┼───────────┤
+ │ verify_deepresearch_v7.py          │ M6        │
+ └────────────────────────────────────┴───────────┘
+
+ Modifizierte Dateien
+
+ ┌─────────────────────────────────────────┬───────────────────────────┐
+ │                  Datei                  │        Milestones         │
+ ├─────────────────────────────────────────┼───────────────────────────┤
+ │ tools/deep_research/tool.py             │ M2, M3, M4, M6            │
+ ├─────────────────────────────────────────┼───────────────────────────┤
+ │ tools/deep_research/trend_researcher.py │ M5                        │
+ ├─────────────────────────────────────────┼───────────────────────────┤
+ │ tools/search_tool/tool.py               │ M2                        │
+ ├─────────────────────────────────────────┼───────────────────────────┤
+ │ lean/CiSpecs.lean                       │ +7 Theoreme (M2–M5)       │
+ ├─────────────────────────────────────────┼───────────────────────────┤
+ │ tools/lean_tool/tool.py                 │ +2 Mathlib-Specs (M4, M6) │
+ ├─────────────────────────────────────────┼───────────────────────────┤
+ │ .env.example                            │ +2 Flags (M3, M4)         │
+ └─────────────────────────────────────────┴───────────────────────────┘
+
+ .env-Ergänzungen
+
+ # Deep Research v7: Domain-aware Thresholds
+ DR_EMBEDDING_THRESHOLD_TECH=0.72
+ DR_VERIFICATION_MODE_AUTO=true
+
+ Implementierungsreihenfolge
+
+ M1 → M2 → M3 → M4 → M5 → M6
+
+ Zwischen jedem Milestone: Tests laufen + Lean verifizieren + Commit.
+ RC4 (Suchlocation) muss vor RC2 (Embedding) behoben sein — sonst testet RC2 mit falschem Input.

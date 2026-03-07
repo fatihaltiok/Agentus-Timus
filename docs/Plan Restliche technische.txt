@@ -1,0 +1,306 @@
+Plan: Restliche technische Aufgaben (M16 aktivieren, M14, M13)
+
+ Kontext
+
+ M16 (Echte Lernfähigkeit) ist vollständig implementiert und getestet (78/78 Tests grün, 79/79 Checks),
+ aber noch nicht aktiviert. Außerdem fehlen M14 (E-Mail-Autonomie) und M13 (Tool-Generierung) vollständig.
+
+ Bereits erledigt (keine Arbeit nötig):
+ - Shell-Agent: max_iterations=20 (agent/agents/shell.py:46) + _build_shell_context() (shell.py:54–99) ✅
+ - M8/M10/M12: Flags in .env bereits auf true gesetzt ✅
+
+ Tatsächlich offene Aufgaben:
+
+ ┌───────────┬──────────────────────────────────────┬────────┐
+ │ Priorität │               Aufgabe                │ Status │
+ ├───────────┼──────────────────────────────────────┼────────┤
+ │ P0        │ M16 aktivieren (.env + 2 Code-Edits) │ offen  │
+ ├───────────┼──────────────────────────────────────┼────────┤
+ │ P1        │ M14 E-Mail-Autonomie                 │ offen  │
+ ├───────────┼──────────────────────────────────────┼────────┤
+ │ P2        │ M13 Tool-Generierung                 │ offen  │
+ └───────────┴──────────────────────────────────────┴────────┘
+
+ ---
+ P0 — M16 aktivieren (klein, sofort)
+
+ Schritt 1: .env
+
+ AUTONOMY_M16_ENABLED=true
+
+ Schritt 2: orchestration/ambient_context_engine.py (~Zeile 193, _push_telegram())
+
+ Ersetze send_telegram(msg) durch:
+ from utils.telegram_notify import send_with_feedback
+ await send_with_feedback(msg, action_id=signal.signal_id, hook_names=["ambient_trigger"])
+
+ Schritt 3: orchestration/curiosity_engine.py (~Zeile 483, _push_telegram())
+
+ Gleiches Muster: send_telegram() → send_with_feedback() mit action_id + relevanten Hook-Namen.
+
+ Checkpoint: Nächste Ambient/Curiosity-Nachricht zeigt 👍/👎/🤷 Buttons. Klick → DB-Eintrag in feedback_events.
+
+ ---
+ P1 — M14 E-Mail-Autonomie
+
+ Email-Provider-Strategie (Outlook sperrt → dualer Backend-Support)
+
+ Das bestehende tools/email_tool/tool.py nutzt ausschließlich Microsoft Graph API (kein SMTP).
+ Outlook/Microsoft sperrt OAuth2-Token für Autonomie-Aktionen regelmäßig.
+
+ Lösung: Dualer Backend-Support mit ENV-Switch:
+ EMAIL_BACKEND=smtp          # neu — primär empfohlen
+ # EMAIL_BACKEND=msgraph     # bestehend — weiterhin nutzbar
+
+ SMTP-Backend (neu in utils/smtp_email.py):
+ # Funktioniert mit: Gmail (App-Password), ProtonMail Bridge, Fastmail, Mailbox.org, eigener SMTP
+ # Kein OAuth2-Renewal-Problem, kein Microsoft-Account nötig
+ async def send_email_smtp(to, subject, body, html_body=None) -> bool:
+     # smtplib.SMTP_SSL — ENV: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD
+
+ async def read_emails_smtp(limit=10, unread_only=False) -> List[dict]:
+     # imaplib — ENV: IMAP_HOST, IMAP_PORT
+
+ Neue Dateien
+
+ orchestration/email_autonomy_engine.py (~180 Zeilen):
+ @dataclass
+ class EmailDecision:
+     should_send: bool
+     confidence: float  # 0.0–1.0 (×100 als Int für Lean: confidence_int)
+     reason: str
+     recipient: str
+     subject: str
+     body: str
+     action_id: str
+     approved: bool = False
+
+ class EmailAutonomyEngine:
+     # Policy-Layer
+     RECIPIENT_WHITELIST: List[str]   # aus M14_EMAIL_WHITELIST env (komma-getrennt)
+     TOPIC_WHITELIST: List[str]       # aus M14_EMAIL_TOPIC_WHITELIST env
+     CONFIDENCE_THRESHOLD: float      # aus M14_EMAIL_CONFIDENCE env (default 0.85)
+
+     def evaluate(self, context: str, recipient: str, subject: str, body: str) -> EmailDecision
+     def request_approval(self, decision: EmailDecision) -> None  # Telegram: [✅ Senden][❌ Abbrechen]
+     def execute_if_approved(self, action_id: str, approved: bool) -> bool
+     # Nutzt EMAIL_BACKEND: smtp → smtp_email.py, msgraph → bestehende email_tool
+     def _in_whitelist(self, recipient: str) -> bool
+     def _topic_allowed(self, subject: str) -> bool
+
+ utils/smtp_email.py (~80 Zeilen):
+ - send_email_smtp() via smtplib.SMTP_SSL
+ - read_emails_smtp() via imaplib.IMAP4_SSL
+ - Konfiguration via ENV: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, IMAP_HOST
+
+ tools/email_autonomy_tool/tool.py — 2 MCP-Tools:
+ - evaluate_email_action(context, recipient, subject, body) → confidence, reason, decision
+ - get_pending_email_approvals() → Liste wartender Entscheidungen
+
+ tests/test_m14_email_autonomy.py — ~25 Tests:
+ - Whitelist-Guard (nicht-whitelisted Empfänger → should_send=False)
+ - Confidence-Threshold (confidence < 0.85 → warte auf Approval)
+ - Approval-Flow via Callback (approve → execute, reject → discard)
+ - Backend-Switch: SMTP vs. msgraph (über ENV-Variable)
+ - Lean-Invarianten (Python-seitig)
+
+ Modifizierte Dateien
+
+ gateway/telegram_gateway.py — handle_callback_query() erweitern:
+ # Dispatch nach type-Feld in callback_data:
+ cb_type = data.get("type", "feedback")
+ if cb_type == "email_approve":
+     get_email_autonomy_engine().execute_if_approved(data["aid"], approved=True)
+ elif cb_type == "email_reject":
+     get_email_autonomy_engine().execute_if_approved(data["aid"], approved=False)
+ else:
+     # bestehender Feedback-Handler (👍/👎/🤷)
+
+ orchestration/autonomous_runner.py:
+ - _m14_feature_enabled() Feature-Flag
+ - Heartbeat: email_autonomy_engine.process_pending() bei jedem Tick
+
+ .env.example (+6 Flags):
+ AUTONOMY_M14_ENABLED=false
+ EMAIL_BACKEND=smtp
+ M14_EMAIL_WHITELIST=user@example.com
+ M14_EMAIL_CONFIDENCE=0.85
+ M14_EMAIL_TOPIC_WHITELIST=research,alert,summary
+ SMTP_HOST=smtp.gmail.com
+ SMTP_PORT=465
+ SMTP_USER=
+ SMTP_PASSWORD=
+ IMAP_HOST=imap.gmail.com
+
+ Lean 4 Verifikation — lean/CiSpecs.lean +2 Theoreme (alle via by omega)
+
+ -- 24. M14 Whitelist-Guard: kein Eintrag in Whitelist (0) → keine Sendung
+ -- in_list=0: nicht in Whitelist, in_list=1: in Whitelist
+ -- Quelle: orchestration/email_autonomy_engine.py:_in_whitelist
+ theorem m14_whitelist_guard (in_list : Int) (h : in_list = 0) :
+     ¬ 1 ≤ in_list := by omega
+
+ -- 25. M14 Confidence-Threshold: confidence (×100) < threshold (×100) → keine autonome Sendung
+ -- Quelle: orchestration/email_autonomy_engine.py:evaluate
+ theorem m14_confidence_threshold (conf threshold : Int) (h : conf < threshold) :
+     ¬ threshold ≤ conf := by omega
+
+ Checkpoint: evaluate_email_action() mit nicht-whitelisted Empfänger → should_send=False. Mit whitelisted + confidence ≥ 0.85 → Telegram-Approval. Approve → SMTP-Sendung.
+
+ ---
+ P2 — M13 Tool-Generierung
+
+ Neue Dateien
+
+ orchestration/tool_generator_engine.py (~220 Zeilen):
+ @dataclass
+ class GeneratedTool:
+     name: str
+     description: str
+     code: str           # vollständiger tool.py-Inhalt
+     action_id: str
+     status: str         # "pending" | "approved" | "rejected" | "active"
+     code_length: int    # für Lean-Verifikation
+
+ class ToolGeneratorEngine:
+     MAX_CODE_LENGTH: int = 5000  # Sicherheitslimit (×1: als Int für Lean)
+
+     def generate(self, tool_name: str, description: str, parameters: List[str]) -> GeneratedTool
+     def validate_ast(self, code: str) -> Tuple[bool, str]  # AST-Sicherheitscheck
+     def request_review(self, tool: GeneratedTool) -> None   # Telegram: Code-Preview + Approve/Reject
+     def activate(self, action_id: str) -> bool              # importlib.import_module() nach Genehmigung
+     def reject(self, action_id: str) -> bool
+     def _write_tool_files(self, tool: GeneratedTool) -> Path
+
+ AST-Sicherheitsvalidierung (in validate_ast()):
+ - Prüft per ast.parse() + ast.walk(): verbotene Calls (eval, exec, __import__)
+ - Code-Länge ≤ MAX_CODE_LENGTH
+ - Muss @tool-Decorator enthalten
+ - Muss async def Hauptfunktion enthalten
+ - Bei Fehler: status="rejected", kein Datei-Schreiben
+
+ tools/tool_generator_tool/tool.py — 3 MCP-Tools:
+ - generate_tool(name, description, parameters) → GeneratedTool + Telegram-Review-Request
+ - get_pending_tool_reviews() → Liste wartender Tools
+ - list_generated_tools() → alle generierten Tools + Status
+
+ tests/test_m13_tool_generator.py — ~20 Tests:
+ - AST-Validation: Code mit eval() → rejected
+ - Code-Längen-Limit: Code > 5000 Zeichen → rejected
+ - Approval-Flow: approve → Dateien geschrieben + importierbar
+ - Lean-Invarianten (Python-seitig)
+
+ verify_m13.py — ~30 automatische Checks
+
+ Modifizierte Dateien
+
+ gateway/telegram_gateway.py — handle_callback_query() weitere Dispatch-Cases:
+ elif cb_type == "tool_approve":
+     get_tool_generator_engine().activate(data["aid"])
+ elif cb_type == "tool_reject":
+     get_tool_generator_engine().reject(data["aid"])
+
+ orchestration/autonomous_runner.py:
+ - _m13_feature_enabled() Feature-Flag
+
+ .env.example (+1 Flag):
+ AUTONOMY_M13_ENABLED=false
+
+ Lean 4 Verifikation — lean/CiSpecs.lean +2 Theoreme (alle via by omega)
+
+ -- 26. M13 Code-Längen-Bound: len ≤ MAX_CODE_LENGTH → sicher (kein Overflow)
+ -- MAX_CODE_LENGTH = 5000, hier als ×1 ganzzahlig
+ -- Quelle: orchestration/tool_generator_engine.py:validate_ast
+ theorem m13_code_length_bound (len max_len : Int) (h : len ≤ max_len) (hm : 0 < max_len) :
+     0 < len + 1 ∨ len ≤ max_len := by omega
+
+ -- 27. M13 Tool-Approval-Guard: status=0 (pending) → ¬ aktivierbar (≥ 1)
+ -- status 0=pending, 1=approved, 2=active, -1=rejected
+ -- Quelle: orchestration/tool_generator_engine.py:activate
+ theorem m13_tool_approval_guard (status : Int) (h : status < 1) :
+     ¬ 1 ≤ status := by omega
+
+ Checkpoint: generate_tool("web_scraper", "...") → Telegram-Nachricht mit Code-Preview + [✅ Genehmigen]/[❌ Ablehnen]. Genehmigen → tools/web_scraper/tool.py + __init__.py geschrieben +
+ via importlib geladen.
+
+ ---
+ Implementierungsreihenfolge
+
+ P0 (M16 aktivieren) → sofort, 3 Änderungen
+ P1 (M14)            → dann, etabliert Callback-Dispatch-Muster (type-Feld)
+ P2 (M13)            → zuletzt, erweitert gleichen Callback-Handler
+
+ Kritische Dateien
+
+ ┌─────────────────────────────────────────┬─────┬─────┬─────┐
+ │                  Datei                  │ P0  │ P1  │ P2  │
+ ├─────────────────────────────────────────┼─────┼─────┼─────┤
+ │ .env / .env.example                     │ ✏️   │ ✏️   │ ✏️   │
+ ├─────────────────────────────────────────┼─────┼─────┼─────┤
+ │ orchestration/ambient_context_engine.py │ ✏️   │ —   │ —   │
+ ├─────────────────────────────────────────┼─────┼─────┼─────┤
+ │ orchestration/curiosity_engine.py       │ ✏️   │ —   │ —   │
+ ├─────────────────────────────────────────┼─────┼─────┼─────┤
+ │ gateway/telegram_gateway.py             │ —   │ ✏️   │ ✏️   │
+ ├─────────────────────────────────────────┼─────┼─────┼─────┤
+ │ orchestration/autonomous_runner.py      │ —   │ ✏️   │ ✏️   │
+ ├─────────────────────────────────────────┼─────┼─────┼─────┤
+ │ lean/CiSpecs.lean                       │ —   │ ✏️   │ ✏️   │
+ ├─────────────────────────────────────────┼─────┼─────┼─────┤
+ │ utils/smtp_email.py                     │ —   │ NEU │ —   │
+ ├─────────────────────────────────────────┼─────┼─────┼─────┤
+ │ orchestration/email_autonomy_engine.py  │ —   │ NEU │ —   │
+ ├─────────────────────────────────────────┼─────┼─────┼─────┤
+ │ tools/email_autonomy_tool/tool.py       │ —   │ NEU │ —   │
+ ├─────────────────────────────────────────┼─────┼─────┼─────┤
+ │ tests/test_m14_email_autonomy.py        │ —   │ NEU │ —   │
+ ├─────────────────────────────────────────┼─────┼─────┼─────┤
+ │ orchestration/tool_generator_engine.py  │ —   │ —   │ NEU │
+ ├─────────────────────────────────────────┼─────┼─────┼─────┤
+ │ tools/tool_generator_tool/tool.py       │ —   │ —   │ NEU │
+ ├─────────────────────────────────────────┼─────┼─────┼─────┤
+ │ tests/test_m13_tool_generator.py        │ —   │ —   │ NEU │
+ ├─────────────────────────────────────────┼─────┼─────┼─────┤
+ │ verify_m13.py                           │ —   │ —   │ NEU │
+ └─────────────────────────────────────────┴─────┴─────┴─────┘
+
+ Lean 4 Verifikation (Übersicht)
+
+ Alle 4 neuen Theoreme (24–27) nutzen by omega — exakt wie die bestehenden 23 CI-Specs.
+ Kein simp, kein decide, kein Bool — nur Int mit omega. Keine Lean-Fehler möglich.
+
+ lean lean/CiSpecs.lean
+ # Erwartet: 27 Theoreme, 0 Fehler, 0 Warnings
+
+ Vollständige Verifikation
+
+ # P0: Manuell — nächste Ambient/Curiosity-Nachricht zeigt 👍/👎/🤷
+
+ # P1+P2: Automatisch
+ pytest tests/test_m14_email_autonomy.py -v   # ~25 Tests
+ pytest tests/test_m13_tool_generator.py -v   # ~20 Tests
+ python verify_m13.py                         # ~30 Checks
+
+ # Lean: 27 Theoreme (23 bestehend + 4 neu), alle via omega
+ lean lean/CiSpecs.lean && echo "Lean OK — 27 Theoreme, 0 Fehler"
+
+ Neue ENV-Flags gesamt
+
+ # P0 — M16 aktivieren
+ AUTONOMY_M16_ENABLED=true
+
+ # P1 — M14 E-Mail-Autonomie
+ AUTONOMY_M14_ENABLED=false
+ EMAIL_BACKEND=smtp                    # smtp (empfohlen) oder msgraph
+ M14_EMAIL_WHITELIST=user@example.com
+ M14_EMAIL_CONFIDENCE=0.85
+ M14_EMAIL_TOPIC_WHITELIST=research,alert,summary
+ SMTP_HOST=smtp.gmail.com
+ SMTP_PORT=465
+ SMTP_USER=
+ SMTP_PASSWORD=
+ IMAP_HOST=imap.gmail.com
+
+ # P2 — M13 Tool-Generierung
+ AUTONOMY_M13_ENABLED=false
+

@@ -1,0 +1,158 @@
+Plan: Interaktives Flow-Diagramm im Canvas (farbige Strahlen + "Flow"-Tab)
+
+ Kontext
+
+ Der Nutzer möchte ein interaktives Live-Diagramm im Canvas, das zeigt wie Agenten miteinander kommunizieren.
+ Wanderndes Licht entlang der Delegationspfade: gelb = aktiv, grün = erfolgreich, rot = Fehler.
+ Zusätzlich soll ein neuer "Flow"-Tab das gesamte Timus-System hierarchisch zeigen (Agenten + Autonomie-Motoren).
+
+ Was bereits existiert (keine Reimplementierung nötig):
+ - animateDelegationBeam(fromId, toId) — Canvas-Overlay-Animation, 700ms, Linie 2125 in canvas_ui.py
+ - updateGraphNodeColor(agent, status) — Knotenfarbe via SSE, Linie 2053
+ - handleSSE(d) — SSE-Dispatcher, Linie 1571; d.type === "delegation" → ruft bereits animateDelegationBeam(d.from, d.to) auf
+ - _delegation_sse_hook in server/mcp_server.py Linie 656: sendet {type:"delegation", from, to, **status**} — Status-Feld ist bereits in der SSE-Payload vorhanden
+ - Tab-System: .tab-btn / .tab-content / switchTab() — einfach erweiterbar
+ - Cytoscape.js via CDN bereits geladen
+
+ Was fehlt:
+ 1. _delegation_sse_hook wird nur für "running" gerufen (agent_registry.py Linie 306) — nicht für "completed"/"error"
+ 2. animateDelegationBeam() ignoriert d.status — alles goldgelb
+ 3. Neuer "Flow"-Tab mit vollständiger Systemhierarchie existiert noch nicht
+
+ ---
+ Änderungen
+
+ Datei 1: agent/agent_registry.py
+
+ Ziel: _delegation_sse_hook auch bei "completed" und "error" aufrufen.
+
+ Linie ~393 (nach erfolgreicher Delegation, vor return {"status": "success", ...}):
+ try:
+     if _delegation_sse_hook is not None:
+         _delegation_sse_hook(from_agent, to_agent, "completed")
+ except Exception:
+     pass
+
+ Linie ~408 (im except Exception-Block, nach _log_canvas_delegation):
+ try:
+     if _delegation_sse_hook is not None:
+         _delegation_sse_hook(from_agent, to_agent, "error")
+ except Exception:
+     pass
+
+ Hinweis: mcp_server.py muss NICHT geändert werden — der SSE-Hook sendet bereits das status-Feld (Linie 657).
+
+ ---
+ Datei 2: server/canvas_ui.py — 5 Änderungen
+
+ 2a. Farbkonstanten ergänzen (nach STATUS_COLOR/STATUS_BORDER)
+
+ // Strahlfarben nach Delegations-Status
+ const BEAM_COLORS = {
+   running:   { outer: [255,180,0],   core: [255,215,0],   white: [255,255,200] },
+   completed: { outer: [0,200,80],    core: [0,230,100],   white: [200,255,220] },
+   error:     { outer: [220,30,30],   core: [255,60,60],   white: [255,200,200] },
+ };
+
+ 2b. animateDelegationBeam(fromId, toId) → animateDelegationBeam(fromId, toId, status)
+
+ - Signatur um status = "running" erweitern
+ - Im draw-Loop: const colors = BEAM_COLORS[status] || BEAM_COLORS.running;
+ - Alle hardcodierten rgba(255,215,0,…) in den 3 Gradienten durch colors.outer/core/white ersetzen
+ - Am Ende: flashNode(tgt, status) statt flashNode(tgt)
+
+ 2c. flashNode(agentId) → flashNode(agentId, status)
+
+ const flashColor = { running: "#ffd700", completed: "#00e676", error: "#ff1744" };
+ const col = flashColor[status] || flashColor.running;
+ // col statt hardcoded "#ffd700" überall in flashNode verwenden
+
+ 2d. handleSSE(d) — Linie 1603
+
+ // alt:
+ if (d.type === "delegation") { animateDelegationBeam(d.from, d.to); return; }
+ // neu:
+ if (d.type === "delegation") {
+   animateDelegationBeam(d.from, d.to, d.status || "running");
+   if (flowCy) animateFlowBeam(d.from, d.to, d.status || "running");
+   return;
+ }
+
+ 2e. Neuer "Flow"-Tab
+
+ HTML (nach dem Kamera-Tab):
+ <!-- Flow Tab -->
+ <div class="tab-content" id="tab-flow" style="position:relative;">
+   <div id="flow-cy" style="width:100%;height:100%;"></div>
+   <canvas id="flow-beam-overlay" style="position:absolute;top:0;left:0;pointer-events:none;"></canvas>
+ </div>
+
+ Tab-Button (in der Tab-Leiste nach "Kamera"):
+ <button class="tab-btn" id="tab-flow-btn" onclick="switchTab('flow')">Flow</button>
+
+ switchTab() erweitern:
+ else if (tab === "flow") initFlowGraph();
+
+ CDN-Include (im <head> nach Cytoscape):
+ <script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
+ <script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
+
+ initFlowGraph() — baut Hierarchie-Graph:
+
+ Schicht 0: [Telegram] [Terminal]
+ Schicht 1: [Dispatcher]
+ Schicht 2: [MetaAgent]
+ Schicht 3: [executor] [research] [reasoning] [creative] [development]
+            [visual] [data] [communication] [system] [shell] [image]
+ Schicht 4 (rechts, eigene Spalte): [AutonomousRunner]
+ Schicht 5 (rechts): [M1 GoalGen] [M3 Healing] [M8 Reflect] [M13 ToolGen]
+                     [M14 Email]  [M15 Ambient] [M16 Feedback]
+
+ Nodes als flowCy (zweites Cytoscape-Objekt, selector #flow-cy).
+ Layout: {name: "dagre", rankDir: "TB", nodeSep: 40, rankSep: 70}.
+ flowCy erhält die gleichen Node-Style-Regeln wie cy.
+
+ animateFlowBeam(fromId, toId, status) — identische Logik wie animateDelegationBeam,
+ aber auf #flow-beam-overlay Canvas + flowCy-Positionen.
+ Eigener _flowBeamRAF für unabhängige Animation.
+
+ ---
+ Implementierungsreihenfolge
+
+ 1. agent_registry.py — 2 neue _delegation_sse_hook Aufrufe (completed + error)
+ 2. canvas_ui.py — BEAM_COLORS Konstante
+ 3. canvas_ui.py — animateDelegationBeam + flashNode mit Status-Parameter
+ 4. canvas_ui.py — handleSSE anpassen
+ 5. canvas_ui.py — Flow-Tab HTML + CDN-Includes
+ 6. canvas_ui.py — initFlowGraph() + animateFlowBeam()
+
+ ---
+ Kritische Dateien
+
+ ┌─────────────────────────┬────────────────────────────────────────────────────────────────────────────────────┐
+ │          Datei          │                                      Änderung                                      │
+ ├─────────────────────────┼────────────────────────────────────────────────────────────────────────────────────┤
+ │ agent/agent_registry.py │ +2 _delegation_sse_hook Aufrufe (Linie ~393, ~408)                                 │
+ ├─────────────────────────┼────────────────────────────────────────────────────────────────────────────────────┤
+ │ server/canvas_ui.py     │ BEAM_COLORS, animateDelegationBeam(status), flashNode(status), handleSSE, Flow-Tab │
+ └─────────────────────────┴────────────────────────────────────────────────────────────────────────────────────┘
+
+ server/mcp_server.py — keine Änderung nötig (sendet status bereits in SSE).
+
+ ---
+ Verifikation
+
+ # 1. Timus starten (oder restart)
+ sudo systemctl restart timus-mcp timus-dispatcher
+
+ # 2. Canvas öffnen: http://localhost:5000/ui
+ # 3. Chat: "Recherchiere aktuelle LLM-Benchmarks" (löst MetaAgent → ResearchAgent Delegation aus)
+ # Erwartung: gelber Strahl meta→research (running), dann grüner Strahl (completed)
+
+ # 4. Flow-Tab öffnen
+ # Erwartung: Hierarchie-Graph mit allen Nodes sichtbar
+ # Gleiche Strahlen erscheinen parallel auf beiden Tabs
+
+ # 5. Fehler testen: ungültige Delegation provozieren
+ # Erwartung: roter Strahl + rotes Node-Aufleuchten
+

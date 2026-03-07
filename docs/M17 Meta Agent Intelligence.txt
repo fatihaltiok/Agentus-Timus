@@ -1,0 +1,200 @@
+ M17: Meta-Agent Intelligence Upgrade — Implementierungsplan
+
+ Context
+
+ Der Meta-Agent delegiert Aufgaben an Spezial-Agenten, erhält aber keine strukturierten Rückantworten — nur rohe Strings. Es gibt keinen automatischen Blackboard-Write nach Delegationen,
+ kein Replan-Protokoll bei Misserfolg und keine Übersicht der verfügbaren Agenten-Fähigkeiten. Ziel ist ein bidirektionales Kommunikationsprotokoll: strukturierte AgentResult-Objekte,
+ automatisches Blackboard-Schreiben, dynamische Capability-Map und Replan-Loop.
+
+ ---
+ Schritt 1 — Lean Th.50–53 (formale Verifikation)
+
+ Datei: lean/CiSpecs.lean — nach Zeile 263 (nach Th.49) einfügen
+
+ -- M17: Meta-Agent Intelligence
+ theorem agent_result_quality_in_bounds (q : Nat) (h : q ≤ 100) : q ≤ 100 := h
+ theorem agent_result_success_quality_gt_error (qs qe : Nat) (hs : qs = 80) (he : qe = 0) : qe < qs := by omega
+ theorem auto_blackboard_ttl_positive (ttl : Nat) (h : ttl = 120 ∨ ttl = 60 ∨ ttl = 30) : 0 < ttl := by omega
+ theorem meta_replan_depth_bounded (attempts : Nat) (h : attempts ≤ 2) (depth : Nat) (hd : depth ≤ 3) : attempts + depth ≤ 5 := by omega
+
+ Ziel: Formale Garantien für Quality-Bounds, TTL-Positivität und Replan-Tiefenbeschränkung.
+
+ ---
+ Schritt 2 — AgentResult Dataclass
+
+ Datei: agent/agent_registry.py — nach Zeile 34 (nach AgentSpec Klasse) einfügen
+
+ @dataclasses.dataclass
+ class AgentResult:
+     status: str          # "success" | "partial" | "error"
+     agent: str           # agent_type z.B. "shell"
+     result: str          # Ergebnis-Text
+     quality: int         # 0–100
+     blackboard_key: str  # Key unter dem Ergebnis im Blackboard liegt
+     error: str = ""      # Fehlermeldung bei status=="error"
+
+ Außerdem AgentResult zu __all__ hinzufügen.
+
+ ---
+ Schritt 3 — _auto_write_to_blackboard() + 3 Call-Sites
+
+ Datei: agent/agent_registry.py
+
+ Neue Methode nach _record_routing_outcome() (ca. Zeile 451)
+
+ @staticmethod
+ def _auto_write_to_blackboard(agent_type: str, task: str, result: str, status: str) -> str:
+     """Schreibt Delegationsergebnis automatisch ins Blackboard. Gibt Key zurück."""
+     try:
+         from memory.agent_blackboard import get_blackboard
+         bb = get_blackboard()
+         key = f"delegation:{agent_type}:{int(time.time())}"
+         ttl = {"success": 120, "partial": 60, "error": 30}.get(status, 60)
+         bb.write(
+             key=key,
+             value={"task": task[:200], "result": result[:1000], "status": status},
+             agent_id="agent_registry",
+             ttl_minutes=ttl,
+         )
+         return key
+     except Exception as e:
+         log.warning("Auto-Blackboard-Write fehlgeschlagen: %s", e)
+         return ""
+
+ 3 Return-Sites in delegate() modifizieren
+
+ Erfolg-Return (success):
+ bb_key = AgentRegistry._auto_write_to_blackboard(agent_type, task, result, "success")
+ return AgentResult(status="success", agent=agent_type, result=result, quality=80, blackboard_key=bb_key)
+
+ Partial-Return (timeout/truncated):
+ bb_key = AgentRegistry._auto_write_to_blackboard(agent_type, task, result, "partial")
+ return AgentResult(status="partial", agent=agent_type, result=result, quality=40, blackboard_key=bb_key)
+
+ Error-Return:
+ bb_key = AgentRegistry._auto_write_to_blackboard(agent_type, task, str(e), "error")
+ return AgentResult(status="error", agent=agent_type, result="", quality=0, blackboard_key=bb_key, error=str(e))
+
+ M12-Confidence-Upgrade (gleichzeitig)
+
+ Binäre Konfidenz (0.75/0.3) → Map:
+ CONFIDENCE_MAP = {"success": 0.8, "partial": 0.4, "error": 0.0}
+ confidence = CONFIDENCE_MAP.get(result.status, 0.4)
+
+ ---
+ Schritt 4 — Meta-Agent: Rich Context + Capability Map
+
+ Datei: agent/agents/meta.py
+
+ _get_blackboard_summary() — echte Delegation-Einträge zeigen
+
+ def _get_blackboard_summary(self) -> str:
+     try:
+         from memory.agent_blackboard import get_blackboard
+         bb = get_blackboard()
+         entries = bb.search("delegation:", agent_id=None, limit=5)
+         if not entries:
+             return "Blackboard leer"
+         lines = []
+         for e in entries:
+             val = e.get("value", {})
+             lines.append(f"- [{val.get('status','?')}] {e['key']}: {val.get('task','')[:60]}...")
+         return "\n".join(lines)
+     except Exception:
+         return "Blackboard nicht verfügbar"
+
+ Neue Methode _get_capability_map() hinzufügen
+
+ def _get_capability_map(self) -> str:
+     try:
+         from agent.agent_registry import AgentRegistry
+         reg = AgentRegistry.get_instance()
+         lines = []
+         for spec in reg.list_agents():
+             lines.append(f"- {spec.agent_type}: {', '.join(spec.capabilities[:3])}")
+         return "\n".join(lines) if lines else "Keine Agenten registriert"
+     except Exception:
+         return "Capability-Map nicht verfügbar"
+
+ _build_meta_context() — Capability-Map einbinden
+
+ _get_capability_map() in den Meta-Context-String einbauen statt statischer Agenten-Liste.
+
+ Konstante META_MAX_REPLAN_ATTEMPTS = 2 ergänzen
+
+ Nach MAX_DECOMPOSITION_DEPTH = 3.
+
+ ---
+ Schritt 5 — REPLAN-PROTOKOLL in META_SYSTEM_PROMPT
+
+ Datei: agent/prompts.py — vor dem abschließenden """ des META_SYSTEM_PROMPT einfügen
+
+ REPLAN-PROTOKOLL:
+ Wenn delegate_to_agent status="partial" oder status="error" zurückgibt:
+ 1. Analysiere den Fehler im Ergebnis
+ 2. Wähle einen anderen Agenten ODER formuliere die Aufgabe konkreter neu
+ 3. Maximal 2 Replan-Versuche pro Sub-Task
+ 4. Nach 2 Fehlversuchen: status="partial" zurückgeben mit Erklärung
+ Niemals denselben fehlgeschlagenen Call ohne Änderung wiederholen.
+
+ ---
+ Schritt 6 — 30 Tests in 3 neuen Dateien
+
+ tests/test_agent_result.py — 12 Tests
+
+ - AgentResult Felder validieren (quality 0–100, status enum)
+ - AgentResult aus dict/json round-trip
+ - Blackboard-Key Format-Check
+
+ tests/test_auto_blackboard_write.py — 10 Tests
+
+ - Mock-Blackboard: write() wird aufgerufen
+ - TTL-Mapping: success=120, partial=60, error=30
+ - Key-Format: delegation:{agent}:{timestamp}
+ - Exception im Blackboard → Key="" (graceful)
+
+ tests/test_meta_replan_protocol.py — 8 Tests
+
+ - META_MAX_REPLAN_ATTEMPTS = 2
+ - Quality-Map: success=80, partial=40, error=0
+ - Confidence-Map: success=0.8, partial=0.4, error=0.0
+ - Blackboard-Summary enthält echte Einträge (Mock)
+
+ ---
+ Schritt 7 — Verifikation
+
+ # Lean 4 Theoreme verifizieren
+ cd /home/fatih-ubuntu/dev/lean_verify && lake build
+
+ # Python-Tests ausführen
+ cd /home/fatih-ubuntu/dev/timus
+ python -m pytest tests/test_agent_result.py tests/test_auto_blackboard_write.py tests/test_meta_replan_protocol.py -v
+
+ # Integrations-Smoke-Test
+ python -c "from agent.agent_registry import AgentResult; r = AgentResult('success','shell','ok',80,'key'); print(r)"
+
+ ---
+ Kritische Dateien
+
+ ┌─────────────────────────────────────┬─────────────────────────────────────────────────────────────────────────────┐
+ │                Datei                │                                  Änderung                                   │
+ ├─────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────┤
+ │ lean/CiSpecs.lean                   │ Th.50–53 einfügen (nach Zeile 263)                                          │
+ ├─────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────┤
+ │ agent/agent_registry.py             │ AgentResult + _auto_write_to_blackboard() + 3 Return-Sites + M12-Confidence │
+ ├─────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────┤
+ │ agent/agents/meta.py                │ _get_blackboard_summary() + _get_capability_map() + Konstante               │
+ ├─────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────┤
+ │ agent/prompts.py                    │ REPLAN-PROTOKOLL in META_SYSTEM_PROMPT                                      │
+ ├─────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────┤
+ │ tests/test_agent_result.py          │ NEU — 12 Tests                                                              │
+ ├─────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────┤
+ │ tests/test_auto_blackboard_write.py │ NEU — 10 Tests                                                              │
+ ├─────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────┤
+ │ tests/test_meta_replan_protocol.py  │ NEU — 8 Tests                                                               │
+ └─────────────────────────────────────┴─────────────────────────────────────────────────────────────────────────────┘
+
+ Reihenfolge
+
+ 1. Lean → 2. AgentResult → 3. Auto-Blackboard → 4. Meta-Context → 5. Replan-Prompt → 6. Tests → 7. Verifikation
+
