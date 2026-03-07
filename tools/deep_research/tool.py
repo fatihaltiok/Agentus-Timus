@@ -2163,10 +2163,11 @@ Wichtig: Schreibe NUR den Berichtstext. Kein Meta-Kommentar über den Schreibpro
         extras.append(f"{hf_count} HuggingFace-Einträge")
 
     extras_info = (", " + ", ".join(extras)) if extras else ""
+    word_count = len(narrative.split())
     header = (
         f"# Recherche-Bericht\n"
         f"## {session.query}\n\n"
-        f"*Erstellt am {now} | Timus Deep Research v6.0 | Basierend auf {source_count} Web-Quellen{extras_info}*\n\n"
+        f"*Erstellt am {now} | Timus Deep Research v6.0 | Basierend auf {source_count} Web-Quellen{extras_info} | {word_count:,} Wörter*\n\n"
         f"---\n\n"
     )
     return header + narrative
