@@ -302,6 +302,11 @@ Du bist der zentrale Dispatcher für Timus. Analysiere die INTENTION des Nutzers
 6. Bei BILDPFADEN nur 'image' wenn das Bild ANALYSIERT werden soll, NICHT bei Speicher-/Ausgabepfaden
 7. Bei INTERNET-ERKUNDUNG ("erkunde das internet", "erforsche das web", "stöbere online", "suche im netz") → IMMER 'research', NIEMALS 'visual_nemotron'. visual_nemotron ist nur für Desktop-UI-Automation (Maus, Klicks, Formulare), nicht für Recherche.
 8. Bei URL-INHALT LESEN/ANALYSIEREN → IMMER 'research'. Beispiele: "was steht auf https://...", "schau dir diesen Link an", "öffne https://... und lies den Inhalt", "was ist auf dieser Seite", "analysiere diese URL", "ich gebe dir einen Link". research nutzt fetch_url (kein Browser, kein Desktop nötig). visual_nemotron NUR wenn explizit geklickt oder ein Formular ausgefüllt werden soll.
+9. KRITISCH — RESEARCH + WEITERE AKTION → 'meta': Wenn eine Recherche-Anfrage kombiniert wird mit einer weiteren Aktion (PDF erstellen, E-Mail senden, Bericht speichern, Datei generieren), dann IMMER 'meta'. Beispiele:
+   - "recherchiere über X und erstelle eine PDF" → 'meta'
+   - "mache eine recherche und schicke mir das Ergebnis per Mail" → 'meta'
+   - "recherchiere X, erstelle einen Bericht und speichere ihn" → 'meta'
+   Der Meta-Agent orchestriert: er delegiert die Recherche an den Research-Agenten und führt die Folgeaktion selbst durch.
 
 ### ENTSCHEIDUNGSREGEL
 - Ist die Anfrage eine TRIVIALE Frage ohne Aktion (Begrüßung, Uhrzeit, Name)? → 'executor'
@@ -983,25 +988,37 @@ def quick_intent_check(query: str) -> Optional[str]:
     # HÖCHSTE PRIORITÄT: Compound Multi-Step Tasks → immer META
     # (verhindert dass "architektur" REASONING triggert wenn "danach"/"erstelle" auch da ist)
     _MULTI_STEP_TRIGGERS = ("danach", "anschließend", "und dann", "dann erstelle",
-                            "dann generiere", "im anschluss", "abschließend erstelle")
+                            "dann generiere", "im anschluss", "abschließend erstelle",
+                            "und schicke", "und sende", "und erstelle", "und speichere",
+                            "dazu eine", "dazu ein", "dazu einen")
     _TASK_STARTERS = ("recherchiere", "suche nach", "finde heraus", "analysiere",
-                      "schreibe", "erstelle", "generiere", "berechne")
+                      "schreibe", "erstelle", "generiere", "berechne",
+                      "mache eine recherche", "mach eine recherche")
     _has_multi_step = any(t in query_lower for t in _MULTI_STEP_TRIGGERS)
     _has_task_starter = any(t in query_lower for t in _TASK_STARTERS)
     if _has_multi_step and _has_task_starter:
         return "meta"
 
-    # RESEARCH-PRIORITÄT (vor REASONING prüfen!)
-    # "tiefenrecherche" / "deep research" schlagen "analysiere" immer, auch wenn
-    # beide im Query vorkommen — Reasoning-Agent darf KEINE deep_research-Tools nutzen.
-    _RESEARCH_PRIORITY = (
+    # RESEARCH + FOLLOW-UP-AKTION → META
+    # Wenn Research mit einer weiteren Aktion kombiniert wird (PDF, E-Mail, Speichern),
+    # muss der Meta-Agent orchestrieren — nicht der Research-Agent allein.
+    _RESEARCH_KEYWORDS_QUICK = (
         "tiefenrecherche", "deep research", "deep_research",
-        "recherchiere", "recherchier",
+        "recherchiere", "recherchier", "recherche über", "eine recherche",
         "fakten zu", "fakten über", "sammle informationen",
         "informiere mich über", "was gibt es neues",
     )
-    if any(kw in query_lower for kw in _RESEARCH_PRIORITY):
-        return "research"
+    _FOLLOW_UP_ACTIONS = (
+        "pdf", "erstelle", "schicke", "sende", "speichere", "mail",
+        "e-mail", "email", "bericht", "report", "dokument", "datei",
+        "schreibe", "generiere", "exportiere",
+    )
+    _has_research = any(kw in query_lower for kw in _RESEARCH_KEYWORDS_QUICK)
+    _has_follow_up = any(kw in query_lower for kw in _FOLLOW_UP_ACTIONS)
+    if _has_research and _has_follow_up:
+        return "meta"  # Meta orchestriert: Research + Folgeaktion
+    if _has_research:
+        return "research"  # Reine Recherche → direkt zum Research-Agent
 
     # REASONING (komplexe Analyse, Debugging, Architektur)
     for keyword in REASONING_KEYWORDS:
