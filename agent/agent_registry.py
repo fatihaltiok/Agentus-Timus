@@ -59,6 +59,13 @@ class AgentRegistry:
     """
 
     MAX_DELEGATION_DEPTH = 3
+    _ERROR_TEXT_PATTERNS = (
+        re.compile(r"^\s*(?:error|fehler)\s*:", re.IGNORECASE),
+        re.compile(r"invalid_request_error", re.IGNORECASE),
+        re.compile(r"credit balance is too low", re.IGNORECASE),
+        re.compile(r"ist ein system-tool und darf nicht direkt aufgerufen werden", re.IGNORECASE),
+        re.compile(r"kein erfolgreicher send_email-tool-call", re.IGNORECASE),
+    )
     AGENT_TYPE_ALIASES = {
         "development": "developer",
         "dev": "developer",
@@ -384,9 +391,13 @@ class AgentRegistry:
                 raw,
                 to_agent,
             )
+            outcome_status, outcome_error = AgentRegistry._classify_delegation_outcome(
+                raw,
+                result_str,
+            )
 
             # Partial-Result-Erkennung
-            if result_str in self._PARTIAL_MARKERS:
+            if outcome_status == "partial":
                 status = "partial"
                 self._log_canvas_delegation(
                     from_agent=from_agent,
@@ -426,6 +437,51 @@ class AgentRegistry:
                     "metadata": _res.metadata,
                     "artifacts": _res.artifacts,
                     "note": "Aufgabe nicht vollstaendig abgeschlossen",
+                }
+
+            if outcome_status == "error":
+                self._log_canvas_delegation(
+                    from_agent=from_agent,
+                    to_agent=to_agent,
+                    session_id=effective_session_id,
+                    status="error",
+                    task=task,
+                    message=f"Delegation inhaltlich fehlgeschlagen: {from_agent} -> {to_agent}",
+                    payload={"error_preview": outcome_error[:240]},
+                )
+                self._record_routing_outcome(task, to_agent, "error")
+                try:
+                    if _delegation_sse_hook is not None:
+                        _delegation_sse_hook(from_agent, to_agent, "error")
+                except Exception:
+                    pass
+                bb_key = AgentRegistry._auto_write_to_blackboard(
+                    to_agent,
+                    task,
+                    outcome_error[:1000],
+                    "error",
+                    session_id=effective_session_id,
+                    metadata=_meta,
+                    artifacts=_artifacts,
+                )
+                _res = AgentResult(
+                    status="error",
+                    agent=to_agent,
+                    result="",
+                    quality=0,
+                    blackboard_key=bb_key,
+                    error=outcome_error,
+                    metadata=_meta,
+                    artifacts=_artifacts,
+                )
+                return {
+                    "status": _res.status,
+                    "agent": _res.agent,
+                    "error": f"FEHLER: Delegation an '{to_agent}' fehlgeschlagen: {_res.error}",
+                    "quality": _res.quality,
+                    "blackboard_key": _res.blackboard_key,
+                    "metadata": _res.metadata,
+                    "artifacts": _res.artifacts,
                 }
 
             self._log_canvas_delegation(
@@ -587,6 +643,30 @@ class AgentRegistry:
             if isinstance(preferred, str) and preferred.strip():
                 return preferred
         return str(raw)
+
+    @classmethod
+    def _classify_delegation_outcome(cls, raw: Any, result_text: str) -> tuple[str, str]:
+        """Klassifiziert delegierte Ergebnisse, damit Fehlertext nicht als Erfolg durchgeht."""
+        if isinstance(raw, dict):
+            raw_status = str(raw.get("status") or "").strip().lower()
+            if raw.get("skipped") is True:
+                return "error", str(raw.get("reason") or "Delegierter Tool-Call wurde blockiert")
+            if raw_status in {"error", "partial"}:
+                return raw_status, str(raw.get("error") or raw.get("result") or result_text)
+            if raw.get("success") is False:
+                return "error", str(raw.get("error") or result_text)
+            if raw.get("error"):
+                return "error", str(raw.get("error"))
+
+        if result_text in cls._PARTIAL_MARKERS:
+            return "partial", result_text
+
+        stripped = (result_text or "").strip()
+        for pattern in cls._ERROR_TEXT_PATTERNS:
+            if pattern.search(stripped):
+                return "error", stripped
+
+        return "success", ""
 
     @staticmethod
     def _extract_declared_metadata(raw: Any) -> Dict[str, Any]:
@@ -1005,15 +1085,18 @@ class AgentRegistry:
                     # Schritt 6: read-only zuruecksetzen
                     MemoryAccessGuard.set_read_only(False)
 
-                    # Schritt 7: Partial-Result-Erkennung
-                    result_str = str(raw)
-                    status = "partial" if result_str in self._PARTIAL_MARKERS else "success"
+                    # Schritt 7: Ergebnis klassifizieren statt Fehlertext blind als Erfolg zu werten
+                    result_str = AgentRegistry._stringify_delegation_result(raw)
+                    status, error_text = AgentRegistry._classify_delegation_outcome(
+                        raw,
+                        result_str,
+                    )
 
                     self._log_canvas_delegation(
                         from_agent=from_agent,
                         to_agent=agent_name,
                         session_id=effective_session_id,
-                        status="completed",
+                        status="completed" if status != "error" else "error",
                         task=task_desc,
                         message=f"[Parallel] Abgeschlossen: {agent_name} | status={status}",
                         payload={"trace_id": subtrace, "parallel": True},
@@ -1026,7 +1109,8 @@ class AgentRegistry:
                         status=status,
                         trace=subtrace,
                         task_desc=task_desc,
-                        raw=raw,
+                        raw=raw if status != "error" else None,
+                        error=error_text,
                     )
 
                 except asyncio.TimeoutError:

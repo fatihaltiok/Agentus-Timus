@@ -17,9 +17,11 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from agent.agents.communication import CommunicationAgent
+from agent.base_agent import AGENT_CAPABILITY_MAP
 
 
 def _make_agent() -> CommunicationAgent:
+    os.environ["TIMUS_VALIDATE_CONFIGURED_MODELS"] = "false"
     return CommunicationAgent(tools_description_string="")
 
 
@@ -29,6 +31,12 @@ def _make_agent() -> CommunicationAgent:
 
 def test_max_draft_revisions_positive():
     assert CommunicationAgent.MAX_DRAFT_REVISIONS > 0
+
+
+def test_communication_agent_has_email_capabilities():
+    caps = AGENT_CAPABILITY_MAP["communication"]
+    assert "email" in caps
+    assert "communication" in caps
 
 
 def test_max_draft_revisions_value():
@@ -180,3 +188,43 @@ async def test_draft_long_body_truncated():
 
     # Gesamte Nachricht ist kürzer als 2000 + overhead
     assert len(sent[0]) < 1500
+
+
+def test_email_send_requested_detection():
+    assert CommunicationAgent._email_send_requested(
+        "Sende eine E-Mail mit PDF-Anhang an fatihaltiok@outlook.com"
+    ) is True
+    assert CommunicationAgent._email_send_requested(
+        "Schreibe einen LinkedIn-Post über KI-Agenten"
+    ) is False
+
+
+def test_verified_email_send_requires_real_tool_success():
+    agent = _make_agent()
+    agent._task_action_history = [
+        {
+            "method": "send_email",
+            "observation": {
+                "status": "success",
+                "data": {"success": True, "message": "sent"},
+            },
+        }
+    ]
+    assert agent._has_verified_email_send() is True
+
+    agent._task_action_history = [
+        {
+            "method": "send_email",
+            "observation": {"skipped": True, "reason": "blocked"},
+        }
+    ]
+    assert agent._has_verified_email_send() is False
+
+
+def test_result_claims_email_success_marker():
+    assert CommunicationAgent._result_claims_email_success(
+        "**E-Mail erfolgreich versendet!**"
+    ) is True
+    assert CommunicationAgent._result_claims_email_success(
+        "Entwurf erstellt, aber noch nicht gesendet."
+    ) is False

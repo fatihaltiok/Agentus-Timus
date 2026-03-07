@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -211,8 +212,31 @@ class TestReadEmails:
 
 class TestGetEmailStatus:
 
+    def test_status_resend_ok(self, tool, monkeypatch):
+        monkeypatch.setenv("EMAIL_BACKEND", "resend")
+        monkeypatch.setenv("RESEND_API_KEY", "re_test")
+        monkeypatch.setenv("RESEND_FROM", "Timus <timus@example.com>")
+        result = tool.get_email_status()
+        assert result["success"] is True
+        assert result["authenticated"] is True
+        assert result["backend"] == "resend"
+        assert "timus@example.com" in result["address"]
+
+    def test_status_smtp_ok(self, tool, monkeypatch):
+        monkeypatch.setenv("EMAIL_BACKEND", "smtp")
+        monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+        monkeypatch.setenv("SMTP_PORT", "465")
+        monkeypatch.setenv("SMTP_USER", "timus@example.com")
+        monkeypatch.setenv("SMTP_PASSWORD", "secret")
+        result = tool.get_email_status()
+        assert result["success"] is True
+        assert result["authenticated"] is True
+        assert result["backend"] == "smtp"
+        assert result["address"] == "timus@example.com"
+
     def test_status_graph_ok(self, tool):
         """Graph /me antwortet 200 → graph_ok=True, token_ok=True, Adresse korrekt."""
+        os.environ["EMAIL_BACKEND"] = "msgraph"
         mock_resp = MagicMock(status_code=200)
         mock_resp.json.return_value = {
             "mail": "timus@test.com",
@@ -221,12 +245,14 @@ class TestGetEmailStatus:
         with patch("requests.get", return_value=mock_resp):
             result = tool.get_email_status()
         assert result["success"] is True
+        assert result["authenticated"] is True
         assert result["graph_ok"] is True
         assert result["token_ok"] is True
         assert result["address"] == "timus@test.com"
 
     def test_status_graph_401(self, tool):
         """Graph gibt 401 zurück → graph_ok=False, aber token_ok=True (Token war vorhanden)."""
+        os.environ["EMAIL_BACKEND"] = "msgraph"
         mock_resp = MagicMock(status_code=401)
         mock_resp.text = "Unauthorized"
         with patch("requests.get", return_value=mock_resp):
@@ -237,6 +263,7 @@ class TestGetEmailStatus:
 
     def test_status_no_token(self, tool):
         """RuntimeError aus _get_access_token → token_ok=False."""
+        os.environ["EMAIL_BACKEND"] = "msgraph"
         with patch.object(tool, "_get_access_token",
                           side_effect=RuntimeError("Kein OAuth2-Token vorhanden.")):
             result = tool.get_email_status()
@@ -245,6 +272,7 @@ class TestGetEmailStatus:
 
     def test_status_missing_client_id(self, tool):
         """Fehlende Client-ID → RuntimeError → success=False."""
+        os.environ["EMAIL_BACKEND"] = "msgraph"
         with patch.object(tool, "_get_access_token",
                           side_effect=RuntimeError("TIMUS_GRAPH_CLIENT_ID fehlt in .env")):
             result = tool.get_email_status()

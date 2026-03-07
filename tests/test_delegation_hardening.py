@@ -218,6 +218,69 @@ async def test_delegate_tool_returns_error_status_when_registry_reports_error(mo
 
 
 @pytest.mark.asyncio
+async def test_delegate_marks_error_prefixed_result_as_error():
+    from agent.agent_registry import AgentRegistry
+
+    registry = AgentRegistry()
+
+    class _ErrorStringAgent:
+        async def run(self, task: str) -> str:
+            return "Error: SMTP backend offline"
+
+    async def _fake_tools_description():
+        return "tools"
+
+    registry._get_tools_description = _fake_tools_description
+    registry.register_spec(
+        "communication",
+        "communication",
+        ["communication"],
+        lambda tools_description_string: _ErrorStringAgent(),
+    )
+
+    result = await registry.delegate(
+        from_agent="meta",
+        to_agent="communication",
+        task="send report",
+    )
+
+    assert result["status"] == "error"
+    assert "SMTP backend offline" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_delegate_parallel_marks_error_prefixed_result_as_error():
+    from agent.agent_registry import AgentRegistry
+
+    registry = AgentRegistry()
+
+    class _ErrorStringAgent:
+        async def run(self, task: str) -> str:
+            return "FEHLER: Kein erfolgreicher send_email-Tool-Call"
+
+    async def _fake_tools_description():
+        return "tools"
+
+    registry._get_tools_description = _fake_tools_description
+    registry._tools_description = "tools"
+    registry.register_spec(
+        "communication",
+        "communication",
+        ["communication"],
+        lambda tools_description_string: _ErrorStringAgent(),
+    )
+
+    result = await registry.delegate_parallel(
+        tasks=[{"task_id": "mail-1", "agent": "communication", "task": "send report"}],
+        from_agent="meta",
+    )
+
+    assert result["errors"] == 1
+    assert result["success"] == 0
+    assert result["results"][0]["status"] == "error"
+
+
+@pytest.mark.asyncio
 async def test_delegate_logs_canvas_edge_and_events(monkeypatch, tmp_path):
     import importlib
     from orchestration.canvas_store import CanvasStore

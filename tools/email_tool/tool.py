@@ -397,7 +397,43 @@ def read_emails(
     category=C.SYSTEM,
 )
 def get_email_status() -> Dict[str, Any]:
-    """Prüft Graph-Verbindung und Token-Status."""
+    """Prüft Backend-spezifischen E-Mail-Status."""
+    backend = os.getenv("EMAIL_BACKEND", "resend").lower()
+
+    if backend == "resend":
+        api_key = os.getenv("RESEND_API_KEY", "")
+        from_address = os.getenv("RESEND_FROM", "")
+        ok = bool(api_key and from_address)
+        return {
+            "success": ok,
+            "authenticated": ok,
+            "backend": "resend",
+            "address": from_address or _EMAIL or _DISPLAY,
+            "display_name": _DISPLAY,
+            "backend_ok": ok,
+            "graph_ok": False,
+            "token_ok": False,
+            "error": "" if ok else "RESEND_API_KEY oder RESEND_FROM fehlt",
+        }
+
+    if backend == "smtp":
+        smtp_user = os.getenv("SMTP_USER", "")
+        smtp_password = os.getenv("SMTP_PASSWORD", "")
+        smtp_host = os.getenv("SMTP_HOST", "")
+        smtp_port = os.getenv("SMTP_PORT", "")
+        ok = bool(smtp_user and smtp_password and smtp_host and smtp_port)
+        return {
+            "success": ok,
+            "authenticated": ok,
+            "backend": "smtp",
+            "address": smtp_user or _EMAIL or _DISPLAY,
+            "display_name": _DISPLAY,
+            "backend_ok": ok,
+            "graph_ok": False,
+            "token_ok": False,
+            "error": "" if ok else "SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASSWORD unvollständig",
+        }
+
     try:
         token = _get_access_token()
         resp = requests.get(
@@ -409,14 +445,20 @@ def get_email_status() -> Dict[str, Any]:
             me = resp.json()
             return {
                 "success":      True,
+                "authenticated": True,
+                "backend":      "msgraph",
                 "address":      me.get("mail") or me.get("userPrincipalName", _EMAIL),
                 "display_name": me.get("displayName", _DISPLAY),
+                "backend_ok":   True,
                 "graph_ok":     True,
                 "token_ok":     True,
             }
         else:
             return {
                 "success":  False,
+                "authenticated": False,
+                "backend":  "msgraph",
+                "backend_ok": False,
                 "graph_ok": False,
                 "token_ok": True,
                 "error":    f"Graph /me: {resp.status_code} — {resp.text[:200]}",
@@ -424,12 +466,23 @@ def get_email_status() -> Dict[str, Any]:
     except RuntimeError as e:
         return {
             "success":  False,
+            "authenticated": False,
+            "backend":  "msgraph",
+            "backend_ok": False,
             "graph_ok": False,
             "token_ok": False,
             "error":    str(e),
         }
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {
+            "success": False,
+            "authenticated": False,
+            "backend": "msgraph",
+            "backend_ok": False,
+            "graph_ok": False,
+            "token_ok": False,
+            "error": str(e),
+        }
 
 
 # ── Hilfsfunktionen ───────────────────────────────────────────────────────────

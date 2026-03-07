@@ -13,8 +13,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Dict
 
 from agent.base_agent import BaseAgent
 from agent.prompts import COMMUNICATION_PROMPT_TEMPLATE
@@ -53,7 +55,18 @@ class CommunicationAgent(BaseAgent):
         """Reichert den Task mit E-Mail-Status und Nutzerprofil an."""
         context = await self._build_comm_context()
         enriched_task = task + "\n\n" + context
-        return await super().run(enriched_task)
+        result = await super().run(enriched_task)
+        if not self._email_send_requested(task):
+            return result
+        if self._has_verified_email_send():
+            return result
+        if self._result_claims_email_success(result):
+            return (
+                "FEHLER: Der E-Mail-Versand wurde nicht verifiziert. "
+                "Es gab keinen erfolgreichen send_email-Tool-Call. "
+                "Bitte prüfe Backend-Status und Tool-Ergebnis erneut."
+            )
+        return result
 
     # ------------------------------------------------------------------
     # Kommunikations-Kontext aufbauen
@@ -103,8 +116,15 @@ class CommunicationAgent(BaseAgent):
             from tools.email_tool.tool import get_email_status, read_emails
 
             status = get_email_status()
-            if not status.get("authenticated"):
-                return "E-Mail: nicht authentifiziert (Graph API offline)"
+            authenticated = bool(
+                status.get("authenticated")
+                or status.get("success")
+            )
+            if not authenticated:
+                return f"E-Mail: nicht authentifiziert ({status.get('error', 'Backend offline')})"
+
+            backend = status.get("backend", "unknown")
+            address = status.get("address") or _TIMUS_EMAIL
 
             # Ungelesene Mails zählen — max 1 API-Call mit limit=1 für die Anzahl
             result = read_emails(mailbox="inbox", limit=25, unread_only=True)
@@ -119,13 +139,62 @@ class CommunicationAgent(BaseAgent):
                     sender = first.get("from_email") or first.get("from_name") or "?"
                     subj = (first.get("subject") or "")[:40]
                     sender_preview = f" — neueste: {sender}: {subj}"
-                return f"E-Mail: verbunden | Posteingang: {unread_str}{sender_preview}"
+                return (
+                    f"E-Mail: verbunden ({backend}) | Konto: {address} | "
+                    f"Posteingang: {unread_str}{sender_preview}"
+                )
             else:
-                return f"E-Mail: verbunden | Posteingang: nicht abrufbar ({result.get('error', '')})"
+                return (
+                    f"E-Mail: verbunden ({backend}) | Konto: {address} | "
+                    f"Posteingang: nicht abrufbar ({result.get('error', '')})"
+                )
 
         except Exception as exc:
             log.debug("E-Mail-Status nicht abrufbar: %s", exc)
             return "E-Mail: Status nicht abrufbar"
+
+    @staticmethod
+    def _email_send_requested(task: str) -> bool:
+        task_lower = (task or "").lower()
+        patterns = (
+            r"\bsende\b.*\be-?mail\b",
+            r"\bschick\w*\b.*\be-?mail\b",
+            r"\bsend\s+email\b",
+            r"\bsend_email\b",
+            r"\banhang\b",
+            r"\battachment_path\b",
+            r"\bpdf\b.*\bmail\b",
+        )
+        return any(re.search(pattern, task_lower) for pattern in patterns)
+
+    def _has_verified_email_send(self) -> bool:
+        for action in reversed(self._task_action_history):
+            if action.get("method") != "send_email":
+                continue
+            obs = action.get("observation")
+            if not isinstance(obs, dict):
+                continue
+            if obs.get("skipped") or obs.get("error"):
+                return False
+            if obs.get("status") != "success":
+                continue
+            data = obs.get("data")
+            if isinstance(data, dict) and data.get("success") is True:
+                return True
+            if obs.get("success") is True:
+                return True
+        return False
+
+    @staticmethod
+    def _result_claims_email_success(result: str) -> bool:
+        text = (result or "").lower()
+        markers = (
+            "e-mail erfolgreich versendet",
+            "erfolgreich übermittelt",
+            "die e-mail wurde",
+            "mail wurde gesendet",
+        )
+        return any(marker in text for marker in markers)
 
     def _get_pending_comm_tasks(self) -> str:
         """Gibt offene Tasks mit Bezug zu Kommunikation zurück."""

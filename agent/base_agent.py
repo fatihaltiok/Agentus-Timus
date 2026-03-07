@@ -136,6 +136,8 @@ AGENT_CAPABILITY_MAP = {
     ],
     # ── M2: Kommunikation ─────────────────────────────────────────────
     "communication": [
+        "communication", "email",               # E-Mail lesen/senden + Status
+        "send_email", "read_emails", "status", # explizite Mail-Tool-Caps
         "document", "txt", "docx",             # Ausgabe (Briefe, Anschreiben)
         "file", "filesystem",                  # Dateizugriff
         "results",                             # Speichern
@@ -1868,7 +1870,8 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             self._task_action_history.append({
                 "method": method,
                 "params": params,
-                "result": str(obs)[:200] if obs else None
+                "result": str(obs)[:200] if obs else None,
+                "observation": self._sanitize_observation(obs),
             })
             
             self._handle_file_artifacts(obs)

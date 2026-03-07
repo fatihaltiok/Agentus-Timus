@@ -2,9 +2,9 @@
 ShellAgent — Bash-Befehle, Skripte, Cron-Jobs, Service-Management.
 
 Erweiterungen gegenüber BaseAgent:
-  - Timus-Ökosystem-Kontext automatisch injiziert (Services, Disk, Pfade, Skripte)
+  - Timus-Ökosystem-Kontext automatisch injiziert (Git, Services, Disk, Pfade, Skripte)
   - max_iterations=20 für mehrstufige Shell-Tasks
-  - Letzte Befehle aus Audit-Log als Session-Kontext
+  - Letzter Audit-Log-Eintrag als Session-Kontext
   - Strukturierte Ausgabe-Hinweise für systemd, git, pytest, python
   - Sicherheits-Tier-Awareness im Kontext
 """
@@ -36,7 +36,7 @@ class ShellAgent(BaseAgent):
 
     Führt Bash-Befehle, Skripte und Cron-Jobs sicher aus.
     Lädt vor jedem Task automatisch den aktuellen System-Kontext:
-    Service-Status, Disk-Nutzung, letzte Audit-Log-Einträge, verfügbare Skripte.
+    Git-Status, Service-Status, Disk-Nutzung, letzten Audit-Eintrag, verfügbare Skripte.
     """
 
     def __init__(self, tools_description_string: str) -> None:
@@ -64,39 +64,81 @@ class ShellAgent(BaseAgent):
     async def _build_shell_context(self) -> str:
         """
         Erstellt einen kompakten System-Snapshot:
+        - Git-Branch + geänderte Dateien
         - Service-Status (timus-mcp, timus-dispatcher)
-        - Disk-Auslastung
-        - Letzte 5 Befehle aus Shell-Audit-Log
+        - Disk-Auslastung (/home, /tmp)
+        - Letzter Audit-Eintrag aus Shell-Audit-Log
         - Verfügbare Skripte in scripts/
         - Bekannte Pfade + aktuelle Zeit
         """
         lines: list[str] = ["# SHELL-KONTEXT (automatisch geladen)"]
 
-        # 1. Service-Status
+        # 1. Git-Status
+        git_status = await self._get_git_status()
+        if git_status:
+            lines.append(git_status)
+
+        # 2. Service-Status
         lines.append(await self._get_service_status())
 
-        # 2. Disk-Nutzung
-        disk = await self._get_disk_usage()
-        if disk:
-            lines.append(disk)
+        # 3. Disk-Nutzung
+        disk_home = await self._get_disk_usage(_PROJECT_ROOT.parent, "/home")
+        if disk_home:
+            lines.append(disk_home)
+        disk_tmp = await self._get_disk_usage(Path("/tmp"), "/tmp")
+        if disk_tmp:
+            lines.append(disk_tmp)
 
-        # 3. Letzte Shell-Befehle aus Audit-Log
-        history = self._get_recent_commands(n=5)
-        if history:
-            lines.append(f"Letzte Befehle: {history}")
+        # 4. Letzter Audit-Eintrag
+        audit_entry = self._get_last_audit_entry()
+        if audit_entry:
+            lines.append(f"Letzter Audit-Eintrag: {audit_entry}")
 
-        # 4. Verfügbare Skripte
+        # 5. Verfügbare Skripte
         scripts = self._list_scripts()
         if scripts:
             lines.append(f"Skripte in scripts/: {scripts}")
 
-        # 5. Bekannte Pfade & Zeit
+        # 6. Bekannte Pfade & Zeit
         lines.append(f"Projektpfad: {_PROJECT_ROOT}")
         lines.append(f"Logs: {_LOGS_DIR}")
         lines.append(f"Audit-Log: {_AUDIT_LOG}")
         lines.append(f"Aktuelle Zeit: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
         return "\n".join(lines)
+
+    async def _get_git_status(self) -> str:
+        """Gibt Branch und geänderte Dateien im Repo zurück."""
+        try:
+            branch_result = await asyncio.to_thread(
+                subprocess.run,
+                ["git", "-C", str(_PROJECT_ROOT), "branch", "--show-current"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            branch = branch_result.stdout.strip() or "detached"
+
+            status_result = await asyncio.to_thread(
+                subprocess.run,
+                ["git", "-C", str(_PROJECT_ROOT), "status", "--short"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            changed = [
+                line[3:].strip()
+                for line in status_result.stdout.strip().splitlines()
+                if len(line) >= 4 and line[3:].strip()
+            ]
+            if changed:
+                preview = ", ".join(changed[:5])
+                extra = f" (+{len(changed) - 5} weitere)" if len(changed) > 5 else ""
+                return f"Git: branch={branch} | Änderungen: {preview}{extra}"
+            return f"Git: branch={branch} | Änderungen: sauber"
+        except Exception as exc:
+            log.debug("Git-Status nicht abrufbar: %s", exc)
+            return "Git: (nicht abrufbar)"
 
     async def _get_service_status(self) -> str:
         """Fragt systemctl is-active für Timus-Services ab."""
@@ -118,12 +160,12 @@ class ShellAgent(BaseAgent):
             log.debug("Service-Status nicht abrufbar: %s", exc)
             return "Services: (nicht abrufbar)"
 
-    async def _get_disk_usage(self) -> str:
-        """Gibt Disk-Nutzung für das Home-Verzeichnis zurück."""
+    async def _get_disk_usage(self, path: Path, label: str) -> str:
+        """Gibt Disk-Nutzung für einen Pfad zurück."""
         try:
             result = await asyncio.to_thread(
                 subprocess.run,
-                ["df", "-h", "--output=used,avail,pcent", str(_PROJECT_ROOT.parent)],
+                ["df", "-h", "--output=used,avail,pcent", str(path)],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -132,24 +174,21 @@ class ShellAgent(BaseAgent):
             if len(lines) >= 2:
                 parts = lines[1].split()
                 if len(parts) >= 3:
-                    return f"Disk /home: {parts[0]} verwendet, {parts[1]} frei ({parts[2]})"
+                    return f"Disk {label}: {parts[0]} verwendet, {parts[1]} frei ({parts[2]})"
         except Exception as exc:
-            log.debug("Disk-Usage nicht abrufbar: %s", exc)
+            log.debug("Disk-Usage nicht abrufbar fuer %s: %s", label, exc)
         return ""
 
-    def _get_recent_commands(self, n: int = 5) -> str:
-        """Liest die letzten n Befehle aus dem Shell-Audit-Log."""
+    def _get_last_audit_entry(self) -> str:
+        """Liest den letzten Audit-Log-Eintrag kompakt aus."""
         try:
             if not _AUDIT_LOG.exists():
                 return ""
-            recent = _AUDIT_LOG.read_text(encoding="utf-8").strip().splitlines()[-n:]
-            cmds: list[str] = []
-            for line in recent:
-                if "cmd=" in line:
-                    # Format: [TS] [STATUS] cmd=... duration=...
-                    cmd_part = line.split("cmd=", 1)[-1].split(" ")[0][:60]
-                    cmds.append(cmd_part)
-            return " | ".join(cmds) if cmds else ""
+            lines = [line.strip() for line in _AUDIT_LOG.read_text(encoding="utf-8").splitlines() if line.strip()]
+            if not lines:
+                return ""
+            last = lines[-1]
+            return last[:180] + ("..." if len(last) > 180 else "")
         except Exception:
             return ""
 
