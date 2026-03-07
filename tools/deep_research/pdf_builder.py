@@ -14,9 +14,10 @@ import base64
 import logging
 import os
 import re
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Tuple, TYPE_CHECKING
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from jinja2 import Environment, FileSystemLoader
 
@@ -55,29 +56,10 @@ class ResearchPDFBuilder:
 
         sections = self._parse_markdown(narrative_md)
         toc_titles = [heading for heading, _ in sections]
-
-        # Bildmap: section_title → ImageResult
-        image_map = {}
-        for img in images:
-            if img.section_title not in image_map:
-                image_map[img.section_title] = img
-
-        # Abschnitte für Template aufbereiten
-        template_sections = []
-        for heading, text in sections:
-            img = image_map.get(heading)
-            img_path = None
-            img_caption = ""
-            if img and os.path.isfile(img.local_path):
-                img_path = self._file_to_data_uri(img.local_path)
-                img_caption = img.caption
-
-            template_sections.append({
-                "heading": heading,
-                "text_html": self._markdown_to_html(text),
-                "image_path": img_path,
-                "image_caption": img_caption,
-            })
+        figures_by_section = self._build_section_figures(images)
+        template_sections = self._build_template_sections(sections, figures_by_section)
+        report_figures = [figure for section in template_sections for figure in section["figures"]]
+        cover_visual = report_figures[0] if report_figures else None
 
         # Quellen aufbereiten
         web_sources = [
@@ -141,6 +123,7 @@ class ResearchPDFBuilder:
 
         # Wortanzahl
         word_count = len(narrative_md.split())
+        reading_minutes = max(1, round(word_count / 180))
 
         # Deutsches Datum (strftime %B ist systemabhängig englisch)
         _MONTHS_DE = [
@@ -159,10 +142,20 @@ class ResearchPDFBuilder:
             web_count=len(web_sources),
             yt_count=len(yt_sources),
             trend_count=trend_count,
-            image_count=len(images),
+            image_count=len(report_figures),
             word_count=word_count,
+            reading_minutes=reading_minutes,
             toc=toc_titles,
             sections=template_sections,
+            report_figures=report_figures,
+            cover_visual=cover_visual,
+            key_metrics=self._build_key_metrics(
+                web_count=len(web_sources),
+                yt_count=len(yt_sources),
+                trend_count=trend_count,
+                image_count=len(report_figures),
+                word_count=word_count,
+            ),
             web_sources=web_sources,
             yt_sources=yt_sources,
             arxiv_sources=arxiv_sources,
@@ -182,6 +175,84 @@ class ResearchPDFBuilder:
     # ------------------------------------------------------------------
     # Hilfs-Methoden
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _figure_kind_label(source: str) -> str:
+        mapping = {
+            "web": "Web-Referenzbild",
+            "dalle": "KI-generierte Abbildung",
+            "creative": "Kreative Visualisierung",
+        }
+        return mapping.get((source or "").lower(), "Abbildung")
+
+    def _build_section_figures(self, images: List["ImageResult"]) -> Dict[str, List[Dict[str, str]]]:
+        by_section: Dict[str, List[Dict[str, str]]] = defaultdict(list)
+        for idx, img in enumerate(images, start=1):
+            if not img or not img.section_title:
+                continue
+            if not os.path.isfile(img.local_path):
+                continue
+            data_uri = self._file_to_data_uri(img.local_path)
+            if not data_uri:
+                continue
+            by_section[img.section_title].append({
+                "id": f"fig-{idx}",
+                "path": data_uri,
+                "caption": img.caption or img.section_title,
+                "alt": img.section_title,
+                "kind_label": self._figure_kind_label(img.source),
+                "source": img.source,
+            })
+        return dict(by_section)
+
+    def _build_template_sections(
+        self,
+        sections: List[Tuple[str, str]],
+        figures_by_section: Dict[str, List[Dict[str, str]]],
+    ) -> List[Dict[str, object]]:
+        template_sections: List[Dict[str, object]] = []
+        for idx, (heading, text) in enumerate(sections, start=1):
+            template_sections.append({
+                "index": idx,
+                "heading": heading,
+                "slug": self._slugify(heading),
+                "lead": self._extract_lead(text),
+                "text_html": self._markdown_to_html(text),
+                "figures": figures_by_section.get(heading, []),
+            })
+        return template_sections
+
+    @staticmethod
+    def _build_key_metrics(
+        web_count: int,
+        yt_count: int,
+        trend_count: int,
+        image_count: int,
+        word_count: int,
+    ) -> List[Dict[str, str]]:
+        metrics = [
+            {"label": "Webquellen", "value": str(web_count), "tone": "primary"},
+            {"label": "YouTube", "value": str(yt_count), "tone": "neutral"},
+            {"label": "Trendquellen", "value": str(trend_count), "tone": "neutral"},
+            {"label": "Abbildungen", "value": str(image_count), "tone": "accent"},
+            {"label": "Woerter", "value": str(word_count), "tone": "neutral"},
+        ]
+        return metrics
+
+    @staticmethod
+    def _extract_lead(text: str) -> str:
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            line = re.sub(r"^\s*[-*•]\s+", "", line)
+            return line[:260]
+        return ""
+
+    @staticmethod
+    def _slugify(text: str) -> str:
+        cleaned = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+        return cleaned or "section"
 
     def _parse_markdown(self, md: str) -> List[Tuple[str, str]]:
         """Zerlegt Markdown in (Heading, Content)-Paare anhand ## Grenzen."""
@@ -221,6 +292,7 @@ class ResearchPDFBuilder:
         lines = text.splitlines()
         html_parts: List[str] = []
         in_ul = False
+        table_lines: List[str] = []
         para_lines: List[str] = []
 
         def flush_para():
@@ -237,7 +309,49 @@ class ResearchPDFBuilder:
                 html_parts.append("</ul>")
                 in_ul = False
 
+        def is_table_line(line: str) -> bool:
+            stripped = line.strip()
+            return stripped.startswith("|") and stripped.endswith("|") and stripped.count("|") >= 2
+
+        def is_table_separator(line: str) -> bool:
+            stripped = line.strip()
+            return bool(re.match(r"^\|\s*[-:| ]+\|\s*$", stripped))
+
+        def flush_table():
+            nonlocal table_lines
+            if not table_lines:
+                return
+            rows = [line for line in table_lines if line.strip()]
+            if len(rows) >= 2 and is_table_separator(rows[1]):
+                header = [self._inline_md(cell.strip()) for cell in rows[0].strip().strip("|").split("|")]
+                body_rows = rows[2:]
+            else:
+                header = [self._inline_md(cell.strip()) for cell in rows[0].strip().strip("|").split("|")]
+                body_rows = rows[1:]
+            html_parts.append("<table>")
+            html_parts.append("<thead><tr>")
+            for cell in header:
+                html_parts.append(f"<th>{cell}</th>")
+            html_parts.append("</tr></thead>")
+            if body_rows:
+                html_parts.append("<tbody>")
+                for row in body_rows:
+                    cells = [self._inline_md(cell.strip()) for cell in row.strip().strip("|").split("|")]
+                    html_parts.append("<tr>")
+                    for cell in cells:
+                        html_parts.append(f"<td>{cell}</td>")
+                    html_parts.append("</tr>")
+                html_parts.append("</tbody>")
+            html_parts.append("</table>")
+            table_lines = []
+
         for line in lines:
+            if is_table_line(line):
+                flush_para()
+                flush_ul()
+                table_lines.append(line)
+                continue
+            flush_table()
             # Bullet-Listenelement
             if re.match(r"^\s*[-*•]\s+", line):
                 flush_para()
@@ -257,6 +371,7 @@ class ResearchPDFBuilder:
 
         flush_ul()
         flush_para()
+        flush_table()
         return "\n".join(html_parts)
 
     def _inline_md(self, text: str) -> str:

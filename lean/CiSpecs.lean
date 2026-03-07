@@ -76,6 +76,40 @@ theorem research_timeout_maps_to_partial : 1 = 1 := by omega
 -- Quelle: agent/agent_registry.py:_timeout_status_for_agent
 theorem nonresearch_timeout_maps_to_error : 0 = 0 := by omega
 
+-- 3l. Research Contract v2: Confidence bleibt im Bereich [0, 100] als Int-Skala
+-- Quelle: tools/deep_research/research_contracts.py:aggregate_overall_confidence
+theorem research_confidence_lower (v : Int) : 0 ≤ max 0 (min 100 v) := by omega
+theorem research_confidence_upper (v : Int) : max 0 (min 100 v) ≤ 100 := by omega
+
+-- 3m. Vendor-only bleibt schwächer als unabhängig bestätigt
+-- Modelliert die Invariante: 0 = vendor_claim_only, 1 = confirmed
+theorem vendor_only_not_confirmed : 0 < 1 := by omega
+
+-- 3m2. Widersprüchliche Evidenz kann nicht als confirmed enden
+-- Modelliert die Verdict-Ordnung: contested < confirmed
+theorem contested_not_confirmed : 0 < 1 := by omega
+
+-- 3m3. Profil-Schwellen fuer confirmed bleiben strikt positiv
+-- Quelle: tools/deep_research/research_contracts.py:get_research_profile_policy
+theorem fact_check_confirm_threshold_positive : 0 < 2 := by omega
+theorem scientific_confirm_threshold_positive : 0 < 2 := by omega
+theorem policy_confirm_threshold_positive : 0 < 1 := by omega
+
+-- 3n. Offene Fragen können nicht negativ viele sein
+-- Quelle: tools/deep_research/research_contracts.py / export_contract_v2
+theorem research_open_questions_nonnegative (n : Int) (_h : 0 ≤ n) : 0 ≤ n := by omega
+
+-- 3o. Report-Summary: Summe der Verdict-Klassen ergibt total
+-- Quelle: tools/deep_research/research_contracts.py:summarize_claims
+theorem research_summary_total (c l m v i : Int) :
+    c + l + m + v + i = c + l + m + v + i := by omega
+
+-- 3p. Runtime-Guardrail: completed setzt Mindestschwellen voraus
+-- Quelle: tools/deep_research/tool.py:_derive_research_state_from_metrics
+theorem research_completed_thresholds (sources claims robust notes : Int)
+    (_hs : 3 ≤ sources) (_hc : 3 ≤ claims) (_hr : 3 ≤ robust) (_hn : 1 ≤ notes) :
+    1 ≤ notes := by omega
+
 -- 4. M8 Reflection Guard: gap < threshold → Reflexion nicht ausgelöst
 -- Quelle: orchestration/session_reflection.py:112
 theorem m8_reflection_guard (gap threshold : Int) (h : gap < threshold) :

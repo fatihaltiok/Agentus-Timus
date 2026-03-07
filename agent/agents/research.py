@@ -50,12 +50,23 @@ class DeepResearchAgent(BaseAgent):
     # (Original-Logik unverändert)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _effective_report_params(params: dict, current_session_id: Optional[str]) -> dict:
+        effective = dict(params or {})
+        if current_session_id:
+            effective.setdefault("session_id", current_session_id)
+        return effective
+
     async def _call_tool(self, method: str, params: dict) -> dict:
+        if method == "generate_research_report" and self.current_session_id:
+            params = self._effective_report_params(params, self.current_session_id)
         result = await super()._call_tool(method, params)
         if isinstance(result, dict) and "session_id" in result:
             self.current_session_id = result["session_id"]
-        if method == "generate_research_report" and self.current_session_id:
-            params.setdefault("session_id", self.current_session_id)
+        elif isinstance(result, dict):
+            metadata = result.get("metadata")
+            if isinstance(metadata, dict) and metadata.get("session_id"):
+                self.current_session_id = metadata["session_id"]
         return result
 
     # ------------------------------------------------------------------

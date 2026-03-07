@@ -1,6 +1,6 @@
-# tools/deep_research/tool.py (VERSION 5.0 - ACADEMIC EXCELLENCE)
+# tools/deep_research/tool.py (VERSION 8.0 - EVIDENCE ENGINE)
 """
-Timus Deep Research Engine v5.0 - Academic Excellence Edition
+Timus Deep Research v8.0 - Evidence Engine
 
 NEUE FEATURES:
 - These-Antithese-Synthese Framework für dialektische Analyse
@@ -10,6 +10,9 @@ NEUE FEATURES:
 - Kritische Analyse & Limitationen
 - Konfliktanalyse bei widersprüchlichen Befunden
 - Executive Summary & Methodik-Dokumentation
+- Claim -> Evidence -> Verdict
+- Profile-aware Verifikation
+- Runtime-Guardrails mit partial_research
 
 AUTOR: Timus Development Team
 DATUM: Januar 2026
@@ -44,6 +47,19 @@ from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 
 # Interne Imports
 from tools.planner.planner_helpers import call_tool_internal
+from tools.deep_research.research_contracts import (
+    build_domain_scorecards,
+    ClaimRecord,
+    ClaimVerdict,
+    EvidenceRecord,
+    EvidenceStance,
+    build_source_record_from_legacy,
+    compute_claim_verdict,
+    infer_domain_from_text,
+    initial_research_contract,
+    sort_claims_for_report,
+    summarize_claims,
+)
 
 # Numpy für Embeddings - optional
 try:
@@ -150,6 +166,45 @@ def _build_report_artifacts(*paths: Optional[str]) -> List[Dict[str, Any]]:
     return artifacts
 
 
+def _merge_report_images(
+    base_images: List[Any],
+    image_paths: Optional[List[str]] = None,
+    image_captions: Optional[List[str]] = None,
+    image_sections: Optional[List[str]] = None,
+) -> List[Any]:
+    merged = list(base_images or [])
+    if not image_paths:
+        return merged
+
+    from tools.deep_research.image_collector import ImageResult
+
+    captions = image_captions or []
+    sections = image_sections or []
+    for idx, raw_path in enumerate(image_paths):
+        path = str(raw_path or "").strip()
+        if not path:
+            continue
+        caption = (
+            str(captions[idx]).strip()
+            if idx < len(captions) and str(captions[idx]).strip()
+            else f"Visual {idx + 1}"
+        )
+        section_title = (
+            str(sections[idx]).strip()
+            if idx < len(sections) and str(sections[idx]).strip()
+            else caption
+        )
+        merged.append(
+            ImageResult(
+                local_path=path,
+                caption=caption,
+                section_title=section_title,
+                source="creative",
+            )
+        )
+    return merged
+
+
 # ==============================================================================
 # ENUMS & DATENSTRUKTUREN
 # ==============================================================================
@@ -254,6 +309,7 @@ class DeepResearchSession:
         self.methodology_notes: List[str] = []
         self.limitations: List[str] = []
         self.research_metadata: Dict[str, Any] = {}
+        self.contract_v2 = initial_research_contract(query)
 
     def add_node(self, node: ResearchNode):
         """Fügt einen Node zum Recherche-Baum hinzu."""
@@ -269,6 +325,296 @@ class DeepResearchSession:
 
             bias_key = node.quality_metrics.bias_level.value
             self.bias_summary[bias_key] = self.bias_summary.get(bias_key, 0) + 1
+
+    def export_contract_v2(self) -> Dict[str, Any]:
+        """Exportiert den neuen allgemeinen Research-Vertrag.
+
+        Die Runtime hängt heute noch nicht vollständig an diesem Vertrag.
+        Der Export dient als stabiler Migrationsanker für die nächsten Phasen.
+        """
+        if self.contract_v2 is None:
+            self.contract_v2 = initial_research_contract(self.query)
+        sources = []
+        seen_urls: set[str] = set()
+
+        for idx, node in enumerate(self.research_tree, start=1):
+            canonical = self._get_canonical_url(node.url)
+            if not canonical or canonical in seen_urls:
+                continue
+            seen_urls.add(canonical)
+            meta = {
+                "has_methodology": (
+                    bool(getattr(node, "quality_metrics", None))
+                    and getattr(node.quality_metrics, "citation_score", 0.0) > 0.0
+                ),
+            }
+            sources.append(
+                build_source_record_from_legacy(
+                    source_id=f"src-web-{idx}",
+                    url=canonical,
+                    title=node.title or canonical,
+                    metadata=meta,
+                )
+            )
+
+        for idx, claim in enumerate(self.unverified_claims, start=1):
+            raw_url = str(claim.get("source") or "").strip()
+            canonical = self._get_canonical_url(raw_url)
+            if not canonical or canonical in seen_urls:
+                continue
+            seen_urls.add(canonical)
+            meta = {
+                "is_official": bool(claim.get("is_official")),
+                "has_transcript": bool(claim.get("transcript") or claim.get("key_quote")),
+                "published_at": str(claim.get("published_date") or ""),
+            }
+            sources.append(
+                build_source_record_from_legacy(
+                    source_id=f"src-claim-{idx}",
+                    url=canonical,
+                    title=str(claim.get("source_title") or canonical),
+                    declared_type=str(claim.get("source_type") or ""),
+                    metadata=meta,
+                )
+            )
+
+        existing_sources_by_id = {
+            source.source_id: source for source in getattr(self.contract_v2, "sources", []) or []
+        }
+        for source in sources:
+            existing_sources_by_id[source.source_id] = source
+        self.contract_v2.sources = list(existing_sources_by_id.values())
+
+        legacy_claims = self._build_contract_claims_v2(self.contract_v2.sources)
+        existing_claims_by_id = {
+            claim.claim_id: claim for claim in getattr(self.contract_v2, "claims", []) or []
+        }
+        for claim in legacy_claims:
+            existing_claims_by_id.setdefault(claim.claim_id, claim)
+        self.contract_v2.claims = list(existing_claims_by_id.values())
+
+        legacy_evidences = self._build_contract_evidences_v2(self.contract_v2.claims, self.contract_v2.sources)
+        existing_evidences_by_id = {
+            evidence.evidence_id: evidence for evidence in getattr(self.contract_v2, "evidences", []) or []
+        }
+        for evidence in legacy_evidences:
+            existing_evidences_by_id.setdefault(evidence.evidence_id, evidence)
+        self.contract_v2.evidences = list(existing_evidences_by_id.values())
+
+        self._refresh_contract_v2_verdicts()
+        self.contract_v2.open_questions = list(dict.fromkeys(self.limitations))
+        return self.contract_v2.to_dict()
+
+    def _refresh_contract_v2_verdicts(self) -> None:
+        source_by_id = {source.source_id: source for source in self.contract_v2.sources}
+        evidences_by_claim: Dict[str, List[EvidenceRecord]] = {}
+        for evidence in self.contract_v2.evidences:
+            evidences_by_claim.setdefault(evidence.claim_id, []).append(evidence)
+        for claim in self.contract_v2.claims:
+            claim_evidences = evidences_by_claim.get(claim.claim_id, [])
+            claim.verdict = compute_claim_verdict(
+                self.contract_v2.question.profile,
+                claim_evidences,
+                [source_by_id[e.source_id] for e in claim_evidences if e.source_id in source_by_id],
+            )
+            if claim.verdict == ClaimVerdict.CONFIRMED:
+                claim.confidence = 0.9
+            elif claim.verdict == ClaimVerdict.LIKELY:
+                claim.confidence = 0.7
+            elif claim.verdict == ClaimVerdict.VENDOR_CLAIM_ONLY:
+                claim.confidence = 0.45
+            elif claim.verdict == ClaimVerdict.CONTESTED:
+                claim.confidence = 0.35
+            elif claim.verdict == ClaimVerdict.MIXED_EVIDENCE:
+                claim.confidence = 0.4
+            else:
+                claim.confidence = 0.2
+
+    def _materialize_verification_claims_v2(
+        self,
+        grouped_facts: List[List[Dict[str, Any]]],
+        verified: List[Dict[str, Any]],
+        unverified: List[Dict[str, Any]],
+        conflicts: List[Dict[str, Any]],
+    ) -> None:
+        source_records: Dict[str, Any] = {
+            source.source_id: source for source in getattr(self.contract_v2, "sources", []) or []
+        }
+        claim_records: List[ClaimRecord] = []
+        evidence_records: List[EvidenceRecord] = []
+        source_id_by_url: Dict[str, str] = {}
+
+        for idx, group in enumerate(grouped_facts, start=1):
+            if not group:
+                continue
+            main_fact = group[0]
+            fact_text = str(main_fact.get("fact") or "").strip()
+            if not fact_text:
+                continue
+
+            candidate_output = next(
+                (item for item in verified if item.get("fact") == fact_text),
+                None,
+            )
+            if candidate_output is None:
+                candidate_output = next(
+                    (item for item in unverified if item.get("fact") == fact_text),
+                    None,
+                )
+
+            claim_id = f"claim-runtime-{idx}"
+            claim = ClaimRecord(
+                claim_id=claim_id,
+                question_id=self.contract_v2.question.question_id,
+                domain=infer_domain_from_text(fact_text),
+                subject=self.query[:120],
+                claim_text=fact_text,
+                claim_type="runtime_fact_group",
+                notes=f"source_count={len({f.get('source_url') for f in group if f.get('source_url')})}",
+            )
+
+            if candidate_output and candidate_output.get("status") == "verified_multiple_methods":
+                claim.confidence = 0.95
+            elif candidate_output and candidate_output.get("status") in {"verified", "tentatively_verified"}:
+                claim.confidence = float(candidate_output.get("confidence_score_numeric", 0.7))
+            else:
+                claim.confidence = 0.2
+
+            for ev_idx, fact in enumerate(group, start=1):
+                raw_url = str(fact.get("source_url") or "").strip()
+                canonical = self._get_canonical_url(raw_url)
+                if not canonical:
+                    continue
+                source_id = source_id_by_url.get(canonical)
+                if not source_id:
+                    source_id = f"src-runtime-{idx}-{ev_idx}"
+                    source_id_by_url[canonical] = source_id
+                    source_records[source_id] = build_source_record_from_legacy(
+                        source_id=source_id,
+                        url=canonical,
+                        title=str(fact.get("source_title") or canonical),
+                        declared_type=str(fact.get("source_type") or ""),
+                        metadata={
+                            "has_methodology": True,
+                            "published_at": str(fact.get("published_date") or ""),
+                        },
+                    )
+                claim.supports.append(source_id)
+                evidence_records.append(
+                    EvidenceRecord(
+                        evidence_id=f"ev-runtime-{idx}-{ev_idx}",
+                        claim_id=claim_id,
+                        source_id=source_id,
+                        stance=EvidenceStance.SUPPORTS,
+                        excerpt=str(fact.get("source_quote") or fact_text[:280]),
+                    )
+                )
+
+            claim_records.append(claim)
+
+        for idx, conflict in enumerate(conflicts, start=1):
+            fact_text = str(conflict.get("fact") or "").strip()
+            if not fact_text:
+                continue
+            matching = next((claim for claim in claim_records if claim.claim_text == fact_text), None)
+            if matching is None:
+                continue
+            conflict_source_id = f"src-conflict-{idx}"
+            source_records[conflict_source_id] = build_source_record_from_legacy(
+                source_id=conflict_source_id,
+                url=f"https://timus.local/conflicts/{idx}",
+                title=f"Verification conflict #{idx}",
+                declared_type="analysis",
+                metadata={"has_methodology": True},
+            )
+            matching.contradicts.append(conflict_source_id)
+            matching.unknowns.append("Konflikt zwischen Verifikationsmethoden")
+            matching.notes = (matching.notes + f"; conflict_{idx}=confidence_disagreement").strip("; ")
+            evidence_records.append(
+                EvidenceRecord(
+                    evidence_id=f"ev-conflict-{idx}",
+                    claim_id=matching.claim_id,
+                    source_id=conflict_source_id,
+                    stance=EvidenceStance.CONTRADICTS,
+                    excerpt=str(conflict.get("note") or "Verification conflict"),
+                )
+            )
+
+        self.contract_v2.sources = list(source_records.values())
+        self.contract_v2.claims = claim_records
+        self.contract_v2.evidences = evidence_records
+        self._refresh_contract_v2_verdicts()
+
+    def _build_contract_claims_v2(self, sources: List[Any]) -> List[ClaimRecord]:
+        claims: List[ClaimRecord] = []
+
+        for idx, fact in enumerate(self.verified_facts, start=1):
+            text = str(fact.get("fact") or "").strip()
+            if not text:
+                continue
+            source_url = str(fact.get("example_source_url") or "").strip()
+            source_id = next((src.source_id for src in sources if src.url == source_url), "")
+            claims.append(
+                ClaimRecord(
+                    claim_id=f"claim-verified-{idx}",
+                    question_id=self.contract_v2.question.question_id,
+                    domain=infer_domain_from_text(text),
+                    subject=self.query[:120],
+                    claim_text=text,
+                    claim_type="verified_fact",
+                    verdict=ClaimVerdict.LIKELY,
+                    supports=[source_id] if source_id else [],
+                    notes=f"legacy_status={fact.get('status', '')}",
+                )
+            )
+
+        for idx, claim in enumerate(self.unverified_claims, start=1):
+            text = str(claim.get("fact") or "").strip()
+            if not text:
+                continue
+            source_url = str(claim.get("source") or "").strip()
+            source_id = next((src.source_id for src in sources if src.url == self._get_canonical_url(source_url)), "")
+            source_type_hint = str(claim.get("source_type") or "")
+            domain = infer_domain_from_text(f"{text} {source_type_hint}")
+            claims.append(
+                ClaimRecord(
+                    claim_id=f"claim-unverified-{idx}",
+                    question_id=self.contract_v2.question.question_id,
+                    domain=domain,
+                    subject=self.query[:120],
+                    claim_text=text,
+                    claim_type="legacy_claim",
+                    verdict=ClaimVerdict.INSUFFICIENT_EVIDENCE,
+                    supports=[source_id] if source_id else [],
+                    unknowns=["Noch nicht durch mehrere Quellen bestätigt"],
+                    notes=f"source_type={claim.get('source_type', '')}",
+                )
+            )
+
+        return claims
+
+    def _build_contract_evidences_v2(
+        self,
+        claims: List[ClaimRecord],
+        sources: List[Any],
+    ) -> List[EvidenceRecord]:
+        evidence_records: List[EvidenceRecord] = []
+        source_id_by_url = {source.url: source.source_id for source in sources}
+
+        for claim in claims:
+            source_id = claim.supports[0] if claim.supports else ""
+            if not source_id:
+                continue
+            evidence_records.append(
+                EvidenceRecord(
+                    evidence_id=f"ev-{claim.claim_id}",
+                    claim_id=claim.claim_id,
+                    source_id=source_id,
+                    stance=EvidenceStance.SUPPORTS,
+                    excerpt=claim.claim_text[:280],
+                )
+            )
+        return evidence_records
 
     def _get_canonical_url(self, url: str) -> str:
         """Normalisiert URLs für Deduplizierung."""
@@ -696,6 +1042,7 @@ async def _deep_verify_facts(session: DeepResearchSession, verification_mode: st
     session.verified_facts = verified
     session.unverified_claims = unverified
     session.conflicting_info = conflicts
+    session._materialize_verification_claims_v2(grouped, verified, unverified, conflicts)
 
     logger.info(
         f"✅ Verifikation abgeschlossen: {len(verified)} verifiziert "
@@ -1424,6 +1771,13 @@ async def _group_similar_facts(
 
 def _get_research_metadata_summary(session: DeepResearchSession) -> Dict[str, Any]:
     """Erstellt Metadaten-Zusammenfassung."""
+    contract_export = session.export_contract_v2()
+    claims = contract_export.get("claims", [])
+    confirmed_count = sum(1 for claim in claims if claim.get("verdict") == "confirmed")
+    likely_count = sum(1 for claim in claims if claim.get("verdict") == "likely")
+    mixed_count = sum(1 for claim in claims if claim.get("verdict") in {"mixed_evidence", "contested"})
+    vendor_only_count = sum(1 for claim in claims if claim.get("verdict") == "vendor_claim_only")
+    insufficient_count = sum(1 for claim in claims if claim.get("verdict") == "insufficient_evidence")
     return {
         "original_query": session.query,
         "focus_areas": session.focus_areas,
@@ -1433,9 +1787,135 @@ def _get_research_metadata_summary(session: DeepResearchSession) -> Dict[str, An
         "verified_facts_count": len(session.verified_facts),
         "unverified_claims_count": len(session.unverified_claims),
         "conflicts_count": len(session.conflicting_info),
+        "contract_claims_count": len(claims),
+        "confirmed_claims_count": confirmed_count,
+        "likely_claims_count": likely_count,
+        "mixed_claims_count": mixed_count,
+        "vendor_only_claims_count": vendor_only_count,
+        "insufficient_claims_count": insufficient_count,
         "source_quality_distribution": session.source_quality_summary,
         "bias_distribution": session.bias_summary,
         "thesis_analyses_count": len(session.thesis_analyses)
+    }
+
+
+def _claim_verdict_label(verdict: str) -> str:
+    return {
+        "confirmed": "Confirmed",
+        "likely": "Likely",
+        "mixed_evidence": "Mixed Evidence",
+        "contested": "Contested",
+        "vendor_claim_only": "Vendor Claim Only",
+        "insufficient_evidence": "Insufficient Evidence",
+    }.get(verdict, verdict.replace("_", " ").title())
+
+
+def _source_flag_string(source: Any) -> str:
+    flags = []
+    if getattr(source, "is_primary", False):
+        flags.append("primary")
+    if getattr(source, "is_official", False):
+        flags.append("official")
+    if getattr(source, "has_transcript", False):
+        flags.append("transcript")
+    if getattr(source, "has_methodology", False):
+        flags.append("methodology")
+    return ", ".join(flags) if flags else "-"
+
+
+def _derive_research_state_from_metrics(
+    *,
+    quality_gate_passed: bool,
+    source_count: int,
+    claim_count: int,
+    robust_claim_count: int,
+    methodology_notes_count: int,
+) -> str:
+    if (
+        quality_gate_passed
+        and source_count >= 3
+        and claim_count >= 3
+        and robust_claim_count >= 3
+        and methodology_notes_count >= 1
+    ):
+        return "completed"
+    return "partial_research"
+
+
+def _build_research_telemetry(session: DeepResearchSession) -> Dict[str, Any]:
+    session.export_contract_v2()
+    contract = session.contract_v2
+    claims = list(contract.claims)
+    sources = list(contract.sources)
+    claim_summary = summarize_claims(claims)
+    domain_scorecards = build_domain_scorecards(claims)
+    source_tiers: Dict[str, int] = {}
+    source_types: Dict[str, int] = {}
+    for source in sources:
+        source_tiers[source.tier.value] = source_tiers.get(source.tier.value, 0) + 1
+        source_types[source.source_type.value] = source_types.get(source.source_type.value, 0) + 1
+    return {
+        "claim_summary": claim_summary,
+        "domain_scorecards": domain_scorecards,
+        "source_tiers": source_tiers,
+        "source_types": source_types,
+        "evidence_count": len(contract.evidences),
+        "open_questions_count": len(contract.open_questions),
+        "methodology_notes_count": len(session.methodology_notes),
+        "limitations_count": len(session.limitations),
+        "primary_sources_count": sum(1 for source in sources if source.is_primary),
+        "official_sources_count": sum(1 for source in sources if source.is_official),
+        "transcript_sources_count": sum(1 for source in sources if source.has_transcript),
+        "source_count": len(sources),
+    }
+
+
+def _assess_research_completion(
+    session: DeepResearchSession,
+    *,
+    quality_gate_passed: bool,
+    fallback_triggered: bool,
+) -> Dict[str, Any]:
+    telemetry = _build_research_telemetry(session)
+    claim_summary = telemetry["claim_summary"]
+    robust_claim_count = int(claim_summary.get("confirmed", 0)) + int(claim_summary.get("likely", 0))
+    criteria = {
+        "quality_gate_passed": bool(quality_gate_passed),
+        "minimum_sources_met": int(telemetry["source_count"]) >= 3,
+        "minimum_claims_met": int(claim_summary.get("total", 0)) >= 3,
+        "minimum_robust_claims_met": robust_claim_count >= 3,
+        "methodology_recorded": int(telemetry["methodology_notes_count"]) >= 1,
+    }
+    state = _derive_research_state_from_metrics(
+        quality_gate_passed=criteria["quality_gate_passed"],
+        source_count=int(telemetry["source_count"]),
+        claim_count=int(claim_summary.get("total", 0)),
+        robust_claim_count=robust_claim_count,
+        methodology_notes_count=int(telemetry["methodology_notes_count"]),
+    )
+    stop_reasons: List[str] = []
+    if not criteria["quality_gate_passed"]:
+        stop_reasons.append("quality_gate_not_met")
+    if not criteria["minimum_sources_met"]:
+        stop_reasons.append("insufficient_source_coverage")
+    if not criteria["minimum_claims_met"]:
+        stop_reasons.append("insufficient_claim_coverage")
+    if not criteria["minimum_robust_claims_met"]:
+        stop_reasons.append("insufficient_robust_claims")
+    if not criteria["methodology_recorded"]:
+        stop_reasons.append("methodology_not_recorded")
+    if telemetry["open_questions_count"] > 0:
+        stop_reasons.append("open_questions_present")
+    if claim_summary.get("contested", 0) or claim_summary.get("mixed_evidence", 0):
+        stop_reasons.append("conflicting_claims_present")
+    return {
+        "state": state,
+        "criteria": criteria,
+        "stop_reasons": stop_reasons,
+        "robust_claim_count": robust_claim_count,
+        "fallback_triggered": bool(fallback_triggered),
+        "open_questions_count": int(telemetry["open_questions_count"]),
+        "telemetry": telemetry,
     }
 
 
@@ -1495,38 +1975,51 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
     """
     Erstellt einen druckreifen Report im wissenschaftlichen Stil.
 
-    NEU v5.0:
-    - Executive Summary
-    - Methodik-Sektion
-    - These-Antithese-Synthese Framework
-    - Quellenqualitäts-Analyse
-    - Kritische Analyse
-    - Limitationen
-    - Proper Citations
+    Phase 5:
+    - Executive Verdict Table
+    - Domain Scorecards
+    - Claim Register
+    - Conflicts & Unknowns
+    - Quellenanhang mit Tier/Typ/Bias
     """
     now = datetime.now().strftime('%d.%m.%Y %H:%M')
+    session.export_contract_v2()
+    contract = session.contract_v2
     meta = _get_research_metadata_summary(session)
+    claims = sort_claims_for_report(list(contract.claims))
+    claim_summary = summarize_claims(claims)
+    scorecards = build_domain_scorecards(claims)
+    source_by_id = {source.source_id: source for source in contract.sources}
+    confirmed_claims = meta["confirmed_claims_count"]
+    likely_claims = meta["likely_claims_count"]
+    mixed_claims = meta["mixed_claims_count"]
+    vendor_only_claims = meta["vendor_only_claims_count"]
+    insufficient_claims = meta["insufficient_claims_count"]
+    contract_claims = meta["contract_claims_count"]
 
-    lines = []
+    lines: List[str] = []
 
-    # ==================== TITELSEITE ====================
     lines.extend([
-        f"# Tiefenrecherche-Bericht",
+        "# Tiefenrecherche-Bericht",
         f"## {session.query}",
         "",
         "---",
         "",
         f"**Datum:** {now}",
-        f"**Research Engine:** Timus Deep Research v5.0",
+        "**Research Engine:** Timus Deep Research v8.0 - Evidence Engine",
         f"**Analysierte Quellen:** {meta['total_sources_processed']}",
-        f"**Verifizierte Fakten:** {meta['verified_facts_count']} / {meta['total_facts_extracted']}",
-        ""
+        (
+            f"**Claim-Status:** {confirmed_claims} confirmed, {likely_claims} likely, "
+            f"{mixed_claims} mixed/contested, {vendor_only_claims} vendor-only, "
+            f"{insufficient_claims} insufficient"
+        ),
+        "",
     ])
 
     if session.focus_areas:
         lines.extend([
             f"**Fokusthemen:** {', '.join(session.focus_areas)}",
-            ""
+            "",
         ])
 
     lines.extend([
@@ -1535,186 +2028,160 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
         "## Inhaltsverzeichnis",
         "",
         "1. [Executive Summary](#executive-summary)",
-        "2. [Methodik](#methodik)",
-        "3. [Kern-Erkenntnisse](#kern-erkenntnisse)",
-        "4. [These-Antithese-Synthese Analysen](#these-antithese-synthese-analysen)",
-        "5. [Quellenqualitäts-Analyse](#quellenqualitäts-analyse)",
-        "6. [Kritische Diskussion](#kritische-diskussion)",
-        "7. [Limitationen & Unsicherheiten](#limitationen--unsicherheiten)",
-        "8. [Schlussfolgerungen](#schlussfolgerungen)",
-        "9. [Quellenverzeichnis](#quellenverzeichnis)",
+        "2. [Executive Verdict Table](#executive-verdict-table)",
+        "3. [Domain Scorecards](#domain-scorecards)",
+        "4. [Methodik](#methodik)",
+        "5. [Claim Register](#claim-register)",
+        "6. [These-Antithese-Synthese Analysen](#these-antithese-synthese-analysen)",
+        "7. [Conflicts & Unknowns](#conflicts--unknowns)",
+        "8. [Quellenqualitäts-Analyse](#quellenqualitäts-analyse)",
+        "9. [Limitationen & Unsicherheiten](#limitationen--unsicherheiten)",
+        "10. [Schlussfolgerungen](#schlussfolgerungen)",
+        "11. [Quellenanhang](#quellenanhang)",
         "",
         "---",
-        ""
-    ])
-
-    # ==================== EXECUTIVE SUMMARY ====================
-    lines.extend([
+        "",
         "## Executive Summary",
-        ""
+        "",
     ])
 
-    if session.verified_facts:
-        summary_text = (
-            f"Diese Tiefenrecherche zum Thema '{session.query}' basiert auf der Analyse von "
-            f"{meta['total_sources_processed']} Quellen. Aus {meta['total_facts_extracted']} extrahierten "
-            f"Fakten konnten {meta['verified_facts_count']} ({(meta['verified_facts_count']/max(meta['total_facts_extracted'], 1)*100):.1f}%) "
-            f"durch mehrere unabhängige Quellen verifiziert werden."
-        )
-
-        lines.append(summary_text)
-        lines.append("")
-
-        # Top 3 Erkenntnisse
-        lines.append("**Zentrale Erkenntnisse:**")
-        lines.append("")
-        for i, fact in enumerate(session.verified_facts[:3], 1):
-            conf_icon = "🟢" if fact.get('confidence') in ['high', 'very_high'] else "🟡"
-            lines.append(f"{i}. {conf_icon} {fact.get('fact')}")
+    if claims:
+        lines.extend([
+            (
+                f"Diese Tiefenrecherche zum Thema '{session.query}' basiert auf der Analyse von "
+                f"{meta['total_sources_processed']} Quellen. Die Claim-Auswertung ergab "
+                f"{confirmed_claims} confirmed, {likely_claims} likely und "
+                f"{mixed_claims + vendor_only_claims} gemischte/noch eingeschränkte Claims "
+                f"bei insgesamt {contract_claims} strukturierten Claims."
+            ),
+            "",
+            "**Zentrale Erkenntnisse:**",
+            "",
+        ])
+        for idx, claim in enumerate(claims[:3], 1):
+            lines.append(f"{idx}. {claim.claim_text} *({_claim_verdict_label(claim.verdict.value)})*")
         lines.append("")
     else:
         lines.extend([
-            "_Keine ausreichend verifizierten Fakten für Executive Summary verfügbar._",
-            ""
+            "_Keine strukturierten Claims für die Executive Summary verfügbar._",
+            "",
         ])
 
-    # Qualitätshinweis
     if session.source_quality_summary:
         excellent_count = session.source_quality_summary.get("excellent", 0)
         good_count = session.source_quality_summary.get("good", 0)
-        high_quality_percent = ((excellent_count + good_count) / meta['total_sources_processed'] * 100) if meta['total_sources_processed'] > 0 else 0
-
+        high_quality_percent = ((excellent_count + good_count) / max(meta["total_sources_processed"], 1) * 100)
         lines.extend([
-            f"**Quellenqualität:** {high_quality_percent:.0f}% der Quellen wurden als 'Excellent' oder 'Good' eingestuft. "
-            f"Die Recherche basiert überwiegend auf {'hochqualitativen' if high_quality_percent > 60 else 'gemischten'} Quellen.",
-            ""
+            f"**Quellenqualität:** {high_quality_percent:.0f}% der Quellen wurden als 'Excellent' oder 'Good' eingestuft.",
+            "",
+        ])
+
+    lines.extend([
+        "---",
+        "",
+        "## Executive Verdict Table",
+        "",
+        "| Verdict | Count | Bedeutung |",
+        "|---------|-------|-----------|",
+        f"| Confirmed | {claim_summary['confirmed']} | Mehrere starke, profilkonforme Evidenzen |",
+        f"| Likely | {claim_summary['likely']} | Gute, aber noch nicht maximale Evidenzbasis |",
+        f"| Mixed / Contested | {claim_summary['mixed_evidence'] + claim_summary['contested']} | Widersprüchliche oder gemischte Evidenz |",
+        f"| Vendor Claim Only | {claim_summary['vendor_claim_only']} | Nur Anbieter-/Eigenclaim |",
+        f"| Insufficient | {claim_summary['insufficient_evidence']} | Noch keine tragfähige Evidenz |",
+        "",
+        "---",
+        "",
+        "## Domain Scorecards",
+        "",
+    ])
+
+    if scorecards:
+        lines.extend([
+            "| Domain | Total | Confirmed | Likely | Mixed | Vendor-only | Insufficient | Avg Confidence |",
+            "|--------|-------|-----------|--------|-------|-------------|--------------|----------------|",
+        ])
+        for row in scorecards:
+            lines.append(
+                f"| {row['domain']} | {row['total']} | {row['confirmed']} | {row['likely']} | "
+                f"{row['mixed']} | {row['vendor_only']} | {row['insufficient']} | {row['avg_confidence']:.2f} |"
+            )
+        lines.append("")
+    else:
+        lines.extend([
+            "_Noch keine Domain-Scorecards verfügbar._",
+            "",
         ])
 
     lines.extend(["---", ""])
 
-    # ==================== METHODIK ====================
     if include_methodology:
         lines.extend([
             "## Methodik",
             "",
             "### Recherche-Ansatz",
             "",
-            "Diese Tiefenrecherche wurde mit folgenden Methoden durchgeführt:",
+            "Diese Tiefenrecherche wurde mit Multi-Query-Websuche, Quellenklassifikation, Claim->Evidence->Verdict-Logik und optionalem Fact-Corroborator durchgeführt.",
             "",
-            "1. **Multi-Query Websuche**",
-            f"   - Initiale Suchqueries: Haupt-Query + {len(session.focus_areas)} Fokusthemen",
-            "   - Suchtiefe: Mehrere Iterationen mit Relevanz-Filtering",
-            "",
-            "2. **Quellenqualitäts-Bewertung** (NEU in v5.0)",
-            "   - Autoritätsscore basierend auf Domain-Typ (.gov, .edu, peer-reviewed)",
-            "   - Bias-Erkennung (politisch & kommerziell)",
-            "   - Transparenz-Check (Autor, Methodik, Publikationsdatum)",
-            "   - Citation-Analyse (Quellenangaben im Text)",
-            "",
-            "3. **Fakten-Extraktion & Verifikation**",
-            "   - LLM-basierte Extraktion strukturierter Fakten",
-            "   - Embedding-basierte Gruppierung ähnlicher Aussagen",
-            f"   - Verifikations-Modus: {'Strikt (≥3 Quellen)' if 'strict' in str(session.research_metadata.get('verification_mode', '')) else 'Moderat (≥2 Quellen)'}",
-            ""
-        ])
-
-        # fact_corroborator erwähnen wenn genutzt
-        if any(f.get("verification_methods") and "fact_corroborator" in f.get("verification_methods", []) for f in session.verified_facts):
-            lines.extend([
-                "4. **Erweiterte Verifikation mit Fact Corroborator**",
-                "   - Zusätzliche unabhängige Verifizierung kritischer Fakten",
-                "   - Consensus-Bildung zwischen internen und externen Verifikationsmethoden",
-                ""
-            ])
-
-        lines.extend([
-            "### Bewertungskriterien",
-            "",
-            "**Confidence-Level:**",
-            "- 🟢 **High/Very High:** Durch ≥3 unabhängige Quellen bestätigt oder durch fact_corroborator verifiziert",
-            "- 🟡 **Medium:** Durch 2 Quellen bestätigt",
-            "- 🔴 **Low:** Nur eine Quelle, unverifiziert",
-            "",
-            "**Quellenqualität:**",
-            "- **Excellent:** .gov, .edu, peer-reviewed journals",
-            "- **Good:** Etablierte Medien, Wikipedia mit Quellenangaben",
-            "- **Medium:** Blogs/Websites mit Quellenangaben",
-            "- **Poor:** Keine Quellenangaben, starker Bias",
+            f"- Verifikations-Modus: {'Strikt (≥3 Quellen)' if 'strict' in str(session.research_metadata.get('verification_mode', '')) else 'Moderat (≥2 Quellen)'}",
+            "- Claim-Verdicts: confirmed, likely, mixed/contested, vendor-only, insufficient",
+            "- Profile-aware Beweismaßstäbe für News, Scientific, Policy, Vendor Comparison usw.",
             "",
             "---",
-            ""
+            "",
         ])
 
-    # ==================== KERN-ERKENNTNISSE ====================
     lines.extend([
-        "## Kern-Erkenntnisse",
+        "## Claim Register",
         "",
-        "### Verifizierte Fakten",
-        ""
+        "### Belastbare Claims",
+        "",
     ])
 
-    if session.verified_facts:
-        lines.append("Die folgenden Aussagen wurden durch multiple unabhängige Quellen verifiziert:")
-        lines.append("")
+    if claims:
+        for idx, claim in enumerate(claims[:15], 1):
+            support_sources = [source_by_id[sid] for sid in claim.supports if sid in source_by_id][:3]
+            contradict_sources = [source_by_id[sid] for sid in claim.contradicts if sid in source_by_id][:3]
+            support_note = ", ".join(
+                f"{urlparse(src.url).netloc or src.title} ({src.tier.value}/{src.source_type.value})"
+                for src in support_sources
+            ) or "-"
+            contrad_note = ", ".join(
+                f"{urlparse(src.url).netloc or src.title} ({src.tier.value}/{src.source_type.value})"
+                for src in contradict_sources
+            ) or "-"
 
-        for i, fact in enumerate(session.verified_facts[:20], 1):
-            conf = fact.get('confidence', 'unknown')
-            conf_icon = "🟢" if conf in ['high', 'very_high'] else ("🟡" if conf == 'medium' else "🔴")
-            status = fact.get('status', 'unknown')
-
-            lines.append(f"### {i}. {conf_icon} {fact.get('fact')}")
+            lines.extend([
+                f"### {idx}. {claim.claim_text}",
+                "",
+                f"- **Verdict:** {_claim_verdict_label(claim.verdict.value)}",
+                f"- **Domain:** {claim.domain}",
+                f"- **Confidence:** {claim.confidence:.2f}",
+                f"- **Unterstützende Evidenzen:** {len(claim.supports)}",
+                f"- **Widersprechende Evidenzen:** {len(claim.contradicts)}",
+                f"- **Beispielquellen:** {support_note}",
+            ])
+            if claim.notes:
+                lines.append(f"- **Hinweise:** {claim.notes}")
+            if claim.unknowns:
+                lines.append(f"- **Offene Punkte:** {', '.join(claim.unknowns[:4])}")
+            if claim.contradicts:
+                lines.append(f"- **Gegenevidenz:** {contrad_note}")
             lines.append("")
-            lines.append(f"- **Status:** {status}")
-            lines.append(f"- **Confidence:** {conf} ({fact.get('confidence_score_numeric', 0):.2f})")
-            lines.append(f"- **Quellen:** {fact.get('source_count', 0)}")
-
-            # Verifikationsmethoden
-            methods = fact.get('verification_methods', ['internal'])
-            if len(methods) > 1:
-                lines.append(f"- **Verifikationsmethoden:** {', '.join(methods)}")
-
-            # Quelle verlinken
-            if fact.get('example_source_url'):
-                lines.append(f"- **Beispiel-Quelle:** [{urlparse(fact['example_source_url']).netloc}]({fact['example_source_url']})")
-
-            # Zitate
-            quotes = fact.get('supporting_quotes', [])
-            if quotes and quotes[0]:
-                lines.append(f"- **Originalzitat:** \"{quotes[0][:200]}...\"")
-
-            lines.append("")
-
     else:
         lines.extend([
-            "_Keine Fakten konnten ausreichend verifiziert werden._",
-            ""
-        ])
-
-    # Unverifizierte Behauptungen
-    if session.unverified_claims:
-        lines.extend([
-            "### ⚠️ Unverifizierte Behauptungen",
+            "_Keine strukturierten Claims verfügbar._",
             "",
-            "Folgende Aussagen konnten nur durch eine Quelle belegt werden und bedürfen weiterer Überprüfung:",
-            ""
         ])
-
-        for i, claim in enumerate(session.unverified_claims[:10], 1):
-            lines.append(f"{i}. {claim.get('fact')} *(1 Quelle, Confidence: {claim.get('confidence', 'low')})*")
-
-        lines.append("")
 
     lines.extend(["---", ""])
 
-    # ==================== THESE-ANTITHESE-SYNTHESE ====================
     if session.thesis_analyses:
         lines.extend([
             "## These-Antithese-Synthese Analysen",
             "",
             "Folgende dialektische Analysen wurden durchgeführt, um ein ausgewogenes Verständnis zu erreichen:",
-            ""
+            "",
         ])
-
         for idx, analysis in enumerate(session.thesis_analyses, 1):
             lines.extend([
                 f"### Analyse #{idx}: {analysis.topic}",
@@ -1725,17 +2192,13 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
                 "",
                 f"**Confidence:** {analysis.thesis_confidence:.2f}",
                 f"**Unterstützende Quellen:** {len(analysis.supporting_sources)}",
-                ""
+                "",
             ])
-
-            # Unterstützende Fakten
             if analysis.supporting_facts:
                 lines.append("**Unterstützende Evidenz:**")
                 for fact in analysis.supporting_facts[:3]:
                     lines.append(f"- {fact.get('fact')}")
                 lines.append("")
-
-            # Antithese
             if analysis.antithesis:
                 lines.extend([
                     "#### 📕 Antithese",
@@ -1744,16 +2207,8 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
                     "",
                     f"**Confidence:** {analysis.antithesis_confidence:.2f}",
                     f"**Widersprechende Quellen:** {len(analysis.contradicting_sources)}",
-                    ""
+                    "",
                 ])
-
-                if analysis.contradicting_facts:
-                    lines.append("**Widersprechende Evidenz:**")
-                    for fact in analysis.contradicting_facts[:3]:
-                        lines.append(f"- {fact.get('fact')}")
-                    lines.append("")
-
-            # Synthese
             if analysis.synthesis:
                 lines.extend([
                     "#### 📗 Synthese",
@@ -1761,293 +2216,172 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
                     f"> {analysis.synthesis}",
                     "",
                     f"**Confidence:** {analysis.synthesis_confidence:.2f}",
-                    ""
+                    "",
                 ])
-
-                if analysis.synthesis_reasoning:
-                    lines.extend([
-                        "**Begründung:**",
-                        "",
-                        analysis.synthesis_reasoning,
-                        ""
-                    ])
-
-            # Limitationen
-            if analysis.limitations:
-                lines.extend([
-                    "**Limitationen dieser Analyse:**",
-                    ""
-                ])
-                for limitation in analysis.limitations:
-                    lines.append(f"- {limitation}")
-                lines.append("")
-
             lines.extend(["---", ""])
 
-    # ==================== QUELLENQUALITÄTS-ANALYSE ====================
-    if session.source_quality_summary or session.bias_summary:
+    conflict_claims = [
+        claim for claim in claims
+        if claim.verdict in {ClaimVerdict.CONTESTED, ClaimVerdict.MIXED_EVIDENCE} or claim.unknowns
+    ]
+    open_questions = list(dict.fromkeys(contract.open_questions))
+    if conflict_claims or session.conflicting_info or open_questions:
         lines.extend([
-            "## Quellenqualitäts-Analyse",
-            ""
+            "## Conflicts & Unknowns",
+            "",
+            "### Konfliktbehaftete Claims",
+            "",
         ])
+        for idx, claim in enumerate(conflict_claims[:10], 1):
+            lines.extend([
+                f"**Claim #{idx}:** {claim.claim_text}",
+                f"- **Verdict:** {_claim_verdict_label(claim.verdict.value)}",
+                f"- **Unknowns:** {', '.join(claim.unknowns[:4]) if claim.unknowns else '-'}",
+                f"- **Hinweise:** {claim.notes or '-'}",
+                "",
+            ])
+        if session.conflicting_info:
+            lines.extend(["### Laufzeit-Konflikte aus der Verifikation", ""])
+            for idx, conflict in enumerate(session.conflicting_info[:5], 1):
+                lines.extend([
+                    f"**Konflikt #{idx}:**",
+                    f"- **Fakt:** {conflict.get('fact', 'N/A')}",
+                    f"- **Interne Confidence:** {conflict.get('internal_confidence', 0):.2f}",
+                    f"- **Corroborator Confidence:** {conflict.get('corroborator_confidence', 0):.2f}",
+                    f"- **Hinweis:** {conflict.get('note', '')}",
+                    "",
+                ])
+        if open_questions:
+            lines.extend(["### Offene Fragen", ""])
+            for idx, item in enumerate(open_questions[:10], 1):
+                lines.append(f"{idx}. {item}")
+            lines.append("")
+        lines.extend(["---", ""])
 
-        # Qualitätsverteilung
+    if session.source_quality_summary or session.bias_summary:
+        lines.extend(["## Quellenqualitäts-Analyse", ""])
         if session.source_quality_summary:
             lines.extend([
                 "### Qualitätsverteilung der Quellen",
                 "",
                 "| Qualitätsstufe | Anzahl | Prozent |",
-                "|----------------|--------|---------|"
+                "|----------------|--------|---------|",
             ])
-
-            total = sum(session.source_quality_summary.values())
+            total = max(1, sum(session.source_quality_summary.values()))
             for quality in ["excellent", "good", "medium", "poor", "unknown"]:
                 count = session.source_quality_summary.get(quality, 0)
-                percent = (count / total * 100) if total > 0 else 0
+                percent = count / total * 100
                 icon = {"excellent": "🟢", "good": "🟡", "medium": "🟠", "poor": "🔴", "unknown": "⚪"}.get(quality, "")
                 lines.append(f"| {icon} {quality.capitalize()} | {count} | {percent:.1f}% |")
-
             lines.append("")
-
-        # Bias-Verteilung
         if session.bias_summary:
             lines.extend([
                 "### Bias-Analyse",
                 "",
                 "| Bias-Level | Anzahl | Prozent |",
-                "|------------|--------|---------|"
+                "|------------|--------|---------|",
             ])
-
-            total = sum(session.bias_summary.values())
+            total = max(1, sum(session.bias_summary.values()))
             for bias in ["none", "low", "medium", "high", "unknown"]:
                 count = session.bias_summary.get(bias, 0)
-                percent = (count / total * 100) if total > 0 else 0
+                percent = count / total * 100
                 lines.append(f"| {bias.capitalize()} | {count} | {percent:.1f}% |")
-
             lines.append("")
-
-            # Interpretation
-            high_bias_count = session.bias_summary.get("high", 0) + session.bias_summary.get("medium", 0)
-            if high_bias_count > 0:
-                lines.extend([
-                    f"⚠️ **Hinweis:** {high_bias_count} Quellen zeigen mittleren bis hohen Bias. ",
-                    "Die Schlussfolgerungen sollten unter Berücksichtigung möglicher Voreingenommenheit interpretiert werden.",
-                    ""
-                ])
-
         lines.extend(["---", ""])
 
-    # ==================== KRITISCHE DISKUSSION ====================
-    if session.conflicting_info:
-        lines.extend([
-            "## Kritische Diskussion",
-            "",
-            "### Widersprüchliche Befunde",
-            "",
-            "Folgende Widersprüche wurden identifiziert:",
-            ""
-        ])
-
-        for i, conflict in enumerate(session.conflicting_info[:5], 1):
-            lines.extend([
-                f"**Konflikt #{i}:**",
-                f"- **Fakt:** {conflict.get('fact', 'N/A')}",
-                f"- **Interne Confidence:** {conflict.get('internal_confidence', 0):.2f}",
-                f"- **Corroborator Confidence:** {conflict.get('corroborator_confidence', 0):.2f}",
-                f"- **Hinweis:** {conflict.get('note', '')}",
-                ""
-            ])
-
-        lines.extend(["---", ""])
-
-    # ==================== LIMITATIONEN ====================
     lines.extend([
         "## Limitationen & Unsicherheiten",
         "",
         "Diese Recherche unterliegt folgenden Limitationen:",
         "",
-        f"1. **Quellenabdeckung:** Die Analyse basiert auf {meta['total_sources_processed']} Quellen. "
-        "Relevante Informationen könnten in nicht erfassten Quellen vorhanden sein.",
-        ""
+        f"1. **Quellenabdeckung:** Die Analyse basiert auf {meta['total_sources_processed']} Quellen.",
+        "",
     ])
-
-    # Qualitäts-basierte Limitationen
     poor_count = session.source_quality_summary.get("poor", 0)
     if poor_count > 0:
-        poor_percent = (poor_count / meta['total_sources_processed'] * 100) if meta['total_sources_processed'] > 0 else 0
+        poor_percent = (poor_count / max(meta["total_sources_processed"], 1) * 100)
         lines.extend([
-            f"2. **Quellenqualität:** {poor_percent:.0f}% der Quellen wurden als 'Poor' eingestuft, "
-            "was die Zuverlässigkeit einiger Fakten einschränkt.",
-            ""
+            f"2. **Quellenqualität:** {poor_percent:.0f}% der Quellen wurden als 'Poor' eingestuft.",
+            "",
         ])
-
-    # Verifizierungs-Limitationen
-    unverified_percent = (meta['unverified_claims_count'] / max(meta['total_facts_extracted'], 1) * 100)
-    if unverified_percent > 30:
+    if meta["unverified_claims_count"] > 0:
         lines.extend([
-            f"3. **Verifizierung:** {unverified_percent:.0f}% der extrahierten Fakten konnten nicht "
-            "durch mehrere Quellen verifiziert werden.",
-            ""
+            f"3. **Noch offene Claims:** {meta['unverified_claims_count']} extrahierte Aussagen konnten nicht in confirmed/likely Claims überführt werden.",
+            "",
         ])
-
-    # Thesen-Limitationen
-    if session.thesis_analyses:
-        all_limitations = []
-        for analysis in session.thesis_analyses:
-            all_limitations.extend(analysis.limitations)
-
-        if all_limitations:
-            lines.append("4. **Analysespezifische Limitationen:**")
-            for limitation in list(set(all_limitations))[:5]:  # Dedupliziert
-                lines.append(f"   - {limitation}")
-            lines.append("")
-
+    if open_questions:
+        lines.extend([
+            f"4. **Offene Fragen:** {len(open_questions)} Punkte bleiben explizit offen.",
+            "",
+        ])
     lines.extend([
-        "5. **Zeitpunkt:** Diese Recherche wurde zum angegebenen Datum durchgeführt. "
-        "Neuere Entwicklungen sind möglicherweise nicht berücksichtigt.",
+        "5. **Zeitpunkt:** Diese Recherche wurde zum angegebenen Datum durchgeführt.",
         "",
         "---",
-        ""
-    ])
-
-    # ==================== SCHLUSSFOLGERUNGEN ====================
-    lines.extend([
+        "",
         "## Schlussfolgerungen",
-        ""
+        "",
     ])
 
-    if session.verified_facts:
-        verification_rate = (meta['verified_facts_count'] / max(meta['total_facts_extracted'], 1) * 100)
-
-        conclusion_text = (
-            f"Diese Tiefenrecherche zum Thema '{session.query}' liefert ein fundiertes Verständnis "
-            f"basierend auf {meta['total_sources_processed']} analysierten Quellen. "
-            f"Mit einer Verifizierungsrate von {verification_rate:.1f}% (durch multiple Quellen bestätigt) "
-            f"bietet die Recherche {'eine solide' if verification_rate > 50 else 'eine vorläufige'} Grundlage "
-            "für weitere Analysen."
-        )
-
-        lines.append(conclusion_text)
-        lines.append("")
-
-        # Haupt-Schlussfolgerungen
+    if claims:
+        claim_reliability_rate = ((confirmed_claims + likely_claims) / max(contract_claims, 1) * 100)
+        lines.extend([
+            (
+                f"Diese Tiefenrecherche liefert auf Basis von {meta['total_sources_processed']} Quellen "
+                f"{confirmed_claims + likely_claims} belastbare Claims aus {contract_claims} strukturierten Claims "
+                f"({claim_reliability_rate:.1f}% confirmed/likely)."
+            ),
+            "",
+        ])
         if session.thesis_analyses:
-            lines.append("**Zentrale Schlussfolgerungen:**")
-            lines.append("")
-            for i, analysis in enumerate(session.thesis_analyses, 1):
+            lines.extend(["**Zentrale Schlussfolgerungen:**", ""])
+            for idx, analysis in enumerate(session.thesis_analyses, 1):
                 if analysis.synthesis:
-                    lines.append(f"{i}. **{analysis.topic}:** {analysis.synthesis}")
+                    lines.append(f"{idx}. **{analysis.topic}:** {analysis.synthesis}")
             lines.append("")
-
     else:
         lines.extend([
-            "Die Recherche konnte keine ausreichend verifizierten Fakten liefern. "
-            "Eine weitergehende Analyse mit zusätzlichen Quellen oder alternativen Suchstrategien wird empfohlen.",
-            ""
+            "Die Recherche konnte keine ausreichend belastbaren Claims liefern.",
+            "",
         ])
 
-    lines.extend(["---", ""])
-
-    # ==================== QUELLENVERZEICHNIS ====================
     lines.extend([
-        "## Quellenverzeichnis",
+        "---",
         "",
-        "Alle in dieser Recherche verwendeten Quellen mit Qualitätsbewertung:",
+        "## Quellenanhang",
         "",
-        "| # | Titel | Qualität | Bias | URL |",
-        "|---|-------|----------|------|-----|"
+        "Alle im Research-Contract geführten Quellen mit Tier-, Typ- und Bias-Metadaten:",
+        "",
+        "| # | Tier | Typ | Bias | Flags | Titel | URL |",
+        "|---|------|-----|------|-------|-------|-----|",
     ])
+    for idx, source in enumerate(sorted(contract.sources, key=lambda s: (s.tier.value, s.source_type.value, s.title.lower()))[:40], 1):
+        title_short = source.title[:54] + "..." if len(source.title) > 54 else source.title
+        domain = urlparse(source.url).netloc or source.url
+        lines.append(
+            f"| {idx} | {source.tier.value} | {source.source_type.value} | {source.bias_risk.value} | "
+            f"{_source_flag_string(source)} | {title_short} | [{domain}]({source.url}) |"
+        )
 
-    for i, node in enumerate(session.research_tree[:30], 1):
-        quality = node.quality_metrics.overall_quality.value if node.quality_metrics else "unknown"
-        bias = node.quality_metrics.bias_level.value if node.quality_metrics else "unknown"
-
-        quality_icon = {
-            "excellent": "🟢",
-            "good": "🟡",
-            "medium": "🟠",
-            "poor": "🔴",
-            "unknown": "⚪"
-        }.get(quality, "")
-
-        title_short = node.title[:60] + "..." if len(node.title) > 60 else node.title
-        domain = urlparse(node.url).netloc
-
-        lines.append(f"| {i} | {title_short} | {quality_icon} {quality} | {bias} | [{domain}]({node.url}) |")
-
-    lines.append("")
-
-    # ==================== TREND-QUELLEN ====================
-    arxiv_claims = [c for c in session.unverified_claims if c.get("source_type") == "arxiv"]
-    github_claims = [c for c in session.unverified_claims if c.get("source_type") == "github"]
-    hf_claims = [c for c in session.unverified_claims if c.get("source_type") == "huggingface"]
-    yt_claims_report = [c for c in session.unverified_claims if c.get("source_type") == "youtube"]
-
-    if yt_claims_report or arxiv_claims or github_claims or hf_claims:
-        lines.extend(["### Trend-Quellen (YouTube / ArXiv / GitHub / HuggingFace)", ""])
-        lines.extend([
-            "| # | Typ | Titel | Details | URL |",
-            "|---|-----|-------|---------|-----|"
-        ])
-
-        idx = 1
-        for c in yt_claims_report[:10]:
-            title = c.get("source_title", "")[:50]
-            channel = c.get("channel", "")
-            url = c.get("source", "")
-            lines.append(f"| YT{idx} | YouTube | {title} | Kanal: {channel} | {url} |")
-            idx += 1
-
-        idx = 1
-        for c in arxiv_claims[:10]:
-            title = c.get("source_title", "")[:50]
-            authors = c.get("authors", "")[:40]
-            pub = c.get("published_date", "")
-            url = c.get("source", "")
-            lines.append(f"| A{idx} | ArXiv | {title} | {authors} ({pub}) | {url} |")
-            idx += 1
-
-        idx = 1
-        for c in github_claims[:10]:
-            name = c.get("full_name", c.get("source_title", ""))[:50]
-            stars = c.get("stars", 0)
-            lang = c.get("language", "")
-            url = c.get("source", "")
-            lines.append(f"| GH{idx} | GitHub | {name} | {stars:,}★ {lang} | {url} |")
-            idx += 1
-
-        idx = 1
-        for c in hf_claims[:10]:
-            title = c.get("source_title", "")[:50]
-            hf_type = c.get("hf_type", "model")
-            details = f"Downloads: {c.get('downloads', 0):,}" if hf_type == "model" else f"Upvotes: {c.get('upvotes', 0)}"
-            url = c.get("source", "")
-            lines.append(f"| HF{idx} | HuggingFace | {title} | {details} | {url} |")
-            idx += 1
-
-        lines.append("")
-
-    # ==================== FOOTER ====================
     lines.extend([
+        "",
         "---",
         "",
         "### Über diesen Bericht",
         "",
-        f"Dieser Bericht wurde automatisiert von **Timus Deep Research Engine v5.0** erstellt.",
+        "Dieser Bericht wurde automatisiert von **Timus Deep Research v8.0 - Evidence Engine** erstellt.",
         "",
         "**Features:**",
-        "- Multi-Source Fakten-Verifikation",
+        "- Claim -> Evidence -> Verdict",
+        "- Profile-aware Verifikation",
         "- Quellenqualitäts-Bewertung",
         "- Bias-Erkennung",
-        "- These-Antithese-Synthese Dialektik",
         "- Transparente Methodik",
         "",
         f"**Generiert am:** {now}",
-        ""
     ])
 
     return "\n".join(lines)
-
 
 def _create_text_report(session: DeepResearchSession, include_methodology: bool = True) -> str:
     """Erstellt Plain-Text Version (Markdown-frei)."""
@@ -2203,7 +2537,7 @@ Wichtig: Schreibe NUR den Berichtstext. Kein Meta-Kommentar über den Schreibpro
     header = (
         f"# Recherche-Bericht\n"
         f"## {session.query}\n\n"
-        f"*Erstellt am {now} | Timus Deep Research v7.0 | Basierend auf {source_count} Web-Quellen{extras_info} | {word_count:,} Wörter*\n\n"
+        f"*Erstellt am {now} | Timus Deep Research v8.0 - Evidence Engine | Basierend auf {source_count} Web-Quellen{extras_info} | {word_count:,} Wörter*\n\n"
         f"---\n\n"
     )
     return header + narrative
@@ -2340,7 +2674,7 @@ async def _run_research_pipeline(
 
 @tool(
     name="start_deep_research",
-    description="Startet eine akademische Tiefenrecherche (v7.0) mit Quellenqualitätsbewertung, These-Antithese-Synthese Analyse und erweiterter Fakten-Verifikation.",
+    description="Startet Timus Deep Research v8.0 - Evidence Engine mit Claim->Evidence->Verdict, profilgesteuerter Verifikation und Runtime-Guardrails.",
     parameters=[
         P("query", "string", "Die Hauptsuchanfrage"),
         P("focus_areas", "array", "Optionale Liste von Fokusthemen", required=False),
@@ -2357,9 +2691,9 @@ async def start_deep_research(
     verification_mode: str = "strict"
 ) -> dict:
     """
-    Startet eine akademische Tiefenrecherche (v7.0).
+    Startet Timus Deep Research v8.0 - Evidence Engine.
 
-    NEU in v7.0:
+    Kernmerkmale in v8.0:
     - Language-Detection → US-Location für englische Queries
     - Domain-aware Embedding-Threshold (Tech: 0.72)
     - Auto-Mode: strict + Tech → moderate
@@ -2367,6 +2701,10 @@ async def start_deep_research(
     - ArXiv Threshold 5 + topic-aware Fallback-Score
     - Qualitäts-Gate (verified ≥ 3) + automatischer light-Fallback
     - DrDiagnostics Integration
+    - Claim -> Evidence -> Verdict
+    - Profile-aware Beweismaßstäbe
+    - Report/PDF aus Claim-Registern
+    - partial_research statt falscher Sicherheit
 
     Args:
         query: Die Hauptsuchanfrage
@@ -2381,7 +2719,7 @@ async def start_deep_research(
     current_session = DeepResearchSession(query, focus_areas)
     research_sessions[session_id] = current_session
 
-    # v7.0: Diagnostics initialisieren
+    # v8.0: Diagnostics initialisieren
     try:
         from tools.deep_research.diagnostics import reset as diag_reset
         diag = diag_reset()
@@ -2394,13 +2732,13 @@ async def start_deep_research(
     current_session.research_metadata = {
         "verification_mode": verification_mode,
         "max_depth": max_depth,
-        "version": "7.0"
+        "version": "8.0"
     }
 
     try:
-        logger.info(f"🔬 Starte Deep Research v7.0 Session {session_id}: '{query}'")
+        logger.info(f"🔬 Starte Timus Deep Research v8.0 - Evidence Engine Session {session_id}: '{query}'")
 
-        # v7.0: Pipeline ausführen
+        # v8.0: Pipeline ausführen
         pipe = await _run_research_pipeline(
             query=query,
             session_id=session_id,
@@ -2420,7 +2758,7 @@ async def start_deep_research(
         analysis = pipe["analysis"]
         fallback_triggered = False
 
-        # v7.0: Qualitäts-Gate + automatischer light-Fallback
+        # v8.0: Qualitäts-Gate + automatischer light-Fallback
         quality_ok = verified_count >= 3
         if not quality_ok and verification_mode != "light":
             logger.warning(
@@ -2470,6 +2808,23 @@ async def start_deep_research(
         except Exception:
             pass
 
+        completion_summary = _assess_research_completion(
+            current_session,
+            quality_gate_passed=quality_ok,
+            fallback_triggered=fallback_triggered,
+        )
+        research_state = completion_summary["state"]
+        telemetry = completion_summary["telemetry"]
+        if research_state != "completed":
+            partial_note = (
+                f"Research beendet als partial_research: {', '.join(completion_summary['stop_reasons']) or 'unbekannte_guardrail'}"
+            )
+            if partial_note not in current_session.limitations:
+                current_session.limitations.append(partial_note)
+            current_session.methodology_notes.append(
+                f"Guardrail-State: {research_state} ({', '.join(completion_summary['stop_reasons']) or 'no_stop_reasons'})"
+            )
+
         # PHASE 7: AUTOMATISCHER REPORT (NEU v5.0)
         filepath = None
         try:
@@ -2515,8 +2870,8 @@ async def start_deep_research(
 
         return {
             "session_id": session_id,
-            "status": "completed",
-            "version": "7.0",
+            "status": research_state,
+            "version": "8.0",
             "facts_extracted": len(current_session.all_extracted_facts_raw),
             "verified_count": len(current_session.verified_facts),
             "unverified_count": len(current_session.unverified_claims),
@@ -2527,6 +2882,8 @@ async def start_deep_research(
             "trend_sources_analyzed": trend_count,
             "quality_gate_passed": quality_ok,
             "fallback_triggered": fallback_triggered,
+            "completion_summary": completion_summary,
+            "telemetry": telemetry,
             "source_quality_summary": current_session.source_quality_summary,
             "bias_summary": current_session.bias_summary,
             "analysis": analysis,
@@ -2558,22 +2915,34 @@ async def get_research_status(session_id: str) -> dict:
     if not session:
         raise Exception(f"Session '{session_id}' nicht gefunden.")
 
+    summary = _get_research_metadata_summary(session)
+    completion_summary = _assess_research_completion(
+        session,
+        quality_gate_passed=len(session.verified_facts) >= 3,
+        fallback_triggered=False,
+    )
     return {
         "session_id": session_id,
         "query": session.query,
-        "summary": _get_research_metadata_summary(session)
+        "summary": summary,
+        "status": completion_summary["state"],
+        "completion_summary": completion_summary,
+        "telemetry": completion_summary["telemetry"],
     }
 
 
 @tool(
     name="generate_research_report",
-    description="Erstellt einen druckreifen akademischen Bericht (v5.0) mit Executive Summary, Methodik, These-Antithese-Synthese und Quellenqualitäts-Tabellen.",
+    description="Erstellt einen druckreifen Bericht aus Timus Deep Research v8.0 - Evidence Engine mit Verdict-Table, Scorecards, Claim-Register und Quellenanhang.",
     parameters=[
         P("session_id", "string", "Die Session-ID der Recherche", required=False),
         P("session_id_to_report", "string", "Alternative Session-ID (Alias)", required=False),
         P("format", "string", "Report-Format: markdown oder text", required=False, default="markdown"),
         P("report_format_type", "string", "Alternatives Format-Feld (Alias)", required=False),
         P("include_methodology", "boolean", "Ob Methodik-Sektion enthalten sein soll", required=False, default="true"),
+        P("image_paths", "array", "Optionale Bildpfade fuer den Bericht", required=False),
+        P("image_captions", "array", "Optionale Bildunterschriften passend zu image_paths", required=False),
+        P("image_sections", "array", "Optionale Abschnittstitel passend zu image_paths", required=False),
     ],
     capabilities=["research", "deep_research"],
     category=C.RESEARCH
@@ -2583,17 +2952,20 @@ async def generate_research_report(
     session_id_to_report: Optional[str] = None,
     format: str = "markdown",
     report_format_type: Optional[str] = None,
-    include_methodology: bool = True
+    include_methodology: bool = True,
+    image_paths: Optional[List[str]] = None,
+    image_captions: Optional[List[str]] = None,
+    image_sections: Optional[List[str]] = None,
 ) -> dict:
     """
-    Erstellt einen druckreifen akademischen Bericht (v5.0).
+    Erstellt einen druckreifen Bericht für Timus Deep Research v8.0 - Evidence Engine.
 
-    NEU in v5.0:
-    - Akademischer Stil mit Executive Summary
-    - Methodik-Sektion
-    - These-Antithese-Synthese Framework
-    - Quellenqualitäts-Tabellen
-    - Kritische Diskussion & Limitationen
+    In v8.0:
+    - Executive Verdict Table
+    - Domain Scorecards
+    - Claim Register
+    - Conflicts & Unknowns
+    - Quellenanhang mit Tier/Typ/Bias
 
     Args:
         session_id: Die Session-ID
@@ -2691,6 +3063,18 @@ async def generate_research_report(
         except Exception as e:
             logger.warning(f"Bilder-Sammlung fehlgeschlagen (unkritisch): {e}")
 
+    # Externe Bilder (z.B. vom creative-Agent) integrieren
+    if image_paths:
+        try:
+            images = _merge_report_images(
+                images,
+                image_paths=image_paths,
+                image_captions=image_captions,
+                image_sections=image_sections,
+            )
+        except Exception as e:
+            logger.warning(f"Externe Bildintegration fehlgeschlagen (unkritisch): {e}")
+
     # PDF erstellen
     pdf_filepath = None
     if os.getenv("DEEP_RESEARCH_PDF_ENABLED", "true").lower() == "true":
@@ -2703,7 +3087,7 @@ async def generate_research_report(
             )
             pdf_path = str(base_dir_pdf / f"DeepResearch_PDF_{actual_session_id}.pdf")
             pdf_filepath = ResearchPDFBuilder().build_pdf(
-                narrative_content, images, session, pdf_path
+                content, images, session, pdf_path
             )
             logger.info(f"📄 PDF erstellt: {pdf_filepath}")
         except Exception as e:
@@ -2728,7 +3112,7 @@ async def generate_research_report(
                 f"PDF: {pdf_filepath or 'nicht verfügbar'}."
             ),
             "summary": _get_research_metadata_summary(session),
-            "version": "6.0"
+            "version": "8.0"
         }
     else:
         # Fallback: Content im Response
@@ -2744,6 +3128,5 @@ async def generate_research_report(
             "images_in_pdf": len(images),
             "message": "Bericht erstellt, aber Speichern fehlgeschlagen. Content im Response.",
             "summary": _get_research_metadata_summary(session),
-            "version": "6.0"
+            "version": "8.0"
         }
-
