@@ -16,8 +16,10 @@ Für jedes Video:
 """
 
 import asyncio
+import json
 import logging
 import os
+import re
 from typing import List, Optional, TYPE_CHECKING
 
 from dotenv import load_dotenv
@@ -34,8 +36,13 @@ logger = logging.getLogger("youtube_researcher")
 # --- Modell-Konfiguration ---
 _OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 _OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
+
+# Primär: Qwen3.5-122B analysiert Video direkt (Bild + Audio + Bewegung)
+_VIDEO_MODEL = os.getenv("YOUTUBE_VIDEO_MODEL", "qwen/qwen3.5-122b-a10b")
+# Fallback Text-Analyse (nur Transkript, kein Video-Verständnis)
 _ANALYSIS_MODEL = os.getenv("YOUTUBE_ANALYSIS_MODEL", "qwen/qwen3-235b-a22b")
 
+# Optionale NVIDIA-Thumbnail-Analyse (nur wenn NVIDIA_API_KEY gesetzt)
 _NVIDIA_BASE = "https://integrate.api.nvidia.com/v1"
 _NVIDIA_KEY = os.getenv("NVIDIA_API_KEY", "")
 _VISION_MODEL = os.getenv("YOUTUBE_VISION_MODEL", "nvidia/llama-3.2-90b-vision-instruct")
@@ -93,31 +100,48 @@ class YouTubeResearcher:
             return 0
 
         async def _analyze_video(video: dict) -> bool:
-            """Transkript-Fetch und Thumbnail-Analyse laufen parallel."""
+            """
+            Primär: Qwen2.5-VL analysiert das Video direkt (URL → Video-Verständnis).
+            Fallback: Transkript-Text-Analyse + optionale NVIDIA-Thumbnail-Analyse.
+            """
             try:
+                video_id = video["video_id"]
                 thumbnail_url = video.get("thumbnail_url", "")
 
-                async def _maybe_thumbnail() -> dict:
-                    if thumbnail_url:
-                        return await self._analyze_thumbnail(thumbnail_url, query)
-                    return {}
+                # Primär: Qwen VL schaut das Video direkt an
+                video_facts = await self._analyze_video_with_qwen(video_id, query)
 
-                transcript, visual_info = await asyncio.gather(
-                    self._get_transcript_with_fallback(video["video_id"]),
-                    _maybe_thumbnail(),
-                )
-                if not isinstance(visual_info, dict):
-                    visual_info = {}
+                if video_facts.get("facts"):
+                    # Qwen VL erfolgreich — enthält Fakten + visuelle Beschreibung
+                    text_facts = {k: v for k, v in video_facts.items() if k != "visual_description"}
+                    visual_info = {"visual_description": video_facts.get("visual_description", "")}
+                    logger.info(
+                        f"📺 Qwen-VL: '{video.get('title', video_id)}' "
+                        f"— {len(video_facts.get('facts', []))} Fakten (Video-Analyse)"
+                    )
+                else:
+                    # Fallback: Transkript + NVIDIA-Thumbnail parallel
+                    async def _maybe_thumbnail() -> dict:
+                        if thumbnail_url:
+                            return await self._analyze_thumbnail(thumbnail_url, query)
+                        return {}
 
-                text_facts: dict = {}
-                if transcript and len(transcript) > 100:
-                    text_facts = await self._analyze_text(transcript, query)
+                    transcript, visual_info = await asyncio.gather(
+                        self._get_transcript_with_fallback(video_id),
+                        _maybe_thumbnail(),
+                    )
+                    if not isinstance(visual_info, dict):
+                        visual_info = {}
+
+                    text_facts = {}
+                    if transcript and len(transcript) > 100:
+                        text_facts = await self._analyze_text(transcript, query)
+                    logger.info(
+                        f"📺 Fallback: '{video.get('title', video_id)}' "
+                        f"— {len(text_facts.get('facts', []))} Fakten (Transkript)"
+                    )
 
                 self._add_to_session(session, video, text_facts, visual_info)
-                logger.info(
-                    f"📺 Video analysiert: '{video.get('title', video['video_id'])}' "
-                    f"— {len(text_facts.get('facts', []))} Fakten"
-                )
                 return True
             except Exception as e:
                 logger.warning(f"Video {video['video_id']} übersprungen: {e}")
@@ -183,8 +207,58 @@ class YouTubeResearcher:
         de_text, en_text = await asyncio.gather(_fetch("de"), _fetch("en"))
         return de_text or en_text
 
+    async def _analyze_video_with_qwen(self, video_id: str, query: str) -> dict:
+        """
+        Primär-Analyse: Qwen2.5-VL schaut das YouTube-Video direkt an.
+        Versteht Bild, Bewegung, Sprache und Kontext in einem Schritt.
+        Gibt leeres Dict zurück wenn Qwen VL nicht verfügbar oder fehlschlägt.
+        """
+        if not _OPENROUTER_KEY:
+            return {}
+
+        video_url = f"https://www.youtube.com/watch?v={video_id}"
+        prompt = (
+            f"Analysiere dieses YouTube-Video zum Thema: '{query}'\n"
+            "Extrahiere die wichtigsten Fakten, Argumente und Erkenntnisse aus dem Video.\n"
+            "Beziehe sowohl den gesprochenen Inhalt als auch visuelle Elemente ein "
+            "(Grafiken, Demos, Animationen, eingeblendete Texte).\n"
+            "Antworte auf DEUTSCH, auch wenn das Video auf Englisch ist.\n"
+            "Antworte NUR als JSON:\n"
+            '{"facts": ["Fakt 1", "Fakt 2", ...], '
+            '"key_quote": "wichtigstes Zitat (auf Deutsch)", '
+            '"relevance": 8, '
+            '"visual_description": "was ist visuell zu sehen (Grafiken, Demos, etc.)"}'
+        )
+
+        def _call() -> str:
+            oc = OpenAI(api_key=_OPENROUTER_KEY, base_url=_OPENROUTER_BASE)
+            resp = oc.chat.completions.create(
+                model=_VIDEO_MODEL,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "video_url", "video_url": {"url": video_url}},
+                        {"type": "text", "text": prompt},
+                    ],
+                }],
+                temperature=0.2,
+                max_tokens=800,
+            )
+            return resp.choices[0].message.content or ""
+
+        try:
+            raw = await asyncio.to_thread(_call)
+            m = re.search(r"\{.*\}", raw, re.DOTALL)
+            if m:
+                result = json.loads(m.group())
+                logger.info(f"📺 Qwen-VL direkte Video-Analyse: {video_id} OK")
+                return result
+        except Exception as e:
+            logger.warning(f"📺 Qwen-VL Video-Analyse fehlgeschlagen ({video_id}): {e} — Fallback auf Transkript")
+        return {}
+
     async def _analyze_text(self, text: str, query: str) -> dict:
-        """Extrahiert Fakten aus dem Transkript via LLM (DE + EN Inhalte)."""
+        """Fallback: Extrahiert Fakten aus dem Transkript via Text-LLM (DE + EN Inhalte)."""
         if not _OPENROUTER_KEY:
             logger.warning("OPENROUTER_API_KEY fehlt — Text-Analyse übersprungen")
             return {}
@@ -210,7 +284,6 @@ class YouTubeResearcher:
 
         try:
             raw = await asyncio.to_thread(_call)
-            import json, re
             m = re.search(r"\{.*\}", raw, re.DOTALL)
             if m:
                 return json.loads(m.group())
