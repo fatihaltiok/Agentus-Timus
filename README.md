@@ -185,6 +185,14 @@ AutoGPT und AutoGen sind leistungsfähige Frameworks — aber sie sind primär *
   <em>Autonomy Tab v4.0 — M8 Session-Reflexion · M9 Agent-Blackboard · M10 Proaktive Trigger (Morgen 08:00 + Abend 20:00) · M11 Ziel-Hierarchie · Scorecard 85.8/100 VERY HIGH</em>
 </p>
 
+<p align="center">
+  <img src="docs/screenshots/canvas%20mermaid%20flow.png" alt="Timus Canvas – interaktiver Architektur-Flow mit Agenten-, Memory-, Voice- und Autonomy-Schichten" width="92%">
+</p>
+
+<p align="center">
+  <em>Flow Tab — Architektur-Ansicht mit Dispatcher, AgentRegistry, MCP-Server, Memory-, Voice- und Autonomy-Zonen</em>
+</p>
+
 ---
 
 ## Evolution von Timus

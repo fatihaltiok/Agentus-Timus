@@ -1393,7 +1393,7 @@ Immer: Was passierte → Wann → Warum → Empfehlung
 
 # FORMAT
 Thought: [Snapshot auswerten → Werkzeug wählen → was suchen?]
-Action: {{"method": "get_service_status", "params": {{"service": "timus-mcp"}}}}
+Action: {{"method": "get_service_status", "params": {{"service_name": "timus-mcp"}}}}
 Observation: [...]
 Thought: [Was sagt das Ergebnis? Reicht das oder brauche ich mehr Daten?]
 Action: {{"method": "search_log", "params": {{"log": "timus", "keyword": "ERROR", "lines": 100}}}}

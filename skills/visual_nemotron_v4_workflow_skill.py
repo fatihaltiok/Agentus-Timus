@@ -1,22 +1,21 @@
 import json
 import logging
+import asyncio
+import concurrent.futures
+import inspect
 from typing import Any, Dict, List, Optional
 
-# Tools import – bitte die tatsächlichen Module anpassen, falls nötig
-from tools import (
-    open_url,
+from tools.browser_tool.tool import open_url, dismiss_overlays, click_by_text, get_text
+from tools.mouse_tool.tool import type_text as _type_text_impl
+from tools.screen_contract_tool.tool import verify_screen_condition
+from tools.som_tool.tool import save_annotated_screenshot
+from tools.verification_tool.tool import (
     capture_screen_before_action,
-    dismiss_overlays,
-    analyze_screen_verified,
-    click_by_text,
-    type_text,
     verify_action_result,
-    save_annotated_screenshot,
-    save_screenshot,
-    get_text,
-    verify_screen_condition,
     wait_until_stable,
 )
+from tools.verified_vision_tool.tool import analyze_screen_verified
+from tools.visual_segmentation_tool.tool import save_screenshot
 
 # Logger konfigurieren
 logging.basicConfig(level=logging.INFO)
@@ -27,6 +26,35 @@ skill_name = "visual_nemotron_v4_workflow"
 description = "Workflow-Skill für Visual Nemotron v4: Öffnen, Überprüfen, Interagieren, Verifizieren, Aufräumen."
 version = "1.0"
 author = "Timus (auto-generated)"
+
+
+def _run_sync(func, *args, **kwargs):
+    """Fuehrt Sync- oder Async-Toolfunktionen in einem synchronen Skill robust aus."""
+    if inspect.iscoroutinefunction(func):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(func(*args, **kwargs))
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            return executor.submit(lambda: asyncio.run(func(*args, **kwargs))).result()
+
+    result = func(*args, **kwargs)
+    if inspect.isawaitable(result):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(result)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            return executor.submit(lambda: asyncio.run(func(*args, **kwargs))).result()
+
+    return result
+
+
+def type_text(field_hint: str, text: str) -> Dict[str, Any]:
+    """Kompatibilitaetswrapper fuer den historischen Skillvertrag."""
+    return _run_sync(_type_text_impl, text_to_type=text, press_enter_after=False)
 
 
 def retry_action(
@@ -51,7 +79,7 @@ def retry_action(
         result["attempt_count"] = attempt
         try:
             logger.info(f"Versuch {attempt}/{max_attempts}: {action_func.__name__}")
-            response = action_func(*args, **kwargs)
+            response = _run_sync(action_func, *args, **kwargs)
 
             # Defensive Prüfung auf Fehlermeldungen in der Rückgabe
             if response is None or (isinstance(response, dict) and "error" in response):
@@ -65,7 +93,7 @@ def retry_action(
             result["message"] = str(exc)
             # Screenshot nur bei ersten Fehlversuch speichern
             if attempt == 1:
-                screenshot_path = capture_screen_before_action()
+                screenshot_path = _run_sync(capture_screen_before_action)
                 result["screenshot_path"] = screenshot_path
     return result
 
@@ -113,7 +141,7 @@ def run(params: Dict[str, Any]) -> Dict[str, Any]:
         return result
 
     # Screenshot vor Aktionen
-    pre_action_screenshot = capture_screen_before_action()
+    pre_action_screenshot = _run_sync(capture_screen_before_action)
     result["steps"].append(
         {
             "name": "capture_screen_before_action",
@@ -128,7 +156,7 @@ def run(params: Dict[str, Any]) -> Dict[str, Any]:
     logger.info("Phase 2: Overlays entfernen")
     for attempt in range(1, 3):
         try:
-            dismiss_result = dismiss_overlays(max_secs=8)
+            dismiss_result = _run_sync(dismiss_overlays, max_secs=8)
             if dismiss_result is None or (isinstance(dismiss_result, dict) and "error" in dismiss_result):
                 raise RuntimeError(f"dismiss_overlays fehlgeschlagen: {dismiss_result}")
             logger.info(f"Overlays entfernt (Versuch {attempt})")
@@ -173,7 +201,7 @@ def run(params: Dict[str, Any]) -> Dict[str, Any]:
         logger.info(f"Aktion {idx}: {act_type}")
 
         # Screenshot vor jeder Aktion
-        pre_act_scr = capture_screen_before_action()
+        pre_act_scr = _run_sync(capture_screen_before_action)
 
         # Aktion ausführen
         if act_type == "click":
@@ -204,14 +232,14 @@ def run(params: Dict[str, Any]) -> Dict[str, Any]:
 
         # Ergebnis der Aktion verifizieren
         verify_result = retry_action(verify_action_result, timeout=6)
-        verify_result["screenshot_path"] = capture_screen_before_action()
+        verify_result["screenshot_path"] = _run_sync(capture_screen_before_action)
         result["steps"].append(verify_result)
 
         if not verify_result["success"]:
             # Einmaliger Retry
             logger.info(f"Retry für Aktion {idx} nach Verifizierung")
             retry_verify = retry_action(verify_action_result, timeout=6)
-            retry_verify["screenshot_path"] = capture_screen_before_action()
+            retry_verify["screenshot_path"] = _run_sync(capture_screen_before_action)
             result["steps"].append(retry_verify)
             if not retry_verify["success"]:
                 error_msg = f"Aktion {idx} ({act_type}) konnte nicht verifiziert werden."
@@ -236,7 +264,7 @@ def run(params: Dict[str, Any]) -> Dict[str, Any]:
 
     # Debug‑Screenshots speichern, falls aktiviert
     if save_debug_screenshots:
-        debug_path = save_annotated_screenshot()
+        debug_path = _run_sync(save_annotated_screenshot)
         logger.info(f"Debug‑Screenshot gespeichert unter {debug_path}")
 
     return result

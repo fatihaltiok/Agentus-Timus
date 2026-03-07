@@ -40,8 +40,8 @@ class SystemAgent(BaseAgent):
         try:
             stats_r, mcp_r, disp_r = await asyncio.gather(
                 self._call_tool("get_system_stats", {}),
-                self._call_tool("get_service_status", {"service": "timus-mcp"}),
-                self._call_tool("get_service_status", {"service": "timus-dispatcher"}),
+                self._call_tool("get_service_status", {"service_name": "timus-mcp"}),
+                self._call_tool("get_service_status", {"service_name": "timus-dispatcher"}),
                 return_exceptions=True,
             )
         except Exception as e:

@@ -1,6 +1,6 @@
 ---
 name: email-manager
-description: E-Mail-Skill für Timus: E-Mails lesen (IMAP), senden (SMTP), Credentials-Management und Konfiguration. Use when working with emails.
+description: "E-Mail-Skill für Timus: E-Mails lesen (IMAP), senden (SMTP), Credentials-Management und Konfiguration. Use when working with emails."
 version: 1.0.0
 author: Timus
 ---
