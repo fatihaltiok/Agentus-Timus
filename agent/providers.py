@@ -9,7 +9,7 @@ Enthaelt:
 
 import os
 import logging
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, Set
 from enum import Enum
 
 log = logging.getLogger("TimusAgent-v4.4")
@@ -24,6 +24,10 @@ class ModelProvider(str, Enum):
     NVIDIA = "nvidia"
     OPENROUTER = "openrouter"
     GOOGLE = "google"
+
+
+class ModelConfigurationError(ValueError):
+    """Konfiguriertes Modell passt nicht zum gewählten Provider."""
 
 
 class MultiProviderClient:
@@ -55,6 +59,8 @@ class MultiProviderClient:
     def __init__(self):
         self._clients: Dict[ModelProvider, Any] = {}
         self._api_keys: Dict[ModelProvider, str] = {}
+        self._available_models_cache: Dict[ModelProvider, Set[str]] = {}
+        self._validated_models: set[tuple[ModelProvider, str]] = set()
         self._load_api_keys()
 
     def _load_api_keys(self):
@@ -75,6 +81,11 @@ class MultiProviderClient:
 
     def has_provider(self, provider: ModelProvider) -> bool:
         return provider in self._api_keys
+
+    def _validation_enabled(self) -> bool:
+        return os.getenv("TIMUS_VALIDATE_CONFIGURED_MODELS", "true").strip().lower() not in {
+            "0", "false", "no", "off"
+        }
 
     def get_client(self, provider: ModelProvider):
         if provider in self._clients:
@@ -103,6 +114,87 @@ class MultiProviderClient:
         self._clients[provider] = client
         log.info(f"Client initialisiert: {provider.value}")
         return client
+
+    def _provider_supports_model_listing(self, provider: ModelProvider) -> bool:
+        return provider in {
+            ModelProvider.OPENAI,
+            ModelProvider.DEEPSEEK,
+            ModelProvider.INCEPTION,
+            ModelProvider.NVIDIA,
+            ModelProvider.OPENROUTER,
+        }
+
+    def _fetch_available_models(self, provider: ModelProvider) -> Set[str]:
+        if provider in self._available_models_cache:
+            return self._available_models_cache[provider]
+        client = self.get_client(provider)
+        try:
+            models_response = client.models.list()
+            models = {
+                str(getattr(model, "id", "") or "").strip()
+                for model in getattr(models_response, "data", []) or []
+                if str(getattr(model, "id", "") or "").strip()
+            }
+        except Exception as e:
+            raise ModelConfigurationError(
+                f"Modellvalidierung fehlgeschlagen fuer Provider '{provider.value}': "
+                f"Model-Liste konnte nicht geladen werden ({e})"
+            ) from e
+
+        if not models:
+            raise ModelConfigurationError(
+                f"Modellvalidierung fehlgeschlagen fuer Provider '{provider.value}': "
+                "Provider lieferte keine Modelle zurueck."
+            )
+
+        self._available_models_cache[provider] = models
+        return models
+
+    def validate_model_or_raise(
+        self,
+        provider: ModelProvider,
+        model: str,
+        *,
+        agent_type: str = "",
+    ) -> None:
+        if not self._validation_enabled():
+            return
+
+        normalized_model = str(model or "").strip()
+        if not normalized_model:
+            raise ModelConfigurationError(
+                f"Leeres Modell fuer Provider '{provider.value}' konfiguriert"
+            )
+
+        cache_key = (provider, normalized_model)
+        if cache_key in self._validated_models:
+            return
+
+        if not self.has_provider(provider):
+            raise ModelConfigurationError(
+                f"Provider '{provider.value}' fuer Modell '{normalized_model}' ist nicht konfiguriert. "
+                f"Fehlender API-Key: {self.API_KEY_ENV[provider]}"
+            )
+
+        if not self._provider_supports_model_listing(provider):
+            log.info(
+                "Modellvalidierung uebersprungen: provider=%s model=%s reason=no-model-listing",
+                provider.value,
+                normalized_model,
+            )
+            self._validated_models.add(cache_key)
+            return
+
+        available_models = self._fetch_available_models(provider)
+        if normalized_model not in available_models:
+            scope = f" fuer Agent '{agent_type}'" if agent_type else ""
+            examples = ", ".join(sorted(list(available_models))[:8])
+            raise ModelConfigurationError(
+                f"Konfiguriertes Modell '{normalized_model}' existiert nicht beim Provider "
+                f"'{provider.value}'{scope}. Verfuegbare Beispiele: {examples}"
+            )
+
+        self._validated_models.add(cache_key)
 
     def _init_openai_compatible(self, provider: ModelProvider):
         from openai import OpenAI
@@ -152,7 +244,9 @@ class AgentModelConfig:
     def get_model_and_provider(cls, agent_type: str) -> Tuple[str, ModelProvider]:
         if agent_type not in cls.AGENT_CONFIGS:
             log.warning(f"Unbekannter Agent-Typ: {agent_type}, nutze Defaults")
-            return "gpt-4o", ModelProvider.OPENAI
+            model, provider = "gpt-4o", ModelProvider.OPENAI
+            get_provider_client().validate_model_or_raise(provider, model, agent_type=agent_type)
+            return model, provider
 
         model_env, provider_env, fallback_model, fallback_provider = cls.AGENT_CONFIGS[agent_type]
         model = os.getenv(model_env, fallback_model)
@@ -164,6 +258,7 @@ class AgentModelConfig:
             log.warning(f"Unbekannter Provider '{provider_str}', nutze Fallback")
             provider = fallback_provider
 
+        get_provider_client().validate_model_or_raise(provider, model, agent_type=agent_type)
         return model, provider
 
 
@@ -177,3 +272,17 @@ def get_provider_client() -> MultiProviderClient:
     if _provider_client is None:
         _provider_client = MultiProviderClient()
     return _provider_client
+
+
+def validate_configured_model_or_raise(
+    provider: ModelProvider,
+    model: str,
+    *,
+    agent_type: str = "",
+) -> None:
+    """Oeffentliche Helferfunktion fuer Sonderpfade ausserhalb von BaseAgent."""
+    get_provider_client().validate_model_or_raise(
+        provider,
+        model,
+        agent_type=agent_type,
+    )

@@ -48,6 +48,7 @@ from agent.shared.screenshot import (
     get_last_screenshot_error as _shared_last_screenshot_error,
 )
 from agent.shared.action_parser import parse_action as _shared_parse_action
+from agent.providers import ModelProvider, validate_configured_model_or_raise
 
 logging.basicConfig(
     level=logging.INFO,
@@ -59,9 +60,10 @@ log = logging.getLogger("VisualNemotronV4")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-NEMOTRON_MODEL = os.getenv("REASONING_MODEL", "qwen/qwen3.5-plus-02-15")
-NEMOTRON_PROVIDER = os.getenv("REASONING_MODEL_PROVIDER", "openrouter").lower()
-OPENROUTER_VISION_MODEL = os.getenv("OPENROUTER_VISION_MODEL", "")   # z.B. qwen/qwen3.5-plus-02-15
+VISUAL_MODEL_DEFAULT = "nvidia/nemotron-nano-12b-v2-vl"
+NEMOTRON_MODEL = os.getenv("VISUAL_MODEL", VISUAL_MODEL_DEFAULT)
+NEMOTRON_PROVIDER = os.getenv("VISUAL_MODEL_PROVIDER", "openrouter").lower()
+OPENROUTER_VISION_MODEL = os.getenv("VISUAL_OPENROUTER_VISION_MODEL", os.getenv("VISUAL_MODEL", VISUAL_MODEL_DEFAULT))
 MCP_URL = os.getenv("MCP_SERVER_URL", "http://localhost:5000")
 # Feature-Flag: Florence-2 als primärer Vision-Pfad (FLORENCE2_ENABLED=false → alter Pfad)
 FLORENCE2_ENABLED = os.getenv("FLORENCE2_ENABLED", "true").lower() not in {"0", "false", "no", "off"}
@@ -470,6 +472,12 @@ class NemotronClient:
     MAX_RETRIES = 3
 
     def __init__(self):
+        if NEMOTRON_PROVIDER == "openrouter":
+            validate_configured_model_or_raise(
+                ModelProvider.OPENROUTER,
+                NEMOTRON_MODEL,
+                agent_type="visual.decision",
+            )
         # Provider-Auswahl: openrouter | openai
         # Hinweis: Für Anthropic-Modelle → openrouter mit "anthropic/claude-..." nutzen
         if NEMOTRON_PROVIDER == "openai":
@@ -792,6 +800,12 @@ class VisionClient:
         self.florence2_timeout = 90.0   # Erstes Laden dauert länger (Modell-Download)
         self.gpt4_timeout = 10.0
         self.qwen_timeout = 120.0
+        if OPENROUTER_VISION_MODEL and OPENROUTER_API_KEY:
+            validate_configured_model_or_raise(
+                ModelProvider.OPENROUTER,
+                OPENROUTER_VISION_MODEL,
+                agent_type="visual.vision",
+            )
 
     def _resize_for_qwen(self, img: Image.Image) -> Image.Image:
         return img.resize((512, 288), Image.Resampling.LANCZOS)
