@@ -1,393 +1,174 @@
 <!DOCTYPE html>
-<html lang="de">
+<html>
 <head>
-<meta charset="UTF-8">
-<style>
-  /* ── Basis ─────────────────────────────────────────────── */
-  @page {
-    size: A4;
-    margin: 20mm 20mm 22mm 20mm;
-    @top-center {
-      content: "{{ query | truncate(80) }}";
-      font-family: 'DejaVu Sans', sans-serif;
-      font-size: 8pt;
-      color: #888;
-    }
-    @bottom-center {
-      content: "Seite " counter(page) " | Timus Deep Research v6.0";
-      font-family: 'DejaVu Sans', sans-serif;
-      font-size: 8pt;
-      color: #888;
-    }
-  }
-  @page :first {
-    margin: 0;
-    @top-center { content: ""; }
-    @bottom-center { content: ""; }
-  }
-
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-
-  body {
-    font-family: 'DejaVu Sans', 'Liberation Sans', Arial, sans-serif;
-    font-size: 10.5pt;
-    line-height: 1.65;
-    color: #1a1a1a;
-  }
-
-  /* ── Titelseite ─────────────────────────────────────────── */
-  .cover {
-    width: 210mm;
-    height: 297mm;
-    display: flex;
-    flex-direction: column;
-    page-break-after: always;
-  }
-  .cover-header {
-    background: #1a3a5c;
-    padding: 40mm 20mm 20mm;
-    flex: 0 0 auto;
-  }
-  .cover-badge {
-    font-size: 9pt;
-    font-weight: bold;
-    letter-spacing: 2px;
-    color: #c8a84b;
-    text-transform: uppercase;
-    margin-bottom: 14mm;
-  }
-  .cover-title {
-    font-size: 22pt;
-    font-weight: bold;
-    color: #ffffff;
-    line-height: 1.3;
-    margin-bottom: 8mm;
-  }
-  .cover-divider {
-    width: 60mm;
-    height: 2px;
-    background: #c8a84b;
-    margin-bottom: 8mm;
-  }
-  .cover-date {
-    font-size: 10pt;
-    color: #a8c8e8;
-  }
-  .cover-body {
-    background: #f4f6f9;
-    flex: 1;
-    padding: 14mm 20mm;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-  }
-  .cover-stats {
-    display: flex;
-    gap: 8mm;
-    margin-bottom: 10mm;
-  }
-  .stat-box {
-    background: white;
-    border-left: 3px solid #c8a84b;
-    padding: 4mm 6mm;
-    flex: 1;
-  }
-  .stat-num {
-    font-size: 18pt;
-    font-weight: bold;
-    color: #1a3a5c;
-  }
-  .stat-label {
-    font-size: 8pt;
-    color: #666;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-  .cover-footer-text {
-    font-size: 8pt;
-    color: #999;
-    border-top: 1px solid #ddd;
-    padding-top: 4mm;
-  }
-
-  /* ── Inhaltsverzeichnis ─────────────────────────────────── */
-  .toc {
-    page-break-after: always;
-  }
-  .toc h2 {
-    font-size: 16pt;
-    color: #1a3a5c;
-    border-bottom: 2px solid #c8a84b;
-    padding-bottom: 3mm;
-    margin-bottom: 7mm;
-  }
-  .toc-entry {
-    display: flex;
-    justify-content: space-between;
-    padding: 2mm 0;
-    border-bottom: 1px dotted #ccc;
-    font-size: 10pt;
-  }
-  .toc-num { color: #c8a84b; font-weight: bold; margin-right: 3mm; }
-
-  /* ── Inhaltsbereich ─────────────────────────────────────── */
-  .content { }
-
-  h2.section-heading {
-    font-size: 13pt;
-    font-weight: bold;
-    color: #1a3a5c;
-    margin-top: 9mm;
-    margin-bottom: 2mm;
-    padding-bottom: 1.5mm;
-    border-bottom: 1.5px solid #1a3a5c;
-    page-break-after: avoid;
-  }
-  p {
-    margin-bottom: 3mm;
-    text-align: justify;
-    hyphens: auto;
-  }
-  ul, ol {
-    margin: 2mm 0 3mm 6mm;
-  }
-  li { margin-bottom: 1.5mm; }
-
-  blockquote {
-    border-left: 3px solid #c8a84b;
-    padding: 2mm 4mm;
-    margin: 3mm 0;
-    color: #444;
-    font-style: italic;
-    background: #fdf9f0;
-  }
-
-  /* ── Abschnitt mit Bild ─────────────────────────────────── */
-  .section-with-image {
-    margin-top: 3mm;
-  }
-  .section-image-wrap {
-    float: right;
-    width: 75mm;
-    margin: 0 0 4mm 6mm;
-  }
-  .section-image {
-    width: 75mm;
-    height: auto;
-    border: 1px solid #dde2ea;
-    border-radius: 2px;
-    display: block;
-  }
-  .image-caption {
-    font-size: 7.5pt;
-    color: #777;
-    font-style: italic;
-    text-align: center;
-    margin-top: 1.5mm;
-  }
-  .section-with-image::after {
-    content: "";
-    display: table;
-    clear: both;
-  }
-
-  /* ── Quellenverzeichnis ─────────────────────────────────── */
-  .sources {
-    page-break-before: always;
-  }
-  .sources h2 {
-    font-size: 14pt;
-    color: #1a3a5c;
-    border-bottom: 2px solid #c8a84b;
-    padding-bottom: 3mm;
-    margin-bottom: 6mm;
-  }
-  .sources h3 {
-    font-size: 10pt;
-    color: #1a3a5c;
-    margin: 5mm 0 2mm;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-  .source-entry {
-    font-size: 8.5pt;
-    margin-bottom: 2.5mm;
-    padding-left: 6mm;
-    text-indent: -6mm;
-  }
-  .source-num { color: #c8a84b; font-weight: bold; }
-  .source-url { color: #1a3a5c; word-break: break-all; }
-  .source-yt { color: #e00; font-weight: bold; }
-  .source-arxiv { color: #b31b1b; font-weight: bold; }
-  .source-github { color: #24292f; font-weight: bold; }
-  .source-hf { color: #ff9d00; font-weight: bold; }
-
-  /* ── Info-Box ───────────────────────────────────────────── */
-  .info-box {
-    background: #eef3fa;
-    border: 1px solid #1a3a5c22;
-    border-radius: 3px;
-    padding: 4mm 5mm;
-    margin: 4mm 0;
-    font-size: 9pt;
-    color: #333;
-  }
-</style>
+	<meta http-equiv="content-type" content="text/html; charset=utf-8"/>
+	<title></title>
+	<meta name="generator" content="LibreOffice 24.2.7.2 (Linux)"/>
+	<meta name="created" content="00:00:00"/>
+	<meta name="changed" content="2026-03-07T10:29:33.911663073"/>
+	<meta name="" content=""/>
+	<style type="text/css">
+		@page { size: 21cm 29.7cm; margin-left: 2cm; margin-right: 2cm; margin-top: 2cm; margin-bottom: 2.2cm }
+		@page:first { }
+		p { color: #1a1a1a; font-family: "DejaVu Sans", "Liberation Sans", "Arial", sans-serif; font-size: 10pt; line-height: 115%; text-align: justify; margin-bottom: 0.3cm; background: transparent }
+		h2 { color: #1a1a1a; line-height: 165%; margin-top: 0.35cm; margin-bottom: 0.21cm; background: transparent; page-break-after: avoid }
+		h2.western { font-family: "Liberation Serif", serif; font-size: 18pt; font-weight: bold }
+		h2.cjk { font-family: "Noto Serif CJK SC"; font-size: 18pt; font-weight: bold }
+		h2.ctl { font-family: "Noto Sans Devanagari"; font-size: 18pt; font-weight: bold }
+		h2.section-heading { color: #1a3a5c; font-size: 13pt; margin-top: 0.9cm; margin-bottom: 0.2cm; border-top: none; border-bottom: 1px solid #1a3a5c; border-left: none; border-right: none; padding-top: 0cm; padding-bottom: 0.15cm; padding-left: 0cm; padding-right: 0cm }
+		h3 { color: #1a1a1a; line-height: 165%; margin-top: 0.25cm; margin-bottom: 0.21cm; background: transparent; page-break-after: avoid }
+		h3.western { font-family: "Liberation Serif", serif; font-size: 14pt; font-weight: bold }
+		h3.cjk { font-family: "Noto Serif CJK SC"; font-size: 14pt; font-weight: bold }
+		h3.ctl { font-family: "Noto Sans Devanagari"; font-size: 14pt; font-weight: bold }
+		strong { font-weight: bold }
+	</style>
 </head>
-<body>
+<body lang="de-DE" text="#1a1a1a" link="#000080" vlink="#800000" dir="ltr"><p style="text-transform: uppercase; letter-spacing: 1.5pt; margin-bottom: 1.4cm">
+<span style="display: inline-block; border: none; padding: 0cm"><font color="#c8a84b"><font size="2" style="font-size: 9pt"><b><span style="background: #1a3a5c">Timus
+Deep Research &nbsp;·&nbsp; v7.0</span></b></font></font></span></p>
+<p style="line-height: 130%; margin-bottom: 0.8cm"><span style="display: inline-block; border: none; padding: 0cm"><font color="#ffffff"><font size="6" style="font-size: 22pt"><b><span style="background: #1a3a5c">{{
+query }}</span></b></font></font></span></p>
+<p><span style="display: inline-block; border: none; padding: 0cm"><font color="#a8c8e8"><font size="2" style="font-size: 10pt"><span style="background: #1a3a5c">{{
+date }}</span></font></font></span></p>
+<p style="line-height: 170%; margin-bottom: 0.5cm"><span style="display: inline-block; border: none; padding: 0cm"><font color="#333333"><font size="2" style="font-size: 10pt"><span style="background: #f4f6f9">Dieser
+Bericht wurde vollautomatisch durch </span></font></font><strong><font color="#333333"><font size="2" style="font-size: 10pt"><span style="background: #f4f6f9">Timus
+Deep Research v7.0</span></font></font></strong><font color="#333333"><font size="2" style="font-size: 10pt"><span style="background: #f4f6f9">
+erstellt. Das System analysiert Web-Quellen, YouTube-Videos und
+wissenschaftliche Artikel, verifiziert Fakten durch Quellenabgleich
+und synthetisiert die Ergebnisse zu einem strukturierten Lesebericht.
+</span></font></font></span>
+</p>
+<p style="line-height: 160%"><span style="display: inline-block; border: none; padding: 0cm"><font color="#555555"><font size="2" style="font-size: 9pt"><span style="background: #f4f6f9">Die
+Recherche umfasst eine mehrstufige Analyse mit
+Quellenqualitätsbewertung, These-Antithese-Synthese-Framework und
+narrativer Zusammenfassung auf 2.500–5.000 Wörter. </span></font></font></span>
+</p>
+<p style="margin-bottom: 1cm"><span style="display: inline-block; border-top: none; border-bottom: none; border-left: 2.25pt solid #c8a84b; border-right: none; padding-top: 0cm; padding-bottom: 0cm; padding-left: 0.6cm; padding-right: 0cm"><font color="#1a3a5c"><font size="5" style="font-size: 18pt"><b><span style="background: #ffffff">{{
+web_count }}</span></b></font></font></span></p>
+<p style="text-transform: uppercase; letter-spacing: normal; margin-bottom: 1cm">
+<span style="display: inline-block; border-top: none; border-bottom: none; border-left: 2.25pt solid #c8a84b; border-right: none; padding-top: 0cm; padding-bottom: 0cm; padding-left: 0.6cm; padding-right: 0cm"><font color="#666666"><font size="1" style="font-size: 8pt"><span style="background: #ffffff">Web-Quellen</span></font></font></span></p>
+<p style="margin-bottom: 1cm"><span style="display: inline-block; border: none; padding: 0cm"><span style="background: #f4f6f9">{%
+if yt_count > 0 %}</span></span>
+</p>
+<p style="margin-bottom: 1cm"><span style="display: inline-block; border-top: none; border-bottom: none; border-left: 2.25pt solid #c8a84b; border-right: none; padding-top: 0cm; padding-bottom: 0cm; padding-left: 0.6cm; padding-right: 0cm"><font color="#1a3a5c"><font size="5" style="font-size: 18pt"><b><span style="background: #ffffff">{{
+yt_count }}</span></b></font></font></span></p>
+<p style="text-transform: uppercase; letter-spacing: normal; margin-bottom: 1cm">
+<span style="display: inline-block; border-top: none; border-bottom: none; border-left: 2.25pt solid #c8a84b; border-right: none; padding-top: 0cm; padding-bottom: 0cm; padding-left: 0.6cm; padding-right: 0cm"><font color="#666666"><font size="1" style="font-size: 8pt"><span style="background: #ffffff">YouTube-Videos</span></font></font></span></p>
+<p style="margin-bottom: 1cm"><span style="display: inline-block; border: none; padding: 0cm"><span style="background: #f4f6f9">{%
+endif %} {% if trend_count > 0 %}</span></span>
+</p>
+<p style="margin-bottom: 1cm"><span style="display: inline-block; border-top: none; border-bottom: none; border-left: 2.25pt solid #c8a84b; border-right: none; padding-top: 0cm; padding-bottom: 0cm; padding-left: 0.6cm; padding-right: 0cm"><font color="#1a3a5c"><font size="5" style="font-size: 18pt"><b><span style="background: #ffffff">{{
+trend_count }}</span></b></font></font></span></p>
+<p style="text-transform: uppercase; letter-spacing: normal; margin-bottom: 1cm">
+<span style="display: inline-block; border-top: none; border-bottom: none; border-left: 2.25pt solid #c8a84b; border-right: none; padding-top: 0cm; padding-bottom: 0cm; padding-left: 0.6cm; padding-right: 0cm"><font color="#666666"><font size="1" style="font-size: 8pt"><span style="background: #ffffff">Trend-Quellen</span></font></font></span></p>
+<p style="margin-bottom: 1cm"><span style="display: inline-block; border: none; padding: 0cm"><span style="background: #f4f6f9">{%
+endif %} {% if image_count > 0 %}</span></span>
+</p>
+<p style="margin-bottom: 1cm"><span style="display: inline-block; border-top: none; border-bottom: none; border-left: 2.25pt solid #c8a84b; border-right: none; padding-top: 0cm; padding-bottom: 0cm; padding-left: 0.6cm; padding-right: 0cm"><font color="#1a3a5c"><font size="5" style="font-size: 18pt"><b><span style="background: #ffffff">{{
+image_count }}</span></b></font></font></span></p>
+<p style="text-transform: uppercase; letter-spacing: normal; margin-bottom: 1cm">
+<span style="display: inline-block; border-top: none; border-bottom: none; border-left: 2.25pt solid #c8a84b; border-right: none; padding-top: 0cm; padding-bottom: 0cm; padding-left: 0.6cm; padding-right: 0cm"><font color="#666666"><font size="1" style="font-size: 8pt"><span style="background: #ffffff">Abbildungen</span></font></font></span></p>
+<p style="margin-bottom: 1cm"><span style="display: inline-block; border: none; padding: 0cm"><span style="background: #f4f6f9">{%
+endif %} </span></span>
+</p>
+<p style="margin-bottom: 1cm"><span style="display: inline-block; border-top: none; border-bottom: none; border-left: 2.25pt solid #c8a84b; border-right: none; padding-top: 0cm; padding-bottom: 0cm; padding-left: 0.6cm; padding-right: 0cm"><font color="#1a3a5c"><font size="5" style="font-size: 18pt"><b><span style="background: #ffffff">{{
+word_count }}</span></b></font></font></span></p>
+<p style="text-transform: uppercase; letter-spacing: normal; margin-bottom: 1cm">
+<span style="display: inline-block; border-top: none; border-bottom: none; border-left: 2.25pt solid #c8a84b; border-right: none; padding-top: 0cm; padding-bottom: 0cm; padding-left: 0.6cm; padding-right: 0cm"><font color="#666666"><font size="1" style="font-size: 8pt"><span style="background: #ffffff">Wörter</span></font></font></span></p>
+<p style="margin-bottom: 0cm"><span style="display: inline-block; border-top: 1px solid #dddddd; border-bottom: none; border-left: none; border-right: none; padding-top: 0.4cm; padding-bottom: 0cm; padding-left: 0cm; padding-right: 0cm"><font color="#999999"><font size="1" style="font-size: 8pt"><span style="background: #f4f6f9">Automatisch
+generierter Recherchebericht &nbsp;·&nbsp; Alle Informationen
+basieren auf öffentlich zugänglichen Quellen. </span></font></font></span>
+</p>
+<p>{% if toc %} 
+</p>
+<h2 class="western">Inhaltsverzeichnis</h2>
+<p style="margin-bottom: 0cm">{% for entry in toc %} 
+</p>
+<p style="margin-right: 0.3cm; margin-bottom: 0cm"><span style="display: inline-block; border-top: none; border-bottom: 1px dotted #cccccc; border-left: none; border-right: none; padding-top: 0cm; padding-bottom: 0.2cm; padding-left: 0cm; padding-right: 0cm"><font size="2" style="font-size: 10pt"><font color="#c8a84b"><b>{{
+loop.index }}.</b></font> {{ entry }} </font></span>
+</p>
+<p style="margin-bottom: 0cm">{% endfor %} 
+</p>
+<p style="margin-bottom: 0cm">{% endif %} 
+</p>
+<p>{% for section in sections %} 
+</p>
+<h2 class="section-heading">{{ section.heading }}</h2>
+<p style="margin-bottom: 0cm">{% if section.image_path %} 
+</p>
+<p style="margin-top: 0.3cm">{{ section.text_html | safe }}</p>
+<p style="margin-bottom: 0cm"><span id="Frame1" dir="ltr" style="float: right; width: 7.5cm; border: none; padding: 0cm; background: #ffffff"><p style="margin-bottom: 0cm">
+	<font color="#dde2ea">
+  <img src="%7B%7B%20section.image_path%20%7D%7D" name="Image1" alt="{{ section.heading }}" align="bottom" width="282" height="34" border="1"/>
+</font>
 
-<!-- ═══════════════════════════════════ TITELSEITE ═══ -->
-<div class="cover">
-  <div class="cover-header">
-    <div class="cover-badge">Timus Deep Research &nbsp;·&nbsp; v7.0</div>
-    <div class="cover-title">{{ query }}</div>
-    <div class="cover-divider"></div>
-    <div class="cover-date">{{ date }}</div>
-  </div>
-  <div class="cover-body">
-    <div class="cover-intro">
-      <p style="font-size:10.5pt; color:#333; line-height:1.7; margin-bottom:5mm;">
-        Dieser Bericht wurde vollautomatisch durch <strong>Timus Deep Research v7.0</strong>
-        erstellt. Das System analysiert Web-Quellen, YouTube-Videos und wissenschaftliche
-        Artikel, verifiziert Fakten durch Quellenabgleich und synthetisiert die Ergebnisse
-        zu einem strukturierten Lesebericht.
-      </p>
-      <p style="font-size:9.5pt; color:#555; line-height:1.6;">
-        Die Recherche umfasst eine mehrstufige Analyse mit Quellenqualitätsbewertung,
-        These-Antithese-Synthese-Framework und narrativer Zusammenfassung auf
-        2.500–5.000 Wörter.
-      </p>
-    </div>
-    <div>
-    <div class="cover-stats">
-      <div class="stat-box">
-        <div class="stat-num">{{ web_count }}</div>
-        <div class="stat-label">Web-Quellen</div>
-      </div>
-      {% if yt_count > 0 %}
-      <div class="stat-box">
-        <div class="stat-num">{{ yt_count }}</div>
-        <div class="stat-label">YouTube-Videos</div>
-      </div>
-      {% endif %}
-      {% if trend_count > 0 %}
-      <div class="stat-box">
-        <div class="stat-num">{{ trend_count }}</div>
-        <div class="stat-label">Trend-Quellen</div>
-      </div>
-      {% endif %}
-      {% if image_count > 0 %}
-      <div class="stat-box">
-        <div class="stat-num">{{ image_count }}</div>
-        <div class="stat-label">Abbildungen</div>
-      </div>
-      {% endif %}
-      <div class="stat-box">
-        <div class="stat-num">{{ word_count }}</div>
-        <div class="stat-label">Wörter</div>
-      </div>
-    </div>
-    <div class="cover-footer-text">
-      Automatisch generierter Recherchebericht &nbsp;·&nbsp;
-      Alle Informationen basieren auf öffentlich zugänglichen Quellen.
-    </div>
-    </div>
-  </div>
-</div>
-
-<!-- ═══════════════════════════════════ INHALTSVERZEICHNIS ═══ -->
-{% if toc %}
-<div class="toc">
-  <h2>Inhaltsverzeichnis</h2>
-  {% for entry in toc %}
-  <div class="toc-entry">
-    <span><span class="toc-num">{{ loop.index }}.</span> {{ entry }}</span>
-  </div>
-  {% endfor %}
-</div>
-{% endif %}
-
-<!-- ═══════════════════════════════════ INHALT ═══ -->
-<div class="content">
-{% for section in sections %}
-  <h2 class="section-heading">{{ section.heading }}</h2>
-
-  {% if section.image_path %}
-  <div class="section-with-image">
-    <div class="section-text">{{ section.text_html | safe }}</div>
-    <div class="section-image-wrap">
-      <img class="section-image" src="{{ section.image_path }}" alt="{{ section.heading }}">
-      <div class="image-caption">{{ section.image_caption }}</div>
-    </div>
-  </div>
-  {% else %}
-  <div>{{ section.text_html | safe }}</div>
-  {% endif %}
-{% endfor %}
-</div>
-
-<!-- ═══════════════════════════════════ QUELLENVERZEICHNIS ═══ -->
-<div class="sources">
-  <h2>Quellenverzeichnis</h2>
-
-  {% if web_sources %}
-  <h3>Web-Quellen</h3>
-  {% for src in web_sources %}
-  <div class="source-entry">
-    <span class="source-num">[{{ loop.index }}]</span>
-    {{ src.title }}<br>
-    <span class="source-url">{{ src.url }}</span>
-  </div>
-  {% endfor %}
-  {% endif %}
-
-  {% if yt_sources %}
-  <h3>YouTube-Quellen</h3>
-  {% for src in yt_sources %}
-  <div class="source-entry">
-    <span class="source-yt">[YT{{ loop.index }}]</span>
-    {{ src.title }}{% if src.channel %} &nbsp;·&nbsp; Kanal: {{ src.channel }}{% endif %}<br>
-    <span class="source-url">{{ src.url }}</span>
-  </div>
-  {% endfor %}
-  {% endif %}
-
-  {% if arxiv_sources %}
-  <h3>ArXiv-Paper</h3>
-  {% for src in arxiv_sources %}
-  <div class="source-entry">
-    <span class="source-arxiv">[A{{ loop.index }}]</span>
-    {{ src.title }}{% if src.authors %} &nbsp;·&nbsp; {{ src.authors }}{% endif %}{% if src.published %} ({{ src.published }}){% endif %}<br>
-    <span class="source-url">{{ src.url }}</span>
-  </div>
-  {% endfor %}
-  {% endif %}
-
-  {% if github_sources %}
-  <h3>GitHub-Projekte</h3>
-  {% for src in github_sources %}
-  <div class="source-entry">
-    <span class="source-github">[GH{{ loop.index }}]</span>
-    {{ src.title }} &nbsp;·&nbsp; {{ src.stars | int }}★{% if src.language %} &nbsp;·&nbsp; {{ src.language }}{% endif %}<br>
-    <span class="source-url">{{ src.url }}</span>
-  </div>
-  {% endfor %}
-  {% endif %}
-
-  {% if hf_sources %}
-  <h3>HuggingFace</h3>
-  {% for src in hf_sources %}
-  <div class="source-entry">
-    <span class="source-hf">[HF{{ loop.index }}]</span>
-    {{ src.title }}
-    {% if src.hf_type == "model" %} &nbsp;·&nbsp; {{ src.downloads | int | string }} Downloads
-    {% else %} &nbsp;·&nbsp; {{ src.upvotes | int }} Upvotes
-    {% endif %}<br>
-    <span class="source-url">{{ src.url }}</span>
-  </div>
-  {% endfor %}
-  {% endif %}
-</div>
-
+		</p>
+	<p align="center" style="margin-top: 0.15cm"><font color="#777777"><font size="1" style="font-size: 7pt"><i>{{
+	section.image_caption }}</i></font></font></p>
+</span>{% else %} 
+</p>
+<p style="margin-bottom: 0cm">{{ section.text_html | safe }}</p>
+<p>{% endif %} {% endfor %} 
+</p>
+<h2 class="western">Quellenverzeichnis</h2>
+<p>{% if web_sources %} 
+</p>
+<h3 class="western">Web-Quellen</h3>
+<p style="margin-bottom: 0cm">{% for src in web_sources %} 
+</p>
+<p style="margin-bottom: 0cm">[{{ loop.index }}] {{ src.title }}<br/>
+{{
+src.url }} 
+</p>
+<p>{% endfor %} {% endif %} {% if yt_sources %} 
+</p>
+<h3 class="western">YouTube-Quellen</h3>
+<p style="margin-bottom: 0cm">{% for src in yt_sources %} 
+</p>
+<p style="margin-bottom: 0cm">[YT{{ loop.index }}] {{ src.title }}{%
+if src.channel %} &nbsp;·&nbsp; Kanal: {{ src.channel }}{% endif
+%}<br/>
+{{ src.url }} 
+</p>
+<p>{% endfor %} {% endif %} {% if arxiv_sources %} 
+</p>
+<h3 class="western">ArXiv-Paper</h3>
+<p style="margin-bottom: 0cm">{% for src in arxiv_sources %} 
+</p>
+<p style="margin-bottom: 0cm">[A{{ loop.index }}] {{ src.title }}{%
+if src.authors %} &nbsp;·&nbsp; {{ src.authors }}{% endif %}{% if
+src.published %} ({{ src.published }}){% endif %}<br/>
+{{ src.url }} 
+</p>
+<p>{% endfor %} {% endif %} {% if github_sources %} 
+</p>
+<h3 class="western">GitHub-Projekte</h3>
+<p style="margin-bottom: 0cm">{% for src in github_sources %} 
+</p>
+<p style="margin-bottom: 0cm">[GH{{ loop.index }}] {{ src.title }}
+&nbsp;·&nbsp; {{ src.stars | int }}★{% if src.language %} &nbsp;·&nbsp;
+{{ src.language }}{% endif %}<br/>
+{{ src.url }} 
+</p>
+<p>{% endfor %} {% endif %} {% if hf_sources %} 
+</p>
+<h3 class="western">HuggingFace</h3>
+<p style="margin-bottom: 0cm">{% for src in hf_sources %} 
+</p>
+<p style="margin-bottom: 0cm">[HF{{ loop.index }}] {{ src.title }} {%
+if src.hf_type == "model" %}&nbsp;·&nbsp; {{
+src.downloads | int | string }} Downloads {% else %} &nbsp;·&nbsp;
+{{ src.upvotes | int }} Upvotes {% endif %}<br/>
+{{ src.url }} 
+</p>
+<p style="margin-bottom: 0cm">{% endfor %} {% endif %} {% if edison_sources %}
+</p>
+<h3 class="western">Edison Scientific (PaperQA3)</h3>
+<p style="margin-bottom: 0cm">{% for src in edison_sources %}
+</p>
+<p style="margin-bottom: 0cm">[LIT{{ loop.index }}] {{ src.title }}{% if src.authors %} &nbsp;·&nbsp; {{ src.authors }}{% endif %}{% if src.year %} ({{ src.year }}){% endif %}{% if src.journal %} &nbsp;·&nbsp; <em>{{ src.journal }}</em>{% endif %}<br/>
+{{ src.url }}
+</p>
+<p style="margin-bottom: 0cm">{% endfor %} {% endif %}</p>
 </body>
 </html>

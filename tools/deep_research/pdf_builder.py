@@ -125,6 +125,17 @@ class ResearchPDFBuilder:
             for c in session.unverified_claims
             if c.get("source_type") == "huggingface"
         ]
+        edison_sources = [
+            {
+                "title": c.get("source_title", c.get("title", ""))[:80],
+                "authors": c.get("authors", "")[:80],
+                "year": str(c.get("year", c.get("published_date", ""))),
+                "journal": c.get("journal", c.get("venue", ""))[:60],
+                "url": c.get("source", c.get("doi", ""))[:120],
+            }
+            for c in session.unverified_claims
+            if c.get("source_type") == "edison"
+        ]
 
         trend_count = len(arxiv_sources) + len(github_sources) + len(hf_sources)
 
@@ -157,6 +168,7 @@ class ResearchPDFBuilder:
             arxiv_sources=arxiv_sources,
             github_sources=github_sources,
             hf_sources=hf_sources,
+            edison_sources=edison_sources,
         )
 
         # PDF erzeugen
