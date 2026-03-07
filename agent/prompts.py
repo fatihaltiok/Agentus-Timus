@@ -763,34 +763,29 @@ Action: {{"method": "delegate_to_agent", "params": {{
 ALTERNATIVE wenn creative fehlschlägt: Bild aus Recherche-Ergebnis nutzen falls vorhanden,
 oder Schritt 2 überspringen und PDF ohne Bild erstellen.
 
-### SCHRITT 3 — PDF erstellen (wartet auf Schritt 1 + 2)
-Baue den Markdown-Content zusammen:
-- Beginne mit: "![Cover](/home/fatih-ubuntu/dev/timus/results/cover_[kurzthema].png)\n\n"
-- Dann der vollständige Recherche-Text aus Schritt 1
-- Playwright rendert das Bild automatisch (absoluter Pfad nötig!)
+### SCHRITT 3 — PDF-Pfad aus generate_research_report übernehmen
+generate_research_report erstellt die PDF automatisch via WeasyPrint + report_template.html.
+KEIN separater create_pdf-Aufruf nötig — die PDF ist bereits fertig!
 
-Action: {{"method": "delegate_to_agent", "params": {{
-  "agent_type": "document",
-  "task": "Erstelle ein professionelles PDF. Titel: 'Forschungsbericht: [THEMA]'. Autor: 'Timus Research'. Inhalt (Markdown):\\n![Cover](/home/fatih-ubuntu/dev/timus/results/cover_[kurzthema].png)\\n\\n[VOLLSTÄNDIGER RECHERCHE-TEXT AUS SCHRITT 1]",
-  "from_agent": "meta"
-}}}}
+Das Ergebnis von generate_research_report (Schritt 1) enthält:
+- "pdf_filepath": "/home/fatih-ubuntu/dev/timus/results/DeepResearch_PDF_[session_id].pdf"
+- "narrative_filepath": Pfad zum Markdown-Bericht
 
-→ Ergebnis: {{"status": "success", "path": "results/Forschungsbericht_[...].pdf", "filename": "..."}}
-→ MERKE: Den Dateinamen für Schritt 4 aufbewahren.
+→ MERKE: Den Wert von "pdf_filepath" aus Schritt 1 für Schritt 4 aufbewahren.
+→ Falls pdf_filepath fehlt oder null: Schritt 4 trotzdem ausführen, PDF-Pfad im Body nennen.
 
-### SCHRITT 4 — Email versenden mit PDF-Anhang (wartet auf Schritt 3)
-send_email unterstützt attachment_path — die PDF wird direkt als Anhang mitgeschickt.
+### SCHRITT 4 — Email versenden mit PDF-Anhang (wartet auf Schritt 1)
+send_email unterstützt attachment_path — die WeasyPrint-PDF wird direkt als Anhang mitgeschickt.
 
 Action: {{"method": "delegate_to_agent", "params": {{
   "agent_type": "communication",
-  "task": "Sende eine E-Mail an fatihaltiok@outlook.com. Betreff: 'Timus Forschungsbericht: [THEMA]'. Body: 'Hallo Fatih,\\n\\ndein Forschungsbericht über [THEMA] ist fertig. Die PDF ist als Anhang beigefügt.\\n\\n[3-5 KERNAUSSAGEN AUS DER RECHERCHE]\\n\\nGrüße,\\nTimus'. attachment_path: '/home/fatih-ubuntu/dev/timus/results/[DATEINAME_AUS_SCHRITT3]'",
+  "task": "Sende eine E-Mail an fatihaltiok@outlook.com. Betreff: 'Timus Forschungsbericht: [THEMA]'. Body: 'Hallo Fatih,\\n\\ndein Forschungsbericht über [THEMA] ist fertig. Die PDF ist als Anhang beigefügt.\\n\\n[3-5 KERNAUSSAGEN AUS DER RECHERCHE]\\n\\nGrüße,\\nTimus'. attachment_path: '[PDF_FILEPATH_AUS_SCHRITT1]'",
   "from_agent": "meta"
 }}}}
 
 ### FEHLERFÄLLE
 - research gibt status="error": Query umformulieren, Sprache wechseln (DE→EN), 1x retry
-- creative gibt status="error": PDF ohne Bild erstellen (Bild-Zeile weglassen), weitermachen
-- document gibt status="error": create_pdf direkt via tool versuchen mit kürzerem Content
+- pdf_filepath fehlt im Ergebnis: E-Mail ohne Anhang senden, PDF-Pfad im Body nennen
 - communication gibt status="error": Telegram-Nachricht an Nutzer mit PDF-Pfad als Fallback
 
 ### ERKENNUNG DES WORKFLOWS
