@@ -238,12 +238,57 @@ class MetaAgent(BaseAgent):
 
         return ""
 
+    @staticmethod
+    def _normalize_delegation_result(
+        specialist_agent: str,
+        method: str,
+        result: Any,
+    ) -> Any:
+        if not isinstance(result, dict):
+            return result
+
+        status = str(result.get("status") or "").strip().lower()
+        error_text = str(result.get("error") or "").strip()
+        has_payload = any(
+            result.get(key) not in (None, "", [], {})
+            for key in ("result", "artifacts", "metadata", "quality", "blackboard_key")
+        )
+
+        if status == "error" and not error_text:
+            error_text = (
+                f"FEHLER: Delegation an '{specialist_agent}' fuer Tool '{method}' "
+                "lieferte keinen Fehlertext."
+            )
+            normalized = dict(result)
+            normalized["error"] = error_text
+            return normalized
+
+        if not status and not has_payload:
+            return {
+                "status": "error",
+                "agent": specialist_agent,
+                "error": (
+                    f"FEHLER: Delegation an '{specialist_agent}' fuer Tool '{method}' "
+                    "lieferte eine leere oder unvollstaendige Antwort."
+                ),
+                "quality": 0,
+                "metadata": {"delegation_transport_error": True, "tool": method},
+                "artifacts": [],
+            }
+
+        if not status and error_text:
+            normalized = dict(result)
+            normalized["status"] = "error"
+            return normalized
+
+        return result
+
     async def _call_tool(self, method: str, params: dict) -> dict:
         specialist_agent = self._SPECIALIST_TOOL_AGENT_MAP.get(method)
         if specialist_agent:
             task = self._build_specialist_delegation_task(method, params)
             if task:
-                return await super()._call_tool(
+                result = await super()._call_tool(
                     "delegate_to_agent",
                     {
                         "agent_type": specialist_agent,
@@ -252,6 +297,7 @@ class MetaAgent(BaseAgent):
                         "session_id": self.conversation_session_id,
                     },
                 )
+                return self._normalize_delegation_result(specialist_agent, method, result)
         return await super()._call_tool(method, params)
 
     # ------------------------------------------------------------------

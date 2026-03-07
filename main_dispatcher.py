@@ -993,7 +993,10 @@ def quick_intent_check(query: str) -> Optional[str]:
                             "dazu eine", "dazu ein", "dazu einen")
     _TASK_STARTERS = ("recherchiere", "suche nach", "finde heraus", "analysiere",
                       "schreibe", "erstelle", "generiere", "berechne",
-                      "mache eine recherche", "mach eine recherche")
+                      "mache eine recherche", "mach eine recherche",
+                      "mache eine tiefen recherche", "mach eine tiefen recherche",
+                      "mache eine tiefe recherche", "mach eine tiefe recherche",
+                      "mache eine tiefenrecherche", "mach eine tiefenrecherche")
     _has_multi_step = any(t in query_lower for t in _MULTI_STEP_TRIGGERS)
     _has_task_starter = any(t in query_lower for t in _TASK_STARTERS)
     if _has_multi_step and _has_task_starter:
@@ -1003,7 +1006,8 @@ def quick_intent_check(query: str) -> Optional[str]:
     # Wenn Research mit einer weiteren Aktion kombiniert wird (PDF, E-Mail, Speichern),
     # muss der Meta-Agent orchestrieren — nicht der Research-Agent allein.
     _RESEARCH_KEYWORDS_QUICK = (
-        "tiefenrecherche", "deep research", "deep_research",
+        "tiefenrecherche", "tiefen recherche", "tiefe recherche",
+        "deep research", "deep_research", "deep-research", "deepresearch",
         "recherchiere", "recherchier", "recherche über", "eine recherche",
         "fakten zu", "fakten über", "sammle informationen",
         "informiere mich über", "was gibt es neues",

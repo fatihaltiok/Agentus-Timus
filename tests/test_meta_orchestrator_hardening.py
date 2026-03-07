@@ -75,3 +75,32 @@ async def test_meta_reroutes_send_email_to_communication(monkeypatch):
     assert captured["params"]["session_id"] == "sess-meta-mail"
     assert "fatihaltiok@outlook.com" in captured["params"]["task"]
     assert "Bericht" in captured["params"]["task"]
+
+
+@pytest.mark.asyncio
+async def test_meta_converts_empty_delegation_response_into_explicit_error(monkeypatch):
+    from agent.agents.meta import MetaAgent
+    from agent.base_agent import BaseAgent
+
+    captured = {}
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        captured["method"] = method
+        captured["params"] = dict(params)
+        return {"error": ""}
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = MetaAgent.__new__(MetaAgent)
+    agent.conversation_session_id = "sess-meta-empty"
+
+    result = await MetaAgent._call_tool(
+        agent,
+        "start_deep_research",
+        {"query": "Chinesische LLMs 2025"},
+    )
+
+    assert captured["method"] == "delegate_to_agent"
+    assert result["status"] == "error"
+    assert "leere oder unvollstaendige Antwort" in result["error"]
+    assert result["metadata"]["delegation_transport_error"] is True

@@ -107,3 +107,53 @@ async def test_dynamic_execute_tool_requests_normalized_result(monkeypatch):
     assert captured["tool_name"] == "demo_tool"
     assert captured["kwargs"]["normalize"] is True
     assert captured["kwargs"]["value"] == "abc"
+
+
+@pytest.mark.asyncio
+async def test_call_tool_formats_empty_jsonrpc_error(monkeypatch):
+    import agent.base_agent as base_agent_module
+
+    agent = _minimal_base_agent()
+    agent.http_client = SimpleNamespace(
+        post=AsyncMock(
+            return_value=SimpleNamespace(
+                json=lambda: {
+                    "jsonrpc": "2.0",
+                    "error": "",
+                }
+            )
+        )
+    )
+
+    monkeypatch.setattr(base_agent_module, "evaluate_policy_gate", lambda **kwargs: {"allowed": True})
+    monkeypatch.setattr(base_agent_module, "audit_policy_decision", lambda decision: None)
+    monkeypatch.setattr(base_agent_module.registry_v2, "validate_tool_call", lambda *args, **kwargs: kwargs)
+
+    result = await agent._call_tool("delegate_to_agent", {"agent_type": "research", "task": "x"})
+
+    assert result["error"] == "JSON-RPC Fehler ohne Details"
+
+
+@pytest.mark.asyncio
+async def test_call_tool_formats_jsonrpc_error_dict(monkeypatch):
+    import agent.base_agent as base_agent_module
+
+    agent = _minimal_base_agent()
+    agent.http_client = SimpleNamespace(
+        post=AsyncMock(
+            return_value=SimpleNamespace(
+                json=lambda: {
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32602, "message": "Invalid params", "data": "missing session_id"},
+                }
+            )
+        )
+    )
+
+    monkeypatch.setattr(base_agent_module, "evaluate_policy_gate", lambda **kwargs: {"allowed": True})
+    monkeypatch.setattr(base_agent_module, "audit_policy_decision", lambda decision: None)
+    monkeypatch.setattr(base_agent_module.registry_v2, "validate_tool_call", lambda *args, **kwargs: kwargs)
+
+    result = await agent._call_tool("delegate_to_agent", {"agent_type": "research", "task": "x"})
+
+    assert result["error"] == "JSON-RPC Fehler: code=-32602 | Invalid params | missing session_id"

@@ -344,6 +344,29 @@ class BaseAgent(DynamicToolMixin):
             return obs[:2000] + "..."
         return obs
 
+    @staticmethod
+    def _format_jsonrpc_error(error: Any) -> str:
+        if isinstance(error, dict):
+            message = str(error.get("message") or "").strip()
+            code = error.get("code")
+            data = error.get("data")
+
+            parts = []
+            if code not in (None, ""):
+                parts.append(f"code={code}")
+            if message:
+                parts.append(message)
+            if data not in (None, "", [], {}):
+                parts.append(str(data))
+            if parts:
+                return "JSON-RPC Fehler: " + " | ".join(parts)
+            return "JSON-RPC Fehler ohne Details"
+
+        text = str(error or "").strip()
+        if text:
+            return text
+        return "JSON-RPC Fehler ohne Details"
+
     # ------------------------------------------------------------------
     # Implicit Final Answer Detection
     # ------------------------------------------------------------------
@@ -727,12 +750,13 @@ class BaseAgent(DynamicToolMixin):
                 return result
 
             if "error" in data:
+                error_text = self._format_jsonrpc_error(data["error"])
                 self._emit_live_status(
                     phase="tool_error",
-                    detail=str(data["error"])[:120],
+                    detail=error_text[:120],
                     tool_name=method,
                 )
-                return {"error": str(data["error"])}
+                return {"error": error_text}
             self._emit_live_status(
                 phase="tool_error",
                 detail="Invalid response",
