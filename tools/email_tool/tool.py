@@ -21,6 +21,7 @@ Konfiguration (.env):
 from __future__ import annotations
 
 import logging
+import mimetypes
 import os
 import textwrap
 from pathlib import Path
@@ -135,6 +136,28 @@ def _graph_headers() -> Dict[str, str]:
     }
 
 
+def _attachment_artifact(path: str) -> Dict[str, Any]:
+    attachment_path = Path(path).resolve()
+    mime_type = mimetypes.guess_type(str(attachment_path))[0] or "application/octet-stream"
+    suffix = attachment_path.suffix.lower()
+    if suffix == ".pdf":
+        artifact_type = "pdf"
+    elif suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+        artifact_type = "image"
+    elif suffix in {".doc", ".docx", ".md", ".txt"}:
+        artifact_type = "document"
+    else:
+        artifact_type = "file"
+    return {
+        "type": artifact_type,
+        "path": str(attachment_path),
+        "label": attachment_path.name,
+        "mime": mime_type,
+        "source": "email_tool",
+        "origin": "tool",
+    }
+
+
 # ── MCP-Tools ─────────────────────────────────────────────────────────────────
 
 @tool(
@@ -204,16 +227,18 @@ def send_email(
             if ok:
                 log.info(f"E-Mail gesendet an {to} via {backend} | Betreff: {subject!r}")
                 result = {"success": True, "to": to, "subject": subject,
-                          "message": f"E-Mail erfolgreich an {to} gesendet ({backend})."}
+                          "message": f"E-Mail erfolgreich an {to} gesendet ({backend}).",
+                          "artifacts": []}
                 if resolved_attachment:
                     from pathlib import Path as _Path
                     result["attachment"] = _Path(resolved_attachment).name
+                    result["artifacts"] = [_attachment_artifact(resolved_attachment)]
                 return result
             else:
-                return {"success": False, "error": f"{backend}: Sendefehler — Logs prüfen"}
+                return {"success": False, "error": f"{backend}: Sendefehler — Logs prüfen", "artifacts": []}
         except Exception as e:
             log.error(f"{backend} send_email Fehler: {e}", exc_info=True)
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": str(e), "artifacts": []}
 
     # ── Microsoft Graph ───────────────────────────────────────────────────────
     try:
@@ -260,10 +285,12 @@ def send_email(
         if resp.status_code in (202, 204):
             log.info(f"E-Mail gesendet an {to} via msgraph | Betreff: {subject!r}")
             result = {"success": True, "to": to, "subject": subject,
-                      "message": f"E-Mail erfolgreich an {to} gesendet (msgraph)."}
+                      "message": f"E-Mail erfolgreich an {to} gesendet (msgraph).",
+                      "artifacts": []}
             if resolved_attachment:
                 from pathlib import Path as _Path
                 result["attachment"] = _Path(resolved_attachment).name
+                result["artifacts"] = [_attachment_artifact(resolved_attachment)]
             return result
         else:
             try:
@@ -271,16 +298,16 @@ def send_email(
             except Exception:
                 err_msg = resp.text[:300] or f"HTTP {resp.status_code}"
             log.error(f"Graph sendMail Fehler {resp.status_code}: {err_msg}")
-            return {"success": False, "error": f"HTTP {resp.status_code} — {err_msg}"}
+            return {"success": False, "error": f"HTTP {resp.status_code} — {err_msg}", "artifacts": []}
 
     except RuntimeError as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": str(e), "artifacts": []}
     except requests.RequestException as e:
         log.error(f"Netzwerkfehler beim E-Mail-Versand: {e}")
-        return {"success": False, "error": f"Netzwerkfehler: {e}"}
+        return {"success": False, "error": f"Netzwerkfehler: {e}", "artifacts": []}
     except Exception as e:
         log.error(f"Unerwarteter Fehler: {e}", exc_info=True)
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": str(e), "artifacts": []}
 
 
 @tool(

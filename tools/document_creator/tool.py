@@ -16,6 +16,7 @@ import asyncio
 import csv
 import io
 import logging
+import mimetypes
 import re
 from datetime import datetime
 from pathlib import Path
@@ -39,6 +40,28 @@ def _safe_filename(title: str, ext: str) -> Path:
 def _rel(path: Path) -> str:
     """Relativer Pfad zum Projekt-Root."""
     return str(path.relative_to(_PROJECT_ROOT))
+
+
+def _artifact_type_for_format(format_name: str) -> str:
+    if format_name == "pdf":
+        return "pdf"
+    if format_name in {"docx", "txt", "csv"}:
+        return "document"
+    if format_name == "xlsx":
+        return "data"
+    return "file"
+
+
+def _output_artifact(out_path: Path, format_name: str) -> dict:
+    mime_type = mimetypes.guess_type(str(out_path))[0] or "application/octet-stream"
+    return {
+        "type": _artifact_type_for_format(format_name),
+        "path": str(out_path.resolve()),
+        "label": out_path.name,
+        "mime": mime_type,
+        "source": "document_creator",
+        "origin": "tool",
+    }
 
 
 # ── PDF ───────────────────────────────────────────────────────────
@@ -72,10 +95,16 @@ async def create_pdf(title: str, content: str, author: str = "Timus") -> dict:
             "author": author,
         })
         log.info(f"PDF erstellt (Playwright): {out_path.name}")
-        return {"status": "success", "format": "pdf", "path": _rel(out_path), "filename": out_path.name}
+        return {
+            "status": "success",
+            "format": "pdf",
+            "path": _rel(out_path),
+            "filename": out_path.name,
+            "artifacts": [_output_artifact(out_path, "pdf")],
+        }
     except Exception as e:
         log.error(f"create_pdf Fehler: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": str(e), "artifacts": []}
 
 
 # ── DOCX ──────────────────────────────────────────────────────────
@@ -138,10 +167,16 @@ async def create_docx(title: str, content: str, author: str = "Timus") -> dict:
     try:
         out_path = await asyncio.to_thread(_build)
         log.info(f"DOCX erstellt: {out_path.name}")
-        return {"status": "success", "format": "docx", "path": _rel(out_path), "filename": out_path.name}
+        return {
+            "status": "success",
+            "format": "docx",
+            "path": _rel(out_path),
+            "filename": out_path.name,
+            "artifacts": [_output_artifact(out_path, "docx")],
+        }
     except Exception as e:
         log.error(f"create_docx Fehler: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": str(e), "artifacts": []}
 
 
 # ── XLSX ──────────────────────────────────────────────────────────
@@ -198,10 +233,16 @@ async def create_xlsx(title: str, headers: list, rows: list, sheet: str = "Tabel
     try:
         out_path = await asyncio.to_thread(_build)
         log.info(f"XLSX erstellt: {out_path.name}")
-        return {"status": "success", "format": "xlsx", "path": _rel(out_path), "filename": out_path.name}
+        return {
+            "status": "success",
+            "format": "xlsx",
+            "path": _rel(out_path),
+            "filename": out_path.name,
+            "artifacts": [_output_artifact(out_path, "xlsx")],
+        }
     except Exception as e:
         log.error(f"create_xlsx Fehler: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": str(e), "artifacts": []}
 
 
 # ── CSV ───────────────────────────────────────────────────────────
@@ -232,10 +273,16 @@ async def create_csv(title: str, headers: list, rows: list) -> dict:
     try:
         out_path = await asyncio.to_thread(_build)
         log.info(f"CSV erstellt: {out_path.name}")
-        return {"status": "success", "format": "csv", "path": _rel(out_path), "filename": out_path.name}
+        return {
+            "status": "success",
+            "format": "csv",
+            "path": _rel(out_path),
+            "filename": out_path.name,
+            "artifacts": [_output_artifact(out_path, "csv")],
+        }
     except Exception as e:
         log.error(f"create_csv Fehler: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": str(e), "artifacts": []}
 
 
 # ── TXT ───────────────────────────────────────────────────────────
@@ -259,7 +306,13 @@ async def create_txt(title: str, content: str) -> dict:
     try:
         out_path = await asyncio.to_thread(_build)
         log.info(f"TXT erstellt: {out_path.name}")
-        return {"status": "success", "format": "txt", "path": _rel(out_path), "filename": out_path.name}
+        return {
+            "status": "success",
+            "format": "txt",
+            "path": _rel(out_path),
+            "filename": out_path.name,
+            "artifacts": [_output_artifact(out_path, "txt")],
+        }
     except Exception as e:
         log.error(f"create_txt Fehler: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": str(e), "artifacts": []}

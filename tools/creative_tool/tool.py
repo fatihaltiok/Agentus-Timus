@@ -5,6 +5,7 @@ import os
 import json
 import asyncio
 import base64
+import mimetypes
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
@@ -24,6 +25,23 @@ try:
 except (ImportError, RuntimeError):
     log.warning("shared_context nicht gefunden oder Client fehlt. Erstelle lokalen Fallback-Client.")
     openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+
+def _build_image_artifacts(saved_as: str | None) -> list[dict]:
+    if not saved_as:
+        return []
+
+    project_root = Path(__file__).resolve().parent.parent.parent
+    image_path = (project_root / saved_as).resolve()
+    mime_type = mimetypes.guess_type(str(image_path))[0] or "image/png"
+    return [{
+        "type": "image",
+        "path": str(image_path),
+        "label": image_path.name,
+        "mime": mime_type,
+        "source": "creative_tool",
+        "origin": "tool",
+    }]
 
 # ==============================================================================
 # KORRIGIERTE `generate_image` FUNKTION
@@ -110,7 +128,8 @@ async def generate_image(prompt: str, size: str = "1024x1024", quality: str = "h
             "status": "success",
             "image_url": image_url,
             "saved_as": saved_as_filename,
-            "message": message_to_user
+            "message": message_to_user,
+            "artifacts": _build_image_artifacts(saved_as_filename),
         }
 
     except Exception as e:
@@ -134,6 +153,7 @@ async def generate_image(prompt: str, size: str = "1024x1024", quality: str = "h
             "message": error_message,
             "error_code": error_code,
             "error_type": error_type,
+            "artifacts": [],
         }
 
 # ... (deine anderen Methoden wie generate_code, generate_text bleiben unverändert) ...

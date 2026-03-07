@@ -74,6 +74,9 @@ TYPE_VALIDATORS = {
     "any": lambda v: True,
 }
 
+NORMALIZED_TOOL_RESULT_KEYS = {"status", "data", "summary", "artifacts", "metadata", "error"}
+NORMALIZED_TOOL_RESULT_STATUSES = {"success", "partial", "error"}
+
 
 def validate_parameter_value(param: "ToolParameter", value: Any) -> Any:
     """
@@ -369,7 +372,7 @@ class ToolRegistryV2:
                         # Bereits ein Success/Error (Right/Left) Objekt
                         if isinstance(result, (Right, Left)):
                             return result
-                        return Success(result)
+                        return Success(self.normalize_tool_result(name, result))
                     except Exception as e:
                         log.error(f"Tool {name} error: {e}")
                         return Error(code=-32000, message=str(e))
@@ -381,7 +384,7 @@ class ToolRegistryV2:
                         result = await asyncio.to_thread(fn, *args, **kwargs)
                         if isinstance(result, (Right, Left)):
                             return result
-                        return Success(result)
+                        return Success(self.normalize_tool_result(name, result))
                     except Exception as e:
                         log.error(f"Tool {name} error: {e}")
                         return Error(code=-32000, message=str(e))
@@ -455,13 +458,164 @@ class ToolRegistryV2:
 
         return "\n".join(manifest_lines)
 
-    async def execute(self, name: str, validate: bool = True, **kwargs) -> Any:
+    @staticmethod
+    def _is_normalized_tool_result(result: Any) -> bool:
+        return (
+            isinstance(result, dict)
+            and result.get("status") in NORMALIZED_TOOL_RESULT_STATUSES
+            and NORMALIZED_TOOL_RESULT_KEYS.issubset(result.keys())
+        )
+
+    @staticmethod
+    def _infer_artifact_type(path: str) -> str:
+        lower = (path or "").lower()
+        if lower.endswith(".pdf"):
+            return "pdf"
+        if lower.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif")):
+            return "image"
+        if lower.endswith((".md", ".txt", ".doc", ".docx")):
+            return "document"
+        if lower.endswith((".csv", ".xlsx", ".json")):
+            return "data"
+        return "file"
+
+    @classmethod
+    def _normalize_artifact(cls, tool_name: str, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        path = str(item.get("path") or "").strip()
+        if not path:
+            return None
+        return {
+            "type": item.get("type") or cls._infer_artifact_type(path),
+            "path": path,
+            "label": item.get("label") or path.rsplit("/", 1)[-1],
+            "mime": item.get("mime") or "",
+            "source": item.get("source") or tool_name,
+            "origin": item.get("origin") or "tool",
+        }
+
+    @classmethod
+    def _extract_artifacts_from_payload(cls, tool_name: str, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        artifacts: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+
+        raw_artifacts = payload.get("artifacts")
+        if isinstance(raw_artifacts, list):
+            for item in raw_artifacts:
+                if not isinstance(item, dict):
+                    continue
+                normalized = cls._normalize_artifact(tool_name, item)
+                if not normalized:
+                    continue
+                if normalized["path"] in seen:
+                    continue
+                seen.add(normalized["path"])
+                artifacts.append(normalized)
+
+        path_candidates = (
+            ("pdf_filepath", "pdf"),
+            ("image_path", "image"),
+            ("narrative_filepath", "document"),
+            ("filepath", ""),
+            ("file_path", ""),
+            ("path", ""),
+            ("saved_as", ""),
+            ("output_path", ""),
+        )
+        for key, fallback_type in path_candidates:
+            value = payload.get(key)
+            if not isinstance(value, str) or not value.strip():
+                continue
+            normalized = cls._normalize_artifact(
+                tool_name,
+                {"path": value.strip(), "type": fallback_type, "origin": "wrapper"},
+            )
+            if not normalized:
+                continue
+            if normalized["path"] in seen:
+                continue
+            seen.add(normalized["path"])
+            artifacts.append(normalized)
+
+        return artifacts
+
+    @classmethod
+    def _extract_metadata_from_payload(cls, payload: Dict[str, Any]) -> Dict[str, Any]:
+        metadata: Dict[str, Any] = {}
+        raw_metadata = payload.get("metadata")
+        if isinstance(raw_metadata, dict):
+            metadata.update(raw_metadata)
+
+        for key in (
+            "session_id",
+            "filepath",
+            "file_path",
+            "path",
+            "saved_as",
+            "pdf_filepath",
+            "image_path",
+            "narrative_filepath",
+            "output_path",
+            "filename",
+            "format",
+        ):
+            value = payload.get(key)
+            if value not in (None, "") and key not in metadata:
+                metadata[key] = value
+
+        return metadata
+
+    @classmethod
+    def normalize_tool_result(cls, tool_name: str, result: Any) -> Any:
+        if not isinstance(result, dict):
+            return result
+
+        if cls._is_normalized_tool_result(result):
+            normalized = dict(result)
+            normalized["artifacts"] = cls._extract_artifacts_from_payload(tool_name, normalized)
+            normalized["metadata"] = cls._extract_metadata_from_payload(normalized)
+            normalized["error"] = str(normalized.get("error") or "")
+            return normalized
+
+        payload = dict(result)
+        status = payload.get("status")
+        if status not in NORMALIZED_TOOL_RESULT_STATUSES:
+            if payload.get("success") is False or payload.get("error"):
+                status = "error"
+            else:
+                status = "success"
+
+        metadata = cls._extract_metadata_from_payload(payload)
+        artifacts = cls._extract_artifacts_from_payload(tool_name, payload)
+        if artifacts and not payload.get("artifacts"):
+            log.warning(
+                "Wrapper-Artefakt-Inferenz genutzt: tool=%s keys=%s",
+                tool_name,
+                sorted(k for k, v in payload.items() if v not in (None, "", [], {})),
+            )
+        summary = ""
+        for key in ("summary", "message", "result", "text", "error"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                summary = value.strip()
+                break
+
+        normalized = dict(payload)
+        normalized["status"] = status
+        normalized["data"] = payload.get("data", dict(payload))
+        normalized["summary"] = summary
+        normalized["artifacts"] = artifacts
+        normalized["metadata"] = metadata
+        normalized["error"] = str(payload.get("error") or "")
+        return normalized
+
+    async def execute(self, name: str, validate: bool = True, normalize: bool = False, **kwargs) -> Any:
         """
         Fuehrt ein Tool aus mit vollstaendiger Parameter-Validierung.
 
         Args:
             name: Name des Tools
             validate: Ob Parameter validiert werden sollen (default: True)
+            normalize: Ob Dict-Rueckgaben in den Tool-Envelope normalisiert werden sollen
             **kwargs: Parameter fuer das Tool
 
         Returns:
@@ -502,6 +656,8 @@ class ToolRegistryV2:
             else:
                 result = metadata.function(**validated_kwargs)
 
+        if normalize:
+            return self.normalize_tool_result(name, result)
         return result
 
     def validate_tool_call(self, tool_name: str, /, **kwargs) -> Dict[str, Any]:

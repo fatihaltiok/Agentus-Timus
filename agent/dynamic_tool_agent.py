@@ -204,7 +204,7 @@ class DynamicToolAgent(ABC):
                 args = {}
             
             try:
-                result = await registry_v2.execute(tool_name, **args)
+                result = await registry_v2.execute(tool_name, normalize=True, **args)
                 tool_results.append(ToolCallResult(
                     tool_name=tool_name,
                     arguments=args,
@@ -305,7 +305,7 @@ WICHTIG: Wenn du fertig bist, schreibe "Final Answer:" gefolgt von deiner Antwor
         
         tool_results = []
         try:
-            result = await registry_v2.execute(tool_name, **args)
+            result = await registry_v2.execute(tool_name, normalize=True, **args)
             tool_results.append(ToolCallResult(
                 tool_name=tool_name,
                 arguments=args,

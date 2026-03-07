@@ -303,6 +303,9 @@ def test_graph_result_contains_attachment_filename():
         assert result["success"] is True
         assert "attachment" in result
         assert result["attachment"] == Path(tmp).name
+        assert result["artifacts"][0]["path"] == str(Path(tmp).resolve())
+        assert result["artifacts"][0]["label"] == Path(tmp).name
+        assert result["artifacts"][0]["type"] == "pdf"
     finally:
         os.unlink(tmp)
 
@@ -365,3 +368,27 @@ def test_tool_missing_attachment_graceful():
 
     assert result["success"] is True
     assert "attachment" not in result
+    assert result["artifacts"] == []
+
+
+def test_graph_result_contains_empty_artifacts_without_attachment():
+    captured_payloads = []
+
+    def fake_post(url, headers, json, timeout):
+        captured_payloads.append(json)
+        mock_resp = MagicMock()
+        mock_resp.status_code = 202
+        return mock_resp
+
+    with patch("requests.post", side_effect=fake_post):
+        with patch("tools.email_tool.tool._get_access_token", return_value="fake_token"):
+            with patch.dict(os.environ, {"EMAIL_BACKEND": "msgraph"}):
+                from tools.email_tool.tool import send_email
+                result = send_email(
+                    to="test@example.com",
+                    subject="No Attachment",
+                    body="Hallo",
+                )
+
+    assert result["success"] is True
+    assert result["artifacts"] == []

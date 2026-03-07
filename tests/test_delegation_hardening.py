@@ -124,6 +124,72 @@ async def test_delegate_propagates_session_id_from_source_agent_and_restores_tar
 
 
 @pytest.mark.asyncio
+async def test_delegate_passes_effective_session_id_to_blackboard(monkeypatch):
+    from agent.agent_registry import AgentRegistry
+
+    registry = AgentRegistry()
+    source = _DummyAgent()
+    source.conversation_session_id = "sess-bb-9"
+    target = _DummyAgent()
+    captured = {}
+
+    async def _fake_tools_description():
+        return "tools"
+
+    def _capture_blackboard(
+        agent_type,
+        task,
+        result,
+        status,
+        session_id=None,
+        metadata=None,
+        artifacts=None,
+    ):
+        captured["agent_type"] = agent_type
+        captured["task"] = task
+        captured["result"] = result
+        captured["status"] = status
+        captured["session_id"] = session_id
+        captured["metadata"] = metadata
+        captured["artifacts"] = artifacts
+        return "delegation:research:123"
+
+    registry._get_tools_description = _fake_tools_description
+    registry.register_spec(
+        "executor",
+        "executor",
+        ["execution"],
+        lambda tools_description_string: source,
+    )
+    registry.register_spec(
+        "research",
+        "research",
+        ["research"],
+        lambda tools_description_string: target,
+    )
+    registry._instances["executor"] = source
+
+    monkeypatch.setattr(
+        AgentRegistry,
+        "_auto_write_to_blackboard",
+        staticmethod(_capture_blackboard),
+    )
+
+    result = await registry.delegate(
+        from_agent="executor",
+        to_agent="research",
+        task="persist this",
+    )
+
+    assert result["status"] == "success"
+    assert captured["session_id"] == "sess-bb-9"
+    assert captured["agent_type"] == "research"
+    assert captured["status"] == "success"
+    assert isinstance(captured["metadata"], dict)
+    assert isinstance(captured["artifacts"], list)
+
+
+@pytest.mark.asyncio
 async def test_delegate_tool_returns_error_status_when_registry_reports_error(monkeypatch):
     import agent.agent_registry as agent_registry_module
     from tools.delegation_tool.tool import delegate_to_agent

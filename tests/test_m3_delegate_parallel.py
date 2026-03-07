@@ -179,6 +179,38 @@ class TestFanIn:
         assert "erfolgreich" in result["summary"]
         assert "Fehler"      in result["summary"]
 
+    @pytest.mark.asyncio
+    async def test_worker_result_traegt_agentresult_felder(self):
+        from agent.agent_registry import AgentRegistry, AgentSpec
+
+        def factory(tools_desc, **kwargs):
+            m = MagicMock()
+            m.run = AsyncMock(return_value={
+                "result": "Bericht fertig",
+                "metadata": {"pdf_filepath": "/tmp/report.pdf"},
+                "artifacts": [{"type": "pdf", "path": "/tmp/report.pdf"}],
+            })
+            return m
+
+        registry = AgentRegistry()
+        registry._specs["research"] = AgentSpec(
+            name="research",
+            agent_type="research",
+            capabilities=["research"],
+            factory=factory,
+        )
+
+        result = await registry.delegate_parallel(tasks=[
+            {"task_id": "t1", "agent": "research", "task": "Erstelle Bericht"},
+        ])
+
+        worker = result["results"][0]
+        assert worker["status"] == "success"
+        assert worker["quality"] == 80
+        assert isinstance(worker["blackboard_key"], str)
+        assert worker["metadata"]["pdf_filepath"] == "/tmp/report.pdf"
+        assert worker["artifacts"][0]["path"] == "/tmp/report.pdf"
+
 
 # ── T4: Frische Instanz pro Task ─────────────────────────────────────────────
 

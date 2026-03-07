@@ -65,3 +65,28 @@ async def test_creative_agent_retries_once_on_moderation_and_succeeds():
     assert "erfolgreich generiert" in result.lower()
     assert "results/hero.png" in result
 
+
+@pytest.mark.asyncio
+async def test_creative_agent_prefers_artifacts_path_over_saved_as():
+    agent = CreativeAgent.__new__(CreativeAgent)
+    agent._handle_file_artifacts = lambda observation: None
+    agent._extract_primary_file_path = lambda observation: ("/tmp/from-artifacts.png", "artifacts")
+
+    async def _fake_prompt(_task: str) -> str:
+        return "cinematic superhero scene"
+
+    async def _fake_exec(prompt: str, size: str = "1024x1024", quality: str = "high"):
+        return {
+            "status": "success",
+            "saved_as": "results/hero.png",
+            "artifacts": [{"type": "image", "path": "/tmp/from-artifacts.png"}],
+            "message": "ok",
+        }
+
+    agent._generate_image_prompt_with_gpt = _fake_prompt
+    agent._execute_with_nemotron = _fake_exec
+
+    result = await CreativeAgent.run(agent, "male ein bild von einem helden")
+
+    assert "erfolgreich generiert" in result.lower()
+    assert "/tmp/from-artifacts.png" in result

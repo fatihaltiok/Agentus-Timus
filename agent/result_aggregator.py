@@ -25,12 +25,32 @@ class ResultAggregator:
             task_id = r.get("task_id", "?")
             agent   = r.get("agent", "?")
             status  = r.get("status", "?").upper()
-            content = r.get("result", r.get("error", ""))
+            content = r.get("result") or r.get("error", "")
+            artifacts = r.get("artifacts", []) or []
+            metadata = r.get("metadata", {}) or {}
+            quality = r.get("quality")
+            blackboard_key = r.get("blackboard_key", "")
 
             lines.append(f"### [{task_id}] {agent} → {status}")
+            if quality is not None:
+                lines.append(f"Quality: {quality}")
+            if blackboard_key:
+                lines.append(f"Blackboard: {blackboard_key}")
             if content:
                 # Max 800 Zeichen pro Ergebnis — Context-Window schonen
                 lines.append(str(content)[:800])
+            if artifacts:
+                lines.append("Artifacts:")
+                for item in artifacts[:5]:
+                    if not isinstance(item, dict):
+                        continue
+                    path = str(item.get("path", ""))[:200]
+                    artifact_type = str(item.get("type", "file"))
+                    lines.append(f"- {artifact_type}: {path}")
+            elif metadata:
+                lines.append("Metadata:")
+                for key, value in list(metadata.items())[:5]:
+                    lines.append(f"- {key}: {str(value)[:200]}")
             lines.append("")
 
         return "\n".join(lines)

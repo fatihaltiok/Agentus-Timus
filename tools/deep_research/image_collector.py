@@ -30,6 +30,30 @@ _MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB
 _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 
+def _extract_generated_image_path(result: dict) -> Optional[str]:
+    artifacts = result.get("artifacts")
+    if isinstance(artifacts, list):
+        for item in artifacts:
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path") or "").strip()
+            if path:
+                return path
+
+    metadata = result.get("metadata")
+    if isinstance(metadata, dict):
+        for key in ("image_path", "saved_as", "path", "filepath"):
+            value = metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+    for key in ("saved_as", "image_path", "path", "filepath"):
+        value = result.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 @dataclass
 class ImageResult:
     local_path: str    # Absoluter Pfad zur heruntergeladenen/generierten Datei
@@ -186,10 +210,11 @@ class ImageCollector:
             if not isinstance(result, dict):
                 return None
 
-            # Wenn lokal gespeichert (b64_json-Pfad)
-            saved_as = result.get("saved_as")
-            if saved_as:
-                full_path = Path("/home/fatih-ubuntu/dev/timus") / saved_as
+            generated_path = _extract_generated_image_path(result)
+            if generated_path:
+                full_path = Path(generated_path)
+                if not full_path.is_absolute():
+                    full_path = Path("/home/fatih-ubuntu/dev/timus") / generated_path
                 if full_path.exists():
                     return str(full_path)
 

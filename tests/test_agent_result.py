@@ -14,6 +14,7 @@ def test_agent_result_success_fields():
     assert r.quality == 80
     assert r.blackboard_key == "delegation:shell:123"
     assert r.error == ""
+    assert r.artifacts == []
 
 
 def test_agent_result_error_fields():
@@ -28,6 +29,7 @@ def test_agent_result_partial_fields():
     r = AgentResult(status="partial", agent="data", result="teilweise", quality=40, blackboard_key="")
     assert r.status == "partial"
     assert r.quality == 40
+    assert r.artifacts == []
 
 
 # ── 2. Quality-Bounds: 0–100 ──────────────────────────────────────────────
@@ -92,6 +94,7 @@ def test_agent_result_asdict():
     assert d["quality"] == 80
     assert d["blackboard_key"] == "k1"
     assert d["error"] == ""
+    assert d["artifacts"] == []
 
 
 def test_agent_result_from_dict():
@@ -100,3 +103,28 @@ def test_agent_result_from_dict():
     r = AgentResult(**d)
     assert r.status == "partial"
     assert r.quality == 40
+    assert r.artifacts == []
+
+
+def test_agent_result_with_artifacts_from_dict():
+    d = {
+        "status": "success",
+        "agent": "research",
+        "result": "done",
+        "quality": 80,
+        "blackboard_key": "delegation:research:111",
+        "error": "",
+        "artifacts": [
+            {
+                "type": "pdf",
+                "path": "/tmp/report.pdf",
+                "label": "Research PDF",
+                "source": "research",
+                "origin": "metadata",
+            }
+        ],
+    }
+    r = AgentResult(**d)
+    assert len(r.artifacts) == 1
+    assert r.artifacts[0]["type"] == "pdf"
+    assert r.artifacts[0]["path"] == "/tmp/report.pdf"

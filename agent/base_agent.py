@@ -523,12 +523,15 @@ class BaseAgent(DynamicToolMixin):
         if os.getenv("AUTO_OPEN_FILES", "true").lower() != "true":
             return
 
-        file_path = (
-            observation.get("file_path")
-            or observation.get("saved_as")
-            or observation.get("filepath")
-        )
+        file_path, path_source = self._extract_primary_file_path(observation)
         if file_path and os.path.exists(file_path):
+            if path_source != "artifacts":
+                log.warning(
+                    "Dateipfad-Fallback genutzt: agent=%s source=%s path=%s",
+                    getattr(self, "agent_type", "unknown"),
+                    path_source,
+                    file_path,
+                )
             log.info(f"Oeffne: {file_path}")
             try:
                 if platform.system() == "Windows":
@@ -539,6 +542,40 @@ class BaseAgent(DynamicToolMixin):
                     subprocess.call(["xdg-open", file_path])
             except Exception as e:
                 log.warning(f"Oeffnen fehlgeschlagen: {e}")
+
+    def _extract_primary_file_path(self, observation: dict) -> Tuple[Optional[str], str]:
+        if not isinstance(observation, dict):
+            return None, "none"
+
+        artifacts = observation.get("artifacts")
+        if isinstance(artifacts, list):
+            for item in artifacts:
+                if not isinstance(item, dict):
+                    continue
+                path = str(item.get("path") or "").strip()
+                if path:
+                    return self._resolve_local_path(path), "artifacts"
+
+        metadata = observation.get("metadata")
+        if isinstance(metadata, dict):
+            for key in ("pdf_filepath", "image_path", "narrative_filepath", "filepath", "file_path", "path", "saved_as"):
+                value = metadata.get(key)
+                if isinstance(value, str) and value.strip():
+                    return self._resolve_local_path(value.strip()), "metadata"
+
+        for key in ("file_path", "saved_as", "filepath", "path"):
+            value = observation.get(key)
+            if isinstance(value, str) and value.strip():
+                return self._resolve_local_path(value.strip()), "legacy"
+
+        return None, "none"
+
+    @staticmethod
+    def _resolve_local_path(path: str) -> str:
+        if os.path.isabs(path):
+            return path
+        candidate = os.path.abspath(path)
+        return candidate
 
     # ------------------------------------------------------------------
     # Lane Management
@@ -680,6 +717,8 @@ class BaseAgent(DynamicToolMixin):
                         result["_loop_warning"] = loop_reason
                     else:
                         result = {"value": result, "_loop_warning": loop_reason}
+                if isinstance(result, dict):
+                    result = registry_v2.normalize_tool_result(method, result)
                 self._emit_live_status(
                     phase="tool_done",
                     detail="ok",

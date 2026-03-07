@@ -115,7 +115,7 @@ class DynamicToolMixin:
         if not self._dynamic_tools_enabled:
             raise RuntimeError("Dynamische Tools nicht aktiviert. Rufe init_dynamic_tools() auf.")
         
-        return await registry_v2.execute(tool_name, **kwargs)
+        return await registry_v2.execute(tool_name, normalize=True, **kwargs)
     
     async def run_with_dynamic_tools(
         self,

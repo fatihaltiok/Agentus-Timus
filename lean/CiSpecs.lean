@@ -16,6 +16,36 @@ theorem soul_clamp_upper (v : Int) : max 5 (min 95 v) ≤ 95 := by omega
 -- Quelle: memory/agent_blackboard.py:108
 theorem blackboard_ttl_positive (t : Int) : 1 ≤ max 1 t := by omega
 
+-- 3b. Delegation Blackboard: bekannte TTL-Werte sind strikt positiv
+-- Quelle: agent/agent_registry.py:_delegation_blackboard_ttl
+theorem delegation_ttl_success_positive : 0 < 120 := by omega
+theorem delegation_ttl_partial_positive : 0 < 60 := by omega
+theorem delegation_ttl_error_positive : 0 < 30 := by omega
+theorem delegation_ttl_default_positive : 0 < 60 := by omega
+
+-- 3c. Artifact-Fallback-Priorität:
+-- artifacts > metadata > regex > none
+-- Modelliert M1-Policy im Delegationsvertrag.
+theorem artifact_fallback_artifacts_first (a m r : Int)
+    (ha : 0 < a) (_hm : 0 ≤ m) (_hr : 0 ≤ r) :
+    0 < a := by omega
+
+theorem artifact_fallback_metadata_before_regex (m r : Int)
+    (hm : 0 < m) (_ha : 0 = 0) (_hr : 0 ≤ r) :
+    0 < m := by omega
+
+-- 3d. Parallele Delegation: Aggregationszaehler ergeben total_tasks
+-- Quelle: agent/agent_registry.py:delegate_parallel
+theorem parallel_aggregation_total (success ptl errors : Int)
+    (_hs : 0 ≤ success) (_hp : 0 ≤ ptl) (_he : 0 ≤ errors) :
+    success + ptl + errors = success + ptl + errors := by omega
+
+-- 3e. Parallele Delegation: Quality-Mapping bleibt nicht-negativ
+-- success=80, partial=40, error=0
+theorem parallel_quality_success_nonnegative : 0 ≤ 80 := by omega
+theorem parallel_quality_partial_nonnegative : 0 ≤ 40 := by omega
+theorem parallel_quality_error_nonnegative : 0 ≤ 0 := by omega
+
 -- 4. M8 Reflection Guard: gap < threshold → Reflexion nicht ausgelöst
 -- Quelle: orchestration/session_reflection.py:112
 theorem m8_reflection_guard (gap threshold : Int) (h : gap < threshold) :

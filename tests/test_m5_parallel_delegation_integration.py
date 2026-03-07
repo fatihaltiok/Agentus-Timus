@@ -308,6 +308,23 @@ class TestMetaPromptErweiterung:
         )
         assert "UNABHAENGIG" in prompt or "unabhängig" in prompt.lower() or "UNABHÄNGIG" in prompt
 
+    def test_prompt_enthaelt_results_und_artifacts_hinweis(self):
+        from agent.prompts import META_SYSTEM_PROMPT
+        prompt = META_SYSTEM_PROMPT.format(
+            current_date="2026-02-24",
+            tools_description="test",
+        )
+        assert "results[]" in prompt
+        assert "artifacts" in prompt
+
+    def test_prompt_markiert_metadata_als_ausnahme_fallback(self):
+        from agent.prompts import META_SYSTEM_PROMPT
+        prompt = META_SYSTEM_PROMPT.format(
+            current_date="2026-02-24",
+            tools_description="test",
+        )
+        assert "Ausnahme-Fallback" in prompt or "nicht der Normalfall" in prompt
+
 
 # ── T6: Regression — delegate() + delegate_parallel() koexistieren ────────────
 

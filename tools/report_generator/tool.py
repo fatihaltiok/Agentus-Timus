@@ -114,6 +114,30 @@ async def generate_report_from_session(
         logger.error(f"Kritischer Fehler bei der Berichterstellung: {e}", exc_info=True)
         raise
 
+def _primary_saved_path(save_result: Dict) -> str:
+    artifacts = save_result.get("artifacts")
+    if isinstance(artifacts, list):
+        for item in artifacts:
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path") or "").strip()
+            if path:
+                return path
+
+    metadata = save_result.get("metadata")
+    if isinstance(metadata, dict):
+        for key in ("filepath", "file_path", "path", "saved_as"):
+            value = metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+    for key in ("filepath", "file_path", "path", "saved_as"):
+        value = save_result.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 async def _save_report(content: str, query: str, report_format: str) -> Dict:
     """
     Speichert den Bericht über das 'save_research_result'-Tool.
@@ -236,8 +260,9 @@ async def _save_report(content: str, query: str, report_format: str) -> Dict:
             "title": title, "content": content, "format": report_format.lower()
         })
 
-        if isinstance(save_result, dict) and save_result.get("filename"):
-            logger.info(f"Bericht erfolgreich gespeichert: {save_result.get('filepath')}")
+        primary_path = _primary_saved_path(save_result) if isinstance(save_result, dict) else ""
+        if isinstance(save_result, dict) and (save_result.get("filename") or primary_path):
+            logger.info(f"Bericht erfolgreich gespeichert: {primary_path or save_result.get('filepath')}")
             return save_result
         else:
             error_msg = f"Tool 'save_research_result' gab keinen Dateinamen zurück. Antwort: {save_result}"

@@ -83,6 +83,52 @@ class TestFormatResultsGrundverhalten:
         out = ResultAggregator.format_results(agg)
         assert "Mein Recherche-Ergebnis" in out
 
+    def test_artifacts_in_ausgabe(self):
+        from agent.result_aggregator import ResultAggregator
+        agg = _make_aggregated(results=[
+            {
+                "task_id": "t1",
+                "agent": "research",
+                "status": "success",
+                "result": "ok",
+                "artifacts": [{"type": "pdf", "path": "/tmp/report.pdf"}],
+            },
+        ])
+        out = ResultAggregator.format_results(agg)
+        assert "Artifacts:" in out
+        assert "/tmp/report.pdf" in out
+
+    def test_quality_und_blackboard_in_ausgabe(self):
+        from agent.result_aggregator import ResultAggregator
+        agg = _make_aggregated(results=[
+            {
+                "task_id": "t1",
+                "agent": "research",
+                "status": "success",
+                "result": "ok",
+                "quality": 80,
+                "blackboard_key": "delegation:research:123",
+            },
+        ])
+        out = ResultAggregator.format_results(agg)
+        assert "Quality: 80" in out
+        assert "delegation:research:123" in out
+
+    def test_metadata_in_ausgabe_wenn_keine_artifacts(self):
+        from agent.result_aggregator import ResultAggregator
+        agg = _make_aggregated(results=[
+            {
+                "task_id": "t1",
+                "agent": "research",
+                "status": "success",
+                "result": "ok",
+                "metadata": {"session_id": "abc123"},
+            },
+        ])
+        out = ResultAggregator.format_results(agg)
+        assert "Metadata:" in out
+        assert "session_id: abc123" in out
+
     def test_error_message_in_ausgabe(self):
         """Bei Fehlern wird 'error'-Feld statt 'result' gezeigt."""
         from agent.result_aggregator import ResultAggregator

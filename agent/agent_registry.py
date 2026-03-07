@@ -11,6 +11,7 @@ FEATURES:
 import asyncio
 import logging
 import os
+import re
 import time
 import uuid
 import httpx
@@ -45,6 +46,7 @@ class AgentResult:
     blackboard_key: str  # Key unter dem Ergebnis im Blackboard liegt
     error: str = ""      # Fehlermeldung bei status=="error"
     metadata: Dict[str, Any] = field(default_factory=dict)  # Strukturierte Key-Values
+    artifacts: List[Dict[str, Any]] = field(default_factory=list)  # Typed file refs etc.
 
 
 class AgentRegistry:
@@ -377,8 +379,13 @@ class AgentRegistry:
             if last_error is not None:
                 raise last_error
 
+            result_str = AgentRegistry._stringify_delegation_result(raw)
+            _meta, _artifacts = AgentRegistry._build_result_metadata_and_artifacts(
+                raw,
+                to_agent,
+            )
+
             # Partial-Result-Erkennung
-            result_str = str(raw)
             if result_str in self._PARTIAL_MARKERS:
                 status = "partial"
                 self._log_canvas_delegation(
@@ -392,9 +399,24 @@ class AgentRegistry:
                 )
                 # M12: Routing-Analytics (partial)
                 self._record_routing_outcome(task, to_agent, "partial")
-                bb_key = AgentRegistry._auto_write_to_blackboard(to_agent, task, result_str, "partial")
-                _meta = AgentRegistry._extract_metadata(result_str, to_agent)
-                _res = AgentResult(status="partial", agent=to_agent, result=result_str, quality=40, blackboard_key=bb_key, metadata=_meta)
+                bb_key = AgentRegistry._auto_write_to_blackboard(
+                    to_agent,
+                    task,
+                    result_str,
+                    "partial",
+                    session_id=effective_session_id,
+                    metadata=_meta,
+                    artifacts=_artifacts,
+                )
+                _res = AgentResult(
+                    status="partial",
+                    agent=to_agent,
+                    result=result_str,
+                    quality=40,
+                    blackboard_key=bb_key,
+                    metadata=_meta,
+                    artifacts=_artifacts,
+                )
                 return {
                     "status": _res.status,
                     "agent": _res.agent,
@@ -402,6 +424,7 @@ class AgentRegistry:
                     "quality": _res.quality,
                     "blackboard_key": _res.blackboard_key,
                     "metadata": _res.metadata,
+                    "artifacts": _res.artifacts,
                     "note": "Aufgabe nicht vollstaendig abgeschlossen",
                 }
 
@@ -421,10 +444,33 @@ class AgentRegistry:
                     _delegation_sse_hook(from_agent, to_agent, "completed")
             except Exception:
                 pass
-            bb_key = AgentRegistry._auto_write_to_blackboard(to_agent, task, result_str, "success")
-            _meta = AgentRegistry._extract_metadata(result_str, to_agent)
-            _res = AgentResult(status="success", agent=to_agent, result=result_str, quality=80, blackboard_key=bb_key, metadata=_meta)
-            return {"status": _res.status, "agent": _res.agent, "result": _res.result, "quality": _res.quality, "blackboard_key": _res.blackboard_key, "metadata": _res.metadata}
+            bb_key = AgentRegistry._auto_write_to_blackboard(
+                to_agent,
+                task,
+                result_str,
+                "success",
+                session_id=effective_session_id,
+                metadata=_meta,
+                artifacts=_artifacts,
+            )
+            _res = AgentResult(
+                status="success",
+                agent=to_agent,
+                result=result_str,
+                quality=80,
+                blackboard_key=bb_key,
+                metadata=_meta,
+                artifacts=_artifacts,
+            )
+            return {
+                "status": _res.status,
+                "agent": _res.agent,
+                "result": _res.result,
+                "quality": _res.quality,
+                "blackboard_key": _res.blackboard_key,
+                "metadata": _res.metadata,
+                "artifacts": _res.artifacts,
+            }
 
         except Exception as e:
             log.error(f"Delegation {from_agent} -> {to_agent} fehlgeschlagen: {e}")
@@ -444,8 +490,21 @@ class AgentRegistry:
                     _delegation_sse_hook(from_agent, to_agent, "error")
             except Exception:
                 pass
-            bb_key = AgentRegistry._auto_write_to_blackboard(to_agent, task, str(e), "error")
-            _res = AgentResult(status="error", agent=to_agent, result="", quality=0, blackboard_key=bb_key, error=str(e))
+            bb_key = AgentRegistry._auto_write_to_blackboard(
+                to_agent,
+                task,
+                str(e),
+                "error",
+                session_id=effective_session_id,
+            )
+            _res = AgentResult(
+                status="error",
+                agent=to_agent,
+                result="",
+                quality=0,
+                blackboard_key=bb_key,
+                error=str(e),
+            )
             return {
                 "status": _res.status,
                 "agent": _res.agent,
@@ -453,6 +512,7 @@ class AgentRegistry:
                 "quality": _res.quality,
                 "blackboard_key": _res.blackboard_key,
                 "metadata": {},
+                "artifacts": [],
             }
         finally:
             if target_has_session_attr and agent is not None:
@@ -480,18 +540,39 @@ class AgentRegistry:
             pass
 
     @staticmethod
-    def _auto_write_to_blackboard(agent_type: str, task: str, result: str, status: str) -> str:
+    def _delegation_blackboard_ttl(status: str) -> int:
+        """Liefert positive TTL fuer Delegations-Ergebnisse."""
+        return {"success": 120, "partial": 60, "error": 30}.get(status, 60)
+
+    @staticmethod
+    def _auto_write_to_blackboard(
+        agent_type: str,
+        task: str,
+        result: str,
+        status: str,
+        session_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        artifacts: Optional[List[Dict[str, Any]]] = None,
+    ) -> str:
         """Schreibt Delegationsergebnis automatisch ins Blackboard (M17). Gibt Key zurück."""
         try:
             from memory.agent_blackboard import get_blackboard
             bb = get_blackboard()
             key = f"delegation:{agent_type}:{int(time.time())}"
-            ttl = {"success": 120, "partial": 60, "error": 30}.get(status, 60)
+            ttl = AgentRegistry._delegation_blackboard_ttl(status)
             bb.write(
+                agent="agent_registry",
+                topic="delegation_results",
                 key=key,
-                value={"task": task[:200], "result": result[:1000], "status": status},
-                agent_id="agent_registry",
+                value={
+                    "task": task[:200],
+                    "result": result[:1000],
+                    "status": status,
+                    "metadata": metadata or {},
+                    "artifacts": artifacts or [],
+                },
                 ttl_minutes=ttl,
+                session_id=session_id or "",
             )
             return key
         except Exception as e:
@@ -499,9 +580,45 @@ class AgentRegistry:
             return ""
 
     @staticmethod
-    def _extract_metadata(result: str, agent_type: str) -> Dict[str, Any]:
+    def _stringify_delegation_result(raw: Any) -> str:
+        """String-Darstellung fuer Delegationsergebnisse mit Dict-Spezialfall."""
+        if isinstance(raw, dict):
+            preferred = raw.get("result")
+            if isinstance(preferred, str) and preferred.strip():
+                return preferred
+        return str(raw)
+
+    @staticmethod
+    def _extract_declared_metadata(raw: Any) -> Dict[str, Any]:
+        """Extrahiert explizit deklarierte Metadaten ohne Regex-Fallback."""
+        meta: Dict[str, Any] = {}
+        if not isinstance(raw, dict):
+            return meta
+
+        raw_meta = raw.get("metadata")
+        if isinstance(raw_meta, dict):
+            meta.update(raw_meta)
+
+        for key in (
+            "pdf_filepath",
+            "image_path",
+            "narrative_filepath",
+            "session_id",
+            "word_count",
+            "saved_as",
+            "file_path",
+            "filepath",
+        ):
+            value = raw.get(key)
+            if value not in (None, "") and key not in meta:
+                meta[key] = value
+
+        return meta
+
+    @staticmethod
+    def _extract_metadata(result: Any, agent_type: str) -> Dict[str, Any]:
         """
-        Extrahiert strukturierte Key-Value-Paare aus dem Ergebnis-Text.
+        Extrahiert strukturierte Key-Value-Paare.
         Gibt dem Meta-LLM ein sauberes JSON-Dict statt Textsuche.
 
         Extrahierte Keys:
@@ -511,8 +628,9 @@ class AgentRegistry:
           narrative_filepath — Markdown-Bericht-Pfad
           word_count     — Wörterzahl aus Berichts-Header
         """
-        import re
-        meta: Dict[str, Any] = {}
+        meta: Dict[str, Any] = AgentRegistry._extract_declared_metadata(result)
+        result_text = AgentRegistry._stringify_delegation_result(result)
+        regex_used = False
 
         # --- Datei-Pfade ---
         path_patterns = {
@@ -521,36 +639,178 @@ class AgentRegistry:
             "narrative_filepath":  r'narrative_filepath["\s:]+([^\s\'"}\]]+\.(?:md|txt))',
         }
         for key, pattern in path_patterns.items():
-            m = re.search(pattern, result, re.IGNORECASE)
+            if key in meta:
+                continue
+            m = re.search(pattern, result_text, re.IGNORECASE)
             if m:
                 meta[key] = m.group(1).strip().strip('"\'')
+                regex_used = True
 
         # --- session_id ---
-        m = re.search(r'"?session_id"?\s*[=:]\s*"?([a-zA-Z0-9_-]{8,})"?', result)
-        if m:
-            meta["session_id"] = m.group(1)
+        if "session_id" not in meta:
+            m = re.search(r'"?session_id"?\s*[=:]\s*"?([a-zA-Z0-9_-]{8,})"?', result_text)
+            if m:
+                meta["session_id"] = m.group(1)
+                regex_used = True
 
         # --- Wörterzahl aus Header ---
-        m = re.search(r'([\d,\.]+)\s+W[oö]rter', result)
-        if m:
-            try:
-                meta["word_count"] = int(m.group(1).replace(",", "").replace(".", ""))
-            except ValueError:
-                pass
+        if "word_count" not in meta:
+            m = re.search(r'([\d,\.]+)\s+W[oö]rter', result_text)
+            if m:
+                try:
+                    meta["word_count"] = int(m.group(1).replace(",", "").replace(".", ""))
+                    regex_used = True
+                except ValueError:
+                    pass
 
         # --- Fallback: alle absoluten Pfade mit bekannten Endungen ---
         if not meta.get("pdf_filepath"):
-            m = re.search(r'(/[^\s\'"}\]]+\.pdf)', result)
+            m = re.search(r'(/[^\s\'"}\]]+\.pdf)', result_text)
             if m:
                 meta["pdf_filepath"] = m.group(1)
+                regex_used = True
         if not meta.get("image_path"):
-            m = re.search(r'(/[^\s\'"}\]]+\.(?:png|jpg|jpeg|webp))', result)
+            m = re.search(r'(/[^\s\'"}\]]+\.(?:png|jpg|jpeg|webp))', result_text)
             if m:
                 meta["image_path"] = m.group(1)
+                regex_used = True
+        if not meta.get("narrative_filepath"):
+            m = re.search(r'(/[^\s\'"}\]]+\.(?:md|txt))', result_text)
+            if m:
+                meta["narrative_filepath"] = m.group(1)
+                regex_used = True
 
         if meta:
             log.debug("Metadata extrahiert für %s: %s", agent_type, list(meta.keys()))
+        if regex_used:
+            log.warning(
+                "Regex-Fallback fuer Delegationsergebnis genutzt: agent=%s keys=%s",
+                agent_type,
+                sorted(meta.keys()),
+            )
         return meta
+
+    @staticmethod
+    def _normalize_artifact(path: str, *, artifact_type: str, label: str, source: str, origin: str) -> Dict[str, Any]:
+        return {
+            "type": artifact_type,
+            "path": path,
+            "label": label,
+            "source": source,
+            "origin": origin,
+        }
+
+    @staticmethod
+    def _infer_artifact_type(path: str, *, fallback: str = "file") -> str:
+        lower = (path or "").lower()
+        if lower.endswith(".pdf"):
+            return "pdf"
+        if lower.endswith((".png", ".jpg", ".jpeg", ".webp")):
+            return "image"
+        if lower.endswith((".md", ".txt")):
+            return "report"
+        if lower.endswith(".docx"):
+            return "docx"
+        if lower.endswith((".csv", ".xlsx", ".json")):
+            return "data"
+        return fallback
+
+    @staticmethod
+    def _extract_declared_artifacts(raw: Any, agent_type: str) -> List[Dict[str, Any]]:
+        artifacts: List[Dict[str, Any]] = []
+        if not isinstance(raw, dict):
+            return artifacts
+
+        raw_artifacts = raw.get("artifacts")
+        if not isinstance(raw_artifacts, list):
+            return artifacts
+
+        for item in raw_artifacts:
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path") or "").strip()
+            if not path:
+                continue
+            artifacts.append(
+                {
+                    "type": item.get("type") or AgentRegistry._infer_artifact_type(path),
+                    "path": path,
+                    "label": item.get("label") or path.rsplit("/", 1)[-1],
+                    "source": item.get("source") or agent_type,
+                    "origin": item.get("origin") or "artifacts",
+                }
+            )
+
+        return artifacts
+
+    @staticmethod
+    def _artifacts_from_metadata(
+        metadata: Dict[str, Any],
+        agent_type: str,
+        *,
+        origin: str,
+    ) -> List[Dict[str, Any]]:
+        artifacts: List[Dict[str, Any]] = []
+
+        typed_keys = (
+            ("pdf_filepath", "pdf", "Research PDF"),
+            ("image_path", "image", "Generated image"),
+            ("narrative_filepath", "report", "Narrative report"),
+            ("saved_as", "file", "Saved file"),
+            ("file_path", "file", "Output file"),
+            ("filepath", "file", "Output file"),
+        )
+
+        seen_paths: set[str] = set()
+        for key, fallback_type, label in typed_keys:
+            value = metadata.get(key)
+            path = str(value or "").strip()
+            if not path or path in seen_paths:
+                continue
+            seen_paths.add(path)
+            artifacts.append(
+                AgentRegistry._normalize_artifact(
+                    path,
+                    artifact_type=AgentRegistry._infer_artifact_type(path, fallback=fallback_type),
+                    label=label,
+                    source=agent_type,
+                    origin=origin,
+                )
+            )
+
+        return artifacts
+
+    @staticmethod
+    def _build_result_metadata_and_artifacts(raw: Any, agent_type: str) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
+        """
+        Erzwingt die Fallback-Politik:
+        artifacts -> metadata -> regex-fallback + warning
+        """
+        declared_artifacts = AgentRegistry._extract_declared_artifacts(raw, agent_type)
+        declared_metadata = AgentRegistry._extract_declared_metadata(raw)
+        metadata_artifacts = AgentRegistry._artifacts_from_metadata(
+            declared_metadata,
+            agent_type,
+            origin="metadata",
+        )
+
+        if declared_artifacts:
+            return declared_metadata, declared_artifacts
+        if metadata_artifacts:
+            log.warning(
+                "Metadata-Fallback fuer Delegationsergebnis genutzt: agent=%s keys=%s",
+                agent_type,
+                sorted(declared_metadata.keys()),
+            )
+            return declared_metadata, metadata_artifacts
+
+        regex_metadata = AgentRegistry._extract_metadata(raw, agent_type)
+        regex_artifacts = AgentRegistry._artifacts_from_metadata(
+            regex_metadata,
+            agent_type,
+            origin="regex",
+        )
+        return regex_metadata, regex_artifacts
 
     def find_by_capability(self, capability: str) -> List[AgentSpec]:
         """Findet alle AgentSpecs mit einer bestimmten Capability."""
@@ -585,6 +845,7 @@ class AgentRegistry:
         tasks: List[Dict[str, Any]],
         from_agent: str = "meta",
         max_parallel: int = 5,
+        session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Fan-Out: Startet mehrere unabhaengige Tasks parallel.
@@ -608,12 +869,69 @@ class AgentRegistry:
         from memory.memory_guard import MemoryAccessGuard
 
         trace_id = uuid.uuid4().hex[:12]
+        effective_session_id = self._resolve_effective_session_id(from_agent, session_id)
         semaphore = asyncio.Semaphore(max(1, min(10, int(max_parallel))))
 
         log.info(
             f"[delegate_parallel] Start | {len(tasks)} Tasks | "
             f"TraceID: {trace_id} | MaxParallel: {max_parallel}"
         )
+
+        def _parallel_payload(
+            *,
+            task_id: str,
+            agent_name: str,
+            status: str,
+            trace: str,
+            task_desc: str,
+            raw: Any = None,
+            error: str = "",
+        ) -> Dict[str, Any]:
+            result_str = AgentRegistry._stringify_delegation_result(raw) if raw is not None else ""
+            metadata: Dict[str, Any] = {}
+            artifacts: List[Dict[str, Any]] = []
+            if raw is not None:
+                metadata, artifacts = AgentRegistry._build_result_metadata_and_artifacts(
+                    raw,
+                    agent_name,
+                )
+
+            quality = {"success": 80, "partial": 40, "error": 0}.get(status, 0)
+            blackboard_value = error or result_str
+            blackboard_key = AgentRegistry._auto_write_to_blackboard(
+                agent_name,
+                task_desc,
+                blackboard_value,
+                status,
+                session_id=effective_session_id,
+                metadata=metadata,
+                artifacts=artifacts,
+            )
+
+            result = AgentResult(
+                status=status,
+                agent=agent_name,
+                result=result_str,
+                quality=quality,
+                blackboard_key=blackboard_key,
+                error=error,
+                metadata=metadata,
+                artifacts=artifacts,
+            )
+            payload = {
+                "task_id": task_id,
+                "agent": result.agent,
+                "status": result.status,
+                "result": result.result,
+                "quality": result.quality,
+                "blackboard_key": result.blackboard_key,
+                "metadata": result.metadata,
+                "artifacts": result.artifacts,
+                "trace": trace,
+            }
+            if result.error:
+                payload["error"] = result.error
+            return payload
 
         async def run_single(task: Dict[str, Any]) -> Dict[str, Any]:
             task_id    = task.get("task_id") or f"t{uuid.uuid4().hex[:6]}"
@@ -628,31 +946,42 @@ class AgentRegistry:
             subtrace   = f"{trace_id}-{task_id}"
 
             if not agent_name or not task_desc:
-                return {
-                    "task_id": task_id, "agent": agent_name,
-                    "status": "error",
-                    "error": "Fehlende 'agent' oder 'task' Felder",
-                    "trace": subtrace,
-                }
+                return _parallel_payload(
+                    task_id=task_id,
+                    agent_name=agent_name,
+                    status="error",
+                    trace=subtrace,
+                    task_desc=task_desc,
+                    error="Fehlende 'agent' oder 'task' Felder",
+                )
 
             async with semaphore:
                 try:
                     # Schritt 1: Spec prüfen
                     spec = self._specs.get(agent_name)
                     if not spec:
-                        return {
-                            "task_id": task_id, "agent": agent_name,
-                            "status": "error",
-                            "error": (
+                        return _parallel_payload(
+                            task_id=task_id,
+                            agent_name=agent_name,
+                            status="error",
+                            trace=subtrace,
+                            task_desc=task_desc,
+                            error=(
                                 f"Agent '{agent_name}' nicht registriert. "
                                 f"Verfuegbar: {list(self._specs.keys())}"
                             ),
-                            "trace": subtrace,
-                        }
+                        )
 
                     # Schritt 2: FRISCHE Instanz erstellen (kein Singleton-Conflict)
                     tools_desc = self._tools_description or ""
                     fresh_agent = spec.factory(tools_desc, **spec.extra_kwargs)
+                    previous_session_id: Optional[str] = None
+                    target_has_session_attr = False
+                    if hasattr(fresh_agent, "conversation_session_id"):
+                        target_has_session_attr = True
+                        previous_session_id = getattr(fresh_agent, "conversation_session_id", None)
+                        if effective_session_id:
+                            setattr(fresh_agent, "conversation_session_id", effective_session_id)
 
                     # Schritt 3: read-only fuer diesen Task setzen (ContextVar — nur dieser Task)
                     MemoryAccessGuard.set_read_only(True)
@@ -661,7 +990,7 @@ class AgentRegistry:
                     self._log_canvas_delegation(
                         from_agent=from_agent,
                         to_agent=agent_name,
-                        session_id=None,
+                        session_id=effective_session_id,
                         status="running",
                         task=task_desc,
                         message=f"[Parallel] {from_agent} -> {agent_name} | trace={subtrace}",
@@ -683,7 +1012,7 @@ class AgentRegistry:
                     self._log_canvas_delegation(
                         from_agent=from_agent,
                         to_agent=agent_name,
-                        session_id=None,
+                        session_id=effective_session_id,
                         status="completed",
                         task=task_desc,
                         message=f"[Parallel] Abgeschlossen: {agent_name} | status={status}",
@@ -691,38 +1020,48 @@ class AgentRegistry:
                     )
 
                     log.info(f"[delegate_parallel] {agent_name} fertig | status={status} | trace={subtrace}")
-
-                    return {
-                        "task_id":  task_id,
-                        "agent":    agent_name,
-                        "status":   status,
-                        "result":   result_str,
-                        "trace":    subtrace,
-                    }
+                    return _parallel_payload(
+                        task_id=task_id,
+                        agent_name=agent_name,
+                        status=status,
+                        trace=subtrace,
+                        task_desc=task_desc,
+                        raw=raw,
+                    )
 
                 except asyncio.TimeoutError:
                     MemoryAccessGuard.set_read_only(False)
                     log.warning(
                         f"[delegate_parallel] Timeout: {agent_name} nach {timeout}s | trace={subtrace}"
                     )
-                    return {
-                        "task_id": task_id, "agent": agent_name,
-                        "status":  "partial",
-                        "error":   f"Timeout nach {timeout}s",
-                        "trace":   subtrace,
-                    }
+                    return _parallel_payload(
+                        task_id=task_id,
+                        agent_name=agent_name,
+                        status="partial",
+                        trace=subtrace,
+                        task_desc=task_desc,
+                        error=f"Timeout nach {timeout}s",
+                    )
 
                 except Exception as e:
                     MemoryAccessGuard.set_read_only(False)
                     log.error(
                         f"[delegate_parallel] Fehler: {agent_name}: {e} | trace={subtrace}"
                     )
-                    return {
-                        "task_id": task_id, "agent": agent_name,
-                        "status":  "error",
-                        "error":   str(e),
-                        "trace":   subtrace,
-                    }
+                    return _parallel_payload(
+                        task_id=task_id,
+                        agent_name=agent_name,
+                        status="error",
+                        trace=subtrace,
+                        task_desc=task_desc,
+                        error=str(e),
+                    )
+                finally:
+                    try:
+                        if target_has_session_attr:
+                            setattr(fresh_agent, "conversation_session_id", previous_session_id)
+                    except Exception:
+                        pass
 
         # ── Fan-Out ────────────────────────────────────────────────────────────
         raw_results = await asyncio.gather(
@@ -736,7 +1075,14 @@ class AgentRegistry:
 
         for r in raw_results:
             if isinstance(r, Exception):
-                results.append({"status": "error", "error": str(r)})
+                results.append(_parallel_payload(
+                    task_id=f"t{uuid.uuid4().hex[:6]}",
+                    agent_name="unknown",
+                    status="error",
+                    trace=f"{trace_id}-exception",
+                    task_desc="",
+                    error=str(r),
+                ))
                 error_count += 1
             else:
                 results.append(r)

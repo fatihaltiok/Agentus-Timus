@@ -19,6 +19,7 @@ import asyncio
 import html as html_module
 import json
 import logging
+import mimetypes
 import os
 import re
 from typing import Dict, List, Any, Optional, Tuple
@@ -112,6 +113,41 @@ def _get_token_param_name(model: str) -> str:
         if prefix in model_lower:
             return "max_completion_tokens"
     return "max_tokens"
+
+
+def _artifact_type_for_path(path: str) -> str:
+    suffix = os.path.splitext(path)[1].lower()
+    if suffix == ".pdf":
+        return "pdf"
+    if suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+        return "image"
+    if suffix in {".md", ".txt", ".doc", ".docx"}:
+        return "document"
+    if suffix in {".csv", ".xlsx"}:
+        return "data"
+    return "file"
+
+
+def _build_report_artifacts(*paths: Optional[str]) -> List[Dict[str, Any]]:
+    artifacts: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for path in paths:
+        if not path:
+            continue
+        resolved = os.path.abspath(path)
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        mime_type = mimetypes.guess_type(resolved)[0] or "application/octet-stream"
+        artifacts.append({
+            "type": _artifact_type_for_path(resolved),
+            "path": resolved,
+            "label": os.path.basename(resolved),
+            "mime": mime_type,
+            "source": "deep_research",
+            "origin": "tool",
+        })
+    return artifacts
 
 
 # ==============================================================================
@@ -2496,6 +2532,7 @@ async def start_deep_research(
             "analysis": analysis,
             "verified_data": verified_data,
             "report_filepath": filepath,
+            "artifacts": _build_report_artifacts(filepath),
             "methodology_notes": current_session.methodology_notes,
             "limitations": current_session.limitations
         }
@@ -2682,6 +2719,7 @@ async def generate_research_report(
             "filepath": filepath,
             "narrative_filepath": narrative_filepath,
             "pdf_filepath": pdf_filepath,
+            "artifacts": _build_report_artifacts(filepath, narrative_filepath, pdf_filepath),
             "youtube_videos_analyzed": yt_count,
             "images_in_pdf": len(images),
             "message": (
@@ -2701,12 +2739,11 @@ async def generate_research_report(
             "content": content,
             "narrative_filepath": narrative_filepath,
             "pdf_filepath": pdf_filepath,
+            "artifacts": _build_report_artifacts(narrative_filepath, pdf_filepath),
             "youtube_videos_analyzed": yt_count,
             "images_in_pdf": len(images),
             "message": "Bericht erstellt, aber Speichern fehlgeschlagen. Content im Response.",
             "summary": _get_research_metadata_summary(session),
             "version": "6.0"
         }
-
-
 

@@ -158,9 +158,10 @@ Schritt 1: start_deep_research(query="...", focus_areas=[...])
              DANACH KEINE WEITEREN SUCHEN!
 
 Schritt 2: generate_research_report(session_id="...", format="markdown")
-           → Strukturierter Report + pdf_filepath (WeasyPrint-PDF automatisch erstellt)
+           → Strukturierter Report + artifacts mit PDF-Pfad (WeasyPrint-PDF automatisch erstellt)
+           → Nur wenn artifacts fehlen: metadata["pdf_filepath"] als Ausnahme-Fallback
 
-Schritt 3: Final Answer mit Report-Zusammenfassung + pdf_filepath aus Ergebnis
+Schritt 3: Final Answer mit Report-Zusammenfassung + PDF-Pfad aus artifacts des Ergebnisses
 
 ⚠️ ABSOLUTES VERBOT nach Schritt 1:
 - KEIN search_web
@@ -192,7 +193,7 @@ Schritt 2 (SOFORT nach session_id — KEIN search_web dazwischen):
 Action: {{"method": "generate_research_report", "params": {{"session_id": "...", "format": "markdown"}}}}
 
 Schritt 3:
-Final Answer: [Zusammenfassung des Reports. PDF gespeichert unter: {pdf_filepath aus Ergebnis}]
+Final Answer: [Zusammenfassung des Reports. PDF gespeichert unter: {artifacts[0].path aus Ergebnis; nur im Ausnahmefall metadata["pdf_filepath"]}]
 
 """ + SINGLE_ACTION_WARNING
 
@@ -460,7 +461,8 @@ Stil-Mapping:
 
 # ANTI-HALLUZINATION
 - Erfinde KEINE Dateinamen oder URLs die du nicht in der Observation siehst
-- Kein "Bild gespeichert unter ..." ohne saved_as aus der Observation
+- Kein "Bild gespeichert unter ..." ohne echten Pfad aus `artifacts`
+- Nur wenn `artifacts` leer sind: metadata/legacy-Felder als Ausnahme-Fallback nutzen
 - Bei Wissensluecken → sage klar: "Das weiss ich nicht sicher"
 
 # TOOLS
@@ -472,7 +474,7 @@ Stil-Mapping:
 Thought: [Welches Format? Welche Größe? Was ist das Kernmotiv?]
 Action: {{"method": "generate_image", "params": {{"prompt": "detailed english description...", "size": "1024x1024", "quality": "high"}}}}
 [Nach Observation:]
-Final Answer: Bild erstellt! Gespeichert unter: [saved_as] | Prompt: [prompt[:80]]...
+Final Answer: Bild erstellt! Gespeichert unter: [artifacts[0].path] | Prompt: [prompt[:80]]...
 
 ## Kreative Texte:
 Thought: [Welcher Stil? Welche Länge? Welches Format?]
@@ -733,6 +735,15 @@ Jede Delegation gibt ein strukturiertes Dict zurück:
   "agent": "research",
   "result": "...langer Text...",
   "quality": 80,
+  "artifacts": [
+    {{
+      "type": "pdf",
+      "path": "/home/.../results/DeepResearch_PDF_xyz.pdf",
+      "label": "Research PDF",
+      "source": "research",
+      "origin": "metadata"
+    }}
+  ],
   "metadata": {{
     "pdf_filepath": "/home/.../results/DeepResearch_PDF_xyz.pdf",
     "image_path": "/home/.../results/cover_ki.png",
@@ -742,16 +753,23 @@ Jede Delegation gibt ein strukturiertes Dict zurück:
 }}
 ```
 
-REGEL: IMMER zuerst `metadata` lesen — NIEMALS im `result`-Text suchen wenn `metadata` vorhanden!
+REGEL: IMMER diese Priorität einhalten:
+1. `artifacts`
+2. `metadata`
+3. Nur wenn beides fehlt: Regex-/Text-Fallback
+
+- `artifacts[*].path` ist die Primärquelle für Datei-/Bildpfade
+- `metadata` ist Backward-Compatibility und Zusatzkontext, nicht der Normalfall
+- NIEMALS zuerst im `result`-Text suchen wenn `artifacts` oder `metadata` vorhanden sind
 - `pdf_filepath` → für E-Mail-Anhang (attachment_path) oder weitere Verarbeitung
-- `image_path` / `saved_as` → Bildpfad für PDF-Erstellung oder Anzeige
+- `image_path` / `saved_as` → nur Ausnahme-Fallback wenn `artifacts` fehlen
 - `session_id` → für generate_research_report (falls du direkt recherchierst)
 - `word_count` → Länge des Berichts
 
 Beispiel:
-Schritt 1: delegate_to_agent("research", ...) → result["metadata"]["pdf_filepath"] = "/home/.../report.pdf"
+Schritt 1: delegate_to_agent("research", ...) → result["artifacts"][0]["path"] = "/home/.../report.pdf"
 Schritt 2: delegate_to_agent("communication", "... attachment_path: /home/.../report.pdf")
-           ← pdf_filepath direkt aus metadata, KEIN Textsuchen nötig!
+           ← Pfad direkt aus artifacts, KEIN Textsuchen nötig!
 
 ## PARALLELE DELEGATION (bei unabhaengigen Teilaufgaben)
 Wenn eine Aufgabe mehrere UNABHAENGIGE Teilschritte hat, nutze delegate_multiple_agents
@@ -772,8 +790,22 @@ Action: {{"method": "delegate_multiple_agents", "params": {{"tasks": [
   {{"task_id": "t2", "agent": "developer", "task": "Schreibe Skript fuer Y"}}
 ]}}}}
 
-Nach dem Aufruf erhaeltst du eine strukturierte Markdown-Zusammenfassung aller Ergebnisse.
-Integriere alle Ergebnisse in deine finale Antwort.
+Nach dem Aufruf erhaeltst du ein strukturiertes Ergebnis-Dict mit `results[]`.
+Jeder Eintrag in `results[]` enthaelt mindestens:
+- `status`
+- `result` oder `error`
+- `quality`
+- `metadata`
+- `artifacts`
+- `blackboard_key`
+
+Bei Parallel-Ergebnissen gilt dieselbe Prioritaet wie sonst:
+1. `results[i]["artifacts"]`
+2. `results[i]["metadata"]`
+3. nur als letzter Fallback Text aus `results[i]["result"]`
+
+Wenn ein Worker Dateien erzeugt hat, lies die Pfade aus `results[i]["artifacts"]`, nicht aus Fliesstext.
+Integriere danach alle Ergebnisse in deine finale Antwort.
 
 ## VOLLSTÄNDIGER WORKFLOW: RECHERCHE → BILDER → PDF → EMAIL
 
@@ -787,9 +819,11 @@ Action: {{"method": "delegate_to_agent", "params": {{
   "from_agent": "meta"
 }}}}
 
-→ Ergebnis-Dict enthält metadata mit pdf_filepath:
-   result["metadata"]["pdf_filepath"] = "/home/.../results/DeepResearch_PDF_xyz.pdf"
-→ NIEMALS im result-Text suchen — metadata["pdf_filepath"] direkt verwenden!
+→ Ergebnis-Dict enthält idealerweise artifacts mit PDF-Pfad:
+   result["artifacts"][0]["path"] = "/home/.../results/DeepResearch_PDF_xyz.pdf"
+→ Ausnahme-Fallback nur wenn artifacts leer sind:
+   result["metadata"]["pdf_filepath"]
+→ NIEMALS im result-Text suchen wenn artifacts oder metadata vorhanden sind!
 
 ### SCHRITT 2 — Cover-Bild erstellen (parallel möglich wenn klar was das Thema ist)
 Action: {{"method": "delegate_to_agent", "params": {{
@@ -798,28 +832,29 @@ Action: {{"method": "delegate_to_agent", "params": {{
   "from_agent": "meta"
 }}}}
 
-→ result["metadata"]["image_path"] enthält den absoluten Bildpfad
-→ Falls metadata["image_path"] leer: Schritt 2 überspringen, PDF ohne Bild erstellen.
+→ result["artifacts"] enthält idealerweise den absoluten Bildpfad
+→ Nur falls artifacts leer sind: metadata["image_path"] prüfen
+→ Falls auch metadata["image_path"] leer: Schritt 2 überspringen, PDF ohne Bild erstellen.
 
-### SCHRITT 3 — PDF-Pfad ist bereits in metadata aus Schritt 1
+### SCHRITT 3 — PDF-Pfad liegt idealerweise bereits in artifacts aus Schritt 1
 generate_research_report erstellt die PDF automatisch via WeasyPrint + report_template.html.
 KEIN separater create_pdf-Aufruf nötig — die PDF ist bereits fertig!
 
-→ pdf_filepath = result_schritt1["metadata"]["pdf_filepath"]
-→ Falls metadata["pdf_filepath"] fehlt: Schritt 4 trotzdem ausführen, Pfad im Body nennen.
+→ pdf_filepath = zuerst result_schritt1["artifacts"][0]["path"], dann metadata["pdf_filepath"]
+→ Falls beides fehlt: Schritt 4 trotzdem ausführen, Pfad im Body nennen.
 
 ### SCHRITT 4 — Email versenden mit PDF-Anhang (wartet auf Schritt 1)
 send_email unterstützt attachment_path — die WeasyPrint-PDF wird direkt als Anhang mitgeschickt.
 
 Action: {{"method": "delegate_to_agent", "params": {{
   "agent_type": "communication",
-  "task": "Sende eine E-Mail an fatihaltiok@outlook.com. Betreff: 'Timus Forschungsbericht: [THEMA]'. Body: 'Hallo Fatih,\\n\\ndein Forschungsbericht über [THEMA] ist fertig. Die PDF ist als Anhang beigefügt.\\n\\n[3-5 KERNAUSSAGEN AUS DER RECHERCHE]\\n\\nGrüße,\\nTimus'. attachment_path: '[metadata[pdf_filepath] AUS SCHRITT 1]'",
+  "task": "Sende eine E-Mail an fatihaltiok@outlook.com. Betreff: 'Timus Forschungsbericht: [THEMA]'. Body: 'Hallo Fatih,\\n\\ndein Forschungsbericht über [THEMA] ist fertig. Die PDF ist als Anhang beigefügt.\\n\\n[3-5 KERNAUSSAGEN AUS DER RECHERCHE]\\n\\nGrüße,\\nTimus'. attachment_path: '[artifacts[0].path ODER metadata[pdf_filepath] AUS SCHRITT 1]'",
   "from_agent": "meta"
 }}}}
 
 ### FEHLERFÄLLE
 - research gibt status="error": Query umformulieren, Sprache wechseln (DE→EN), 1x retry
-- metadata["pdf_filepath"] fehlt: E-Mail ohne Anhang senden, Pfad im Body nennen
+- artifacts leer und metadata["pdf_filepath"] fehlt: E-Mail ohne Anhang senden, Pfad im Body nennen
 - communication gibt status="error": Telegram-Nachricht an Nutzer mit PDF-Pfad als Fallback
 
 ### ERKENNUNG DES WORKFLOWS
@@ -889,6 +924,10 @@ Wenn delegate_to_agent status="partial" oder status="error" zurückgibt:
 4. Nach 2 Fehlversuchen: status="partial" zurückgeben mit Erklärung
 Niemals denselben fehlgeschlagenen Call ohne Änderung wiederholen.
 Blackboard-Key aus dem Ergebnis nutzen: read_from_blackboard(key=result["blackboard_key"])
+Datei-/Artefaktpfade IMMER in dieser Reihenfolge lesen:
+1. `result["artifacts"]`
+2. `result["metadata"]`
+3. Nur wenn beides fehlt: Text/Regex-Fallback
 
 ## RESEARCH-TIMEOUT-PROTOKOLL (ABSOLUTES GEBOT)
 Der Research-Agent (Deep Research) braucht 300–600 Sekunden. Timeout ist kein Fehler,

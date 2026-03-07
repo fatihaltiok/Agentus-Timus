@@ -10,6 +10,7 @@ Fixes:
 import os
 import json
 import logging
+import mimetypes
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any, List
@@ -86,6 +87,29 @@ def _sanitize_filename(text: str, max_length: int = 60) -> str:
     safe = "".join(c if c.isalnum() or c in (' ', '_', '-') else '' for c in text)
     safe = safe.strip().replace(" ", "_")
     return safe[:max_length]
+
+
+def _artifact_type_for_path(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix == ".pdf":
+        return "pdf"
+    if suffix in {".md", ".txt", ".doc", ".docx"}:
+        return "document"
+    if suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+        return "image"
+    return "file"
+
+
+def _build_file_artifact(path: Path) -> Dict[str, Any]:
+    mime_type = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+    return {
+        "type": _artifact_type_for_path(path),
+        "path": str(path.resolve()),
+        "label": path.name,
+        "mime": mime_type,
+        "source": "save_results",
+        "origin": "tool",
+    }
 
 
 def _format_markdown(title: str, content: str, metadata: Optional[Dict] = None) -> str:
@@ -206,7 +230,8 @@ async def save_research_result(
             "filepath": str(filepath),
             "filename": filename,
             "size_bytes": file_size,
-            "format": format
+            "format": format,
+            "artifacts": [_build_file_artifact(filepath)],
         }
 
     except PermissionError:

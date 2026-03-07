@@ -229,7 +229,7 @@ Gib NUR das Action-JSON zurueck!"""
             elif has_error:
                 return f"Fehler bei der Bildgenerierung: {error_message}"
 
-            saved_path = observation.get("saved_as", "")
+            saved_path, path_source = self._extract_primary_file_path(observation)
             image_url = observation.get("image_url", "")
 
             if not saved_path and not image_url:
@@ -240,6 +240,12 @@ Gib NUR das Action-JSON zurueck!"""
 
             final_answer = "Ich habe das Bild erfolgreich generiert!"
             if saved_path:
+                if path_source != "artifacts":
+                    log.warning(
+                        "CreativeAgent nutzt Fallback-Pfadquelle: source=%s path=%s",
+                        path_source,
+                        saved_path,
+                    )
                 final_answer += f"\n\nGespeichert unter: {saved_path}"
             if image_url:
                 final_answer += f"\nURL: {image_url}"
