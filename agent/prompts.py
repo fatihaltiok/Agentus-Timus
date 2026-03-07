@@ -724,6 +724,35 @@ FORMAT fuer Delegation:
 Action: {{"method": "delegate_to_agent",
          "params": {{"agent_type": "research", "task": "...", "from_agent": "meta"}}}}
 
+## AGENTERGEBNIS LESEN — METADATA ZUERST PRÜFEN
+
+Jede Delegation gibt ein strukturiertes Dict zurück:
+```
+{{
+  "status": "success" | "partial" | "error",
+  "agent": "research",
+  "result": "...langer Text...",
+  "quality": 80,
+  "metadata": {{
+    "pdf_filepath": "/home/.../results/DeepResearch_PDF_xyz.pdf",
+    "image_path": "/home/.../results/cover_ki.png",
+    "session_id": "abc123",
+    "word_count": 3847
+  }}
+}}
+```
+
+REGEL: IMMER zuerst `metadata` lesen — NIEMALS im `result`-Text suchen wenn `metadata` vorhanden!
+- `pdf_filepath` → für E-Mail-Anhang (attachment_path) oder weitere Verarbeitung
+- `image_path` / `saved_as` → Bildpfad für PDF-Erstellung oder Anzeige
+- `session_id` → für generate_research_report (falls du direkt recherchierst)
+- `word_count` → Länge des Berichts
+
+Beispiel:
+Schritt 1: delegate_to_agent("research", ...) → result["metadata"]["pdf_filepath"] = "/home/.../report.pdf"
+Schritt 2: delegate_to_agent("communication", "... attachment_path: /home/.../report.pdf")
+           ← pdf_filepath direkt aus metadata, KEIN Textsuchen nötig!
+
 ## PARALLELE DELEGATION (bei unabhaengigen Teilaufgaben)
 Wenn eine Aufgabe mehrere UNABHAENGIGE Teilschritte hat, nutze delegate_multiple_agents
 statt mehrerer sequenzieller delegate_to_agent-Aufrufe — spart 3–6× Zeit.
@@ -758,8 +787,9 @@ Action: {{"method": "delegate_to_agent", "params": {{
   "from_agent": "meta"
 }}}}
 
-→ Ergebnis: Markdown-Text mit Fakten, Quellenangaben, session_id
-→ MERKE: Den vollständigen Markdown-Text aus dem Ergebnis für Schritt 3 aufbewahren.
+→ Ergebnis-Dict enthält metadata mit pdf_filepath:
+   result["metadata"]["pdf_filepath"] = "/home/.../results/DeepResearch_PDF_xyz.pdf"
+→ NIEMALS im result-Text suchen — metadata["pdf_filepath"] direkt verwenden!
 
 ### SCHRITT 2 — Cover-Bild erstellen (parallel möglich wenn klar was das Thema ist)
 Action: {{"method": "delegate_to_agent", "params": {{
@@ -768,35 +798,28 @@ Action: {{"method": "delegate_to_agent", "params": {{
   "from_agent": "meta"
 }}}}
 
-→ Ergebnis enthält den Bildpfad, z.B.: results/cover_ki_robotik.png
-→ MERKE: Den absoluten Pfad /home/fatih-ubuntu/dev/timus/[pfad] für Schritt 3 aufbewahren.
+→ result["metadata"]["image_path"] enthält den absoluten Bildpfad
+→ Falls metadata["image_path"] leer: Schritt 2 überspringen, PDF ohne Bild erstellen.
 
-ALTERNATIVE wenn creative fehlschlägt: Bild aus Recherche-Ergebnis nutzen falls vorhanden,
-oder Schritt 2 überspringen und PDF ohne Bild erstellen.
-
-### SCHRITT 3 — PDF-Pfad aus generate_research_report übernehmen
+### SCHRITT 3 — PDF-Pfad ist bereits in metadata aus Schritt 1
 generate_research_report erstellt die PDF automatisch via WeasyPrint + report_template.html.
 KEIN separater create_pdf-Aufruf nötig — die PDF ist bereits fertig!
 
-Das Ergebnis von generate_research_report (Schritt 1) enthält:
-- "pdf_filepath": "/home/fatih-ubuntu/dev/timus/results/DeepResearch_PDF_[session_id].pdf"
-- "narrative_filepath": Pfad zum Markdown-Bericht
-
-→ MERKE: Den Wert von "pdf_filepath" aus Schritt 1 für Schritt 4 aufbewahren.
-→ Falls pdf_filepath fehlt oder null: Schritt 4 trotzdem ausführen, PDF-Pfad im Body nennen.
+→ pdf_filepath = result_schritt1["metadata"]["pdf_filepath"]
+→ Falls metadata["pdf_filepath"] fehlt: Schritt 4 trotzdem ausführen, Pfad im Body nennen.
 
 ### SCHRITT 4 — Email versenden mit PDF-Anhang (wartet auf Schritt 1)
 send_email unterstützt attachment_path — die WeasyPrint-PDF wird direkt als Anhang mitgeschickt.
 
 Action: {{"method": "delegate_to_agent", "params": {{
   "agent_type": "communication",
-  "task": "Sende eine E-Mail an fatihaltiok@outlook.com. Betreff: 'Timus Forschungsbericht: [THEMA]'. Body: 'Hallo Fatih,\\n\\ndein Forschungsbericht über [THEMA] ist fertig. Die PDF ist als Anhang beigefügt.\\n\\n[3-5 KERNAUSSAGEN AUS DER RECHERCHE]\\n\\nGrüße,\\nTimus'. attachment_path: '[PDF_FILEPATH_AUS_SCHRITT1]'",
+  "task": "Sende eine E-Mail an fatihaltiok@outlook.com. Betreff: 'Timus Forschungsbericht: [THEMA]'. Body: 'Hallo Fatih,\\n\\ndein Forschungsbericht über [THEMA] ist fertig. Die PDF ist als Anhang beigefügt.\\n\\n[3-5 KERNAUSSAGEN AUS DER RECHERCHE]\\n\\nGrüße,\\nTimus'. attachment_path: '[metadata[pdf_filepath] AUS SCHRITT 1]'",
   "from_agent": "meta"
 }}}}
 
 ### FEHLERFÄLLE
 - research gibt status="error": Query umformulieren, Sprache wechseln (DE→EN), 1x retry
-- pdf_filepath fehlt im Ergebnis: E-Mail ohne Anhang senden, PDF-Pfad im Body nennen
+- metadata["pdf_filepath"] fehlt: E-Mail ohne Anhang senden, Pfad im Body nennen
 - communication gibt status="error": Telegram-Nachricht an Nutzer mit PDF-Pfad als Fallback
 
 ### ERKENNUNG DES WORKFLOWS

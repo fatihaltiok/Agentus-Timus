@@ -44,6 +44,7 @@ class AgentResult:
     quality: int         # 0–100
     blackboard_key: str  # Key unter dem Ergebnis im Blackboard liegt
     error: str = ""      # Fehlermeldung bei status=="error"
+    metadata: Dict[str, Any] = field(default_factory=dict)  # Strukturierte Key-Values
 
 
 class AgentRegistry:
@@ -392,13 +393,15 @@ class AgentRegistry:
                 # M12: Routing-Analytics (partial)
                 self._record_routing_outcome(task, to_agent, "partial")
                 bb_key = AgentRegistry._auto_write_to_blackboard(to_agent, task, result_str, "partial")
-                _res = AgentResult(status="partial", agent=to_agent, result=result_str, quality=40, blackboard_key=bb_key)
+                _meta = AgentRegistry._extract_metadata(result_str, to_agent)
+                _res = AgentResult(status="partial", agent=to_agent, result=result_str, quality=40, blackboard_key=bb_key, metadata=_meta)
                 return {
                     "status": _res.status,
                     "agent": _res.agent,
                     "result": _res.result,
                     "quality": _res.quality,
                     "blackboard_key": _res.blackboard_key,
+                    "metadata": _res.metadata,
                     "note": "Aufgabe nicht vollstaendig abgeschlossen",
                 }
 
@@ -419,8 +422,9 @@ class AgentRegistry:
             except Exception:
                 pass
             bb_key = AgentRegistry._auto_write_to_blackboard(to_agent, task, result_str, "success")
-            _res = AgentResult(status="success", agent=to_agent, result=result_str, quality=80, blackboard_key=bb_key)
-            return {"status": _res.status, "agent": _res.agent, "result": _res.result, "quality": _res.quality, "blackboard_key": _res.blackboard_key}
+            _meta = AgentRegistry._extract_metadata(result_str, to_agent)
+            _res = AgentResult(status="success", agent=to_agent, result=result_str, quality=80, blackboard_key=bb_key, metadata=_meta)
+            return {"status": _res.status, "agent": _res.agent, "result": _res.result, "quality": _res.quality, "blackboard_key": _res.blackboard_key, "metadata": _res.metadata}
 
         except Exception as e:
             log.error(f"Delegation {from_agent} -> {to_agent} fehlgeschlagen: {e}")
@@ -448,6 +452,7 @@ class AgentRegistry:
                 "error": f"FEHLER: Delegation an '{to_agent}' fehlgeschlagen: {_res.error}",
                 "quality": _res.quality,
                 "blackboard_key": _res.blackboard_key,
+                "metadata": {},
             }
         finally:
             if target_has_session_attr and agent is not None:
@@ -492,6 +497,60 @@ class AgentRegistry:
         except Exception as e:
             log.warning("Auto-Blackboard-Write fehlgeschlagen: %s", e)
             return ""
+
+    @staticmethod
+    def _extract_metadata(result: str, agent_type: str) -> Dict[str, Any]:
+        """
+        Extrahiert strukturierte Key-Value-Paare aus dem Ergebnis-Text.
+        Gibt dem Meta-LLM ein sauberes JSON-Dict statt Textsuche.
+
+        Extrahierte Keys:
+          pdf_filepath   — PDF-Pfad aus Deep Research
+          image_path     — Bildpfad aus Creative Agent
+          session_id     — Research-Session-ID
+          narrative_filepath — Markdown-Bericht-Pfad
+          word_count     — Wörterzahl aus Berichts-Header
+        """
+        import re
+        meta: Dict[str, Any] = {}
+
+        # --- Datei-Pfade ---
+        path_patterns = {
+            "pdf_filepath":        r'pdf_filepath["\s:]+([^\s\'"}\]]+\.pdf)',
+            "image_path":          r'(?:image_path|saved_as|image_url)["\s:]+([^\s\'"}\]]+\.(?:png|jpg|jpeg|webp))',
+            "narrative_filepath":  r'narrative_filepath["\s:]+([^\s\'"}\]]+\.(?:md|txt))',
+        }
+        for key, pattern in path_patterns.items():
+            m = re.search(pattern, result, re.IGNORECASE)
+            if m:
+                meta[key] = m.group(1).strip().strip('"\'')
+
+        # --- session_id ---
+        m = re.search(r'"?session_id"?\s*[=:]\s*"?([a-zA-Z0-9_-]{8,})"?', result)
+        if m:
+            meta["session_id"] = m.group(1)
+
+        # --- Wörterzahl aus Header ---
+        m = re.search(r'([\d,\.]+)\s+W[oö]rter', result)
+        if m:
+            try:
+                meta["word_count"] = int(m.group(1).replace(",", "").replace(".", ""))
+            except ValueError:
+                pass
+
+        # --- Fallback: alle absoluten Pfade mit bekannten Endungen ---
+        if not meta.get("pdf_filepath"):
+            m = re.search(r'(/[^\s\'"}\]]+\.pdf)', result)
+            if m:
+                meta["pdf_filepath"] = m.group(1)
+        if not meta.get("image_path"):
+            m = re.search(r'(/[^\s\'"}\]]+\.(?:png|jpg|jpeg|webp))', result)
+            if m:
+                meta["image_path"] = m.group(1)
+
+        if meta:
+            log.debug("Metadata extrahiert für %s: %s", agent_type, list(meta.keys()))
+        return meta
 
     def find_by_capability(self, capability: str) -> List[AgentSpec]:
         """Findet alle AgentSpecs mit einer bestimmten Capability."""
