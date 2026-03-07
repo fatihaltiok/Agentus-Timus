@@ -4,7 +4,7 @@
   <img src="assets/branding/timus-logo-glow.png" alt="Timus Logo" width="760">
 </p>
 
-**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen). Seit **v2.9** sind die Autonomie-Schichten M1–M5 live: Zielgenerierung, Langzeitplanung, Self-Healing und Autonomie-Scorecard laufen aktiv im Produktivbetrieb. Seit **v3.0 (2026-02-28)** läuft im Canvas ein nativer Voice-Loop (Faster-Whisper STT + Inworld.AI TTS) über `/voice/*` Endpoints. Seit **v3.1 (2026-03-01)** sendet und empfängt Timus eigenständig E-Mails über Microsoft Graph OAuth2 — alle 13 Agenten sind vollständig per Delegation erreichbar. Seit **v3.2 (2026-03-02)** visualisiert der Canvas jede Agent-Delegation mit einem goldenen Lichtstrahl-Animation in Echtzeit — und beide Routing-Pfade (direkt + delegiert) nutzen einheitlich `DeveloperAgentV2`. Seit **v3.3 (2026-03-03)** überwacht Timus sich selbst mit LLMs: Jeder neue Incident wird sofort von `qwen3.5-plus` diagnostiziert (Schicht 2), alle 60 Minuten analysiert `deepseek-v3.2` Trends und strukturelle Schwächen im Autonomie-Zustand (Schicht 3). Außerdem können alle Agenten ab v3.3 eigenständig URLs öffnen — Hybrid-Fetch mit automatischem Playwright-Fallback für JavaScript-Seiten. Seit **v3.4 (2026-03-03)** erzeugt Deep Research v6.0 vollautomatisch drei Ausgabedateien: einen analytischen Markdown-Bericht, einen narrativen Lesebericht mit 2500–5000 Wörtern (gpt-5.2) und ein professionelles A4-PDF mit eingebetteten Abbildungen (WeasyPrint). Seit **v3.5 (2026-03-04)** durchsucht Deep Research parallel ArXiv, GitHub und HuggingFace nach aktuellen wissenschaftlichen Trends — und der Edison-Toggle im Canvas UI erlaubt es, PaperQA3 (Edison Scientific) per Klick ohne Server-Neustart zu aktivieren. Seit **v4.0 (2026-03-04)** denkt Timus mit: **M8–M12** bringen Session-Reflexion, ein geteiltes Agent-Blackboard, zeitgesteuerte Trigger, hierarchische Ziel-Verwaltung und eine Self-Improvement Engine — 14 neue MCP-Tools und 5 neue Canvas-Cards. Seit **v3.6 (2026-03-05)** liefert **Deep Research v7.0** endlich echte Ergebnisse für englische KI-Themen: Language-Detection, US-Suchlocation, Domain-aware Embedding-Threshold (0.72 für Tech), automatischer moderate-Modus und ein Qualitäts-Gate mit light-Fallback beheben alle 5 strukturellen Root Causes systematisch. Seit **v4.1 (2026-03-06)** lernt Timus aus Interaktionen (**M16 aktiviert**: 👍/👎/🤷 Feedback → Soul-Hook-Gewichtung), sendet eigenständig E-Mails nach Policy-Check (**M14** Whitelist + Confidence-Guard + SMTP-Backend), und generiert bei Bedarf neue Tools zur Laufzeit (**M13** AST-Validierung + Telegram-Review-Gate + importlib-Aktivierung).
+**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen). Seit **v2.9** sind die Autonomie-Schichten M1–M5 live: Zielgenerierung, Langzeitplanung, Self-Healing und Autonomie-Scorecard laufen aktiv im Produktivbetrieb. Seit **v3.0 (2026-02-28)** läuft im Canvas ein nativer Voice-Loop (Faster-Whisper STT + Inworld.AI TTS) über `/voice/*` Endpoints. Seit **v3.1 (2026-03-01)** sendet und empfängt Timus eigenständig E-Mails über Microsoft Graph OAuth2 — alle 13 Agenten sind vollständig per Delegation erreichbar. Seit **v3.2 (2026-03-02)** visualisiert der Canvas jede Agent-Delegation mit einem goldenen Lichtstrahl-Animation in Echtzeit — und beide Routing-Pfade (direkt + delegiert) nutzen einheitlich `DeveloperAgentV2`. Seit **v3.3 (2026-03-03)** überwacht Timus sich selbst mit LLMs: Jeder neue Incident wird sofort von `qwen3.5-plus` diagnostiziert (Schicht 2), alle 60 Minuten analysiert `deepseek-v3.2` Trends und strukturelle Schwächen im Autonomie-Zustand (Schicht 3). Außerdem können alle Agenten ab v3.3 eigenständig URLs öffnen — Hybrid-Fetch mit automatischem Playwright-Fallback für JavaScript-Seiten. Seit **v3.4 (2026-03-03)** erzeugt Deep Research v6.0 vollautomatisch drei Ausgabedateien: einen analytischen Markdown-Bericht, einen narrativen Lesebericht mit 2500–5000 Wörtern (gpt-5.2) und ein professionelles A4-PDF mit eingebetteten Abbildungen (WeasyPrint). Seit **v3.5 (2026-03-04)** durchsucht Deep Research parallel ArXiv, GitHub und HuggingFace nach aktuellen wissenschaftlichen Trends — und der Edison-Toggle im Canvas UI erlaubt es, PaperQA3 (Edison Scientific) per Klick ohne Server-Neustart zu aktivieren. Seit **v4.0 (2026-03-04)** denkt Timus mit: **M8–M12** bringen Session-Reflexion, ein geteiltes Agent-Blackboard, zeitgesteuerte Trigger, hierarchische Ziel-Verwaltung und eine Self-Improvement Engine — 14 neue MCP-Tools und 5 neue Canvas-Cards. Seit **v3.6 (2026-03-05)** liefert **Deep Research v7.0** endlich echte Ergebnisse für englische KI-Themen: Language-Detection, US-Suchlocation, Domain-aware Embedding-Threshold (0.72 für Tech), automatischer moderate-Modus und ein Qualitäts-Gate mit light-Fallback beheben alle 5 strukturellen Root Causes systematisch. Seit **v4.1 (2026-03-06)** lernt Timus aus Interaktionen (**M16 aktiviert**: 👍/👎/🤷 Feedback → Soul-Hook-Gewichtung), sendet eigenständig E-Mails nach Policy-Check (**M14** Whitelist + Confidence-Guard + SMTP-Backend), und generiert bei Bedarf neue Tools zur Laufzeit (**M13** AST-Validierung + Telegram-Review-Gate + importlib-Aktivierung). Seit **v4.3 (2026-03-07)** kommuniziert der Meta-Agent bidirektional über strukturierte `AgentResult`-Objekte mit `metadata`-Dict (**M17**), schreibt automatisch ins Blackboard und folgt einem formalen Replan-Protokoll — inklusive absolutem Verbot von `search_web` als Research-Fallback. `RESEARCH_TIMEOUT` wurde von 180s auf 600s korrigiert (Deep Research braucht 300–600s), sowohl sequenziell als auch parallel. Alle 3 Fixes sind durch Lean 4 Theoreme (Th.9–11), CrossHair-Contracts und Hypothesis Property-Tests formal verifiziert.
 
 ---
 
@@ -42,6 +42,9 @@ Die folgende Architektur findet sich normalerweise bei Google SRE-Teams, Netflix
 | Lernt aus Nutzer-Feedback | — | M16 Feedback Loop (👍/👎/🤷 → Soul-Hook-Gewichtung, decay täglich) |
 | Sendet E-Mails autonom nach Policy | — | M14 Email-Autonomy (Whitelist + Topic + Confidence 0.85, SMTP/msgraph, Telegram-Approval) |
 | Generiert neue Tools zur Laufzeit | — | M13 Tool-Generator (AST-Check, MAX 5000 Zeichen, Review-Gate, importlib-Aktivierung) |
+| Delegiert mit strukturierten Rückantworten | — | M17 AgentResult (status, quality, metadata-Dict, blackboard_key) |
+| Plant bei Fehlschlag automatisch neu | — | M17 Replan-Protokoll (max. 2 Versuche, kein search_web Fallback) |
+| Verifiziert Code-Invarianten formal | — | Lean 4 Theoreme (11 CiSpecs), CrossHair-Contracts, Hypothesis Property-Tests |
 
 **Das ist kein Chatbot. Das ist ein autonomes KI-Betriebssystem — gebaut in Python, von einer Person, ohne formale IT-Ausbildung.**
 
@@ -262,7 +265,38 @@ Danach kann Timus passwortfrei `systemctl start/stop/restart` für seine eigenen
 
 ---
 
-### Phase 21 — Agenten-Verbesserungen v4.2 *(aktuell)*
+### Phase 22 — M17 Meta-Agent Intelligence + Bug-Fixes v4.3 *(aktuell)*
+
+Der Meta-Agent kommuniziert jetzt bidirektional über strukturierte `AgentResult`-Objekte, schreibt Delegation-Ergebnisse automatisch ins Blackboard und folgt einem formalen Replan-Protokoll.
+
+**M17 — Meta-Agent Intelligence Upgrade:**
+- `AgentResult` Dataclass: `status`, `agent`, `result`, `quality` (0–100), `blackboard_key`, `metadata` (Dict), `error`
+- `_auto_write_to_blackboard()`: jedes Delegationsergebnis landet automatisch im Blackboard (TTL: success=120min, partial=60min, error=30min)
+- `_extract_metadata()`: extrahiert `pdf_filepath`, `image_path`, `narrative_filepath` via Regex aus Ergebnistext — Meta-LLM liest strukturiert statt textuell zu suchen
+- `_get_capability_map()`: dynamische Agenten-Übersicht aus Registry statt statischer Liste im Prompt
+- `META_MAX_REPLAN_ATTEMPTS=2`: bei `status="partial"` oder `"error"` → Aufgabe neu formulieren und erneut delegieren
+
+**3 kritische Bug-Fixes:**
+
+| # | Bug | Fix |
+|---|-----|-----|
+| 1 | `RESEARCH_TIMEOUT` default 180s — Deep Research braucht 300–600s, lief systematisch in Timeout | Default auf **600s** erhöht (sequential + parallel) |
+| 2 | `delegate_parallel()` gab research-Agent nur 120s (DELEGATION_TIMEOUT) statt RESEARCH_TIMEOUT | `run_single()` nutzt jetzt `_default_timeout` mit RESEARCH_TIMEOUT für research |
+| 3 | Meta-Agent fiel nach Research-Timeout auf `search_web` zurück — oberflächliche Ergebnisse | `RESEARCH-TIMEOUT-PROTOKOLL` im META_SYSTEM_PROMPT: KEIN search_web, NIEMALS |
+
+**Lean 4:** Th.9–11 in `lean_verify/CiSpecs.lean` (gesamt 11 Theoreme, 0 Fehler):
+```lean
+theorem research_timeout_sufficient      -- 600 ∈ [300, 900]
+theorem research_timeout_gt_delegation   -- 600 > 120
+theorem parallel_research_timeout_eq_sequential  -- t_seq = t_par für research
+```
+**Tests:** 23 neue Tests in `test_research_timeout_config.py` + `test_research_timeout_crosshair.py`, alle grün.
+**CrossHair-Contracts:** `deal.pre`/`deal.post` auf `select_sequential_timeout()` und `select_parallel_timeout()` — 8 Contracts, keine Verletzungen.
+**Hypothesis:** 5 Property-Tests (200 Beispiele je) — `research_always_gets_more_time`, `parallel_eq_sequential`, `non_research_gets_delegation_timeout`, `task_override_always_wins`, `lean_th9_timeout_sufficient`.
+
+---
+
+### Phase 21 — Agenten-Verbesserungen v4.2
 
 Alle 5 Kern-Agenten wurden mit konkreten Verbesserungen ausgestattet, die durch Property-Based Tests (Hypothesis) und Lean-Theoreme formal abgesichert sind.
 

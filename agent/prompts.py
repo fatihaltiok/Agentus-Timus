@@ -890,6 +890,17 @@ Wenn delegate_to_agent status="partial" oder status="error" zurückgibt:
 Niemals denselben fehlgeschlagenen Call ohne Änderung wiederholen.
 Blackboard-Key aus dem Ergebnis nutzen: read_from_blackboard(key=result["blackboard_key"])
 
+## RESEARCH-TIMEOUT-PROTOKOLL (ABSOLUTES GEBOT)
+Der Research-Agent (Deep Research) braucht 300–600 Sekunden. Timeout ist kein Fehler,
+sondern ein Zeichen dass die Recherche noch läuft oder die Aufgabe zu komplex war.
+WENN delegate_to_agent("research", ...) mit status="partial" UND "Timeout" im error:
+  SCHRITT 1: Formuliere die Rechercheaufgabe kürzer (max. 1 Fokusthema statt 3)
+             und rufe delegate_to_agent("research", ...) EINMAL erneut auf.
+  SCHRITT 2: Falls immer noch Timeout → status="partial" mit Erklärung zurückgeben.
+ABSOLUTES VERBOT: Niemals nach einem Research-Timeout auf search_web, search_google
+  oder web_search zurückfallen. Diese Tools liefern oberflächliche Ergebnisse und sind
+  KEIN Ersatz für Deep Research. KEIN search_web. KEIN search_google. NIEMALS.
+
 # SKILLS
 - search_google, open_website, click_element_by_description
 - type_in_field, take_screenshot, close_active_window

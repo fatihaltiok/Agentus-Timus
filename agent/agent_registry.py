@@ -331,7 +331,7 @@ class AgentRegistry:
         )
 
         if to_agent == "research":
-            timeout = float(os.getenv("RESEARCH_TIMEOUT", "180"))
+            timeout = float(os.getenv("RESEARCH_TIMEOUT", "600"))
         else:
             timeout = float(os.getenv("DELEGATION_TIMEOUT", "120"))
         max_retries = int(os.getenv("DELEGATION_MAX_RETRIES", "1"))
@@ -619,7 +619,12 @@ class AgentRegistry:
             task_id    = task.get("task_id") or f"t{uuid.uuid4().hex[:6]}"
             agent_name = self.normalize_agent_name(task.get("agent", ""))
             task_desc  = task.get("task", "")
-            timeout    = float(task.get("timeout", 120))
+            _default_timeout = (
+                float(os.getenv("RESEARCH_TIMEOUT", "600"))
+                if agent_name == "research"
+                else float(os.getenv("DELEGATION_TIMEOUT", "120"))
+            )
+            timeout = float(task.get("timeout", _default_timeout))
             subtrace   = f"{trace_id}-{task_id}"
 
             if not agent_name or not task_desc:
