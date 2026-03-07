@@ -17,7 +17,7 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from agent.base_agent import BaseAgent
 from agent.prompts import META_SYSTEM_PROMPT
@@ -29,6 +29,29 @@ from agent.shared.json_utils import extract_json_robust  # noqa: F401 - re-expor
 
 
 class MetaAgent(BaseAgent):
+    _SPECIALIST_TOOL_AGENT_MAP = {
+        "search_web": "research",
+        "open_url": "research",
+        "start_deep_research": "research",
+        "generate_research_report": "research",
+        "verify_fact": "research",
+        "verify_multiple_facts": "research",
+        "generate_image": "creative",
+        "generate_text": "creative",
+        "create_pdf": "document",
+        "create_docx": "document",
+        "send_email": "communication",
+        "run_command": "shell",
+        "run_script": "shell",
+        "add_cron": "shell",
+        "take_screenshot": "visual",
+        "click_element": "visual",
+        "type_in_field": "visual",
+        "execute_action_plan": "visual",
+        "execute_visual_task": "visual",
+        "execute_visual_task_quick": "visual",
+    }
+
     # Koordinator darf Spezialisten-Tools NIE direkt aufrufen — nur per Delegation.
     # Philosophie: Meta-Agent = Orchestrator, nicht Ausführer.
     # Je mehr er direkt tut, desto weniger delegiert er — und desto mehr Fehler macht er.
@@ -84,32 +107,22 @@ class MetaAgent(BaseAgent):
         "visual_agent_health",
     }
 
-    # UI/Vision-Tool-Namen die aus der Beschreibung herausgefiltert werden
-    _VISUAL_TOOL_NAMES = frozenset({
-        "execute_action_plan", "execute_visual_task", "execute_visual_task_quick",
-        "should_analyze_screen", "analyze_screen_state", "get_all_screen_text",
-        "read_text_from_screen", "find_element_by_description", "find_text_coordinates",
-        "find_ui_element_by_text", "find_all_text_occurrences", "verify_screen_condition",
-        "get_screen_change_stats", "reset_screen_detector", "set_change_threshold",
-        "set_active_monitor", "list_monitors", "visual_agent_health",
-        "take_screenshot", "click_element", "type_in_field",
-    })
-
     @classmethod
     def _filter_tools_for_meta(cls, tools_description: str) -> str:
         """
-        Entfernt UI/Vision-Tool-Blöcke aus der Tools-Beschreibung.
+        Entfernt Spezialisten-Tool-Blöcke aus der Tools-Beschreibung.
         Der Meta-Agent soll diese Tools gar nicht erst sehen — er delegiert immer.
         Jeder Tool-Block beginnt mit dem Tool-Namen als erstem Wort einer Zeile.
         """
         lines = tools_description.splitlines(keepends=True)
         filtered = []
         skip = False
+        hidden_tool_names = cls.SYSTEM_ONLY_TOOLS | {"search_web", "open_url"}
         for line in lines:
             stripped = line.strip()
             # Neuer Tool-Block beginnt (Name am Zeilenanfang, kein Einzug)
             first_word = stripped.split()[0].rstrip(":") if stripped else ""
-            if first_word in cls._VISUAL_TOOL_NAMES:
+            if first_word in hidden_tool_names:
                 skip = True
             elif stripped and not line[0].isspace() and first_word and skip:
                 skip = False  # Nächster Block beginnt
@@ -129,6 +142,117 @@ class MetaAgent(BaseAgent):
         self.skill_registry = None
         self.active_skills: list = []
         self._init_skill_system()
+
+    @staticmethod
+    def _build_research_delegation_task(method: str, params: dict) -> str:
+        query = str(params.get("query") or params.get("topic") or "").strip()
+        focus_areas = params.get("focus_areas")
+        format_name = str(params.get("format") or "markdown").strip()
+        session_id = str(params.get("session_id") or "").strip()
+
+        if method == "start_deep_research":
+            lines = [
+                f"Fuehre eine Deep-Research zum Thema '{query}' durch.",
+                "Erstelle am Ende den finalen Forschungsbericht mit Artefakten.",
+            ]
+            if isinstance(focus_areas, list) and focus_areas:
+                lines.append("Fokusbereiche: " + ", ".join(str(x).strip() for x in focus_areas if str(x).strip()))
+            return " ".join(lines)
+
+        if method == "generate_research_report":
+            lines = [f"Generiere den finalen Forschungsbericht im Format '{format_name}'."]
+            if session_id:
+                lines.append(f"Nutze dabei unbedingt die bestehende Research-Session '{session_id}'.")
+            return " ".join(lines)
+
+        return ""
+
+    @staticmethod
+    def _shorten(value: Any, limit: int = 280) -> str:
+        text = str(value or "").strip()
+        if len(text) <= limit:
+            return text
+        return text[:limit].rstrip() + "..."
+
+    @classmethod
+    def _build_specialist_delegation_task(cls, method: str, params: Dict[str, Any]) -> str:
+        if method == "search_web":
+            query = cls._shorten(params.get("query"))
+            return f"Recherchiere diese Anfrage und liefere belastbare Ergebnisse: {query}".strip()
+
+        if method == "open_url":
+            url = cls._shorten(params.get("url"))
+            return f"Analysiere den Inhalt dieser URL und extrahiere die relevanten Informationen: {url}".strip()
+
+        if method in {"start_deep_research", "generate_research_report"}:
+            return cls._build_research_delegation_task(method, params)
+
+        if method in {"verify_fact", "verify_multiple_facts"}:
+            claim = cls._shorten(params.get("claim") or params.get("claims") or params.get("query"))
+            return f"Pruefe und verifiziere diese Aussage sauber und mit Quellen: {claim}".strip()
+
+        if method in {"generate_image", "generate_text"}:
+            prompt = cls._shorten(params.get("prompt") or params.get("text") or params.get("description"))
+            size = str(params.get("size") or "").strip()
+            task = f"Erstelle das angeforderte kreative Artefakt: {prompt}".strip()
+            if size:
+                task += f" Zielgroesse: {size}."
+            return task
+
+        if method in {"create_pdf", "create_docx"}:
+            title = cls._shorten(params.get("title") or params.get("filename") or "")
+            content = cls._shorten(params.get("content") or params.get("text") or params.get("markdown"))
+            fmt = "PDF" if method == "create_pdf" else "DOCX"
+            task = f"Erstelle ein {fmt}-Dokument."
+            if title:
+                task += f" Titel: {title}."
+            if content:
+                task += f" Inhalt: {content}"
+            return task
+
+        if method == "send_email":
+            recipient = cls._shorten(params.get("to") or params.get("recipient") or params.get("email"))
+            subject = cls._shorten(params.get("subject"))
+            body = cls._shorten(params.get("body") or params.get("content") or params.get("message"))
+            attachment = cls._shorten(params.get("attachment_path") or params.get("attachment"))
+            task = f"Sende eine E-Mail an {recipient}."
+            if subject:
+                task += f" Betreff: {subject}."
+            if body:
+                task += f" Inhalt: {body}"
+            if attachment:
+                task += f" Anhang: {attachment}."
+            return task
+
+        if method in {"run_command", "run_script", "add_cron"}:
+            command = cls._shorten(params.get("command") or params.get("script_path") or params.get("script"))
+            return f"Fuehre die Shell-Aufgabe sicher aus: {command}".strip()
+
+        if method in {"take_screenshot", "click_element", "type_in_field"}:
+            detail = cls._shorten(params.get("description") or params.get("text") or params.get("selector"))
+            return f"Fuehre die visuelle UI-Aufgabe aus: {method}. Kontext: {detail}".strip()
+
+        if method in {"execute_action_plan", "execute_visual_task", "execute_visual_task_quick"}:
+            detail = cls._shorten(params.get("task") or params.get("instruction") or params.get("goal"))
+            return f"Fuehre die visuelle Aufgabe aus: {detail}".strip()
+
+        return ""
+
+    async def _call_tool(self, method: str, params: dict) -> dict:
+        specialist_agent = self._SPECIALIST_TOOL_AGENT_MAP.get(method)
+        if specialist_agent:
+            task = self._build_specialist_delegation_task(method, params)
+            if task:
+                return await super()._call_tool(
+                    "delegate_to_agent",
+                    {
+                        "agent_type": specialist_agent,
+                        "task": task,
+                        "from_agent": "meta",
+                        "session_id": self.conversation_session_id,
+                    },
+                )
+        return await super()._call_tool(method, params)
 
     # ------------------------------------------------------------------
     # Skill-System

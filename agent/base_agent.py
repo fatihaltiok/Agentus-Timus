@@ -90,11 +90,9 @@ AGENT_CAPABILITY_MAP = {
         "planning", "automation", "tasks",       # Workflow-Planung
         "memory", "reflection", "curation",     # Kontext + Lernen
         "skills",                               # Skill-Verwaltung
-        "analysis", "verification", "fact_check",# Entscheidungen
-        "search", "web",                         # Recherche
-        "document", "report", "summarize",      # Ausgabe
-        "results", "file", "filesystem",        # Speichern + Dateien
-        "system",                               # Systemueberblick
+        # Meta ist Orchestrator, kein Spezialist:
+        # keine Search-/Document-/File-/System-Caps, damit Fach-Tools gar nicht
+        # erst im normalen Tool-Sichtfeld auftauchen.
     ],
     "visual": [
         "browser", "dom", "navigation",         # Browser-Steuerung

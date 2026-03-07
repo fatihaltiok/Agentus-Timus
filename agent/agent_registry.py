@@ -222,6 +222,40 @@ class AgentRegistry:
     # Strings die auf ein nur teilweise abgeschlossenes Ergebnis hinweisen
     _PARTIAL_MARKERS = frozenset({"Limit erreicht.", "Max Iterationen."})
 
+    @staticmethod
+    def _select_delegation_timeout(agent_name: str) -> float:
+        """Waehlt den Default-Timeout pro Agentenrolle."""
+        if agent_name == "research":
+            return float(os.getenv("RESEARCH_TIMEOUT", "600"))
+        return float(os.getenv("DELEGATION_TIMEOUT", "120"))
+
+    @staticmethod
+    def _timeout_status_for_agent(agent_name: str) -> str:
+        """Research-Timeouts sind partiell, andere Timeouts bleiben Fehler."""
+        return "partial" if agent_name == "research" else "error"
+
+    @classmethod
+    def _build_timeout_metadata(
+        cls,
+        *,
+        agent_name: str,
+        timeout_seconds: float,
+        session_id: Optional[str],
+        attempts: int,
+    ) -> Dict[str, Any]:
+        meta: Dict[str, Any] = {
+            "timed_out": True,
+            "timeout_seconds": timeout_seconds,
+            "attempts": attempts,
+        }
+        if session_id:
+            meta["session_id"] = session_id
+        if agent_name == "research":
+            meta["recovery_hint"] = (
+                "Recherche enger formulieren und genau einmal erneut delegieren."
+            )
+        return meta
+
     async def delegate(
         self,
         from_agent: str,
@@ -339,10 +373,7 @@ class AgentRegistry:
             payload={"stack_depth": len(next_stack)},
         )
 
-        if to_agent == "research":
-            timeout = float(os.getenv("RESEARCH_TIMEOUT", "600"))
-        else:
-            timeout = float(os.getenv("DELEGATION_TIMEOUT", "120"))
+        timeout = self._select_delegation_timeout(to_agent)
         max_retries = int(os.getenv("DELEGATION_MAX_RETRIES", "1"))
 
         agent = None
@@ -364,7 +395,7 @@ class AgentRegistry:
                     break
                 except asyncio.TimeoutError as e:
                     last_error = TimeoutError(
-                        f"Agent '{to_agent}' hat nicht innerhalb von {timeout}s geantwortet"
+                        f"Timeout: Agent '{to_agent}' hat nicht innerhalb von {timeout}s geantwortet"
                     )
                     log.warning(
                         f"Delegation {from_agent} -> {to_agent} Timeout "
@@ -528,6 +559,63 @@ class AgentRegistry:
                 "artifacts": _res.artifacts,
             }
 
+        except TimeoutError as e:
+            timeout_status = self._timeout_status_for_agent(to_agent)
+            timeout_meta = self._build_timeout_metadata(
+                agent_name=to_agent,
+                timeout_seconds=timeout,
+                session_id=effective_session_id,
+                attempts=max_retries,
+            )
+            self._log_canvas_delegation(
+                from_agent=from_agent,
+                to_agent=to_agent,
+                session_id=effective_session_id,
+                status="error" if timeout_status == "error" else "completed",
+                task=task,
+                message=f"Delegation Timeout: {e}",
+                payload={"timeout_seconds": timeout, "attempts": max_retries},
+            )
+            self._record_routing_outcome(task, to_agent, timeout_status)
+            try:
+                if _delegation_sse_hook is not None:
+                    _delegation_sse_hook(
+                        from_agent,
+                        to_agent,
+                        "error" if timeout_status == "error" else "completed",
+                    )
+            except Exception:
+                pass
+            bb_key = AgentRegistry._auto_write_to_blackboard(
+                to_agent,
+                task,
+                str(e),
+                timeout_status,
+                session_id=effective_session_id,
+                metadata=timeout_meta,
+                artifacts=[],
+            )
+            if timeout_status == "partial":
+                return {
+                    "status": "partial",
+                    "agent": to_agent,
+                    "result": "",
+                    "error": str(e),
+                    "quality": 40,
+                    "blackboard_key": bb_key,
+                    "metadata": timeout_meta,
+                    "artifacts": [],
+                    "note": "Recherche-Timeout: Aufgabe enger formulieren und einmal neu delegieren.",
+                }
+            return {
+                "status": "error",
+                "agent": to_agent,
+                "error": f"FEHLER: Delegation an '{to_agent}' fehlgeschlagen: {e}",
+                "quality": 0,
+                "blackboard_key": bb_key,
+                "metadata": timeout_meta,
+                "artifacts": [],
+            }
         except Exception as e:
             log.error(f"Delegation {from_agent} -> {to_agent} fehlgeschlagen: {e}")
             self._log_canvas_delegation(
@@ -1017,11 +1105,7 @@ class AgentRegistry:
             task_id    = task.get("task_id") or f"t{uuid.uuid4().hex[:6]}"
             agent_name = self.normalize_agent_name(task.get("agent", ""))
             task_desc  = task.get("task", "")
-            _default_timeout = (
-                float(os.getenv("RESEARCH_TIMEOUT", "600"))
-                if agent_name == "research"
-                else float(os.getenv("DELEGATION_TIMEOUT", "120"))
-            )
+            _default_timeout = AgentRegistry._select_delegation_timeout(agent_name)
             timeout = float(task.get("timeout", _default_timeout))
             subtrace   = f"{trace_id}-{task_id}"
 
