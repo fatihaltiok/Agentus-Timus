@@ -2167,7 +2167,7 @@ Wichtig: Schreibe NUR den Berichtstext. Kein Meta-Kommentar über den Schreibpro
     header = (
         f"# Recherche-Bericht\n"
         f"## {session.query}\n\n"
-        f"*Erstellt am {now} | Timus Deep Research v6.0 | Basierend auf {source_count} Web-Quellen{extras_info} | {word_count:,} Wörter*\n\n"
+        f"*Erstellt am {now} | Timus Deep Research v7.0 | Basierend auf {source_count} Web-Quellen{extras_info} | {word_count:,} Wörter*\n\n"
         f"---\n\n"
     )
     return header + narrative
