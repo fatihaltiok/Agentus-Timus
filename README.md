@@ -4,7 +4,7 @@
   <img src="assets/branding/timus-logo-glow.png" alt="Timus Logo" width="760">
 </p>
 
-**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen). Seit **v2.9** sind die Autonomie-Schichten M1–M5 live: Zielgenerierung, Langzeitplanung, Self-Healing und Autonomie-Scorecard laufen aktiv im Produktivbetrieb. Seit **v3.0 (2026-02-28)** läuft im Canvas ein nativer Voice-Loop (Faster-Whisper STT + Inworld.AI TTS) über `/voice/*` Endpoints. Seit **v3.1 (2026-03-01)** sendet und empfängt Timus eigenständig E-Mails über Microsoft Graph OAuth2 — alle 13 Agenten sind vollständig per Delegation erreichbar. Seit **v3.2 (2026-03-02)** visualisiert der Canvas jede Agent-Delegation mit einem goldenen Lichtstrahl-Animation in Echtzeit — und beide Routing-Pfade (direkt + delegiert) nutzen einheitlich `DeveloperAgentV2`. Seit **v3.3 (2026-03-03)** überwacht Timus sich selbst mit LLMs: Jeder neue Incident wird sofort von `qwen3.5-plus` diagnostiziert (Schicht 2), alle 60 Minuten analysiert `deepseek-v3.2` Trends und strukturelle Schwächen im Autonomie-Zustand (Schicht 3). Außerdem können alle Agenten ab v3.3 eigenständig URLs öffnen — Hybrid-Fetch mit automatischem Playwright-Fallback für JavaScript-Seiten. Seit **v3.4 (2026-03-03)** erzeugt Deep Research v6.0 vollautomatisch drei Ausgabedateien: einen analytischen Markdown-Bericht, einen narrativen Lesebericht mit 2500–5000 Wörtern (gpt-5.2) und ein professionelles A4-PDF mit eingebetteten Abbildungen (WeasyPrint). Seit **v3.5 (2026-03-04)** durchsucht Deep Research parallel ArXiv, GitHub und HuggingFace nach aktuellen wissenschaftlichen Trends — und der Edison-Toggle im Canvas UI erlaubt es, PaperQA3 (Edison Scientific) per Klick ohne Server-Neustart zu aktivieren. Seit **v4.0 (2026-03-04)** denkt Timus mit: **M8–M12** bringen Session-Reflexion, ein geteiltes Agent-Blackboard, zeitgesteuerte Trigger, hierarchische Ziel-Verwaltung und eine Self-Improvement Engine — 14 neue MCP-Tools und 5 neue Canvas-Cards. Seit **v3.6 (2026-03-05)** liefert **Deep Research v7.0** endlich echte Ergebnisse für englische KI-Themen: Language-Detection, US-Suchlocation, Domain-aware Embedding-Threshold (0.72 für Tech), automatischer moderate-Modus und ein Qualitäts-Gate mit light-Fallback beheben alle 5 strukturellen Root Causes systematisch. Seit **v4.1 (2026-03-06)** lernt Timus aus Interaktionen (**M16 aktiviert**: 👍/👎/🤷 Feedback → Soul-Hook-Gewichtung), sendet eigenständig E-Mails nach Policy-Check (**M14** Whitelist + Confidence-Guard + SMTP-Backend), und generiert bei Bedarf neue Tools zur Laufzeit (**M13** AST-Validierung + Telegram-Review-Gate + importlib-Aktivierung). Seit **v4.3 (2026-03-07)** kommuniziert der Meta-Agent bidirektional über strukturierte `AgentResult`-Objekte mit `metadata`-Dict (**M17**), schreibt automatisch ins Blackboard und folgt einem formalen Replan-Protokoll — inklusive absolutem Verbot von `search_web` als Research-Fallback. `RESEARCH_TIMEOUT` wurde von 180s auf 600s korrigiert (Deep Research braucht 300–600s), sowohl sequenziell als auch parallel. Alle 3 Fixes sind durch Lean 4 Theoreme (Th.9–11), CrossHair-Contracts und Hypothesis Property-Tests formal verifiziert.
+**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen). Seit **v2.9** sind die Autonomie-Schichten M1–M5 live: Zielgenerierung, Langzeitplanung, Self-Healing und Autonomie-Scorecard laufen aktiv im Produktivbetrieb. Seit **v3.0 (2026-02-28)** läuft im Canvas ein nativer Voice-Loop (Faster-Whisper STT + Inworld.AI TTS) über `/voice/*` Endpoints. Seit **v3.1 (2026-03-01)** sendet und empfängt Timus eigenständig E-Mails über Microsoft Graph OAuth2 — alle 13 Agenten sind vollständig per Delegation erreichbar. Seit **v3.2 (2026-03-02)** visualisiert der Canvas jede Agent-Delegation mit einem goldenen Lichtstrahl-Animation in Echtzeit — und beide Routing-Pfade (direkt + delegiert) nutzen einheitlich `DeveloperAgentV2`. Seit **v3.3 (2026-03-03)** überwacht Timus sich selbst mit LLMs: Jeder neue Incident wird sofort von `qwen3.5-plus` diagnostiziert (Schicht 2), alle 60 Minuten analysiert `deepseek-v3.2` Trends und strukturelle Schwächen im Autonomie-Zustand (Schicht 3). Außerdem können alle Agenten ab v3.3 eigenständig URLs öffnen — Hybrid-Fetch mit automatischem Playwright-Fallback für JavaScript-Seiten. Seit **v3.4 (2026-03-03)** erzeugt Deep Research v6.0 vollautomatisch drei Ausgabedateien: einen analytischen Markdown-Bericht, einen narrativen Lesebericht mit 2500–5000 Wörtern (gpt-5.2) und ein professionelles A4-PDF mit eingebetteten Abbildungen (WeasyPrint). Seit **v3.5 (2026-03-04)** durchsucht Deep Research parallel ArXiv, GitHub und HuggingFace nach aktuellen wissenschaftlichen Trends — und der Edison-Toggle im Canvas UI erlaubt es, PaperQA3 (Edison Scientific) per Klick ohne Server-Neustart zu aktivieren. Seit **v4.0 (2026-03-04)** denkt Timus mit: **M8–M12** bringen Session-Reflexion, ein geteiltes Agent-Blackboard, zeitgesteuerte Trigger, hierarchische Ziel-Verwaltung und eine Self-Improvement Engine — 14 neue MCP-Tools und 5 neue Canvas-Cards. Seit **v3.6 (2026-03-05)** liefert **Deep Research v7.0** endlich echte Ergebnisse für englische KI-Themen: Language-Detection, US-Suchlocation, Domain-aware Embedding-Threshold (0.72 für Tech), automatischer moderate-Modus und ein Qualitäts-Gate mit light-Fallback beheben alle 5 strukturellen Root Causes systematisch. Seit **v4.1 (2026-03-06)** lernt Timus aus Interaktionen (**M16 aktiviert**: 👍/👎/🤷 Feedback → Soul-Hook-Gewichtung), sendet eigenständig E-Mails nach Policy-Check (**M14** Whitelist + Confidence-Guard + SMTP-Backend), und generiert bei Bedarf neue Tools zur Laufzeit (**M13** AST-Validierung + Telegram-Review-Gate + importlib-Aktivierung). Seit **v4.3 (2026-03-07)** kommuniziert der Meta-Agent bidirektional über strukturierte `AgentResult`-Objekte mit `metadata`-Dict (**M17**), schreibt automatisch ins Blackboard und folgt einem formalen Replan-Protokoll — inklusive absolutem Verbot von `search_web` als Research-Fallback. `RESEARCH_TIMEOUT` wurde von 180s auf 600s korrigiert (Deep Research braucht 300–600s), sowohl sequenziell als auch parallel. Seit **v4.4 (2026-03-07)** ist der Agent-Kommunikationsvertrag systemweit gehärtet: `AgentResult` trägt typisierte `artifacts`-Listen, der gesamte Kernpfad (Dispatcher → Agent → Tool → Meta-Fan-In) normalisiert Ergebnisse zentral über `tool_registry_v2`, alle Regex-/Textpfade sind auf sichtbare Fallbacks reduziert — 73 Lean 4 Theoreme, CrossHair-Contracts und Hypothesis Property-Tests sichern die Invarianten ab. Der Canvas UI hat einen neuen **FLOW-Tab**: ein interaktives Cytoscape.js-Architekturdiagramm zeigt den gesamten System-Laufzeitgraph mit Echtzeit-Statusfarben, kollabierbare Gruppen (Voice, Memory, Autonomy) und klickbare Node-Details.
 
 ---
 
@@ -44,7 +44,9 @@ Die folgende Architektur findet sich normalerweise bei Google SRE-Teams, Netflix
 | Generiert neue Tools zur Laufzeit | — | M13 Tool-Generator (AST-Check, MAX 5000 Zeichen, Review-Gate, importlib-Aktivierung) |
 | Delegiert mit strukturierten Rückantworten | — | M17 AgentResult (status, quality, metadata-Dict, blackboard_key) |
 | Plant bei Fehlschlag automatisch neu | — | M17 Replan-Protokoll (max. 2 Versuche, kein search_web Fallback) |
-| Verifiziert Code-Invarianten formal | — | Lean 4 Theoreme (11 CiSpecs), CrossHair-Contracts, Hypothesis Property-Tests |
+| Kommuniziert über typisierten Envelope | — | v4.4 artifacts-Liste, Tool-Wrapper-Normalisierung, zentrale Fallback-Policy |
+| Visualisiert seine Architektur live | — | FLOW-Tab: Cytoscape.js-Diagramm, Echtzeit-Status, Voice/Memory/Autonomy-Gruppen |
+| Verifiziert Code-Invarianten formal | — | 73 Lean 4 Theoreme, CrossHair-Contracts, Hypothesis Property-Tests |
 
 **Das ist kein Chatbot. Das ist ein autonomes KI-Betriebssystem — gebaut in Python, von einer Person, ohne formale IT-Ausbildung.**
 
@@ -265,7 +267,38 @@ Danach kann Timus passwortfrei `systemctl start/stop/restart` für seine eigenen
 
 ---
 
-### Phase 22 — M17 Meta-Agent Intelligence + Bug-Fixes v4.3 *(aktuell)*
+### Phase 23 — Kommunikationsvertrag v4.4 + Interactive Flow Diagram *(aktuell)*
+
+Der gesamte Agent-Tool-Kommunikationsvertrag wurde systemweit gehärtet — und der Canvas UI bekommt ein vollständiges interaktives Architekturdiagramm.
+
+**Kommunikationsvertrag-Härtung (M0–M4):**
+
+| Meilenstein | Was wurde umgesetzt |
+|-------------|-------------------|
+| **M0** | Blackboard-Bug im Delegationspfad beseitigt — `_auto_write_to_blackboard()` nutzt reale Signatur (`topic`, `session_id`, `artifacts`), `_delegation_blackboard_ttl()` als reiner Helfer |
+| **M1** | `AgentResult.artifacts: List[Dict]` eingeführt — typisiertes Artefaktmodell (`type/path/label/mime/source`), Fallback-Policy `artifacts → metadata → regex+WARNING` im Kernpfad verankert |
+| **M2** | `delegate_parallel()` liefert pro Worker echte strukturierte Ergebnisse: `quality`, `metadata`, `artifacts`, `blackboard_key` — kein textuelles Fan-In mehr |
+| **M3** | Zentraler Tool-Wrapper in `tool_registry_v2.py`: `normalize_tool_result()` — idempotent, erkennt bereits normalisierte Envelopes, extrahiert Artefakte aus bekannten Keys |
+| **M4** | Regex-/Altpfade auf Warning-Fallback reduziert — alle Dateipfad-Auflösungen loggen ihre Quelle (`artifacts`/`metadata`/`legacy`), kein stiller Primärzugriff mehr auf `saved_as`/`filepath` |
+
+**Tool-Produzenten auf artifacts umgestellt:** `save_results`, `email_tool`, `deep_research`, `creative_tool`, `document_creator`
+
+**Lean 4:** 73 Theoreme (CiSpecs.lean) — TTL-Bounds, Quality-Maps, Fallback-Reihenfolge, Parallel-Aggregation, Wrapper-Idempotenz
+**Tests:** 200+ Tests über 15+ neue Dateien — Blackboard-Contracts, Artifact-Fallbacks, Parallel-Aggregation, Registry-Envelope
+**CrossHair:** Verträge auf `_auto_write_to_blackboard()`, `normalize_tool_result()`, Artefakt-Normalisierung, Fallback-Logik
+
+**FLOW-Tab — Interaktives Architekturdiagramm:**
+- Neuer **FLOW**-Tab im Canvas UI — vollständiges System-Runtime-Diagram via **Cytoscape.js**
+- Zeigt alle Komponenten als interaktive Nodes: Dispatcher, 13 Agenten, Blackboard, Memory, Autonomy-Engine, Voice-Stack
+- **Echtzeit-Statusfarben**: jeder Node färbt sich nach Live-Status (running/completed/error/warning)
+- **Kollabierbare Gruppen**: Voice, Memory, Autonomy — einzeln ein-/ausklappbar
+- **Klickbare Nodes**: Detail-Panel zeigt Typ, Layer, Status, Quelle, letzte Ausführungszeit
+- **Architecture Runtime HUD**: zeigt Router-Stats, aktive Nodes, laufende Outputs live
+- **Legend + Action-Buttons**: Status-Filter (Errors, Running, Warning, Error-Hotspot), Fit/Zoom
+
+---
+
+### Phase 22 — M17 Meta-Agent Intelligence + Bug-Fixes v4.3 *(v4.3)*
 
 Der Meta-Agent kommuniziert jetzt bidirektional über strukturierte `AgentResult`-Objekte, schreibt Delegation-Ergebnisse automatisch ins Blackboard und folgt einem formalen Replan-Protokoll.
 
@@ -314,7 +347,7 @@ Alle 5 Kern-Agenten wurden mit konkreten Verbesserungen ausgestattet, die durch 
 
 ---
 
-### Phase 20 — M16 aktiv + M14 E-Mail-Autonomie + M13 Tool-Generierung *(v4.1, aktuell)*
+### Phase 20 — M16 aktiv + M14 E-Mail-Autonomie + M13 Tool-Generierung *(v4.1)*
 
 Timus lernt jetzt aus jeder Interaktion, handelt eigenständig per E-Mail und kann sich selbst neue Werkzeuge schreiben.
 

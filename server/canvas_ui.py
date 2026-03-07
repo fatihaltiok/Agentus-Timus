@@ -595,6 +595,172 @@ _TEMPLATE = r"""<!doctype html>
     .nd-close { position: absolute; top: 10px; right: 12px; cursor: pointer; color: var(--text3); font-size: 12px; line-height: 1; }
     .nd-close:hover { color: var(--err); }
 
+    /* Flow-Architecture-Panel */
+    .flow-toolbar {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      right: 10px;
+      z-index: 12;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      pointer-events: none;
+    }
+    .flow-legend, .flow-actions, .flow-hud, .flow-detail {
+      pointer-events: auto;
+    }
+    .flow-legend {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: linear-gradient(135deg, rgba(8,14,24,0.93) 0%, rgba(4,8,14,0.97) 100%);
+      box-shadow: 0 8px 28px rgba(0,0,0,0.38);
+      backdrop-filter: blur(18px);
+    }
+    .flow-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-size: 9.5px;
+      color: var(--text2);
+      border: 1px solid rgba(255,255,255,0.06);
+      background: rgba(255,255,255,0.02);
+    }
+    .flow-chip-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      box-shadow: 0 0 12px currentColor;
+    }
+    .flow-actions {
+      margin-left: auto;
+      display: flex;
+      gap: 6px;
+    }
+    .flow-groups {
+      display: flex;
+      gap: 6px;
+      margin-left: 4px;
+    }
+    .flow-actions button {
+      font-size: 10px;
+      padding: 4px 10px;
+    }
+    .flow-group-btn.active {
+      border-color: rgba(0,224,154,0.24);
+      color: var(--brand);
+      box-shadow: 0 0 18px rgba(0,224,154,0.08);
+    }
+    .flow-group-btn.collapsed {
+      border-color: rgba(0,212,240,0.22);
+      color: var(--cyan);
+      background: rgba(0,212,240,0.07);
+    }
+    .flow-hud {
+      position: absolute;
+      top: 56px;
+      left: 10px;
+      z-index: 12;
+      min-width: 270px;
+      max-width: 340px;
+      padding: 11px 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(0,212,240,0.14);
+      background: linear-gradient(140deg, rgba(7,13,22,0.92) 0%, rgba(5,10,18,0.97) 100%);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.03),
+        0 10px 30px rgba(0,0,0,0.42);
+      backdrop-filter: blur(16px);
+    }
+    .flow-hud-title {
+      font-size: 10px;
+      letter-spacing: 1.4px;
+      text-transform: uppercase;
+      color: var(--cyan);
+      margin-bottom: 7px;
+    }
+    .flow-hud-line {
+      font-size: 10.5px;
+      color: var(--text2);
+      line-height: 1.5;
+    }
+    .flow-hud-line strong { color: var(--text); font-weight: 600; }
+    .flow-detail {
+      position: absolute;
+      right: 14px;
+      bottom: 118px;
+      z-index: 12;
+      display: none;
+      min-width: 260px;
+      max-width: 340px;
+      padding: 14px 16px;
+      border-radius: 14px;
+      border: 1px solid var(--border3);
+      background: linear-gradient(135deg, rgba(10,18,29,0.95) 0%, rgba(4,8,15,0.985) 100%);
+      box-shadow:
+        0 0 0 1px rgba(0,224,154,0.06),
+        0 16px 40px rgba(0,0,0,0.6),
+        0 0 36px rgba(0,212,240,0.07);
+      backdrop-filter: blur(20px);
+    }
+    .flow-detail.visible { display: block; }
+    .flow-detail h4 {
+      font-size: 13px;
+      color: var(--brand);
+      margin-bottom: 10px;
+      padding-right: 20px;
+      white-space: pre-wrap;
+    }
+    .fd-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 4px 0;
+      border-bottom: 1px solid var(--border-dim);
+      font-size: 10.5px;
+    }
+    .fd-row:last-of-type {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+    .fd-key { color: var(--text3); }
+    .fd-val {
+      color: var(--text);
+      font-weight: 500;
+      text-align: right;
+      max-width: 180px;
+      word-break: break-word;
+    }
+    .fd-log {
+      margin-top: 11px;
+      padding: 9px 10px;
+      border-radius: 10px;
+      border: 1px solid var(--border-dim);
+      background: rgba(0,0,0,0.24);
+      font-size: 10px;
+      line-height: 1.55;
+      color: var(--text2);
+      max-height: 140px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+    .flow-empty {
+      color: var(--text3);
+      font-style: italic;
+    }
+    .flow-group-note {
+      margin-top: 8px;
+      font-size: 9.5px;
+      color: var(--text3);
+    }
+
     /* ── AUTONOMY TAB ────────────────────────────────────────────── */
     .autonomy-view {
       flex: 1;
@@ -1228,17 +1394,45 @@ _TEMPLATE = r"""<!doctype html>
 
       <!-- Flow Tab -->
       <div class="tab-content" id="tab-flow" style="position:relative;">
+        <div class="flow-toolbar">
+          <div class="flow-legend">
+            <span class="flow-chip"><span class="flow-chip-dot" style="background:#1d3753;color:#1d3753;"></span>Entry / Dispatch</span>
+            <span class="flow-chip"><span class="flow-chip-dot" style="background:#00d4f0;color:#00d4f0;"></span>Running</span>
+            <span class="flow-chip"><span class="flow-chip-dot" style="background:#00e09a;color:#00e09a;"></span>Healthy</span>
+            <span class="flow-chip"><span class="flow-chip-dot" style="background:#fbbf24;color:#fbbf24;"></span>Warning</span>
+            <span class="flow-chip"><span class="flow-chip-dot" style="background:#f43f5e;color:#f43f5e;"></span>Error Hotspot</span>
+          </div>
+          <div class="flow-actions">
+            <button class="sec" onclick="focusFlowErrors()">Focus Errors</button>
+            <button class="sec" onclick="reloadFlowRuntime()">↺ Runtime</button>
+            <button class="sec" onclick="flowCy&&flowCy.fit(60)">⊞ Fit</button>
+          </div>
+          <div class="flow-groups">
+            <button class="sec flow-group-btn active" id="flowGroupBtn-voice" onclick="toggleFlowGroup('voice')">Voice</button>
+            <button class="sec flow-group-btn active" id="flowGroupBtn-memory" onclick="toggleFlowGroup('memory')">Memory</button>
+            <button class="sec flow-group-btn active" id="flowGroupBtn-autonomy" onclick="toggleFlowGroup('autonomy')">Autonomy</button>
+          </div>
+        </div>
+        <div class="flow-hud" id="flowHud">
+          <div class="flow-hud-title">Architecture Runtime</div>
+          <div class="flow-hud-line" id="flowHudCounts">Knoten: – · Aktiv: – · Fehler: –</div>
+          <div class="flow-hud-line" id="flowHudLast">Noch keine Laufzeitdaten.</div>
+          <div class="flow-group-note" id="flowHudGroups">Gruppen: Voice offen · Memory offen · Autonomy offen</div>
+        </div>
         <div id="flow-cy" style="width:100%;height:100%;"></div>
         <canvas id="flow-beam-overlay" style="position:absolute;top:0;left:0;pointer-events:none;"></canvas>
-        <!-- Zoom-Controls -->
-        <div style="position:absolute;top:8px;right:8px;z-index:10;display:flex;gap:6px;">
-          <button class="sec" style="font-size:12px;padding:3px 10px;" onclick="flowCy&&(flowCy.zoom(flowCy.zoom()*1.3),flowCy.center())">＋</button>
-          <button class="sec" style="font-size:12px;padding:3px 10px;" onclick="flowCy&&(flowCy.zoom(flowCy.zoom()*0.77),flowCy.center())">－</button>
-          <button class="sec" style="font-size:12px;padding:3px 10px;" onclick="flowCy&&flowCy.fit(40)">⊞ Fit</button>
-        </div>
-        <!-- Minimap -->
         <div id="flow-minimap" style="position:absolute;bottom:8px;right:8px;width:150px;height:100px;
              border:1px solid #334;background:#0d1117;border-radius:4px;z-index:10;"></div>
+        <div class="flow-detail" id="flowDetail">
+          <span class="nd-close" onclick="closeFlowDetail()">✕</span>
+          <h4 id="fdTitle">–</h4>
+          <div class="fd-row"><span class="fd-key">ID</span><span class="fd-val" id="fdId">–</span></div>
+          <div class="fd-row"><span class="fd-key">Layer</span><span class="fd-val" id="fdLayer">–</span></div>
+          <div class="fd-row"><span class="fd-key">Status</span><span class="fd-val" id="fdStatus">–</span></div>
+          <div class="fd-row"><span class="fd-key">Quelle</span><span class="fd-val" id="fdSource">–</span></div>
+          <div class="fd-row"><span class="fd-key">Update</span><span class="fd-val" id="fdUpdated">–</span></div>
+          <div class="fd-log" id="fdMessage"><span class="flow-empty">Kein Laufzeitereignis.</span></div>
+        </div>
       </div>
 
       <!-- Autonomy Tab -->
@@ -1600,7 +1794,7 @@ function switchTab(tab) {
   if (tab === "autonomy") loadAutonomyData();
   else if (tab === "canvas" && cy) setTimeout(() => cy.fit(), 60);
   else if (tab === "kamera") camCheckStatus();
-  else if (tab === "flow") initFlowGraph();
+  else if (tab === "flow") { initFlowGraph(); setTimeout(() => reloadFlowRuntime(), 80); }
 }
 
 // ── Kamera ────────────────────────────────────────────────────────────────────
@@ -1781,7 +1975,7 @@ function handleSSE(d) {
   if (d.type === "autonomy_score") { updateSidebarScore(d.score, d.level); return; }
   if (d.type === "delegation") {
     animateDelegationBeam(d.from, d.to, d.status || "running");
-    if (typeof flowCy !== "undefined" && flowCy) animateFlowBeam(d.from, d.to, d.status || "running");
+    if (typeof flowCy !== "undefined" && flowCy) animateFlowBeam(flowAliasToNodeId(d.from) || d.from, flowAliasToNodeId(d.to) || d.to, d.status || "running");
     return;
   }
 }
@@ -2471,69 +2665,969 @@ async function reloadGraph() {
 let flowCy = null;
 let _flowBeamRAF = null;
 let _flowGraphInited = false;
+let _flowNavigatorInited = false;
+let _flowResizeObserver = null;
+let _flowActiveDetailNodeId = "";
+let _flowLastRuntimeSummary = { active: 0, errors: 0, latest: "" };
+let _flowCollapsedGroups = { voice: false, memory: false, autonomy: false };
+let _flowEdgeAnimationRAF = null;
+let _flowEdgeDashOffset = 0;
+
+const FLOW_STATUS_ORDER = { idle: 0, completed: 1, running: 2, warning: 3, error: 4 };
+const FLOW_GROUPS = {
+  voice: {
+    label: "Voice",
+    parent: "GROUP_VOICE",
+    summaryNode: "VOICE_SUM",
+    summaryEdges: ["e-M-VOICE_SUM"],
+    children: ["VC", "VW", "VT", "CV"],
+  },
+  memory: {
+    label: "Memory",
+    parent: "GROUP_MEMORY",
+    summaryNode: "MEMORY_SUM",
+    summaryEdges: ["e-M-MEMORY_SUM", "e-MEMORY_SUM-ARP"],
+    children: ["MM", "WAL", "MAG", "IE", "UR", "CHR", "CUR", "AUS", "RFT", "SE", "SEA", "SED", "SET", "SEP", "CE", "CEL", "CET", "CEQ", "CES", "CEG", "CED", "CEP"],
+  },
+  autonomy: {
+    label: "Autonomy",
+    parent: "GROUP_AUTONOMY",
+    summaryNode: "AUTONOMY_SUM",
+    summaryEdges: ["e-D-AUTONOMY_SUM", "e-AUTONOMY_SUM-B", "e-AUTONOMY_SUM-MEMORY_SUM"],
+    children: ["RUN", "G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8", "G9", "G10", "G11", "G12", "G13"],
+  },
+};
+const FLOW_NODE_POSITIONS = {
+  U: { x: 120, y: 220 },
+  D: { x: 360, y: 220 },
+  DS: { x: 600, y: 90 },
+  DI: { x: 600, y: 150 },
+  DP: { x: 600, y: 210 },
+  DL: { x: 600, y: 270 },
+  A: { x: 840, y: 250 },
+  AR: { x: 1080, y: 180 },
+  ARD: { x: 1310, y: 120 },
+  ARDR: { x: 1530, y: 70 },
+  ARDP: { x: 1530, y: 130 },
+  ARDL: { x: 1530, y: 190 },
+  ARP: { x: 1310, y: 280 },
+  ARPM: { x: 1530, y: 260 },
+  ARPA: { x: 1530, y: 320 },
+  B: { x: 1080, y: 430 },
+  BW: { x: 1310, y: 390 },
+  BR: { x: 1310, y: 460 },
+  BL: { x: 1310, y: 530 },
+  M: { x: 1580, y: 430 },
+  FH: { x: 1900, y: 80 },
+  VC: { x: 1900, y: 210 },
+  VW: { x: 2140, y: 145 },
+  VT: { x: 2140, y: 225 },
+  CV: { x: 2140, y: 305 },
+  VOICE_SUM: { x: 2020, y: 225 },
+  RS: { x: 1900, y: 430 },
+  RSS: { x: 2140, y: 385 },
+  RSC: { x: 2140, y: 445 },
+  RSL: { x: 2140, y: 505 },
+  RSM: { x: 2140, y: 565 },
+  RSD: { x: 2380, y: 445 },
+  RSLD: { x: 2380, y: 515 },
+  SYS: { x: 1900, y: 660 },
+  SH: { x: 1900, y: 760 },
+  DR: { x: 1900, y: 920 },
+  DRY: { x: 2140, y: 860 },
+  DRI: { x: 2140, y: 930 },
+  DRP: { x: 2140, y: 1000 },
+  E: { x: 1900, y: 1110 },
+  MM: { x: 1600, y: 1370 },
+  WAL: { x: 1830, y: 1220 },
+  MAG: { x: 1830, y: 1290 },
+  IE: { x: 1830, y: 1360 },
+  UR: { x: 1830, y: 1430 },
+  CHR: { x: 1830, y: 1500 },
+  CUR: { x: 1830, y: 1570 },
+  AUS: { x: 1830, y: 1640 },
+  RFT: { x: 1830, y: 1710 },
+  SE: { x: 2110, y: 1350 },
+  SEA: { x: 2350, y: 1220 },
+  SED: { x: 2350, y: 1300 },
+  SET: { x: 2350, y: 1380 },
+  SEP: { x: 2350, y: 1460 },
+  CE: { x: 2110, y: 1590 },
+  CEL: { x: 2350, y: 1540 },
+  CET: { x: 2350, y: 1610 },
+  CEQ: { x: 2350, y: 1680 },
+  CES: { x: 2350, y: 1750 },
+  CEG: { x: 2350, y: 1820 },
+  CED: { x: 2350, y: 1890 },
+  CEP: { x: 2350, y: 1960 },
+  MEMORY_SUM: { x: 2070, y: 1530 },
+  RUN: { x: 420, y: 1080 },
+  G1: { x: 700, y: 930 },
+  G2: { x: 700, y: 1000 },
+  G3: { x: 700, y: 1070 },
+  G4: { x: 700, y: 1140 },
+  G5: { x: 980, y: 930 },
+  G6: { x: 980, y: 1020 },
+  G7: { x: 980, y: 1120 },
+  G8: { x: 1260, y: 930 },
+  G9: { x: 1260, y: 1020 },
+  G10: { x: 1260, y: 1120 },
+  G11: { x: 1540, y: 930 },
+  G12: { x: 1540, y: 1020 },
+  G13: { x: 1540, y: 1120 },
+  AUTONOMY_SUM: { x: 980, y: 1040 },
+};
+const FLOW_PRIMARY_BEAM_MAP = {
+  user: "U",
+  telegram: "U",
+  terminal: "U",
+  canvas: "U",
+  dispatcher: "D",
+  main_dispatcher: "D",
+  meta: "ARPA",
+  executor: "B",
+  research: "DR",
+  reasoning: "DI",
+  creative: "DRI",
+  development: "M",
+  developer: "M",
+  visual: "FH",
+  data: "MM",
+  document: "DRP",
+  communication: "VC",
+  system: "SYS",
+  shell: "SH",
+  image: "DRI",
+};
+const FLOW_ALIAS_NODE_IDS = {
+  u: "U",
+  user: "U",
+  cli: "U",
+  telegram: "U",
+  canvas: "U",
+  terminal: "U",
+  d: "D",
+  dispatcher: "D",
+  main_dispatcher: "D",
+  "query sanitizing": "DS",
+  sanitize: "DS",
+  sanitizing: "DS",
+  "intent analyse llm": "DI",
+  intent: "DI",
+  "policy gate": "DP",
+  policy: "DP",
+  lane: "DL",
+  session: "DL",
+  agent_class_map: "A",
+  agent_classmap: "A",
+  "13 agenten": "A",
+  agentregistry: "AR",
+  agent_registry: "AR",
+  delegate: "ARD",
+  delegation: "ARD",
+  retry: "ARDR",
+  partial: "ARDP",
+  "loop prevention": "ARDL",
+  loop: "ARDL",
+  delegate_parallel: "ARP",
+  fanout: "ARP",
+  "fan out": "ARP",
+  "memoryaccessguard": "ARPM",
+  "resultaggregator": "ARPA",
+  result_aggregator: "ARPA",
+  base_agent: "B",
+  dynamictoolmixin: "B",
+  dynamic_tool_mixin: "B",
+  "working memory": "BW",
+  recall: "BR",
+  fastpath: "BR",
+  buglogger: "BL",
+  "mcp server": "M",
+  mcp: "M",
+  jsonrpc: "M",
+  "json-rpc": "M",
+  tools: "M",
+  visualnemotron: "FH",
+  florence: "FH",
+  paddleocr: "FH",
+  voice: "VC",
+  whisper: "VW",
+  stt: "VW",
+  tts: "VT",
+  inworld: "VT",
+  realsense: "RS",
+  start_realsense_stream: "RSS",
+  capture_realsense_snapshot: "RSC",
+  snapshot: "RSC",
+  capture_realsense_live_frame: "RSL",
+  live_frame: "RSL",
+  realsense_stream: "RSM",
+  "realsense captures": "RSD",
+  "realsense stream": "RSLD",
+  systemagent: "SYS",
+  "system agent": "SYS",
+  shellagent: "SH",
+  "shell agent": "SH",
+  "deep research": "DR",
+  deep_research: "DR",
+  youtuberesearcher: "DRY",
+  imagecollector: "DRI",
+  researchpdfbuilder: "DRP",
+  memory: "MM",
+  memory_system: "MM",
+  sqlite: "WAL",
+  wal: "WAL",
+  interaction_events: "IE",
+  unified_recall: "UR",
+  chromadb: "CHR",
+  curator: "CUR",
+  summarize: "AUS",
+  reflection: "RFT",
+  soulengine: "SE",
+  soul_engine: "SE",
+  axes: "SEA",
+  apply_drift: "SED",
+  tone: "SET",
+  system_prompt_prefix: "SEP",
+  curiosity: "CE",
+  curiosityengine: "CE",
+  "fuzzy sleep": "CEL",
+  topic: "CET",
+  query: "CEQ",
+  dataforseo: "CES",
+  gatekeeper: "CEG",
+  duplicate: "CED",
+  push: "CEP",
+  autonomous_runner: "RUN",
+  goalgenerator: "G1",
+  longtermplanner: "G2",
+  replanningengine: "G3",
+  selfhealingengine: "G4",
+  autonomyscorecard: "G5",
+  sessionreflection: "G6",
+  agentblackboard: "G7",
+  blackboard: "G7",
+  proactivetriggers: "G8",
+  goalqueuemanager: "G9",
+  selfimprovementengine: "G10",
+  feedbackengine: "G11",
+  emailautonomyengine: "G12",
+  toolgeneratorengine: "G13",
+  executor: "A",
+  research: "DR",
+  reasoning: "A",
+  creative: "DRI",
+  development: "A",
+  developer: "A",
+  visual: "FH",
+  data: "MM",
+  document: "DRP",
+  communication: "VC",
+  system: "SYS",
+  shell: "SH",
+  image: "DRI",
+  meta: "ARPA",
+};
+const FLOW_KEYWORD_GROUPS = [
+  { nodeIds: ["DS"], terms: ["sanitize", "sanitizing", "query sanitize"] },
+  { nodeIds: ["DI"], terms: ["intent", "routing llm", "classifier"] },
+  { nodeIds: ["DP"], terms: ["policy", "guardrail"] },
+  { nodeIds: ["DL"], terms: ["lane", "session", "context"] },
+  { nodeIds: ["AR", "ARD"], terms: ["delegate", "delegation"] },
+  { nodeIds: ["ARDR"], terms: ["retry", "backoff"] },
+  { nodeIds: ["ARDP"], terms: ["partial"] },
+  { nodeIds: ["ARDL"], terms: ["loop", "max_depth"] },
+  { nodeIds: ["ARP", "ARPA"], terms: ["parallel", "fan-out", "fan out", "fan-in", "fan in", "gather", "aggregator"] },
+  { nodeIds: ["ARPM", "MAG"], terms: ["memoryaccessguard", "contextvar", "thread-safe", "thread safe"] },
+  { nodeIds: ["B", "BW"], terms: ["working memory", "prompt prefix", "soul-prefix", "soul prefix"] },
+  { nodeIds: ["BR"], terms: ["recall", "fast-path", "fast path"] },
+  { nodeIds: ["BL"], terms: ["buglogger", "traceback"] },
+  { nodeIds: ["M"], terms: ["mcp", "json-rpc", "jsonrpc", "tool", "fastapi"] },
+  { nodeIds: ["FH"], terms: ["visualnemotron", "florence", "paddleocr", "vision"] },
+  { nodeIds: ["VC", "VW", "VT", "CV"], terms: ["voice", "listen", "speak", "whisper", "tts", "stt", "playback"] },
+  { nodeIds: ["RS", "RSS", "RSC", "RSL", "RSM", "RSD", "RSLD"], terms: ["realsense", "snapshot", "live_frame", "live frame", "capture_realsense", "camera/status"] },
+  { nodeIds: ["SYS"], terms: ["systemagent", "system agent", "monitoring"] },
+  { nodeIds: ["SH"], terms: ["shellagent", "shell agent", "bash", "terminal"] },
+  { nodeIds: ["DR", "DRY", "DRI", "DRP"], terms: ["deep research", "researchpdfbuilder", "imagecollector", "youtube"] },
+  { nodeIds: ["MM", "WAL", "IE", "UR", "CHR", "CUR", "AUS", "RFT"], terms: ["memory", "sqlite", "wal", "interaction_events", "unified_recall", "chromadb", "curator", "summarize", "reflection"] },
+  { nodeIds: ["SE", "SEA", "SED", "SET", "SEP"], terms: ["soul", "tone", "apply_drift", "risk_appetite", "system prompt prefix"] },
+  { nodeIds: ["CE", "CEL", "CET", "CEQ", "CES", "CEG", "CED", "CEP"], terms: ["curiosity", "fuzzy sleep", "topic", "dataforseo", "telegram push", "duplicate"] },
+  { nodeIds: ["RUN", "G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8", "G9", "G10", "G11", "G12", "G13"], terms: ["autonomous_runner", "goalgenerator", "planner", "selfhealing", "scorecard", "sessionreflection", "blackboard", "trigger", "goal queue", "self improvement", "feedback", "email autonomy", "tool generator"] },
+];
+
+function flowTonePalette(tone) {
+  const palette = {
+    entry:      { bg: "#102236", border: "#2d5273", glow: "rgba(45,82,115,0.35)" },
+    dispatch:   { bg: "#12273c", border: "#3270a1", glow: "rgba(50,112,161,0.34)" },
+    agent:      { bg: "#142437", border: "#2d5f83", glow: "rgba(45,95,131,0.30)" },
+    runtime:    { bg: "#101f30", border: "#296181", glow: "rgba(41,97,129,0.28)" },
+    voice:      { bg: "#102634", border: "#2b7f91", glow: "rgba(43,127,145,0.30)" },
+    sensor:     { bg: "#1d1f39", border: "#4b4ba3", glow: "rgba(75,75,163,0.28)" },
+    memory:     { bg: "#17212f", border: "#4a5e8a", glow: "rgba(74,94,138,0.28)" },
+    soul:       { bg: "#1a2037", border: "#6d61b5", glow: "rgba(109,97,181,0.26)" },
+    curiosity:  { bg: "#142a24", border: "#2b8a6d", glow: "rgba(43,138,109,0.28)" },
+    autonomy:   { bg: "#1d2432", border: "#788aa8", glow: "rgba(120,138,168,0.26)" },
+    storage:    { bg: "#1d2330", border: "#4f5d76", glow: "rgba(79,93,118,0.25)" },
+    external:   { bg: "#2a2316", border: "#9a7a39", glow: "rgba(154,122,57,0.28)" },
+    system:     { bg: "#2a1821", border: "#92506d", glow: "rgba(146,80,109,0.27)" },
+  };
+  return palette[tone] || palette.runtime;
+}
+
+function flowRuntimePalette(status, baseBg, baseBorder, baseGlow) {
+  const presets = {
+    idle:      { bg: baseBg, border: baseBorder, glow: baseGlow, blur: 18, opacity: 0.45 },
+    completed: { bg: "#0f2d24", border: "#00e09a", glow: "rgba(0,224,154,0.45)", blur: 28, opacity: 0.82 },
+    running:   { bg: "#0f2933", border: "#00d4f0", glow: "rgba(0,212,240,0.50)", blur: 30, opacity: 0.88 },
+    warning:   { bg: "#332710", border: "#fbbf24", glow: "rgba(251,191,36,0.48)", blur: 32, opacity: 0.92 },
+    error:     { bg: "#381320", border: "#f43f5e", glow: "rgba(244,63,94,0.60)", blur: 40, opacity: 0.96 },
+  };
+  return presets[status] || presets.idle;
+}
+
+function flowNodeSpec(id, label, tone, meta) {
+  meta = meta || {};
+  const lines = String(label).split("\n");
+  const longest = lines.reduce((m, line) => Math.max(m, line.length), 0);
+  const position = meta.position || FLOW_NODE_POSITIONS[id] || null;
+  const dims = {
+    w: meta.w || Math.min(230, Math.max(96, 28 + longest * 6.2)),
+    h: meta.h || (lines.length >= 3 ? 72 : lines.length === 2 ? 60 : 46),
+  };
+  const palette = flowTonePalette(tone);
+  const data = {
+    id,
+    label,
+    tone,
+    lane: meta.lane || "",
+    description: meta.description || "",
+    groupKey: meta.groupKey || "",
+    isGroup: meta.isGroup ? 1 : 0,
+    isSummary: meta.isSummary ? 1 : 0,
+    zoneMinW: meta.zoneMinW || 220,
+    zoneMinH: meta.zoneMinH || 160,
+    baseBg: palette.bg,
+    baseBorder: palette.border,
+    baseGlow: palette.glow,
+    renderBg: palette.bg,
+    renderBorder: palette.border,
+    renderGlow: palette.glow,
+    renderBlur: 18,
+    renderOpacity: 0.45,
+    runtimeStatus: "idle",
+    runtimeSource: "",
+    runtimeMessage: "",
+    runtimeUpdatedAt: "",
+    runtimeSeverity: 0,
+    w: dims.w,
+    h: dims.h,
+    renderDashOffset: 0,
+  };
+  if (meta.parent) data.parent = meta.parent;
+  return {
+    data,
+    position: position || undefined,
+  };
+}
+
+function flowEdgeSpec(source, target, meta) {
+  meta = meta || {};
+  return {
+    data: {
+      id: meta.id || `e-${source}-${target}`,
+      source,
+      target,
+      label: meta.label || "",
+      dashed: !!meta.dashed,
+      baseColor: meta.color || "#274058",
+      renderColor: meta.color || "#274058",
+      renderOpacity: meta.opacity != null ? meta.opacity : (meta.dashed ? 0.42 : 0.62),
+      renderWidth: meta.width || (meta.dashed ? 1.15 : 1.4),
+    },
+    classes: meta.dashed ? "flow-edge-dashed" : "",
+  };
+}
+
+function buildArchitectureFlowElements() {
+  const nodes = [
+    flowNodeSpec("GROUP_VOICE", "Voice", "voice", { lane: "Group", isGroup: true, groupKey: "voice", zoneMinW: 520, zoneMinH: 230 }),
+    flowNodeSpec("GROUP_MEMORY", "Memory", "memory", { lane: "Group", isGroup: true, groupKey: "memory", zoneMinW: 1120, zoneMinH: 900 }),
+    flowNodeSpec("GROUP_AUTONOMY", "Autonomy", "autonomy", { lane: "Group", isGroup: true, groupKey: "autonomy", zoneMinW: 1320, zoneMinH: 360 }),
+    flowNodeSpec("U", "User Input\nCLI / Telegram / Canvas / Terminal", "entry", { lane: "Input", description: "Alle primären Einstiegspunkte." }),
+    flowNodeSpec("D", "main_dispatcher.py", "dispatch", { lane: "Dispatch", description: "Zentraler Router für Queries." }),
+    flowNodeSpec("DS", "Query Sanitizing", "dispatch", { lane: "Dispatch" }),
+    flowNodeSpec("DI", "Intent Analyse LLM", "dispatch", { lane: "Dispatch" }),
+    flowNodeSpec("DP", "Policy Gate", "dispatch", { lane: "Dispatch" }),
+    flowNodeSpec("DL", "Lane + Session", "dispatch", { lane: "Dispatch" }),
+    flowNodeSpec("A", "AGENT_CLASS_MAP\n13 Agenten", "agent", { lane: "Agents", description: "Gemeinsamer Einstieg in die Agentenklasse." }),
+    flowNodeSpec("AR", "AgentRegistry", "agent", { lane: "Delegation" }),
+    flowNodeSpec("ARD", "delegate - sequenziell\nasyncio.wait_for 120s", "agent", { lane: "Delegation" }),
+    flowNodeSpec("ARDR", "Retry expon. Backoff", "agent", { lane: "Delegation" }),
+    flowNodeSpec("ARDP", "Partial-Erkennung", "agent", { lane: "Delegation" }),
+    flowNodeSpec("ARDL", "Loop-Prevention MAX_DEPTH 3", "agent", { lane: "Delegation" }),
+    flowNodeSpec("ARP", "delegate_parallel - Fan-Out v2.5\nasyncio.gather + Semaphore max 10", "agent", { lane: "Delegation", h: 72 }),
+    flowNodeSpec("ARPM", "MemoryAccessGuard\nContextVar - thread-safe", "agent", { lane: "Delegation" }),
+    flowNodeSpec("ARPA", "ResultAggregator\nFan-In Markdown", "agent", { lane: "Delegation" }),
+    flowNodeSpec("B", "agent/base_agent.py\nDynamicToolMixin", "runtime", { lane: "Runtime" }),
+    flowNodeSpec("BW", "Working Memory inject\nSoul-Prefix NEU v2.8", "runtime", { lane: "Runtime" }),
+    flowNodeSpec("BR", "Recall Fast-Path", "runtime", { lane: "Runtime" }),
+    flowNodeSpec("BL", "BugLogger", "runtime", { lane: "Runtime" }),
+    flowNodeSpec("M", "MCP Server :5000\nFastAPI + JSON-RPC\n80+ Tools", "runtime", { lane: "Tools", h: 72 }),
+    flowNodeSpec("FH", "VisualNemotron v4\nFlorence-2 + PaddleOCR\nPlan-then-Execute", "runtime", { lane: "Tools", h: 72 }),
+    flowNodeSpec("VC", "Voice REST API\n/voice/status|listen|stop|speak", "voice", { lane: "Voice", h: 72, parent: "GROUP_VOICE" }),
+    flowNodeSpec("VW", "Faster-Whisper STT\ninit via Background-Task", "voice", { lane: "Voice", parent: "GROUP_VOICE" }),
+    flowNodeSpec("VT", "Inworld.AI TTS\nBase64-MP3 + Playback", "voice", { lane: "Voice", parent: "GROUP_VOICE" }),
+    flowNodeSpec("CV", "Canvas UI v3.3+\nSSE Voice-Loop", "voice", { lane: "Voice", parent: "GROUP_VOICE" }),
+    flowNodeSpec("VOICE_SUM", "Voice Cluster\n4 Subsysteme", "voice", { lane: "Voice", isSummary: true, groupKey: "voice", w: 180, h: 74, description: "Zusammenfassung des Voice-Subsystems." }),
+    flowNodeSpec("RS", "RealSense Toolchain\nrealsense_camera_tool", "sensor", { lane: "Sensor" }),
+    flowNodeSpec("RSS", "start_realsense_stream\nOpenCV Background Thread", "sensor", { lane: "Sensor" }),
+    flowNodeSpec("RSC", "capture_realsense_snapshot\nrs-save-to-disk", "sensor", { lane: "Sensor" }),
+    flowNodeSpec("RSL", "capture_realsense_live_frame\nexport latest frame", "sensor", { lane: "Sensor" }),
+    flowNodeSpec("RSM", "utils/realsense_stream.py\nlatest frame + stream status", "sensor", { lane: "Sensor" }),
+    flowNodeSpec("RSD", "data/realsense_captures\nSnapshot-Persistenz", "storage", { lane: "Storage" }),
+    flowNodeSpec("RSLD", "data/realsense_stream\nLive-Frame Export", "storage", { lane: "Storage" }),
+    flowNodeSpec("SYS", "SystemAgent\nread-only Monitoring", "system", { lane: "Agents" }),
+    flowNodeSpec("SH", "ShellAgent v2\n5-Schicht-Policy\nSystem-Kontext-Injektion", "system", { lane: "Agents", h: 72 }),
+    flowNodeSpec("DR", "Deep Research v6.0\nYouTube + Bilder + PDF", "runtime", { lane: "Tools" }),
+    flowNodeSpec("DRY", "YouTubeResearcher\nDataForSEO + qwen3-235b\nNVIDIA Vision", "runtime", { lane: "Tools", h: 72 }),
+    flowNodeSpec("DRI", "ImageCollector\nWeb-Bild + DALL-E", "runtime", { lane: "Tools" }),
+    flowNodeSpec("DRP", "ResearchPDFBuilder\nWeasyPrint A4-PDF\nJinja2 Template", "runtime", { lane: "Tools", h: 72 }),
+    flowNodeSpec("E", "Externe Systeme\nPyAutoGUI / Playwright / APIs", "external", { lane: "External" }),
+    flowNodeSpec("MM", "memory/memory_system.py\nMemory v2.2 + WAL", "memory", { lane: "Memory", parent: "GROUP_MEMORY" }),
+    flowNodeSpec("WAL", "SQLite WAL\ncuriosity_sent NEU v2.8", "storage", { lane: "Memory", parent: "GROUP_MEMORY" }),
+    flowNodeSpec("MAG", "MemoryAccessGuard\nContextVar", "memory", { lane: "Memory", parent: "GROUP_MEMORY" }),
+    flowNodeSpec("IE", "interaction_events\ndeterministisches Logging", "memory", { lane: "Memory", parent: "GROUP_MEMORY" }),
+    flowNodeSpec("UR", "unified_recall\n200-Scan", "memory", { lane: "Memory", parent: "GROUP_MEMORY" }),
+    flowNodeSpec("CHR", "ChromaDB Direktverbindung", "memory", { lane: "Memory", parent: "GROUP_MEMORY" }),
+    flowNodeSpec("CUR", "Nemotron-Kurator\n4 Kriterien", "memory", { lane: "Memory", parent: "GROUP_MEMORY" }),
+    flowNodeSpec("AUS", "Auto-Summarize\nalle 20 Nachrichten", "memory", { lane: "Memory", parent: "GROUP_MEMORY" }),
+    flowNodeSpec("RFT", "Reflection 30s Timeout\n-> soul_engine.apply_drift NEU v2.8", "memory", { lane: "Memory", h: 72, parent: "GROUP_MEMORY" }),
+    flowNodeSpec("SE", "SoulEngine NEU v2.8\nmemory/soul_engine.py", "soul", { lane: "Soul", parent: "GROUP_MEMORY" }),
+    flowNodeSpec("SEA", "5 Achsen\nconfidence formality humor\nverbosity risk_appetite", "soul", { lane: "Soul", h: 72, parent: "GROUP_MEMORY" }),
+    flowNodeSpec("SED", "apply_drift\n7 Signale - x0.1 Dampfung\nClamp 5-95", "soul", { lane: "Soul", h: 72, parent: "GROUP_MEMORY" }),
+    flowNodeSpec("SET", "get_tone_config\nvorsichtig neutral direkt", "soul", { lane: "Soul", parent: "GROUP_MEMORY" }),
+    flowNodeSpec("SEP", "get_system_prompt_prefix\ndynamisches Prompt-Fragment", "soul", { lane: "Soul", parent: "GROUP_MEMORY" }),
+    flowNodeSpec("CE", "CuriosityEngine NEU v2.8\norchestration/curiosity_engine.py", "curiosity", { lane: "Curiosity", parent: "GROUP_MEMORY" }),
+    flowNodeSpec("CEL", "Fuzzy Sleep\n3-14h zufallig", "curiosity", { lane: "Curiosity", parent: "GROUP_MEMORY" }),
+    flowNodeSpec("CET", "Topic-Extraktion\nSession + SQLite 72h", "curiosity", { lane: "Curiosity", parent: "GROUP_MEMORY" }),
+    flowNodeSpec("CEQ", "LLM Query-Gen\nEdge-Suchanfrage 2026", "curiosity", { lane: "Curiosity", parent: "GROUP_MEMORY" }),
+    flowNodeSpec("CES", "DataForSEO\nTop-3 Ergebnisse", "curiosity", { lane: "Curiosity", parent: "GROUP_MEMORY" }),
+    flowNodeSpec("CEG", "Gatekeeper-LLM\nScore 0-10 - >=7 = senden", "curiosity", { lane: "Curiosity", h: 72, parent: "GROUP_MEMORY" }),
+    flowNodeSpec("CED", "Duplikat-Check\n14 Tage - 2/Tag Limit", "curiosity", { lane: "Curiosity", parent: "GROUP_MEMORY" }),
+    flowNodeSpec("CEP", "Telegram Push\nSoul-Ton als Einstieg", "curiosity", { lane: "Curiosity", parent: "GROUP_MEMORY" }),
+    flowNodeSpec("MEMORY_SUM", "Memory Cluster\n22 Module", "memory", { lane: "Memory", isSummary: true, groupKey: "memory", w: 190, h: 78, description: "Zusammenfassung von Memory, Soul und Curiosity." }),
+    flowNodeSpec("RUN", "autonomous_runner.py\nAutonomie-Loop v4.0", "autonomy", { lane: "Autonomy", parent: "GROUP_AUTONOMY" }),
+    flowNodeSpec("G1", "GoalGenerator M1\nMemory+Curiosity+Events", "autonomy", { lane: "Autonomy", parent: "GROUP_AUTONOMY" }),
+    flowNodeSpec("G2", "LongTermPlanner M2\n3-Horizont-Planung", "autonomy", { lane: "Autonomy", parent: "GROUP_AUTONOMY" }),
+    flowNodeSpec("G3", "ReplanningEngine M2\nCommitment-Uberwachung", "autonomy", { lane: "Autonomy", parent: "GROUP_AUTONOMY" }),
+    flowNodeSpec("G4", "SelfHealingEngine M3\nCircuit-Breaker+Incidents", "autonomy", { lane: "Autonomy", h: 72, parent: "GROUP_AUTONOMY" }),
+    flowNodeSpec("G5", "AutonomyScorecard M5\nScore 0-100-Control-Loop", "autonomy", { lane: "Autonomy", h: 72, parent: "GROUP_AUTONOMY" }),
+    flowNodeSpec("G6", "SessionReflection M8\nIdle-Erkennung + LLM-Reflexion\nPattern-Akkumulation", "autonomy", { lane: "Autonomy", h: 78, parent: "GROUP_AUTONOMY" }),
+    flowNodeSpec("G7", "AgentBlackboard M9\nTTL Shared Memory\nwrite/read/search", "autonomy", { lane: "Autonomy", h: 72, parent: "GROUP_AUTONOMY" }),
+    flowNodeSpec("G8", "ProactiveTriggers M10\n+-14-Min-Fenster\nMorgen + Abend-Routinen", "autonomy", { lane: "Autonomy", h: 72, parent: "GROUP_AUTONOMY" }),
+    flowNodeSpec("G9", "GoalQueueManager M11\nHierarchische Ziele\nMeilenstein-Rollup", "autonomy", { lane: "Autonomy", h: 72, parent: "GROUP_AUTONOMY" }),
+    flowNodeSpec("G10", "SelfImprovementEngine M12\nTool-/Routing-Analytics\nwochentliche Analyse", "autonomy", { lane: "Autonomy", h: 72, parent: "GROUP_AUTONOMY" }),
+    flowNodeSpec("G11", "FeedbackEngine M16\n+/-/? -> Soul-Hooks\nDecay taglich", "autonomy", { lane: "Autonomy", h: 72, parent: "GROUP_AUTONOMY" }),
+    flowNodeSpec("G12", "EmailAutonomyEngine M14\nWhitelist+Confidence\nSMTP-Backend", "autonomy", { lane: "Autonomy", h: 72, parent: "GROUP_AUTONOMY" }),
+    flowNodeSpec("G13", "ToolGeneratorEngine M13\nAST-Check+Review\nimportlib-Aktivierung", "autonomy", { lane: "Autonomy", h: 72, parent: "GROUP_AUTONOMY" }),
+    flowNodeSpec("AUTONOMY_SUM", "Autonomy Cluster\n14 Module", "autonomy", { lane: "Autonomy", isSummary: true, groupKey: "autonomy", w: 190, h: 78, description: "Zusammenfassung des Autonomy-Subsystems." }),
+  ];
+
+  const edges = [
+    flowEdgeSpec("U", "D"),
+    flowEdgeSpec("D", "DS"),
+    flowEdgeSpec("D", "DI"),
+    flowEdgeSpec("D", "DP"),
+    flowEdgeSpec("D", "DL"),
+    flowEdgeSpec("DL", "A"),
+    flowEdgeSpec("A", "AR"),
+    flowEdgeSpec("AR", "ARD"),
+    flowEdgeSpec("ARD", "ARDR"),
+    flowEdgeSpec("ARD", "ARDP"),
+    flowEdgeSpec("ARD", "ARDL"),
+    flowEdgeSpec("AR", "ARP"),
+    flowEdgeSpec("ARP", "ARPM"),
+    flowEdgeSpec("ARP", "ARPA"),
+    flowEdgeSpec("A", "B"),
+    flowEdgeSpec("B", "BW"),
+    flowEdgeSpec("B", "BR"),
+    flowEdgeSpec("B", "BL"),
+    flowEdgeSpec("B", "M"),
+    flowEdgeSpec("M", "FH"),
+    flowEdgeSpec("M", "VC"),
+    flowEdgeSpec("VC", "VW"),
+    flowEdgeSpec("VC", "VT"),
+    flowEdgeSpec("VC", "CV"),
+    flowEdgeSpec("M", "RS"),
+    flowEdgeSpec("RS", "RSS"),
+    flowEdgeSpec("RS", "RSC"),
+    flowEdgeSpec("RS", "RSL"),
+    flowEdgeSpec("RS", "RSM"),
+    flowEdgeSpec("RSC", "RSD"),
+    flowEdgeSpec("RSL", "RSLD"),
+    flowEdgeSpec("M", "SYS"),
+    flowEdgeSpec("M", "SH"),
+    flowEdgeSpec("M", "DR"),
+    flowEdgeSpec("DR", "DRY"),
+    flowEdgeSpec("DR", "DRI"),
+    flowEdgeSpec("DR", "DRP"),
+    flowEdgeSpec("M", "E"),
+    flowEdgeSpec("M", "MM"),
+    flowEdgeSpec("MM", "WAL"),
+    flowEdgeSpec("MM", "MAG"),
+    flowEdgeSpec("MM", "IE"),
+    flowEdgeSpec("MM", "UR"),
+    flowEdgeSpec("MM", "CHR"),
+    flowEdgeSpec("MM", "CUR"),
+    flowEdgeSpec("MM", "AUS"),
+    flowEdgeSpec("MM", "RFT"),
+    flowEdgeSpec("MM", "SE"),
+    flowEdgeSpec("SE", "SEA"),
+    flowEdgeSpec("SE", "SED"),
+    flowEdgeSpec("SE", "SET"),
+    flowEdgeSpec("SE", "SEP"),
+    flowEdgeSpec("MM", "CE"),
+    flowEdgeSpec("CE", "CEL"),
+    flowEdgeSpec("CE", "CET"),
+    flowEdgeSpec("CE", "CEQ"),
+    flowEdgeSpec("CE", "CES"),
+    flowEdgeSpec("CE", "CEG"),
+    flowEdgeSpec("CE", "CED"),
+    flowEdgeSpec("CE", "CEP"),
+    flowEdgeSpec("SET", "CEP", { dashed: true }),
+    flowEdgeSpec("SEP", "BW", { dashed: true }),
+    flowEdgeSpec("SED", "RFT", { dashed: true }),
+    flowEdgeSpec("ARP", "MAG", { dashed: true }),
+    flowEdgeSpec("WAL", "ARP", { dashed: true }),
+    flowEdgeSpec("D", "RUN"),
+    flowEdgeSpec("RUN", "G1"),
+    flowEdgeSpec("RUN", "G2"),
+    flowEdgeSpec("RUN", "G3"),
+    flowEdgeSpec("RUN", "G4"),
+    flowEdgeSpec("RUN", "G5"),
+    flowEdgeSpec("RUN", "G6"),
+    flowEdgeSpec("RUN", "G7"),
+    flowEdgeSpec("RUN", "G8"),
+    flowEdgeSpec("RUN", "G9"),
+    flowEdgeSpec("RUN", "G10"),
+    flowEdgeSpec("RUN", "G11"),
+    flowEdgeSpec("RUN", "G12"),
+    flowEdgeSpec("RUN", "G13"),
+    flowEdgeSpec("G1", "WAL", { dashed: true }),
+    flowEdgeSpec("G4", "WAL", { dashed: true }),
+    flowEdgeSpec("G5", "WAL", { dashed: true }),
+    flowEdgeSpec("G6", "WAL", { dashed: true }),
+    flowEdgeSpec("G7", "B", { dashed: true }),
+    flowEdgeSpec("G8", "WAL", { dashed: true }),
+    flowEdgeSpec("G9", "WAL", { dashed: true }),
+    flowEdgeSpec("G10", "WAL", { dashed: true }),
+    flowEdgeSpec("M", "VOICE_SUM", { id: "e-M-VOICE_SUM", dashed: true, color: "#2b7f91", opacity: 0.55 }),
+    flowEdgeSpec("M", "MEMORY_SUM", { id: "e-M-MEMORY_SUM", dashed: true, color: "#4a5e8a", opacity: 0.55 }),
+    flowEdgeSpec("MEMORY_SUM", "ARP", { id: "e-MEMORY_SUM-ARP", dashed: true, color: "#4a5e8a", opacity: 0.55 }),
+    flowEdgeSpec("D", "AUTONOMY_SUM", { id: "e-D-AUTONOMY_SUM", dashed: true, color: "#788aa8", opacity: 0.55 }),
+    flowEdgeSpec("AUTONOMY_SUM", "B", { id: "e-AUTONOMY_SUM-B", dashed: true, color: "#788aa8", opacity: 0.55 }),
+    flowEdgeSpec("AUTONOMY_SUM", "MEMORY_SUM", { id: "e-AUTONOMY_SUM-MEMORY_SUM", dashed: true, color: "#788aa8", opacity: 0.55 }),
+  ];
+  return { nodes, edges };
+}
+
+function normalizeFlowStatus(status, message) {
+  const raw = String(status || "").toLowerCase();
+  const msg = String(message || "").toLowerCase();
+  if (["error", "failed", "failure", "exception", "fatal"].includes(raw) || /\b(error|failed|exception|timeout|traceback)\b/.test(msg)) return "error";
+  if (["warning", "warn", "partial", "degraded"].includes(raw) || /\b(partial|warning|fallback)\b/.test(msg)) return "warning";
+  if (["running", "active", "thinking", "processing", "start", "started"].includes(raw)) return "running";
+  if (["ok", "done", "success", "completed", "complete", "healthy", "idle"].includes(raw)) return raw === "idle" ? "idle" : "completed";
+  return raw ? "running" : "idle";
+}
+
+function flowAliasToNodeId(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (FLOW_PRIMARY_BEAM_MAP[raw]) return FLOW_PRIMARY_BEAM_MAP[raw];
+  if (FLOW_ALIAS_NODE_IDS[raw.toLowerCase()]) return FLOW_ALIAS_NODE_IDS[raw.toLowerCase()];
+  if (flowCy && flowCy.getElementById(raw).length) return raw;
+  return "";
+}
+
+function flowNodeIdsForText(text) {
+  const found = new Set();
+  const normalized = String(text || "").toLowerCase();
+  if (!normalized) return [];
+
+  for (const token of Object.keys(FLOW_ALIAS_NODE_IDS)) {
+    if (!token || token.length < 3) continue;
+    if (normalized.includes(token)) found.add(FLOW_ALIAS_NODE_IDS[token]);
+  }
+  for (const group of FLOW_KEYWORD_GROUPS) {
+    if (group.terms.some(term => normalized.includes(term))) {
+      group.nodeIds.forEach(id => found.add(id));
+    }
+  }
+  return Array.from(found);
+}
+
+function resolveFlowNodeIds(ctx) {
+  const ids = new Set();
+  const directFields = [
+    ctx && ctx.nodeId,
+    ctx && ctx.node_id,
+    ctx && ctx.agent,
+    ctx && ctx.from,
+    ctx && ctx.to,
+    ctx && ctx.tool,
+    ctx && ctx.type,
+  ];
+  for (const value of directFields) {
+    const mapped = flowAliasToNodeId(value);
+    if (mapped) ids.add(mapped);
+  }
+  const text = [
+    ctx && ctx.title,
+    ctx && ctx.message,
+    ctx && ctx.error,
+    ctx && JSON.stringify(ctx && ctx.payload || {}),
+  ].join(" ");
+  flowNodeIdsForText(text).forEach(id => ids.add(id));
+  if (ctx && ctx.type === "chat_error") {
+    ids.add("D");
+    ids.add("M");
+  }
+  if (ctx && ctx.type === "delegation") {
+    ids.add("AR");
+    ids.add("ARD");
+    ids.add("A");
+  }
+  if (ctx && ctx.type === "tool_start") ids.add("M");
+  if (ctx && ctx.type === "tool_done") ids.add("M");
+  return Array.from(ids);
+}
+
+function setFlowNodeRuntime(nodeId, patch) {
+  if (!flowCy) return;
+  const node = flowCy.getElementById(nodeId);
+  if (!node.length) return;
+  const current = node.data();
+  const nextStatus = normalizeFlowStatus(patch.status, patch.message);
+  const nextSeverity = FLOW_STATUS_ORDER[nextStatus] || 0;
+  const currentSeverity = Number(current.runtimeSeverity || 0);
+  const shouldReplace =
+    patch.force ||
+    nextSeverity >= currentSeverity ||
+    !current.runtimeUpdatedAt ||
+    (patch.updatedAt && String(patch.updatedAt) >= String(current.runtimeUpdatedAt));
+  if (!shouldReplace) return;
+
+  const runtime = flowRuntimePalette(nextStatus, current.baseBg, current.baseBorder, current.baseGlow);
+  node.data({
+    runtimeStatus: nextStatus,
+    runtimeSource: patch.source || current.runtimeSource || "",
+    runtimeMessage: patch.message || current.runtimeMessage || "",
+    runtimeUpdatedAt: patch.updatedAt || current.runtimeUpdatedAt || "",
+    runtimeSeverity: nextSeverity,
+    renderBg: runtime.bg,
+    renderBorder: runtime.border,
+    renderGlow: runtime.glow,
+    renderBlur: runtime.blur,
+    renderOpacity: runtime.opacity,
+  });
+}
+
+function resetFlowRuntime() {
+  if (!flowCy) return;
+  flowCy.nodes().forEach(node => {
+    node.data({
+      runtimeStatus: "idle",
+      runtimeSource: "",
+      runtimeMessage: "",
+      runtimeUpdatedAt: "",
+      runtimeSeverity: 0,
+      renderBg: node.data("baseBg"),
+      renderBorder: node.data("baseBorder"),
+      renderGlow: node.data("baseGlow"),
+      renderBlur: 18,
+      renderOpacity: 0.45,
+    });
+  });
+  flowCy.edges().forEach(edge => {
+    edge.data({
+      renderColor: edge.data("baseColor"),
+      renderOpacity: edge.hasClass("flow-edge-dashed") ? 0.42 : 0.62,
+      renderWidth: edge.hasClass("flow-edge-dashed") ? 1.15 : 1.4,
+      renderDashOffset: 0,
+    });
+    edge.removeClass("flow-edge-alert");
+  });
+  _flowLastRuntimeSummary = { active: 0, errors: 0, latest: "" };
+  refreshFlowHud();
+  refreshFlowGroupSummaries();
+  refreshFlowEdgeStates();
+}
+
+function stopFlowEdgeAnimation() {
+  if (_flowEdgeAnimationRAF) cancelAnimationFrame(_flowEdgeAnimationRAF);
+  _flowEdgeAnimationRAF = null;
+}
+
+function animateFlowAlertEdges() {
+  if (!flowCy) return;
+  const activeEdges = flowCy.edges(".flow-edge-alert").filter(edge => edge.style("display") !== "none");
+  if (!activeEdges.length) {
+    stopFlowEdgeAnimation();
+    return;
+  }
+  _flowEdgeDashOffset = (_flowEdgeDashOffset - 1.2) % 100;
+  activeEdges.forEach(edge => edge.data("renderDashOffset", _flowEdgeDashOffset));
+  _flowEdgeAnimationRAF = requestAnimationFrame(animateFlowAlertEdges);
+}
+
+function ensureFlowEdgeAnimation() {
+  const hasAlerts = flowCy && flowCy.edges(".flow-edge-alert").filter(edge => edge.style("display") !== "none").length > 0;
+  if (hasAlerts && !_flowEdgeAnimationRAF) {
+    _flowEdgeAnimationRAF = requestAnimationFrame(animateFlowAlertEdges);
+  } else if (!hasAlerts) {
+    stopFlowEdgeAnimation();
+  }
+}
+
+function refreshFlowEdgeStates() {
+  if (!flowCy) return;
+  flowCy.edges().forEach(edge => {
+    if (edge.style("display") === "none") return;
+    const sourceStatus = edge.source().data("runtimeStatus") || "idle";
+    const targetStatus = edge.target().data("runtimeStatus") || "idle";
+    const level = ["error", "warning", "running", "completed"].find(status => sourceStatus === status || targetStatus === status) || "idle";
+
+    if (level === "error" || level === "warning") {
+      edge.addClass("flow-edge-alert");
+      edge.data({
+        renderColor: level === "error" ? "#f43f5e" : "#fbbf24",
+        renderOpacity: 0.98,
+        renderWidth: 2.8,
+      });
+    } else if (level === "running") {
+      edge.removeClass("flow-edge-alert");
+      edge.data({
+        renderColor: "#00d4f0",
+        renderOpacity: 0.86,
+        renderWidth: 2.1,
+        renderDashOffset: 0,
+      });
+    } else if (level === "completed") {
+      edge.removeClass("flow-edge-alert");
+      edge.data({
+        renderColor: "#00e09a",
+        renderOpacity: 0.74,
+        renderWidth: 1.8,
+        renderDashOffset: 0,
+      });
+    } else {
+      edge.removeClass("flow-edge-alert");
+      edge.data({
+        renderColor: edge.data("baseColor"),
+        renderOpacity: edge.hasClass("flow-edge-dashed") ? 0.42 : 0.62,
+        renderWidth: edge.hasClass("flow-edge-dashed") ? 1.15 : 1.4,
+        renderDashOffset: 0,
+      });
+    }
+  });
+  ensureFlowEdgeAnimation();
+}
+
+function pulseFlowPath(nodeIds, status) {
+  if (!flowCy || !nodeIds || !nodeIds.length) return;
+  const colorByStatus = {
+    running: "#00d4f0",
+    completed: "#00e09a",
+    warning: "#fbbf24",
+    error: "#f43f5e",
+  };
+  const color = colorByStatus[normalizeFlowStatus(status)] || "#00d4f0";
+  const active = new Set(nodeIds);
+  flowCy.edges().forEach(edge => {
+    const touches = active.has(edge.source().id()) || active.has(edge.target().id());
+    if (!touches) return;
+    edge.data({ renderColor: color, renderOpacity: 0.92, renderWidth: 2.7 });
+    setTimeout(() => {
+      if (!edge.removed()) {
+        edge.data({
+          renderColor: edge.data("baseColor"),
+          renderOpacity: edge.hasClass("flow-edge-dashed") ? 0.42 : 0.62,
+          renderWidth: edge.hasClass("flow-edge-dashed") ? 1.15 : 1.4,
+        });
+      }
+    }, 1200);
+  });
+}
+
+function refreshFlowHud(events) {
+  const countEl = document.getElementById("flowHudCounts");
+  const lastEl = document.getElementById("flowHudLast");
+  if (!countEl || !lastEl) return;
+  const total = flowCy ? flowCy.nodes().length : 0;
+  const active = flowCy ? flowCy.nodes().filter(node => node.data("runtimeStatus") === "running").length : 0;
+  const errors = flowCy ? flowCy.nodes().filter(node => node.data("runtimeStatus") === "error" || node.data("runtimeStatus") === "warning").length : 0;
+  const latest = _flowLastRuntimeSummary.latest || ((events && events[0] && (events[0].message || events[0].type)) || "Noch keine Laufzeitdaten.");
+  countEl.innerHTML = `Knoten: <strong>${total}</strong> · Aktiv: <strong>${active}</strong> · Hotspots: <strong>${errors}</strong>`;
+  lastEl.textContent = latest;
+}
+
+function openFlowDetail(nodeId) {
+  if (!flowCy) return;
+  const node = flowCy.getElementById(nodeId);
+  if (!node.length) return;
+  _flowActiveDetailNodeId = nodeId;
+  flowCy.nodes().unselect();
+  node.select();
+  document.getElementById("fdTitle").textContent = String(node.data("label") || "–");
+  document.getElementById("fdId").textContent = node.id();
+  document.getElementById("fdLayer").textContent = node.data("lane") || "–";
+  document.getElementById("fdStatus").textContent = node.data("runtimeStatus") || "idle";
+  document.getElementById("fdSource").textContent = node.data("runtimeSource") || "–";
+  document.getElementById("fdUpdated").textContent = node.data("runtimeUpdatedAt") || "–";
+  const msg = node.data("runtimeMessage") || node.data("description") || "";
+  document.getElementById("fdMessage").innerHTML = msg ? esc(msg).replace(/\n/g, "<br>") : '<span class="flow-empty">Kein Laufzeitereignis.</span>';
+  document.getElementById("flowDetail").classList.add("visible");
+}
+
+function closeFlowDetail() {
+  _flowActiveDetailNodeId = "";
+  if (flowCy) flowCy.nodes().unselect();
+  document.getElementById("flowDetail").classList.remove("visible");
+}
+
+function focusFlowErrors() {
+  if (!flowCy) return;
+  const hot = flowCy.nodes().filter(node => {
+    const status = node.data("runtimeStatus");
+    return status === "error" || status === "warning";
+  });
+  if (hot.length) {
+    flowCy.fit(hot, 90);
+    hot.forEach(node => openFlowDetail(node.id()));
+  } else {
+    flowCy.fit(60);
+  }
+}
+
+function flowGroupOfNode(nodeId) {
+  for (const [groupKey, cfg] of Object.entries(FLOW_GROUPS)) {
+    if (cfg.children.includes(nodeId) || cfg.summaryNode === nodeId || cfg.parent === nodeId) return groupKey;
+  }
+  return "";
+}
+
+function highestFlowStatus(nodes) {
+  let winner = null;
+  for (const node of nodes) {
+    if (!node || !node.length) continue;
+    if (!winner || (FLOW_STATUS_ORDER[node.data("runtimeStatus")] || 0) > (FLOW_STATUS_ORDER[winner.data("runtimeStatus")] || 0)) {
+      winner = node;
+    }
+  }
+  return winner;
+}
+
+function refreshFlowGroupToggleButtons() {
+  const hud = document.getElementById("flowHudGroups");
+  const parts = [];
+  for (const [groupKey, cfg] of Object.entries(FLOW_GROUPS)) {
+    const btn = document.getElementById(`flowGroupBtn-${groupKey}`);
+    if (btn) {
+      btn.classList.toggle("collapsed", !!_flowCollapsedGroups[groupKey]);
+      btn.classList.toggle("active", !_flowCollapsedGroups[groupKey]);
+      btn.textContent = `${cfg.label} ${_flowCollapsedGroups[groupKey] ? "▸" : "▾"}`;
+    }
+    parts.push(`${cfg.label} ${_flowCollapsedGroups[groupKey] ? "zu" : "offen"}`);
+  }
+  if (hud) hud.textContent = `Gruppen: ${parts.join(" · ")}`;
+}
+
+function refreshFlowGroupSummaries() {
+  if (!flowCy) return;
+  for (const [groupKey, cfg] of Object.entries(FLOW_GROUPS)) {
+    const summaryNode = flowCy.getElementById(cfg.summaryNode);
+    if (!summaryNode.length) continue;
+    const memberNodes = cfg.children.map(id => flowCy.getElementById(id)).filter(node => node.length);
+    const topNode = highestFlowStatus(memberNodes);
+    const topStatus = topNode ? topNode.data("runtimeStatus") : "idle";
+    const activeCount = memberNodes.filter(node => {
+      const status = node.data("runtimeStatus");
+      return status === "running" || status === "warning" || status === "error";
+    }).length;
+    const message = topNode
+      ? `${cfg.label}: ${activeCount} aktive Hotspots.\nFokus: ${topNode.data("label")}\n${topNode.data("runtimeMessage") || ""}`.trim()
+      : `${cfg.label}: keine Laufzeitdaten.`;
+    setFlowNodeRuntime(cfg.summaryNode, {
+      status: topStatus,
+      message,
+      source: `group:${cfg.label}`,
+      updatedAt: topNode ? topNode.data("runtimeUpdatedAt") : "",
+      force: true,
+    });
+  }
+}
+
+function applyFlowGroupState(groupKey) {
+  if (!flowCy || !FLOW_GROUPS[groupKey]) return;
+  const cfg = FLOW_GROUPS[groupKey];
+  const collapsed = !!_flowCollapsedGroups[groupKey];
+  const parentNode = flowCy.getElementById(cfg.parent);
+  const summaryNode = flowCy.getElementById(cfg.summaryNode);
+  const childSet = new Set(cfg.children);
+
+  if (parentNode.length) parentNode.style("display", collapsed ? "none" : "element");
+  if (summaryNode.length) summaryNode.style("display", collapsed ? "element" : "none");
+
+  cfg.children.forEach(nodeId => {
+    const node = flowCy.getElementById(nodeId);
+    if (node.length) node.style("display", collapsed ? "none" : "element");
+  });
+
+  flowCy.edges().forEach(edge => {
+    const edgeId = edge.id();
+    const isSummaryEdge = cfg.summaryEdges.includes(edgeId);
+    const touchesChild = childSet.has(edge.source().id()) || childSet.has(edge.target().id());
+    const touchesParent = edge.source().id() === cfg.parent || edge.target().id() === cfg.parent;
+    if (isSummaryEdge) {
+      edge.style("display", collapsed ? "element" : "none");
+    } else if (touchesChild || touchesParent) {
+      edge.style("display", collapsed ? "none" : "element");
+    }
+  });
+
+  if (collapsed && _flowActiveDetailNodeId && childSet.has(_flowActiveDetailNodeId)) {
+    openFlowDetail(cfg.summaryNode);
+  }
+}
+
+function applyAllFlowGroupStates() {
+  refreshFlowGroupSummaries();
+  Object.keys(FLOW_GROUPS).forEach(applyFlowGroupState);
+  refreshFlowGroupToggleButtons();
+}
+
+function toggleFlowGroup(groupKey) {
+  if (!FLOW_GROUPS[groupKey]) return;
+  _flowCollapsedGroups[groupKey] = !_flowCollapsedGroups[groupKey];
+  applyFlowGroupState(groupKey);
+  refreshFlowGroupSummaries();
+  refreshFlowEdgeStates();
+  refreshFlowGroupToggleButtons();
+  if (flowCy) flowCy.fit(80);
+}
 
 function initFlowGraph() {
   const container = document.getElementById("flow-cy");
   if (!container) return;
-  if (_flowGraphInited && flowCy) { flowCy.fit(40); return; }
+  if (_flowGraphInited && flowCy) {
+    flowCy.resize();
+    flowCy.fit(60);
+    reloadFlowRuntime();
+    return;
+  }
   _flowGraphInited = true;
-
-  const nodes = [
-    // Eingabe-Schicht
-    { data: { id: "telegram",  label: "Telegram",        bgColor: "#1b2e42", borderColor: "#243748" } },
-    { data: { id: "terminal",  label: "Terminal",         bgColor: "#1b2e42", borderColor: "#243748" } },
-    // Dispatcher
-    { data: { id: "dispatcher", label: "Dispatcher",      bgColor: "#1b314a", borderColor: "#2a4a6a" } },
-    // Meta
-    { data: { id: "meta",      label: "MetaAgent",        bgColor: "#1e2a40", borderColor: "#3a5080" } },
-    // Executor-Agenten
-    { data: { id: "executor",      label: "Executor",     bgColor: "#152030", borderColor: "#243748" } },
-    { data: { id: "research",      label: "Research",     bgColor: "#152030", borderColor: "#243748" } },
-    { data: { id: "reasoning",     label: "Reasoning",    bgColor: "#152030", borderColor: "#243748" } },
-    { data: { id: "creative",      label: "Creative",     bgColor: "#152030", borderColor: "#243748" } },
-    { data: { id: "development",   label: "Developer",    bgColor: "#152030", borderColor: "#243748" } },
-    { data: { id: "visual",        label: "Visual",       bgColor: "#152030", borderColor: "#243748" } },
-    { data: { id: "data",          label: "Data",         bgColor: "#152030", borderColor: "#243748" } },
-    { data: { id: "communication", label: "Comms",        bgColor: "#152030", borderColor: "#243748" } },
-    { data: { id: "system",        label: "System",       bgColor: "#152030", borderColor: "#243748" } },
-    { data: { id: "shell",         label: "Shell",        bgColor: "#152030", borderColor: "#243748" } },
-    { data: { id: "image",         label: "Image",        bgColor: "#152030", borderColor: "#243748" } },
-    // Autonomie-Runner
-    { data: { id: "runner",    label: "AutonomousRunner",  bgColor: "#1a1a35", borderColor: "#3a3a80" } },
-    // Autonomie-Motoren
-    { data: { id: "m1",        label: "M1 GoalGen",        bgColor: "#0d1a28", borderColor: "#1a3a50" } },
-    { data: { id: "m3",        label: "M3 Healing",        bgColor: "#0d1a28", borderColor: "#1a3a50" } },
-    { data: { id: "m8",        label: "M8 Reflect",        bgColor: "#0d1a28", borderColor: "#1a3a50" } },
-    { data: { id: "m13",       label: "M13 ToolGen",       bgColor: "#0d1a28", borderColor: "#1a3a50" } },
-    { data: { id: "m14",       label: "M14 Email",         bgColor: "#0d1a28", borderColor: "#1a3a50" } },
-    { data: { id: "m15",       label: "M15 Ambient",       bgColor: "#0d1a28", borderColor: "#1a3a50" } },
-    { data: { id: "m16",       label: "M16 Feedback",      bgColor: "#0d1a28", borderColor: "#1a3a50" } },
-  ];
-
-  const edges = [
-    { data: { id: "e-tg-d",  source: "telegram",  target: "dispatcher" } },
-    { data: { id: "e-tr-d",  source: "terminal",  target: "dispatcher" } },
-    { data: { id: "e-d-m",   source: "dispatcher", target: "meta" } },
-    { data: { id: "e-m-ex",  source: "meta", target: "executor" } },
-    { data: { id: "e-m-re",  source: "meta", target: "research" } },
-    { data: { id: "e-m-rz",  source: "meta", target: "reasoning" } },
-    { data: { id: "e-m-cr",  source: "meta", target: "creative" } },
-    { data: { id: "e-m-dv",  source: "meta", target: "development" } },
-    { data: { id: "e-m-vi",  source: "meta", target: "visual" } },
-    { data: { id: "e-m-da",  source: "meta", target: "data" } },
-    { data: { id: "e-m-co",  source: "meta", target: "communication" } },
-    { data: { id: "e-m-sy",  source: "meta", target: "system" } },
-    { data: { id: "e-m-sh",  source: "meta", target: "shell" } },
-    { data: { id: "e-m-im",  source: "meta", target: "image" } },
-    { data: { id: "e-r-m1",  source: "runner", target: "m1" } },
-    { data: { id: "e-r-m3",  source: "runner", target: "m3" } },
-    { data: { id: "e-r-m8",  source: "runner", target: "m8" } },
-    { data: { id: "e-r-m13", source: "runner", target: "m13" } },
-    { data: { id: "e-r-m14", source: "runner", target: "m14" } },
-    { data: { id: "e-r-m15", source: "runner", target: "m15" } },
-    { data: { id: "e-r-m16", source: "runner", target: "m16" } },
-    { data: { id: "e-m15-d", source: "m15", target: "dispatcher" } },
-  ];
+  const { nodes, edges } = buildArchitectureFlowElements();
 
   flowCy = cytoscape({
     container,
@@ -2544,63 +3638,140 @@ function initFlowGraph() {
       {
         selector: "node",
         style: {
-          "background-color":  "data(bgColor)",
-          "border-color":      "data(borderColor)",
+          "background-color":  "data(renderBg)",
+          "border-color":      "data(renderBorder)",
           "border-width":      2,
           "label":             "data(label)",
-          "color":             "#cce8db",
+          "color":             "#e4f8ef",
           "font-family":       "JetBrains Mono, monospace",
-          "font-size":         "9px",
+          "font-size":         "9.5px",
           "font-weight":       "500",
           "text-valign":       "center",
           "text-halign":       "center",
-          "width":             65,
-          "height":            65,
+          "width":             "data(w)",
+          "height":            "data(h)",
           "shape":             "roundrectangle",
           "text-wrap":         "wrap",
-          "text-max-width":    58,
-          "shadow-blur":       10,
-          "shadow-color":      "data(borderColor)",
-          "shadow-opacity":    0.4,
+          "text-max-width":    "data(w)",
+          "padding":           "8px",
+          "shadow-blur":       "data(renderBlur)",
+          "shadow-color":      "data(renderGlow)",
+          "shadow-opacity":    "data(renderOpacity)",
           "shadow-offset-x":   0,
           "shadow-offset-y":   0,
+          "text-outline-width": 0,
+        },
+      },
+      {
+        selector: "node[isGroup = 1]",
+        style: {
+          "shape": "roundrectangle",
+          "background-color": "data(baseBg)",
+          "background-opacity": 0.16,
+          "border-color": "data(baseBorder)",
+          "border-width": 1.2,
+          "border-style": "dashed",
+          "label": "data(label)",
+          "font-size": "11px",
+          "font-weight": 700,
+          "color": "#9bd0bf",
+          "text-valign": "top",
+          "text-halign": "left",
+          "text-margin-x": 14,
+          "text-margin-y": 12,
+          "padding": 28,
+          "min-width": "data(zoneMinW)",
+          "min-height": "data(zoneMinH)",
+          "shadow-opacity": 0,
+        },
+      },
+      {
+        selector: "node[isSummary = 1]",
+        style: {
+          "border-style": "dashed",
+          "border-width": 2.4,
+          "font-size": "10px",
+          "font-weight": 700,
+          "background-opacity": 0.92,
         },
       },
       {
         selector: "edge",
         style: {
-          "line-color":         "#1e3a50",
-          "target-arrow-color": "#1e3a50",
+          "line-color":         "data(renderColor)",
+          "target-arrow-color": "data(renderColor)",
           "target-arrow-shape": "triangle",
-          "curve-style":        "bezier",
-          "width":              1.5,
-          "opacity":            0.6,
+          "curve-style":        "unbundled-bezier",
+          "width":              "data(renderWidth)",
+          "opacity":            "data(renderOpacity)",
           "arrow-scale":        0.9,
+          "control-point-distances": [25, -25],
+          "control-point-weights": [0.25, 0.75],
+          "line-dash-offset":   "data(renderDashOffset)",
+        },
+      },
+      {
+        selector: "edge.flow-edge-dashed",
+        style: {
+          "line-style": "dashed",
+          "target-arrow-shape": "triangle",
+          "target-arrow-fill": "hollow",
+        },
+      },
+      {
+        selector: "edge.flow-edge-alert",
+        style: {
+          "line-style": "dashed",
+          "line-dash-pattern": [10, 6],
+          "shadow-color": "data(renderColor)",
+          "shadow-opacity": 0.72,
+          "shadow-blur": 18,
+        },
+      },
+      {
+        selector: "node:selected",
+        style: {
+          "border-width": 4,
+          "overlay-opacity": 0,
+          "shadow-opacity": 1,
+          "shadow-blur": 34,
         },
       },
     ],
     layout: {
-      name:     "dagre",
-      rankDir:  "LR",
-      nodeSep:  35,
-      rankSep:  80,
-      padding:  30,
+      name:     "preset",
+      padding:  46,
+      fit:      false,
     },
   });
 
-  flowCy.fit(40);
+  flowCy.on("tap", "node", evt => openFlowDetail(evt.target.id()));
+  flowCy.on("tap", evt => {
+    if (evt.target === flowCy) closeFlowDetail();
+  });
+
+  applyAllFlowGroupStates();
+  flowCy.fit(80);
 
   // Minimap initialisieren (falls cytoscape-navigator geladen)
   try {
-    if (flowCy.navigator) {
+    if (!_flowNavigatorInited && flowCy.navigator) {
       flowCy.navigator({ container: "#flow-minimap", viewLiveFramerate: 0, thumbnailEventFramerate: 30 });
+      _flowNavigatorInited = true;
     }
   } catch (_) {}
 
   // Sync Flow-Beam-Overlay
   syncFlowBeamOverlay();
-  const ro = new ResizeObserver(syncFlowBeamOverlay);
-  ro.observe(container);
+  if (!_flowResizeObserver && window.ResizeObserver) {
+    _flowResizeObserver = new ResizeObserver(() => {
+      syncFlowBeamOverlay();
+      if (flowCy) flowCy.resize();
+    });
+    _flowResizeObserver.observe(container);
+  }
+  resetFlowRuntime();
+  reloadFlowRuntime();
 }
 
 function syncFlowBeamOverlay() {
@@ -2615,10 +3786,8 @@ function syncFlowBeamOverlay() {
 function animateFlowBeam(fromId, toId, status) {
   if (!flowCy) return;
   status = status || "running";
-
-  const idMap = { developer: "development" };
-  const src = idMap[fromId] || fromId;
-  const tgt = idMap[toId]   || toId;
+  const src = flowAliasToNodeId(fromId) || fromId;
+  const tgt = flowAliasToNodeId(toId) || toId;
 
   const fromNode = flowCy.getElementById(src);
   const toNode   = flowCy.getElementById(tgt);
@@ -2699,15 +3868,137 @@ function animateFlowBeam(fromId, toId, status) {
       // Flash-Zielknoten im Flow-Graph
       const node = flowCy.getElementById(tgt);
       if (node.length) {
-        const flashColorMap = { running: "#ffd700", completed: "#00e676", error: "#ff1744" };
+        const flashColorMap = { running: "#00d4f0", completed: "#00e676", warning: "#fbbf24", error: "#ff1744" };
         const col = flashColorMap[status] || flashColorMap.running;
-        node.style({ "border-color": col, "border-width": 4, "shadow-color": col, "shadow-opacity": 0.9, "shadow-blur": 20 });
-        setTimeout(() => node.style({ "border-color": node.data("borderColor") || "#243748", "border-width": 2, "shadow-opacity": 0.4, "shadow-blur": 10 }), 600);
+        node.style({ "border-color": col, "border-width": 4, "shadow-color": col, "shadow-opacity": 0.95, "shadow-blur": 26 });
+        pulseFlowPath([src, tgt], status);
+        setTimeout(() => {
+          if (!node.removed()) {
+            node.style({
+              "border-color": node.data("renderBorder") || node.data("baseBorder") || "#243748",
+              "border-width": node.selected() ? 4 : 2,
+              "shadow-color": node.data("renderGlow") || node.data("baseGlow"),
+              "shadow-opacity": node.data("renderOpacity") || 0.45,
+              "shadow-blur": node.data("renderBlur") || 18,
+            });
+          }
+        }, 700);
       }
     }
   }
 
   _flowBeamRAF = requestAnimationFrame(draw);
+}
+
+async function reloadFlowRuntime() {
+  if (!flowCy) return;
+  const canvasId = selectedCanvasId || document.getElementById("attachCanvasId").value.trim();
+  resetFlowRuntime();
+  if (!canvasId) return;
+  const out = await api(`/canvas/${encodeURIComponent(canvasId)}?event_limit=180`).catch(() => null);
+  if (!out || !out.canvas) return;
+
+  const canvas = out.canvas;
+  const nodes = Object.values(canvas.nodes || {});
+  for (const item of nodes) {
+    const mapped = resolveFlowNodeIds({
+      nodeId: item.id,
+      node_id: item.id,
+      title: item.title,
+      status: item.status,
+      message: JSON.stringify(item.metadata || {}),
+      payload: item.metadata || {},
+    });
+    mapped.forEach(nodeId => setFlowNodeRuntime(nodeId, {
+      status: item.status,
+      message: item.title || JSON.stringify(item.metadata || {}),
+      source: `canvas.node:${item.id}`,
+      updatedAt: item.updated_at || "",
+    }));
+  }
+
+  const orderedEvents = (canvas.events || []).slice().reverse();
+  for (const ev of orderedEvents) {
+    const message = [ev.message || "", JSON.stringify(ev.payload || {})].filter(Boolean).join("\n");
+    const mapped = resolveFlowNodeIds({
+      type: ev.type,
+      agent: ev.agent,
+      nodeId: ev.node_id,
+      node_id: ev.node_id,
+      status: ev.status,
+      message,
+      payload: ev.payload || {},
+    });
+    mapped.forEach(nodeId => setFlowNodeRuntime(nodeId, {
+      status: ev.status || ev.type,
+      message: ev.message || ev.type || "",
+      source: `canvas.event:${ev.type || "event"}`,
+      updatedAt: ev.created_at || "",
+    }));
+  }
+
+  const latestEvent = canvas.events && canvas.events[0];
+  _flowLastRuntimeSummary = {
+    active: flowCy.nodes().filter(node => node.data("runtimeStatus") === "running").length,
+    errors: flowCy.nodes().filter(node => ["warning", "error"].includes(node.data("runtimeStatus"))).length,
+    latest: latestEvent ? `${latestEvent.type || "event"}: ${latestEvent.message || latestEvent.status || "Aktualisiert"}` : "",
+  };
+  refreshFlowGroupSummaries();
+  applyAllFlowGroupStates();
+  refreshFlowEdgeStates();
+  refreshFlowHud(canvas.events || []);
+  if (_flowActiveDetailNodeId) openFlowDetail(_flowActiveDetailNodeId);
+}
+
+function handleFlowRuntimeEvent(d) {
+  if (!flowCy || !d || d.type === "ping" || d.type === "init") return;
+  const status = d.status || (d.type === "chat_error" ? "error" : d.type === "tool_done" ? "completed" : "running");
+  const message = d.error || d.message || d.text || d.tool || d.type || "";
+  const mapped = resolveFlowNodeIds({
+    type: d.type,
+    agent: d.agent,
+    from: d.from,
+    to: d.to,
+    nodeId: d.node_id,
+    node_id: d.node_id,
+    tool: d.tool,
+    status,
+    message,
+    error: d.error,
+    payload: d,
+  });
+  if (!mapped.length) return;
+
+  mapped.forEach(nodeId => setFlowNodeRuntime(nodeId, {
+    status,
+    message,
+    source: `sse:${d.type}`,
+    updatedAt: new Date().toISOString(),
+    force: status === "error" || status === "warning",
+  }));
+
+  if (d.type === "delegation") {
+    const path = [
+      "AR",
+      flowAliasToNodeId(d.from) || "",
+      flowAliasToNodeId(d.to) || "",
+      "ARPA",
+    ].filter(Boolean);
+    pulseFlowPath(path, status);
+  } else {
+    pulseFlowPath(mapped, status);
+  }
+
+  _flowLastRuntimeSummary = {
+    active: flowCy.nodes().filter(node => node.data("runtimeStatus") === "running").length,
+    errors: flowCy.nodes().filter(node => ["warning", "error"].includes(node.data("runtimeStatus"))).length,
+    latest: `${d.type}: ${message || status}`,
+  };
+  refreshFlowGroupSummaries();
+  applyAllFlowGroupStates();
+  refreshFlowEdgeStates();
+  refreshFlowHud();
+  if (_flowActiveDetailNodeId && mapped.includes(_flowActiveDetailNodeId)) openFlowDetail(_flowActiveDetailNodeId);
 }
 
 // ── Canvas List ───────────────────────────────────────────────────────────────
@@ -2731,6 +4022,7 @@ async function loadCanvasList() {
       document.getElementById("attachCanvasId").value = c.id;
       loadCanvasList();
       reloadGraph();
+      if (activeTab === "flow") reloadFlowRuntime();
     });
     list.appendChild(card);
   }
@@ -2748,6 +4040,7 @@ function setPolling(on) {
       _pollTick++;
       loadCanvasList();
       if (activeTab === "canvas") reloadGraph();
+      if (activeTab === "flow") reloadFlowRuntime();
       if (_pollTick % Math.ceil(30000/POLL_MS) === 0) loadScorecard().catch(() => {});
     }, POLL_MS);
   }
@@ -2795,11 +4088,13 @@ async function init() {
       selectedCanvasId = out.canvas.id;
       document.getElementById("attachCanvasId").value = out.canvas.id;
       await loadCanvasList(); await reloadGraph();
+      if (activeTab === "flow") await reloadFlowRuntime();
     } catch (err) { alert("Fehler: " + err.message); }
   });
 
   document.getElementById("refreshBtn").addEventListener("click", async () => {
     await loadCanvasList(); await reloadGraph();
+    if (activeTab === "flow") await reloadFlowRuntime();
   });
 
   document.getElementById("attachBtn").addEventListener("click", async () => {
@@ -2813,6 +4108,7 @@ async function init() {
       });
       selectedCanvasId = cid;
       await loadCanvasList(); await reloadGraph();
+      if (activeTab === "flow") await reloadFlowRuntime();
     } catch (err) { alert("Fehler: " + err.message); }
   });
 
@@ -3003,6 +4299,7 @@ init().catch(err => console.error("Canvas-Init-Fehler:", err));
 const _origHandleSSE = handleSSE;
 window.handleSSE = function(d) {
   _origHandleSSE(d);
+  handleFlowRuntimeEvent(d);
   // Voice Pulse Orb
   if (window.voicePulse) {
     if (d.type === "thinking")          { d.active ? voicePulse.startThinking() : voicePulse.stopThinking(); }

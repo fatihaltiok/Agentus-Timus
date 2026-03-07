@@ -1,6 +1,6 @@
 # Timus Roadmap
 
-Current version: **v4.1** (2026-03-06)
+Current version: **v4.4** (2026-03-07)
 
 ---
 
@@ -27,13 +27,16 @@ Current version: **v4.1** (2026-03-06)
 | **M15 Ambient Context Engine** | ✅ | Push-autonomy: file watcher, goal staleness, system alerts → tasks without user input |
 | **M16 Feedback Learning** | ✅ | 👍/👎/🤷 → Soul hook weights, CuriosityEngine topic scores, session reflection |
 | **Qdrant Migration** | ✅ | Drop-in replacement for ChromaDB, 1585 entries migrated |
-| **Lean 4 Formal Proofs** | ✅ | 49 theorems in `lean/CiSpecs.lean` (all `by omega`, CI-ready in ~5s) |
-| **Hypothesis Property Tests** | ✅ | 92 property-based tests mapped 1:1 to Lean theorems |
-| **CrossHair Contracts** | ✅ | Pre/postconditions on autonomy_scorecard, curiosity_engine, policy_gate |
-| **Canvas UI v3** | ✅ | 3-column layout: Cytoscape agent graph, Autonomy tab, Markdown chat |
+| **Lean 4 Formal Proofs** | ✅ | 73 theorems in `lean_verify/CiSpecs.lean` (all `by omega`, CI-ready in ~5s) |
+| **Hypothesis Property Tests** | ✅ | 200+ property-based tests covering delegation, artifacts, timeouts, parallel aggregation |
+| **CrossHair Contracts** | ✅ | Pre/postconditions on autonomy_scorecard, curiosity_engine, policy_gate, blackboard write, artifact normalization |
+| **Canvas UI v4** | ✅ | 4-tab layout: CANVAS, AUTONOMY, KAMERA, FLOW (interactive Cytoscape.js architecture diagram) |
 | **Voice Loop** | ✅ | Faster-Whisper STT + Inworld.AI TTS, native canvas integration |
 | **RealSense D435** | ✅ | Physical camera integration for environment awareness |
 | **Agent Improvements v4.2** | ✅ | Dedup+ranking (Research), auto-test-run (Developer), click retry (Visual), decomposition hint (Meta), draft review (Communication) |
+| **M17 Meta-Agent Intelligence v4.3** | ✅ | AgentResult.metadata, bidirectional Blackboard-Write, Replan-Protocol, RESEARCH_TIMEOUT 180→600s |
+| **Communication Contract Hardening v4.4** | ✅ | AgentResult.artifacts, Tool-Wrapper normalization (tool_registry_v2), artifacts→metadata→regex fallback policy, 73 Lean theorems |
+| **Interactive Flow Diagram v4.4** | ✅ | Cytoscape.js FLOW-Tab: live architecture graph, real-time status colors, collapsible groups, clickable node details |
 
 ---
 
