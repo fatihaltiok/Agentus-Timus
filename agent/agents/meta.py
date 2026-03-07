@@ -63,10 +63,63 @@ class MetaAgent(BaseAgent):
         "take_screenshot",
         "click_element",
         "type_in_field",
+        # UI/Vision-Tools — ALLE über visual-Agent, NIE direkt vom Meta-Agent
+        "execute_action_plan",
+        "execute_visual_task",
+        "execute_visual_task_quick",
+        "should_analyze_screen",
+        "analyze_screen_state",
+        "get_all_screen_text",
+        "read_text_from_screen",
+        "find_element_by_description",
+        "find_text_coordinates",
+        "find_ui_element_by_text",
+        "find_all_text_occurrences",
+        "verify_screen_condition",
+        "get_screen_change_stats",
+        "reset_screen_detector",
+        "set_change_threshold",
+        "set_active_monitor",
+        "list_monitors",
+        "visual_agent_health",
     }
 
+    # UI/Vision-Tool-Namen die aus der Beschreibung herausgefiltert werden
+    _VISUAL_TOOL_NAMES = frozenset({
+        "execute_action_plan", "execute_visual_task", "execute_visual_task_quick",
+        "should_analyze_screen", "analyze_screen_state", "get_all_screen_text",
+        "read_text_from_screen", "find_element_by_description", "find_text_coordinates",
+        "find_ui_element_by_text", "find_all_text_occurrences", "verify_screen_condition",
+        "get_screen_change_stats", "reset_screen_detector", "set_change_threshold",
+        "set_active_monitor", "list_monitors", "visual_agent_health",
+        "take_screenshot", "click_element", "type_in_field",
+    })
+
+    @classmethod
+    def _filter_tools_for_meta(cls, tools_description: str) -> str:
+        """
+        Entfernt UI/Vision-Tool-Blöcke aus der Tools-Beschreibung.
+        Der Meta-Agent soll diese Tools gar nicht erst sehen — er delegiert immer.
+        Jeder Tool-Block beginnt mit dem Tool-Namen als erstem Wort einer Zeile.
+        """
+        lines = tools_description.splitlines(keepends=True)
+        filtered = []
+        skip = False
+        for line in lines:
+            stripped = line.strip()
+            # Neuer Tool-Block beginnt (Name am Zeilenanfang, kein Einzug)
+            first_word = stripped.split()[0].rstrip(":") if stripped else ""
+            if first_word in cls._VISUAL_TOOL_NAMES:
+                skip = True
+            elif stripped and not line[0].isspace() and first_word and skip:
+                skip = False  # Nächster Block beginnt
+            if not skip:
+                filtered.append(line)
+        return "".join(filtered)
+
     def __init__(self, tools_description_string: str):
-        super().__init__(META_SYSTEM_PROMPT, tools_description_string, 30, "meta")
+        filtered = self._filter_tools_for_meta(tools_description_string)
+        super().__init__(META_SYSTEM_PROMPT, filtered, 30, "meta")
 
         # Meta-Agent ist Orchestrator, kein Visual-Agent.
         # Capability-Map enthält "browser"/"navigation" → würde sonst fälschlich
