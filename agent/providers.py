@@ -133,13 +133,13 @@ class AgentModelConfig:
         "developer": ("CODE_MODEL", "CODE_MODEL_PROVIDER", "mercury-coder-small", ModelProvider.INCEPTION),
         "development": ("CODE_MODEL", "CODE_MODEL_PROVIDER", "mercury-coder-small", ModelProvider.INCEPTION),
         "meta": ("PLANNING_MODEL", "PLANNING_MODEL_PROVIDER", "z-ai/glm-5", ModelProvider.OPENROUTER),
-        "visual": ("VISION_MODEL", "VISION_MODEL_PROVIDER", "claude-sonnet-4-5-20250929", ModelProvider.ANTHROPIC),
+        "visual": ("VISUAL_MODEL", "VISUAL_MODEL_PROVIDER", "nvidia/nemotron-nano-12b-v2-vl", ModelProvider.OPENROUTER),
         "reasoning": ("REASONING_MODEL", "REASONING_MODEL_PROVIDER", "nvidia/nemotron-3-nano-30b-a3b", ModelProvider.OPENROUTER),
         # M1: neue Agenten
         "data":     ("DATA_MODEL",     "DATA_MODEL_PROVIDER",     "deepseek/deepseek-v3.2",         ModelProvider.OPENROUTER),
-        "document": ("DOCUMENT_MODEL", "DOCUMENT_MODEL_PROVIDER", "claude-sonnet-4-5-20250929",      ModelProvider.ANTHROPIC),
+        "document": ("DOCUMENT_MODEL", "DOCUMENT_MODEL_PROVIDER", "amazon/nova-2-lite-v1", ModelProvider.OPENROUTER),
         # M2: neue Agenten
-        "communication": ("COMMUNICATION_MODEL", "COMMUNICATION_MODEL_PROVIDER", "claude-sonnet-4-5-20250929", ModelProvider.ANTHROPIC),
+        "communication": ("COMMUNICATION_MODEL", "COMMUNICATION_MODEL_PROVIDER", "google/gemini-3.1-flash-lite-preview", ModelProvider.OPENROUTER),
         # M3: neue Agenten
         "system": ("SYSTEM_MODEL", "SYSTEM_MODEL_PROVIDER", "qwen/qwen3.5-plus-02-15", ModelProvider.OPENROUTER),
         # M4: neue Agenten
