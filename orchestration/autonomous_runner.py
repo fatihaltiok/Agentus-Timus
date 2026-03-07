@@ -1204,6 +1204,7 @@ class AutonomousRunner:
                     queue.refresh_goal_progress(goal_id, last_task_id=task_id, last_event="task_completed")
                 log.info(f"✅ Task [{task_id[:8]}] abgeschlossen")
                 await self._send_result_to_telegram(description, result_str)
+                await self._send_result_to_email(description, result_str)
             else:
                 queue.fail(task_id, "Alle Failover-Versuche erschöpft")
                 if goal_id and _goals_feature_enabled():
@@ -1342,6 +1343,29 @@ class AutonomousRunner:
 
         except Exception as e:
             log.warning(f"_send_result_to_telegram fehlgeschlagen: {e}")
+
+    async def _send_result_to_email(self, description: str, result: str) -> None:
+        """Sendet das Task-Ergebnis per E-Mail (Resend/SMTP je nach EMAIL_BACKEND)."""
+        import os
+        recipient = os.getenv("USER_EMAIL_PRIMARY", "")
+        if not recipient:
+            return
+        try:
+            from utils.resend_email import send_email_resend
+            from utils.smtp_email import send_email_smtp
+            backend = os.getenv("EMAIL_BACKEND", "resend").lower()
+
+            subject = f"Timus: {description[:80]}"
+            body = f"Autonomer Task abgeschlossen\n\n{description}\n\n{'='*60}\n\n{result}"
+
+            if backend == "resend":
+                await send_email_resend(to=recipient, subject=subject, body=body)
+            else:
+                await send_email_smtp(to=recipient, subject=subject, body=body)
+
+            log.info("📧 Task-Ergebnis via E-Mail gesendet")
+        except Exception as e:
+            log.warning(f"_send_result_to_email fehlgeschlagen: {e}")
 
 
 # ------------------------------------------------------------------

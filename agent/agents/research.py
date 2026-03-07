@@ -39,7 +39,7 @@ class DeepResearchAgent(BaseAgent):
         super().__init__(
             DEEP_RESEARCH_PROMPT_TEMPLATE,
             tools_description_string,
-            max_iterations=8,
+            max_iterations=12,
             agent_type="deep_research",
         )
         self.http_client = httpx.AsyncClient(timeout=600.0)

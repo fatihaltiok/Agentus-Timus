@@ -13,8 +13,10 @@ IMAP-Empfang: Resend ist reiner Versanddienst — Empfang läuft weiter
 über IMAP_HOST/IMAP_PORT/SMTP_USER/SMTP_PASSWORD (z.B. Gmail IMAP).
 """
 
+import base64
 import logging
 import os
+from pathlib import Path
 from typing import List, Optional
 
 import httpx
@@ -37,15 +39,17 @@ async def send_email_resend(
     subject: str,
     body: str,
     html_body: Optional[str] = None,
+    attachment_path: Optional[str] = None,
 ) -> bool:
     """
     Sendet eine E-Mail via Resend REST-API.
 
     Args:
-        to:        Empfänger-Adresse
-        subject:   Betreff
-        body:      Plaintext-Body
-        html_body: Optional HTML-Body (Priorität über Plaintext)
+        to:              Empfänger-Adresse
+        subject:         Betreff
+        body:            Plaintext-Body
+        html_body:       Optional HTML-Body (Priorität über Plaintext)
+        attachment_path: Optionaler Pfad zu einer Anhang-Datei (absolut oder relativ)
 
     Returns:
         True wenn erfolgreich (HTTP 200/201)
@@ -65,8 +69,19 @@ async def send_email_resend(
     else:
         payload["text"] = body
 
+    if attachment_path:
+        path = Path(attachment_path)
+        if not path.is_absolute():
+            path = Path(__file__).resolve().parent.parent / attachment_path
+        if path.exists():
+            content_b64 = base64.b64encode(path.read_bytes()).decode("utf-8")
+            payload["attachments"] = [{"filename": path.name, "content": content_b64}]
+            log.info("Resend: Anhang '%s' (%d Bytes) wird mitgesendet", path.name, path.stat().st_size)
+        else:
+            log.warning("Resend: Anhang-Datei nicht gefunden: %s — wird ohne Anhang gesendet", attachment_path)
+
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
                 _RESEND_API,
                 headers={

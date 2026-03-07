@@ -142,6 +142,16 @@ class QdrantProvider:
         except Exception as e:
             log.error("Qdrant add() fehlgeschlagen: %s", e)
 
+    def upsert(
+        self,
+        ids: List[str],
+        documents: Optional[List[str]] = None,
+        metadatas: Optional[List[Dict]] = None,
+        embeddings: Optional[List[List[float]]] = None,
+    ) -> None:
+        """ChromaDB-kompatibles upsert() — delegiert an add()."""
+        self.add(ids=ids, documents=documents, metadatas=metadatas, embeddings=embeddings)
+
     def query(
         self,
         query_embeddings: Optional[List[List[float]]] = None,
@@ -164,16 +174,17 @@ class QdrantProvider:
 
             qdrant_filter = self._build_filter(where) if where else None
 
-            results = self._client.search(
+            response = self._client.query_points(
                 collection_name=self._collection,
-                query_vector=("content", query_embeddings[0]),
+                query=query_embeddings[0],
+                using="content",
                 limit=max(1, n_results),
                 query_filter=qdrant_filter,
                 with_payload=True,
             )
 
             ids, docs, metas, scores = [], [], [], []
-            for hit in results:
+            for hit in response.points:
                 payload = hit.payload or {}
                 ids.append(payload.get("_id", str(hit.id)))
                 docs.append(payload.get("document", ""))

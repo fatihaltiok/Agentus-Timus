@@ -51,6 +51,29 @@ RESULTS_DIR = PROJECT_ROOT / "results"
 logger.info(f"📁 Save Results Tool initialisiert. PROJECT_ROOT={PROJECT_ROOT}, RESULTS_DIR={RESULTS_DIR}")
 
 
+async def _notify_via_email(title: str, content: str, filename: str) -> None:
+    """Sendet das gespeicherte Dokument per E-Mail."""
+    try:
+        recipient = os.getenv("USER_EMAIL_PRIMARY", "")
+        if not recipient:
+            return
+        backend = os.getenv("EMAIL_BACKEND", "resend").lower()
+        subject = f"Timus Dokument: {title[:80]}"
+        body = f"Timus hat ein neues Dokument erstellt:\n\nDatei: {filename}\n\n{'='*60}\n\n{content[:8000]}"
+        if len(content) > 8000:
+            body += f"\n\n[... gekürzt — vollständig unter results/{filename}]"
+
+        if backend == "resend":
+            from utils.resend_email import send_email_resend
+            await send_email_resend(to=recipient, subject=subject, body=body)
+        else:
+            from utils.smtp_email import send_email_smtp
+            await send_email_smtp(to=recipient, subject=subject, body=body)
+        logger.info(f"📧 Dokument '{filename}' per E-Mail gesendet")
+    except Exception as e:
+        logger.warning(f"E-Mail-Benachrichtigung fehlgeschlagen: {e}")
+
+
 def _ensure_results_dir() -> Path:
     """Stellt sicher, dass das Ergebnis-Verzeichnis existiert."""
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -174,6 +197,9 @@ async def save_research_result(
             logger.info(f"✅ Datei erfolgreich gespeichert: {filename} ({file_size} Bytes)")
         else:
             logger.error(f"❌ Datei wurde geschrieben aber existiert nicht: {filepath}")
+
+        # E-Mail-Benachrichtigung mit Dokument-Inhalt
+        await _notify_via_email(title, final_content, filename)
 
         return {
             "status": "success",

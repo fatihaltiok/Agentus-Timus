@@ -11,6 +11,7 @@ FEATURES:
 import asyncio
 import logging
 import os
+import time
 import uuid
 import httpx
 from typing import Dict, Any, List, Optional, Callable
@@ -32,6 +33,17 @@ class AgentSpec:
     capabilities: List[str]
     factory: Callable
     extra_kwargs: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class AgentResult:
+    """Strukturiertes Delegationsergebnis (M17)."""
+    status: str          # "success" | "partial" | "error"
+    agent: str           # agent_type z.B. "shell"
+    result: str          # Ergebnis-Text
+    quality: int         # 0–100
+    blackboard_key: str  # Key unter dem Ergebnis im Blackboard liegt
+    error: str = ""      # Fehlermeldung bei status=="error"
 
 
 class AgentRegistry:
@@ -379,10 +391,14 @@ class AgentRegistry:
                 )
                 # M12: Routing-Analytics (partial)
                 self._record_routing_outcome(task, to_agent, "partial")
+                bb_key = AgentRegistry._auto_write_to_blackboard(to_agent, task, result_str, "partial")
+                _res = AgentResult(status="partial", agent=to_agent, result=result_str, quality=40, blackboard_key=bb_key)
                 return {
-                    "status": "partial",
-                    "agent": to_agent,
-                    "result": result_str,
+                    "status": _res.status,
+                    "agent": _res.agent,
+                    "result": _res.result,
+                    "quality": _res.quality,
+                    "blackboard_key": _res.blackboard_key,
                     "note": "Aufgabe nicht vollstaendig abgeschlossen",
                 }
 
@@ -402,7 +418,9 @@ class AgentRegistry:
                     _delegation_sse_hook(from_agent, to_agent, "completed")
             except Exception:
                 pass
-            return {"status": "success", "agent": to_agent, "result": result_str}
+            bb_key = AgentRegistry._auto_write_to_blackboard(to_agent, task, result_str, "success")
+            _res = AgentResult(status="success", agent=to_agent, result=result_str, quality=80, blackboard_key=bb_key)
+            return {"status": _res.status, "agent": _res.agent, "result": _res.result, "quality": _res.quality, "blackboard_key": _res.blackboard_key}
 
         except Exception as e:
             log.error(f"Delegation {from_agent} -> {to_agent} fehlgeschlagen: {e}")
@@ -422,10 +440,14 @@ class AgentRegistry:
                     _delegation_sse_hook(from_agent, to_agent, "error")
             except Exception:
                 pass
+            bb_key = AgentRegistry._auto_write_to_blackboard(to_agent, task, str(e), "error")
+            _res = AgentResult(status="error", agent=to_agent, result="", quality=0, blackboard_key=bb_key, error=str(e))
             return {
-                "status": "error",
-                "agent": to_agent,
-                "error": f"FEHLER: Delegation an '{to_agent}' fehlgeschlagen: {e}",
+                "status": _res.status,
+                "agent": _res.agent,
+                "error": f"FEHLER: Delegation an '{to_agent}' fehlgeschlagen: {_res.error}",
+                "quality": _res.quality,
+                "blackboard_key": _res.blackboard_key,
             }
         finally:
             if target_has_session_attr and agent is not None:
@@ -441,14 +463,35 @@ class AgentRegistry:
             import hashlib
             from orchestration.self_improvement_engine import get_improvement_engine, RoutingRecord
             task_hash = hashlib.sha256(task.encode()).hexdigest()[:8]
+            CONFIDENCE_MAP = {"success": 0.8, "partial": 0.4, "error": 0.0}
+            confidence = CONFIDENCE_MAP.get(outcome, 0.4)
             get_improvement_engine().record_routing(RoutingRecord(
                 task_hash=task_hash,
                 chosen_agent=chosen_agent,
                 outcome=outcome,
-                confidence=0.75 if outcome == "success" else 0.3,
+                confidence=confidence,
             ))
         except Exception:
             pass
+
+    @staticmethod
+    def _auto_write_to_blackboard(agent_type: str, task: str, result: str, status: str) -> str:
+        """Schreibt Delegationsergebnis automatisch ins Blackboard (M17). Gibt Key zurück."""
+        try:
+            from memory.agent_blackboard import get_blackboard
+            bb = get_blackboard()
+            key = f"delegation:{agent_type}:{int(time.time())}"
+            ttl = {"success": 120, "partial": 60, "error": 30}.get(status, 60)
+            bb.write(
+                key=key,
+                value={"task": task[:200], "result": result[:1000], "status": status},
+                agent_id="agent_registry",
+                ttl_minutes=ttl,
+            )
+            return key
+        except Exception as e:
+            log.warning("Auto-Blackboard-Write fehlgeschlagen: %s", e)
+            return ""
 
     def find_by_capability(self, capability: str) -> List[AgentSpec]:
         """Findet alle AgentSpecs mit einer bestimmten Capability."""
@@ -461,6 +504,10 @@ class AgentRegistry:
     def list_agents(self) -> List[str]:
         """Listet alle registrierten Agent-Namen."""
         return list(self._specs.keys())
+
+    def list_agent_specs(self) -> List[AgentSpec]:
+        """Listet alle registrierten AgentSpecs (mit Capabilities)."""
+        return list(self._specs.values())
 
     def get_agent_info(self, name: str) -> Optional[Dict[str, Any]]:
         """Gibt Info ueber einen registrierten Agenten."""
@@ -744,6 +791,7 @@ def register_all_agents():
 __all__ = [
     "AgentRegistry",
     "AgentSpec",
+    "AgentResult",
     "agent_registry",
     "register_all_agents",
 ]

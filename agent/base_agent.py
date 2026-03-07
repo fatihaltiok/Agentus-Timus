@@ -1132,6 +1132,36 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             log.error(f"LLM Fehler: {e}")
             return f"Error: {e}"
 
+    @staticmethod
+    def _strip_think_tags(text: str) -> str:
+        """Entfernt <think>...</think> Blöcke aus LLM-Antworten (QwQ, GLM, etc.).
+
+        Behandelt auch unclosed Tags — passiert wenn max_tokens mitten im
+        Thinking-Block abschneidet. CrossHair-verifiziert: '<think>' nie im Output.
+        """
+        if not text or "<think>" not in text:
+            return text
+        # 1. Vollständige <think>...</think> Blöcke entfernen
+        cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+        # 2. Unclosed <think> (kein </think>) — ab <think> bis Ende strippen
+        cleaned = re.sub(r"<think>.*$", "", cleaned, flags=re.DOTALL)
+        return cleaned.strip()
+
+    @staticmethod
+    def _get_max_tokens_for_model(model: str) -> int:
+        """Gibt modell-abhängiges max_tokens zurück.
+
+        Reasoning-Modelle generieren lange <think>-Blöcke vor der eigentlichen
+        Action-JSON. 2000 Tokens sind dafür zu knapp — die Antwort wird mitten
+        im Thinking-Prozess abgeschnitten, die Action-JSON erscheint nie.
+        """
+        model_lower = model.lower()
+        if any(m in model_lower for m in ["deepseek-reasoner", "deepseek-r1", "qwq", "qvq"]):
+            return int(os.getenv("REASONING_MAX_TOKENS", "8000"))
+        if "nemotron" in model_lower:
+            return int(os.getenv("NEMOTRON_MAX_TOKENS", "4000"))
+        return int(os.getenv("DEFAULT_MAX_TOKENS", "2000"))
+
     async def _call_openai_compatible(self, messages: List[Dict]) -> str:
         client = self.provider_client.get_client(self.provider)
 
@@ -1139,7 +1169,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             "model": self.model,
             "messages": messages,
             "temperature": 0.3,
-            "max_tokens": 2000,
+            "max_tokens": self._get_max_tokens_for_model(self.model),
         }
 
         if self.provider == ModelProvider.INCEPTION:
@@ -1181,9 +1211,21 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         resp = await asyncio.to_thread(client.chat.completions.create, **kwargs)
         if not resp.choices or not hasattr(resp.choices[0], "message"):
             return ""
-        content = resp.choices[0].message.content
+        msg = resp.choices[0].message
+        content = msg.content
+
+        # deepseek-reasoner: reasoning_content als Fallback wenn content leer.
+        # WICHTIG: Kein "Error:" zurückgeben — das würde den Loop sofort beenden.
+        # Stattdessen reasoning_content zurückgeben: der Loop schickt dann einen
+        # Format-Korrektur-Prompt und das Modell bekommt eine weitere Chance.
+        if (not content or not str(content).strip()) and hasattr(msg, "reasoning_content"):
+            reasoning = getattr(msg, "reasoning_content", "") or ""
+            if reasoning:
+                log.warning("deepseek-reasoner: content leer — gebe reasoning_content zurück (Loop-Retry)")
+                return self._strip_think_tags(reasoning.strip())
+
         if isinstance(content, str):
-            return content.strip()
+            return self._strip_think_tags(content)
         if isinstance(content, list):
             parts: List[str] = []
             for item in content:
@@ -1191,8 +1233,8 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                     parts.append(item["text"])
                 elif hasattr(item, "text") and isinstance(getattr(item, "text"), str):
                     parts.append(getattr(item, "text"))
-            return "".join(parts).strip()
-        return str(content or "").strip()
+            return self._strip_think_tags("".join(parts).strip())
+        return self._strip_think_tags(str(content or "").strip())
 
     async def _call_anthropic(self, messages: List[Dict]) -> str:
         client = self.provider_client.get_client(ModelProvider.ANTHROPIC)

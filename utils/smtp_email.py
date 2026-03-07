@@ -8,11 +8,15 @@ Konfiguration via ENV: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, IMAP_HOST
 import email as email_lib
 import imaplib
 import logging
+import mimetypes
 import os
 import smtplib
 import ssl
+from email import encoders
+from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from pathlib import Path
 from typing import List, Optional
 
 log = logging.getLogger("SmtpEmail")
@@ -41,15 +45,17 @@ async def send_email_smtp(
     subject: str,
     body: str,
     html_body: Optional[str] = None,
+    attachment_path: Optional[str] = None,
 ) -> bool:
     """
     Sendet eine E-Mail via SMTP_SSL.
 
     Args:
-        to: Empfänger-Adresse
-        subject: Betreff
-        body: Plaintext-Body
-        html_body: Optional HTML-Body
+        to:              Empfänger-Adresse
+        subject:         Betreff
+        body:            Plaintext-Body
+        html_body:       Optional HTML-Body
+        attachment_path: Optionaler Pfad zu einer Anhang-Datei (absolut oder relativ)
 
     Returns:
         True wenn erfolgreich
@@ -59,13 +65,34 @@ async def send_email_smtp(
         log.warning("SMTP: SMTP_USER oder SMTP_PASSWORD fehlt")
         return False
 
-    msg = MIMEMultipart("alternative") if html_body else MIMEMultipart()
+    msg = MIMEMultipart("mixed")
     msg["From"] = cfg["user"]
     msg["To"] = to
     msg["Subject"] = subject
-    msg.attach(MIMEText(body, "plain", "utf-8"))
+
+    # Text/HTML-Teil
+    body_part = MIMEMultipart("alternative")
+    body_part.attach(MIMEText(body, "plain", "utf-8"))
     if html_body:
-        msg.attach(MIMEText(html_body, "html", "utf-8"))
+        body_part.attach(MIMEText(html_body, "html", "utf-8"))
+    msg.attach(body_part)
+
+    # Anhang
+    if attachment_path:
+        path = Path(attachment_path)
+        if not path.is_absolute():
+            path = Path(__file__).resolve().parent.parent / attachment_path
+        if path.exists():
+            mime_type, _ = mimetypes.guess_type(str(path))
+            main_type, sub_type = (mime_type or "application/octet-stream").split("/", 1)
+            part = MIMEBase(main_type, sub_type)
+            part.set_payload(path.read_bytes())
+            encoders.encode_base64(part)
+            part.add_header("Content-Disposition", "attachment", filename=path.name)
+            msg.attach(part)
+            log.info("SMTP: Anhang '%s' (%d Bytes) wird mitgesendet", path.name, path.stat().st_size)
+        else:
+            log.warning("SMTP: Anhang-Datei nicht gefunden: %s — wird ohne Anhang gesendet", attachment_path)
 
     try:
         context = ssl.create_default_context()

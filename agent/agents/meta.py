@@ -68,6 +68,11 @@ class MetaAgent(BaseAgent):
     def __init__(self, tools_description_string: str):
         super().__init__(META_SYSTEM_PROMPT, tools_description_string, 30, "meta")
 
+        # Meta-Agent ist Orchestrator, kein Visual-Agent.
+        # Capability-Map enthält "browser"/"navigation" → würde sonst fälschlich
+        # is_navigation_task=True triggern und Screenshot an nicht-Vision-Modell senden.
+        self._vision_enabled = False
+
         self.skill_registry = None
         self.active_skills: list = []
         self._init_skill_system()
@@ -214,11 +219,10 @@ class MetaAgent(BaseAgent):
         if trigger_ctx:
             lines.append(f"Aktive Routinen: {trigger_ctx}")
 
-        # 6. Verfügbare Agenten
-        lines.append(
-            "Agenten: executor, research, reasoning, creative, developer, "
-            "meta, visual, data, document, communication, system, shell, image"
-        )
+        # 6. Verfügbare Agenten (dynamische Capability-Map, M17)
+        cap_map = await asyncio.to_thread(self._get_capability_map)
+        if cap_map:
+            lines.append(f"Verfügbare Agenten:\n{cap_map}")
 
         lines.append(f"Aktuelle Zeit: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
@@ -268,12 +272,23 @@ class MetaAgent(BaseAgent):
             return ""
 
     def _get_blackboard_summary(self) -> str:
-        """Fasst den AgentBlackboard zusammen (M9)."""
+        """Zeigt aktuelle Delegation-Einträge aus dem AgentBlackboard (M9/M17)."""
         if not os.getenv("AUTONOMY_BLACKBOARD_ENABLED", "true").lower() == "true":
             return ""
         try:
             from memory.agent_blackboard import get_blackboard
-            summary = get_blackboard().get_summary()
+            bb = get_blackboard()
+            entries = bb.search("delegation:", agent_id=None, limit=5)
+            if entries:
+                lines = []
+                for e in entries:
+                    val = e.get("value", {})
+                    lines.append(
+                        f"- [{val.get('status', '?')}] {e['key']}: {val.get('task', '')[:60]}..."
+                    )
+                return "\n".join(lines)
+            # Fallback: Gesamtübersicht wenn keine delegation:-Einträge
+            summary = bb.get_summary()
             total = summary.get("total_active", 0)
             if not total:
                 return ""
@@ -283,6 +298,21 @@ class MetaAgent(BaseAgent):
         except Exception as exc:
             log.debug("AgentBlackboard nicht verfügbar: %s", exc)
             return ""
+
+    def _get_capability_map(self) -> str:
+        """Erstellt dynamische Capability-Map aller registrierten Agenten (M17)."""
+        try:
+            from agent.agent_registry import agent_registry
+            specs = agent_registry.list_agent_specs()
+            if not specs:
+                return "Keine Agenten registriert"
+            lines = []
+            for spec in specs:
+                lines.append(f"- {spec.agent_type}: {', '.join(spec.capabilities[:3])}")
+            return "\n".join(lines)
+        except Exception as exc:
+            log.debug("Capability-Map nicht verfügbar: %s", exc)
+            return "Capability-Map nicht verfügbar"
 
     async def _get_last_reflection(self) -> str:
         """Lädt die letzte Session-Reflexion (M8)."""
@@ -328,7 +358,8 @@ class MetaAgent(BaseAgent):
     # 3d: Strukturierte Decomposition komplexer Ziele (Phase 3)
     # ------------------------------------------------------------------
 
-    MAX_DECOMPOSITION_DEPTH = 3  # Lean: meta_decomposition_depth
+    MAX_DECOMPOSITION_DEPTH = 3      # Lean: meta_decomposition_depth (Th.49)
+    META_MAX_REPLAN_ATTEMPTS = 2     # Lean: meta_replan_depth_bounded (Th.53)
 
     _DECOMPOSITION_HINT = (
         "\n\n## DECOMPOSITION-REGEL (automatisch aktiviert)\n"

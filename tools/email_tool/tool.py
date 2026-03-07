@@ -140,17 +140,19 @@ def _graph_headers() -> Dict[str, str]:
 @tool(
     name="send_email",
     description=(
-        "Sendet eine E-Mail im Namen von Timus über Microsoft Graph API (OAuth2). "
-        "Unterstützt CC, BCC und HTML-Body."
+        "Sendet eine E-Mail im Namen von Timus. "
+        "Backend wird via EMAIL_BACKEND gesteuert: resend (Standard), smtp oder msgraph. "
+        "Unterstützt optionalen Datei-Anhang (z.B. PDF-Report)."
     ),
     parameters=[
-        P("to",        "string",  "Empfänger-Adresse (eine oder kommagetrennt)",  True),
-        P("subject",   "string",  "Betreff der E-Mail",                           True),
-        P("body",      "string",  "Plaintext-Body der E-Mail",                    True),
-        P("cc",        "string",  "CC-Adresse(n), kommagetrennt",                 False),
-        P("bcc",       "string",  "BCC-Adresse(n), kommagetrennt",                False),
-        P("html_body", "string",  "HTML-Alternativtext (optional)",               False),
-        P("reply_to",  "string",  "Reply-To Header (optional)",                   False),
+        P("to",              "string", "Empfänger-Adresse (eine oder kommagetrennt)",                   True),
+        P("subject",         "string", "Betreff der E-Mail",                                            True),
+        P("body",            "string", "Plaintext-Body der E-Mail",                                     True),
+        P("cc",              "string", "CC-Adresse(n), kommagetrennt",                                  False),
+        P("bcc",             "string", "BCC-Adresse(n), kommagetrennt",                                 False),
+        P("html_body",       "string", "HTML-Alternativtext (optional)",                                False),
+        P("reply_to",        "string", "Reply-To Header (optional)",                                    False),
+        P("attachment_path", "string", "Pfad zur Anhang-Datei (absolut oder relativ zu /timus/results/)", False),
     ],
     capabilities=["email", "communication", "send_email"],
     category=C.DOCUMENT,
@@ -163,8 +165,57 @@ def send_email(
     bcc: Optional[str] = None,
     html_body: Optional[str] = None,
     reply_to: Optional[str] = None,
+    attachment_path: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Versendet eine E-Mail via Microsoft Graph /me/sendMail."""
+    """Versendet eine E-Mail — Backend via EMAIL_BACKEND (resend/smtp/msgraph)."""
+    import base64
+
+    backend = os.getenv("EMAIL_BACKEND", "resend").lower()
+
+    # Anhang-Pfad auflösen (relativ → absolut ab Projektroot)
+    resolved_attachment: Optional[str] = None
+    if attachment_path:
+        from pathlib import Path as _Path
+        p = _Path(attachment_path)
+        if not p.is_absolute():
+            p = _PROJECT_ROOT / attachment_path
+        if p.exists():
+            resolved_attachment = str(p)
+            log.info("send_email: Anhang gefunden: %s (%d Bytes)", p.name, p.stat().st_size)
+        else:
+            log.warning("send_email: Anhang nicht gefunden: %s — wird ohne Anhang gesendet", attachment_path)
+
+    # ── Resend oder SMTP (async → sync wrapper) ───────────────────────────────
+    if backend in ("resend", "smtp"):
+        import asyncio
+        try:
+            if backend == "resend":
+                from utils.resend_email import send_email_resend
+                ok = asyncio.run(send_email_resend(
+                    to=to, subject=subject, body=body,
+                    html_body=html_body, attachment_path=resolved_attachment,
+                ))
+            else:
+                from utils.smtp_email import send_email_smtp
+                ok = asyncio.run(send_email_smtp(
+                    to=to, subject=subject, body=body,
+                    html_body=html_body, attachment_path=resolved_attachment,
+                ))
+            if ok:
+                log.info(f"E-Mail gesendet an {to} via {backend} | Betreff: {subject!r}")
+                result = {"success": True, "to": to, "subject": subject,
+                          "message": f"E-Mail erfolgreich an {to} gesendet ({backend})."}
+                if resolved_attachment:
+                    from pathlib import Path as _Path
+                    result["attachment"] = _Path(resolved_attachment).name
+                return result
+            else:
+                return {"success": False, "error": f"{backend}: Sendefehler — Logs prüfen"}
+        except Exception as e:
+            log.error(f"{backend} send_email Fehler: {e}", exc_info=True)
+            return {"success": False, "error": str(e)}
+
+    # ── Microsoft Graph ───────────────────────────────────────────────────────
     try:
         content_type = "HTML" if html_body else "Text"
         content      = html_body if html_body else body
@@ -185,41 +236,42 @@ def send_email(
         if reply_to:
             payload["message"]["replyTo"] = _addr_list(reply_to)
 
-        # Plaintext-Alternativkörper bei HTML-Mails anhängen
-        if html_body and body:
-            payload["message"]["body"]["content"] = html_body
-            # Graph unterstützt kein multipart direkt — wir senden HTML
-            # und der plain body steht im Text-Teil automatisch
+        # Anhang für Graph API (fileAttachment)
+        if resolved_attachment:
+            from pathlib import Path as _Path
+            import mimetypes
+            att_path = _Path(resolved_attachment)
+            mime_type = mimetypes.guess_type(str(att_path))[0] or "application/octet-stream"
+            content_bytes = base64.b64encode(att_path.read_bytes()).decode("utf-8")
+            payload["message"]["attachments"] = [{
+                "@odata.type": "#microsoft.graph.fileAttachment",
+                "name": att_path.name,
+                "contentType": mime_type,
+                "contentBytes": content_bytes,
+            }]
 
         resp = requests.post(
             f"{_GRAPH_BASE}/me/sendMail",
             headers=_graph_headers(),
             json=payload,
-            timeout=20,
+            timeout=30,
         )
 
-        log.debug(f"sendMail HTTP {resp.status_code} | body: {resp.text[:300]}")
-
         if resp.status_code in (202, 204):
-            log.info(f"E-Mail gesendet an {to} | Betreff: {subject!r}")
-            return {
-                "success": True,
-                "to":      to,
-                "subject": subject,
-                "message": f"E-Mail erfolgreich an {to} gesendet.",
-            }
+            log.info(f"E-Mail gesendet an {to} via msgraph | Betreff: {subject!r}")
+            result = {"success": True, "to": to, "subject": subject,
+                      "message": f"E-Mail erfolgreich an {to} gesendet (msgraph)."}
+            if resolved_attachment:
+                from pathlib import Path as _Path
+                result["attachment"] = _Path(resolved_attachment).name
+            return result
         else:
-            # Body kann leer sein → sicher parsen
             try:
-                err = resp.json().get("error", {})
-                err_msg = err.get("message", resp.text[:300] or f"HTTP {resp.status_code}")
+                err_msg = resp.json().get("error", {}).get("message", resp.text[:300])
             except Exception:
-                err_msg = resp.text[:300] or f"HTTP {resp.status_code} (leere Antwort)"
+                err_msg = resp.text[:300] or f"HTTP {resp.status_code}"
             log.error(f"Graph sendMail Fehler {resp.status_code}: {err_msg}")
-            return {
-                "success": False,
-                "error":   f"HTTP {resp.status_code} — {err_msg}",
-            }
+            return {"success": False, "error": f"HTTP {resp.status_code} — {err_msg}"}
 
     except RuntimeError as e:
         return {"success": False, "error": str(e)}
@@ -234,8 +286,8 @@ def send_email(
 @tool(
     name="read_emails",
     description=(
-        "Liest E-Mails aus dem Postfach von Timus via Microsoft Graph API. "
-        "Gibt Liste mit Absender, Betreff, Datum und Body zurück."
+        "Liest E-Mails aus dem Postfach von Timus. "
+        "Backend via EMAIL_BACKEND: resend/smtp nutzen IMAP, msgraph nutzt Graph API."
     ),
     parameters=[
         P("mailbox",     "string",  "Postfach (Standard: inbox)",                                          False, "inbox"),
@@ -252,14 +304,28 @@ def read_emails(
     unread_only: bool = False,
     search: str = "",
 ) -> Dict[str, Any]:
-    """Liest E-Mails via Microsoft Graph /me/mailFolders/.../messages."""
+    """Liest E-Mails — Backend via EMAIL_BACKEND (resend/smtp → IMAP, msgraph → Graph)."""
+    backend = os.getenv("EMAIL_BACKEND", "resend").lower()
+
+    # ── IMAP (resend oder smtp) ───────────────────────────────────────────────
+    if backend in ("resend", "smtp"):
+        import asyncio
+        try:
+            from utils.smtp_email import read_emails_smtp
+            raw = asyncio.run(read_emails_smtp(limit=limit, unread_only=unread_only))
+            log.info(f"read_emails: {len(raw)} E-Mail(s) via IMAP gelesen")
+            return {"success": True, "mailbox": "inbox", "count": len(raw), "emails": raw}
+        except Exception as e:
+            log.error(f"IMAP read_emails Fehler: {e}", exc_info=True)
+            return {"success": False, "error": str(e)}
+
+    # ── Microsoft Graph ───────────────────────────────────────────────────────
     try:
         params: Dict[str, Any] = {
             "$top":     min(limit, 50),
             "$orderby": "receivedDateTime desc",
             "$select":  "id,subject,from,toRecipients,receivedDateTime,bodyPreview,isRead,body",
         }
-
         filters = []
         if unread_only:
             filters.append("isRead eq false")
@@ -268,32 +334,20 @@ def read_emails(
         if search:
             params["$search"] = f'"{search}"'
 
-        url = f"{_GRAPH_BASE}/me/mailFolders/{mailbox}/messages"
         resp = requests.get(
-            url,
+            f"{_GRAPH_BASE}/me/mailFolders/{mailbox}/messages",
             headers=_graph_headers(),
             params=params,
             timeout=20,
         )
-
         if resp.status_code != 200:
             err = resp.json().get("error", {})
-            return {
-                "success": False,
-                "error":   f"{resp.status_code} — {err.get('message', resp.text)}",
-            }
+            return {"success": False, "error": f"{resp.status_code} — {err.get('message', resp.text)}"}
 
-        data   = resp.json()
-        raw    = data.get("value", [])
+        raw    = resp.json().get("value", [])
         emails = [_parse_graph_message(m) for m in raw]
-
-        log.info(f"read_emails: {len(emails)} E-Mail(s) aus '{mailbox}' gelesen")
-        return {
-            "success": True,
-            "mailbox": mailbox,
-            "count":   len(emails),
-            "emails":  emails,
-        }
+        log.info(f"read_emails: {len(emails)} E-Mail(s) via Graph gelesen")
+        return {"success": True, "mailbox": mailbox, "count": len(emails), "emails": emails}
 
     except RuntimeError as e:
         return {"success": False, "error": str(e)}

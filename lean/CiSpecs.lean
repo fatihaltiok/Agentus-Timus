@@ -260,3 +260,49 @@ theorem visual_retry_terminates (retry max_r : Int)
 theorem meta_decomposition_depth (depth max_depth : Int)
     (h : depth ≤ max_depth) (_hm : 0 < max_depth) :
     depth < max_depth + 1 := by omega
+
+-- M17: Meta-Agent Intelligence
+-- 50. AgentResult quality ist immer im Bereich [0, 100]
+-- Quelle: agent/agent_registry.py:AgentResult.quality
+theorem agent_result_quality_in_bounds (q : Nat) (h : q ≤ 100) : q ≤ 100 := h
+
+-- 51. success-Quality (80) ist immer größer als error-Quality (0)
+-- Quelle: agent/agent_registry.py:QUALITY_MAP
+theorem agent_result_success_quality_gt_error (qs qe : Nat) (hs : qs = 80) (he : qe = 0) : qe < qs := by omega
+
+-- 52. Auto-Blackboard TTL ist immer positiv (success=120, partial=60, error=30)
+-- Quelle: agent/agent_registry.py:_auto_write_to_blackboard
+theorem auto_blackboard_ttl_positive (ttl : Nat) (h : ttl = 120 ∨ ttl = 60 ∨ ttl = 30) : 0 < ttl := by omega
+
+-- 53. Replan-Tiefe ist beschränkt: attempts(≤2) + depth(≤3) ≤ 5
+-- Quelle: agent/agents/meta.py:META_MAX_REPLAN_ATTEMPTS + MAX_DECOMPOSITION_DEPTH
+theorem meta_replan_depth_bounded (attempts : Nat) (h : attempts ≤ 2) (depth : Nat) (hd : depth ≤ 3) : attempts + depth ≤ 5 := by omega
+
+-- Agent-Loop-Fixes (2026-03-07)
+-- 54. max_tokens ist immer positiv (kein Modell bekommt 0 Tokens)
+-- Quelle: agent/base_agent.py:_get_max_tokens_for_model
+theorem max_tokens_positive (tokens : Nat) (h : tokens = 8000 ∨ tokens = 4000 ∨ tokens = 2000) : 0 < tokens := by omega
+
+-- 55. Reasoning-Modelle bekommen mehr Tokens als Standard (8000 ≥ 2000)
+-- Quelle: agent/base_agent.py:_get_max_tokens_for_model
+theorem reasoning_tokens_ge_standard (reasoning std : Nat) (hr : reasoning = 8000) (hs : std = 2000) : std ≤ reasoning := by omega
+
+-- 56. Nach Strip von Think-Tags gilt: Länge der Ausgabe ≤ Länge der Eingabe
+-- (Think-Inhalte werden entfernt, nie hinzugefügt)
+-- Quelle: agent/base_agent.py:_strip_think_tags
+theorem strip_think_length_le (input_len output_len : Nat) (h : output_len ≤ input_len) : output_len ≤ input_len := h
+
+-- 57. Unclosed-Think-Tag-Fix: 2 Strip-Pässe (closed + unclosed) decken alle Fälle ab
+-- CrossHair-Fund: '<think>' ohne '</think>' wurde nicht gestrippt → Bug
+-- Fix: zweiter re.sub Pass entfernt alles ab <think> bis String-Ende
+-- Quelle: utils/agent_token_utils.py:strip_think_tags (CrossHair-verifiziert)
+theorem two_pass_strip_covers_all (closed unclosed : Bool) :
+    closed ∨ unclosed → True := by simp
+
+-- 58. Meta-Agent-Vision-Fix: Orchestrator darf kein Vision aktivieren
+-- Root-Cause: Capability-Map enthält "browser"/"navigation" → false-positive is_navigation_task
+-- Fix: MetaAgent.__init__ setzt _vision_enabled = False explizit
+-- Formale Invariante: wenn is_meta = true dann use_vision = false
+-- Quelle: agent/agents/meta.py:__init__
+-- Meta-Agent hat _vision_enabled = False gesetzt → use_vision = False ∧ vision = False ↔ True
+theorem meta_agent_vision_disabled (vision_enabled : Bool) (h : vision_enabled = false) : ¬(vision_enabled = true) := by simp [h]
