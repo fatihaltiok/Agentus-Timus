@@ -39,7 +39,7 @@ class DeepResearchAgent(BaseAgent):
         super().__init__(
             DEEP_RESEARCH_PROMPT_TEMPLATE,
             tools_description_string,
-            max_iterations=12,
+            max_iterations=6,   # 3 Schritte nötig (start → report → final), 6 = sicherer Puffer
             agent_type="deep_research",
         )
         self.http_client = httpx.AsyncClient(timeout=600.0)
