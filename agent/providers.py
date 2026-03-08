@@ -219,7 +219,7 @@ class AgentModelConfig:
     """Konfiguration welches Modell/Provider jeder Agent-Typ nutzt."""
 
     AGENT_CONFIGS = {
-        "executor": ("FAST_MODEL", "FAST_MODEL_PROVIDER", "claude-haiku-4-5-20251001", ModelProvider.ANTHROPIC),
+        "executor": ("FAST_MODEL", "FAST_MODEL_PROVIDER", "qwen/qwen3-8b", ModelProvider.OPENROUTER),
         "deep_research": ("RESEARCH_MODEL", "RESEARCH_MODEL_PROVIDER", "deepseek/deepseek-v3.2", ModelProvider.OPENROUTER),
         "creative": ("CREATIVE_MODEL", "CREATIVE_MODEL_PROVIDER", "gpt-5.2", ModelProvider.OPENAI),
         "developer": ("CODE_MODEL", "CODE_MODEL_PROVIDER", "mercury-coder-small", ModelProvider.INCEPTION),
@@ -235,7 +235,7 @@ class AgentModelConfig:
         # M3: neue Agenten
         "system": ("SYSTEM_MODEL", "SYSTEM_MODEL_PROVIDER", "qwen/qwen3.5-plus-02-15", ModelProvider.OPENROUTER),
         # M4: neue Agenten
-        "shell": ("SHELL_MODEL", "SHELL_MODEL_PROVIDER", "claude-sonnet-4-6", ModelProvider.ANTHROPIC),
+        "shell": ("SHELL_MODEL", "SHELL_MODEL_PROVIDER", "inception/mercury-2", ModelProvider.OPENROUTER),
         # M5: Bild-Analyse
         "image": ("IMAGE_MODEL", "IMAGE_MODEL_PROVIDER", "qwen/qwen3.5-plus-02-15", ModelProvider.OPENROUTER),
     }
