@@ -266,17 +266,19 @@ Du bist der zentrale Dispatcher für Timus. Analysiere die INTENTION des Nutzers
       - NICHT bei: "starte den Service" (→ shell), "repariere den Code" (→ development)
 
 13. **shell**: Der SHELL-OPERATOR
-    - Zustaendigkeit: Bash-Befehle ausfuehren, Skripte/Dateien starten, Cron-Jobs verwalten, Pakete installieren, Updates durchfuehren
+    - Zustaendigkeit: Bash-Befehle ausfuehren, Skripte/Dateien starten, Cron-Jobs verwalten, Pakete installieren, Updates durchfuehren, Service-Neustarts
     - Wähle 'shell' bei EXPLIZITEN Ausfuehrungs-Anfragen:
       - "Fuehre diesen Befehl aus: ..."
       - "Starte das Skript results/backup.py" / "Fuehre die Datei aus"
       - "Lege einen Cron-Job an der taeglich um 08:00 laeuft"
       - "Fuehre im Terminal aus..."
       - "Zeig mir die Cron-Jobs"
-      - "Starte den timus-Service neu" (mit systemctl)
+      - "Starte den timus-Service neu" / "Neustart" / "Restart" / "systemctl restart ..."
+      - "Starte den MCP-Server neu" / "MCP neu starten" / "Dispatcher neu starten"
       - "Installiere das Paket X" / "pip install X" / "apt install X" / "conda install X"
       - "Fuehre pip install -r requirements.txt aus"
       - "Mach ein apt update" / "Spiele Updates ein" / "Update das System"
+      - IMMER bei: "neustart", "neu starten", "restart", "systemctl", "service neu"
       - "Installiere die fehlende Bibliothek / das fehlende Modul"
     - NICHT bei: "Lies die Datei" (→ executor), "Was laeuft?" (→ system),
                  "Schreib ein Skript" (→ development)
@@ -699,6 +701,25 @@ SHELL_KEYWORDS = [
     "kommando ausführen",
     "im terminal ausführen",
     "befehl ausführen",
+    # Service-Restarts & Systemctl (MUSS vor Visual kommen)
+    "neustart",
+    "neu starten",
+    "neustarten",
+    "restart",
+    "reboot",
+    "systemctl",
+    "service neu",
+    "service restart",
+    "mcp server neu",
+    "mcp-server neu",
+    "mcp neu",
+    "dispatcher neu",
+    "timus neu",
+    "timus neustarten",
+    "den service",
+    "den mcp",
+    "starte den",       # "starte den MCP-Server" → shell (nicht visual)
+    "starte die service",
     # Installationen & Updates
     "pip install",
     "pip3 install",
@@ -1039,6 +1060,11 @@ def quick_intent_check(query: str) -> Optional[str]:
         if keyword in query_lower:
             return "research"
 
+    # Shell-Keywords VOR Visual — Service-Restarts/Systemctl dürfen nie zu Visual routen
+    for keyword in SHELL_KEYWORDS:
+        if keyword in query_lower:
+            return "shell"
+
     # VisualNemotron-Keywords (Multi-Step Web-Automation)
     for keyword in VISUAL_NEMOTRON_KEYWORDS:
         if keyword in query_lower:
@@ -1063,11 +1089,6 @@ def quick_intent_check(query: str) -> Optional[str]:
     for keyword in EXECUTOR_KEYWORDS:
         if keyword in query_lower:
             return "executor"
-
-    # Shell-Keywords (höchste Prio unter M1-M4 — konkrete Befehle)
-    for keyword in SHELL_KEYWORDS:
-        if keyword in query_lower:
-            return "shell"
 
     # Data-Keywords
     for keyword in DATA_KEYWORDS:
