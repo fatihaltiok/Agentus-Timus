@@ -532,7 +532,7 @@ class NemotronClient:
                 instructions=system_prompt,
                 input=user_prompt,
                 temperature=0.1,
-                max_output_tokens=1500,
+                max_output_tokens=max(16, 1500),
             )
             return response.output_text.strip()
 
