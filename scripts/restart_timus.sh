@@ -49,6 +49,17 @@ check_health() {
     return 1
 }
 
+check_noninteractive_sudo() {
+    if ! sudo -n /usr/bin/systemctl status "$MCP_SERVICE" >/dev/null 2>&1; then
+        err "Passwortloses sudo fuer $MCP_SERVICE nicht verfuegbar. Installiere scripts/sudoers_timus."
+        exit 1
+    fi
+    if ! sudo -n /usr/bin/systemctl status "$DISPATCHER_SERVICE" >/dev/null 2>&1; then
+        err "Passwortloses sudo fuer $DISPATCHER_SERVICE nicht verfuegbar. Installiere scripts/sudoers_timus."
+        exit 1
+    fi
+}
+
 show_status() {
     echo ""
     log "=== Service-Status ==="
@@ -62,19 +73,19 @@ show_status() {
 
 restart_mcp() {
     log "Stoppe $MCP_SERVICE..."
-    sudo systemctl stop "$MCP_SERVICE" 2>/dev/null || true
+    sudo -n systemctl stop "$MCP_SERVICE" 2>/dev/null || true
     sleep 1
     log "Starte $MCP_SERVICE..."
-    sudo systemctl start "$MCP_SERVICE"
+    sudo -n systemctl start "$MCP_SERVICE"
     check_health && ok "MCP-Server läuft" || { err "MCP-Start fehlgeschlagen"; show_status; exit 1; }
 }
 
 restart_dispatcher() {
     log "Stoppe $DISPATCHER_SERVICE..."
-    sudo systemctl stop "$DISPATCHER_SERVICE" 2>/dev/null || true
+    sudo -n systemctl stop "$DISPATCHER_SERVICE" 2>/dev/null || true
     sleep 1
     log "Starte $DISPATCHER_SERVICE..."
-    sudo systemctl start "$DISPATCHER_SERVICE"
+    sudo -n systemctl start "$DISPATCHER_SERVICE"
     sleep 3
     if systemctl is-active --quiet "$DISPATCHER_SERVICE"; then
         ok "Dispatcher läuft"
@@ -90,10 +101,12 @@ log "━━━━━━━━━━━━━━━━━━━━━━━━━
 log "  Timus Neustart  (Modus: $MODE)"
 log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
+check_noninteractive_sudo
+
 case "$MODE" in
     full)
         log "Stoppe Dispatcher zuerst (hängt von MCP ab)..."
-        sudo systemctl stop "$DISPATCHER_SERVICE" 2>/dev/null || true
+        sudo -n systemctl stop "$DISPATCHER_SERVICE" 2>/dev/null || true
         sleep 1
         restart_mcp
         restart_dispatcher

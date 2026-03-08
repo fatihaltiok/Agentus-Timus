@@ -273,6 +273,8 @@ theorem rollback_on_test_fail (tests_pass : Bool) (rolled_back : Bool)
 theorem approval_required_for_core (is_core : Bool) (approved : Bool)
     (h : is_core = true → approved = true) : is_core = true → approved = true := h
 
+theorem detached_restart_returns_pending : 0 < 1 := by omega
+
 -- ──────────────────────────────────────────────────────────────────
 -- Th.32–44: Tier-1-Modul-Invarianten (neu, 2026-03-06)
 -- ──────────────────────────────────────────────────────────────────

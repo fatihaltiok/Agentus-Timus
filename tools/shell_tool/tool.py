@@ -11,11 +11,13 @@ Sicherheitsstufen:
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
 import shlex
 import subprocess
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +31,10 @@ _AUDIT_LOG     = _PROJECT_ROOT / "logs" / "shell_audit.log"
 _RESULTS_DIR   = _PROJECT_ROOT / "results"
 _MAX_TIMEOUT   = int(os.getenv("SHELL_MAX_TIMEOUT", "300"))   # default 5 Minuten
 _INSTALL_TIMEOUT = int(os.getenv("SHELL_INSTALL_TIMEOUT", "180"))  # default 3 Minuten
+_RESTART_SCRIPT = _PROJECT_ROOT / "scripts" / "restart_timus.sh"
+_RESTART_SUPERVISOR = _PROJECT_ROOT / "scripts" / "restart_supervisor.py"
+_DETACHED_RESTART_LOG = _PROJECT_ROOT / "logs" / "timus_restart_detached.log"
+_DETACHED_RESTART_STATUS = _PROJECT_ROOT / "logs" / "timus_restart_status.json"
 
 # Verzeichnis sicherstellen
 _AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
@@ -110,6 +116,89 @@ def _check_whitelist(command: str) -> str | None:
     return None
 
 
+def _contains_direct_restart_script(command: str) -> bool:
+    normalized = str(command or "").replace("\\", "/")
+    return (
+        "scripts/restart_timus.sh" in normalized
+        or str(_RESTART_SCRIPT).replace("\\", "/") in normalized
+        or "scripts/restart_supervisor.py" in normalized
+        or str(_RESTART_SUPERVISOR).replace("\\", "/") in normalized
+    )
+
+
+def _detached_restart_command(mode: str) -> str:
+    python_bin = shlex.quote(sys.executable)
+    script = shlex.quote(str(_RESTART_SUPERVISOR))
+    mode_q = shlex.quote(mode)
+    log_path = shlex.quote(str(_DETACHED_RESTART_LOG))
+    status_path = shlex.quote(str(_DETACHED_RESTART_STATUS))
+    return (
+        f"nohup {python_bin} {script} {mode_q} --status-file {status_path} > {log_path} 2>&1 < /dev/null &"
+    )
+
+
+def _launch_detached_restart(mode: str) -> dict:
+    _DETACHED_RESTART_LOG.parent.mkdir(parents=True, exist_ok=True)
+    command = _detached_restart_command(mode)
+    try:
+        proc = subprocess.Popen(
+            command,
+            shell=True,
+            cwd=str(_PROJECT_ROOT),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        return {
+            "status": "pending_restart",
+            "mode": mode,
+            "launcher_pid": proc.pid,
+            "launcher_command": command,
+            "log_path": str(_DETACHED_RESTART_LOG),
+            "status_path": str(_DETACHED_RESTART_STATUS),
+            "message": f"Detached Timus-Neustart gestartet (Modus: {mode}). Status danach separat pruefen.",
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "mode": mode,
+            "message": f"Detached Neustart konnte nicht gestartet werden: {exc}",
+        }
+
+
+def _can_run_noninteractive_restart() -> tuple[bool, str]:
+    checks = (
+        f"sudo -n /usr/bin/systemctl status {_MCP_SERVICE}",
+        f"sudo -n /usr/bin/systemctl status {_DISPATCHER_SERVICE}",
+    )
+    for cmd in checks:
+        try:
+            proc = subprocess.run(
+                cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=str(_PROJECT_ROOT),
+            )
+        except subprocess.TimeoutExpired:
+            return False, f"Preflight-Timeout fuer: {cmd}"
+        except Exception as exc:
+            return False, f"Preflight-Fehler fuer {cmd}: {exc}"
+        if proc.returncode != 0:
+            detail = (proc.stdout + proc.stderr).strip() or "sudo/systemctl nicht non-interaktiv verfuegbar"
+            return False, detail
+    return True, "ok"
+
+
+async def _maybe_to_thread(fn):
+    use_threadpool = os.getenv("TIMUS_SHELL_TOOL_USE_THREADPOOL", "0") == "1"
+    if use_threadpool:
+        return await asyncio.to_thread(fn)
+    return fn()
+
+
 # ── run_command ────────────────────────────────────────────────────
 
 @tool(
@@ -155,6 +244,18 @@ async def run_command(
             return {
                 "status":  "blocked",
                 "reason":  wl_reason,
+                "command": command,
+            }
+
+        if _contains_direct_restart_script(command):
+            reason = (
+                "Direkte Ausführung von scripts/restart_timus.sh ist blockiert. "
+                "Nutze restart_timus(mode=...) für einen sicheren Detached-Neustart."
+            )
+            _audit(command, dry_run=False, blocked=True, result=reason)
+            return {
+                "status": "blocked",
+                "reason": reason,
                 "command": command,
             }
 
@@ -206,7 +307,7 @@ async def run_command(
             }
 
     try:
-        return await asyncio.to_thread(_run)
+        return await _maybe_to_thread(_run)
     except Exception as e:
         log.error(f"run_command Fehler: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
@@ -278,6 +379,14 @@ async def run_script(
             _audit(command, dry_run=False, blocked=True, result=block_reason)
             return {"status": "blocked", "reason": block_reason, "command": command}
 
+        if resolved == _RESTART_SCRIPT:
+            reason = (
+                "Direkte Ausführung von restart_timus.sh via run_script ist blockiert. "
+                "Nutze restart_timus(mode=...) für einen sicheren Detached-Neustart."
+            )
+            _audit(command, dry_run=False, blocked=True, result=reason)
+            return {"status": "blocked", "reason": reason, "command": command}
+
         if dry_run:
             _audit(command, dry_run=True, blocked=False, result="(dry-run)")
             return {
@@ -311,7 +420,7 @@ async def run_script(
             return {"status": "timeout", "command": command, "message": msg}
 
     try:
-        return await asyncio.to_thread(_run)
+        return await _maybe_to_thread(_run)
     except Exception as e:
         log.error(f"run_script Fehler: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
@@ -657,31 +766,54 @@ async def restart_timus(mode: str = "full") -> dict:
             results["mcp_active"]        = _svc_status(_MCP_SERVICE)
             results["dispatcher_active"] = _svc_status(_DISPATCHER_SERVICE)
             results["mcp_healthy"]       = _health_check(retries=1, wait=1)
+            if _DETACHED_RESTART_STATUS.exists():
+                try:
+                    results["restart_supervisor"] = json.loads(
+                        _DETACHED_RESTART_STATUS.read_text(encoding="utf-8")
+                    )
+                except Exception as exc:
+                    results["restart_supervisor_error"] = str(exc)
             results["status"] = "ok"
             return results
 
-        # full oder mcp: Dispatcher zuerst stoppen (haengt von MCP ab)
         if mode_clean in ("full", "mcp"):
-            if mode_clean == "full":
-                _stop(_DISPATCHER_SERVICE)
-            _stop(_MCP_SERVICE)
-            _start(_MCP_SERVICE)
-            healthy = _health_check()
-            results["mcp_healthy"] = healthy
-            results["steps"].append({"action": "health_check", "healthy": healthy})
-            if not healthy:
-                results["status"] = "error"
-                results["message"] = "MCP-Server antwortet nicht nach Neustart"
-                _audit(f"restart_timus mode={mode_clean}", dry_run=False, blocked=False,
-                       result="mcp_health_failed")
+            preflight_ok, preflight_detail = _can_run_noninteractive_restart()
+            if not preflight_ok:
+                results["status"] = "blocked"
+                results["message"] = (
+                    "Detached Neustart blockiert: sudo/systemctl ist nicht non-interaktiv verfuegbar. "
+                    f"Detail: {preflight_detail}"
+                )
+                results["preflight_ok"] = False
+                results["preflight_detail"] = preflight_detail
+                _audit(
+                    f"restart_timus mode={mode_clean}",
+                    dry_run=False,
+                    blocked=True,
+                    result=results["message"],
+                )
                 return results
+            detached = _launch_detached_restart(mode_clean)
+            _audit(
+                f"restart_timus mode={mode_clean}",
+                dry_run=False,
+                blocked=False,
+                result=str(detached.get("message") or detached.get("status") or ""),
+            )
+            return detached
 
-        if mode_clean in ("full", "dispatcher"):
+        if mode_clean == "dispatcher":
             _start(_DISPATCHER_SERVICE)
             time.sleep(3)
             disp_active = _svc_status(_DISPATCHER_SERVICE)
             results["dispatcher_active"] = disp_active
             results["steps"].append({"action": "dispatcher_active_check", "active": disp_active})
+            if disp_active != "active":
+                results["status"] = "error"
+                results["message"] = "Dispatcher antwortet nicht nach Neustart"
+                _audit(f"restart_timus mode={mode_clean}", dry_run=False, blocked=False,
+                       result="dispatcher_restart_failed")
+                return results
 
         results["status"] = "ok"
         results["message"] = f"Timus neugestartet (Modus: {mode_clean})"
@@ -691,7 +823,7 @@ async def restart_timus(mode: str = "full") -> dict:
         return results
 
     try:
-        return await asyncio.to_thread(_restart)
+        return await _maybe_to_thread(_restart)
     except Exception as e:
         log.error(f"restart_timus Fehler: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
