@@ -1086,6 +1086,47 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await query.answer("⚠️ Fehler bei Tool-Ablehnung")
         return
 
+    # M18: Code-Edit-Approval
+    if cb_type == "code_edit_approve":
+        pending_id = data.get("pid", "")
+        try:
+            from orchestration.self_modifier_engine import get_self_modifier_engine
+
+            result = await get_self_modifier_engine().approve_pending(
+                pending_id,
+                approver=f"telegram:{user.id}",
+            )
+            if result.status == "success":
+                await query.answer("✅ Code-Änderung angewendet")
+            elif result.status == "rolled_back":
+                await query.answer("⚠️ Änderung angewendet, Tests fehlgeschlagen, Rollback durchgeführt")
+            else:
+                await query.answer("⚠️ Code-Änderung konnte nicht angewendet werden")
+            log.info("M18: Code-Edit-Approval: pid=%s user=%d status=%s", pending_id, user.id, result.status)
+        except Exception as e:
+            log.warning("M18: Code-Edit-Approval fehlgeschlagen: %s", e)
+            await query.answer("⚠️ Fehler bei Code-Edit-Approval")
+        return
+
+    if cb_type == "code_edit_reject":
+        pending_id = data.get("pid", "")
+        try:
+            from orchestration.self_modifier_engine import get_self_modifier_engine
+
+            result = await get_self_modifier_engine().reject_pending(
+                pending_id,
+                approver=f"telegram:{user.id}",
+            )
+            if result.status == "blocked":
+                await query.answer("❌ Code-Änderung abgelehnt")
+            else:
+                await query.answer("⚠️ Änderung konnte nicht abgelehnt werden")
+            log.info("M18: Code-Edit-Reject: pid=%s user=%d status=%s", pending_id, user.id, result.status)
+        except Exception as e:
+            log.warning("M18: Code-Edit-Ablehnung fehlgeschlagen: %s", e)
+            await query.answer("⚠️ Fehler bei Code-Edit-Ablehnung")
+        return
+
     # M16-Feedback-Handler (Fallback für type="feedback" oder kein type-Feld)
     signal = data.get("fb")
     action_id = data.get("aid", "unknown")

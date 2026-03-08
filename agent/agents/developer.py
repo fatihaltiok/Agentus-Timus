@@ -6,6 +6,7 @@ Erweiterungen gegenüber BaseAgent:
   - max_iterations=15→20 für mehrstufige Code-Workflows
   - _build_dev_context(): scannt git-Status, letzte Commits, Projektstruktur
   - Timus-Ökosystem-Wissen: Tool-Struktur, BaseAgent-Pattern, Pfade
+  - Mercury Edit via apply_code_edit für präzise Änderungen an bestehenden Dateien
 """
 
 from __future__ import annotations
@@ -105,6 +106,10 @@ class DeveloperAgent(BaseAgent):
             "Agenten: agent/agents/ | Tools: tools/ | "
             "Orchestration: orchestration/ | Memory: memory/ | "
             "Server: server/ | Tests: tests/"
+        )
+        lines.append(
+            "Bestehende Dateien bevorzugt mit apply_code_edit anpassen; "
+            "write_file primär für neue Dateien oder vollständige Replacement-Fälle."
         )
 
         # 4. Offene Developer-Tasks

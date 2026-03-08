@@ -115,6 +115,12 @@ def _improvement_feature_enabled() -> bool:
     return _env_bool("AUTONOMY_SELF_IMPROVEMENT_ENABLED", False)
 
 
+def _self_modify_feature_enabled() -> bool:
+    if _env_bool("AUTONOMY_COMPAT_MODE", True):
+        return False
+    return _env_bool("AUTONOMY_SELF_MODIFY_ENABLED", False)
+
+
 def _ambient_context_feature_enabled() -> bool:
     if _env_bool("AUTONOMY_COMPAT_MODE", True):
         return False
@@ -165,6 +171,7 @@ class AutonomousRunner:
         self._trigger_engine = None
         self._goal_manager = None
         self._improvement_engine = None
+        self._self_modifier_engine = None
         # M15
         self._ambient_engine = None
         # M16
@@ -293,6 +300,15 @@ class AutonomousRunner:
                 log.info("🔬 SelfImprovementEngine aktiviert")
             except Exception as e:
                 log.warning("SelfImprovementEngine konnte nicht gestartet werden: %s", e)
+
+        if _self_modify_feature_enabled():
+            try:
+                from orchestration.self_modifier_engine import get_self_modifier_engine
+
+                self._self_modifier_engine = get_self_modifier_engine()
+                log.info("🛠️ SelfModifierEngine aktiviert")
+            except Exception as e:
+                log.warning("SelfModifierEngine konnte nicht gestartet werden: %s", e)
 
         # M15: Ambient Context Engine
         if _ambient_context_feature_enabled():
@@ -534,6 +550,22 @@ class AutonomousRunner:
                     pass
                 except Exception as e:
                     log.debug("SelfImprovementEngine fehlgeschlagen: %s", e)
+
+        if _self_modify_feature_enabled() and self._self_modifier_engine:
+            try:
+                modify_summary = self._self_modifier_engine.run_cycle()
+                if modify_summary.get("status") == "enabled" and (
+                    modify_summary.get("applied", 0)
+                    or modify_summary.get("pending", 0)
+                ):
+                    log.info(
+                        "🛠️ Heartbeat Self-Modify: applied=%s pending=%s max_per_cycle=%s",
+                        modify_summary.get("applied", 0),
+                        modify_summary.get("pending", 0),
+                        modify_summary.get("max_per_cycle", 0),
+                    )
+            except Exception as e:
+                log.debug("SelfModifierEngine fehlgeschlagen: %s", e)
 
         # M15: Ambient Context Engine
         if _ambient_context_feature_enabled() and self._ambient_engine:

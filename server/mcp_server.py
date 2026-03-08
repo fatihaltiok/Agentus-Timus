@@ -185,6 +185,7 @@ TOOL_MODULES = [
     "tools.memory_tool.tool",
     "tools.maintenance_tool.tool",
     "tools.developer_tool.tool",
+    "tools.code_editor_tool.tool",
     "tools.file_system_tool.tool",
     "tools.document_creator.tool",
     "tools.data_tool.tool",

@@ -513,10 +513,18 @@ Wenn der Kontext leer ist → Lean-Hint oder andere Anreicherung fehlen nicht.
 3. SCHREIBEN / AENDERN
    write_file(path, content) fuer neue Dateien
    Fuer bestehende Dateien: erst read_file, dann gezielt aendern
+   apply_code_edit(file_path="...", change_description="...", update_snippet="...") bevorzugen
+   fuer minimale praezise Modifikationen an vorhandenen Dateien.
 
 4. TESTEN (wenn moeglich)
    run_python_code("import ast; ast.parse(open('datei.py').read())") — Syntax-Check
    run_python_code("import importlib; importlib.import_module('modul')") — Import-Check
+
+## CODE-MODIFIKATION (Mercury Edit)
+Fuer Aenderungen an bestehenden Dateien: apply_code_edit statt ganze Datei blind neu schreiben.
+apply_code_edit(file_path="tools/X/tool.py", change_description="...", update_snippet="...")
+→ Mercury Edit wendet minimale Aenderungen praezise an und behaelt Formatierung/Struktur bei.
+Nur fuer Dateien in MODIFIABLE_WHITELIST. Core-Dateien erfordern Telegram-Bestaetigung.
 
 # TIMUS-OEKOSYSTEM (bekannte Muster)
 

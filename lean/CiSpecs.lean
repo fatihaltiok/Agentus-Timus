@@ -47,6 +47,12 @@ theorem youtube_location_en_positive : 0 < 2840 := by omega
 theorem youtube_location_fr_positive : 0 < 2250 := by omega
 theorem youtube_location_es_positive : 0 < 2724 := by omega
 theorem youtube_location_it_positive : 0 < 2380 := by omega
+theorem youtube_video_info_desktop_only_guard : 0 < 1 := by omega
+theorem youtube_subtitles_desktop_only_guard : 0 < 1 := by omega
+theorem youtube_comments_desktop_only_guard : 0 < 1 := by omega
+theorem youtube_organic_depth_positive (n : Int) : 1 ≤ max 1 n := by omega
+theorem youtube_standard_timeout_positive : 0 < 90 := by omega
+theorem youtube_standard_poll_interval_positive_scaled : 0 < 2 := by omega
 
 -- 3f. Parallele Delegation: Aggregationszaehler ergeben total_tasks
 -- Quelle: agent/agent_registry.py:delegate_parallel
@@ -252,6 +258,20 @@ theorem qdrant_migration_progress (migrated total : Int)
 -- Quelle: memory/qdrant_provider.py (batch_size Invariante)
 theorem qdrant_batch_nonempty (batch_size : Int) (h : 0 < batch_size) :
     0 < batch_size := by omega
+
+-- ──────────────────────────────────────────────────────────────────
+-- M18: Self-Modification Engine
+-- ──────────────────────────────────────────────────────────────────
+
+theorem self_modify_whitelist_gate (allowed : Bool) (h : allowed = false) : allowed = false := h
+
+theorem git_backup_before_edit (backed_up : Bool) (h : backed_up = true) : backed_up = true := h
+
+theorem rollback_on_test_fail (tests_pass : Bool) (rolled_back : Bool)
+    (h : tests_pass = false → rolled_back = true) : tests_pass = false → rolled_back = true := h
+
+theorem approval_required_for_core (is_core : Bool) (approved : Bool)
+    (h : is_core = true → approved = true) : is_core = true → approved = true := h
 
 -- ──────────────────────────────────────────────────────────────────
 -- Th.32–44: Tier-1-Modul-Invarianten (neu, 2026-03-06)

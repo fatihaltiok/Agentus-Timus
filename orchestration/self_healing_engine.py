@@ -31,6 +31,8 @@ from utils.policy_gate import audit_policy_decision, evaluate_policy_gate
 
 log = logging.getLogger("SelfHealingEngine")
 
+PLAYBOOK_CODE_FIX = "code_fix"
+
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name, "true" if default else "false").strip().lower()
@@ -294,6 +296,28 @@ class SelfHealingEngine:
         summary["degrade_score"] = float(degrade_eval.get("score") or 0.0)
 
         return summary
+
+    async def attempt_code_fix(
+        self,
+        *,
+        file_path: str,
+        error_text: str,
+        session_id: str = "",
+    ) -> Dict[str, Any]:
+        """M18: versucht einen gezielten Code-Fix über die Self-Modification Engine."""
+        try:
+            from orchestration.self_modifier_engine import get_self_modifier_engine
+
+            result = await get_self_modifier_engine().modify_file(
+                file_path=file_path,
+                change_description=f"Behebe ImportError/SyntaxError im Zielcode: {error_text}",
+                update_snippet=error_text,
+                require_tests=True,
+                session_id=session_id,
+            )
+            return {"ok": result.status in {"success", "pending_approval"}, "status": result.status}
+        except Exception as exc:
+            return {"ok": False, "status": "error", "error": str(exc)}
 
     def _register_incident(
         self,
@@ -882,6 +906,17 @@ class SelfHealingEngine:
                     "Fehlertypen aus den letzten failed Tasks extrahieren.",
                     "Betroffene Agent/Provider identifizieren.",
                     "Fallback-Kette anpassen und erneuten Lauf pruefen.",
+                ],
+                "suggested_commands": [],
+            },
+            PLAYBOOK_CODE_FIX: {
+                "headline": "ImportError oder SyntaxError analysieren und gezielten Code-Fix vorbereiten.",
+                "steps": [
+                    "Betroffene Datei und konkrete Fehlermeldung aus Logs extrahieren.",
+                    "Developer-Agent analysiert Root-Cause und erzeugt präzisen Fix-Vorschlag.",
+                    "SelfModifierEngine.modify_file() mit Fix anwenden oder Approval anfordern.",
+                    "Danach Import-/Syntax-Check und gezielte Tests ausführen.",
+                    "Wenn Fix erfolgreich war: Dispatcher/Service sauber neu starten oder Health prüfen.",
                 ],
                 "suggested_commands": [],
             },
