@@ -173,10 +173,10 @@ async def request_code_edit(
         raise RuntimeError("INCEPTION_API_KEY fehlt")
 
     original = absolute_path.read_text(encoding="utf-8")
-    prompt = build_mercury_edit_prompt(original, update_snippet or change_description)
+    content = build_mercury_edit_prompt(original, update_snippet or change_description)
     payload = {
         "model": MERCURY_MODEL_NAME,
-        "prompt": prompt,
+        "messages": [{"role": "user", "content": content}],
         "max_tokens": 4000,
     }
 

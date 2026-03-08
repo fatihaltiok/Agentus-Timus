@@ -100,8 +100,11 @@ async def test_apply_code_edit_formats_request_and_returns_modified_code(tmp_pat
     assert result["modified_code"].startswith("def answer")
     payload = calls[0]["json"]
     assert payload["model"] == editor.MERCURY_MODEL_NAME
-    assert "<|original_code|>" in payload["prompt"]
-    assert "<|update_snippet|>" in payload["prompt"]
+    assert isinstance(payload["messages"], list)
+    assert payload["messages"][0]["role"] == "user"
+    content = payload["messages"][0]["content"]
+    assert "<|original_code|>" in content
+    assert "<|update_snippet|>" in content
 
 
 @pytest.mark.asyncio
