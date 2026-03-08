@@ -225,7 +225,7 @@ class AgentModelConfig:
         "developer": ("CODE_MODEL", "CODE_MODEL_PROVIDER", "mercury-coder-small", ModelProvider.INCEPTION),
         "development": ("CODE_MODEL", "CODE_MODEL_PROVIDER", "mercury-coder-small", ModelProvider.INCEPTION),
         "meta": ("PLANNING_MODEL", "PLANNING_MODEL_PROVIDER", "z-ai/glm-5", ModelProvider.OPENROUTER),
-        "visual": ("VISUAL_MODEL", "VISUAL_MODEL_PROVIDER", "nvidia/nemotron-nano-12b-v2-vl", ModelProvider.OPENROUTER),
+        "visual": ("VISUAL_MODEL", "VISUAL_MODEL_PROVIDER", "gpt-5.4-2026-03-05", ModelProvider.OPENAI),
         "reasoning": ("REASONING_MODEL", "REASONING_MODEL_PROVIDER", "nvidia/nemotron-3-nano-30b-a3b", ModelProvider.OPENROUTER),
         # M1: neue Agenten
         "data":     ("DATA_MODEL",     "DATA_MODEL_PROVIDER",     "deepseek/deepseek-v3.2",         ModelProvider.OPENROUTER),

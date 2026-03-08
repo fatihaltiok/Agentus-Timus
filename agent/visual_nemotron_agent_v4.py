@@ -512,6 +512,8 @@ class NemotronClient:
             client = self.client
             model = NEMOTRON_MODEL
 
+        from utils.openai_compat import is_new_openai_model
+        token_key = "max_completion_tokens" if is_new_openai_model(model) else "max_tokens"
         response = client.chat.completions.create(
             model=model,
             messages=[
@@ -519,7 +521,7 @@ class NemotronClient:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.1,
-            max_tokens=1500,
+            **{token_key: 1500},
         )
         return response.choices[0].message.content.strip()
 

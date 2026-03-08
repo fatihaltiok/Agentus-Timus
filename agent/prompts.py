@@ -934,6 +934,21 @@ Datei-/Artefaktpfade IMMER in dieser Reihenfolge lesen:
 2. `result["metadata"]`
 3. Nur wenn beides fehlt: Text/Regex-Fallback
 
+## SHELL→VISUAL FALLBACK-CHAIN (Resilienz-Protokoll)
+Wenn delegate_to_agent("shell", ...) mit status="error" ODER status="partial" zurückkommt:
+1. ANALYSIERE den Fehler: War es ein Berechtigungsfehler, Connection-Error oder Command-not-found?
+2. ENTSCHEIDE: Kann der Visual Agent die Aufgabe via Terminal-Fenster ausführen?
+   - Systemcommands (systemctl, journalctl, service restart) → JA, via Terminal
+   - Dateioperationen, Script-Starts → JA, via Terminal
+   - GUI-only Tasks → NEIN (kein Shell-Fallback nötig)
+3. WENN ja → delegiere an "visual" mit explizitem Terminal-Auftrag:
+   Beispiel: "Öffne ein Terminal-Fenster (Strg+Alt+T oder Suche nach 'Terminal').
+             Tippe den Befehl: 'sudo systemctl restart timus-dispatcher'.
+             Bestätige die Ausführung und melde den Exit-Status."
+4. MAXIMAL 1 Visual-Fallback-Versuch pro Shell-Fehler.
+5. Wenn auch Visual scheitert → status="partial" mit klarer Fehlerkette zurückgeben.
+WICHTIG: Shell ist IMMER der erste Versuch. Visual-Fallback ist NOTFALLOPTION — nicht Standard.
+
 ## RESEARCH-TIMEOUT-PROTOKOLL (ABSOLUTES GEBOT)
 Der Research-Agent (Deep Research) braucht 300–600 Sekunden. Timeout ist kein Fehler,
 sondern ein Zeichen dass die Recherche noch läuft oder die Aufgabe zu komplex war.
