@@ -503,15 +503,40 @@ class NemotronClient:
             log.info(f"   🔄 LLM-Fallback konfiguriert: {LOCAL_LLM_URL} ({LOCAL_LLM_MODEL})")
 
     def _call_llm(self, system_prompt: str, user_prompt: str, use_fallback: bool = False) -> str:
-        """Ruft Nemotron oder den lokalen Fallback auf."""
+        """Ruft GPT-5.4 (Responses API) oder OpenRouter/Fallback (Chat Completions) auf."""
         if use_fallback and self.fallback_client:
+            # Lokaler Fallback → immer Chat Completions
             client = self.fallback_client
             model = self.fallback_model
             log.info(f"   🔄 Nutze LLM-Fallback: {model}")
-        else:
-            client = self.client
-            model = NEMOTRON_MODEL
+            from utils.openai_compat import is_new_openai_model
+            token_key = "max_completion_tokens" if is_new_openai_model(model) else "max_tokens"
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.1,
+                **{token_key: 1500},
+            )
+            return response.choices[0].message.content.strip()
 
+        client = self.client
+        model = NEMOTRON_MODEL
+
+        if NEMOTRON_PROVIDER == "openai":
+            # GPT-5.4 → Responses API (instructions + input → output_text)
+            response = client.responses.create(
+                model=model,
+                instructions=system_prompt,
+                input=user_prompt,
+                temperature=0.1,
+                max_output_tokens=1500,
+            )
+            return response.output_text.strip()
+
+        # OpenRouter → Chat Completions (unterstützt alle anderen Modelle)
         from utils.openai_compat import is_new_openai_model
         token_key = "max_completion_tokens" if is_new_openai_model(model) else "max_tokens"
         response = client.chat.completions.create(
