@@ -157,7 +157,10 @@ pytest tests/test_hypothesis_formal.py -v      # property-based (Lean-mapped)
 pytest tests/test_m16_feedback_engine.py -v    # specific module
 ```
 
-Pre-commit hook runs `lean lean/CiSpecs.lean` + Mathlib specs automatically.
+Pre-commit hook runs `python3 scripts/verify_pre_commit_lean.py`, which verifies
+`lean/CiSpecs.lean` plus the bundled Mathlib specs in one bounded batch run.
+The tracked hook template lives at `.githooks/pre-commit`; install it locally with
+`cp .githooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit`.
 
 ---
 
