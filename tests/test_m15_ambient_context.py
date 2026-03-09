@@ -369,24 +369,20 @@ async def test_policy_confirm_calls_telegram(monkeypatch: pytest.MonkeyPatch) ->
         policy_level="confirm",  # confirm → immer Telegram
     )
 
-    telegram_called = []
+    fake_feedback = AsyncMock(return_value=True)
 
-    async def _fake_telegram(msg: str, parse_mode: str = "Markdown") -> bool:
-        telegram_called.append(msg)
-        return True
-
-    # send_telegram wird lokal importiert → am Ursprungsmodul patchen
+    # send_with_feedback wird lokal importiert → am Ursprungsmodul patchen
     with patch("memory.agent_blackboard.get_blackboard", return_value=fake_bb), \
          patch("orchestration.task_queue.get_queue") as mock_queue, \
-         patch("utils.telegram_notify.send_telegram", _fake_telegram):
+         patch("utils.telegram_notify.send_with_feedback", fake_feedback):
         mock_queue.return_value = MagicMock()
         mock_queue.return_value.add = MagicMock(return_value="task-id-x")
 
         created = await engine._process_signal(signal)
 
     assert created is True
-    assert len(telegram_called) == 1
-    assert "SYSTEM" in telegram_called[0]
+    fake_feedback.assert_awaited_once()
+    assert "SYSTEM" in fake_feedback.await_args.args[0]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

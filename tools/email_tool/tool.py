@@ -216,13 +216,17 @@ def send_email(
                 from utils.resend_email import send_email_resend
                 ok = asyncio.run(send_email_resend(
                     to=to, subject=subject, body=body,
-                    html_body=html_body, attachment_path=resolved_attachment,
+                    cc=cc, bcc=bcc,
+                    html_body=html_body, reply_to=reply_to,
+                    attachment_path=resolved_attachment,
                 ))
             else:
                 from utils.smtp_email import send_email_smtp
                 ok = asyncio.run(send_email_smtp(
                     to=to, subject=subject, body=body,
-                    html_body=html_body, attachment_path=resolved_attachment,
+                    cc=cc, bcc=bcc,
+                    html_body=html_body, reply_to=reply_to,
+                    attachment_path=resolved_attachment,
                 ))
             if ok:
                 log.info(f"E-Mail gesendet an {to} via {backend} | Betreff: {subject!r}")

@@ -108,6 +108,12 @@ class TestMemoryManagerHybrid:
         # Should include base context
         assert "BEKANNTE FAKTEN" in context or "STRUKTURIERTE MEMORY" in context
 
+    def test_session_id_is_opaque_short_uuid(self):
+        manager = MemoryManager()
+
+        assert len(manager.session_id) == 12
+        assert all(ch in "0123456789abcdef" for ch in manager.session_id)
+
 
 class TestMemoryManagerSync:
     """Tests für Markdown-Sync."""
@@ -136,6 +142,16 @@ class TestMemoryManagerSync:
         result = manager.sync_from_markdown()
         # Should not crash even if files don't exist
         assert isinstance(result, bool)
+
+    def test_extract_memory_candidates_uses_stable_digest_for_explicit_note(self):
+        manager = MemoryManager()
+
+        candidates = manager._extract_memory_candidates("Bitte merke dir Kaffee ohne Zucker")
+
+        explicit = [item for item in candidates if item["reason"] == "explicit_request"]
+        assert explicit
+        assert explicit[0]["key"].startswith("explicit_note_")
+        assert len(explicit[0]["key"]) == len("explicit_note_") + 8
 
 
 class TestReflectionEngine:

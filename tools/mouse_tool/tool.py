@@ -9,7 +9,7 @@ Korrigiertes Mouse-Tool mit einheitlicher Monitor-Logik über monitor_config.py.
 import logging
 import asyncio
 import os
-from typing import Tuple
+from typing import Tuple, List
 from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 from monitor_config import convert_relative_to_absolute, get_monitor_bounds
 
@@ -112,6 +112,13 @@ def _scroll_sync(amount: int):
     pyautogui.FAILSAFE = False  # Wir prüfen Position vorher
     pyautogui.scroll(int(amount))
     pyautogui.FAILSAFE = True  # Wieder aktivieren
+
+
+def _normalize_hotkey_keys(keys: List[str]) -> List[str]:
+    normalized = [str(key).strip().lower() for key in keys if str(key).strip()]
+    if not normalized:
+        raise Exception("keys enthaelt keine gueltigen Tasten.")
+    return normalized
 
 def _click_and_focus_sync(x: int, y: int):
     """Klickt mehrfach bis Fokus gewährleistet (für hartnäckige Felder wie ChatGPT)."""
@@ -257,6 +264,40 @@ async def scroll(amount: int) -> dict:
             raise Exception(f"Scroll-Operation fehlgeschlagen: {e2}")
     except Exception as e:
         raise Exception(f"Scroll-Operation fehlgeschlagen: {e}")
+
+
+@tool(
+    name="hotkey",
+    description="Drueckt eine Tastenkombination wie ctrl+l oder alt+f4.",
+    parameters=[
+        P("keys", "array", "Liste der Tasten in Reihenfolge, z.B. ['ctrl', 'l']"),
+    ],
+    capabilities=["mouse", "interaction", "automation"],
+    category=C.MOUSE
+)
+async def hotkey(keys: List[str]) -> dict:
+    _ensure_pyautogui_ok()
+    if not isinstance(keys, list) or not keys:
+        raise Exception("keys muss eine nicht-leere Liste sein.")
+
+    def _press_hotkey():
+        pyautogui.FAILSAFE = False
+        _ensure_safe_mouse_position()
+        normalized = _normalize_hotkey_keys(keys)
+        pyautogui.hotkey(*normalized)
+        pyautogui.FAILSAFE = True
+        return normalized
+
+    try:
+        normalized = _press_hotkey()
+        return {"status": "pressed", "keys": normalized}
+    except pyautogui.FailSafeException as e:
+        log.warning(f"FailSafeException in hotkey: {e} - Maus in sicherer Position...")
+        _ensure_safe_mouse_position()
+        normalized = _press_hotkey()
+        return {"status": "pressed", "keys": normalized, "retry": True}
+    except Exception as e:
+        raise Exception(f"Hotkey-Operation fehlgeschlagen: {e}")
 
 @tool(
     name="click_and_focus",

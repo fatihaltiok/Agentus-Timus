@@ -16,7 +16,6 @@ Feature-Flag: AUTONOMY_AMBIENT_CONTEXT_ENABLED=true
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import os
 import sqlite3
@@ -25,6 +24,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Optional
+from utils.stable_hash import stable_text_digest
 
 log = logging.getLogger("AmbientContextEngine")
 
@@ -82,6 +82,12 @@ class AmbientSignal:
     cooldown_minutes: int  # Dedup-TTL
     context: dict = field(default_factory=dict)  # Signal-Metadaten (Audit)
     policy_level: str = "auto"
+    signal_id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.signal_id:
+            seed = f"{self.source}|{self.target_agent}|{self.dedup_key}"
+            self.signal_id = stable_text_digest(seed, hex_chars=12)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -197,6 +203,12 @@ class AmbientContextEngine:
                     msg,
                     action_id=signal.signal_id,
                     hook_names=["ambient_trigger"],
+                    context={
+                        "source": "ambient_trigger",
+                        "target_agent": signal.target_agent,
+                        "signal_source": signal.source,
+                        "description": signal.description[:160],
+                    },
                 )
             except Exception as e:
                 log.debug("Telegram-Benachrichtigung fehlgeschlagen: %s", e)
@@ -273,7 +285,7 @@ class AmbientContextEngine:
                 if mail_id:
                     dedup_key = f"email:{mail_id}"
                 else:
-                    dedup_key = f"email:{hashlib.sha1(subject.encode()).hexdigest()[:8]}"
+                    dedup_key = f"email:{stable_text_digest(subject, hex_chars=8)}"
 
                 signals.append(AmbientSignal(
                     source="email",
@@ -330,8 +342,7 @@ class AmbientContextEngine:
 
                 score, agent = _FILE_TYPE_MAP[ext]
                 score = max(0.0, min(1.0, score))
-                sha1_short = hashlib.sha1(str(fp).encode()).hexdigest()[:8]
-                dedup_key = f"file:{sha1_short}"
+                dedup_key = f"file:{stable_text_digest(str(fp), hex_chars=8)}"
 
                 signals.append(AmbientSignal(
                     source="file",

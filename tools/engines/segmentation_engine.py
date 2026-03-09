@@ -1,6 +1,7 @@
 # tools/engines/segmentation_engine.py (Refactored)
 
 import logging
+import os
 from typing import Any, List, Dict
 
 import torch
@@ -9,6 +10,7 @@ from PIL import Image
 
 # Importiere den zentralen Logger
 from tools.shared_context import log
+from utils.hf_model_pinning import resolve_pinned_revision
 
 # Fange Import-Fehler ab, um den Serverstart nicht zu blockieren
 try:
@@ -74,13 +76,23 @@ class SegmentationEngine:
         log.info(f"🔄 Initialisiere SegmentationEngine (SAM+CLIP) auf Gerät '{self.device}'...")
 
         try:
+            sam_model_name = os.getenv("SAM_MODEL", "facebook/sam-vit-base")
+            sam_revision = resolve_pinned_revision(sam_model_name, "SAM_MODEL_REVISION")
             log.info("📥 Lade SAM-Modell...")
-            self.sam_model = SamModel.from_pretrained("facebook/sam-vit-base").to(self.device)
-            self.sam_processor = SamProcessor.from_pretrained("facebook/sam-vit-base")
+            self.sam_model = SamModel.from_pretrained(sam_model_name, revision=sam_revision).to(self.device)
+            self.sam_processor = SamProcessor.from_pretrained(sam_model_name, revision=sam_revision)
 
+            clip_model_name = os.getenv("CLIP_MODEL", "openai/clip-vit-base-patch32")
+            clip_revision = resolve_pinned_revision(clip_model_name, "CLIP_MODEL_REVISION")
             log.info("📥 Lade CLIP-Modell...")
-            self.clip_model = CLIPForImageClassification.from_pretrained("openai/clip-vit-base-patch32").to(self.device)
-            self.clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+            self.clip_model = CLIPForImageClassification.from_pretrained(
+                clip_model_name,
+                revision=clip_revision,
+            ).to(self.device)
+            self.clip_processor = CLIPProcessor.from_pretrained(
+                clip_model_name,
+                revision=clip_revision,
+            )
 
             self.initialized = True
             log.info("✅ SegmentationEngine (SAM+CLIP) erfolgreich initialisiert.")

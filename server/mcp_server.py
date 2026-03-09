@@ -12,6 +12,7 @@ import threading
 import re
 import uuid
 import webbrowser
+import ipaddress
 from collections import deque
 from datetime import datetime
 
@@ -22,6 +23,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingRes
 from fastapi.middleware.cors import CORSMiddleware
 from jsonrpcserver import async_dispatch
 from dotenv import load_dotenv
+from utils.chroma_runtime import build_chroma_settings, configure_chroma_runtime
 
 # --- NumPy JSON Encoder für numpy Typen ---
 class NumpyJSONEncoder(_json.JSONEncoder):
@@ -83,6 +85,7 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 # .env frueh laden, damit env-basierte Pfade bereits bei Modul-Imports wirken.
 load_dotenv(dotenv_path=project_root / ".env", override=False)
+configure_chroma_runtime()
 
 # Runtime-Settings: Persistenz ohne Server-Neustart (wird in lifespan geladen)
 _RUNTIME_SETTINGS_PATH = project_root / "data" / "runtime_settings.json"
@@ -97,6 +100,7 @@ from utils.policy_gate import (
 )
 from orchestration.canvas_store import canvas_store
 from server.canvas_ui import build_canvas_ui_html
+from gateway.status_snapshot import collect_status_snapshot
 
 log = logging.getLogger("mcp_server")
 
@@ -118,6 +122,7 @@ _sse_queues: list = []
 _sse_lock = threading.Lock()
 _chat_history: list = []
 _chat_lock = threading.Lock()
+_SHUTDOWN_STEP_TIMEOUT_S = float(os.getenv("TIMUS_SHUTDOWN_STEP_TIMEOUT", "6"))
 
 
 def _broadcast_sse(event: dict) -> None:
@@ -344,7 +349,7 @@ def _initialize_shared_clients():
             db_path = project_root / "memory_db"
             chroma_db_client = chromadb.PersistentClient(
                 path=str(db_path),
-                settings=chromadb.config.Settings(anonymized_telemetry=False),
+                settings=build_chroma_settings(chromadb_module=chromadb),
             )
             openai_ef = get_embedding_function()
             shared_context.memory_collection = (
@@ -444,16 +449,34 @@ def _is_truthy_env(value: str | None, default: bool = False) -> bool:
 
 def _canvas_ui_url() -> str:
     host = (os.getenv("HOST", "127.0.0.1") or "127.0.0.1").strip()
-    if host in {"0.0.0.0", "::"}:
-        host = "127.0.0.1"
+    try:
+        if ipaddress.ip_address(host).is_unspecified:
+            host = "127.0.0.1"
+    except ValueError:
+        pass
     port = int(os.getenv("PORT", 5000))
     return f"http://{host}:{port}/canvas/ui"
+
+
+def _should_auto_open_canvas_ui() -> bool:
+    """Auto-Open nur in interaktiven Desktop-Sessions, nicht im 24/7-Servicebetrieb."""
+    explicit = os.getenv("TIMUS_CANVAS_AUTO_OPEN")
+    if explicit is not None:
+        return _is_truthy_env(explicit, default=False)
+
+    if os.getenv("SYSTEMD_EXEC_PID") or os.getenv("INVOCATION_ID"):
+        return False
+
+    if not (os.getenv("DISPLAY") or os.getenv("WAYLAND_DISPLAY")):
+        return False
+
+    return bool(getattr(sys.stdout, "isatty", lambda: False)())
 
 
 def _bootstrap_canvas_startup() -> dict:
     """Initialisiert Canvas-MVP beim Server-Start (best effort)."""
     auto_create = _is_truthy_env(os.getenv("TIMUS_CANVAS_AUTO_CREATE"), default=True)
-    auto_open = _is_truthy_env(os.getenv("TIMUS_CANVAS_AUTO_OPEN"), default=True)
+    auto_open = _should_auto_open_canvas_ui()
 
     created_canvas_id = None
     primary_canvas_id = None
@@ -486,7 +509,9 @@ def _bootstrap_canvas_startup() -> dict:
 
         try:
             # Verzögert starten, damit der HTTP-Listener bereit ist.
-            threading.Timer(1.2, _open_ui).start()
+            timer = threading.Timer(1.2, _open_ui)
+            timer.daemon = True
+            timer.start()
             opened = True
             log.info(f"🖼️ Canvas UI Auto-Open geplant: {ui_url}")
         except Exception as exc:
@@ -505,6 +530,44 @@ def _short_text(value: str, limit: int = 140) -> str:
     if len(text) <= limit:
         return text
     return text[: max(0, limit - 3)] + "..."
+
+
+async def _shutdown_async_step(name: str, awaitable, timeout_s: float | None = None) -> bool:
+    """Fuehrt einen Shutdown-Schritt mit begrenzter Wartezeit aus."""
+    limit = max(0.5, float(timeout_s or _SHUTDOWN_STEP_TIMEOUT_S))
+    try:
+        await asyncio.wait_for(awaitable, timeout=limit)
+        log.info("✅ Shutdown-Schritt abgeschlossen: %s", name)
+        return True
+    except asyncio.TimeoutError:
+        log.warning("⚠️ Shutdown-Schritt Timeout nach %.1fs: %s", limit, name)
+        return False
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        log.warning("⚠️ Shutdown-Schritt fehlgeschlagen (%s): %s", name, exc)
+        return False
+
+
+async def _cancel_background_task(name: str, task: asyncio.Task | None, timeout_s: float = 2.0) -> bool:
+    """Bricht einen Hintergrundtask kontrolliert ab."""
+    if not task:
+        return True
+    if task.done():
+        return True
+    task.cancel()
+    try:
+        await asyncio.wait_for(task, timeout=max(0.5, timeout_s))
+        log.info("✅ Hintergrundtask beendet: %s", name)
+        return True
+    except asyncio.CancelledError:
+        return True
+    except asyncio.TimeoutError:
+        log.warning("⚠️ Hintergrundtask stoppt nicht rechtzeitig: %s", name)
+        return False
+    except Exception as exc:
+        log.warning("⚠️ Fehler beim Stoppen von Hintergrundtask %s: %s", name, exc)
+        return False
 
 
 async def _canvas_mirror_log_worker(interval_seconds: float = 1.2) -> None:
@@ -782,39 +845,67 @@ async def lifespan(app: FastAPI):
 
     yield  # Server läuft
 
-    # === SHUTDOWN: Browser Contexts speichern ===
-    if shared_context.browser_context_manager:
+    log.info("🛑 TIMUS MCP SERVER SHUTDOWN beginnt...")
+
+    # === SHUTDOWN: Voice-Task abbrechen ===
+    global _voice_listen_task
+    if _voice_listen_task:
         try:
-            await shared_context.browser_context_manager.shutdown()
-            log.info("✅ Browser-Contexts gespeichert und geschlossen")
-        except Exception as e:
-            log.warning(f"⚠️ Fehler beim Browser-Context Shutdown: {e}")
+            from tools.voice_tool.tool import voice_engine
+
+            voice_engine.stop_listening()
+        except Exception:
+            pass
+        await _cancel_background_task("voice_listen_task", _voice_listen_task)
+        _voice_listen_task = None
+
+    # === SHUTDOWN: Canvas mirror logger stoppen ===
+    await _cancel_background_task(
+        "canvas_mirror_task",
+        getattr(app.state, "canvas_mirror_task", None),
+    )
+
+    # === SHUTDOWN: Browser-Ressourcen schließen ===
+    browser_shutdown_steps = []
+    if shared_context.browser_context_manager:
+        browser_shutdown_steps.append(
+            _shutdown_async_step(
+                "persistent_browser_context_manager",
+                shared_context.browser_context_manager.shutdown(),
+                timeout_s=8.0,
+            )
+        )
+        shared_context.browser_context_manager = None
+
+    try:
+        from tools.browser_tool.tool import shutdown_browser_tool
+
+        browser_shutdown_steps.append(
+            _shutdown_async_step("legacy_browser_tool", shutdown_browser_tool(), timeout_s=8.0)
+        )
+    except Exception as exc:
+        log.warning("⚠️ Legacy Browser-Tool Shutdown konnte nicht vorbereitet werden: %s", exc)
+
+    if browser_shutdown_steps:
+        await asyncio.gather(*browser_shutdown_steps, return_exceptions=True)
 
     # === SHUTDOWN: Scheduler stoppen ===
     if app.state.scheduler:
-        try:
-            await app.state.scheduler.stop()
-            log.info("✅ Heartbeat-Scheduler gestoppt")
-        except Exception as e:
-            log.warning(f"⚠️ Fehler beim Scheduler-Shutdown: {e}")
+        await _shutdown_async_step("heartbeat_scheduler", app.state.scheduler.stop(), timeout_s=5.0)
+        app.state.scheduler = None
 
     # === SHUTDOWN: RealSense Stream stoppen ===
     if getattr(app.state, "realsense_stream_manager", None):
         try:
-            status = await asyncio.to_thread(app.state.realsense_stream_manager.stop)
+            status = await asyncio.wait_for(
+                asyncio.to_thread(app.state.realsense_stream_manager.stop),
+                timeout=5.0,
+            )
             log.info(f"✅ RealSense-Stream gestoppt: {status}")
+        except asyncio.TimeoutError:
+            log.warning("⚠️ RealSense-Stream Shutdown Timeout")
         except Exception as e:
             log.warning(f"⚠️ Fehler beim RealSense-Stream Shutdown: {e}")
-
-    # === SHUTDOWN: Canvas mirror logger stoppen ===
-    if app.state.canvas_mirror_task:
-        app.state.canvas_mirror_task.cancel()
-        try:
-            await app.state.canvas_mirror_task
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            log.warning(f"⚠️ Fehler beim Canvas mirror shutdown: {e}")
 
 
 # --- App-Initialisierung mit Lifespan ---
@@ -1199,6 +1290,16 @@ async def get_agent_status_endpoint():
     }
 
 
+@app.get("/status/snapshot", summary="Strukturierter Betriebs-/Kosten-Snapshot")
+async def status_snapshot_endpoint():
+    try:
+        snapshot = await collect_status_snapshot()
+        return {"status": "success", "snapshot": snapshot}
+    except Exception as e:
+        log.error(f"Status-Snapshot Fehler: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
 @app.get("/events/stream", summary="SSE-Stream für Echtzeit-Canvas-Updates")
 async def events_stream(request: Request):
     """Server-Sent Events: Pushing agent-status, thinking-LED und Chat-Events."""
@@ -1268,7 +1369,7 @@ async def canvas_chat(request: Request):
         # Tool-Beschreibungen — identisch zu /get_tool_descriptions
         tools_desc = await _build_tools_description()
 
-        agent = await get_agent_decision(query)
+        agent = await get_agent_decision(query, session_id=session_id)
         _set_agent_status(agent, "thinking", query)
 
         result = await run_agent(

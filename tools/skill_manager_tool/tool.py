@@ -12,6 +12,7 @@ import importlib
 
 
 from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
+from utils.stable_hash import stable_text_digest
 
 # Import für interne Tool-Aufrufe, um den Developer-Agenten zu beauftragen.
 from tools.planner.planner_helpers import call_tool_internal
@@ -263,8 +264,7 @@ def _sanitize_skill_name(name: str) -> str:
 
 def _generate_skill_hash(pattern: str) -> str:
     """Generiert einen stabilen Hash für ein Pattern."""
-    import hashlib
-    return hashlib.md5(pattern.encode()).hexdigest()[:8]
+    return stable_text_digest(pattern, hex_chars=8)
 
 
 async def _check_duplicate_skill(skill_name: str) -> bool:

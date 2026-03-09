@@ -16,6 +16,7 @@ import os
 import sys
 import time
 import logging
+import tempfile
 from pathlib import Path
 
 # Projektroot zum Suchpfad hinzufügen
@@ -24,6 +25,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(name)s | %(message)s")
 log = logging.getLogger("setup_florence2")
+_FLORENCE2_TEST_PATH = Path(tempfile.gettempdir()) / "timus_florence2_test.png"
 
 
 def check_dependencies():
@@ -108,7 +110,7 @@ def check_screenshot_analysis():
         import mss
         from mss.tools import to_png
 
-        path = "/tmp/timus_florence2_test.png"
+        path = str(_FLORENCE2_TEST_PATH)
         with mss.mss() as sct:
             monitor = sct.monitors[1]
             shot = sct.grab(monitor)

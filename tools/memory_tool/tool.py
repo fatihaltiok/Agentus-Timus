@@ -22,7 +22,6 @@ Ersetzt das alte memory_tool komplett.
 import os
 import json
 import sqlite3
-import hashlib
 import asyncio
 import logging
 import uuid
@@ -33,6 +32,7 @@ from typing import Optional, List, Dict, Any
 from dataclasses import dataclass, field
 
 from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
+from utils.stable_hash import stable_text_digest
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -159,6 +159,11 @@ class Entity:
 
 # === SESSION MEMORY ===
 
+def _new_session_id() -> str:
+    """Generate a short opaque session identifier."""
+    return uuid.uuid4().hex[:12]
+
+
 class SessionMemory:
     """
     Kurzzeit-Gedächtnis für die aktuelle Sitzung.
@@ -169,7 +174,7 @@ class SessionMemory:
         self.messages: List[Message] = []
         self.max_messages = max_messages
         self.session_start = datetime.now()
-        self.session_id = hashlib.md5(datetime.now().isoformat().encode()).hexdigest()[:12]
+        self.session_id = _new_session_id()
 
         # Entitäts-Tracking
         self.entities: Dict[str, Entity] = {}
@@ -276,7 +281,7 @@ class SessionMemory:
         self.pronoun_map = {}
         self.current_topic = None
         self.session_start = datetime.now()
-        self.session_id = hashlib.md5(datetime.now().isoformat().encode()).hexdigest()[:12]
+        self.session_id = _new_session_id()
 
 
 # === PERSISTENT MEMORY (SQLite) ===
@@ -665,7 +670,7 @@ Antworte NUR mit JSON:
             for fact_text in result.get("user_facts", []):
                 fact = Fact(
                     category="summarized",
-                    key=f"fact_{hashlib.md5(fact_text.encode()).hexdigest()[:8]}",
+                    key=f"fact_{stable_text_digest(fact_text, hex_chars=8)}",
                     value=fact_text,
                     source="summarization"
                 )

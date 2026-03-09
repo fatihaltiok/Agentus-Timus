@@ -43,16 +43,23 @@ import asyncio
 import textwrap
 import logging
 import uuid
+import time
 from pathlib import Path
-from typing import Optional, List
+from typing import Any, Optional, List
 
 import httpx
-from openai import OpenAI
 from dotenv import load_dotenv
 from utils.openai_compat import prepare_openai_params
+from utils.chroma_runtime import configure_chroma_runtime
 
 from orchestration.lane_manager import lane_manager, LaneStatus
+from orchestration.browser_workflow_plan import build_browser_workflow_plan
+from orchestration.llm_budget_guard import evaluate_llm_budget, resolve_soft_budget_model_override
+from orchestration.orchestration_policy import evaluate_query_orchestration
+from orchestration.self_improvement_engine import LLMUsageRecord, get_improvement_engine
 from tools.tool_registry_v2 import registry_v2
+from agent.providers import ModelProvider, get_provider_client
+from utils.llm_usage import build_usage_payload
 
 # Logger frueh definieren, damit Import-Fallbacks sicher loggen koennen.
 log = logging.getLogger("MainDispatcher")
@@ -70,6 +77,7 @@ except NameError:
 
 # WICHTIG: .env frueh laden, bevor Agent-Module ihre Clients/Konstanten initialisieren.
 load_dotenv(dotenv_path=project_root / ".env", override=True)
+configure_chroma_runtime()
 
 # --- Imports ---
 from agent.timus_consolidated import (
@@ -115,12 +123,416 @@ try:
 except ImportError as e:
     VISUAL_NEMOTRON_V4_AVAILABLE = False
 
-# --- Initialisierung ---
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-7s | %(name)-20s | %(message)s",
 )
+
+_DISPATCHER_OPENAI_COMPAT_PROVIDERS = {
+    ModelProvider.OPENAI,
+    ModelProvider.ZAI,
+    ModelProvider.DEEPSEEK,
+    ModelProvider.INCEPTION,
+    ModelProvider.NVIDIA,
+    ModelProvider.OPENROUTER,
+}
+
+
+def _normalize_dispatcher_provider(raw: str) -> ModelProvider:
+    value = (raw or "").strip().lower()
+    try:
+        return ModelProvider(value)
+    except ValueError:
+        return ModelProvider.OPENAI
+
+
+def _dispatcher_provider_from_env() -> ModelProvider:
+    raw = os.getenv("DISPATCHER_MODEL_PROVIDER", ModelProvider.OPENAI.value)
+    provider = _normalize_dispatcher_provider(raw)
+    if provider.value != (raw or "").strip().lower():
+        log.warning("⚠️ Ungueltiger DISPATCHER_MODEL_PROVIDER=%r — fallback auf openai", raw)
+    return provider
+
+
+def _dispatcher_model_from_env() -> str:
+    return os.getenv("DISPATCHER_MODEL", "gpt-5-mini-2025-08-07").strip() or "gpt-5-mini-2025-08-07"
+
+
+def _dispatcher_provider_supports_native_call(provider: ModelProvider) -> bool:
+    return provider in _DISPATCHER_OPENAI_COMPAT_PROVIDERS or provider in {
+        ModelProvider.ANTHROPIC,
+        ModelProvider.GOOGLE,
+    }
+
+
+def _strip_dispatcher_think_tags(text: str) -> str:
+    return re.sub(r"</?think>", "", str(text or ""), flags=re.IGNORECASE).strip()
+
+
+def _count_present_keywords(text: str, keywords: tuple[str, ...]) -> int:
+    return sum(1 for keyword in keywords if keyword in text)
+
+
+def _is_complex_browser_workflow(query_lower: str) -> bool:
+    browser_action_keywords = (
+        "gehe auf",
+        "gehe zu",
+        "navigiere zu",
+        "tippe",
+        "gib ein",
+        "wähle",
+        "waehle",
+        "klicke",
+        "drücke",
+        "druecke",
+        "suche",
+        "formular",
+        "anmelden",
+        "login",
+        "cookies akzeptieren",
+        "cookie banner",
+    )
+    workflow_markers = (
+        " und ",
+        " dann ",
+        " danach ",
+        " anschließend ",
+        ",",
+    )
+
+    action_count = _count_present_keywords(query_lower, browser_action_keywords)
+    marker_count = _count_present_keywords(query_lower, workflow_markers)
+    has_booking_like_state = any(
+        token in query_lower
+        for token in (
+            "kalender",
+            "datum",
+            "anreisedatum",
+            "abreisedatum",
+            "check-in",
+            "check-out",
+        )
+    )
+    return action_count >= 3 or (action_count >= 2 and marker_count >= 1) or has_booking_like_state
+
+
+def _dispatcher_content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return _strip_dispatcher_think_tags(content)
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+            elif hasattr(item, "text") and isinstance(getattr(item, "text"), str):
+                parts.append(getattr(item, "text"))
+        return _strip_dispatcher_think_tags("".join(parts).strip())
+    return _strip_dispatcher_think_tags(str(content or "").strip())
+
+
+def _should_inline_dispatcher_sync_call() -> bool:
+    """Vermeidet asyncio-Executor-Threads in Tests und eng begrenzten Debug-Laeufen."""
+    marker = str(os.getenv("PYTEST_CURRENT_TEST", "") or "").strip()
+    inline_env = str(os.getenv("TIMUS_INLINE_SYNC_CLIENTS", "") or "").strip().lower()
+    return bool(marker) or inline_env in {"1", "true", "yes", "on"}
+
+
+async def _run_dispatcher_sync_call(func, /, *args, **kwargs):
+    """Fuehrt blockierende Provider-Calls in Tests inline, sonst im Threadpool aus."""
+    if _should_inline_dispatcher_sync_call():
+        return func(*args, **kwargs)
+    return await asyncio.to_thread(func, *args, **kwargs)
+
+
+def _summarize_dispatcher_response(response: Any) -> str:
+    if not getattr(response, "choices", None):
+        return "no-choices"
+
+    choice0 = response.choices[0]
+    msg = getattr(choice0, "message", None)
+    if msg is None:
+        return f"choice0={type(choice0).__name__}:no-message"
+
+    content = getattr(msg, "content", None)
+    reasoning = getattr(msg, "reasoning_content", None)
+    content_type = type(content).__name__ if content is not None else "NoneType"
+    reasoning_len = len(str(reasoning or ""))
+    content_preview = _dispatcher_content_to_text(content)[:80]
+    return (
+        f"message_fields={sorted(getattr(msg, '__dict__', {}).keys())} "
+        f"content_type={content_type} "
+        f"content_preview={content_preview!r} "
+        f"reasoning_len={reasoning_len}"
+    )
+
+
+def _extract_dispatcher_text(response: Any) -> str:
+    if not getattr(response, "choices", None) or not hasattr(response.choices[0], "message"):
+        return ""
+    msg = response.choices[0].message
+    content = getattr(msg, "content", None)
+    text = _dispatcher_content_to_text(content)
+    if text:
+        return text
+
+    reasoning = getattr(msg, "reasoning_content", "") or ""
+    if str(reasoning).strip():
+        log.warning("Dispatcher: content leer — nutze reasoning_content als Fallback")
+        return _strip_dispatcher_think_tags(str(reasoning).strip())
+
+    refusal = getattr(msg, "refusal", "") or ""
+    return _strip_dispatcher_think_tags(str(refusal).strip())
+
+
+async def _call_dispatcher_openai_compatible(
+    provider: ModelProvider,
+    model: str,
+    user_query: str,
+    *,
+    session_id: str = "",
+) -> str:
+    provider_client = get_provider_client()
+    client = provider_client.get_client(provider)
+    api_params = prepare_openai_params(
+        {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": DISPATCHER_PROMPT},
+                {"role": "user", "content": user_query},
+            ],
+            "temperature": 0,
+            "max_tokens": 20,
+        }
+    )
+    started = time.perf_counter()
+    response = None
+    try:
+        response = await _run_dispatcher_sync_call(client.chat.completions.create, **api_params)
+        text = _extract_dispatcher_text(response)
+        _record_dispatcher_llm_usage(
+            provider=provider,
+            model=model,
+            session_id=session_id,
+            latency_ms=round((time.perf_counter() - started) * 1000),
+            success=bool(text),
+            response_payload=response,
+        )
+        if not text:
+            log.warning(
+                "Dispatcher-LLM ohne Nutztext | provider=%s model=%s summary=%s",
+                provider.value,
+                model,
+                _summarize_dispatcher_response(response),
+            )
+        return text
+    except Exception:
+        _record_dispatcher_llm_usage(
+            provider=provider,
+            model=model,
+            session_id=session_id,
+            latency_ms=round((time.perf_counter() - started) * 1000),
+            success=False,
+            response_payload=response,
+        )
+        raise
+
+
+async def _call_dispatcher_anthropic(model: str, user_query: str, *, session_id: str = "") -> str:
+    provider_client = get_provider_client()
+    client = provider_client.get_client(ModelProvider.ANTHROPIC)
+    started = time.perf_counter()
+    response_payload: Any = None
+    try:
+        if client:
+            response = await _run_dispatcher_sync_call(
+                client.messages.create,
+                model=model,
+                max_tokens=20,
+                system=DISPATCHER_PROMPT,
+                messages=[{"role": "user", "content": user_query}],
+            )
+            response_payload = response
+            parts = []
+            for item in getattr(response, "content", []) or []:
+                text = getattr(item, "text", "")
+                if isinstance(text, str) and text:
+                    parts.append(text)
+            text = "".join(parts).strip()
+        else:
+            api_key = provider_client.get_api_key(ModelProvider.ANTHROPIC)
+            async with httpx.AsyncClient(timeout=30.0) as http:
+                response = await http.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "x-api-key": api_key,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json",
+                    },
+                    json={
+                        "model": model,
+                        "max_tokens": 20,
+                        "system": DISPATCHER_PROMPT,
+                        "messages": [{"role": "user", "content": user_query}],
+                    },
+                )
+                response.raise_for_status()
+                response_payload = response.json()
+                parts = []
+                for item in response_payload.get("content", []) or []:
+                    text = item.get("text", "") if isinstance(item, dict) else ""
+                    if text:
+                        parts.append(text)
+                text = "".join(parts).strip()
+        _record_dispatcher_llm_usage(
+            provider=ModelProvider.ANTHROPIC,
+            model=model,
+            session_id=session_id,
+            latency_ms=round((time.perf_counter() - started) * 1000),
+            success=bool(text),
+            response_payload=response_payload,
+        )
+        return text
+    except Exception:
+        _record_dispatcher_llm_usage(
+            provider=ModelProvider.ANTHROPIC,
+            model=model,
+            session_id=session_id,
+            latency_ms=round((time.perf_counter() - started) * 1000),
+            success=False,
+            response_payload=response_payload,
+        )
+        raise
+
+
+async def _call_dispatcher_google(model: str, user_query: str, *, session_id: str = "") -> str:
+    provider_client = get_provider_client()
+    api_key = provider_client.get_api_key(ModelProvider.GOOGLE)
+    base_url = provider_client.get_base_url(ModelProvider.GOOGLE).rstrip("/")
+    started = time.perf_counter()
+    response_payload: Any = None
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as http:
+            response = await http.post(
+                f"{base_url}/models/{model}:generateContent",
+                params={"key": api_key},
+                json={
+                    "systemInstruction": {"parts": [{"text": DISPATCHER_PROMPT}]},
+                    "contents": [{"role": "user", "parts": [{"text": user_query}]}],
+                    "generationConfig": {"temperature": 0, "maxOutputTokens": 20},
+                },
+            )
+            response.raise_for_status()
+            response_payload = response.json()
+        candidates = response_payload.get("candidates", []) or []
+        if not candidates:
+            _record_dispatcher_llm_usage(
+                provider=ModelProvider.GOOGLE,
+                model=model,
+                session_id=session_id,
+                latency_ms=round((time.perf_counter() - started) * 1000),
+                success=False,
+                response_payload=response_payload,
+            )
+            return ""
+        parts = ((candidates[0].get("content", {}) or {}).get("parts", [])) or []
+        text = "".join(
+            part.get("text", "")
+            for part in parts
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
+        ).strip()
+        _record_dispatcher_llm_usage(
+            provider=ModelProvider.GOOGLE,
+            model=model,
+            session_id=session_id,
+            latency_ms=round((time.perf_counter() - started) * 1000),
+            success=bool(text),
+            response_payload=response_payload,
+        )
+        return text
+    except Exception:
+        _record_dispatcher_llm_usage(
+            provider=ModelProvider.GOOGLE,
+            model=model,
+            session_id=session_id,
+            latency_ms=round((time.perf_counter() - started) * 1000),
+            success=False,
+            response_payload=response_payload,
+        )
+        raise
+
+
+def _record_dispatcher_llm_usage(
+    *,
+    provider: ModelProvider,
+    model: str,
+    session_id: str,
+    latency_ms: int,
+    success: bool,
+    response_payload: Any,
+) -> None:
+    try:
+        usage = build_usage_payload(provider, model, response_payload)
+        get_improvement_engine().record_llm_usage(
+            LLMUsageRecord(
+                trace_id=f"dispatch-{uuid.uuid4().hex[:12]}",
+                session_id=session_id or "",
+                agent="dispatcher",
+                provider=provider.value,
+                model=model,
+                input_tokens=int(usage["input_tokens"]),
+                output_tokens=int(usage["output_tokens"]),
+                cached_tokens=int(usage["cached_tokens"]),
+                cost_usd=float(usage["cost_usd"]),
+                latency_ms=max(int(latency_ms or 0), 0),
+                success=bool(success),
+            )
+        )
+    except Exception as e:
+        log.debug("Dispatcher-Usage-Aufzeichnung fehlgeschlagen: %s", e)
+
+
+async def _call_dispatcher_llm(user_query: str, *, session_id: str = "") -> str:
+    provider = _dispatcher_provider_from_env()
+    model = _dispatcher_model_from_env()
+    provider_client = get_provider_client()
+    budget = evaluate_llm_budget(
+        agent="dispatcher",
+        session_id=session_id,
+        requested_max_tokens=20,
+    )
+    if budget.warning:
+        log.warning("Dispatcher-Budget %s: %s", budget.state, budget.message)
+    if budget.blocked:
+        log.warning("Dispatcher-LLM uebersprungen wegen Hard-Limit, fallback auf meta")
+        return "meta"
+    model_override = resolve_soft_budget_model_override(
+        agent="dispatcher",
+        provider=provider,
+        model=model,
+        decision=budget,
+    )
+    if model_override:
+        log.warning(
+            "Dispatcher-Budget Soft-Limit: downgrade %s/%s -> %s/%s",
+            provider.value,
+            model,
+            model_override.provider.value,
+            model_override.model,
+        )
+        provider = model_override.provider
+        model = model_override.model
+    provider_client.validate_model_or_raise(provider, model, agent_type="dispatcher")
+
+    if not _dispatcher_provider_supports_native_call(provider):
+        raise ValueError(f"Dispatcher-Provider {provider.value} nicht unterstuetzt")
+
+    if provider in _DISPATCHER_OPENAI_COMPAT_PROVIDERS:
+        return await _call_dispatcher_openai_compatible(provider, model, user_query, session_id=session_id)
+    if provider == ModelProvider.ANTHROPIC:
+        return await _call_dispatcher_anthropic(model, user_query, session_id=session_id)
+    if provider == ModelProvider.GOOGLE:
+        return await _call_dispatcher_google(model, user_query, session_id=session_id)
+    raise ValueError(f"Dispatcher-Provider {provider.value} nicht unterstuetzt")
 
 
 def _emit_dispatcher_status(agent_name: str, phase: str, detail: str = "") -> None:
@@ -370,6 +782,50 @@ AGENT_CLASS_MAP = {
     "architekt": MetaAgent,
     "coder": DeveloperAgentV2,  # AKTUALISIERT v3.2
 }
+
+_DISPATCHER_ALLOWED_AGENT_NAMES = (
+    "reasoning",
+    "research",
+    "executor",
+    "meta",
+    "visual",
+    "development",
+    "creative",
+    "data",
+    "document",
+    "communication",
+    "system",
+    "shell",
+    "image",
+)
+
+
+def _extract_dispatcher_decision(raw_content: str) -> str:
+    cleaned = _strip_dispatcher_think_tags(raw_content).strip().lower()
+    if not cleaned:
+        return ""
+
+    normalized = cleaned.replace(".", "").replace("`", "").strip()
+    if normalized in _DISPATCHER_ALLOWED_AGENT_NAMES:
+        return normalized
+
+    lines = [line.strip(" .:`-") for line in cleaned.splitlines() if line.strip()]
+    for line in reversed(lines):
+        if line in _DISPATCHER_ALLOWED_AGENT_NAMES:
+            return line
+        match = re.search(
+            r"\b(" + "|".join(_DISPATCHER_ALLOWED_AGENT_NAMES) + r")\b",
+            line,
+        )
+        if match:
+            return match.group(1)
+
+    matches = re.findall(
+        r"\b(" + "|".join(_DISPATCHER_ALLOWED_AGENT_NAMES) + r")\b",
+        cleaned,
+    )
+    return matches[-1] if matches else ""
+
 
 # Keywords für schnelle Erkennung (ohne LLM)
 REASONING_KEYWORDS = [
@@ -718,7 +1174,6 @@ SHELL_KEYWORDS = [
     "timus neustarten",
     "den service",
     "den mcp",
-    "starte den",       # "starte den MCP-Server" → shell (nicht visual)
     "starte die service",
     # Installationen & Updates
     "pip install",
@@ -748,6 +1203,12 @@ SHELL_KEYWORDS = [
     "python3 ausführen",
     "datei ausführen",
     "skript starten",
+]
+
+_SHELL_SERVICE_PATTERNS = [
+    r"\bstarte den (?:mcp(?:-server)?|dispatcher|service|dienst|server|prozess)\b",
+    r"\bstarte die (?:dienste?|services?)\b",
+    r"\b(?:stoppe|beende|neustarte|restarte) den (?:mcp(?:-server)?|dispatcher|service|dienst|server|prozess)\b",
 ]
 
 DATA_KEYWORDS = [
@@ -866,107 +1327,8 @@ SYSTEM_KEYWORDS = [
 
 
 def _structure_task(task: str, url: str) -> List[str]:
-    """
-    Wandelt komplexe natürlichsprachige Anfragen in eine geordnete Schritt-Liste um.
-
-    Rückgabe: List[str] — jeder Eintrag ist ein eigenständiger, ausführbarer Schritt.
-
-    Beispiel:
-    - "suche hotels in stockholm für 3.3.2026 2 personen"
-      → ["Navigiere zu booking.com",
-         "Cookies akzeptieren falls Banner sichtbar",
-         "Klicke auf Suchfeld und gib ein: 'hotels in stockholm'",
-         "Drücke Enter",
-         "Setze Datum: 3.3.2026",
-         "Setze Personen: 2",
-         "Beende Task und berichte Ergebnisse"]
-    """
-    import re
-
-    task_lower = task.lower()
-    steps: List[str] = []
-
-    # 1. Navigation + Cookies (immer zuerst)
-    if url:
-        domain = url.replace("https://", "").replace("http://", "").split("/")[0]
-        steps.append(f"Navigiere zu {domain}")
-        steps.append(
-            "Akzeptiere Cookies NUR falls ein Cookie-Banner sichtbar ist — sonst direkt weiter"
-        )
-
-    # 2. Zielort aus Suchbegriff extrahieren (NUR den Ort, keine Datums-/Personendetails)
-    search_match = re.search(
-        r"(?:suche(?:\s+nach)?|schau(?:\s+nach)?|finde)\s+(?:hotels?\s+in\s+)?(.+?)"
-        r"(?:\s+(?:für\s+den|für|am|vom|ab|und\s+dann|dann|anschließend)|\s+\d{1,2}[./]|$)",
-        task_lower,
-    )
-    if search_match:
-        start, end = search_match.span(1)
-        destination = task[start:end].strip().rstrip(",")
-
-        # Schritt A: NUR ins Suchfeld tippen (Zielort)
-        steps.append(
-            f"Klicke auf das Suchfeld 'Wohin reisen Sie?' (Destinations-Eingabefeld oben auf der Seite) "
-            f"und tippe NUR: '{destination}'"
-        )
-        # Schritt B: Autocomplete-Vorschlag wählen ODER Enter drücken
-        steps.append(
-            f"Wähle den ersten Vorschlag '{destination}' aus der Autocomplete-/Dropdown-Liste "
-            f"(falls kein Dropdown: drücke Enter)"
-        )
-        steps.append("Warte 2 Sekunden bis die Seite reagiert hat")
-
-    # 3. Datum — Anreise und Abreise als GETRENNTE Schritte
-    date_matches = re.findall(r'\d{1,2}[./]\d{1,2}[./]\d{2,4}', task)
-    if len(date_matches) >= 2:
-        steps.append(
-            f"Klicke auf das Anreisedatum-Feld und wähle den {date_matches[0]} im Kalender "
-            f"(Klick auf den richtigen Tag im Monats-Kalender)"
-        )
-        steps.append(
-            f"Klicke auf das Abreisedatum-Feld (oder wähle direkt im geöffneten Kalender) "
-            f"und wähle den {date_matches[1]}"
-        )
-    elif len(date_matches) == 1:
-        steps.append(
-            f"Klicke auf das Datum-Feld und wähle den {date_matches[0]} im Kalender"
-        )
-
-    # 4. Personen-/Gästeanzahl
-    persons_match = re.search(
-        r'(\d+)\s*(?:person(?:en)?|erwachsene?|gäste?|reisende?)',
-        task_lower,
-    )
-    if persons_match:
-        steps.append(
-            f"Klicke auf das Gäste-Feld (zeigt '2 Erwachsene · X Kinder · X Zimmer') "
-            f"und setze die Anzahl auf {persons_match.group(1)} Erwachsene"
-        )
-
-    # 5. Suche starten (immer als letzter Pflichtschritt nach Datum/Gäste)
-    if search_match:
-        steps.append(
-            "Klicke auf den blauen Suche-Button um die Hotelsuche zu starten"
-        )
-        steps.append("Warte 3 Sekunden auf die Suchergebnisse")
-
-    # 6. Explizite Klick/Extraktions-Anweisung
-    click_match = re.search(
-        r"(?:klicke\s+auf|extrahiere|zeige\s+(?:mir)?)\s+(.+?)(?:\s+(?:und|dann)|$)",
-        task_lower,
-    )
-    if click_match:
-        start, end = click_match.span(1)
-        steps.append(f"Interagiere mit: {task[start:end].strip()}")
-
-    # Fallback: wenn fast nichts erkannt, originalen Task direkt übergeben
-    if len(steps) <= 2:
-        steps.append(f"Führe aus: {task}")
-
-    # Abschluss
-    steps.append("Beende Task und berichte Ergebnisse")
-
-    return steps
+    """Legacy wrapper fuer den extrahierten Browser-Workflow-Planer."""
+    return build_browser_workflow_plan(task, url)
 
 
 _IMAGE_EXTENSIONS = re.compile(r"\.(jpg|jpeg|png|webp|gif|bmp|tiff?|avif)\b", re.IGNORECASE)
@@ -976,6 +1338,46 @@ _DATA_EXTENSIONS = re.compile(r"\.(csv|xlsx|xls|parquet)\b", re.IGNORECASE)
 def quick_intent_check(query: str) -> Optional[str]:
     """Schnelle Keyword-basierte Intent-Erkennung."""
     query_lower = query.lower()
+    orchestration_policy = evaluate_query_orchestration(query_lower)
+
+    # Browser-Automation muss vor generischen Shell-Phrasen erkannt werden.
+    # Komplexe Browser-Workflows gehen an META, damit der Orchestrator
+    # den Ablauf in robuste Teilaufgaben für Visual zerlegt.
+    _has_browser_target = bool(
+        re.search(r"https?://[^\s]+", query_lower)
+        or re.search(r"\b[a-z0-9.-]+\.(?:de|com|org|net|io|ai)\b", query_lower)
+        or "browser" in query_lower
+        or "webseite" in query_lower
+        or "website" in query_lower
+    )
+    _has_browser_ui_action = any(
+        keyword in query_lower
+        for keyword in (
+            "gehe auf",
+            "gehe zu",
+            "navigiere zu",
+            "tippe",
+            "gib ein",
+            "wähle",
+            "waehle",
+            "klicke",
+            "drücke",
+            "druecke",
+            "formular",
+            "anmelden",
+            "login",
+            "suche",
+            "cookies akzeptieren",
+            "cookie banner",
+        )
+    )
+    if _has_browser_target and _has_browser_ui_action:
+        if _is_complex_browser_workflow(query_lower):
+            return "meta"
+        return "visual_nemotron"
+
+    if orchestration_policy.get("route_to_meta"):
+        return "meta"
 
     # BILD-Dateien — höchste Priorität (nur wenn Datei tatsächlich existiert)
     for _img_match in _IMAGE_EXTENSIONS.finditer(query):
@@ -1061,6 +1463,10 @@ def quick_intent_check(query: str) -> Optional[str]:
             return "research"
 
     # Shell-Keywords VOR Visual — Service-Restarts/Systemctl dürfen nie zu Visual routen
+    for pattern in _SHELL_SERVICE_PATTERNS:
+        if re.search(pattern, query_lower):
+            return "shell"
+
     for keyword in SHELL_KEYWORDS:
         if keyword in query_lower:
             return "shell"
@@ -1113,50 +1519,56 @@ def quick_intent_check(query: str) -> Optional[str]:
     return None  # LLM entscheiden lassen
 
 
-async def get_agent_decision(user_query: str) -> str:
+def _apply_dispatcher_feedback_bias(user_query: str, decision: str) -> str:
+    """
+    Wendet leichte, sichere Feedback-Biases auf Dispatcher-Entscheidungen an.
+
+    Aktuell nur eine konservative Regel:
+    - komplexe Queries duerfen bei schwachem Ziel-Agent-Feedback auf meta angehoben werden
+    """
+    candidate = str(decision or "").strip().lower()
+    if not candidate or candidate == "meta":
+        return candidate
+    try:
+        from orchestration.feedback_engine import get_feedback_engine
+
+        engine = get_feedback_engine()
+        candidate_score = engine.get_effective_target_score("dispatcher_agent", candidate, default=1.0)
+        meta_score = engine.get_effective_target_score("dispatcher_agent", "meta", default=1.0)
+        candidate_stats = engine.get_target_stats("dispatcher_agent", candidate, default=1.0)
+        meta_stats = engine.get_target_stats("dispatcher_agent", "meta", default=1.0)
+        is_complex = _is_complex_browser_workflow(user_query.lower()) or len(str(user_query or "").split()) >= 10
+        enough_evidence = max(candidate_stats.get("evidence_count", 0), meta_stats.get("evidence_count", 0)) >= 3
+        if is_complex and enough_evidence and candidate_score < 0.95 and meta_score >= candidate_score + 0.15:
+            log.info(
+                "Dispatcher-Feedback-Bias: %s -> meta (candidate=%.2f meta=%.2f evidence=%s/%s)",
+                candidate,
+                candidate_score,
+                meta_score,
+                candidate_stats.get("evidence_count", 0),
+                meta_stats.get("evidence_count", 0),
+            )
+            return "meta"
+    except Exception as e:
+        log.debug("Dispatcher-Feedback-Bias uebersprungen: %s", e)
+    return candidate
+
+
+async def get_agent_decision(user_query: str, session_id: str | None = None) -> str:
     """Bestimmt welcher Agent für die Anfrage zuständig ist."""
     log.info(f"🧠 Analysiere Intention: '{user_query}'")
 
     # Schnelle Keyword-Erkennung zuerst
     quick_result = quick_intent_check(user_query)
     if quick_result:
-        log.info(f"✅ Schnell-Entscheidung (Keyword): {quick_result}")
-        return quick_result
+        biased_quick_result = _apply_dispatcher_feedback_bias(user_query, quick_result)
+        log.info(f"✅ Schnell-Entscheidung (Keyword): {biased_quick_result}")
+        return biased_quick_result
 
     # LLM-basierte Entscheidung
     try:
-        model = os.getenv("DISPATCHER_MODEL", "gpt-5-mini-2025-08-07")
-
-        # Nutze Compatibility Helper für automatische API-Anpassung
-        api_params = prepare_openai_params(
-            {
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": DISPATCHER_PROMPT},
-                    {"role": "user", "content": user_query},
-                ],
-                "temperature": 0,
-                "max_tokens": 20,
-            }
-        )
-
-        response = await asyncio.to_thread(client.chat.completions.create, **api_params)
-        raw_content = ""
-        if response.choices and hasattr(response.choices[0], "message"):
-            content = response.choices[0].message.content
-            if isinstance(content, str):
-                raw_content = content
-            elif isinstance(content, list):
-                # Defensive: Einige APIs liefern segmentierte Content-Listen
-                parts = []
-                for item in content:
-                    if isinstance(item, dict) and isinstance(item.get("text"), str):
-                        parts.append(item["text"])
-                    elif hasattr(item, "text") and isinstance(getattr(item, "text"), str):
-                        parts.append(getattr(item, "text"))
-                raw_content = "".join(parts)
-
-        decision = raw_content.strip().lower().replace(".", "")
+        raw_content = await _call_dispatcher_llm(user_query, session_id=session_id or "")
+        decision = _extract_dispatcher_decision(raw_content)
         if not decision:
             log.warning(
                 "⚠️ Leere Dispatcher-Antwort. Fallback auf 'meta'. "
@@ -1166,14 +1578,16 @@ async def get_agent_decision(user_query: str) -> str:
 
         # Direkter Treffer
         if decision in AGENT_CLASS_MAP:
-            log.info(f"✅ Entscheidung: {decision}")
-            return decision
+            biased_decision = _apply_dispatcher_feedback_bias(user_query, decision)
+            log.info(f"✅ Entscheidung: {biased_decision}")
+            return biased_decision
 
         # Suche im Text
         for key in AGENT_CLASS_MAP.keys():
-            if key in decision:
-                log.info(f"✅ Entscheidung (extrahiert): {key}")
-                return key
+            if re.search(rf"\b{re.escape(key)}\b", decision):
+                biased_key = _apply_dispatcher_feedback_bias(user_query, key)
+                log.info(f"✅ Entscheidung (extrahiert): {biased_key}")
+                return biased_key
 
         log.warning(
             f"⚠️ Unsicher ({decision}). Fallback auf 'meta'. "
@@ -1536,6 +1950,13 @@ Schritte: {steps_executed} ausgeführt{f" von {steps_planned} geplant" if steps_
             session_id=effective_session_id,
             metadata=runtime_metadata,
         )
+        _record_runtime_feedback(
+            session_id=effective_session_id,
+            agent_name=agent_name,
+            query=query,
+            final_output=final_output,
+            runtime_metadata=runtime_metadata,
+        )
         _log_canvas_agent_event(
             session_id=effective_session_id,
             agent_name=agent_name,
@@ -1557,6 +1978,45 @@ def _infer_interaction_status(result: Optional[str]) -> str:
     if text.startswith("fehler") or text.startswith("error"):
         return "error"
     return "completed"
+
+
+def _record_runtime_feedback(
+    *,
+    session_id: str,
+    agent_name: str,
+    query: str,
+    final_output: Optional[str],
+    runtime_metadata: Optional[dict] = None,
+) -> None:
+    """Speichert gedämpftes Dispatcher-Laufzeitfeedback für echte Outcomes."""
+    try:
+        from orchestration.feedback_engine import get_feedback_engine
+
+        status = _infer_interaction_status(final_output)
+        success: Optional[bool]
+        if status == "completed":
+            success = True
+        elif status == "error":
+            success = False
+        else:
+            success = None
+
+        get_feedback_engine().record_runtime_outcome(
+            action_id=f"runtime-{session_id}-{agent_name}",
+            success=success,
+            context={
+                "source": "run_agent",
+                "session_id": session_id,
+                "dispatcher_agent": agent_name,
+                "selected_agent": agent_name,
+                "status": status,
+                "query_excerpt": str(query or "")[:120],
+                "execution_path": str((runtime_metadata or {}).get("execution_path", ""))[:80],
+            },
+            feedback_targets=[{"namespace": "dispatcher_agent", "key": agent_name}],
+        )
+    except Exception as e:
+        log.debug("Runtime-Feedback fuer %s konnte nicht gespeichert werden: %s", agent_name, e)
 
 
 def _log_interaction_deterministic(
@@ -1753,7 +2213,7 @@ async def _cli_loop(tools_desc: str) -> None:
                 continue
 
             print("   🤔 Timus denkt...")
-            agent = await get_agent_decision(q_clean)
+            agent = await get_agent_decision(q_clean, session_id=conversation_session_id)
             print(f"   📌 Agent: {agent.upper()}")
             await run_agent(
                 agent,

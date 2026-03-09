@@ -13,7 +13,6 @@ Spart massiv Rechenzeit, indem Vision nur bei echter Änderung läuft.
 import logging
 import asyncio
 import os
-import hashlib
 import time
 from typing import Optional, Dict, Tuple
 from dataclasses import dataclass, asdict
@@ -24,6 +23,7 @@ from PIL import Image
 import mss
 
 from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
+from utils.stable_hash import stable_hex_digest
 from dotenv import load_dotenv
 
 # --- Setup ---
@@ -90,8 +90,8 @@ class ScreenChangeDetector:
             return img
 
     def _calculate_hash(self, img: Image.Image) -> str:
-        """Berechnet MD5-Hash eines Bildes (schnell)."""
-        return hashlib.md5(img.tobytes()).hexdigest()
+        """Berechnet stabilen Hash eines Bildes fuer Change-Detection."""
+        return stable_hex_digest(img.tobytes(), hex_chars=32)
 
     def _create_thumbnail(self, img: Image.Image, size: int = 32) -> np.ndarray:
         """Erstellt Thumbnail für schnellen Diff-Vergleich."""

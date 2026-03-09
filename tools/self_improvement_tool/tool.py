@@ -4,6 +4,11 @@ tools/self_improvement_tool/tool.py — M12: Self-Improvement MCP-Tools
 3 MCP-Tools für die Self-Improvement Engine:
 - get_tool_analytics: Tool-Nutzungsstatistiken
 - get_routing_stats: Routing-Entscheidungsstatistiken
+- get_llm_usage_analytics: Token-/Kostenstatistiken fuer LLM-Calls
+- get_llm_budget_status: Budget-Zustaende und Schwellwerte
+- get_ops_observability: zentrale Ops-Zusammenfassung
+- get_e2e_regression_matrix: produktionskritische Kernflows als Matrix
+- get_e2e_release_gate_status: Eskalations- und Canary/Release-Entscheidung aus E2E
 - get_improvement_suggestions: Verbesserungsvorschläge
 """
 
@@ -12,6 +17,16 @@ import logging
 from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 
 log = logging.getLogger("self_improvement_tool")
+
+
+def _safe_engine_stat(engine, method_name: str, *, default, **kwargs):
+    method = getattr(engine, method_name, None)
+    if method is None:
+        return default
+    try:
+        return method(**kwargs)
+    except Exception:
+        return default
 
 
 @tool(
@@ -62,6 +77,189 @@ async def get_routing_stats(days: int = 7) -> dict:
 
     stats = get_improvement_engine().get_routing_stats(days=max(1, min(90, days)))
     return {"status": "ok", **stats}
+
+
+@tool(
+    name="get_llm_usage_analytics",
+    description=(
+        "Gibt aggregierte LLM-Nutzung zurueck: Requests, Tokens, Kosten und "
+        "Top-Agenten/Modelle fuer den gewaehlten Zeitraum."
+    ),
+    parameters=[
+        P("days", "integer", "Analysezeitraum in Tagen (default: 7)", required=False, default=7),
+        P("session_id", "string", "Optionale Session-ID fuer eine fokussierte Kostenansicht", required=False, default=""),
+        P("limit", "integer", "Maximale Anzahl Top-Agenten/Modelle (default: 5)", required=False, default=5),
+    ],
+    capabilities=["analysis", "system"],
+    category=C.SYSTEM,
+)
+async def get_llm_usage_analytics(days: int = 7, session_id: str = "", limit: int = 5) -> dict:
+    """Gibt Token-/Kostenstatistiken fuer LLM-Aufrufe zurueck."""
+    from orchestration.self_improvement_engine import get_improvement_engine
+
+    stats = get_improvement_engine().get_llm_usage_summary(
+        days=max(1, min(90, days)),
+        session_id=(session_id or "").strip() or None,
+        limit=max(1, min(20, limit)),
+    )
+    return {"status": "ok", **stats}
+
+
+@tool(
+    name="get_llm_budget_status",
+    description=(
+        "Gibt den aktuellen LLM-Budgetstatus zurueck: aktive Warn-/Soft-/Hard-Limits, "
+        "Fenster und Schwellwerte."
+    ),
+    parameters=[],
+    capabilities=["analysis", "system"],
+    category=C.SYSTEM,
+)
+async def get_llm_budget_status() -> dict:
+    """Gibt den aktuellen LLM-Budgetstatus zurueck."""
+    from orchestration.llm_budget_guard import get_public_budget_status
+
+    return {"status": "ok", **get_public_budget_status()}
+
+
+@tool(
+    name="get_ops_observability",
+    description=(
+        "Gibt eine zentrale Ops-Zusammenfassung zurueck: Alerts aus Services, Providern, "
+        "Tool-Erfolgsraten, Routing-Risiken, LLM-Usage und Budgetstatus."
+    ),
+    parameters=[
+        P("days", "integer", "Analysezeitraum fuer interne Analytics (default: 7)", required=False, default=7),
+        P("limit", "integer", "Maximale Anzahl Alerts (default: 5)", required=False, default=5),
+    ],
+    capabilities=["analysis", "system"],
+    category=C.SYSTEM,
+)
+async def get_ops_observability(days: int = 7, limit: int = 5) -> dict:
+    """Gibt eine zentrale Ops-Zusammenfassung zurueck."""
+    from gateway.status_snapshot import collect_status_snapshot
+    from orchestration.ops_observability import build_ops_observability_summary
+    from orchestration.self_improvement_engine import get_improvement_engine
+
+    safe_days = max(1, min(90, days))
+    safe_limit = max(1, min(20, limit))
+    snapshot = await collect_status_snapshot()
+    engine = get_improvement_engine()
+    ops = build_ops_observability_summary(
+        services=snapshot.get("services", {}) or {},
+        providers=snapshot.get("providers", {}) or {},
+        tool_stats=_safe_engine_stat(engine, "get_tool_stats", default=[], days=safe_days),
+        routing_stats=_safe_engine_stat(
+            engine,
+            "get_routing_stats",
+            default={"by_agent": {}, "days": safe_days},
+            days=safe_days,
+        ),
+        llm_usage=_safe_engine_stat(
+            engine,
+            "get_llm_usage_summary",
+            default={
+                "analysis_days": safe_days,
+                "session_id": "",
+                "total_requests": 0,
+                "successful_requests": 0,
+                "failed_requests": 0,
+                "success_rate": 0.0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cached_tokens": 0,
+                "total_cost_usd": 0.0,
+                "avg_latency_ms": 0.0,
+                "top_agents": [],
+                "top_models": [],
+            },
+            days=safe_days,
+            limit=safe_limit,
+        ),
+        budget=snapshot.get("budget", {}) or {},
+        limit=safe_limit,
+    )
+    return {"status": "ok", "days": safe_days, **ops}
+
+
+@tool(
+    name="get_e2e_regression_matrix",
+    description=(
+        "Gibt eine zentrale E2E-Regressionsmatrix fuer produktionskritische Kernflows "
+        "zurueck: Telegram/Status, E-Mail, Restart/Recovery und Meta->Visual."
+    ),
+    parameters=[],
+    capabilities=["analysis", "system"],
+    category=C.SYSTEM,
+)
+async def get_e2e_regression_matrix() -> dict:
+    """Gibt eine zentrale E2E-Regressionsmatrix zurueck."""
+    from gateway.status_snapshot import collect_status_snapshot
+    from orchestration.browser_workflow_eval import (
+        BROWSER_WORKFLOW_EVAL_CASES,
+        evaluate_browser_workflow_case,
+    )
+    from orchestration.e2e_regression_matrix import build_e2e_regression_matrix
+    from tools.email_tool.tool import get_email_status
+
+    snapshot = await collect_status_snapshot()
+    email_status = get_email_status()
+    browser_results = [
+        evaluate_browser_workflow_case(case)
+        for case in BROWSER_WORKFLOW_EVAL_CASES
+    ]
+    matrix = build_e2e_regression_matrix(
+        snapshot=snapshot,
+        email_status=email_status,
+        browser_eval_results=browser_results,
+    )
+    return {"status": "ok", **matrix}
+
+
+@tool(
+    name="get_e2e_release_gate_status",
+    description=(
+        "Bewertet die E2E-Regressionsmatrix fuer Release-/Canary-Entscheidungen "
+        "und kann optional einen Telegram-Alert senden."
+    ),
+    parameters=[
+        P("current_canary_percent", "integer", "Aktueller Canary-Anteil (default: 0)", required=False, default=0),
+        P("notify", "boolean", "Telegram-Alert senden wenn Gate nicht gruen ist", required=False, default=False),
+    ],
+    capabilities=["analysis", "system"],
+    category=C.SYSTEM,
+)
+async def get_e2e_release_gate_status(
+    current_canary_percent: int = 0,
+    notify: bool = False,
+) -> dict:
+    """Gibt den E2E-Release-Gate-Status zurueck."""
+    from orchestration.e2e_release_gate import (
+        build_e2e_gate_alert_message,
+        evaluate_e2e_release_gate,
+    )
+    from utils.telegram_notify import send_telegram
+
+    matrix_payload = await get_e2e_regression_matrix()
+    matrix = {
+        "summary": matrix_payload.get("summary", {}),
+        "flows": matrix_payload.get("flows", []),
+    }
+    decision = evaluate_e2e_release_gate(
+        matrix,
+        current_canary_percent=max(0, min(100, int(current_canary_percent or 0))),
+    )
+    alert_message = build_e2e_gate_alert_message(matrix, decision)
+    alert_sent = False
+    if notify and decision.get("state") != "pass":
+        alert_sent = await send_telegram(alert_message)
+    return {
+        "status": "ok",
+        "matrix": matrix,
+        "decision": decision,
+        "alert_message": alert_message,
+        "alert_sent": alert_sent,
+    }
 
 
 @tool(

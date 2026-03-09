@@ -18,6 +18,7 @@ import re
 import subprocess
 import platform
 import time
+import uuid
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple, Callable
 
@@ -42,7 +43,15 @@ from utils.policy_gate import (
 from agent.dynamic_tool_mixin import DynamicToolMixin
 from tools.tool_registry_v2 import registry_v2, ValidationError
 from orchestration.lane_manager import lane_manager, Lane, LaneStatus
+from orchestration.llm_budget_guard import (
+    BudgetModelOverride,
+    LLMBudgetDecision,
+    evaluate_llm_budget,
+    resolve_soft_budget_model_override,
+)
+from orchestration.self_improvement_engine import LLMUsageRecord, get_improvement_engine
 from utils.context_guard import ContextGuard, ContextStatus
+from utils.llm_usage import build_usage_payload
 
 log = logging.getLogger("TimusAgent-v4.4")
 
@@ -1179,16 +1188,50 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
 
     async def _call_llm(self, messages: List[Dict]) -> str:
         try:
+            requested_max_tokens = self._get_max_tokens_for_model(self.model)
+            budget = evaluate_llm_budget(
+                agent=self.agent_type,
+                session_id=self.conversation_session_id or "",
+                requested_max_tokens=requested_max_tokens,
+            )
+            if budget.warning:
+                log.warning("LLM-Budget %s fuer %s: %s", budget.state, self.agent_type, budget.message)
+            if budget.blocked:
+                return f"Error: {budget.message}"
+            model_override = resolve_soft_budget_model_override(
+                agent=self.agent_type,
+                provider=self.provider,
+                model=self.model,
+                decision=budget,
+            )
+            if model_override:
+                log.warning(
+                    "LLM-Budget Soft-Limit: downgrade %s/%s -> %s/%s fuer %s",
+                    self.provider.value,
+                    self.model,
+                    model_override.provider.value,
+                    model_override.model,
+                    self.agent_type,
+                )
             if self.provider in [
                 ModelProvider.OPENAI,
+                ModelProvider.ZAI,
                 ModelProvider.DEEPSEEK,
                 ModelProvider.INCEPTION,
                 ModelProvider.NVIDIA,
                 ModelProvider.OPENROUTER,
             ]:
-                return await self._call_openai_compatible(messages)
+                return await self._call_openai_compatible(
+                    messages,
+                    budget_decision=budget,
+                    model_override=model_override,
+                )
             elif self.provider == ModelProvider.ANTHROPIC:
-                return await self._call_anthropic(messages)
+                return await self._call_anthropic(
+                    messages,
+                    budget_decision=budget,
+                    model_override=model_override,
+                )
             else:
                 return f"Error: Provider {self.provider} nicht unterstuetzt"
         except Exception as e:
@@ -1225,17 +1268,59 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             return int(os.getenv("NEMOTRON_MAX_TOKENS", "4000"))
         return int(os.getenv("DEFAULT_MAX_TOKENS", "2000"))
 
-    async def _call_openai_compatible(self, messages: List[Dict]) -> str:
-        client = self.provider_client.get_client(self.provider)
+    def _record_llm_usage(
+        self,
+        *,
+        latency_ms: int,
+        success: bool,
+        response_payload: Any = None,
+        provider_override: Optional[ModelProvider] = None,
+        model_override: Optional[str] = None,
+    ) -> None:
+        try:
+            effective_provider = provider_override or self.provider
+            effective_model = model_override or self.model
+            usage = build_usage_payload(effective_provider, effective_model, response_payload)
+            get_improvement_engine().record_llm_usage(
+                LLMUsageRecord(
+                    trace_id=f"llm-{uuid.uuid4().hex[:12]}",
+                    session_id=self.conversation_session_id or "",
+                    agent=self.agent_type,
+                    provider=effective_provider.value,
+                    model=effective_model,
+                    input_tokens=int(usage["input_tokens"]),
+                    output_tokens=int(usage["output_tokens"]),
+                    cached_tokens=int(usage["cached_tokens"]),
+                    cost_usd=float(usage["cost_usd"]),
+                    latency_ms=max(int(latency_ms or 0), 0),
+                    success=bool(success),
+                )
+            )
+        except Exception as e:
+            log.debug("LLM-Usage-Aufzeichnung fehlgeschlagen: %s", e)
+
+    async def _call_openai_compatible(
+        self,
+        messages: List[Dict],
+        *,
+        budget_decision: Optional[LLMBudgetDecision] = None,
+        model_override: Optional[BudgetModelOverride] = None,
+    ) -> str:
+        effective_provider = model_override.provider if model_override else self.provider
+        effective_model = model_override.model if model_override else self.model
+        client = self.provider_client.get_client(effective_provider)
+        max_tokens = self._get_max_tokens_for_model(self.model)
+        if budget_decision and budget_decision.max_tokens_cap:
+            max_tokens = min(max_tokens, max(int(budget_decision.max_tokens_cap), 1))
 
         kwargs = {
-            "model": self.model,
+            "model": effective_model,
             "messages": messages,
             "temperature": 0.3,
-            "max_tokens": self._get_max_tokens_for_model(self.model),
+            "max_tokens": max_tokens,
         }
 
-        if self.provider == ModelProvider.INCEPTION:
+        if effective_provider == ModelProvider.INCEPTION:
             if os.getenv("MERCURY_DIFFUSING", "false").lower() == "true":
                 kwargs["extra_body"] = {"diffusing": True}
 
@@ -1258,7 +1343,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         if "glm5" in self.model.lower().replace("-", "").replace("/", ""):
             # NVIDIA NIM: Thinking via chat_template_kwargs steuern
             # OpenRouter: Thinking ist automatisch eingebaut, kein extra_body nötig
-            if self.provider == ModelProvider.NVIDIA:
+            if effective_provider == ModelProvider.NVIDIA:
                 enable = os.getenv("META_ENABLE_THINKING", "true").lower() == "true"
                 kwargs["extra_body"] = {
                     "chat_template_kwargs": {"enable_thinking": enable}
@@ -1266,41 +1351,94 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 if enable:
                     kwargs["temperature"] = 1.0
 
-        if self.provider == ModelProvider.NVIDIA:
+        if effective_provider == ModelProvider.NVIDIA:
             kwargs["timeout"] = int(os.getenv("NVIDIA_TIMEOUT", "120"))
 
         kwargs = prepare_openai_params(kwargs)
 
-        resp = await asyncio.to_thread(client.chat.completions.create, **kwargs)
-        if not resp.choices or not hasattr(resp.choices[0], "message"):
-            return ""
-        msg = resp.choices[0].message
-        content = msg.content
+        started = time.perf_counter()
+        resp = None
+        try:
+            resp = await asyncio.to_thread(client.chat.completions.create, **kwargs)
+            if not resp.choices or not hasattr(resp.choices[0], "message"):
+                self._record_llm_usage(
+                    latency_ms=round((time.perf_counter() - started) * 1000),
+                    success=False,
+                    response_payload=resp,
+                    provider_override=effective_provider,
+                    model_override=effective_model,
+                )
+                return ""
+            msg = resp.choices[0].message
+            content = msg.content
 
-        # deepseek-reasoner: reasoning_content als Fallback wenn content leer.
-        # WICHTIG: Kein "Error:" zurückgeben — das würde den Loop sofort beenden.
-        # Stattdessen reasoning_content zurückgeben: der Loop schickt dann einen
-        # Format-Korrektur-Prompt und das Modell bekommt eine weitere Chance.
-        if (not content or not str(content).strip()) and hasattr(msg, "reasoning_content"):
-            reasoning = getattr(msg, "reasoning_content", "") or ""
-            if reasoning:
-                log.warning("deepseek-reasoner: content leer — gebe reasoning_content zurück (Loop-Retry)")
-                return self._strip_think_tags(reasoning.strip())
+            # deepseek-reasoner: reasoning_content als Fallback wenn content leer.
+            # WICHTIG: Kein "Error:" zurückgeben — das würde den Loop sofort beenden.
+            # Stattdessen reasoning_content zurückgeben: der Loop schickt dann einen
+            # Format-Korrektur-Prompt und das Modell bekommt eine weitere Chance.
+            if (not content or not str(content).strip()) and hasattr(msg, "reasoning_content"):
+                reasoning = getattr(msg, "reasoning_content", "") or ""
+                if reasoning:
+                    log.warning("deepseek-reasoner: content leer — gebe reasoning_content zurück (Loop-Retry)")
+                    self._record_llm_usage(
+                        latency_ms=round((time.perf_counter() - started) * 1000),
+                        success=True,
+                        response_payload=resp,
+                        provider_override=effective_provider,
+                        model_override=effective_model,
+                    )
+                    return self._strip_think_tags(reasoning.strip())
 
-        if isinstance(content, str):
-            return self._strip_think_tags(content)
-        if isinstance(content, list):
-            parts: List[str] = []
-            for item in content:
-                if isinstance(item, dict) and isinstance(item.get("text"), str):
-                    parts.append(item["text"])
-                elif hasattr(item, "text") and isinstance(getattr(item, "text"), str):
-                    parts.append(getattr(item, "text"))
-            return self._strip_think_tags("".join(parts).strip())
-        return self._strip_think_tags(str(content or "").strip())
+            if isinstance(content, str):
+                text = self._strip_think_tags(content)
+            elif isinstance(content, list):
+                parts: List[str] = []
+                for item in content:
+                    if isinstance(item, dict) and isinstance(item.get("text"), str):
+                        parts.append(item["text"])
+                    elif hasattr(item, "text") and isinstance(getattr(item, "text"), str):
+                        parts.append(getattr(item, "text"))
+                text = self._strip_think_tags("".join(parts).strip())
+            else:
+                text = self._strip_think_tags(str(content or "").strip())
 
-    async def _call_anthropic(self, messages: List[Dict]) -> str:
+            self._record_llm_usage(
+                latency_ms=round((time.perf_counter() - started) * 1000),
+                success=bool(text),
+                response_payload=resp,
+                provider_override=effective_provider,
+                model_override=effective_model,
+            )
+            return text
+        except Exception:
+            self._record_llm_usage(
+                latency_ms=round((time.perf_counter() - started) * 1000),
+                success=False,
+                response_payload=resp,
+                provider_override=effective_provider,
+                model_override=effective_model,
+            )
+            raise
+
+    async def _call_anthropic(
+        self,
+        messages: List[Dict],
+        *,
+        budget_decision: Optional[LLMBudgetDecision] = None,
+        model_override: Optional[BudgetModelOverride] = None,
+    ) -> str:
+        effective_provider = model_override.provider if model_override else ModelProvider.ANTHROPIC
+        effective_model = model_override.model if model_override else self.model
+        if effective_provider != ModelProvider.ANTHROPIC:
+            return await self._call_openai_compatible(
+                messages,
+                budget_decision=budget_decision,
+                model_override=model_override,
+            )
         client = self.provider_client.get_client(ModelProvider.ANTHROPIC)
+        max_tokens = 2000
+        if budget_decision and budget_decision.max_tokens_cap:
+            max_tokens = min(max_tokens, max(int(budget_decision.max_tokens_cap), 1))
 
         system_content = ""
         chat_messages = []
@@ -1310,33 +1448,55 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             else:
                 chat_messages.append(msg)
 
-        if client:
-            resp = await asyncio.to_thread(
-                client.messages.create,
-                model=self.model,
-                max_tokens=2000,
-                system=system_content,
-                messages=chat_messages,
-            )
-            return resp.content[0].text.strip()
-        else:
-            api_key = self.provider_client.get_api_key(ModelProvider.ANTHROPIC)
-            async with httpx.AsyncClient(timeout=120.0) as http:
-                resp = await http.post(
-                    "https://api.anthropic.com/v1/messages",
-                    headers={
-                        "x-api-key": api_key,
-                        "anthropic-version": "2023-06-01",
-                        "content-type": "application/json",
-                    },
-                    json={
-                        "model": self.model,
-                        "max_tokens": 2000,
-                        "system": system_content,
-                        "messages": chat_messages,
-                    },
+        started = time.perf_counter()
+        response_payload: Any = None
+        try:
+            if client:
+                resp = await asyncio.to_thread(
+                    client.messages.create,
+                    model=effective_model,
+                    max_tokens=max_tokens,
+                    system=system_content,
+                    messages=chat_messages,
                 )
-                return resp.json()["content"][0]["text"].strip()
+                response_payload = resp
+                text = resp.content[0].text.strip()
+            else:
+                api_key = self.provider_client.get_api_key(ModelProvider.ANTHROPIC)
+                async with httpx.AsyncClient(timeout=120.0) as http:
+                    resp = await http.post(
+                        "https://api.anthropic.com/v1/messages",
+                        headers={
+                            "x-api-key": api_key,
+                            "anthropic-version": "2023-06-01",
+                            "content-type": "application/json",
+                        },
+                        json={
+                            "model": effective_model,
+                            "max_tokens": max_tokens,
+                            "system": system_content,
+                            "messages": chat_messages,
+                        },
+                    )
+                    response_payload = resp.json()
+                    text = response_payload["content"][0]["text"].strip()
+            self._record_llm_usage(
+                latency_ms=round((time.perf_counter() - started) * 1000),
+                success=bool(text),
+                response_payload=response_payload,
+                provider_override=effective_provider,
+                model_override=effective_model,
+            )
+            return text
+        except Exception:
+            self._record_llm_usage(
+                latency_ms=round((time.perf_counter() - started) * 1000),
+                success=False,
+                response_payload=response_payload,
+                provider_override=effective_provider,
+                model_override=effective_model,
+            )
+            raise
 
     # ------------------------------------------------------------------
     # Action Parser (delegiert an shared)
@@ -1447,6 +1607,40 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         if saved_ok:
             return f"{final_text}\n\nGespeichert unter: `{file_path}`"
         return final_text
+
+    def _maybe_finalize_after_terminal_tool(self, method: str, obs: Any) -> str | None:
+        if method != "restart_timus" or not isinstance(obs, dict):
+            return None
+
+        payload = obs
+        nested = obs.get("data")
+        if isinstance(nested, dict):
+            nested_status = str(nested.get("status") or "").strip().lower()
+            if nested_status in {"pending_restart", "blocked", "error"}:
+                payload = nested
+
+        status = str(payload.get("status") or "").strip().lower()
+        mode = str(payload.get("mode") or obs.get("mode") or "").strip() or "full"
+        message = str(payload.get("message") or obs.get("message") or "").strip()
+
+        if status == "pending_restart":
+            launcher_pid = payload.get("launcher_pid") or obs.get("launcher_pid")
+            lines = [
+                f"Der Neustart läuft im Hintergrund (Modus: {mode}).",
+            ]
+            if launcher_pid:
+                lines[0] = f"Der Neustart läuft im Hintergrund (Launcher-PID: {launcher_pid}, Modus: {mode})."
+            if message:
+                lines.append(message)
+            lines.append("Die Verbindung kann jetzt kurz unterbrochen sein. Prüfe den Status anschließend erneut.")
+            return "\n".join(lines)
+
+        if status in {"blocked", "error"}:
+            if message:
+                return message
+            return f"Neustart konnte nicht gestartet werden (Status: {status})."
+
+        return None
 
     # ------------------------------------------------------------------
     # Working-Memory Prompt-Injektion
@@ -1895,6 +2089,23 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 "result": str(obs)[:200] if obs else None,
                 "observation": self._sanitize_observation(obs),
             })
+
+            terminal_result = self._maybe_finalize_after_terminal_tool(method, obs)
+            if terminal_result is not None:
+                if roi_set:
+                    self._clear_roi()
+                self._emit_step_trace(
+                    action="terminal_tool_finalize",
+                    output_data={
+                        "method": method,
+                        "status": getattr(obs, "get", lambda *_: None)("status") if isinstance(obs, dict) else None,
+                        "final_preview": self._preview_value(terminal_result, 500),
+                    },
+                    status="completed",
+                )
+                self._emit_live_status(phase="final", step=step, total_steps=self.max_iterations)
+                await self._run_reflection(task, terminal_result, success=True)
+                return terminal_result
             
             self._handle_file_artifacts(obs)
 

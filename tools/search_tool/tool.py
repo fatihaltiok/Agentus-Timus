@@ -13,6 +13,9 @@ import json
 import logging
 import asyncio
 import base64
+import time
+from dataclasses import dataclass
+from enum import Enum
 from typing import List, Dict, Any, Optional
 
 import requests
@@ -33,6 +36,8 @@ if not (DATAFORSEO_USER and DATAFORSEO_PASS):
 # --- API Konstanten ---
 DATAFORSEO_BASE_URL = "https://api.dataforseo.com"
 DEFAULT_API_TIMEOUT = 45
+DEFAULT_STANDARD_TIMEOUT = 90
+DEFAULT_STANDARD_POLL_INTERVAL = 2.0
 
 # Endpunkt-Mapping
 API_ENDPOINTS = {
@@ -63,6 +68,175 @@ LOCATION_CODES = {
     "uk": 2826,      # UK
     "fr": 2250,      # Frankreich
 }
+
+LANGUAGE_TO_LOCATION_CODE = {
+    "de": 2276,
+    "en": 2840,
+    "fr": 2250,
+    "es": 2724,
+    "it": 2380,
+}
+
+
+class DataForSEORetrievalMode(str, Enum):
+    LIVE = "live"
+    STANDARD = "standard"
+
+
+class YouTubeRequestType(str, Enum):
+    ORGANIC_SEARCH = "youtube_organic_search"
+    VIDEO_INFO = "youtube_video_info"
+    SUBTITLES = "youtube_subtitles"
+    COMMENTS = "youtube_comments"
+
+
+@dataclass(frozen=True)
+class YouTubeRequestSpec:
+    request_type: YouTubeRequestType
+    query: str = ""
+    video_id: str = ""
+    language_code: str = "de"
+    location_code: Optional[int] = None
+    max_results: int = 5
+    device: str = "desktop"
+    device_os: str = "windows"
+    mode: DataForSEORetrievalMode = DataForSEORetrievalMode.LIVE
+
+
+def parse_dataforseo_mode(value: str) -> DataForSEORetrievalMode:
+    raw = str(value or "live").strip().lower()
+    try:
+        return DataForSEORetrievalMode(raw)
+    except ValueError as exc:
+        raise ValueError(f"Ungueltiger DataForSEO-Modus: {value!r}. Erlaubt: live, standard") from exc
+
+
+def _youtube_location_code(language_code: str) -> int:
+    lang = str(language_code or "de").strip().lower()
+    return LANGUAGE_TO_LOCATION_CODE.get(lang, 2276)
+
+
+def validate_youtube_request(spec: YouTubeRequestSpec) -> YouTubeRequestSpec:
+    """Validiert und normalisiert einen typisierten YouTube-Request."""
+    language_code = str(spec.language_code or "de").strip().lower() or "de"
+    device = str(spec.device or "desktop").strip().lower() or "desktop"
+    device_os = str(spec.device_os or "windows").strip().lower() or "windows"
+    query = str(spec.query or "").strip()
+    video_id = str(spec.video_id or "").strip()
+    max_results = max(1, min(int(spec.max_results or 1), 10))
+    location_code = spec.location_code or _youtube_location_code(language_code)
+
+    if spec.request_type == YouTubeRequestType.ORGANIC_SEARCH:
+        if not query:
+            raise ValueError("youtube_organic_search erfordert query")
+        if device not in {"desktop", "mobile"}:
+            raise ValueError("youtube_organic_search erlaubt nur desktop oder mobile")
+        if device == "desktop" and device_os not in {"windows", "macos"}:
+            raise ValueError("youtube_organic_search desktop erfordert windows oder macos")
+        if device == "mobile" and device_os not in {"android", "ios"}:
+            raise ValueError("youtube_organic_search mobile erfordert android oder ios")
+    else:
+        if not video_id:
+            raise ValueError(f"{spec.request_type.value} erfordert video_id")
+        if device != "desktop":
+            raise ValueError(f"{spec.request_type.value} ist desktop-only")
+        if device_os not in {"windows", "macos"}:
+            raise ValueError(f"{spec.request_type.value} erlaubt nur windows oder macos")
+
+    return YouTubeRequestSpec(
+        request_type=spec.request_type,
+        query=query,
+        video_id=video_id,
+        language_code=language_code,
+        location_code=location_code,
+        max_results=max_results,
+        device=device,
+        device_os=device_os,
+        mode=spec.mode,
+    )
+
+
+def build_youtube_organic_payload(spec: YouTubeRequestSpec) -> list[dict[str, Any]]:
+    spec = validate_youtube_request(spec)
+    if spec.request_type != YouTubeRequestType.ORGANIC_SEARCH:
+        raise ValueError("Falscher Request-Typ fuer build_youtube_organic_payload")
+    payload = {
+        "keyword": spec.query,
+        "location_code": spec.location_code,
+        "language_code": spec.language_code,
+        "depth": spec.max_results,
+    }
+    # Konservativ: Default-Desktop/Windows unverändert lassen, um bestehende Live-Calls nicht zu riskieren.
+    if spec.device != "desktop" or spec.device_os != "windows":
+        payload["device"] = spec.device
+        payload["os"] = spec.device_os
+    return [payload]
+
+
+def build_youtube_video_info_payload(spec: YouTubeRequestSpec) -> list[dict[str, Any]]:
+    spec = validate_youtube_request(spec)
+    if spec.request_type != YouTubeRequestType.VIDEO_INFO:
+        raise ValueError("Falscher Request-Typ fuer build_youtube_video_info_payload")
+    return [{"video_id": spec.video_id}]
+
+
+def build_youtube_subtitles_payload(spec: YouTubeRequestSpec) -> list[dict[str, Any]]:
+    spec = validate_youtube_request(spec)
+    if spec.request_type != YouTubeRequestType.SUBTITLES:
+        raise ValueError("Falscher Request-Typ fuer build_youtube_subtitles_payload")
+    return [{"video_id": spec.video_id, "language_code": spec.language_code}]
+
+
+def build_youtube_comments_payload(spec: YouTubeRequestSpec) -> list[dict[str, Any]]:
+    spec = validate_youtube_request(spec)
+    if spec.request_type != YouTubeRequestType.COMMENTS:
+        raise ValueError("Falscher Request-Typ fuer build_youtube_comments_payload")
+    return [{"video_id": spec.video_id, "depth": spec.max_results}]
+
+
+def build_youtube_request(spec: YouTubeRequestSpec) -> tuple[str, list[dict[str, Any]]]:
+    """Baut Endpoint + Payload für einen typisierten YouTube-Request."""
+    spec = validate_youtube_request(spec)
+    base_path = _youtube_base_path(spec.request_type)
+    payload = _youtube_payload_for_spec(spec)
+
+    if spec.mode == DataForSEORetrievalMode.LIVE:
+        return f"{base_path}/live/advanced", payload
+    if spec.mode == DataForSEORetrievalMode.STANDARD:
+        return f"{base_path}/task_post", payload
+    raise ValueError(f"Unbekannter YouTube Request-Typ: {spec.request_type}")
+
+
+def build_youtube_task_get_endpoint(spec: YouTubeRequestSpec, task_id: str) -> str:
+    spec = validate_youtube_request(spec)
+    task_id = str(task_id or "").strip()
+    if not task_id:
+        raise ValueError("task_id ist erforderlich")
+    return f"{_youtube_base_path(spec.request_type)}/task_get/advanced/{task_id}"
+
+
+def _youtube_base_path(request_type: YouTubeRequestType) -> str:
+    if request_type == YouTubeRequestType.ORGANIC_SEARCH:
+        return "/v3/serp/youtube/organic"
+    if request_type == YouTubeRequestType.VIDEO_INFO:
+        return "/v3/serp/youtube/video_info"
+    if request_type == YouTubeRequestType.SUBTITLES:
+        return "/v3/serp/youtube/video_subtitles"
+    if request_type == YouTubeRequestType.COMMENTS:
+        return "/v3/serp/youtube/video_comments"
+    raise ValueError(f"Unbekannter YouTube Request-Typ: {request_type}")
+
+
+def _youtube_payload_for_spec(spec: YouTubeRequestSpec) -> list[dict[str, Any]]:
+    if spec.request_type == YouTubeRequestType.ORGANIC_SEARCH:
+        return build_youtube_organic_payload(spec)
+    if spec.request_type == YouTubeRequestType.VIDEO_INFO:
+        return build_youtube_video_info_payload(spec)
+    if spec.request_type == YouTubeRequestType.SUBTITLES:
+        return build_youtube_subtitles_payload(spec)
+    if spec.request_type == YouTubeRequestType.COMMENTS:
+        return build_youtube_comments_payload(spec)
+    raise ValueError(f"Unbekannter YouTube Request-Typ: {spec.request_type}")
 
 
 def _get_auth_header() -> Dict[str, str]:
@@ -419,14 +593,69 @@ async def search_scholar(
 
 def _call_dataforseo_youtube(endpoint: str, payload: list) -> dict:
     """Führt einen DataForSEO YouTube-API-Aufruf durch und gibt die rohe Response zurück."""
+    return _call_dataforseo_json("POST", endpoint, payload=payload, timeout=DEFAULT_API_TIMEOUT)
+
+
+def _call_dataforseo_json(
+    method: str,
+    endpoint: str,
+    payload: Optional[list | dict] = None,
+    timeout: float = DEFAULT_API_TIMEOUT,
+) -> dict:
     url = DATAFORSEO_BASE_URL + endpoint
     headers = _get_auth_header()
-    response = requests.post(url, json=payload, headers=headers, timeout=DEFAULT_API_TIMEOUT)
+    response = requests.request(method, url, json=payload, headers=headers, timeout=timeout)
     response.raise_for_status()
     data = response.json()
     if data.get("status_code") != 20000:
         raise ValueError(f"DataForSEO API Fehler: {data.get('status_message', 'Unbekannt')}")
     return data
+
+
+def _first_dataforseo_task(data: dict) -> dict:
+    tasks = data.get("tasks", [])
+    if not tasks or not isinstance(tasks[0], dict):
+        raise ValueError("DataForSEO Antwort enthält keinen Task")
+    return tasks[0]
+
+
+def _task_is_pending(task: dict) -> bool:
+    status_message = str(task.get("status_message", "")).lower()
+    if task.get("result"):
+        return False
+    return any(token in status_message for token in ("queue", "queued", "progress", "pending", "created"))
+
+
+def _call_dataforseo_youtube_standard(
+    spec: YouTubeRequestSpec,
+    timeout: float = DEFAULT_STANDARD_TIMEOUT,
+    poll_interval: float = DEFAULT_STANDARD_POLL_INTERVAL,
+) -> dict:
+    spec = validate_youtube_request(spec)
+    endpoint, payload = build_youtube_request(spec)
+    post_data = _call_dataforseo_json("POST", endpoint, payload=payload, timeout=DEFAULT_API_TIMEOUT)
+    first_task = _first_dataforseo_task(post_data)
+    task_id = str(first_task.get("id", "")).strip()
+    if not task_id:
+        raise ValueError("DataForSEO task_post lieferte keine task_id")
+
+    task_get_endpoint = build_youtube_task_get_endpoint(spec, task_id)
+    deadline = time.monotonic() + timeout
+    last_task = first_task
+
+    while time.monotonic() < deadline:
+        get_data = _call_dataforseo_json("GET", task_get_endpoint, timeout=DEFAULT_API_TIMEOUT)
+        task = _first_dataforseo_task(get_data)
+        last_task = task
+        if task.get("result"):
+            return get_data
+        if not _task_is_pending(task):
+            raise ValueError(f"DataForSEO Task nicht erfolgreich: {task.get('status_message', 'Unbekannt')}")
+        time.sleep(poll_interval)
+
+    raise TimeoutError(
+        f"Timeout bei DataForSEO Standard-Task ({timeout}s): {last_task.get('status_message', 'keine Antwort')}"
+    )
 
 
 @tool(
@@ -436,6 +665,7 @@ def _call_dataforseo_youtube(endpoint: str, payload: list) -> dict:
         P("query", "string", "Suchanfrage"),
         P("max_results", "integer", "Maximale Anzahl Videos (1-10)", required=False, default=5),
         P("language_code", "string", "Sprachcode z.B. de, en", required=False, default="de"),
+        P("mode", "string", "DataForSEO Modus: live oder standard", required=False, default="live"),
     ],
     capabilities=["search", "youtube"],
     category=C.SEARCH
@@ -443,7 +673,8 @@ def _call_dataforseo_youtube(endpoint: str, payload: list) -> dict:
 async def search_youtube(
     query: str,
     max_results: int = 5,
-    language_code: str = "de"
+    language_code: str = "de",
+    mode: str = "live",
 ) -> list:
     """
     Sucht YouTube-Videos via DataForSEO.
@@ -455,16 +686,19 @@ async def search_youtube(
     if not (DATAFORSEO_USER and DATAFORSEO_PASS):
         raise Exception("DataForSEO Credentials nicht konfiguriert.")
 
-    payload = [{
-        "keyword": query,
-        "language_code": language_code,
-        "depth": min(max_results, 10),
-    }]
+    spec = YouTubeRequestSpec(
+        request_type=YouTubeRequestType.ORGANIC_SEARCH,
+        query=query,
+        language_code=language_code,
+        max_results=max_results,
+        mode=parse_dataforseo_mode(mode),
+    )
 
     def _call():
-        return _call_dataforseo_youtube(
-            "/v3/serp/youtube/organic/live/advanced", payload
-        )
+        if spec.mode == DataForSEORetrievalMode.STANDARD:
+            return _call_dataforseo_youtube_standard(spec)
+        endpoint, payload = build_youtube_request(spec)
+        return _call_dataforseo_youtube(endpoint, payload)
 
     data = await asyncio.to_thread(_call)
 
@@ -509,13 +743,15 @@ async def search_youtube(
     parameters=[
         P("video_id", "string", "YouTube Video-ID (z.B. dQw4w9WgXcQ)"),
         P("language_code", "string", "Bevorzugte Sprache, Fallback auf 'en'", required=False, default="de"),
+        P("mode", "string", "DataForSEO Modus: live oder standard", required=False, default="live"),
     ],
     capabilities=["search", "youtube"],
     category=C.SEARCH
 )
 async def get_youtube_subtitles(
     video_id: str,
-    language_code: str = "de"
+    language_code: str = "de",
+    mode: str = "live",
 ) -> dict:
     """
     Ruft YouTube-Untertitel via DataForSEO ab.
@@ -527,12 +763,18 @@ async def get_youtube_subtitles(
         raise Exception("DataForSEO Credentials nicht konfiguriert.")
 
     async def _fetch(lang: str) -> dict:
-        payload = [{"video_id": video_id, "language_code": lang}]
+        spec = YouTubeRequestSpec(
+            request_type=YouTubeRequestType.SUBTITLES,
+            video_id=video_id,
+            language_code=lang,
+            mode=parse_dataforseo_mode(mode),
+        )
 
         def _call():
-            return _call_dataforseo_youtube(
-                "/v3/serp/youtube/video_subtitles/live/advanced", payload
-            )
+            if spec.mode == DataForSEORetrievalMode.STANDARD:
+                return _call_dataforseo_youtube_standard(spec)
+            endpoint, payload = build_youtube_request(spec)
+            return _call_dataforseo_youtube(endpoint, payload)
         return await asyncio.to_thread(_call)
 
     # Erst gewünschte Sprache, Fallback auf Englisch

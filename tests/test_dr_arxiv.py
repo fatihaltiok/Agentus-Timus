@@ -7,7 +7,7 @@ Kein Netzwerk.
 """
 
 import pytest
-from tools.deep_research.trend_researcher import _RELEVANCE_THRESHOLD
+from tools.deep_research.trend_researcher import ArXivResearcher, _RELEVANCE_THRESHOLD
 
 
 class TestArXivThreshold:
@@ -115,3 +115,34 @@ class TestArXivMaxCandidates:
         import tools.deep_research.trend_researcher as t
         source = inspect.getsource(t.ArXivResearcher._fetch_papers)
         assert "25" in source
+
+
+class TestArXivAtomParsing:
+    def test_parse_atom_extracts_single_paper(self):
+        researcher = ArXivResearcher()
+        xml_text = """<?xml version="1.0" encoding="UTF-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+          <entry>
+            <id>http://arxiv.org/abs/2603.12345v1</id>
+            <published>2026-03-09T12:00:00Z</published>
+            <title>  Test Paper  </title>
+            <summary>  Abstract text.  </summary>
+            <author><name>Alice Example</name></author>
+            <author><name>Bob Example</name></author>
+          </entry>
+        </feed>
+        """
+
+        papers = researcher._parse_atom(xml_text)
+
+        assert len(papers) == 1
+        assert papers[0]["arxiv_id"] == "2603.12345"
+        assert papers[0]["published"] == "2026-03-09"
+        assert papers[0]["authors"] == ["Alice Example", "Bob Example"]
+
+    def test_parse_atom_returns_empty_on_malformed_xml(self):
+        researcher = ArXivResearcher()
+
+        papers = researcher._parse_atom("<feed><entry></feed>")
+
+        assert papers == []

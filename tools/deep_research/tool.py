@@ -55,6 +55,7 @@ from tools.deep_research.research_contracts import (
     EvidenceStance,
     build_source_record_from_legacy,
     compute_claim_verdict,
+    filter_claims_for_query,
     infer_domain_from_text,
     initial_research_contract,
     sort_claims_for_report,
@@ -391,7 +392,7 @@ class DeepResearchSession:
         }
         for claim in legacy_claims:
             existing_claims_by_id.setdefault(claim.claim_id, claim)
-        self.contract_v2.claims = list(existing_claims_by_id.values())
+        self.contract_v2.claims = _filter_session_claims(self, list(existing_claims_by_id.values()))
 
         legacy_evidences = self._build_contract_evidences_v2(self.contract_v2.claims, self.contract_v2.sources)
         existing_evidences_by_id = {
@@ -399,7 +400,11 @@ class DeepResearchSession:
         }
         for evidence in legacy_evidences:
             existing_evidences_by_id.setdefault(evidence.evidence_id, evidence)
-        self.contract_v2.evidences = list(existing_evidences_by_id.values())
+        valid_claim_ids = {claim.claim_id for claim in self.contract_v2.claims}
+        self.contract_v2.evidences = [
+            evidence for evidence in existing_evidences_by_id.values()
+            if evidence.claim_id in valid_claim_ids
+        ]
 
         self._refresh_contract_v2_verdicts()
         self.contract_v2.open_questions = list(dict.fromkeys(self.limitations))
@@ -472,6 +477,8 @@ class DeepResearchSession:
                 claim_type="runtime_fact_group",
                 notes=f"source_count={len({f.get('source_url') for f in group if f.get('source_url')})}",
             )
+            if not _filter_session_claims(self, [claim]):
+                continue
 
             if candidate_output and candidate_output.get("status") == "verified_multiple_methods":
                 claim.confidence = 0.95
@@ -507,6 +514,7 @@ class DeepResearchSession:
                         source_id=source_id,
                         stance=EvidenceStance.SUPPORTS,
                         excerpt=str(fact.get("source_quote") or fact_text[:280]),
+                        notes=claim.notes,
                     )
                 )
 
@@ -541,8 +549,9 @@ class DeepResearchSession:
             )
 
         self.contract_v2.sources = list(source_records.values())
-        self.contract_v2.claims = claim_records
-        self.contract_v2.evidences = evidence_records
+        self.contract_v2.claims = _filter_session_claims(self, claim_records)
+        valid_claim_ids = {claim.claim_id for claim in self.contract_v2.claims}
+        self.contract_v2.evidences = [evidence for evidence in evidence_records if evidence.claim_id in valid_claim_ids]
         self._refresh_contract_v2_verdicts()
 
     def _build_contract_claims_v2(self, sources: List[Any]) -> List[ClaimRecord]:
@@ -554,19 +563,19 @@ class DeepResearchSession:
                 continue
             source_url = str(fact.get("example_source_url") or "").strip()
             source_id = next((src.source_id for src in sources if src.url == source_url), "")
-            claims.append(
-                ClaimRecord(
-                    claim_id=f"claim-verified-{idx}",
-                    question_id=self.contract_v2.question.question_id,
-                    domain=infer_domain_from_text(text),
-                    subject=self.query[:120],
-                    claim_text=text,
-                    claim_type="verified_fact",
-                    verdict=ClaimVerdict.LIKELY,
-                    supports=[source_id] if source_id else [],
-                    notes=f"legacy_status={fact.get('status', '')}",
-                )
+            claim = ClaimRecord(
+                claim_id=f"claim-verified-{idx}",
+                question_id=self.contract_v2.question.question_id,
+                domain=infer_domain_from_text(text),
+                subject=self.query[:120],
+                claim_text=text,
+                claim_type="verified_fact",
+                verdict=ClaimVerdict.LIKELY,
+                supports=[source_id] if source_id else [],
+                notes=f"legacy_status={fact.get('status', '')}; source_count={int(fact.get('source_count') or 0)}",
             )
+            if _filter_session_claims(self, [claim]):
+                claims.append(claim)
 
         for idx, claim in enumerate(self.unverified_claims, start=1):
             text = str(claim.get("fact") or "").strip()
@@ -576,20 +585,23 @@ class DeepResearchSession:
             source_id = next((src.source_id for src in sources if src.url == self._get_canonical_url(source_url)), "")
             source_type_hint = str(claim.get("source_type") or "")
             domain = infer_domain_from_text(f"{text} {source_type_hint}")
-            claims.append(
-                ClaimRecord(
-                    claim_id=f"claim-unverified-{idx}",
-                    question_id=self.contract_v2.question.question_id,
-                    domain=domain,
-                    subject=self.query[:120],
-                    claim_text=text,
-                    claim_type="legacy_claim",
-                    verdict=ClaimVerdict.INSUFFICIENT_EVIDENCE,
-                    supports=[source_id] if source_id else [],
-                    unknowns=["Noch nicht durch mehrere Quellen bestätigt"],
-                    notes=f"source_type={claim.get('source_type', '')}",
-                )
+            claim_record = ClaimRecord(
+                claim_id=f"claim-unverified-{idx}",
+                question_id=self.contract_v2.question.question_id,
+                domain=domain,
+                subject=self.query[:120],
+                claim_text=text,
+                claim_type="legacy_claim",
+                verdict=ClaimVerdict.INSUFFICIENT_EVIDENCE,
+                supports=[source_id] if source_id else [],
+                unknowns=["Noch nicht durch mehrere Quellen bestätigt"],
+                notes=(
+                    f"source_type={claim.get('source_type', '')}; "
+                    f"source_count={int(claim.get('source_count') or 0)}"
+                ),
             )
+            if _filter_session_claims(self, [claim_record]):
+                claims.append(claim_record)
 
         return claims
 
@@ -629,6 +641,21 @@ class DeepResearchSession:
 
 # Globaler Session-Speicher
 research_sessions: Dict[str, DeepResearchSession] = {}
+
+
+def _claim_requires_topic_filter(claim: ClaimRecord) -> bool:
+    return claim.claim_type in {"runtime_fact_group", "verified_fact", "legacy_claim"}
+
+
+def _filter_session_claims(session: DeepResearchSession, claims: List[ClaimRecord]) -> List[ClaimRecord]:
+    keep: List[ClaimRecord] = []
+    for claim in claims:
+        if not _claim_requires_topic_filter(claim):
+            keep.append(claim)
+            continue
+        if filter_claims_for_query([claim], session.query):
+            keep.append(claim)
+    return keep
 
 
 # ==============================================================================

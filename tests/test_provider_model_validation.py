@@ -54,6 +54,21 @@ def test_validate_model_or_raise_accepts_known_openrouter_model():
     assert fake.models.calls == 1
 
 
+def test_validate_model_or_raise_accepts_known_zai_model():
+    client = MultiProviderClient()
+    client._api_keys[ModelProvider.ZAI] = "test-key"
+    fake = _FakeClient(["glm-5"])
+    client._clients[ModelProvider.ZAI] = fake
+
+    client.validate_model_or_raise(
+        ModelProvider.ZAI,
+        "glm-5",
+        agent_type="dispatcher",
+    )
+
+    assert fake.models.calls == 1
+
+
 def test_validate_model_or_raise_caches_successful_lookup():
     client = MultiProviderClient()
     client._api_keys[ModelProvider.OPENROUTER] = "test-key"

@@ -220,14 +220,13 @@ class GoalQueueManager:
                     # Ziel + alle Nachkommen via goal_edges
                     goal_ids = self._get_descendant_ids(conn, root_id)
                     goal_ids.add(root_id)
-                    placeholders = ",".join("?" * len(goal_ids))
                     goal_rows = conn.execute(
-                        f"""SELECT g.id, g.title, g.description, g.status, g.priority_score,
+                        """SELECT g.id, g.title, g.description, g.status, g.priority_score,
                                    gs.progress, gs.metrics_json
                             FROM goals g
                             LEFT JOIN goal_state gs ON g.id = gs.goal_id
-                            WHERE g.id IN ({placeholders}) AND g.status != 'cancelled'""",
-                        list(goal_ids),
+                            WHERE g.id IN (SELECT value FROM json_each(?)) AND g.status != 'cancelled'""",
+                        (json.dumps(sorted(goal_ids)),),
                     ).fetchall()
                 else:
                     goal_rows = conn.execute(

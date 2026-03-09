@@ -267,7 +267,7 @@ class CuriosityEngine:
         self._decay_stale_topic_scores()
         weighted: Counter = Counter()
         for topic, base_count in topics_combined.items():
-            feedback_boost = self._topic_scores.get(topic, 1.0)
+            feedback_boost = self.get_topic_score(topic)
             weighted[topic] = int(base_count * feedback_boost)
 
         # Top-3 zurückgeben
@@ -475,6 +475,15 @@ class CuriosityEngine:
                 raw_msg,
                 action_id=action_id,
                 hook_names=["curiosity_push", topics[0] if topics else "curiosity"],
+                context={
+                    "source": "curiosity_push",
+                    "topic": topics[0] if topics else "curiosity",
+                    "url": result.get("url", ""),
+                    "title": result.get("title", "")[:160],
+                },
+                feedback_targets=[
+                    {"namespace": "curiosity_topic", "key": topics[0] if topics else "curiosity"},
+                ],
             )
             log.info("Curiosity: Telegram-Nachricht mit Feedback-Buttons gesendet")
         except Exception as e:
@@ -511,7 +520,14 @@ class CuriosityEngine:
 
     def get_topic_score(self, topic: str) -> float:
         """Gibt den aktuellen Score eines Topics zurück (default: 1.0)."""
-        return self._topic_scores.get(topic, 1.0)
+        local_score = self._topic_scores.get(topic, 1.0)
+        try:
+            from orchestration.feedback_engine import get_feedback_engine
+
+            target_score = get_feedback_engine().get_effective_target_score("curiosity_topic", topic, default=1.0)
+        except Exception:
+            target_score = 1.0
+        return max(0.1, min(3.0, local_score * target_score))
 
     def _decay_stale_topic_scores(self) -> None:
         """

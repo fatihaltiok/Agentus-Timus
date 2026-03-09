@@ -26,20 +26,23 @@ import os
 import json
 import sqlite3
 import logging
-import hashlib
 import re
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple, TYPE_CHECKING
 from dataclasses import dataclass, field, asdict
 from openai import OpenAI
+from utils.chroma_runtime import build_chroma_settings, configure_chroma_runtime
 from utils.openai_compat import prepare_openai_params
+from utils.stable_hash import stable_text_digest
 from dotenv import load_dotenv
 
 if TYPE_CHECKING:
     import chromadb
 
 load_dotenv()
+configure_chroma_runtime()
 log = logging.getLogger("memory_system")
 
 # Konfiguration
@@ -927,9 +930,7 @@ class MemoryManager:
         self.session = SessionMemory()
         self.persistent = PersistentMemory()
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        self.session_id = hashlib.md5(
-            datetime.now().isoformat().encode()
-        ).hexdigest()[:12]
+        self.session_id = uuid.uuid4().hex[:12]
         self._active_external_session_id: Optional[str] = None
         self.self_model_last_updated: Optional[datetime] = None
         self.self_model_dirty = False
@@ -986,7 +987,7 @@ class MemoryManager:
             db_path.mkdir(parents=True, exist_ok=True)
             client = chromadb.PersistentClient(
                 path=str(db_path),
-                settings=chromadb.config.Settings(anonymized_telemetry=False),
+                settings=build_chroma_settings(chromadb_module=chromadb),
             )
             collection = client.get_or_create_collection(
                 name="timus_long_term_memory",
@@ -1204,7 +1205,7 @@ class MemoryManager:
             if after:
                 candidates.append({
                     "category": "user_profile",
-                    "key": f"explicit_note_{hashlib.md5(after.encode()).hexdigest()[:8]}",
+                    "key": f"explicit_note_{stable_text_digest(after, hex_chars=8)}",
                     "value": after,
                     "reason": "explicit_request",
                     "importance": 0.9
@@ -2124,7 +2125,7 @@ class MemoryManager:
             for goal in user.goals:
                 self.store_with_embedding(MemoryItem(
                     category="user_profile",
-                    key=f"goal_{hashlib.md5(goal.encode()).hexdigest()[:6]}",
+                    key=f"goal_{stable_text_digest(goal, hex_chars=6)}",
                     value=goal,
                     importance=0.8,
                     reason="markdown_sync"
@@ -2135,7 +2136,7 @@ class MemoryManager:
             for hook in soul.behavior_hooks:
                 self.store_with_embedding(MemoryItem(
                     category="patterns",
-                    key=f"hook_{hashlib.md5(hook.encode()).hexdigest()[:6]}",
+                    key=f"hook_{stable_text_digest(hook, hex_chars=6)}",
                     value=hook,
                     importance=0.7,
                     reason="markdown_sync"
@@ -2146,7 +2147,7 @@ class MemoryManager:
             for m in memories:
                 self.store_with_embedding(MemoryItem(
                     category=m.category,
-                    key=f"md_{hashlib.md5(m.content.encode()).hexdigest()[:8]}",
+                    key=f"md_{stable_text_digest(m.content, hex_chars=8)}",
                     value=m.content,
                     importance=m.importance,
                     reason="markdown_sync",
@@ -2443,7 +2444,7 @@ Antworte im JSON-Format:
             for fact_text in result.get("user_facts", []):
                 fact = Fact(
                     category="extracted",
-                    key=f"fact_{hashlib.md5(fact_text.encode()).hexdigest()[:8]}",
+                    key=f"fact_{stable_text_digest(fact_text, hex_chars=8)}",
                     value=fact_text,
                     source="summarization"
                 )
@@ -2481,9 +2482,7 @@ Antworte im JSON-Format:
         self.session.clear()
         
         # Neue Session-ID
-        self.session_id = hashlib.md5(
-            datetime.now().isoformat().encode()
-        ).hexdigest()[:12]
+        self.session_id = uuid.uuid4().hex[:12]
     
     def remember(self, key: str, value: str, category: str = "user_stated"):
         """Explizit etwas merken."""

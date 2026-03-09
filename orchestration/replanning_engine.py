@@ -8,11 +8,11 @@ M2.2 Re-Planning:
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from utils.stable_hash import stable_text_digest
 
 from orchestration.task_queue import (
     CommitmentStatus,
@@ -300,7 +300,7 @@ class ReplanningEngine:
                 str(details.get("reason") or ""),
             ]
         )
-        digest = hashlib.sha1(base.encode("utf-8")).hexdigest()[:16]
+        digest = stable_text_digest(base, hex_chars=16)
         return f"{commitment_id}:{trigger}:{bucket}:{digest}"
 
     def _apply_action(

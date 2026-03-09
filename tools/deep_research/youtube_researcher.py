@@ -169,7 +169,7 @@ class YouTubeResearcher:
             if len(all_videos) >= max_videos * 2:
                 break  # Genug Kandidaten gesammelt
             try:
-                result = await call_tool_internal("search_youtube", {"query": q, "max_results": 5})
+                result = await call_tool_internal("search_youtube", {"query": q, "max_results": 5, "mode": "standard"})
                 if isinstance(result, list):
                     for v in result:
                         vid = v.get("video_id", "")
@@ -193,7 +193,7 @@ class YouTubeResearcher:
         async def _fetch(lang: str) -> Optional[str]:
             try:
                 result = await call_tool_internal(
-                    "get_youtube_subtitles", {"video_id": video_id, "language_code": lang}
+                    "get_youtube_subtitles", {"video_id": video_id, "language_code": lang, "mode": "standard"}
                 )
                 if isinstance(result, dict):
                     text = result.get("full_text") or ""

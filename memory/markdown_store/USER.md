@@ -1,5 +1,5 @@
 ---
-name: Fatih Altiok
+name: Test User
 location: Offenbach, Hessen, Deutschland
 languages: {}
 preferences:
@@ -7,9 +7,9 @@ preferences:
   style: locker, direkt, Sarkasmus
   anrede: du
 goals:
-  - Karriere technisch
+  - deinen autonmomie lever steigern
 constraints: []
-updated_at: 2026-03-06T11:50:13.160279
+updated_at: 2026-03-09T22:55:23.817996
 ---
 
 # Benutzer-Profil
@@ -18,7 +18,7 @@ Diese Datei enthält Informationen über den Benutzer.
 Sie kann manuell editiert werden und wird automatisch mit Timus synchronisiert.
 
 ## Name
-Fatih Altiok
+Test User
 
 ## Standort
 Offenbach, Hessen, Deutschland
@@ -32,10 +32,10 @@ Nicht gesetzt
 - anrede: du
 
 ## Ziele
-- Karriere technisch
+- deinen autonmomie lever steigern
 
 ## Constraints
 Keine Constraints
 
 ---
-*Zuletzt aktualisiert: 2026-03-06T11:50:13.160279*
+*Zuletzt aktualisiert: 2026-03-09T22:55:23.817996*

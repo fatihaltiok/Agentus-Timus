@@ -18,6 +18,7 @@ log = logging.getLogger("TimusAgent-v4.4")
 class ModelProvider(str, Enum):
     """Unterstuetzte LLM-Provider."""
     OPENAI = "openai"
+    ZAI = "zai"
     ANTHROPIC = "anthropic"
     DEEPSEEK = "deepseek"
     INCEPTION = "inception"
@@ -38,6 +39,7 @@ class MultiProviderClient:
 
     BASE_URLS = {
         ModelProvider.OPENAI: "https://api.openai.com/v1",
+        ModelProvider.ZAI: "https://api.z.ai/api/paas/v4",
         ModelProvider.ANTHROPIC: "https://api.anthropic.com",
         ModelProvider.DEEPSEEK: "https://api.deepseek.com/v1",
         ModelProvider.INCEPTION: "https://api.inceptionlabs.ai/v1",
@@ -48,6 +50,7 @@ class MultiProviderClient:
 
     API_KEY_ENV = {
         ModelProvider.OPENAI: "OPENAI_API_KEY",
+        ModelProvider.ZAI: "ZAI_API_KEY",
         ModelProvider.ANTHROPIC: "ANTHROPIC_API_KEY",
         ModelProvider.DEEPSEEK: "DEEPSEEK_API_KEY",
         ModelProvider.INCEPTION: "INCEPTION_API_KEY",
@@ -99,7 +102,7 @@ class MultiProviderClient:
             )
 
         if provider in [
-            ModelProvider.OPENAI, ModelProvider.DEEPSEEK,
+            ModelProvider.OPENAI, ModelProvider.ZAI, ModelProvider.DEEPSEEK,
             ModelProvider.INCEPTION, ModelProvider.NVIDIA,
             ModelProvider.OPENROUTER,
         ]:
@@ -118,6 +121,7 @@ class MultiProviderClient:
     def _provider_supports_model_listing(self, provider: ModelProvider) -> bool:
         return provider in {
             ModelProvider.OPENAI,
+            ModelProvider.ZAI,
             ModelProvider.DEEPSEEK,
             ModelProvider.INCEPTION,
             ModelProvider.NVIDIA,

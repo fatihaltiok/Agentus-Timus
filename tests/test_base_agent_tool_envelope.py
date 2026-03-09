@@ -157,3 +157,51 @@ async def test_call_tool_formats_jsonrpc_error_dict(monkeypatch):
     result = await agent._call_tool("delegate_to_agent", {"agent_type": "research", "task": "x"})
 
     assert result["error"] == "JSON-RPC Fehler: code=-32602 | Invalid params | missing session_id"
+
+
+def test_terminal_restart_tool_finalizes_agent_run():
+    agent = _minimal_base_agent()
+
+    result = agent._maybe_finalize_after_terminal_tool(
+        "restart_timus",
+        {
+            "status": "pending_restart",
+            "mode": "full",
+            "launcher_pid": 12345,
+            "message": "Detached Timus-Neustart gestartet (Modus: full).",
+        },
+    )
+
+    assert result is not None
+    assert "Launcher-PID: 12345" in result
+    assert "Modus: full" in result
+    assert "Die Verbindung kann jetzt kurz unterbrochen sein" in result
+
+
+def test_terminal_restart_tool_finalizes_agent_run_for_normalized_envelope():
+    agent = _minimal_base_agent()
+
+    result = agent._maybe_finalize_after_terminal_tool(
+        "restart_timus",
+        {
+            "status": "success",
+            "mode": "full",
+            "launcher_pid": 12345,
+            "message": "Detached Timus-Neustart gestartet (Modus: full). Status danach separat pruefen.",
+            "data": {
+                "status": "pending_restart",
+                "mode": "full",
+                "launcher_pid": 12345,
+                "message": "Detached Timus-Neustart gestartet (Modus: full). Status danach separat pruefen.",
+            },
+            "summary": "Detached Timus-Neustart gestartet (Modus: full). Status danach separat pruefen.",
+            "artifacts": [],
+            "metadata": {},
+            "error": "",
+        },
+    )
+
+    assert result is not None
+    assert "Launcher-PID: 12345" in result
+    assert "Modus: full" in result
+    assert "Die Verbindung kann jetzt kurz unterbrochen sein" in result

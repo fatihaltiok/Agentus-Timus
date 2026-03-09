@@ -51,3 +51,30 @@ def test_quick_intent_routes_tiefe_recherche_without_follow_up_to_research():
         "mach eine tiefe recherche zu chinesischen llms"
     )
     assert decision == "research"
+
+
+def test_quick_intent_routes_complex_browser_booking_flow_to_meta():
+    import main_dispatcher
+
+    decision = main_dispatcher.quick_intent_check(
+        "Starte den Browser, gehe auf booking.com, tippe Berlin, waehle 15. Maerz bis 17. Maerz und klicke auf Suchen"
+    )
+    assert decision == "meta"
+
+
+def test_quick_intent_keeps_simple_browser_step_on_visual_nemotron():
+    import main_dispatcher
+
+    decision = main_dispatcher.quick_intent_check(
+        "Starte den Browser und gehe auf booking.com"
+    )
+    assert decision == "visual_nemotron"
+
+
+def test_quick_intent_keeps_service_start_on_shell():
+    import main_dispatcher
+
+    decision = main_dispatcher.quick_intent_check(
+        "Starte den MCP-Server neu"
+    )
+    assert decision == "shell"

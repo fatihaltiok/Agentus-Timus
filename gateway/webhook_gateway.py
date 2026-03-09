@@ -33,6 +33,7 @@ import hmac
 import json
 import logging
 import os
+import ipaddress
 from datetime import datetime
 from typing import Optional
 
@@ -165,6 +166,17 @@ class WebhookServer:
     def __init__(self):
         self._server_task = None
         self._port = int(os.getenv("WEBHOOK_PORT", "8765"))
+        self._host = self._resolve_host(os.getenv("WEBHOOK_HOST", "127.0.0.1"))
+
+    @staticmethod
+    def _resolve_host(raw_host: Optional[str]) -> str:
+        host = str(raw_host or "127.0.0.1").strip() or "127.0.0.1"
+        try:
+            if ipaddress.ip_address(host).is_unspecified:
+                return host
+        except ValueError:
+            pass
+        return host
 
     async def start(self) -> None:
         import asyncio
@@ -173,7 +185,7 @@ class WebhookServer:
         app = create_webhook_app()
         config = uvicorn.Config(
             app,
-            host="0.0.0.0",
+            host=self._host,
             port=self._port,
             log_level="warning",  # Nicht mit Timus-Logs vermischen
             access_log=False,
@@ -182,7 +194,7 @@ class WebhookServer:
         self._server_task = asyncio.create_task(
             server.serve(), name="webhook-server"
         )
-        log.info(f"✅ Webhook-Server aktiv auf Port {self._port}")
+        log.info(f"✅ Webhook-Server aktiv auf {self._host}:{self._port}")
 
     async def stop(self) -> None:
         if self._server_task:

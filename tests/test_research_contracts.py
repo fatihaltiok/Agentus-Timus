@@ -21,9 +21,12 @@ from tools.deep_research.research_contracts import (
     SourceTier,
     SourceType,
     aggregate_overall_confidence,
+    claim_is_on_topic,
     choose_research_profile,
     classify_source_tier,
     compute_claim_verdict,
+    extract_claim_source_count,
+    filter_claims_for_query,
     initial_research_contract,
     is_youtube_hard_evidence,
 )
@@ -167,6 +170,24 @@ def test_two_independent_high_quality_sources_confirm_vendor_comparison():
     assert verdict == ClaimVerdict.CONFIRMED
 
 
+def test_duplicate_evidence_from_same_source_never_confirms_strict_profile():
+    source = SourceRecord(
+        source_id="s1",
+        url="https://arxiv.org/abs/1234.5678",
+        title="Single Paper",
+        source_type=SourceType.PAPER,
+        tier=SourceTier.A,
+        has_methodology=True,
+    )
+    evidences = [
+        EvidenceRecord("e1", "c1", "s1", EvidenceStance.SUPPORTS, notes="source_count=1"),
+        EvidenceRecord("e2", "c1", "s1", EvidenceStance.SUPPORTS, notes="source_count=1"),
+        EvidenceRecord("e3", "c1", "s1", EvidenceStance.SUPPORTS, notes="source_count=1"),
+    ]
+    verdict = compute_claim_verdict(ResearchProfile.SCIENTIFIC, evidences, [source])
+    assert verdict != ClaimVerdict.CONFIRMED
+
+
 def test_contradicting_evidence_makes_claim_contested():
     sources = [
         SourceRecord("s1", "https://a", "A", SourceType.BENCHMARK, SourceTier.A, has_methodology=True),
@@ -224,6 +245,27 @@ def test_hypothesis_support_and_contradiction_never_confirm(
 
 def test_profile_selection_policy_keywords():
     assert choose_research_profile("Welche Regulierung gilt in der EU?") == ResearchProfile.POLICY_REGULATION
+
+
+def test_extract_claim_source_count_from_notes():
+    assert extract_claim_source_count("legacy_status=verified; source_count=3") == 3
+    assert extract_claim_source_count("no_count_here") == 0
+
+
+def test_claim_is_on_topic_filters_admin_metadata():
+    query = "Chinese LLMs Qwen DeepSeek AI agents capabilities comparison 2025 2026"
+    assert claim_is_on_topic(query, "DeepSeek-R1 zeigt starke Reasoning-Leistung in Coding-Benchmarks.") is True
+    assert claim_is_on_topic(query, "Als Kontaktadresse ist research@deepseek.com angegeben.") is False
+
+
+def test_filter_claims_for_query_removes_off_topic_claims():
+    query = "Chinese LLMs Qwen DeepSeek AI agents capabilities comparison 2025 2026"
+    claims = [
+        ClaimRecord("c1", "q1", "coding", "DeepSeek", "DeepSeek-R1 ist stark in Coding und Reasoning."),
+        ClaimRecord("c2", "q1", "general", "DeepSeek", "Als Kontaktadresse ist research@deepseek.com angegeben."),
+    ]
+    filtered = filter_claims_for_query(claims, query)
+    assert [claim.claim_id for claim in filtered] == ["c1"]
 
 
 @given(

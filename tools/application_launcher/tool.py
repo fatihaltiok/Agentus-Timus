@@ -7,6 +7,7 @@ import logging
 import subprocess
 import shutil
 import platform
+import shlex
 
 from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 
@@ -30,6 +31,14 @@ APPLICATION_COMMANDS = {
     "notepad": ["notepad.exe", "notepad"],
     "vscode": ["code"],
 }
+
+
+def _split_launch_command(command: str) -> list[str]:
+    """Split launcher commands without invoking a shell."""
+    try:
+        return shlex.split(command, posix=platform.system() != "Windows")
+    except ValueError:
+        return command.split()
 
 @tool(
     name="open_application",
@@ -66,8 +75,9 @@ async def open_application(app_name: str, wait_for_start: bool = True) -> dict:
     unique_candidates = list(dict.fromkeys(candidates))
 
     for cmd in unique_candidates:
-        # Argumente splitten, aber vorsichtig bei Strings mit Leerzeichen
-        cmd_parts = cmd.split()
+        cmd_parts = _split_launch_command(cmd)
+        if not cmd_parts:
+            continue
         executable = cmd_parts[0]
 
         # Prüfen ob ausführbar (shutil.which ist cross-platform!)
@@ -94,7 +104,7 @@ async def open_application(app_name: str, wait_for_start: bool = True) -> dict:
                 stderr=subprocess.PIPE,
                 creationflags=creationflags,
                 preexec_fn=preexec_fn,
-                shell=(platform.system() == "Windows") # Shell bei Windows oft nötig für Startmenü-Apps
+                shell=False,
             )
 
             if wait_for_start:
@@ -123,7 +133,10 @@ async def list_applications() -> dict:
     available = []
     for category, cmds in APPLICATION_COMMANDS.items():
         for cmd in cmds:
-            exe = cmd.split()[0]
+            cmd_parts = _split_launch_command(cmd)
+            if not cmd_parts:
+                continue
+            exe = cmd_parts[0]
             if shutil.which(exe):
                 available.append(category)
                 break

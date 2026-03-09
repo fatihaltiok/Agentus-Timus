@@ -1,0 +1,233 @@
+"""Runtime policy for orchestration lanes and safe parallel delegation."""
+
+from __future__ import annotations
+
+import re
+from typing import Any, Dict, List
+
+
+_CAPABILITY_KEYWORDS = {
+    "research": (
+        "recherchiere",
+        "recherche",
+        "finde heraus",
+        "suche nach",
+        "informiere mich",
+    ),
+    "document": (
+        "pdf",
+        "bericht",
+        "dokument",
+        "docx",
+        "xlsx",
+        "exportiere",
+        "speichere",
+    ),
+    "communication": (
+        "email",
+        "e-mail",
+        "mail",
+        "sende",
+        "schicke",
+        "schreibe eine nachricht",
+    ),
+    "visual": (
+        "browser",
+        "webseite",
+        "website",
+        "gehe auf",
+        "klicke",
+        "tippe",
+        "wähle",
+        "waehle",
+        "formular",
+    ),
+    "system": (
+        "logs",
+        "systemstatus",
+        "service status",
+        "prozesse",
+    ),
+    "shell": (
+        "systemctl",
+        "bash",
+        "terminal",
+        "sudo",
+        "skript ausführen",
+        "skript ausfuehren",
+    ),
+    "data": (
+        "csv",
+        "excel",
+        "json",
+        "statistik",
+        "daten analysieren",
+    ),
+    "development": (
+        "python",
+        "code",
+        "skript",
+        "implementiere",
+        "debugge",
+    ),
+}
+
+_WORKFLOW_CONNECTORS = (
+    "danach",
+    "anschließend",
+    "anschliessend",
+    "und dann",
+    "im anschluss",
+    "abschließend",
+    "abschliessend",
+)
+
+_DELIVERABLE_CONNECTORS = (
+    "und sende",
+    "und schicke",
+    "und speichere",
+    "und erstelle",
+    "und exportiere",
+    "mit anhang",
+)
+
+_LOGIN_MARKERS = (
+    "login",
+    "log in",
+    "sign in",
+    "anmelden",
+    "einloggen",
+    "logge dich ein",
+)
+
+_DEPENDENCY_PATTERNS = (
+    r"\baus schritt\b",
+    r"\baus dem ergebnis\b",
+    r"\bmit dem ergebnis\b",
+    r"\bnutze (?:das|den|die)\b",
+    r"\bverwende (?:das|den|die)\b",
+    r"\bartifacts?\b",
+    r"\bmetadata\b",
+    r"\bpdf_filepath\b",
+    r"\battachment_path\b",
+    r"\bergebnis von\b",
+    r"\bresult\[[^\]]+\]",
+)
+
+
+def evaluate_query_orchestration(query: str) -> Dict[str, Any]:
+    normalized = (query or "").strip().lower()
+    capability_hits = {
+        capability: [keyword for keyword in keywords if keyword in normalized]
+        for capability, keywords in _CAPABILITY_KEYWORDS.items()
+    }
+    capability_hits = {
+        capability: keywords
+        for capability, keywords in capability_hits.items()
+        if keywords
+    }
+
+    action_count = sum(
+        1
+        for token in (
+            "recherchiere",
+            "analysiere",
+            "erstelle",
+            "schreibe",
+            "sende",
+            "schicke",
+            "speichere",
+            "gib ein",
+            "trage",
+            "fülle",
+            "fuelle",
+            "gehe auf",
+            "klicke",
+            "tippe",
+            "wähle",
+            "waehle",
+            "öffne",
+            "oeffne",
+        )
+        if token in normalized
+    )
+    dependency_markers = [token for token in _WORKFLOW_CONNECTORS if token in normalized]
+    deliverable_markers = [token for token in _DELIVERABLE_CONNECTORS if token in normalized]
+    has_login_workflow = any(marker in normalized for marker in _LOGIN_MARKERS) and any(
+        token in normalized for token in ("benutzername", "username", "email", "e-mail", "passwort", "password")
+    )
+
+    route_to_meta = (
+        len(capability_hits) >= 2
+        or action_count >= 3
+        or bool(dependency_markers)
+        or bool(deliverable_markers)
+        or has_login_workflow
+    )
+    return {
+        "route_to_meta": route_to_meta,
+        "capabilities": sorted(capability_hits.keys()),
+        "capability_count": len(capability_hits),
+        "action_count": action_count,
+        "dependency_markers": dependency_markers,
+        "deliverable_markers": deliverable_markers,
+        "reason": (
+            "multi_capability"
+            if len(capability_hits) >= 2
+            else "workflow_connectors"
+            if dependency_markers
+            else "deliverable_chain"
+            if deliverable_markers
+            else "login_workflow"
+            if has_login_workflow
+            else "multi_action"
+            if action_count >= 3
+            else "single_lane"
+        ),
+    }
+
+
+def evaluate_parallel_tasks(tasks: List[Dict[str, Any]]) -> Dict[str, Any]:
+    dependent_task_ids: List[str] = []
+    reasons: List[str] = []
+    safe_tasks = tasks or []
+    if len(safe_tasks) < 2:
+        return {
+            "allowed": True,
+            "policy_state": "allowed",
+            "reason": "single_task",
+            "dependent_task_ids": [],
+            "independent_task_ids": [
+                str((task or {}).get("task_id") or f"task-{idx}")
+                for idx, task in enumerate(safe_tasks, start=1)
+            ],
+        }
+
+    for idx, task in enumerate(safe_tasks, start=1):
+        text = str((task or {}).get("task", "")).strip().lower()
+        task_id = str((task or {}).get("task_id") or f"task-{idx}")
+        if any(token in text for token in _WORKFLOW_CONNECTORS):
+            dependent_task_ids.append(task_id)
+            reasons.append("workflow_connector")
+            continue
+        if any(token in text for token in _DELIVERABLE_CONNECTORS):
+            dependent_task_ids.append(task_id)
+            reasons.append("deliverable_chain")
+            continue
+        if any(re.search(pattern, text) for pattern in _DEPENDENCY_PATTERNS):
+            dependent_task_ids.append(task_id)
+            reasons.append("explicit_dependency")
+
+    independent_task_ids = [
+        str((task or {}).get("task_id") or f"task-{idx}")
+        for idx, task in enumerate(safe_tasks, start=1)
+        if str((task or {}).get("task_id") or f"task-{idx}") not in dependent_task_ids
+    ]
+    allowed = not dependent_task_ids
+    return {
+        "allowed": allowed,
+        "policy_state": "allowed" if allowed else "blocked",
+        "reason": "independent_tasks" if allowed else reasons[0],
+        "dependent_task_ids": dependent_task_ids,
+        "independent_task_ids": independent_task_ids,
+    }

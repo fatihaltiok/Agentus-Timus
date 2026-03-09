@@ -12,6 +12,7 @@ import mimetypes
 import os
 import smtplib
 import ssl
+from email.utils import formataddr, getaddresses
 from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
@@ -40,11 +41,27 @@ def _imap_config() -> dict:
     }
 
 
+def _parse_addresses(addrs: Optional[str]) -> List[str]:
+    if not addrs:
+        return []
+    return [addr for _, addr in getaddresses([addrs]) if addr]
+
+
+def _format_header_addresses(addrs: Optional[str]) -> str:
+    if not addrs:
+        return ""
+    parsed = [(name, addr) for name, addr in getaddresses([addrs]) if addr]
+    return ", ".join(formataddr((name, addr)) if name else addr for name, addr in parsed)
+
+
 async def send_email_smtp(
     to: str,
     subject: str,
     body: str,
+    cc: Optional[str] = None,
+    bcc: Optional[str] = None,
     html_body: Optional[str] = None,
+    reply_to: Optional[str] = None,
     attachment_path: Optional[str] = None,
 ) -> bool:
     """
@@ -54,7 +71,10 @@ async def send_email_smtp(
         to:              Empfänger-Adresse
         subject:         Betreff
         body:            Plaintext-Body
+        cc:              Optionale CC-Adressen, kommagetrennt
+        bcc:             Optionale BCC-Adressen, kommagetrennt
         html_body:       Optional HTML-Body
+        reply_to:        Optional Reply-To-Adresse(n), kommagetrennt
         attachment_path: Optionaler Pfad zu einer Anhang-Datei (absolut oder relativ)
 
     Returns:
@@ -65,10 +85,24 @@ async def send_email_smtp(
         log.warning("SMTP: SMTP_USER oder SMTP_PASSWORD fehlt")
         return False
 
+    to_addrs = _parse_addresses(to)
+    cc_addrs = _parse_addresses(cc)
+    bcc_addrs = _parse_addresses(bcc)
+    all_recipients = to_addrs + cc_addrs + bcc_addrs
+    if not to_addrs:
+        log.warning("SMTP: keine gueltige Empfaengeradresse in 'to'")
+        return False
+
     msg = MIMEMultipart("mixed")
     msg["From"] = cfg["user"]
-    msg["To"] = to
+    msg["To"] = _format_header_addresses(to)
     msg["Subject"] = subject
+    if cc_addrs:
+        msg["Cc"] = _format_header_addresses(cc)
+    if reply_to:
+        formatted_reply_to = _format_header_addresses(reply_to)
+        if formatted_reply_to:
+            msg["Reply-To"] = formatted_reply_to
 
     # Text/HTML-Teil
     body_part = MIMEMultipart("alternative")
@@ -98,7 +132,7 @@ async def send_email_smtp(
         context = ssl.create_default_context()
         with smtplib.SMTP_SSL(cfg["host"], cfg["port"], context=context) as server:
             server.login(cfg["user"], cfg["password"])
-            server.sendmail(cfg["user"], to, msg.as_string())
+            server.sendmail(cfg["user"], all_recipients, msg.as_string())
         log.info("SMTP: E-Mail an %s gesendet (Betreff: %s)", to, subject)
         return True
     except smtplib.SMTPAuthenticationError as e:

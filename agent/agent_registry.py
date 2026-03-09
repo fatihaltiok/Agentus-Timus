@@ -19,6 +19,9 @@ from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass, field
 from contextvars import ContextVar
 
+from orchestration.llm_budget_guard import cap_parallelism_for_budget
+from orchestration.orchestration_policy import evaluate_parallel_tasks
+
 log = logging.getLogger("AgentRegistry")
 
 # Externer SSE-Hook — wird von mcp_server.py beim Start gesetzt.
@@ -1038,12 +1041,49 @@ class AgentRegistry:
 
         trace_id = uuid.uuid4().hex[:12]
         effective_session_id = self._resolve_effective_session_id(from_agent, session_id)
-        semaphore = asyncio.Semaphore(max(1, min(10, int(max_parallel))))
+        policy_decision = evaluate_parallel_tasks(tasks)
+        if not policy_decision.get("allowed", False):
+            log.warning(
+                "[delegate_parallel] Policy-Block | trace=%s reason=%s dependent=%s",
+                trace_id,
+                policy_decision.get("reason", "unknown"),
+                policy_decision.get("dependent_task_ids", []),
+            )
+            return {
+                "trace_id": trace_id,
+                "total_tasks": len(tasks),
+                "success": 0,
+                "partial": 0,
+                "errors": len(tasks),
+                "results": [],
+                "budget_state": "n/a",
+                "effective_max_parallel": 0,
+                "policy_state": policy_decision.get("policy_state", "blocked"),
+                "policy_reason": policy_decision.get("reason", "unknown"),
+                "dependent_task_ids": policy_decision.get("dependent_task_ids", []),
+                "independent_task_ids": policy_decision.get("independent_task_ids", []),
+                "summary": "Parallel-Delegation durch Policy blockiert",
+            }
+        requested_parallel = max(1, min(10, int(max_parallel)))
+        effective_parallel, budget_decision = cap_parallelism_for_budget(
+            requested_parallel=requested_parallel,
+            agent=from_agent,
+            session_id=effective_session_id or "",
+        )
+        semaphore = asyncio.Semaphore(effective_parallel)
 
         log.info(
             f"[delegate_parallel] Start | {len(tasks)} Tasks | "
-            f"TraceID: {trace_id} | MaxParallel: {max_parallel}"
+            f"TraceID: {trace_id} | MaxParallel: {requested_parallel}"
         )
+        if effective_parallel != requested_parallel:
+            log.warning(
+                "[delegate_parallel] Budget-Cap aktiv | requested=%s effective=%s state=%s msg=%s",
+                requested_parallel,
+                effective_parallel,
+                budget_decision.state,
+                budget_decision.message,
+            )
 
         def _parallel_payload(
             *,
@@ -1276,6 +1316,12 @@ class AgentRegistry:
             "partial":     partial_count,
             "errors":      error_count,
             "results":     results,
+            "policy_state": policy_decision.get("policy_state", "allowed"),
+            "policy_reason": policy_decision.get("reason", "independent_tasks"),
+            "dependent_task_ids": policy_decision.get("dependent_task_ids", []),
+            "independent_task_ids": policy_decision.get("independent_task_ids", []),
+            "budget_state": budget_decision.state,
+            "effective_max_parallel": effective_parallel,
             "summary":     summary,
         }
 

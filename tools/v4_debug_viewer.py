@@ -7,10 +7,11 @@ Zeigt gespeicherte Screenshots und GPT-4 Analysen an.
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 from PIL import Image
 
-DEBUG_DIR = Path("/tmp/v4_debug")
+DEBUG_DIR = Path(tempfile.gettempdir()) / "timus_visual_v4" / "debug"
 
 
 def list_debug_files():

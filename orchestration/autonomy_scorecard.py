@@ -329,6 +329,8 @@ def _read_control_runtime(queue) -> Dict[str, Any]:
     action_state = queue.get_policy_runtime_state("scorecard_last_action")
     score_state = queue.get_policy_runtime_state("scorecard_last_score")
     governance_state = queue.get_policy_runtime_state("scorecard_governance_state")
+    e2e_gate_state = queue.get_policy_runtime_state("scorecard_e2e_gate_state")
+    ops_gate_state = queue.get_policy_runtime_state("scorecard_ops_gate_state")
 
     strict_force_off = False
     if strict_state:
@@ -369,6 +371,26 @@ def _read_control_runtime(queue) -> Dict[str, Any]:
         if isinstance(meta, dict):
             governance_reason = str(meta.get("reason") or "").strip() or None
 
+    e2e_value = None
+    e2e_reason = None
+    e2e_updated_at = None
+    if e2e_gate_state:
+        e2e_value = str(e2e_gate_state.get("state_value") or "").strip() or None
+        e2e_updated_at = str(e2e_gate_state.get("updated_at") or "").strip() or None
+        meta = e2e_gate_state.get("metadata")
+        if isinstance(meta, dict):
+            e2e_reason = str(meta.get("reason") or "").strip() or None
+
+    ops_value = None
+    ops_reason = None
+    ops_updated_at = None
+    if ops_gate_state:
+        ops_value = str(ops_gate_state.get("state_value") or "").strip() or None
+        ops_updated_at = str(ops_gate_state.get("updated_at") or "").strip() or None
+        meta = ops_gate_state.get("metadata")
+        if isinstance(meta, dict):
+            ops_reason = str(meta.get("reason") or "").strip() or None
+
     return {
         "strict_force_off": strict_force_off,
         "canary_percent_override": canary_override,
@@ -378,6 +400,12 @@ def _read_control_runtime(queue) -> Dict[str, Any]:
         "scorecard_governance_state": governance_value,
         "scorecard_governance_reason": governance_reason,
         "scorecard_governance_updated_at": governance_updated_at,
+        "scorecard_e2e_gate_state": e2e_value,
+        "scorecard_e2e_gate_reason": e2e_reason,
+        "scorecard_e2e_gate_updated_at": e2e_updated_at,
+        "scorecard_ops_gate_state": ops_value,
+        "scorecard_ops_gate_reason": ops_reason,
+        "scorecard_ops_gate_updated_at": ops_updated_at,
     }
 
 
@@ -451,6 +479,8 @@ def evaluate_and_apply_scorecard_control(
     queue=None,
     window_hours: Optional[int] = None,
     scorecard: Optional[Dict[str, Any]] = None,
+    e2e_gate_decision: Optional[Dict[str, Any]] = None,
+    ops_gate_decision: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """M5.2: nutzt die Scorecard fuer Promotion/Hold/Rollback-Entscheidungen."""
     if not _scorecard_control_enabled():
@@ -520,6 +550,16 @@ def evaluate_and_apply_scorecard_control(
 
     governance = _evaluate_scorecard_governance(card=card, trend=trend)
     governance_state = str(governance.get("state", "allow"))
+    provided_e2e_gate = e2e_gate_decision if isinstance(e2e_gate_decision, dict) else None
+    e2e_gate = provided_e2e_gate or {}
+    e2e_gate_state = (
+        str(e2e_gate.get("state", "") or "").strip().lower() if provided_e2e_gate is not None else None
+    )
+    provided_ops_gate = ops_gate_decision if isinstance(ops_gate_decision, dict) else None
+    ops_gate = provided_ops_gate or {}
+    ops_gate_state = (
+        str(ops_gate.get("state", "") or "").strip().lower() if provided_ops_gate is not None else None
+    )
 
     runtime = _read_control_runtime(queue)
     current_canary = runtime.get("canary_percent_override")
@@ -555,6 +595,39 @@ def evaluate_and_apply_scorecard_control(
         },
         observed_at=now_iso,
     )
+    if e2e_gate_state:
+        queue.set_policy_runtime_state(
+            "scorecard_e2e_gate_state",
+            e2e_gate_state,
+            metadata_update={
+                "reason": str(e2e_gate.get("reason", "n/a")),
+                "release_blocked": bool(e2e_gate.get("release_blocked", False)),
+                "canary_blocked": bool(e2e_gate.get("canary_blocked", False)),
+                "canary_deferred": bool(e2e_gate.get("canary_deferred", False)),
+                "recommended_canary_percent": int(e2e_gate.get("recommended_canary_percent", current_canary) or current_canary),
+                "blocking_flows": list(e2e_gate.get("blocking_flows", [])),
+                "failed_flows": list(e2e_gate.get("failed_flows", [])),
+                "warning_flows": list(e2e_gate.get("warning_flows", [])),
+                "updated_by": "scorecard_control",
+            },
+            observed_at=now_iso,
+        )
+    if ops_gate_state:
+        queue.set_policy_runtime_state(
+            "scorecard_ops_gate_state",
+            ops_gate_state,
+            metadata_update={
+                "reason": str(ops_gate.get("reason", "n/a")),
+                "release_blocked": bool(ops_gate.get("release_blocked", False)),
+                "canary_blocked": bool(ops_gate.get("canary_blocked", False)),
+                "canary_deferred": bool(ops_gate.get("canary_deferred", False)),
+                "recommended_canary_percent": int(ops_gate.get("recommended_canary_percent", current_canary) or current_canary),
+                "critical_targets": list(ops_gate.get("critical_targets", [])),
+                "warning_targets": list(ops_gate.get("warning_targets", [])),
+                "updated_by": "scorecard_control",
+            },
+            observed_at=now_iso,
+        )
 
     if governance_state == "force_rollback":
         reason = f"governance={governance.get('reason', 'force_rollback')}; score={_round2(overall)}, mode={self_healing_mode}"
@@ -642,6 +715,196 @@ def evaluate_and_apply_scorecard_control(
             "adaptive_reason": adaptive_reason,
             "trend": trend,
             "governance": governance,
+        }
+
+    if e2e_gate_state == "blocked":
+        reason = (
+            f"e2e_gate={e2e_gate.get('reason', 'blocking_e2e_failures')}; "
+            f"blocking_flows={','.join(e2e_gate.get('blocking_flows', [])[:4]) or 'n/a'}"
+        )
+        queue.set_policy_runtime_state(
+            "strict_force_off",
+            "true",
+            metadata_update={
+                "reason": reason,
+                "action": "e2e_gate_blocked",
+                "triggered_at": now_iso,
+            },
+            observed_at=now_iso,
+        )
+        queue.set_policy_runtime_state(
+            "canary_percent_override",
+            "0",
+            metadata_update={
+                "reason": reason,
+                "action": "e2e_gate_blocked",
+                "triggered_at": now_iso,
+            },
+            observed_at=now_iso,
+        )
+        queue.set_policy_runtime_state(
+            "scorecard_last_action",
+            "e2e_gate_blocked",
+            metadata_update={
+                "reason": reason,
+                "overall_score": _round2(overall),
+                "triggered_at": now_iso,
+            },
+            observed_at=now_iso,
+        )
+        queue.set_policy_runtime_state(
+            "scorecard_last_score",
+            f"{_round2(overall):.2f}",
+            metadata_update={"source": "scorecard_control_e2e_gate"},
+            observed_at=now_iso,
+        )
+        return {
+            "status": "ok",
+            "action": "e2e_gate_blocked",
+            "overall_score": _round2(overall),
+            "current_canary_percent": current_canary,
+            "next_canary_percent": 0,
+            "strict_force_off": True,
+            "reason": reason,
+            "promote_threshold": _round2(promote_threshold),
+            "rollback_threshold": _round2(rollback_threshold),
+            "adaptive_mode": adaptive_mode,
+            "adaptive_reason": adaptive_reason,
+            "trend": trend,
+            "governance": governance,
+            "e2e_gate": e2e_gate,
+        }
+
+    if e2e_gate_state == "warn":
+        reason = (
+            f"e2e_gate={e2e_gate.get('reason', 'non_blocking_e2e_drift')}; "
+            f"warning_flows={','.join(e2e_gate.get('warning_flows', [])[:4]) or 'n/a'}"
+        )
+        queue.set_policy_runtime_state(
+            "scorecard_last_action",
+            "e2e_gate_hold",
+            metadata_update={
+                "reason": reason,
+                "overall_score": _round2(overall),
+                "triggered_at": now_iso,
+            },
+            observed_at=now_iso,
+        )
+        queue.set_policy_runtime_state(
+            "scorecard_last_score",
+            f"{_round2(overall):.2f}",
+            metadata_update={"source": "scorecard_control_e2e_gate_hold"},
+            observed_at=now_iso,
+        )
+        return {
+            "status": "ok",
+            "action": "e2e_gate_hold",
+            "overall_score": _round2(overall),
+            "current_canary_percent": current_canary,
+            "strict_force_off": bool(runtime.get("strict_force_off", False)),
+            "reason": reason,
+            "promote_threshold": _round2(promote_threshold),
+            "rollback_threshold": _round2(rollback_threshold),
+            "adaptive_mode": adaptive_mode,
+            "adaptive_reason": adaptive_reason,
+            "trend": trend,
+            "governance": governance,
+            "e2e_gate": e2e_gate,
+        }
+
+    if ops_gate_state == "blocked":
+        reason = (
+            f"ops_gate={ops_gate.get('reason', 'critical_ops_or_budget_health')}; "
+            f"critical_targets={','.join(ops_gate.get('critical_targets', [])[:4]) or 'n/a'}"
+        )
+        queue.set_policy_runtime_state(
+            "strict_force_off",
+            "true",
+            metadata_update={
+                "reason": reason,
+                "action": "ops_gate_blocked",
+                "triggered_at": now_iso,
+            },
+            observed_at=now_iso,
+        )
+        queue.set_policy_runtime_state(
+            "canary_percent_override",
+            "0",
+            metadata_update={
+                "reason": reason,
+                "action": "ops_gate_blocked",
+                "triggered_at": now_iso,
+            },
+            observed_at=now_iso,
+        )
+        queue.set_policy_runtime_state(
+            "scorecard_last_action",
+            "ops_gate_blocked",
+            metadata_update={
+                "reason": reason,
+                "overall_score": _round2(overall),
+                "triggered_at": now_iso,
+            },
+            observed_at=now_iso,
+        )
+        queue.set_policy_runtime_state(
+            "scorecard_last_score",
+            f"{_round2(overall):.2f}",
+            metadata_update={"source": "scorecard_control_ops_gate"},
+            observed_at=now_iso,
+        )
+        return {
+            "status": "ok",
+            "action": "ops_gate_blocked",
+            "overall_score": _round2(overall),
+            "current_canary_percent": current_canary,
+            "next_canary_percent": 0,
+            "strict_force_off": True,
+            "reason": reason,
+            "promote_threshold": _round2(promote_threshold),
+            "rollback_threshold": _round2(rollback_threshold),
+            "adaptive_mode": adaptive_mode,
+            "adaptive_reason": adaptive_reason,
+            "trend": trend,
+            "governance": governance,
+            "ops_gate": ops_gate,
+        }
+
+    if ops_gate_state == "warn":
+        reason = (
+            f"ops_gate={ops_gate.get('reason', 'ops_or_budget_drift')}; "
+            f"warning_targets={','.join(ops_gate.get('warning_targets', [])[:4]) or 'n/a'}"
+        )
+        queue.set_policy_runtime_state(
+            "scorecard_last_action",
+            "ops_gate_hold",
+            metadata_update={
+                "reason": reason,
+                "overall_score": _round2(overall),
+                "triggered_at": now_iso,
+            },
+            observed_at=now_iso,
+        )
+        queue.set_policy_runtime_state(
+            "scorecard_last_score",
+            f"{_round2(overall):.2f}",
+            metadata_update={"source": "scorecard_control_ops_gate_hold"},
+            observed_at=now_iso,
+        )
+        return {
+            "status": "ok",
+            "action": "ops_gate_hold",
+            "overall_score": _round2(overall),
+            "current_canary_percent": current_canary,
+            "strict_force_off": bool(runtime.get("strict_force_off", False)),
+            "reason": reason,
+            "promote_threshold": _round2(promote_threshold),
+            "rollback_threshold": _round2(rollback_threshold),
+            "adaptive_mode": adaptive_mode,
+            "adaptive_reason": adaptive_reason,
+            "trend": trend,
+            "governance": governance,
+            "ops_gate": ops_gate,
         }
 
     if last_action_at is not None:

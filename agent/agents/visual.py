@@ -3,6 +3,7 @@
 import os
 import io
 import json
+import re
 import asyncio
 import base64
 import time
@@ -14,13 +15,21 @@ import httpx
 from agent.base_agent import BaseAgent, MCP_URL
 from agent.providers import ModelProvider
 from agent.prompts import VISUAL_SYSTEM_PROMPT
+from agent.shared.json_utils import extract_json_robust
 from agent.shared.vision_formatter import convert_openai_to_anthropic
+from orchestration.browser_workflow_plan import build_browser_workflow_plan
 
 log = logging.getLogger("TimusAgent-v4.4")
 
 
 class VisualAgent(BaseAgent):
     """Visual Agent mit Screenshot-Analyse."""
+
+    _SCAN_LOOP_RECOVERY_TEXT = (
+        "LOOP-WARNUNG bei scan_ui_elements: aendere den Ansatz. "
+        "Nutze andere element_types, setze use_zoom=false oder wechsle auf "
+        "Text/OCR-basierte Suche statt denselben Scan zu wiederholen."
+    )
 
     def __init__(self, tools_description_string: str):
         super().__init__(VISUAL_SYSTEM_PROMPT, tools_description_string, 30, "visual")
@@ -40,6 +49,7 @@ class VisualAgent(BaseAgent):
 
         self.roi_stack: List[Dict] = []
         self.current_roi: Optional[Dict] = None
+        self.current_workflow_plan: List[str] = []
 
     def _get_screenshot_as_base64(self) -> str:
         if not self._mss_module or not self._pil_image:
@@ -133,14 +143,128 @@ class VisualAgent(BaseAgent):
         except Exception:
             return False
 
-    async def _wait_stable(self):
+    def _get_stability_timeout(self, method: str) -> float:
+        if method == "start_visual_browser":
+            return 1.0
+        if method == "type_text":
+            return 1.2
+        if method in {"click_at", "open_application"}:
+            return 1.5
+        return 0.0
+
+    async def _wait_stable(self, method: str = ""):
+        timeout = self._get_stability_timeout(method)
+        if timeout <= 0:
+            return
         try:
             await self.http_client.post(
                 MCP_URL,
-                json={"jsonrpc": "2.0", "method": "wait_until_stable", "params": {"timeout": 3.0}, "id": "1"},
+                json={"jsonrpc": "2.0", "method": "wait_until_stable", "params": {"timeout": timeout}, "id": "1"},
             )
         except Exception:
             pass
+
+    def _build_loop_recovery_hint(self, method: str) -> str:
+        workflow_hint = ""
+        if self.current_workflow_plan:
+            workflow_hint = (
+                " Nutze den vorhandenen Browser-Ablaufplan und gehe zum naechsten "
+                "verifizierbaren Schritt zurueck statt denselben UI-Scan zu wiederholen."
+            )
+        if method == "scan_ui_elements":
+            strategy = self._preferred_recovery_strategy()
+            if strategy == "ocr_text":
+                return (
+                    f"{self._SCAN_LOOP_RECOVERY_TEXT} "
+                    "Bevorzuge jetzt OCR/Text-Suche und vermeide denselben Bounding-Box-Scan."
+                    f"{workflow_hint}"
+                )
+            if strategy == "datepicker":
+                return (
+                    f"{self._SCAN_LOOP_RECOVERY_TEXT} "
+                    "Bei Kalendern: fokussiere den Datepicker und suche gezielt nach Datums-Text."
+                    f"{workflow_hint}"
+                )
+            return f"{self._SCAN_LOOP_RECOVERY_TEXT}{workflow_hint}"
+        return f"LOOP-WARNUNG fuer {method}: veraendere Parameter oder nutze einen anderen Tool-Pfad.{workflow_hint}"
+
+    def _preferred_recovery_strategy(self) -> str:
+        """Waehlt eine leichte visuelle Recovery-Praeferenz aus Feedback-Scores."""
+        try:
+            from orchestration.feedback_engine import get_feedback_engine
+
+            engine = get_feedback_engine()
+            candidates = {
+                "ocr_text": engine.get_effective_target_score("visual_strategy", "ocr_text", default=1.0),
+                "click_targeting": engine.get_effective_target_score("visual_strategy", "click_targeting", default=1.0),
+                "datepicker": engine.get_effective_target_score("visual_strategy", "datepicker", default=1.0),
+                "browser_flow": engine.get_effective_target_score("visual_strategy", "browser_flow", default=1.0),
+            }
+            return max(candidates.items(), key=lambda item: item[1])[0]
+        except Exception:
+            return "ocr_text"
+
+    def _infer_visual_feedback_targets(self, task: str, *, strategy: str = "") -> List[Dict[str, str]]:
+        task_lower = str(task or "").lower()
+        inferred_strategy = str(strategy or "").strip().lower() or self._preferred_recovery_strategy()
+        targets: List[Dict[str, str]] = [{"namespace": "visual_strategy", "key": inferred_strategy}]
+        if any(token in task_lower for token in ("browser", "website", "webseite", "booking", ".com", ".de")):
+            targets.append({"namespace": "visual_strategy", "key": "browser_flow"})
+        if any(token in task_lower for token in ("datum", "date", "datepicker", "kalender", "check-in", "check-out")):
+            targets.append({"namespace": "visual_strategy", "key": "datepicker"})
+
+        unique: dict[tuple[str, str], Dict[str, str]] = {}
+        for item in targets:
+            unique[(item["namespace"], item["key"])] = item
+        return list(unique.values())
+
+    def _record_runtime_feedback(self, task: str, *, success: Optional[bool], strategy: str = "", stage: str = "") -> None:
+        try:
+            from orchestration.feedback_engine import get_feedback_engine
+
+            get_feedback_engine().record_runtime_outcome(
+                action_id=f"visual-{stage or 'run'}-{int(time.time() * 1000)}",
+                success=success,
+                context={
+                    "agent": "visual",
+                    "stage": str(stage or "run")[:80],
+                    "visual_strategy": str(strategy or self._preferred_recovery_strategy())[:80],
+                    "task_excerpt": str(task or "")[:160],
+                },
+                feedback_targets=self._infer_visual_feedback_targets(task, strategy=strategy),
+            )
+        except Exception as e:
+            log.debug("Visual Runtime-Feedback fehlgeschlagen: %s", e)
+
+    def _extract_browser_url(self, task: str) -> str:
+        text = str(task or "").strip()
+        if not text:
+            return ""
+        direct = re.search(r"https?://[^\s]+", text)
+        if direct:
+            return direct.group(0)
+        domain = re.search(r"([a-zA-Z0-9.-]+\.(?:de|com|org|net|io|ai))", text)
+        if domain:
+            return f"https://{domain.group(1)}"
+        return ""
+
+    def _build_browser_plan_context(self, task: str) -> str:
+        task_text = str(task or "").strip()
+        if not task_text:
+            self.current_workflow_plan = []
+            return ""
+        task_lower = task_text.lower()
+        if not any(token in task_lower for token in ("browser", "website", "webseite", "booking", ".com", ".de", "formular", "login", "anmelden")):
+            self.current_workflow_plan = []
+            return ""
+
+        self.current_workflow_plan = build_browser_workflow_plan(task_text, self._extract_browser_url(task_text))
+        plan_lines = [f"{index + 1}. {step}" for index, step in enumerate(self.current_workflow_plan[:8])]
+        return (
+            "STRIKTER BROWSER-ABLAUFPLAN:\n"
+            + "\n".join(plan_lines)
+            + "\nArbeite strikt schrittweise. Verifiziere jeden Schritt sichtbar, bevor du den naechsten ausfuehrst."
+        )
 
     async def _call_llm(self, messages: List[Dict]) -> str:
         if self.provider == ModelProvider.ANTHROPIC:
@@ -212,7 +336,10 @@ class VisualAgent(BaseAgent):
 
         elif "booking" in task_lower:
             self._set_roi(x=100, y=150, width=1000, height=400, name="booking_search_form")
-            log.info("Dynamische UI erkannt: Booking.com - ROI auf Suchformular gesetzt")
+            log.info(
+                "Dynamische UI erkannt: Booking.com - ROI auf Suchformular gesetzt (feedback_strategy=%s)",
+                self._preferred_recovery_strategy(),
+            )
             return True
 
         return False
@@ -251,8 +378,6 @@ class VisualAgent(BaseAgent):
             return None
 
     async def _create_navigation_plan_with_llm(self, task: str, screen_state: Dict) -> Optional[Dict]:
-        import re as _re
-
         try:
             elements = screen_state.get("elements", [])
             if not elements:
@@ -320,15 +445,10 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 else:
                     os.environ.pop("NEMOTRON_ENABLE_THINKING", None)
 
-            response = _re.sub(r'```json\s*', '', response)
-            response = _re.sub(r'```\s*', '', response)
-
-            json_match = _re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response, _re.DOTALL)
-            if not json_match:
-                log.warning(f"Kein JSON gefunden in Response: {response[:200]}")
+            plan = extract_json_robust(response)
+            if not isinstance(plan, dict):
+                log.warning(f"Kein valides JSON gefunden in Response: {response[:200]}")
                 return None
-
-            plan = json.loads(json_match.group(0))
 
             if not plan.get("steps") or not isinstance(plan["steps"], list):
                 log.warning("ActionPlan hat keine Steps")
@@ -356,9 +476,6 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             log.info(f"ActionPlan erstellt: {compatible_plan['goal']} ({len(compatible_plan['steps'])} Steps)")
             return compatible_plan
 
-        except json.JSONDecodeError as e:
-            log.error(f"JSON-Parsing fehlgeschlagen: {e}")
-            return None
         except Exception as e:
             log.error(f"ActionPlan-Erstellung fehlgeschlagen: {e}")
             return None
@@ -396,21 +513,32 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
 
     async def run(self, task: str) -> str:
         log.info(f"VisualAgent: {task}")
+        browser_plan_context = self._build_browser_plan_context(task)
         self.history = [
             {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": f"AUFGABE: {task}"},
+            {
+                "role": "user",
+                "content": (
+                    f"AUFGABE: {task}\n\n{browser_plan_context}"
+                    if browser_plan_context
+                    else f"AUFGABE: {task}"
+                ),
+            },
         ]
 
         roi_set = await self._detect_dynamic_ui_and_set_roi(task)
 
         consecutive_loops = 0
         force_vision_mode = False
+        runtime_feedback_recorded = False
 
         structured_result = await self._try_structured_navigation(task)
         if structured_result and structured_result.get("success"):
             log.info(f"Strukturierte Navigation erfolgreich: {structured_result['result']}")
             if roi_set:
                 self._clear_roi()
+            self._record_runtime_feedback(task, success=True, strategy="browser_flow", stage="structured_navigation")
+            runtime_feedback_recorded = True
             return structured_result["result"]
         else:
             log.info("Fallback zu Vision-basierter Navigation")
@@ -434,6 +562,9 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
 
             screenshot = await asyncio.to_thread(self._get_screenshot_as_base64)
             if not screenshot:
+                if not runtime_feedback_recorded:
+                    self._record_runtime_feedback(task, success=False, stage="screenshot_capture")
+                    runtime_feedback_recorded = True
                 return "Screenshot-Fehler"
 
             self.last_screen_analysis_time = time.time()
@@ -451,6 +582,9 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             if "Final Answer:" in reply:
                 if roi_set:
                     self._clear_roi()
+                if not runtime_feedback_recorded:
+                    self._record_runtime_feedback(task, success=True, stage="vision_final_answer")
+                    runtime_feedback_recorded = True
                 return reply.split("Final Answer:")[1].strip()
 
             action, err = self._parse_action(reply)
@@ -464,6 +598,9 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             if method == "finish_task":
                 if roi_set:
                     self._clear_roi()
+                if not runtime_feedback_recorded:
+                    self._record_runtime_feedback(task, success=True, strategy="browser_flow", stage="finish_task")
+                    runtime_feedback_recorded = True
                 return params.get("message", "Fertig")
 
             if method in ["click_at", "type_text", "start_visual_browser", "open_application"]:
@@ -474,7 +611,17 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             if isinstance(obs, dict) and "_loop_warning" in obs:
                 consecutive_loops += 1
                 log.warning(f"Loop-Warnung erhalten ({consecutive_loops}x): {obs['_loop_warning']}")
-                obs["_info"] = f"LOOP-WARNUNG: {obs['_loop_warning']} Versuche anderen Ansatz!"
+                obs["_info"] = self._build_loop_recovery_hint(method)
+                if method == "scan_ui_elements":
+                    force_vision_mode = True
+                    if consecutive_loops >= 2 and not runtime_feedback_recorded:
+                        self._record_runtime_feedback(
+                            task,
+                            success=False,
+                            strategy=self._preferred_recovery_strategy(),
+                            stage="scan_ui_loop",
+                        )
+                        runtime_feedback_recorded = True
             else:
                 consecutive_loops = 0
 
@@ -483,7 +630,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                     self.history.append({"role": "assistant", "content": reply})
                     self.history.append({"role": "user", "content": "Nicht verifiziert. Anderen Ansatz versuchen."})
                     continue
-                await self._wait_stable()
+                await self._wait_stable(method)
 
             self._handle_file_artifacts(obs)
             self.history.append({"role": "assistant", "content": reply})
@@ -493,4 +640,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         if roi_set:
             self._clear_roi()
 
+        if not runtime_feedback_recorded:
+            self._record_runtime_feedback(task, success=False, stage="max_iterations")
+            runtime_feedback_recorded = True
         return "Max Iterationen."

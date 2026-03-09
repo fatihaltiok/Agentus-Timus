@@ -68,6 +68,28 @@ CREATE TABLE IF NOT EXISTS improvement_suggestions_m12 (
 
 CREATE INDEX IF NOT EXISTS idx_improvement_suggestions_severity
     ON improvement_suggestions_m12 (severity, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS llm_usage_analytics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trace_id TEXT NOT NULL,
+    session_id TEXT DEFAULT '',
+    agent TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cached_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    latency_ms INTEGER NOT NULL DEFAULT 0,
+    success INTEGER NOT NULL DEFAULT 1,
+    timestamp TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_llm_usage_session
+    ON llm_usage_analytics (session_id, timestamp DESC);
+
+CREATE INDEX IF NOT EXISTS idx_llm_usage_agent
+    ON llm_usage_analytics (agent, timestamp DESC);
 """
 
 
@@ -108,6 +130,22 @@ class ImprovementReport:
     routing_stats: dict = field(default_factory=dict)
     analyzed_at: str = field(default_factory=lambda: datetime.now().isoformat())
     critical_count: int = 0
+
+
+@dataclass
+class LLMUsageRecord:
+    trace_id: str
+    session_id: str = ""
+    agent: str = ""
+    provider: str = ""
+    model: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cached_tokens: int = 0
+    cost_usd: float = 0.0
+    latency_ms: int = 0
+    success: bool = True
+    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -168,6 +206,34 @@ class SelfImprovementEngine:
                 conn.commit()
         except Exception as e:
             log.debug("record_routing: %s", e)
+
+    def record_llm_usage(self, record: LLMUsageRecord) -> None:
+        """Speichert LLM-Nutzung fuer Kosten-/Token-Analysen."""
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.execute(
+                    """INSERT INTO llm_usage_analytics
+                       (trace_id, session_id, agent, provider, model, input_tokens,
+                        output_tokens, cached_tokens, cost_usd, latency_ms, success, timestamp)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        record.trace_id,
+                        record.session_id,
+                        record.agent,
+                        record.provider,
+                        record.model,
+                        max(int(record.input_tokens or 0), 0),
+                        max(int(record.output_tokens or 0), 0),
+                        max(int(record.cached_tokens or 0), 0),
+                        max(float(record.cost_usd or 0.0), 0.0),
+                        max(int(record.latency_ms or 0), 0),
+                        int(record.success),
+                        record.timestamp,
+                    ),
+                )
+                conn.commit()
+        except Exception as e:
+            log.debug("record_llm_usage: %s", e)
 
     # ------------------------------------------------------------------
     # Analyse
@@ -368,6 +434,262 @@ class SelfImprovementEngine:
         except Exception as e:
             log.debug("get_routing_stats: %s", e)
             return {"total_decisions": 0, "by_agent": {}, "analysis_days": days}
+
+    def get_llm_usage_summary(
+        self,
+        *,
+        days: int = 7,
+        session_id: Optional[str] = None,
+        agent: Optional[str] = None,
+        limit: int = 5,
+    ) -> dict:
+        """Aggregierte Token-/Kosten-Sicht fuer Status und Budgeting."""
+        try:
+            safe_days = max(1, min(90, int(days)))
+            safe_limit = max(1, min(20, int(limit)))
+            cutoff = (datetime.now() - timedelta(days=safe_days)).isoformat()
+            if session_id and agent:
+                totals_sql = """
+                    SELECT COUNT(*) as total_requests,
+                           SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful_requests,
+                           SUM(input_tokens) as input_tokens,
+                           SUM(output_tokens) as output_tokens,
+                           SUM(cached_tokens) as cached_tokens,
+                           SUM(cost_usd) as total_cost_usd,
+                           AVG(latency_ms) as avg_latency_ms
+                    FROM llm_usage_analytics
+                    WHERE timestamp >= ? AND session_id = ? AND agent = ?
+                """
+                by_agent_sql = """
+                    SELECT agent,
+                           COUNT(*) as total_requests,
+                           SUM(cost_usd) as total_cost_usd,
+                           SUM(input_tokens) as input_tokens,
+                           SUM(output_tokens) as output_tokens
+                    FROM llm_usage_analytics
+                    WHERE timestamp >= ? AND session_id = ? AND agent = ?
+                    GROUP BY agent
+                    ORDER BY total_cost_usd DESC, total_requests DESC
+                    LIMIT ?
+                """
+                by_model_sql = """
+                    SELECT provider, model,
+                           COUNT(*) as total_requests,
+                           SUM(cost_usd) as total_cost_usd,
+                           SUM(input_tokens) as input_tokens,
+                           SUM(output_tokens) as output_tokens
+                    FROM llm_usage_analytics
+                    WHERE timestamp >= ? AND session_id = ? AND agent = ?
+                    GROUP BY provider, model
+                    ORDER BY total_cost_usd DESC, total_requests DESC
+                    LIMIT ?
+                """
+                totals_params: List[Any] = [cutoff, session_id, agent]
+                grouped_params: List[Any] = [cutoff, session_id, agent, safe_limit]
+            elif session_id:
+                totals_sql = """
+                    SELECT COUNT(*) as total_requests,
+                           SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful_requests,
+                           SUM(input_tokens) as input_tokens,
+                           SUM(output_tokens) as output_tokens,
+                           SUM(cached_tokens) as cached_tokens,
+                           SUM(cost_usd) as total_cost_usd,
+                           AVG(latency_ms) as avg_latency_ms
+                    FROM llm_usage_analytics
+                    WHERE timestamp >= ? AND session_id = ?
+                """
+                by_agent_sql = """
+                    SELECT agent,
+                           COUNT(*) as total_requests,
+                           SUM(cost_usd) as total_cost_usd,
+                           SUM(input_tokens) as input_tokens,
+                           SUM(output_tokens) as output_tokens
+                    FROM llm_usage_analytics
+                    WHERE timestamp >= ? AND session_id = ?
+                    GROUP BY agent
+                    ORDER BY total_cost_usd DESC, total_requests DESC
+                    LIMIT ?
+                """
+                by_model_sql = """
+                    SELECT provider, model,
+                           COUNT(*) as total_requests,
+                           SUM(cost_usd) as total_cost_usd,
+                           SUM(input_tokens) as input_tokens,
+                           SUM(output_tokens) as output_tokens
+                    FROM llm_usage_analytics
+                    WHERE timestamp >= ? AND session_id = ?
+                    GROUP BY provider, model
+                    ORDER BY total_cost_usd DESC, total_requests DESC
+                    LIMIT ?
+                """
+                totals_params: List[Any] = [cutoff, session_id]
+                grouped_params: List[Any] = [cutoff, session_id, safe_limit]
+            elif agent:
+                totals_sql = """
+                    SELECT COUNT(*) as total_requests,
+                           SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful_requests,
+                           SUM(input_tokens) as input_tokens,
+                           SUM(output_tokens) as output_tokens,
+                           SUM(cached_tokens) as cached_tokens,
+                           SUM(cost_usd) as total_cost_usd,
+                           AVG(latency_ms) as avg_latency_ms
+                    FROM llm_usage_analytics
+                    WHERE timestamp >= ? AND agent = ?
+                """
+                by_agent_sql = """
+                    SELECT agent,
+                           COUNT(*) as total_requests,
+                           SUM(cost_usd) as total_cost_usd,
+                           SUM(input_tokens) as input_tokens,
+                           SUM(output_tokens) as output_tokens
+                    FROM llm_usage_analytics
+                    WHERE timestamp >= ? AND agent = ?
+                    GROUP BY agent
+                    ORDER BY total_cost_usd DESC, total_requests DESC
+                    LIMIT ?
+                """
+                by_model_sql = """
+                    SELECT provider, model,
+                           COUNT(*) as total_requests,
+                           SUM(cost_usd) as total_cost_usd,
+                           SUM(input_tokens) as input_tokens,
+                           SUM(output_tokens) as output_tokens
+                    FROM llm_usage_analytics
+                    WHERE timestamp >= ? AND agent = ?
+                    GROUP BY provider, model
+                    ORDER BY total_cost_usd DESC, total_requests DESC
+                    LIMIT ?
+                """
+                totals_params = [cutoff, agent]
+                grouped_params = [cutoff, agent, safe_limit]
+            else:
+                totals_sql = """
+                    SELECT COUNT(*) as total_requests,
+                           SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful_requests,
+                           SUM(input_tokens) as input_tokens,
+                           SUM(output_tokens) as output_tokens,
+                           SUM(cached_tokens) as cached_tokens,
+                           SUM(cost_usd) as total_cost_usd,
+                           AVG(latency_ms) as avg_latency_ms
+                    FROM llm_usage_analytics
+                    WHERE timestamp >= ?
+                """
+                by_agent_sql = """
+                    SELECT agent,
+                           COUNT(*) as total_requests,
+                           SUM(cost_usd) as total_cost_usd,
+                           SUM(input_tokens) as input_tokens,
+                           SUM(output_tokens) as output_tokens
+                    FROM llm_usage_analytics
+                    WHERE timestamp >= ?
+                    GROUP BY agent
+                    ORDER BY total_cost_usd DESC, total_requests DESC
+                    LIMIT ?
+                """
+                by_model_sql = """
+                    SELECT provider, model,
+                           COUNT(*) as total_requests,
+                           SUM(cost_usd) as total_cost_usd,
+                           SUM(input_tokens) as input_tokens,
+                           SUM(output_tokens) as output_tokens
+                    FROM llm_usage_analytics
+                    WHERE timestamp >= ?
+                    GROUP BY provider, model
+                    ORDER BY total_cost_usd DESC, total_requests DESC
+                    LIMIT ?
+                """
+                totals_params = [cutoff]
+                grouped_params = [cutoff, safe_limit]
+
+            with sqlite3.connect(str(self.db_path)) as conn:
+                totals = conn.execute(totals_sql, totals_params).fetchone()
+
+                by_agent_rows = conn.execute(by_agent_sql, grouped_params).fetchall()
+
+                by_model_rows = conn.execute(by_model_sql, grouped_params).fetchall()
+
+            total_requests = int((totals[0] if totals else 0) or 0)
+            successful_requests = int((totals[1] if totals else 0) or 0)
+            failed_requests = max(total_requests - successful_requests, 0)
+
+            return {
+                "analysis_days": safe_days,
+                "session_id": session_id or "",
+                "agent_filter": agent or "",
+                "total_requests": total_requests,
+                "successful_requests": successful_requests,
+                "failed_requests": failed_requests,
+                "success_rate": round(successful_requests / total_requests, 3) if total_requests else 0.0,
+                "input_tokens": int((totals[2] if totals else 0) or 0),
+                "output_tokens": int((totals[3] if totals else 0) or 0),
+                "cached_tokens": int((totals[4] if totals else 0) or 0),
+                "total_cost_usd": round(float((totals[5] if totals else 0.0) or 0.0), 6),
+                "avg_latency_ms": round(float((totals[6] if totals else 0.0) or 0.0), 1),
+                "top_agents": [
+                    {
+                        "agent": row[0],
+                        "total_requests": int(row[1] or 0),
+                        "total_cost_usd": round(float(row[2] or 0.0), 6),
+                        "input_tokens": int(row[3] or 0),
+                        "output_tokens": int(row[4] or 0),
+                    }
+                    for row in by_agent_rows
+                ],
+                "top_models": [
+                    {
+                        "provider": row[0],
+                        "model": row[1],
+                        "total_requests": int(row[2] or 0),
+                        "total_cost_usd": round(float(row[3] or 0.0), 6),
+                        "input_tokens": int(row[4] or 0),
+                        "output_tokens": int(row[5] or 0),
+                    }
+                    for row in by_model_rows
+                ],
+                "top_providers": [
+                    {
+                        "provider": provider,
+                        "total_requests": sum(int(row["total_requests"] or 0) for row in provider_rows),
+                        "total_cost_usd": round(sum(float(row["total_cost_usd"] or 0.0) for row in provider_rows), 6),
+                        "input_tokens": sum(int(row["input_tokens"] or 0) for row in provider_rows),
+                        "output_tokens": sum(int(row["output_tokens"] or 0) for row in provider_rows),
+                    }
+                    for provider, provider_rows in {
+                        provider: [item for item in [
+                            {
+                                "provider": row[0],
+                                "model": row[1],
+                                "total_requests": int(row[2] or 0),
+                                "total_cost_usd": round(float(row[3] or 0.0), 6),
+                                "input_tokens": int(row[4] or 0),
+                                "output_tokens": int(row[5] or 0),
+                            }
+                            for row in by_model_rows
+                        ] if item["provider"] == provider]
+                        for provider in {str(row[0] or "") for row in by_model_rows}
+                    }.items()
+                    if provider
+                ],
+            }
+        except Exception as e:
+            log.debug("get_llm_usage_summary: %s", e)
+            return {
+                "analysis_days": days,
+                "session_id": session_id or "",
+                "agent_filter": agent or "",
+                "total_requests": 0,
+                "successful_requests": 0,
+                "failed_requests": 0,
+                "success_rate": 0.0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cached_tokens": 0,
+                "total_cost_usd": 0.0,
+                "avg_latency_ms": 0.0,
+                "top_agents": [],
+                "top_models": [],
+                "top_providers": [],
+            }
 
     def get_suggestions(self, applied: bool = False) -> List[dict]:
         """Gibt Verbesserungsvorschläge zurück."""

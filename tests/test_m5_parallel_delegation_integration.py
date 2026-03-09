@@ -212,6 +212,61 @@ class TestSemaphoreIntegration:
 
         assert concurrent_max <= 2, f"Max 2 erwartet, aber {concurrent_max} liefen gleichzeitig"
 
+    @pytest.mark.asyncio
+    async def test_budget_cap_reduziert_effektive_parallelitaet(self, monkeypatch):
+        """Budget-Softlimit kann max_parallel runtime-seitig weiter begrenzen."""
+        concurrent_max = 0
+        currently_running = 0
+
+        def factory(tools_desc, **kw):
+            nonlocal concurrent_max, currently_running
+
+            async def slow(task):
+                nonlocal concurrent_max, currently_running
+                currently_running += 1
+                concurrent_max = max(concurrent_max, currently_running)
+                await asyncio.sleep(0.03)
+                currently_running -= 1
+                return "ok"
+
+            m = MagicMock()
+            m.run = slow
+            return m
+
+        from agent.agent_registry import AgentRegistry, AgentSpec
+        from orchestration.llm_budget_guard import LLMBudgetDecision
+
+        monkeypatch.setattr(
+            "agent.agent_registry.cap_parallelism_for_budget",
+            lambda **kwargs: (
+                1,
+                LLMBudgetDecision(
+                    blocked=False,
+                    warning=True,
+                    soft_limited=True,
+                    max_tokens_cap=256,
+                    state="soft_limit",
+                    scopes=[],
+                    message="soft active",
+                ),
+            ),
+        )
+
+        registry = AgentRegistry()
+        registry._specs["executor"] = AgentSpec(
+            name="executor", agent_type="executor",
+            capabilities=["execution"], factory=factory,
+        )
+
+        result = await registry.delegate_parallel(
+            tasks=[{"agent": "executor", "task": f"T{i}"} for i in range(4)],
+            max_parallel=4,
+        )
+
+        assert concurrent_max <= 1
+        assert result["effective_max_parallel"] == 1
+        assert result["budget_state"] == "soft_limit"
+
 
 # ── T4: Timeout → partial ─────────────────────────────────────────────────────
 

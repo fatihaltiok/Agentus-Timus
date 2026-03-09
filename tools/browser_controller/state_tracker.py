@@ -9,12 +9,12 @@ Verfolgt UI-Zustand über Aktionen hinweg:
 - Loop Detection
 """
 
-import hashlib
 import time
 import logging
 from typing import List, Optional, Set, Dict, Any
 from dataclasses import dataclass, field
 from PIL import Image
+from utils.stable_hash import stable_hex_digest, stable_text_digest
 
 log = logging.getLogger("state_tracker")
 
@@ -127,12 +127,12 @@ class UIStateTracker:
             UIState Objekt
         """
         # DOM Hash berechnen
-        dom_hash = hashlib.md5(dom_content.encode()).hexdigest()[:16]
+        dom_hash = stable_text_digest(dom_content, hex_chars=16)
 
         # Screenshot Hash (optional)
         screenshot_hash = None
         if screenshot:
-            screenshot_hash = hashlib.md5(screenshot.tobytes()).hexdigest()[:16]
+            screenshot_hash = stable_hex_digest(screenshot.tobytes(), hex_chars=16)
 
         # State erstellen
         state = UIState(

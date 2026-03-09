@@ -1,0 +1,285 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+
+from agent.providers import ModelProvider
+from gateway import status_snapshot
+
+
+class _DummyAsyncClient:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+@pytest.mark.asyncio
+async def test_collect_status_snapshot_builds_agent_rows(monkeypatch):
+    async def fake_fetch_local_json(_client, url: str):
+        if url.endswith("/agent_status"):
+            return {
+                "ok": True,
+                "status_code": 200,
+                "latency_ms": 12,
+                "data": {
+                    "agents": {
+                        "meta": {"status": "thinking", "last_run": "2026-03-08T20:00:00Z", "last_query": "plan"},
+                        "research": {"status": "completed", "last_run": "2026-03-08T19:59:00Z", "last_query": "news"},
+                    },
+                    "thinking": True,
+                },
+                "error": "",
+            }
+        if url.endswith("/health"):
+            return {
+                "ok": True,
+                "status_code": 200,
+                "latency_ms": 25,
+                "data": {"status": "healthy", "total_rpc_methods": 123},
+                "error": "",
+            }
+        return {
+            "ok": True,
+            "status_code": 200,
+            "latency_ms": 18,
+            "data": {"health": {"goals": {"open_alignment_rate": 88.0}, "planning": {"active_plans": 3}, "healing": {"degrade_mode": "normal"}}},
+            "error": "",
+        }
+
+    async def fake_check_provider_api(_client, provider, *, provider_client):
+        del provider_client
+        states = {
+            ModelProvider.OPENROUTER.value: "ok",
+            ModelProvider.ZAI.value: "ok",
+            ModelProvider.OPENAI.value: "ok",
+            ModelProvider.INCEPTION.value: "missing",
+        }
+        return {
+            "provider": provider.value,
+            "state": states[provider.value],
+            "ok": states[provider.value] == "ok",
+            "env": "X",
+            "base_url": "https://example.test",
+            "status_code": 200 if states[provider.value] == "ok" else None,
+            "latency_ms": 42 if states[provider.value] == "ok" else None,
+            "detail": "",
+        }
+
+    monkeypatch.setattr(status_snapshot, "_fetch_local_json", fake_fetch_local_json)
+    monkeypatch.setattr(status_snapshot, "_check_provider_api", fake_check_provider_api)
+    monkeypatch.setattr(status_snapshot, "_service_state", lambda svc: {"service": svc, "active": "active", "ok": True})
+    monkeypatch.setattr(status_snapshot, "_providers_to_check", lambda: [ModelProvider.OPENROUTER, ModelProvider.ZAI, ModelProvider.OPENAI, ModelProvider.INCEPTION])
+    monkeypatch.setattr(status_snapshot, "get_provider_client", lambda: SimpleNamespace())
+    monkeypatch.setattr(
+        status_snapshot,
+        "get_improvement_engine",
+        lambda: SimpleNamespace(
+            get_llm_usage_summary=lambda days=1, limit=3: {
+                "analysis_days": days,
+                "session_id": "",
+                "total_requests": 6,
+                "successful_requests": 6,
+                "failed_requests": 0,
+                "success_rate": 1.0,
+                "input_tokens": 1200,
+                "output_tokens": 260,
+                "cached_tokens": 80,
+                "total_cost_usd": 0.0345,
+                "avg_latency_ms": 155.0,
+                "top_agents": [{"agent": "meta", "total_cost_usd": 0.02, "total_requests": 3}],
+                "top_models": [{"provider": "openrouter", "model": "z-ai/glm-5", "total_cost_usd": 0.02, "total_requests": 3}],
+                "top_providers": [{"provider": "openrouter", "total_cost_usd": 0.02, "total_requests": 3, "input_tokens": 800, "output_tokens": 120}],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        status_snapshot,
+        "build_ops_observability_summary",
+        lambda **kwargs: {
+            "state": "warn",
+            "critical_alerts": 0,
+            "warnings": 2,
+            "failing_services": 0,
+            "unhealthy_providers": 1,
+            "alerts": [
+                {"severity": "warn", "message": "Provider openrouter: error"},
+                {"severity": "warn", "message": "Routing meta: conf 0.55"},
+            ],
+            "top_tool_failures": [],
+            "top_routing_risks": [],
+            "llm_success_rate": 0.98,
+        },
+    )
+    monkeypatch.setattr(
+        status_snapshot,
+        "get_public_budget_status",
+        lambda: {
+            "state": "soft_limit",
+            "message": "global=soft_limit ($0.034500)",
+            "scopes": [
+                {
+                    "scope": "global",
+                    "current_cost_usd": 0.0345,
+                    "warn_usd": 0.02,
+                    "soft_limit_usd": 0.03,
+                    "hard_limit_usd": 0.05,
+                    "state": "soft_limit",
+                }
+            ],
+            "soft_max_tokens": 600,
+            "window_days": 1,
+        },
+    )
+    monkeypatch.setattr(status_snapshot.httpx, "AsyncClient", lambda **kwargs: _DummyAsyncClient())
+
+    snapshot = await status_snapshot.collect_status_snapshot("http://127.0.0.1:5000")
+
+    assert snapshot["thinking"] is True
+    assert snapshot["services"]["mcp"]["active"] == "active"
+    assert snapshot["restart"]["status"] in {"missing", "completed", "running", "error", "unknown"}
+    assert snapshot["providers"]["openrouter"]["state"] == "ok"
+    assert snapshot["usage"]["total_requests"] == 6
+    assert snapshot["budget"]["state"] == "soft_limit"
+    assert snapshot["ops"]["state"] == "warn"
+    assert snapshot["api_control"]["active_provider_count"] >= 1
+    assert snapshot["api_control"]["providers"][0]["api_env"] == "X"
+
+    rows = {row["agent"]: row for row in snapshot["agents"]}
+    assert rows["meta"]["runtime_status"] == "thinking"
+    assert rows["research"]["runtime_status"] == "completed"
+    assert rows["research"]["provider"] == "openrouter"
+    assert rows["development"]["provider"] == "inception"
+    assert rows["development"]["provider_state"] == "missing"
+
+
+def test_format_status_message_contains_core_provider_and_agent_sections():
+    snapshot = {
+        "services": {
+            "mcp": {"ok": True, "active": "active"},
+            "dispatcher": {"ok": True, "active": "active"},
+        },
+        "local": {
+            "mcp_health": {
+                "latency_ms": 31,
+                "data": {"status": "healthy", "total_rpc_methods": 150},
+            },
+            "autonomy_health": {
+                "data": {
+                    "health": {
+                        "goals": {"open_alignment_rate": 92.0},
+                        "planning": {"active_plans": 4},
+                        "healing": {"degrade_mode": "normal"},
+                    }
+                }
+            },
+        },
+        "providers": {
+            "openrouter": {"state": "ok", "status_code": 200, "latency_ms": 180},
+            "openai": {"state": "missing", "status_code": None, "latency_ms": None},
+        },
+        "agents": [
+            {"agent": "meta", "runtime_status": "thinking", "provider": "openrouter", "model": "z-ai/glm-5"},
+            {"agent": "development", "runtime_status": "idle", "provider": "inception", "model": "mercury-2"},
+        ],
+        "usage": {
+            "total_requests": 9,
+            "input_tokens": 4200,
+            "output_tokens": 910,
+            "cached_tokens": 200,
+            "total_cost_usd": 0.056789,
+            "avg_latency_ms": 188.0,
+            "top_agents": [{"agent": "meta", "total_cost_usd": 0.031, "total_requests": 4}],
+        },
+        "budget": {
+            "state": "warn",
+            "message": "global=warn ($0.056789)",
+            "window_days": 1,
+            "soft_max_tokens": 600,
+            "scopes": [
+                {
+                    "scope": "global",
+                    "current_cost_usd": 0.056789,
+                    "warn_usd": 0.040000,
+                    "soft_limit_usd": 0.080000,
+                    "hard_limit_usd": 0.100000,
+                    "state": "warn",
+                }
+            ],
+        },
+        "api_control": {
+            "active_provider_count": 1,
+            "total_requests": 9,
+            "total_cost_usd": 0.056789,
+            "budget_state": "warn",
+            "providers": [
+                {
+                    "provider": "openrouter",
+                    "api_env": "OPENROUTER_API_KEY",
+                    "api_configured": True,
+                    "state": "ok",
+                    "base_url": "https://openrouter.ai/api/v1",
+                    "latency_ms": 180,
+                    "status_code": 200,
+                    "detail": "api ok",
+                    "total_requests": 4,
+                    "total_cost_usd": 0.031,
+                    "input_tokens": 3000,
+                    "output_tokens": 700,
+                }
+            ],
+        },
+        "ops": {
+            "state": "warn",
+            "critical_alerts": 0,
+            "warnings": 2,
+            "failing_services": 0,
+            "unhealthy_providers": 1,
+            "error_classes": {
+                "availability": 1,
+                "latency": 0,
+                "reliability": 0,
+                "routing": 1,
+                "budget": 0,
+                "orchestration": 0,
+            },
+            "slo": {
+                "breached": 2,
+                "healthy": 6,
+                "items": [],
+            },
+            "alerts": [
+                {"severity": "warn", "error_class": "availability", "message": "Provider openrouter: error"},
+                {"severity": "warn", "error_class": "routing", "message": "Routing meta: conf 0.55"},
+            ],
+            "top_outliers": [
+                {"target": "openrouter", "message": "Provider openrouter: error"},
+            ],
+        },
+        "thinking": True,
+    }
+
+    msg = status_snapshot.format_status_message(snapshot, ["🟢 Scheduler | 12 Beats | alle 15.0 min", "📋 Queue: ⏳1 🔄0 ✅5 ❌0"])
+
+    assert "🤖 Timus Status" in msg
+    assert "Core" in msg
+    assert "Ops" in msg
+    assert "LLM/API Health" in msg
+    assert "Kosten / Usage" in msg
+    assert "Agenten" in msg
+    assert "MCP Service: active" in msg
+    assert "🟠 State warn | Critical 0 | Warnings 2 | Services 0 | Providers 1" in msg
+    assert "SLO: breached 2 | healthy 6" in msg
+    assert "Classes: avail 1 | latency 0 | reliability 0 | routing 1 | budget 0 | orchestration 0" in msg
+    assert "warn [availability]: Provider openrouter: error" in msg
+    assert "Outlier openrouter: Provider openrouter: error" in msg
+    assert "openrouter: ok | HTTP 200 | 180 ms" in msg
+    assert "Cost $0.056789" in msg
+    assert "🟠 Budget warn | Window 1d | Soft MaxTokens 600" in msg
+    assert "Alert: global=warn ($0.056789)" in msg
+    assert "global: $0.056789 | warn $0.040000 | soft $0.080000 | hard $0.100000 | warn" in msg
+    assert "Agent meta: $0.031000 | 4 req" in msg
+    assert "meta" in msg
+    assert "z-ai/glm-5" in msg

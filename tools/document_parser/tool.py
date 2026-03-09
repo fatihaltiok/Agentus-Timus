@@ -4,6 +4,7 @@
 import logging
 import io
 import asyncio
+from urllib.parse import urlparse
 
 # Drittanbieter-Bibliotheken
 import requests
@@ -15,6 +16,42 @@ from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 # Holt den zentral konfigurierten Logger. Kein `log`-Import aus `shared_context`
 # notwendig, da `getLogger` auf die globale Konfiguration zugreift.
 logger_doc = logging.getLogger(__name__)
+
+
+def _download_headers(pdf_url: str) -> dict:
+    parsed = urlparse(pdf_url)
+    origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else ""
+    return {
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/pdf,application/octet-stream,*/*;q=0.8",
+        "Accept-Language": "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Referer": origin or pdf_url,
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+    }
+
+
+def _extract_text_with_pdfium(pdf_bytes: bytes) -> str:
+    pdf_file = io.BytesIO(pdf_bytes)
+    pdf_doc = pdfium.PdfDocument(pdf_file)
+    text_parts = []
+    page_errors = 0
+    for i in range(len(pdf_doc)):
+        try:
+            page = pdf_doc.get_page(i)
+            text_parts.append(page.get_textpage().get_text_range())
+            page.close()
+        except pdfium.PdfiumError as page_error:
+            page_errors += 1
+            logger_doc.warning("PDF-Seite %s konnte nicht geladen werden: %s", i, page_error)
+            continue
+    pdf_doc.close()
+    if not text_parts and page_errors:
+        raise pdfium.PdfiumError("Keine PDF-Seite konnte erfolgreich verarbeitet werden.")
+    return "\n".join(text_parts)
 
 @tool(
     name="extract_text_from_pdf",
@@ -33,11 +70,7 @@ async def extract_text_from_pdf(pdf_url: str) -> dict:
     try:
         # Führe den blockierenden Download in einem Thread aus
         def download_pdf():
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "application/pdf,application/octet-stream",
-                "Accept-Language": "en-US,en;q=0.9"
-            }
+            headers = _download_headers(pdf_url)
 
             # Max 3 Retries mit exponentiellem Backoff
             for attempt in range(3):
@@ -79,18 +112,7 @@ async def extract_text_from_pdf(pdf_url: str) -> dict:
         pdf_bytes = await asyncio.to_thread(download_pdf)
 
         # Die PDF-Verarbeitung selbst ist auch CPU-intensiv und sollte in einem Thread laufen.
-        def parse_pdf():
-            pdf_file = io.BytesIO(pdf_bytes)
-            pdf_doc = pdfium.PdfDocument(pdf_file)
-            text_content = ""
-            for i in range(len(pdf_doc)):
-                page = pdf_doc.get_page(i)
-                text_content += page.get_textpage().get_text_range() + "\n"
-                page.close()
-            pdf_doc.close()
-            return text_content
-
-        extracted_text = await asyncio.to_thread(parse_pdf)
+        extracted_text = await asyncio.to_thread(_extract_text_with_pdfium, pdf_bytes)
 
         logger_doc.info(f"Text aus PDF {pdf_url} extrahiert (Länge: {len(extracted_text)} Zeichen).")
         return {"text": extracted_text, "source_url": pdf_url}

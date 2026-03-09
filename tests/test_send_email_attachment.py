@@ -79,6 +79,37 @@ async def test_resend_no_attachment_key_when_none():
 
 
 @pytest.mark.asyncio
+async def test_resend_supports_multi_recipient_headers():
+    """Resend-Payload splittet To/CC/BCC korrekt und reicht Reply-To durch."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"id": "xyz"}
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client.post.return_value = mock_resp
+
+        with patch.dict(os.environ, {"RESEND_API_KEY": "re_test123"}):
+            from utils.resend_email import send_email_resend
+            ok = await send_email_resend(
+                to="alice@example.com, bob@example.com",
+                cc="carol@example.com",
+                bcc="dave@example.com, erin@example.com",
+                subject="Test",
+                body="Hallo",
+                reply_to="reply@example.com",
+            )
+
+    assert ok is True
+    payload = mock_client.post.call_args.kwargs["json"]
+    assert payload["to"] == ["alice@example.com", "bob@example.com"]
+    assert payload["cc"] == ["carol@example.com"]
+    assert payload["bcc"] == ["dave@example.com", "erin@example.com"]
+    assert payload["reply_to"] == "reply@example.com"
+
+
+@pytest.mark.asyncio
 async def test_resend_missing_file_sends_without_attachment(caplog):
     """Nicht existierende Anhang-Datei → E-Mail wird trotzdem gesendet (kein 'attachments')."""
     mock_resp = MagicMock()
@@ -210,6 +241,46 @@ async def test_smtp_no_attachment_uses_alternative_only():
 
     assert ok is True
     assert "Content-Disposition: attachment" not in sent_messages[0]
+
+
+@pytest.mark.asyncio
+async def test_smtp_sends_to_all_recipients_and_sets_headers():
+    """SMTP splittet To/CC/BCC fuer Envelope und setzt sichtbare Header."""
+    sendmail_calls = []
+
+    class FakeSMTP:
+        def __init__(self, *args, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def login(self, user, pw): pass
+        def sendmail(self, from_, to, msg_str):
+            sendmail_calls.append((from_, to, msg_str))
+
+    with patch("smtplib.SMTP_SSL", FakeSMTP):
+        with patch("ssl.create_default_context", return_value=MagicMock()):
+            with patch.dict(os.environ, {"SMTP_USER": "u@x.com", "SMTP_PASSWORD": "pw"}):
+                from utils.smtp_email import send_email_smtp
+                ok = await send_email_smtp(
+                    to="alice@example.com, bob@example.com",
+                    cc="carol@example.com",
+                    bcc="dave@example.com",
+                    subject="S",
+                    body="B",
+                    reply_to="reply@example.com",
+                )
+
+    assert ok is True
+    assert len(sendmail_calls) == 1
+    _, envelope_to, msg_str = sendmail_calls[0]
+    assert envelope_to == [
+        "alice@example.com",
+        "bob@example.com",
+        "carol@example.com",
+        "dave@example.com",
+    ]
+    assert "To: alice@example.com, bob@example.com" in msg_str
+    assert "Cc: carol@example.com" in msg_str
+    assert "Reply-To: reply@example.com" in msg_str
 
 
 # ── 3. Microsoft Graph Backend ────────────────────────────────────────────────

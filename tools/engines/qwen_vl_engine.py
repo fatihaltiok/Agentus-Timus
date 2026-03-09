@@ -25,6 +25,7 @@ from PIL import Image
 import torch
 
 from tools.shared_context import log
+from utils.hf_model_pinning import resolve_pinned_revision
 
 # Transformers Import mit Fehlerbehandlung
 try:
@@ -121,10 +122,12 @@ class QwenVLEngine:
             log.info(f"   GPU: {gpu_name} ({gpu_memory:.1f} GB)")
 
         try:
+            revision = resolve_pinned_revision(self.model_name, "QWEN_VL_MODEL_REVISION")
             # Tokenizer/Processor laden
             log.info("📥 Lade Processor...")
             self.processor = AutoProcessor.from_pretrained(
                 self.model_name,
+                revision=revision,
                 trust_remote_code=True
             )
 
@@ -142,6 +145,7 @@ class QwenVLEngine:
                 try:
                     self.model = Qwen2VLForConditionalGeneration.from_pretrained(
                         self.model_name,
+                        revision=revision,
                         load_in_8bit=True,
                         device_map="auto",
                         trust_remote_code=True,
@@ -167,6 +171,7 @@ class QwenVLEngine:
 
                 self.model = Qwen2VLForConditionalGeneration.from_pretrained(
                     self.model_name,
+                    revision=revision,
                     torch_dtype=dtype,
                     trust_remote_code=True,
                     low_cpu_mem_usage=True

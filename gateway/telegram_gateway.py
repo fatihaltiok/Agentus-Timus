@@ -43,6 +43,9 @@ from telegram.ext import (
     filters,
 )
 
+from gateway.status_snapshot import collect_status_snapshot, format_status_message
+from utils.telegram_notify import build_feedback_markup, decode_feedback_signal
+
 log = logging.getLogger("TelegramGateway")
 
 # Session-Mapping: Telegram-User-ID → Timus-Session-ID
@@ -76,13 +79,111 @@ def _is_allowed(user_id: int) -> bool:
 _PROJECT_ROOT = Path(__file__).parent.parent
 
 
-async def _send_long(update: Update, text: str) -> None:
+async def _send_long(update: Update, text: str, parse_mode: Optional[str] = None) -> None:
     """Sendet lange Texte in Blöcken (Telegram-Limit: 4096 Zeichen)."""
     MAX = 4000
     if not text:
         text = "(kein Ergebnis)"
     for i in range(0, len(text), MAX):
-        await update.message.reply_text(text[i : i + MAX])
+        await update.message.reply_text(text[i : i + MAX], parse_mode=parse_mode)
+
+
+def _looks_like_browser_ui_flow(query: str) -> bool:
+    query_lower = str(query or "").lower()
+    has_browser_target = bool(
+        re.search(r"https?://[^\s]+", query_lower)
+        or re.search(r"\b[a-z0-9.-]+\.(?:de|com|org|net|io|ai)\b", query_lower)
+        or "browser" in query_lower
+        or "webseite" in query_lower
+        or "website" in query_lower
+    )
+    has_ui_action = any(
+        token in query_lower
+        for token in (
+            "gehe auf",
+            "gehe zu",
+            "navigiere zu",
+            "tippe",
+            "gib ein",
+            "wähle",
+            "waehle",
+            "klicke",
+            "drücke",
+            "druecke",
+            "formular",
+            "suche",
+            "login",
+            "anmelden",
+        )
+    )
+    return has_browser_target and has_ui_action
+
+
+def _build_feedback_targets(query: str, agent: str) -> list[dict[str, str]]:
+    query_lower = str(query or "").lower()
+    items: list[dict[str, str]] = []
+
+    if agent:
+        items.append({"namespace": "dispatcher_agent", "key": agent})
+
+    if agent in {"visual", "visual_nemotron"} or (agent == "meta" and _looks_like_browser_ui_flow(query)):
+        items.append({"namespace": "visual_strategy", "key": "browser_flow"})
+        if any(token in query_lower for token in ("klicke", "button", "suche", "suchen")):
+            items.append({"namespace": "visual_strategy", "key": "click_targeting"})
+        if any(token in query_lower for token in ("tippe", "gib ein", "suchfeld", "formular")):
+            items.append({"namespace": "visual_strategy", "key": "ocr_text"})
+        if any(token in query_lower for token in ("datum", "kalender", "anreise", "abreise", "15.", "17.")):
+            items.append({"namespace": "visual_strategy", "key": "datepicker"})
+
+    unique: dict[tuple[str, str], dict[str, str]] = {}
+    for item in items:
+        namespace = str(item.get("namespace") or "").strip()
+        key = str(item.get("key") or "").strip()
+        if namespace and key:
+            unique[(namespace, key)] = {"namespace": namespace, "key": key}
+    return list(unique.values())
+
+
+def _build_reply_feedback_context(
+    *,
+    user_id: int,
+    session_id: str,
+    query: str,
+    agent: str,
+    response: str,
+    source: str,
+) -> dict:
+    return {
+        "source": source,
+        "user_id": user_id,
+        "session_id": session_id,
+        "query": str(query or "")[:280],
+        "dispatcher_agent": str(agent or ""),
+        "response_preview": str(response or "")[:280],
+    }
+
+
+async def _reply_with_feedback(
+    update: Update,
+    *,
+    text: Optional[str],
+    action_id: str,
+    context: dict,
+    feedback_targets: list[dict[str, str]],
+    parse_mode: Optional[str] = None,
+) -> None:
+    keyboard = build_feedback_markup(
+        action_id=action_id,
+        context=context,
+        feedback_targets=feedback_targets,
+    )
+    body = str(text or "")
+    if body and len(body) <= 4000:
+        await update.message.reply_text(body, parse_mode=parse_mode, reply_markup=keyboard)
+        return
+    if body:
+        await _send_long(update, body, parse_mode=parse_mode)
+    await update.message.reply_text("War diese Antwort hilfreich?", reply_markup=keyboard)
 
 
 async def _try_send_image(update: Update, result: str) -> bool:
@@ -686,8 +787,26 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             f"Disk {sys_stats['disk_percent']}%"
         )
 
-        msg = f"🤖 *Timus Status*\n\n{sched_line}\n{queue_line}\n{goal_line}\n{planning_line}\n{replanning_line}\n{review_line}\n{healing_line}\n{policy_line}\n{autonomy_line}\n{control_line}\n{trend_line}\n{audit_line}\n{change_line}\n{hardening_line}\n{sys_line}"
-        await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+        snapshot = await collect_status_snapshot()
+        summary_lines = [
+            sched_line,
+            queue_line,
+            goal_line,
+            planning_line,
+            replanning_line,
+            review_line,
+            healing_line,
+            policy_line,
+            autonomy_line,
+            control_line,
+            trend_line,
+            audit_line,
+            change_line,
+            hardening_line,
+            sys_line,
+        ]
+        msg = format_status_message(snapshot, summary_lines)
+        await _send_long(update, msg)
     except Exception as e:
         await update.message.reply_text(f"Fehler: {e}")
 
@@ -817,7 +936,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         from main_dispatcher import run_agent, get_agent_decision
 
         tools_desc = context.bot_data.get("tools_desc", "")
-        agent = await get_agent_decision(text)
+        agent = await get_agent_decision(text, session_id=session_id)
         log.info(f"  Agent gewählt: {agent.upper()}")
 
         # Multi-Step-Tasks (META) brauchen mehr Zeit — Status-Update senden
@@ -847,6 +966,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             pass
 
         response = str(result) if result else "_(kein Ergebnis)_"
+        feedback_targets = _build_feedback_targets(text, agent)
+        feedback_context = _build_reply_feedback_context(
+            user_id=user.id,
+            session_id=session_id,
+            query=text,
+            agent=agent,
+            response=response,
+            source="telegram_reply",
+        )
+        action_id = f"tgmsg:{session_id}:{uuid.uuid4().hex[:8]}"
 
         # Bild → als Foto senden
         image_sent = await _try_send_image(update, response)
@@ -854,7 +983,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         doc_sent = await _try_send_document(update, response)
         # Kein Bild/Datei → als Text senden
         if not image_sent and not doc_sent:
-            await _send_long(update, response)
+            await _reply_with_feedback(
+                update,
+                text=response,
+                action_id=action_id,
+                context=feedback_context,
+                feedback_targets=feedback_targets,
+            )
+        else:
+            await _reply_with_feedback(
+                update,
+                text="War diese Antwort hilfreich?",
+                action_id=action_id,
+                context=feedback_context,
+                feedback_targets=feedback_targets,
+            )
 
     except Exception as e:
         log.error(f"Fehler bei Telegram-Nachricht: {e}", exc_info=True)
@@ -907,7 +1050,7 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
         # 3. Agent-Pipeline (gleiche Logik wie handle_message)
         from main_dispatcher import run_agent, get_agent_decision
         tools_desc = context.bot_data.get("tools_desc", "")
-        agent = await get_agent_decision(user_text)
+        agent = await get_agent_decision(user_text, session_id=session_id)
         log.info(f"  Voice-Agent: {agent.upper()}")
 
         # Meta braucht länger — Status-Update
@@ -937,6 +1080,16 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
             pass
 
         response = str(result) if result else "Ich konnte keine Antwort generieren."
+        feedback_targets = _build_feedback_targets(user_text, agent)
+        feedback_context = _build_reply_feedback_context(
+            user_id=user.id,
+            session_id=session_id,
+            query=user_text,
+            agent=agent,
+            response=response,
+            source="telegram_voice_reply",
+        )
+        action_id = f"tgvoice:{session_id}:{uuid.uuid4().hex[:8]}"
 
         # 4. Bild-Check / Dokument-Check
         image_sent = await _try_send_image(update, response)
@@ -953,10 +1106,31 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 voice=io.BytesIO(ogg_audio),
                 caption=caption if not image_sent and not doc_sent else None,
             )
+            await _reply_with_feedback(
+                update,
+                text="War diese Sprachantwort hilfreich?",
+                action_id=action_id,
+                context=feedback_context,
+                feedback_targets=feedback_targets,
+            )
         else:
             # Kein TTS konfiguriert → Textantwort (nur wenn kein Bild/Dok gesendet)
             if not image_sent and not doc_sent:
-                await _send_long(update, response)
+                await _reply_with_feedback(
+                    update,
+                    text=response,
+                    action_id=action_id,
+                    context=feedback_context,
+                    feedback_targets=feedback_targets,
+                )
+            else:
+                await _reply_with_feedback(
+                    update,
+                    text="War diese Antwort hilfreich?",
+                    action_id=action_id,
+                    context=feedback_context,
+                    feedback_targets=feedback_targets,
+                )
 
     except Exception as e:
         log.error(f"Voice-Handler Fehler: {e}", exc_info=True)
@@ -1128,9 +1302,25 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     # M16-Feedback-Handler (Fallback für type="feedback" oder kein type-Feld)
-    signal = data.get("fb")
+    signal = decode_feedback_signal(data.get("s") or data.get("fb"))
     action_id = data.get("aid", "unknown")
     hooks_raw = data.get("hooks", "[]")
+    feedback_context = {}
+    feedback_targets = []
+
+    request_token = str(data.get("t") or "").strip()
+    if request_token:
+        try:
+            from orchestration.feedback_engine import get_feedback_engine
+
+            payload = get_feedback_engine().resolve_feedback_request(request_token)
+            if payload:
+                action_id = payload.action_id
+                hooks_raw = payload.hook_names
+                feedback_context = dict(payload.context or {})
+                feedback_targets = list(payload.feedback_targets or [])
+        except Exception as e:
+            log.warning("M16 Feedback: Token-Aufloesung fehlgeschlagen: %s", e)
 
     if signal not in {"positive", "negative", "neutral"}:
         await query.answer("❌ Unbekanntes Signal")
@@ -1148,7 +1338,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             action_id=action_id,
             signal=signal,
             hook_names=hook_names,
-            context={"user_id": user.id, "username": getattr(user, "username", "")},
+            context={
+                **feedback_context,
+                "user_id": user.id,
+                "username": getattr(user, "username", ""),
+            },
+            feedback_targets=feedback_targets,
         )
         signal_emoji = {"positive": "👍", "negative": "👎", "neutral": "🤷"}.get(signal, "?")
         await query.answer(f"{signal_emoji} Feedback gespeichert!")

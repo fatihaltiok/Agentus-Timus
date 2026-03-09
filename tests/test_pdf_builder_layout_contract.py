@@ -1,6 +1,7 @@
 import base64
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from hypothesis import given, settings, strategies as st
 
@@ -90,6 +91,40 @@ def test_markdown_to_html_renders_markdown_tables():
     assert "<tbody>" in html
     assert "<th>Col A</th>" in html
     assert "<td>three</td>" in html
+
+
+def test_build_pdf_uses_autoescape_for_plain_fields(monkeypatch, tmp_path):
+    captured = {}
+
+    class _FakeHTML:
+        def __init__(self, string: str, base_url: str):
+            captured["html"] = string
+            captured["base_url"] = base_url
+
+        def write_pdf(self, output_path: str) -> None:
+            Path(output_path).write_bytes(b"%PDF-1.4 test")
+
+    monkeypatch.setitem(sys.modules, "weasyprint", SimpleNamespace(HTML=_FakeHTML))
+
+    session = SimpleNamespace(
+        query='<script>alert("x")</script>',
+        research_tree=[],
+        unverified_claims=[],
+    )
+
+    output_path = tmp_path / "report.pdf"
+    builder = ResearchPDFBuilder()
+    result = builder.build_pdf(
+        narrative_md="## Abschnitt\n\nSicherer **Inhalt**.",
+        images=[],
+        session=session,
+        output_path=str(output_path),
+    )
+
+    assert result == str(output_path)
+    assert output_path.exists()
+    assert '&lt;script&gt;alert(&#34;x&#34;)&lt;/script&gt;' in captured["html"]
+    assert "<strong>Inhalt</strong>" in captured["html"]
 
 
 @given(

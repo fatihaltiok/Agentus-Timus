@@ -11,6 +11,7 @@ Erlaubt Timus den Zugriff auf das gesamte Dateisystem des Benutzers.
 import logging
 import asyncio
 import fnmatch
+import tempfile
 from pathlib import Path
 
 from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
@@ -26,7 +27,7 @@ _READ_BLACKLIST = {
 # Beim Schreiben: nur diese Präfixe erlaubt
 _WRITE_ALLOWED_PREFIXES = [
     str(Path.home()),
-    "/tmp",
+    tempfile.gettempdir(),
 ]
 
 

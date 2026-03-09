@@ -28,7 +28,6 @@ import json
 import time
 import asyncio
 import logging
-import hashlib
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, asdict
@@ -56,6 +55,7 @@ except ImportError:
 # Qwen-VL Engine
 from tools.engines.qwen_vl_engine import qwen_vl_engine_instance, UIAction
 from tools.shared_context import log
+from utils.stable_hash import stable_hex_digest
 
 # DOM-First Browser Controller Components
 try:
@@ -577,7 +577,7 @@ class QwenVisualAgent:
                 screenshot_path = self.take_screenshot(f"step_{iteration:03d}.png")
 
                 # Loop Detection: Screenshot-Hash pruefen
-                img_hash = hashlib.md5(screenshot.tobytes()).hexdigest()
+                img_hash = stable_hex_digest(screenshot.tobytes(), hex_chars=32)
                 if img_hash == self._prev_screenshot_hash:
                     self._repeat_count += 1
                     log.warning(f"⚠️  Identischer Screenshot erkannt ({self._repeat_count}/{self._max_repeats})")

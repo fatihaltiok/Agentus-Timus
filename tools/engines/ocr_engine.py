@@ -23,6 +23,7 @@ from PIL import Image
 
 # Importiere den zentralen Logger
 from tools.shared_context import log
+from utils.hf_model_pinning import resolve_pinned_revision
 
 # ===== BACKEND IMPORTS =====
 # EasyOCR
@@ -165,9 +166,10 @@ class OCREngine:
     def _init_trocr(self):
         """Initialisiert TrOCR (Hugging Face)."""
         log.info("Initialisiere TrOCR (Hugging Face)...")
-        model_name = "microsoft/trocr-base-printed"
-        self.trocr_processor = TrOCRProcessor.from_pretrained(model_name)
-        self.trocr_model = VisionEncoderDecoderModel.from_pretrained(model_name).to(self.device)
+        model_name = os.getenv("TROCR_MODEL", "microsoft/trocr-base-printed")
+        revision = resolve_pinned_revision(model_name, "TROCR_MODEL_REVISION")
+        self.trocr_processor = TrOCRProcessor.from_pretrained(model_name, revision=revision)
+        self.trocr_model = VisionEncoderDecoderModel.from_pretrained(model_name, revision=revision).to(self.device)
         log.info(f"✅ TrOCR geladen: {model_name} auf {self.device}")
 
     def _init_paddleocr(self):

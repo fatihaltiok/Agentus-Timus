@@ -1,8 +1,8 @@
 ---
 entries:
-  - {'category': 'user_profile', 'content': 'Ich mag strukturierte JSON Antworten', 'importance': 0.7, 'created_at': '2026-03-06T11:50:19.089822', 'source': ''}
+  - {'category': 'user_profile', 'content': 'Offenbach, Hessen, Deutschland', 'importance': 0.8, 'created_at': '2026-03-09T22:55:33.496533', 'source': 'user_config'}
 count: 1
-updated_at: 2026-03-06T11:50:19.089832
+updated_at: 2026-03-09T22:55:33.496539
 ---
 
 # Wichtige Erinnerungen
@@ -12,8 +12,8 @@ Sie kann manuell editiert werden.
 
 ## USER_PROFILE
 
-- [0.7] Ich mag strukturierte JSON Antworten
+- [0.8] Offenbach, Hessen, Deutschland
 
 
 ---
-*Einträge: 1 | Zuletzt aktualisiert: 2026-03-06T11:50:19.089848*
+*Einträge: 1 | Zuletzt aktualisiert: 2026-03-09T22:55:33.496549*

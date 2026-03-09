@@ -685,11 +685,7 @@ async def click_by_selector(selector: str) -> dict:
     """
     try:
         log.info(f"🎯 Klicke auf Element via Selector: {selector}")
-
-        if not browser_session_manager.is_initialized:
-            await browser_session_manager.initialize()
-
-        page = browser_session_manager.page
+        page = await ensure_browser_initialized()
 
         # Element finden
         element = await page.query_selector(selector)
@@ -738,11 +734,7 @@ async def get_page_content() -> dict:
     """
     try:
         log.info("📄 Hole Seiten-HTML für DOM-Parsing...")
-
-        if not browser_session_manager.is_initialized:
-            await browser_session_manager.initialize()
-
-        page = browser_session_manager.page
+        page = await ensure_browser_initialized()
 
         # HTML-Content holen
         html_content = await page.content()
@@ -840,9 +832,15 @@ async def type_text(selector: str, text_to_type: str) -> dict:
 
 async def shutdown_browser_tool():
     """Fährt die Playwright-Session sauber herunter."""
+    import tools.shared_context as shared_context
+
     if browser_session_manager.is_initialized:
         log.info("Fahre Browser-Tool herunter...")
         await browser_session_manager.close()
+    manager = shared_context.browser_context_manager
+    if manager:
+        await manager.shutdown()
+        shared_context.browser_context_manager = None
 
 
 # =================================================================

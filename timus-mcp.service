@@ -11,12 +11,18 @@ ExecStart=/home/fatih-ubuntu/miniconda3/envs/timus/bin/uvicorn \
     server.mcp_server:app \
     --host 127.0.0.1 \
     --port 5000 \
-    --log-level info
+    --log-level info \
+    --lifespan on \
+    --timeout-keep-alive 2 \
+    --timeout-graceful-shutdown 10
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=timus-mcp
+KillSignal=SIGINT
+TimeoutStopSec=20
+TimeoutStartSec=45
 
 # Umgebungsvariablen (lädt .env automatisch via python-dotenv im Code)
 Environment=PYTHONUNBUFFERED=1

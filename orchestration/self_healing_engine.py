@@ -12,8 +12,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import urllib.error
-import urllib.request
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, Optional
 
@@ -27,6 +25,7 @@ from orchestration.task_queue import (
     TaskType,
     get_queue,
 )
+from utils.http_health import fetch_http_text
 from utils.policy_gate import audit_policy_decision, evaluate_policy_gate
 
 log = logging.getLogger("SelfHealingEngine")
@@ -1063,9 +1062,9 @@ class SelfHealingEngine:
         url = os.getenv("AUTONOMY_SELF_HEALING_MCP_HEALTH_URL", "http://127.0.0.1:5000/health").strip()
         timeout = _env_float("AUTONOMY_SELF_HEALING_HTTP_TIMEOUT_SEC", 2.0)
         try:
-            with urllib.request.urlopen(url, timeout=timeout) as resp:
-                status_code = int(getattr(resp, "status", 200) or 200)
-                body = resp.read().decode("utf-8", errors="ignore")
+            probe = fetch_http_text(url, timeout=timeout)
+            status_code = int(probe["status_code"])
+            body = str(probe.get("body") or "")
             payload: Dict[str, Any] = {}
             if body.strip():
                 try:
@@ -1081,7 +1080,7 @@ class SelfHealingEngine:
                 "endpoint": url,
                 "status": payload.get("status"),
             }
-        except urllib.error.URLError as e:
+        except Exception as e:
             return {"ok": False, "endpoint": url, "error": str(e)}
         except Exception as e:
             return {"ok": False, "endpoint": url, "error": str(e)}

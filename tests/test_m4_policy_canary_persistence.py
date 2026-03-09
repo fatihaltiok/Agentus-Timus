@@ -105,6 +105,48 @@ def test_m4_policy_decisions_persist_in_task_queue(tmp_path: Path) -> None:
     assert metrics["by_gate"].get("autonomous_task", 0) >= 1
 
 
+def test_m4_list_policy_decisions_filters_by_gate_and_source(tmp_path: Path) -> None:
+    queue = TaskQueue(db_path=tmp_path / "task_queue.db")
+
+    queue.record_policy_decision(
+        {
+            "timestamp": "2026-02-25T23:20:00",
+            "gate": "query",
+            "source": "telegram",
+            "subject": "s1",
+            "action": "allow",
+            "blocked": False,
+            "strict_mode": False,
+            "violations": [],
+            "payload": {"query": "ok"},
+            "canary_percent": 0,
+            "canary_enforced": True,
+        }
+    )
+    queue.record_policy_decision(
+        {
+            "timestamp": "2026-02-25T23:21:00",
+            "gate": "autonomous_task",
+            "source": "scheduler",
+            "subject": "s2",
+            "action": "observe",
+            "blocked": False,
+            "strict_mode": True,
+            "violations": ["canary_deferred"],
+            "payload": {"task": "danger"},
+            "canary_percent": 10,
+            "canary_bucket": 88,
+            "canary_enforced": False,
+        }
+    )
+
+    filtered = queue.list_policy_decisions(window_hours=99999, gate="query", source="telegram")
+
+    assert len(filtered) == 1
+    assert filtered[0]["gate"] == "query"
+    assert filtered[0]["source"] == "telegram"
+
+
 def test_m4_audit_policy_decision_writes_to_queue_store(monkeypatch, tmp_path: Path) -> None:
     import orchestration.task_queue as task_queue_module
 

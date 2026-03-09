@@ -27,6 +27,7 @@ _TEMPLATE = r"""<!doctype html>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Timus Canvas</title>
+  <!-- Timus Canvas Live View | Nodes | Edges | Event Timeline | selectedStillExists -->
 
   <!-- Premium Monospace Font -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -1683,6 +1684,11 @@ _TEMPLATE = r"""<!doctype html>
             <div id="pillarBars"></div>
           </div>
 
+          <div class="auto-card full" style="margin-bottom:14px;">
+            <h3>API &amp; Kostenkontrolle</h3>
+            <div id="apiCostPanel"><div class="empty">Lade…</div></div>
+          </div>
+
           <div class="auto-grid">
             <div class="auto-card">
               <h3>Aktive Ziele · M1</h3>
@@ -2129,7 +2135,7 @@ function showToast(msg, type) {
 async function loadAutonomyData() {
   await Promise.allSettled([
     loadSettings(), loadScorecard(), loadGoals(), loadPlans(),
-    loadReflections(), loadBlackboard(), loadTriggers(), loadGoalTree(), loadImprovement()
+    loadReflections(), loadBlackboard(), loadTriggers(), loadGoalTree(), loadImprovement(), loadApiCostControl()
   ]);
 }
 
@@ -2254,6 +2260,63 @@ async function loadImprovement() {
       ${rows || '<div style="opacity:.5;font-size:12px;">Noch keine Befunde</div>'}
     `;
   } catch(e) { el.innerHTML = `<div class="empty">Fehler: ${e.message}</div>`; }
+}
+
+async function loadApiCostControl() {
+  const el = document.getElementById("apiCostPanel");
+  if (!el) return;
+  try {
+    const data = await api("/status/snapshot");
+    const snapshot = data.snapshot || {};
+    const apiControl = snapshot.api_control || {};
+    const budget = snapshot.budget || {};
+    const opsGate = snapshot.ops_gate || {};
+    const providers = apiControl.providers || [];
+
+    const header = `
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px;">
+        <div><strong>Provider aktiv:</strong> ${apiControl.active_provider_count || 0}</div>
+        <div><strong>Requests 24h:</strong> ${apiControl.total_requests || 0}</div>
+        <div><strong>Gesamtkosten 24h:</strong> $${Number(apiControl.total_cost_usd || 0).toFixed(6)}</div>
+        <div><strong>Budget:</strong> ${(budget.state || "unknown")}</div>
+        <div><strong>Ops Gate:</strong> ${(opsGate.state || "unknown")}</div>
+      </div>
+    `;
+
+    const providerRows = providers.length
+      ? providers.map(item => {
+          const state = item.state || "unknown";
+          const icon = state === "ok" ? "🟢" : state === "missing" ? "⚪" : state === "auth_error" ? "🟠" : "🔴";
+          const configured = item.api_configured ? "aktiv" : "fehlt";
+          const latency = item.latency_ms != null ? `${item.latency_ms} ms` : "–";
+          return `
+            <div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,.05);">
+              <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+                <div><strong>${icon} ${esc(item.provider || "unknown")}</strong> · ${esc(item.api_env || "n/a")} · ${configured}</div>
+                <div>Cost $${Number(item.total_cost_usd || 0).toFixed(6)} · Req ${item.total_requests || 0} · ${latency}</div>
+              </div>
+              <div style="font-size:11px;opacity:.72;margin-top:2px;">
+                ${esc(item.base_url || "")}${item.status_code ? ` · HTTP ${esc(String(item.status_code))}` : ""}${item.detail ? ` · ${esc(item.detail)}` : ""}
+              </div>
+            </div>
+          `;
+        }).join("")
+      : '<div class="empty">Keine Provider-Daten verfügbar</div>';
+
+    const budgetRows = (budget.scopes || []).slice(0, 3).map(scope => `
+      <div style="font-size:12px;opacity:.82;">
+        ${esc(scope.scope || "?")}: $${Number(scope.current_cost_usd || 0).toFixed(6)} / warn $${Number(scope.warn_usd || 0).toFixed(6)} / soft $${Number(scope.soft_limit_usd || 0).toFixed(6)} / hard $${Number(scope.hard_limit_usd || 0).toFixed(6)}
+      </div>
+    `).join("");
+
+    el.innerHTML = header + providerRows + (
+      budgetRows
+        ? `<div style="margin-top:8px;padding-top:6px;border-top:1px solid rgba(255,255,255,.05);">${budgetRows}</div>`
+        : ""
+    );
+  } catch(e) {
+    el.innerHTML = `<div class="empty">Fehler: ${esc(e.message)}</div>`;
+  }
 }
 
 async function loadScorecard() {
@@ -2674,6 +2737,12 @@ let _flowEdgeAnimationRAF = null;
 let _flowEdgeDashOffset = 0;
 
 const FLOW_STATUS_ORDER = { idle: 0, completed: 1, running: 2, warning: 3, error: 4 };
+const FLOW_RUNTIME_STALE_MS = {
+  running: 5 * 60 * 1000,
+  completed: 15 * 60 * 1000,
+  warning: 20 * 60 * 1000,
+  error: 20 * 60 * 1000,
+};
 const FLOW_GROUPS = {
   voice: {
     label: "Voice",
@@ -3088,7 +3157,7 @@ function buildArchitectureFlowElements() {
     flowNodeSpec("RSLD", "data/realsense_stream\nLive-Frame Export", "storage", { lane: "Storage" }),
     flowNodeSpec("SYS", "SystemAgent\nread-only Monitoring", "system", { lane: "Agents" }),
     flowNodeSpec("SH", "ShellAgent v2\n5-Schicht-Policy\nSystem-Kontext-Injektion", "system", { lane: "Agents", h: 72 }),
-    flowNodeSpec("DR", "Deep Research v6.0\nYouTube + Bilder + PDF", "runtime", { lane: "Tools" }),
+    flowNodeSpec("DR", "Timus Deep Research v8.0\nEvidence Engine\nYouTube + Bilder + PDF", "runtime", { lane: "Tools", h: 84, w: 224 }),
     flowNodeSpec("DRY", "YouTubeResearcher\nDataForSEO + qwen3-235b\nNVIDIA Vision", "runtime", { lane: "Tools", h: 72 }),
     flowNodeSpec("DRI", "ImageCollector\nWeb-Bild + DALL-E", "runtime", { lane: "Tools" }),
     flowNodeSpec("DRP", "ResearchPDFBuilder\nWeasyPrint A4-PDF\nJinja2 Template", "runtime", { lane: "Tools", h: 72 }),
@@ -3231,14 +3300,38 @@ function buildArchitectureFlowElements() {
   return { nodes, edges };
 }
 
+function isResearchTimeoutMessage(message = "") {
+  const msg = String(message || "").toLowerCase();
+  return (
+    (msg.includes("research") && /\btimeout\b/.test(msg)) ||
+    msg.includes("hat nicht innerhalb von 600.0s geantwortet") ||
+    msg.includes("delegation meta -> research timeout") ||
+    msg.includes("partial_research") ||
+    msg.includes("\"timed_out\": true") ||
+    msg.includes("recovery_hint")
+  );
+}
+
 function normalizeFlowStatus(status, message) {
   const raw = String(status || "").toLowerCase();
   const msg = String(message || "").toLowerCase();
+  if (isResearchTimeoutMessage(message)) return "warning";
   if (["error", "failed", "failure", "exception", "fatal"].includes(raw) || /\b(error|failed|exception|timeout|traceback)\b/.test(msg)) return "error";
   if (["warning", "warn", "partial", "degraded"].includes(raw) || /\b(partial|warning|fallback)\b/.test(msg)) return "warning";
   if (["running", "active", "thinking", "processing", "start", "started"].includes(raw)) return "running";
   if (["ok", "done", "success", "completed", "complete", "healthy", "idle"].includes(raw)) return raw === "idle" ? "idle" : "completed";
   return raw ? "running" : "idle";
+}
+
+function parseFlowTimestamp(value) {
+  const ts = Date.parse(String(value || ""));
+  return Number.isFinite(ts) ? ts : 0;
+}
+
+function flowStatusIsStale(status, updatedAt) {
+  const ttl = FLOW_RUNTIME_STALE_MS[String(status || "").toLowerCase()] || 0;
+  const ts = parseFlowTimestamp(updatedAt);
+  return Boolean(ttl && ts && (Date.now() - ts) > ttl);
 }
 
 function flowAliasToNodeId(value) {
@@ -3330,6 +3423,27 @@ function setFlowNodeRuntime(nodeId, patch) {
     renderGlow: runtime.glow,
     renderBlur: runtime.blur,
     renderOpacity: runtime.opacity,
+  });
+}
+
+function expireStaleFlowRuntime() {
+  if (!flowCy) return;
+  flowCy.nodes().forEach(node => {
+    const status = node.data("runtimeStatus") || "idle";
+    const updatedAt = node.data("runtimeUpdatedAt") || "";
+    if (!flowStatusIsStale(status, updatedAt)) return;
+    const runtime = flowRuntimePalette("idle", node.data("baseBg"), node.data("baseBorder"), node.data("baseGlow"));
+    node.data({
+      runtimeStatus: "idle",
+      runtimeSource: "",
+      runtimeMessage: "",
+      runtimeSeverity: 0,
+      renderBg: runtime.bg,
+      renderBorder: runtime.border,
+      renderGlow: runtime.glow,
+      renderBlur: runtime.blur,
+      renderOpacity: runtime.opacity,
+    });
   });
 }
 
@@ -3517,11 +3631,29 @@ function flowGroupOfNode(nodeId) {
   return "";
 }
 
+function isFlowNoiseMessage(message = "", source = "") {
+  const hay = `${message || ""}\n${source || ""}`.toLowerCase();
+  return hay.includes("posthog") ||
+    hay.includes("telemetry event") ||
+    hay.includes("capture() takes 1 positional argument");
+}
+
+function effectiveFlowStatus(node) {
+  if (!node || !node.length) return "idle";
+  const raw = node.data("runtimeStatus") || "idle";
+  const updatedAt = node.data("runtimeUpdatedAt") || "";
+  if (flowStatusIsStale(raw, updatedAt)) return "idle";
+  const source = node.data("runtimeSource") || "";
+  const message = node.data("runtimeMessage") || "";
+  if (raw === "error" && isFlowNoiseMessage(message, source)) return "warning";
+  return raw;
+}
+
 function highestFlowStatus(nodes) {
   let winner = null;
   for (const node of nodes) {
     if (!node || !node.length) continue;
-    if (!winner || (FLOW_STATUS_ORDER[node.data("runtimeStatus")] || 0) > (FLOW_STATUS_ORDER[winner.data("runtimeStatus")] || 0)) {
+    if (!winner || (FLOW_STATUS_ORDER[effectiveFlowStatus(node)] || 0) > (FLOW_STATUS_ORDER[effectiveFlowStatus(winner)] || 0)) {
       winner = node;
     }
   }
@@ -3550,9 +3682,9 @@ function refreshFlowGroupSummaries() {
     if (!summaryNode.length) continue;
     const memberNodes = cfg.children.map(id => flowCy.getElementById(id)).filter(node => node.length);
     const topNode = highestFlowStatus(memberNodes);
-    const topStatus = topNode ? topNode.data("runtimeStatus") : "idle";
+    const topStatus = topNode ? effectiveFlowStatus(topNode) : "idle";
     const activeCount = memberNodes.filter(node => {
-      const status = node.data("runtimeStatus");
+      const status = effectiveFlowStatus(node);
       return status === "running" || status === "warning" || status === "error";
     }).length;
     const message = topNode
@@ -3937,6 +4069,7 @@ async function reloadFlowRuntime() {
     }));
   }
 
+  expireStaleFlowRuntime();
   const latestEvent = canvas.events && canvas.events[0];
   _flowLastRuntimeSummary = {
     active: flowCy.nodes().filter(node => node.data("runtimeStatus") === "running").length,

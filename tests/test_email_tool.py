@@ -86,6 +86,30 @@ class TestSendEmailResend:
         assert result["artifacts"][0]["type"] == "pdf"
         assert result["artifacts"][0]["source"] == "email_tool"
 
+    def test_resend_passes_cc_bcc_and_reply_to(self, tool, monkeypatch):
+        """Tool-Layer reicht Zusatzfelder an Resend wirklich durch."""
+        monkeypatch.setenv("EMAIL_BACKEND", "resend")
+        with patch("utils.resend_email.send_email_resend", new_callable=AsyncMock, return_value=True) as mock_send:
+            result = tool.send_email(
+                to="x@example.com,y@example.com",
+                cc="cc@example.com",
+                bcc="bcc@example.com",
+                reply_to="reply@example.com",
+                subject="Test",
+                body="Hallo",
+            )
+        assert result["success"] is True
+        mock_send.assert_awaited_once_with(
+            to="x@example.com,y@example.com",
+            subject="Test",
+            body="Hallo",
+            cc="cc@example.com",
+            bcc="bcc@example.com",
+            html_body=None,
+            reply_to="reply@example.com",
+            attachment_path=None,
+        )
+
     def test_resend_exception_propagated(self, tool, monkeypatch):
         """Exception in Resend → success=False, Fehlertext weitergegeben."""
         monkeypatch.setenv("EMAIL_BACKEND", "resend")
@@ -114,6 +138,30 @@ class TestSendEmailSmtp:
         with patch("utils.smtp_email.send_email_smtp", new_callable=AsyncMock, return_value=False):
             result = tool.send_email(to="y@example.com", subject="Fail", body="Body")
         assert result["success"] is False
+
+    def test_smtp_passes_cc_bcc_and_reply_to(self, tool, monkeypatch):
+        """Tool-Layer reicht Zusatzfelder an SMTP wirklich durch."""
+        monkeypatch.setenv("EMAIL_BACKEND", "smtp")
+        with patch("utils.smtp_email.send_email_smtp", new_callable=AsyncMock, return_value=True) as mock_send:
+            result = tool.send_email(
+                to="y@example.com",
+                cc="cc@example.com",
+                bcc="bcc@example.com",
+                reply_to="reply@example.com",
+                subject="SMTP Test",
+                body="Body",
+            )
+        assert result["success"] is True
+        mock_send.assert_awaited_once_with(
+            to="y@example.com",
+            subject="SMTP Test",
+            body="Body",
+            cc="cc@example.com",
+            bcc="bcc@example.com",
+            html_body=None,
+            reply_to="reply@example.com",
+            attachment_path=None,
+        )
 
 
 # ── send_email — Microsoft Graph Backend ─────────────────────────────────────

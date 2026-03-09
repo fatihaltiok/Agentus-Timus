@@ -16,6 +16,7 @@ IMAP-Empfang: Resend ist reiner Versanddienst — Empfang läuft weiter
 import base64
 import logging
 import os
+from email.utils import getaddresses
 from pathlib import Path
 from typing import List, Optional
 
@@ -34,11 +35,20 @@ def _from_address() -> str:
     return os.getenv("RESEND_FROM", "Timus <onboarding@resend.dev>")
 
 
+def _parse_addresses(addrs: Optional[str]) -> List[str]:
+    if not addrs:
+        return []
+    return [addr for _, addr in getaddresses([addrs]) if addr]
+
+
 async def send_email_resend(
     to: str,
     subject: str,
     body: str,
+    cc: Optional[str] = None,
+    bcc: Optional[str] = None,
     html_body: Optional[str] = None,
+    reply_to: Optional[str] = None,
     attachment_path: Optional[str] = None,
 ) -> bool:
     """
@@ -48,7 +58,10 @@ async def send_email_resend(
         to:              Empfänger-Adresse
         subject:         Betreff
         body:            Plaintext-Body
+        cc:              Optionale CC-Adressen, kommagetrennt
+        bcc:             Optionale BCC-Adressen, kommagetrennt
         html_body:       Optional HTML-Body (Priorität über Plaintext)
+        reply_to:        Optional Reply-To-Adresse(n), kommagetrennt
         attachment_path: Optionaler Pfad zu einer Anhang-Datei (absolut oder relativ)
 
     Returns:
@@ -59,11 +72,25 @@ async def send_email_resend(
         log.warning("Resend: RESEND_API_KEY fehlt in .env")
         return False
 
+    to_addrs = _parse_addresses(to)
+    cc_addrs = _parse_addresses(cc)
+    bcc_addrs = _parse_addresses(bcc)
+    reply_to_addrs = _parse_addresses(reply_to)
+    if not to_addrs:
+        log.warning("Resend: keine gueltige Empfaengeradresse in 'to'")
+        return False
+
     payload: dict = {
         "from": _from_address(),
-        "to": [to],
+        "to": to_addrs,
         "subject": subject,
     }
+    if cc_addrs:
+        payload["cc"] = cc_addrs
+    if bcc_addrs:
+        payload["bcc"] = bcc_addrs
+    if reply_to_addrs:
+        payload["reply_to"] = reply_to_addrs[0] if len(reply_to_addrs) == 1 else reply_to_addrs
     if html_body:
         payload["html"] = html_body
     else:

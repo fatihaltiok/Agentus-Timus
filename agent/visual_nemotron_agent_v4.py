@@ -25,7 +25,7 @@ import time
 import re
 import subprocess
 import base64
-import hashlib
+import tempfile
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple, Union
 from dataclasses import dataclass, field
@@ -61,15 +61,55 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 VISUAL_MODEL_DEFAULT = "nvidia/nemotron-nano-12b-v2-vl"
+
+
+def _get_env_str(name: str) -> str:
+    return str(os.getenv(name, "") or "").strip()
+
+
+def _resolve_openrouter_vision_model() -> str:
+    # Eigener Vision-Fallback hat eine separate Env und darf NICHT implizit
+    # auf ein OpenAI-Direktmodell aus VISUAL_MODEL kippen.
+    explicit = _get_env_str("VISUAL_OPENROUTER_VISION_MODEL") or _get_env_str("OPENROUTER_VISION_MODEL")
+    if explicit:
+        return explicit
+
+    vision_model = _get_env_str("VISION_MODEL")
+    if vision_model and _get_env_str("VISION_MODEL_PROVIDER").lower() == "openrouter":
+        return vision_model
+
+    visual_model = _get_env_str("VISUAL_MODEL")
+    if visual_model and _get_env_str("VISUAL_MODEL_PROVIDER").lower() == "openrouter":
+        return visual_model
+
+    return VISUAL_MODEL_DEFAULT
+
+
 NEMOTRON_MODEL = os.getenv("VISUAL_MODEL", VISUAL_MODEL_DEFAULT)
 NEMOTRON_PROVIDER = os.getenv("VISUAL_MODEL_PROVIDER", "openrouter").lower()
-OPENROUTER_VISION_MODEL = os.getenv("VISUAL_OPENROUTER_VISION_MODEL", os.getenv("VISUAL_MODEL", VISUAL_MODEL_DEFAULT))
+OPENROUTER_VISION_MODEL = _resolve_openrouter_vision_model()
 MCP_URL = os.getenv("MCP_SERVER_URL", "http://localhost:5000")
 # Feature-Flag: Florence-2 als primärer Vision-Pfad (FLORENCE2_ENABLED=false → alter Pfad)
 FLORENCE2_ENABLED = os.getenv("FLORENCE2_ENABLED", "true").lower() not in {"0", "false", "no", "off"}
 # LLM-Fallback für Decision-Layer (nur NemotronClient, NICHT Florence-Detection)
 LOCAL_LLM_URL = os.getenv("LOCAL_LLM_URL", "")        # z.B. http://localhost:1234/v1
 LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "")    # z.B. Qwen/Qwen2.5-7B-Instruct
+_VISUAL_V4_TEMP_DIR = Path(tempfile.gettempdir()) / "timus_visual_v4"
+_VISUAL_V4_DEBUG_DIR = _VISUAL_V4_TEMP_DIR / "debug"
+
+
+def _ensure_visual_v4_temp_dir() -> Path:
+    _VISUAL_V4_TEMP_DIR.mkdir(parents=True, exist_ok=True)
+    return _VISUAL_V4_TEMP_DIR
+
+
+def _ensure_visual_v4_debug_dir() -> Path:
+    _VISUAL_V4_DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+    return _VISUAL_V4_DEBUG_DIR
+
+
+def _visual_v4_temp_path(filename: str) -> Path:
+    return _ensure_visual_v4_temp_dir() / filename
 
 
 # ============================================================================
@@ -289,13 +329,13 @@ KEIN Code, KEINE Erklärung - nur JSON!"""
                     vx, vy = x, y
                     if not vx or not vy:
                         log.info(f"   🔍 Suche mit Florence-2 detect_ui: '{search_term}'")
-                        temp_path = "/tmp/v4_click_search.png"
+                        temp_path = _visual_v4_temp_path("v4_click_search.png")
                         screenshot = await self.screenshot()
                         await asyncio.to_thread(screenshot.save, temp_path)
 
                         result = await self.mcp.call_tool(
                             "florence2_detect_ui",
-                            {"image_path": temp_path},
+                            {"image_path": str(temp_path)},
                         )
                         if isinstance(result, dict) and result.get("error"):
                             return {"error": f"Florence-2 detect_ui Fehler: {result['error']}"}
@@ -330,12 +370,12 @@ KEIN Code, KEINE Erklärung - nur JSON!"""
                 if not x or not y:
                     # Auch hier lokal mit Florence-2 statt GPT-4-Koordinatensuche.
                     target_desc = target.get("description", target.get("element_type", "input"))
-                    temp_path = "/tmp/v4_focus_search.png"
+                    temp_path = _visual_v4_temp_path("v4_focus_search.png")
                     screenshot = await self.screenshot()
                     await asyncio.to_thread(screenshot.save, temp_path)
                     result = await self.mcp.call_tool(
                         "florence2_detect_ui",
-                        {"image_path": temp_path},
+                        {"image_path": str(temp_path)},
                     )
                     if isinstance(result, dict) and result.get("error"):
                         return False, f"Florence-2 detect_ui Fehler: {result['error']}"
@@ -887,7 +927,7 @@ class VisionClient:
         Speichert Screenshot temporär, ruft Tool auf, gibt summary_prompt zurück.
         Fallback bei Fehler: florence2_full_analysis.
         """
-        temp_path = "/tmp/v4_florence2_screen.png"
+        temp_path = _visual_v4_temp_path("v4_florence2_screen.png")
         await asyncio.to_thread(img.save, temp_path)
 
         try:
@@ -898,7 +938,7 @@ class VisionClient:
                         json={
                             "jsonrpc": "2.0",
                             "method": method,
-                            "params": {"image_path": temp_path},
+                            "params": {"image_path": str(temp_path)},
                             "id": request_id,
                         },
                     )
@@ -937,7 +977,7 @@ class VisionClient:
 
     async def _qwen_analyze(self, img: Image.Image, task: str) -> str:
         """Qwen-VL Fallback mit langem Timeout."""
-        temp_path = "/tmp/v4_screenshot.png"
+        temp_path = _visual_v4_temp_path("v4_screenshot.png")
         small_img = self._resize_for_qwen(img)
         small_img.save(temp_path, quality=85)
 
@@ -961,7 +1001,7 @@ Focus on actionable details for automation."""
                         "jsonrpc": "2.0",
                         "method": "qwen_analyze_screenshot",
                         "params": {
-                            "screenshot_path": temp_path,
+                            "screenshot_path": str(temp_path),
                             "task": prompt,
                             "include_history": False
                         },
@@ -1061,7 +1101,7 @@ Antworte strukturiert und präzise. NUR beschreiben, KEIN Code."""
             return "[No OpenAI key]"
         
         # DEBUG: Screenshot speichern
-        debug_dir = Path("/tmp/v4_debug")
+        debug_dir = _ensure_visual_v4_debug_dir()
         debug_dir.mkdir(exist_ok=True)
         timestamp = int(time.time())
         screenshot_path = debug_dir / f"screenshot_{timestamp}.png"

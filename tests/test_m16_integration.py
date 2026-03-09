@@ -78,6 +78,44 @@ def test_topic_score_invalid_signal_ignored(curiosity):
     assert curiosity.get_topic_score("Topic") == 1.0
 
 
+def test_curiosity_topic_score_uses_feedback_target(tmp_path):
+    from orchestration.feedback_engine import FeedbackEngine
+    import orchestration.feedback_engine as fe_module
+    from orchestration.curiosity_engine import CuriosityEngine
+
+    fe = FeedbackEngine(db_path=tmp_path / "curiosity_feedback.db")
+    fe.record_signal(
+        "curiosity-1",
+        "positive",
+        context={"topic": "python"},
+        feedback_targets=[{"namespace": "curiosity_topic", "key": "python"}],
+    )
+    curiosity = CuriosityEngine(telegram_app=None)
+    with patch.object(fe_module, "get_feedback_engine", return_value=fe):
+        assert curiosity.get_topic_score("python") > 1.0
+
+
+def test_dispatcher_runtime_feedback_updates_selected_agent(tmp_path):
+    from orchestration.feedback_engine import FeedbackEngine
+    import orchestration.feedback_engine as fe_module
+    import main_dispatcher
+
+    fe = FeedbackEngine(db_path=tmp_path / "dispatcher_runtime_feedback.db")
+
+    with patch.object(fe_module, "get_feedback_engine", return_value=fe):
+        main_dispatcher._record_runtime_feedback(
+            session_id="sess-1",
+            agent_name="meta",
+            query="plane den browser workflow",
+            final_output="Workflow erfolgreich abgeschlossen",
+            runtime_metadata={"execution_path": "standard"},
+        )
+
+    stats = fe.get_target_stats("dispatcher_agent", "meta")
+    assert stats["positive_count"] == 1
+    assert stats["score"] == pytest.approx(1.05)
+
+
 def test_decay_stale_scores(curiosity):
     """Scores älter als 7 Tage werden Richtung 1.0 decay'd."""
     from datetime import datetime, timedelta
@@ -155,6 +193,7 @@ def test_apply_reflection_to_hooks_enabled(reflection_loop, reflection_summary, 
 
     events = fe.get_recent_events(limit=20)
     assert len(events) >= 1
+    assert fe.get_target_score("reflection_pattern", reflection_summary.what_worked[0]) > 1.0
 
 
 def test_reflection_positive_from_what_worked(reflection_loop, tmp_path):
@@ -205,6 +244,36 @@ def test_reflection_negative_from_what_failed(reflection_loop, tmp_path):
 
     negative_events = [e for e in fe.get_recent_events(limit=20) if e.signal == "negative"]
     assert len(negative_events) >= 1
+
+
+def test_reflection_patterns_gain_weighted_occurrences(reflection_loop, tmp_path):
+    from orchestration.feedback_engine import FeedbackEngine
+    from orchestration.session_reflection import ReflectionSummary
+    import orchestration.feedback_engine as fe_module
+
+    fe = FeedbackEngine(db_path=tmp_path / "fb_patterns.db")
+    fe.record_signal(
+        "pattern-1",
+        "positive",
+        context={"reflection_pattern": "pattern-x"},
+        feedback_targets=[{"namespace": "reflection_pattern", "key": "pattern-x"}],
+    )
+    summary = ReflectionSummary(
+        session_id="sess-pattern",
+        tasks_count=2,
+        success_rate=0.7,
+        patterns=["pattern-x"],
+    )
+    with patch.object(fe_module, "get_feedback_engine", return_value=fe):
+        reflection_loop._accumulate_patterns(summary)
+
+    with sqlite3.connect(str(reflection_loop.db_path)) as conn:
+        row = conn.execute(
+            "SELECT occurrences FROM improvement_suggestions WHERE pattern = ?",
+            ("pattern-x",),
+        ).fetchone()
+    assert row is not None
+    assert row[0] == 2
 
 
 # ──────────────────────────────────────────────────────────────────

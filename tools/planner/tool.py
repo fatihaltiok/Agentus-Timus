@@ -1,5 +1,6 @@
 # tools/planner/tool.py
 
+import ast
 import json
 import logging
 import os
@@ -14,11 +15,131 @@ from tools.planner.planner_helpers import call_tool_internal
 
 log = logging.getLogger(__name__)
 
+
+_ALLOWED_BIN_OPS = {
+    ast.Add: lambda left, right: left + right,
+    ast.Sub: lambda left, right: left - right,
+    ast.Mult: lambda left, right: left * right,
+    ast.Div: lambda left, right: left / right,
+    ast.FloorDiv: lambda left, right: left // right,
+    ast.Mod: lambda left, right: left % right,
+    ast.Pow: lambda left, right: left ** right,
+}
+
+_ALLOWED_UNARY_OPS = {
+    ast.UAdd: lambda value: +value,
+    ast.USub: lambda value: -value,
+    ast.Not: lambda value: not value,
+}
+
+_ALLOWED_BOOL_OPS = {
+    ast.And: all,
+    ast.Or: any,
+}
+
+_ALLOWED_COMPARE_OPS = {
+    ast.Eq: lambda left, right: left == right,
+    ast.NotEq: lambda left, right: left != right,
+    ast.Lt: lambda left, right: left < right,
+    ast.LtE: lambda left, right: left <= right,
+    ast.Gt: lambda left, right: left > right,
+    ast.GtE: lambda left, right: left >= right,
+    ast.In: lambda left, right: left in right,
+    ast.NotIn: lambda left, right: left not in right,
+}
+
+
+class SafeExpressionError(ValueError):
+    pass
+
+
+def _resolve_attribute(value: Any, attr_name: str) -> Any:
+    if isinstance(value, dict):
+        if attr_name not in value:
+            raise SafeExpressionError(f"Unbekanntes Attribut: {attr_name}")
+        return value[attr_name]
+    if hasattr(value, attr_name):
+        return getattr(value, attr_name)
+    raise SafeExpressionError(f"Attribut nicht verfügbar: {attr_name}")
+
+
+def _resolve_subscript(value: Any, key: Any) -> Any:
+    try:
+        return value[key]
+    except Exception as exc:
+        raise SafeExpressionError(f"Ungültiger Index/Zugriff: {key!r}") from exc
+
+
+def _safe_eval_node(node: ast.AST, context: Dict[str, Any]) -> Any:
+    if isinstance(node, ast.Expression):
+        return _safe_eval_node(node.body, context)
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.Name):
+        if node.id not in context:
+            raise SafeExpressionError(f"Unbekannte Variable: {node.id}")
+        return context[node.id]
+    if isinstance(node, ast.Attribute):
+        return _resolve_attribute(_safe_eval_node(node.value, context), node.attr)
+    if isinstance(node, ast.Subscript):
+        return _resolve_subscript(
+            _safe_eval_node(node.value, context),
+            _safe_eval_node(node.slice, context),
+        )
+    if isinstance(node, ast.List):
+        return [_safe_eval_node(element, context) for element in node.elts]
+    if isinstance(node, ast.Tuple):
+        return tuple(_safe_eval_node(element, context) for element in node.elts)
+    if isinstance(node, ast.Dict):
+        return {
+            _safe_eval_node(key, context): _safe_eval_node(value, context)
+            for key, value in zip(node.keys, node.values)
+        }
+    if isinstance(node, ast.BinOp):
+        op_type = type(node.op)
+        if op_type not in _ALLOWED_BIN_OPS:
+            raise SafeExpressionError(f"Operator nicht erlaubt: {op_type.__name__}")
+        return _ALLOWED_BIN_OPS[op_type](
+            _safe_eval_node(node.left, context),
+            _safe_eval_node(node.right, context),
+        )
+    if isinstance(node, ast.UnaryOp):
+        op_type = type(node.op)
+        if op_type not in _ALLOWED_UNARY_OPS:
+            raise SafeExpressionError(f"Unary-Operator nicht erlaubt: {op_type.__name__}")
+        return _ALLOWED_UNARY_OPS[op_type](_safe_eval_node(node.operand, context))
+    if isinstance(node, ast.BoolOp):
+        op_type = type(node.op)
+        if op_type not in _ALLOWED_BOOL_OPS:
+            raise SafeExpressionError(f"Bool-Operator nicht erlaubt: {op_type.__name__}")
+        values = [_safe_eval_node(value, context) for value in node.values]
+        return _ALLOWED_BOOL_OPS[op_type](values)
+    if isinstance(node, ast.Compare):
+        left = _safe_eval_node(node.left, context)
+        for op, comparator in zip(node.ops, node.comparators):
+            op_type = type(op)
+            if op_type not in _ALLOWED_COMPARE_OPS:
+                raise SafeExpressionError(f"Vergleich nicht erlaubt: {op_type.__name__}")
+            right = _safe_eval_node(comparator, context)
+            if not _ALLOWED_COMPARE_OPS[op_type](left, right):
+                return False
+            left = right
+        return True
+    raise SafeExpressionError(f"Ausdruckstyp nicht erlaubt: {type(node).__name__}")
+
+
+def _safe_eval_expression(expression: str, context: Dict[str, Any]) -> Any:
+    try:
+        parsed = ast.parse(expression, mode="eval")
+    except SyntaxError as exc:
+        raise SafeExpressionError(f"Ungültiger Ausdruck: {exc.msg}") from exc
+    return _safe_eval_node(parsed, context)
+
 # --- Finale, korrigierte Hilfsfunktion zur Variablensubstitution ---
 def _substitute_variables(data: Any, context: Dict[str, Any]) -> Any:
     """
     Durchläuft rekursiv ein Datenobjekt und ersetzt Platzhalter im Format {{...}}.
-    Unterstützt den Zugriff auf verschachtelte Schlüssel und einfache Berechnungen sicher mit eval().
+    Unterstützt verschachtelte Schlüssel und einfache sichere AST-Ausdrücke.
     """
     if isinstance(data, dict):
         return {k: _substitute_variables(v, context) for k, v in data.items()}
@@ -30,18 +151,7 @@ def _substitute_variables(data: Any, context: Dict[str, Any]) -> Any:
         def replace_match(match):
             expression = match.group(1).strip()
             try:
-                # DotDict-Klasse zur Vereinfachung des Zugriffs im eval (z.B. coords.x1)
-                class DotDict(dict):
-                    __getattr__ = dict.get
-                    def __init__(self, d=None):
-                        super().__init__()
-                        if d:
-                            for k, v in d.items():
-                                self[k] = DotDict(v) if isinstance(v, dict) else v
-                eval_context = {k: DotDict(v) if isinstance(v, dict) else v for k, v in context.items()}
-
-                # Führe die Auswertung im sicheren Kontext durch
-                result = eval(expression, {"__builtins__": None}, eval_context)
+                result = _safe_eval_expression(expression, context)
 
                 # Wenn der gesamte String der Platzhalter war, gib den Typ-korrekten Wert zurück
                 if data.strip() == match.group(0):

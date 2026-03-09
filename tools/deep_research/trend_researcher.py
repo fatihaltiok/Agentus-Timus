@@ -18,10 +18,10 @@ import json
 import logging
 import os
 import re
-import xml.etree.ElementTree as ET
 from typing import List, Optional, TYPE_CHECKING
 
 import httpx
+from defusedxml.ElementTree import ParseError, fromstring
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -160,7 +160,7 @@ class ArXivResearcher:
         """Parst ArXiv Atom-XML und extrahiert relevante Felder."""
         papers = []
         try:
-            root = ET.fromstring(xml_text)
+            root = fromstring(xml_text)
             ns = {"atom": self._ARXIV_NS}
             for entry in root.findall("atom:entry", ns):
                 title_el = entry.find("atom:title", ns)
@@ -195,7 +195,7 @@ class ArXivResearcher:
                         "url": f"https://arxiv.org/abs/{arxiv_id}",
                         "authors": authors,
                     })
-        except ET.ParseError as e:
+        except ParseError as e:
             logger.warning(f"ArXiv XML-Parse-Fehler: {e}")
         return papers
 

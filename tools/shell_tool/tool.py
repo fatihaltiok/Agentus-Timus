@@ -19,10 +19,12 @@ import shlex
 import subprocess
 import sys
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 
 from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
+from utils.http_health import fetch_http_text
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +37,9 @@ _RESTART_SCRIPT = _PROJECT_ROOT / "scripts" / "restart_timus.sh"
 _RESTART_SUPERVISOR = _PROJECT_ROOT / "scripts" / "restart_supervisor.py"
 _DETACHED_RESTART_LOG = _PROJECT_ROOT / "logs" / "timus_restart_detached.log"
 _DETACHED_RESTART_STATUS = _PROJECT_ROOT / "logs" / "timus_restart_status.json"
+_DETACHED_RESTART_LOCK = _PROJECT_ROOT / "logs" / "timus_restart.lock"
+_RESTART_LOCK_TTL_S = int(os.getenv("TIMUS_RESTART_LOCK_TTL", "600"))
+_BASH_BIN = os.getenv("TIMUS_BASH_BIN", "/bin/bash")
 
 # Verzeichnis sicherstellen
 _AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
@@ -126,70 +131,226 @@ def _contains_direct_restart_script(command: str) -> bool:
     )
 
 
-def _detached_restart_command(mode: str) -> str:
+def _safe_shlex_split(raw: str) -> list[str]:
+    try:
+        return shlex.split(raw)
+    except ValueError:
+        return str(raw or "").split()
+
+
+def _shell_argv(command: str) -> list[str]:
+    return [_BASH_BIN, "-lc", command]
+
+
+def _argv_to_display(argv: list[str]) -> str:
+    return " ".join(shlex.quote(part) for part in argv)
+
+
+def _systemctl_argv(*parts: str, use_sudo: bool = True) -> list[str]:
+    base = ["sudo", "-n", "/usr/bin/systemctl"] if use_sudo else ["systemctl"]
+    return base + list(parts)
+
+
+def _detached_restart_argv(mode: str, request_id: str) -> list[str]:
+    return [
+        sys.executable,
+        str(_RESTART_SUPERVISOR),
+        mode,
+        "--status-file",
+        str(_DETACHED_RESTART_STATUS),
+        "--lock-file",
+        str(_DETACHED_RESTART_LOCK),
+        "--request-id",
+        request_id,
+    ]
+
+
+def _read_json_file(path: Path) -> dict | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _write_restart_status(payload: dict) -> None:
+    _DETACHED_RESTART_STATUS.parent.mkdir(parents=True, exist_ok=True)
+    content = dict(payload)
+    content.setdefault("updated_at", datetime.now().isoformat(timespec="seconds"))
+    _DETACHED_RESTART_STATUS.write_text(
+        json.dumps(content, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def _release_restart_lock() -> None:
+    try:
+        _DETACHED_RESTART_LOCK.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _maybe_clear_stale_restart_lock() -> bool:
+    if not _DETACHED_RESTART_LOCK.exists():
+        return False
+
+    try:
+        age_s = time.time() - _DETACHED_RESTART_LOCK.stat().st_mtime
+    except OSError:
+        return False
+
+    status_payload = _read_json_file(_DETACHED_RESTART_STATUS) or {}
+    status_value = str(status_payload.get("status") or "").strip().lower()
+    if status_value in {"completed", "failed", "error", "blocked"}:
+        _release_restart_lock()
+        return True
+
+    if age_s > _RESTART_LOCK_TTL_S:
+        _release_restart_lock()
+        return True
+
+    return False
+
+
+def _acquire_restart_lock(mode: str, request_id: str) -> tuple[bool, dict]:
+    _DETACHED_RESTART_LOCK.parent.mkdir(parents=True, exist_ok=True)
+    lock_payload = {
+        "status": "locked",
+        "mode": mode,
+        "request_id": request_id,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "lock_path": str(_DETACHED_RESTART_LOCK),
+    }
+
+    for _ in range(2):
+        _maybe_clear_stale_restart_lock()
+        try:
+            fd = os.open(str(_DETACHED_RESTART_LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            existing = _read_json_file(_DETACHED_RESTART_LOCK) or {}
+            return False, existing
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(lock_payload, handle, indent=2, ensure_ascii=False)
+            handle.write("\n")
+        return True, lock_payload
+
+    existing = _read_json_file(_DETACHED_RESTART_LOCK) or {}
+    return False, existing
+
+
+def _detached_restart_command(mode: str, request_id: str) -> str:
     python_bin = shlex.quote(sys.executable)
     script = shlex.quote(str(_RESTART_SUPERVISOR))
     mode_q = shlex.quote(mode)
     log_path = shlex.quote(str(_DETACHED_RESTART_LOG))
     status_path = shlex.quote(str(_DETACHED_RESTART_STATUS))
+    lock_path = shlex.quote(str(_DETACHED_RESTART_LOCK))
+    request_q = shlex.quote(request_id)
     return (
-        f"nohup {python_bin} {script} {mode_q} --status-file {status_path} > {log_path} 2>&1 < /dev/null &"
+        f"nohup {python_bin} {script} {mode_q} --status-file {status_path} --lock-file {lock_path} "
+        f"--request-id {request_q} > {log_path} 2>&1 < /dev/null &"
     )
 
 
 def _launch_detached_restart(mode: str) -> dict:
     _DETACHED_RESTART_LOG.parent.mkdir(parents=True, exist_ok=True)
-    command = _detached_restart_command(mode)
+    request_id = uuid.uuid4().hex
+    acquired, lock_info = _acquire_restart_lock(mode, request_id)
+    if not acquired:
+        return {
+            "status": "blocked",
+            "mode": mode,
+            "reason": "restart_in_progress",
+            "message": "Detached Neustart blockiert: Ein anderer Timus-Neustart laeuft bereits.",
+            "lock_info": lock_info,
+            "status_path": str(_DETACHED_RESTART_STATUS),
+            "lock_path": str(_DETACHED_RESTART_LOCK),
+        }
+
+    _DETACHED_RESTART_LOG.write_text("", encoding="utf-8")
+    _write_restart_status(
+        {
+            "status": "launching",
+            "phase": "launcher",
+            "mode": mode,
+            "request_id": request_id,
+            "requested_at": datetime.now().isoformat(timespec="seconds"),
+            "status_path": str(_DETACHED_RESTART_STATUS),
+            "lock_path": str(_DETACHED_RESTART_LOCK),
+        }
+    )
+    command = _detached_restart_command(mode, request_id)
+    argv = _detached_restart_argv(mode, request_id)
     try:
-        proc = subprocess.Popen(
-            command,
-            shell=True,
-            cwd=str(_PROJECT_ROOT),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        with open(_DETACHED_RESTART_LOG, "ab") as log_handle:
+            proc = subprocess.Popen(
+                argv,
+                cwd=str(_PROJECT_ROOT),
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+            )
         return {
             "status": "pending_restart",
             "mode": mode,
+            "request_id": request_id,
             "launcher_pid": proc.pid,
             "launcher_command": command,
             "log_path": str(_DETACHED_RESTART_LOG),
             "status_path": str(_DETACHED_RESTART_STATUS),
+            "lock_path": str(_DETACHED_RESTART_LOCK),
             "message": f"Detached Timus-Neustart gestartet (Modus: {mode}). Status danach separat pruefen.",
         }
     except Exception as exc:
+        _write_restart_status(
+            {
+                "status": "failed",
+                "phase": "launcher_error",
+                "mode": mode,
+                "request_id": request_id,
+                "error": str(exc),
+                "finished_at": datetime.now().isoformat(timespec="seconds"),
+            }
+        )
+        _release_restart_lock()
         return {
             "status": "error",
             "mode": mode,
+            "request_id": request_id,
             "message": f"Detached Neustart konnte nicht gestartet werden: {exc}",
         }
 
 
-def _can_run_noninteractive_restart() -> tuple[bool, str]:
-    checks = (
-        f"sudo -n /usr/bin/systemctl status {_MCP_SERVICE}",
-        f"sudo -n /usr/bin/systemctl status {_DISPATCHER_SERVICE}",
-    )
+def _can_run_noninteractive_systemctl(services: tuple[str, ...]) -> tuple[bool, str]:
+    checks: list[list[str]] = []
+    for service in services:
+        checks.extend(
+            (
+                _systemctl_argv("status", service),
+                _systemctl_argv("reset-failed", service),
+            )
+        )
     for cmd in checks:
         try:
             proc = subprocess.run(
                 cmd,
-                shell=True,
                 capture_output=True,
                 text=True,
                 timeout=10,
                 cwd=str(_PROJECT_ROOT),
             )
         except subprocess.TimeoutExpired:
-            return False, f"Preflight-Timeout fuer: {cmd}"
+            return False, f"Preflight-Timeout fuer: {_argv_to_display(cmd)}"
         except Exception as exc:
-            return False, f"Preflight-Fehler fuer {cmd}: {exc}"
+            return False, f"Preflight-Fehler fuer {_argv_to_display(cmd)}: {exc}"
         if proc.returncode != 0:
             detail = (proc.stdout + proc.stderr).strip() or "sudo/systemctl nicht non-interaktiv verfuegbar"
             return False, detail
     return True, "ok"
+
+
+def _can_run_noninteractive_restart() -> tuple[bool, str]:
+    return _can_run_noninteractive_systemctl((_MCP_SERVICE, _DISPATCHER_SERVICE))
 
 
 async def _maybe_to_thread(fn):
@@ -274,8 +435,7 @@ async def run_command(
 
         try:
             proc = subprocess.run(
-                command,
-                shell=True,
+                _shell_argv(command),
                 capture_output=True,
                 text=True,
                 timeout=t_limit,
@@ -370,7 +530,11 @@ async def run_script(
         else:
             return {"status": "error", "message": f"Unbekannter Skript-Typ: {suffix}"}
 
-        command = f"{interpreter} {resolved} {args}".strip()
+        args_list = _safe_shlex_split(args)
+        command = " ".join(
+            [interpreter, shlex.quote(str(resolved))]
+            + [shlex.quote(part) for part in args_list]
+        ).strip()
 
         # Blacklist auch fuer Script-Argumente
         full_check = f"{resolved} {args}"
@@ -398,9 +562,13 @@ async def run_script(
         t_limit = max(1, min(_MAX_TIMEOUT, int(timeout)))
         t_start = time.monotonic()
         try:
+            argv = [sys.executable, str(resolved), *args_list] if suffix == ".py" else ["bash", str(resolved), *args_list]
             proc = subprocess.run(
-                command, shell=True, capture_output=True,
-                text=True, timeout=t_limit, cwd=str(_PROJECT_ROOT),
+                argv,
+                capture_output=True,
+                text=True,
+                timeout=t_limit,
+                cwd=str(_PROJECT_ROOT),
             )
             duration = time.monotonic() - t_start
             output   = (proc.stdout + proc.stderr).strip()
@@ -470,18 +638,17 @@ async def install_package(
             return {"status": "blocked", "reason": reason}
 
         # Befehl zusammenbauen
+        extra_list = _safe_shlex_split(extra_args)
+        env = None
         if mgr in ("apt", "apt-get"):
-            command = f"DEBIAN_FRONTEND=noninteractive {mgr} install -y {pkg}"
-            if extra_args:
-                command += f" {extra_args.strip()}"
+            argv = [mgr, "install", "-y", pkg, *extra_list]
+            env = os.environ.copy()
+            env["DEBIAN_FRONTEND"] = "noninteractive"
         elif mgr == "conda":
-            command = f"conda install -y {pkg}"
-            if extra_args:
-                command += f" {extra_args.strip()}"
+            argv = ["conda", "install", "-y", pkg, *extra_list]
         else:
-            command = f"{mgr} install {pkg}"
-            if extra_args:
-                command += f" {extra_args.strip()}"
+            argv = [mgr, "install", pkg, *extra_list]
+        command = _argv_to_display(argv)
 
         # Blacklist pruefen (Schutz vor verschachtelten Injections)
         block_reason = _check_blacklist(command)
@@ -500,12 +667,12 @@ async def install_package(
         t_start = time.monotonic()
         try:
             proc = subprocess.run(
-                command,
-                shell=True,
+                argv,
                 capture_output=True,
                 text=True,
                 timeout=_INSTALL_TIMEOUT,
                 cwd=str(_PROJECT_ROOT),
+                env=env,
             )
             duration = time.monotonic() - t_start
             output = (proc.stdout + proc.stderr).strip()
@@ -724,10 +891,11 @@ async def restart_timus(mode: str = "full") -> dict:
 
         results: dict = {"mode": mode_clean, "steps": []}
 
-        def _run_cmd(cmd: str) -> tuple[int, str]:
+        def _run_cmd(cmd: list[str]) -> tuple[int, str]:
             try:
                 proc = subprocess.run(
-                    cmd, shell=True, capture_output=True,
+                    cmd,
+                    capture_output=True,
                     text=True, timeout=30,
                 )
                 return proc.returncode, (proc.stdout + proc.stderr).strip()
@@ -737,29 +905,27 @@ async def restart_timus(mode: str = "full") -> dict:
                 return -1, str(ex)
 
         def _health_check(retries: int = 8, wait: int = 3) -> bool:
-            import urllib.request
             for _ in range(retries):
                 try:
-                    with urllib.request.urlopen(_MCP_HEALTH_URL, timeout=2) as r:
-                        if r.status == 200:
-                            return True
+                    if int(fetch_http_text(_MCP_HEALTH_URL, timeout=2).get("status_code", 0)) == 200:
+                        return True
                 except Exception:
                     pass
                 time.sleep(wait)
             return False
 
         def _stop(service: str):
-            rc, out = _run_cmd(f"sudo systemctl stop {service}")
+            rc, out = _run_cmd(_systemctl_argv("stop", service))
             results["steps"].append({"action": f"stop {service}", "rc": rc, "out": out[:200]})
             time.sleep(1)
 
         def _start(service: str):
-            rc, out = _run_cmd(f"sudo systemctl start {service}")
+            rc, out = _run_cmd(_systemctl_argv("start", service))
             results["steps"].append({"action": f"start {service}", "rc": rc, "out": out[:200]})
 
         def _svc_status(service: str) -> str:
-            rc, _ = _run_cmd(f"systemctl is-active {service}")
-            _, active = _run_cmd(f"systemctl is-active {service}")
+            rc, _ = _run_cmd(_systemctl_argv("is-active", service, use_sudo=False))
+            _, active = _run_cmd(_systemctl_argv("is-active", service, use_sudo=False))
             return active.strip()
 
         if mode_clean == "status":
@@ -803,9 +969,36 @@ async def restart_timus(mode: str = "full") -> dict:
             return detached
 
         if mode_clean == "dispatcher":
+            preflight_ok, preflight_detail = _can_run_noninteractive_systemctl((_DISPATCHER_SERVICE,))
+            if not preflight_ok:
+                results["status"] = "blocked"
+                results["message"] = (
+                    "Dispatcher-Neustart blockiert: sudo/systemctl ist nicht non-interaktiv verfuegbar. "
+                    f"Detail: {preflight_detail}"
+                )
+                results["preflight_ok"] = False
+                results["preflight_detail"] = preflight_detail
+                _audit(
+                    f"restart_timus mode={mode_clean}",
+                    dry_run=False,
+                    blocked=True,
+                    result=results["message"],
+                )
+                return results
+
+            _stop(_DISPATCHER_SERVICE)
+            rc, out = _run_cmd(_systemctl_argv("reset-failed", _DISPATCHER_SERVICE))
+            results["steps"].append({"action": f"reset-failed {_DISPATCHER_SERVICE}", "rc": rc, "out": out[:200]})
             _start(_DISPATCHER_SERVICE)
-            time.sleep(3)
-            disp_active = _svc_status(_DISPATCHER_SERVICE)
+
+            disp_active = "unknown"
+            for _ in range(5):
+                time.sleep(2)
+                disp_active = _svc_status(_DISPATCHER_SERVICE)
+                results["steps"].append({"action": "dispatcher_active_poll", "active": disp_active})
+                if disp_active == "active":
+                    break
+
             results["dispatcher_active"] = disp_active
             results["steps"].append({"action": "dispatcher_active_check", "active": disp_active})
             if disp_active != "active":

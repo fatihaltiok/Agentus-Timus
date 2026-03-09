@@ -1,12 +1,14 @@
 # tools/engines/object_detection_engine.py (Refactored)
 
 import logging
+import os
 from PIL import Image
 import torch
 from typing import List, Dict, Any
 
 # Importiere den zentralen Logger.
 from tools.shared_context import log
+from utils.hf_model_pinning import resolve_pinned_revision
 
 # Fange den Import-Fehler ab, damit der Server nicht abstürzt, wenn Pakete fehlen.
 try:
@@ -57,9 +59,10 @@ class ObjectDetectionEngine:
         
         try:
             # Lade das Modell und den Prozessor
-            model_name = 'hustvl/yolos-tiny'
-            self.model = YolosForObjectDetection.from_pretrained(model_name).to(self.device)
-            self.image_processor = YolosImageProcessor.from_pretrained(model_name)
+            model_name = os.getenv("YOLOS_MODEL", "hustvl/yolos-tiny")
+            revision = resolve_pinned_revision(model_name, "YOLOS_MODEL_REVISION")
+            self.model = YolosForObjectDetection.from_pretrained(model_name, revision=revision).to(self.device)
+            self.image_processor = YolosImageProcessor.from_pretrained(model_name, revision=revision)
             self.initialized = True
             log.info(f"✅ ObjectDetectionEngine (YOLOS) '{model_name}' erfolgreich initialisiert.")
         except Exception as e:

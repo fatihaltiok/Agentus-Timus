@@ -28,6 +28,10 @@ log = logging.getLogger("TaskQueue")
 DB_PATH = Path(__file__).parent.parent / "data" / "task_queue.db"
 
 
+def _json_array_param(values: List[Any]) -> str:
+    return json.dumps(list(values))
+
+
 # ──────────────────────────────────────────────────────────────────
 # Enums
 # ──────────────────────────────────────────────────────────────────
@@ -1002,16 +1006,15 @@ class TaskQueue:
     ) -> List[dict]:
         status_values = statuses or [GoalStatus.ACTIVE, GoalStatus.BLOCKED]
         norm_statuses = [_normalize_goal_status(s) for s in status_values]
-        placeholders = ",".join("?" for _ in norm_statuses)
 
         with self._conn() as conn:
             rows = conn.execute(
-                f"""SELECT id, title, status, priority_score
+                """SELECT id, title, status, priority_score
                     FROM goals
-                    WHERE status IN ({placeholders})
+                    WHERE status IN (SELECT value FROM json_each(?))
                     ORDER BY priority_score DESC, created_at DESC
                     LIMIT ?""",
-                (*norm_statuses, max(2, int(limit))),
+                (_json_array_param(norm_statuses), max(2, int(limit))),
             ).fetchall()
 
         goals = [dict(r) for r in rows]
@@ -1446,24 +1449,23 @@ class TaskQueue:
         with self._conn() as conn:
             if statuses:
                 norm = [_normalize_commitment_status(s) for s in statuses]
-                placeholders = ",".join("?" for _ in norm)
                 if horizon:
                     rows = conn.execute(
-                        f"""SELECT c.*
+                        """SELECT c.*
                             FROM commitments c
                             JOIN plans p ON p.id = c.plan_id
-                            WHERE c.status IN ({placeholders}) AND p.horizon=?
+                            WHERE c.status IN (SELECT value FROM json_each(?)) AND p.horizon=?
                             ORDER BY c.deadline ASC
                             LIMIT ?""",
-                        (*norm, _normalize_plan_horizon(horizon), limit),
+                        (_json_array_param(norm), _normalize_plan_horizon(horizon), limit),
                     ).fetchall()
                 else:
                     rows = conn.execute(
-                        f"""SELECT * FROM commitments
-                            WHERE status IN ({placeholders})
+                        """SELECT * FROM commitments
+                            WHERE status IN (SELECT value FROM json_each(?))
                             ORDER BY deadline ASC
                             LIMIT ?""",
-                        (*norm, limit),
+                        (_json_array_param(norm), limit),
                     ).fetchall()
             elif horizon:
                 rows = conn.execute(
@@ -1743,7 +1745,6 @@ class TaskQueue:
         statuses = [CommitmentStatus.PENDING, CommitmentStatus.IN_PROGRESS]
         if include_blocked:
             statuses.append(CommitmentStatus.BLOCKED)
-        placeholders = ",".join("?" for _ in statuses)
         scan_limit = max(int(limit) * 6, 80)
         now = datetime.now()
         due_24h_limit = now + timedelta(hours=24)
@@ -1752,14 +1753,14 @@ class TaskQueue:
 
         with self._conn() as conn:
             rows = conn.execute(
-                f"""SELECT c.*, p.horizon, p.window_start, p.window_end, g.status AS goal_status
+                """SELECT c.*, p.horizon, p.window_start, p.window_end, g.status AS goal_status
                     FROM commitments c
                     LEFT JOIN plans p ON p.id = c.plan_id
                     LEFT JOIN goals g ON g.id = c.goal_id
-                    WHERE c.status IN ({placeholders})
+                    WHERE c.status IN (SELECT value FROM json_each(?))
                     ORDER BY c.deadline ASC, c.updated_at ASC
                     LIMIT ?""",
-                (*statuses, scan_limit),
+                (_json_array_param(statuses), scan_limit),
             ).fetchall()
 
         conflicts = self.detect_goal_conflicts(limit=120)
@@ -2158,14 +2159,12 @@ class TaskQueue:
         params: List[Any] = []
         if statuses:
             norm_statuses = [_normalize_replan_event_status(s) for s in statuses]
-            placeholders = ",".join("?" for _ in norm_statuses)
-            clauses.append(f"status IN ({placeholders})")
-            params.extend(norm_statuses)
+            clauses.append("status IN (SELECT value FROM json_each(?))")
+            params.append(_json_array_param(norm_statuses))
         if trigger_types:
             norm_triggers = [_normalize_replan_trigger(t) for t in trigger_types]
-            placeholders = ",".join("?" for _ in norm_triggers)
-            clauses.append(f"trigger_type IN ({placeholders})")
-            params.extend(norm_triggers)
+            clauses.append("trigger_type IN (SELECT value FROM json_each(?))")
+            params.append(_json_array_param(norm_triggers))
 
         query = "SELECT * FROM replan_events"
         if clauses:
@@ -2424,9 +2423,8 @@ class TaskQueue:
         params: List[Any] = []
         if statuses:
             norm = [_normalize_commitment_review_status(s) for s in statuses]
-            placeholders = ",".join("?" for _ in norm)
-            clauses.append(f"status IN ({placeholders})")
-            params.extend(norm)
+            clauses.append("status IN (SELECT value FROM json_each(?))")
+            params.append(_json_array_param(norm))
         if commitment_id:
             clauses.append("commitment_id=?")
             params.append(commitment_id)
@@ -2914,9 +2912,8 @@ class TaskQueue:
         params: List[Any] = []
         if statuses:
             norm = [_normalize_self_healing_incident_status(s) for s in statuses]
-            placeholders = ",".join("?" for _ in norm)
-            clauses.append(f"status IN ({placeholders})")
-            params.extend(norm)
+            clauses.append("status IN (SELECT value FROM json_each(?))")
+            params.append(_json_array_param(norm))
         if component:
             clauses.append("component=?")
             params.append(component.strip().lower())
@@ -3163,23 +3160,38 @@ class TaskQueue:
     ) -> List[Dict[str, Any]]:
         window = max(1, int(window_hours))
         since = (datetime.now() - timedelta(hours=window)).isoformat()
-        clauses = ["created_at >= ?"]
-        params: List[Any] = [since]
-        if gate:
-            clauses.append("gate = ?")
-            params.append(gate.strip().lower())
-        if source:
-            clauses.append("source = ?")
-            params.append(source.strip())
-        params.append(max(1, int(limit)))
-
-        query = (
-            "SELECT * FROM policy_decisions "
-            f"WHERE {' AND '.join(clauses)} "
-            "ORDER BY created_at DESC LIMIT ?"
-        )
+        limit_value = max(1, int(limit))
+        gate_value = gate.strip().lower() if gate else None
+        source_value = source.strip() if source else None
         with self._conn() as conn:
-            rows = conn.execute(query, tuple(params)).fetchall()
+            if gate_value and source_value:
+                rows = conn.execute(
+                    """SELECT * FROM policy_decisions
+                       WHERE created_at >= ? AND gate = ? AND source = ?
+                       ORDER BY created_at DESC LIMIT ?""",
+                    (since, gate_value, source_value, limit_value),
+                ).fetchall()
+            elif gate_value:
+                rows = conn.execute(
+                    """SELECT * FROM policy_decisions
+                       WHERE created_at >= ? AND gate = ?
+                       ORDER BY created_at DESC LIMIT ?""",
+                    (since, gate_value, limit_value),
+                ).fetchall()
+            elif source_value:
+                rows = conn.execute(
+                    """SELECT * FROM policy_decisions
+                       WHERE created_at >= ? AND source = ?
+                       ORDER BY created_at DESC LIMIT ?""",
+                    (since, source_value, limit_value),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """SELECT * FROM policy_decisions
+                       WHERE created_at >= ?
+                       ORDER BY created_at DESC LIMIT ?""",
+                    (since, limit_value),
+                ).fetchall()
 
         out: List[Dict[str, Any]] = []
         for row in rows:
@@ -3788,9 +3800,8 @@ class TaskQueue:
         if statuses:
             norm = [str(s or "").strip().lower() for s in statuses if str(s or "").strip()]
             if norm:
-                placeholders = ",".join("?" for _ in norm)
-                clauses.append(f"status IN ({placeholders})")
-                params.extend(norm)
+                clauses.append("status IN (SELECT value FROM json_each(?))")
+                params.append(_json_array_param(norm))
 
         query = "SELECT * FROM autonomy_change_requests"
         if clauses:
@@ -4075,9 +4086,8 @@ class TaskQueue:
         params: List[Any] = []
         if states:
             norm = [_normalize_self_healing_circuit_breaker_state(s) for s in states]
-            placeholders = ",".join("?" for _ in norm)
-            clauses.append(f"state IN ({placeholders})")
-            params.extend(norm)
+            clauses.append("state IN (SELECT value FROM json_each(?))")
+            params.append(_json_array_param(norm))
         if component:
             clauses.append("component=?")
             params.append(component.strip().lower())

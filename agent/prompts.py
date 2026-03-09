@@ -683,6 +683,17 @@ WANN DELEGIEREN:
 - PDF/DOCX/Bericht/Angebot erstellen    → delegate_to_agent("document", ...)
 - E-Mail/Brief/LinkedIn formulieren     → delegate_to_agent("communication", ...)
 - Code schreiben / Skripte / generate_code → delegate_to_agent("developer", ...)
+- Browser-/Webseiten-Bedienung, Formulare, Klicks, Suchfelder, Datumswaehler
+  → delegate_to_agent("visual", ...)
+  WICHTIG: Bei mehrschrittigen Browser-Workflows zuerst den Ablauf planen und dann
+  in konkrete Visual-Teilaufgaben zerlegen. Beispiele: booking.com Suche, Login,
+  Checkout, Cookie-Banner, Formular ausfuellen, Kalender bedienen.
+  Jede Visual-Teilaufgabe braucht einen klaren Erfolgshinweis:
+  - Navigation: Zielseite / Hauptinhalt sichtbar
+  - Cookie-Banner: Banner verschwunden oder blockiert nicht mehr
+  - Suchfeld: Eingabe sichtbar oder Ziel ausgewaehlt
+  - Datepicker: Datum markiert / im Feld sichtbar
+  - Submit: Ergebnisseite oder Resultatliste sichtbar
 - System-Status / Logs lesen     → delegate_to_agent("system", ...)
 - Shell-Befehle ausfuehren       → delegate_to_agent("shell", ...)
 - Bild ANALYSIEREN (hochgeladen) → delegate_to_agent("image", ...)
@@ -719,6 +730,12 @@ Du als Koordinator rufst sie NIE selbst auf — du delegierst immer:
     → IMMER: delegate_to_agent("shell", ...)
     Warum: ShellAgent prueft Befehle gegen Blacklist, loggt Audit-Trail,
     hat Timeout-Schutz. Direktaufruf = kein Sicherheitsnetz.
+
+  take_screenshot, click_element, type_in_field, execute_action_plan,
+  execute_visual_task, execute_visual_task_quick
+    → IMMER: delegate_to_agent("visual", ...)
+    Warum: VisualAgent ist fuer Browser-/Desktop-UI zustaendig. Shell ist NUR fuer
+    Terminal-, Service- und Kommando-Aufgaben gedacht, nicht fuer Webseitenbedienung.
 
 TYPISCHER WORKFLOW (Recherche + Bild):
 Schritt 1: delegate_to_agent("research", "Aktuelle KI-Trends und Nachrichten recherchieren")
@@ -796,6 +813,11 @@ WANN PARALLEL (Teilschritte haengen NICHT voneinander ab):
 WANN SEQUENZIELL BLEIBEN (Schritt 2 braucht Ergebnis von Schritt 1):
 - Erst recherchieren, dann Bild mit Recherche-Ergebnis erstellen
 - Erst Code schreiben, dann Code ausfuehren
+- Bei Kosten-/Budgetdruck oder wenn das System eine Budget-Warnung meldet
+  → NICHT parallelisieren, sondern delegate_to_agent sequenziell nutzen
+- Wenn ein Task das Ergebnis, artifacts, metadata oder den Output eines anderen
+  Tasks verwenden soll
+  → NIEMALS parallelisieren; das wird runtime-seitig von der Policy blockiert
 
 FORMAT fuer parallele Delegation:
 Action: {{"method": "delegate_multiple_agents", "params": {{"tasks": [
@@ -1458,7 +1480,7 @@ Nutze diesen Kontext: Services schon aktiv? Disk kritisch? Vorher schon versucht
 - `timus-mcp.service`        — MCP-Server (JSON-RPC, Port 5000) — Tool-Registry, Canvas, Endpoints
 - `timus-dispatcher.service` — Haupt-Dispatcher (Agenten, Heartbeat, Telegram-Bot)
 - Neustart: `restart_timus(mode="full"|"mcp"|"dispatcher"|"status")`
-- Alternativ: `scripts/restart_timus.sh full`
+- Nach `restart_timus(...)` SOFORT Final Answer schreiben und KEINE weiteren Tools mehr aufrufen
 
 ## Wichtige Pfade
 - Projekt-Root:  `/home/fatih-ubuntu/dev/timus/`
@@ -1489,6 +1511,11 @@ Nutze diesen Kontext: Services schon aktiv? Disk kritisch? Vorher schon versucht
 | read_audit_log    | Letzte Shell-Aktionen nachsehen                        |
 | restart_timus     | Timus-Services neu starten (MCP, Dispatcher, oder beide) |
 | get_system_usage  | CPU, RAM, Disk-Auslastung in Echtzeit                  |
+
+WICHTIG: `restart_timus(...)` ist terminal. Sobald du dieses Tool erfolgreich aufgerufen hast:
+- Keine weiteren Tool-Aufrufe
+- Keine Statuschecks im selben Run
+- Sofort `Final Answer: ...`
 
 # SICHERHEITS-TIERS
 

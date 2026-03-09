@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import subprocess
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -26,6 +27,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPTS_DIR  = _PROJECT_ROOT / "scripts"
 _LOGS_DIR     = _PROJECT_ROOT / "logs"
 _AUDIT_LOG    = _LOGS_DIR / "shell_audit.log"
+_TEMP_DIR     = Path(tempfile.gettempdir())
 
 _TIMUS_SERVICES = ["timus-mcp.service", "timus-dispatcher.service"]
 
@@ -85,7 +87,7 @@ class ShellAgent(BaseAgent):
         disk_home = await self._get_disk_usage(_PROJECT_ROOT.parent, "/home")
         if disk_home:
             lines.append(disk_home)
-        disk_tmp = await self._get_disk_usage(Path("/tmp"), "/tmp")
+        disk_tmp = await self._get_disk_usage(_TEMP_DIR, str(_TEMP_DIR))
         if disk_tmp:
             lines.append(disk_tmp)
 

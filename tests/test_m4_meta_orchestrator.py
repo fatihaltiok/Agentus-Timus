@@ -37,6 +37,15 @@ def test_meta_system_prompt_enthaelt_delegation_sektion():
     assert "developer" in META_SYSTEM_PROMPT
 
 
+def test_meta_system_prompt_routes_browser_workflows_to_visual():
+    from agent.prompts import META_SYSTEM_PROMPT
+
+    assert 'delegate_to_agent("visual"' in META_SYSTEM_PROMPT
+    assert "Browser-/Webseiten-Bedienung" in META_SYSTEM_PROMPT
+    assert "Shell ist NUR fuer" in META_SYSTEM_PROMPT
+    assert "Jede Visual-Teilaufgabe braucht einen klaren Erfolgshinweis" in META_SYSTEM_PROMPT
+
+
 def test_meta_delegation_aliases():
     """T4.3 — 'koordinator' und 'orchestrator' sind Aliases fuer 'meta'."""
     from agent.agent_registry import AgentRegistry

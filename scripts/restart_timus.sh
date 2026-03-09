@@ -75,6 +75,8 @@ restart_mcp() {
     log "Stoppe $MCP_SERVICE..."
     sudo -n systemctl stop "$MCP_SERVICE" 2>/dev/null || true
     sleep 1
+    log "Bereinige ggf. failed state von $MCP_SERVICE..."
+    sudo -n systemctl reset-failed "$MCP_SERVICE" 2>/dev/null || true
     log "Starte $MCP_SERVICE..."
     sudo -n systemctl start "$MCP_SERVICE"
     check_health && ok "MCP-Server läuft" || { err "MCP-Start fehlgeschlagen"; show_status; exit 1; }
@@ -84,6 +86,8 @@ restart_dispatcher() {
     log "Stoppe $DISPATCHER_SERVICE..."
     sudo -n systemctl stop "$DISPATCHER_SERVICE" 2>/dev/null || true
     sleep 1
+    log "Bereinige ggf. failed state von $DISPATCHER_SERVICE..."
+    sudo -n systemctl reset-failed "$DISPATCHER_SERVICE" 2>/dev/null || true
     log "Starte $DISPATCHER_SERVICE..."
     sudo -n systemctl start "$DISPATCHER_SERVICE"
     sleep 3

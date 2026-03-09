@@ -354,17 +354,27 @@ Antworte NUR als gültiges JSON:
         Akkumuliert Patterns; wenn ≥3x dasselbe → improvement_suggestion erstellen.
         """
         try:
+            try:
+                from orchestration.feedback_engine import get_feedback_engine
+
+                feedback_engine = get_feedback_engine()
+            except Exception:
+                feedback_engine = None
             with sqlite3.connect(str(self.db_path)) as conn:
                 for pattern in summary.patterns[:5]:
                     if not pattern:
                         continue
+                    score = 1.0
+                    if feedback_engine is not None:
+                        score = feedback_engine.get_effective_target_score("reflection_pattern", pattern, default=1.0)
+                    increment = 2 if score > 1.0 else 1
                     existing = conn.execute(
                         "SELECT id, occurrences FROM improvement_suggestions WHERE pattern = ?",
                         (pattern,),
                     ).fetchone()
 
                     if existing:
-                        new_count = existing[1] + 1
+                        new_count = existing[1] + increment
                         conn.execute(
                             "UPDATE improvement_suggestions SET occurrences = ? WHERE id = ?",
                             (new_count, existing[0]),
@@ -383,8 +393,8 @@ Antworte NUR als gültiges JSON:
                         conn.execute(
                             """INSERT OR IGNORE INTO improvement_suggestions
                                (pattern, occurrences, suggestion, applied, created_at)
-                               VALUES (?, 1, ?, 0, ?)""",
-                            (pattern, suggestion, datetime.now().isoformat()),
+                               VALUES (?, ?, ?, 0, ?)""",
+                            (pattern, increment, suggestion, datetime.now().isoformat()),
                         )
                 conn.commit()
         except Exception as e:
@@ -414,11 +424,16 @@ Antworte NUR als gültiges JSON:
                 if not item:
                     continue
                 # Hooks mit thematischer Überlappung finden
-                hooks_updated = soul.apply_hook_feedback(item[:30], "positive")
+                soul.apply_hook_feedback(item[:30], "positive")
                 feedback.record_signal(
                     action_id=f"{action_id}_pos",
                     signal="positive",
-                    context={"source": "reflection", "item": item[:80]},
+                    context={
+                        "source": "reflection",
+                        "item": item[:80],
+                        "reflection_pattern": item[:80],
+                    },
+                    feedback_targets=[{"namespace": "reflection_pattern", "key": item[:80]}],
                 )
 
             # Negative Signale aus what_failed
@@ -429,7 +444,12 @@ Antworte NUR als gültiges JSON:
                 feedback.record_signal(
                     action_id=f"{action_id}_neg",
                     signal="negative",
-                    context={"source": "reflection", "item": item[:80]},
+                    context={
+                        "source": "reflection",
+                        "item": item[:80],
+                        "reflection_pattern": item[:80],
+                    },
+                    feedback_targets=[{"namespace": "reflection_pattern", "key": item[:80]}],
                 )
 
             log.info(

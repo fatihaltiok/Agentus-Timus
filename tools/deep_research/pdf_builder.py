@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 if TYPE_CHECKING:
     from tools.deep_research.image_collector import ImageResult
@@ -134,7 +134,10 @@ class ResearchPDFBuilder:
         date_str = f"{now.day:02d}. {_MONTHS_DE[now.month]} {now.year}"
 
         # Template rendern
-        env = Environment(loader=FileSystemLoader(str(_TEMPLATE_DIR)))
+        env = Environment(
+            loader=FileSystemLoader(str(_TEMPLATE_DIR)),
+            autoescape=select_autoescape(enabled_extensions=("html", "xml"), default_for_string=True),
+        )
         tmpl = env.get_template(_TEMPLATE_FILE)
         html_content = tmpl.render(
             query=str(session.query),

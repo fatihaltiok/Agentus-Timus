@@ -349,14 +349,22 @@ class PersistentContextManager:
 
         try:
             if save_state:
-                await self.save_context_state(session_id)
+                try:
+                    await asyncio.wait_for(self.save_context_state(session_id), timeout=3.0)
+                except asyncio.TimeoutError:
+                    log.warning("State-Save Timeout fuer Session '%s'", session_id)
 
-            await ctx.context.close()
+            await asyncio.wait_for(ctx.context.close(), timeout=4.0)
             del self.contexts[session_id]
 
             log.info(f"Session '{session_id}': Context geschlossen")
             return True
 
+        except asyncio.TimeoutError:
+            log.warning(f"Context-Close Timeout fuer '{session_id}'")
+            if session_id in self.contexts:
+                del self.contexts[session_id]
+            return False
         except Exception as e:
             log.warning(f"Context-Close fehlgeschlagen für '{session_id}': {e}")
             # Trotzdem aus der Map entfernen
@@ -440,7 +448,11 @@ class PersistentContextManager:
             return
 
         # Alle Contexts schließen
-        await self.cleanup_all()
+        try:
+            await asyncio.wait_for(self.cleanup_all(), timeout=6.0)
+        except asyncio.TimeoutError:
+            log.warning("Cleanup aller Browser-Contexts timed out")
+            self.contexts.clear()
 
         # Browser schließen
         if self._browser:
@@ -454,15 +466,16 @@ class PersistentContextManager:
                     "Browser-Close Timeout nach %.1fs - fahre mit Shutdown fort",
                     SHUTDOWN_TIMEOUT_SECONDS,
                 )
-                self._force_kill_pid(browser_pid, "browser")
+                self._force_kill_process_tree(browser_pid, "browser")
             except Exception as e:
                 log.debug(f"Browser-Close Fehler: {e}")
-                self._force_kill_pid(browser_pid, "browser")
+                self._force_kill_process_tree(browser_pid, "browser")
             finally:
                 self._browser = None
 
         # Playwright stoppen
         if self._playwright:
+            playwright_pid = self._get_playwright_pid()
             try:
                 await asyncio.wait_for(
                     self._playwright.stop(), timeout=SHUTDOWN_TIMEOUT_SECONDS
@@ -472,16 +485,18 @@ class PersistentContextManager:
                     "Playwright-Stop Timeout nach %.1fs - fahre mit Shutdown fort",
                     SHUTDOWN_TIMEOUT_SECONDS,
                 )
+                self._force_kill_process_tree(playwright_pid, "playwright")
             except Exception as e:
                 log.debug(f"Playwright-Stop Fehler: {e}")
+                self._force_kill_process_tree(playwright_pid, "playwright")
             finally:
                 self._playwright = None
 
         self._initialized = False
         log.info("✅ PersistentContextManager heruntergefahren")
 
-    def _get_browser_pid(self) -> Optional[int]:
-        """Best effort: liest Browser-PID aus Playwright-Internals."""
+    def _get_playwright_pid(self) -> Optional[int]:
+        """Best effort: liest die PID des Playwright-Driver-Prozesses aus Internals."""
         if not self._browser:
             return None
         try:
@@ -494,15 +509,55 @@ class PersistentContextManager:
         except Exception:
             return None
 
-    def _force_kill_pid(self, pid: Optional[int], label: str) -> None:
-        """Verhindert Teardown-Haenger, wenn Browser/Driver nicht sauber beendet."""
+    def _get_browser_pid(self) -> Optional[int]:
+        """Alias fuer Rueckwaertskompatibilitaet."""
+        return self._get_playwright_pid()
+
+    def _iter_child_pids(self, pid: int) -> list[int]:
+        """Liest Child-PIDs rekursiv aus /proc, ohne zusaetzliche Abhaengigkeiten."""
+        descendants: list[int] = []
+        pending = [pid]
+        seen: set[int] = set()
+        while pending:
+            current = pending.pop()
+            try:
+                child_entries = [entry for entry in os.listdir("/proc") if entry.isdigit()]
+            except Exception:
+                break
+            for entry in child_entries:
+                child_pid = int(entry)
+                if child_pid in seen or child_pid == current:
+                    continue
+                try:
+                    with open(f"/proc/{child_pid}/stat", encoding="utf-8") as handle:
+                        stat = handle.read().split()
+                    parent_pid = int(stat[3])
+                except Exception:
+                    continue
+                if parent_pid == current:
+                    seen.add(child_pid)
+                    descendants.append(child_pid)
+                    pending.append(child_pid)
+        return descendants
+
+    def _force_kill_process_tree(self, pid: Optional[int], label: str) -> None:
+        """Beendet Driver und Kindprozesse aggressiv, um Shutdown-Haenger zu vermeiden."""
         if not pid:
             return
+        descendants = self._iter_child_pids(pid)
+        targets = list(reversed(descendants)) + [pid]
         try:
-            os.kill(pid, signal.SIGKILL)
-            log.warning("Erzwungenes Beenden fuer %s PID %s", label, pid)
-        except ProcessLookupError:
-            pass
+            for target in targets:
+                try:
+                    os.kill(target, signal.SIGTERM)
+                except ProcessLookupError:
+                    continue
+            for target in targets:
+                try:
+                    os.kill(target, signal.SIGKILL)
+                except ProcessLookupError:
+                    continue
+            log.warning("Erzwungenes Beenden fuer %s Prozessbaum PID %s (%s Kinder)", label, pid, len(descendants))
         except Exception as exc:
             log.debug("Force-Kill fehlgeschlagen fuer %s PID %s: %s", label, pid, exc)
 

@@ -65,3 +65,28 @@ def test_export_contract_v2_marks_youtube_source_with_transcript_like_signal():
     assert youtube_sources[0]["has_transcript"] is True
     assert youtube_sources[0]["is_official"] is True
 
+
+def test_export_contract_v2_filters_off_topic_admin_claims():
+    from tools.deep_research.tool import DeepResearchSession
+
+    session = DeepResearchSession("Chinese LLMs Qwen DeepSeek AI agents capabilities comparison 2025 2026")
+    session.verified_facts = [
+        {
+            "fact": "Als Kontaktadresse ist research@deepseek.com angegeben.",
+            "status": "verified",
+            "source_count": 1,
+            "example_source_url": "https://arxiv.org/abs/2501.12948",
+        },
+        {
+            "fact": "DeepSeek-R1 zeigt starke Reasoning-Leistung in Coding-Benchmarks.",
+            "status": "verified",
+            "source_count": 2,
+            "example_source_url": "https://arxiv.org/abs/2501.12948",
+        },
+    ]
+
+    exported = session.export_contract_v2()
+    claim_texts = [claim["claim_text"] for claim in exported["claims"]]
+
+    assert "Als Kontaktadresse ist research@deepseek.com angegeben." not in claim_texts
+    assert "DeepSeek-R1 zeigt starke Reasoning-Leistung in Coding-Benchmarks." in claim_texts

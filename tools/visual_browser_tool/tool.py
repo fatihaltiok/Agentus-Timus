@@ -17,6 +17,25 @@ log = logging.getLogger("visual_browser_tool")
 # Wir speichern die Prozesse, um sie später schließen zu können
 active_browsers = {}
 
+
+def _build_windows_browser_command(target: str, url: Optional[str]) -> list[str]:
+    """Build a Windows browser start command without shell=True."""
+    if target == "chrome":
+        cmd = ["cmd.exe", "/c", "start", "", "chrome", "--new-window"]
+    elif target == "firefox":
+        cmd = ["cmd.exe", "/c", "start", "", "firefox", "--new-window"]
+    else:
+        cmd = ["cmd.exe", "/c", "start", ""]
+
+    if url:
+        cmd.append(url)
+    return cmd
+
+
+def _get_windows_taskkill_command(pid: int) -> list[str]:
+    """Build a Windows taskkill command without shell=True."""
+    return ["taskkill", "/PID", str(pid), "/T", "/F"]
+
 def _get_browser_command(browser_type: str, url: Optional[str] = None) -> list[str]:
     """
     Ermittelt den korrekten Startbefehl für das Betriebssystem.
@@ -34,13 +53,7 @@ def _get_browser_command(browser_type: str, url: Optional[str] = None) -> list[s
     cmd = []
 
     if system == "windows":
-        # Windows nutzt "start", aber subprocess braucht hier shell=True
-        if target == "chrome":
-            cmd = ["start", "chrome", "--new-window"]
-        elif target == "firefox":
-            cmd = ["start", "firefox", "--new-window"]
-        else:
-            cmd = ["start"]
+        cmd = _build_windows_browser_command(target, url)
 
     elif system == "darwin": # macOS
         if target == "chrome":
@@ -66,6 +79,8 @@ def _get_browser_command(browser_type: str, url: Optional[str] = None) -> list[s
             cmd = ["xdg-open"]
 
     # URL anhängen
+    if system == "windows":
+        return cmd
     if url:
         cmd.append(url)
     elif target != "default" and not url:
@@ -109,11 +124,8 @@ async def start_visual_browser(url: str = "https://www.google.com", browser_type
 
         log.info(f"Ausführen des Befehls: {cmd}")
 
-        # Windows 'start' benötigt shell=True
-        use_shell = (platform.system().lower() == "windows")
-
         # Prozess starten
-        proc = subprocess.Popen(cmd, shell=use_shell)
+        proc = subprocess.Popen(cmd, shell=False)
 
         # Prozess speichern
         active_browsers[browser_type] = proc
@@ -179,7 +191,7 @@ async def close_visual_browser(browser_type: str = "firefox") -> dict:
         proc = active_browsers[browser_type]
         try:
             if platform.system().lower() == "windows":
-                subprocess.run(f"taskkill /PID {proc.pid} /T /F", shell=True)
+                subprocess.run(_get_windows_taskkill_command(proc.pid), check=False)
             else:
                 proc.terminate()
 

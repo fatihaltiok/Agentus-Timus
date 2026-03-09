@@ -14,9 +14,16 @@ M16: send_with_feedback() sendet Nachrichten mit 👍/👎/🤷 InlineKeyboard.
 import json
 import logging
 import os
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 log = logging.getLogger("telegram_notify")
+
+_FEEDBACK_SIGNAL_CODES = {
+    "positive": "p",
+    "negative": "n",
+    "neutral": "u",
+}
+_FEEDBACK_SIGNAL_FROM_CODE = {v: k for k, v in _FEEDBACK_SIGNAL_CODES.items()}
 
 
 async def send_telegram(msg: str, parse_mode: str = "Markdown") -> bool:
@@ -85,6 +92,8 @@ async def send_with_feedback(
     action_id: str,
     hook_names: Optional[List[str]] = None,
     parse_mode: str = "Markdown",
+    context: Optional[Dict[str, Any]] = None,
+    feedback_targets: Optional[List[Dict[str, str]]] = None,
 ) -> bool:
     """
     Sendet eine Telegram-Nachricht mit InlineKeyboard [👍][👎][🤷] für M16-Feedback.
@@ -117,20 +126,17 @@ async def send_with_feedback(
     if not chat_ids:
         return False
 
-    hooks_json = json.dumps(hook_names or [], ensure_ascii=False)
-    callback_prefix = json.dumps({"aid": action_id, "hooks": hooks_json}, ensure_ascii=False)
-
     any_sent = False
     try:
         from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+        from orchestration.feedback_engine import get_feedback_engine
 
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("👍", callback_data=json.dumps({"fb": "positive", "aid": action_id, "hooks": hooks_json})),
-                InlineKeyboardButton("👎", callback_data=json.dumps({"fb": "negative", "aid": action_id, "hooks": hooks_json})),
-                InlineKeyboardButton("🤷", callback_data=json.dumps({"fb": "neutral",  "aid": action_id, "hooks": hooks_json})),
-            ]
-        ])
+        keyboard = build_feedback_markup(
+            action_id=action_id,
+            hook_names=hook_names,
+            context=context,
+            feedback_targets=feedback_targets,
+        )
 
         bot = Bot(token=token)
         try:
@@ -156,6 +162,42 @@ async def send_with_feedback(
     except Exception as e:
         log.warning("Telegram Feedback: Fehler: %s", e)
 
-    # Sicherheits-Cleanup: callback_prefix wurde nur zur Lesbarkeit definiert
-    del callback_prefix
     return any_sent
+
+
+def build_feedback_callback_data(signal: str, token: str) -> str:
+    """Erzeugt kompakte callback_data fuer Telegram (64-Byte-Limit)."""
+    signal_code = _FEEDBACK_SIGNAL_CODES.get(signal, "u")
+    return json.dumps({"type": "feedback", "s": signal_code, "t": str(token)}, separators=(",", ":"))
+
+
+def decode_feedback_signal(signal_or_code: str) -> str:
+    """Akzeptiert volle Signale und die kompakten Callback-Codes."""
+    if signal_or_code in _FEEDBACK_SIGNAL_CODES:
+        return signal_or_code
+    return _FEEDBACK_SIGNAL_FROM_CODE.get(str(signal_or_code or "").strip(), "")
+
+
+def build_feedback_markup(
+    action_id: str,
+    hook_names: Optional[List[str]] = None,
+    context: Optional[Dict[str, Any]] = None,
+    feedback_targets: Optional[List[Dict[str, str]]] = None,
+):
+    """Baut ein Feedback-Keyboard und registriert die Payload serverseitig."""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    from orchestration.feedback_engine import get_feedback_engine
+
+    token = get_feedback_engine().register_feedback_request(
+        action_id=action_id,
+        hook_names=hook_names,
+        context=context,
+        feedback_targets=feedback_targets,
+    )
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("👍", callback_data=build_feedback_callback_data("positive", token)),
+            InlineKeyboardButton("👎", callback_data=build_feedback_callback_data("negative", token)),
+            InlineKeyboardButton("🤷", callback_data=build_feedback_callback_data("neutral", token)),
+        ]
+    ])

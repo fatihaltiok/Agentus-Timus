@@ -59,6 +59,10 @@ async def delegate_multiple_agents(
         {
             "trace_id": "abc123",
             "total_tasks": 3,
+            "effective_max_parallel": 2,
+            "budget_state": "soft_limit",
+            "policy_state": "allowed",
+            "policy_reason": "independent_tasks",
             "success": 2, "partial": 0, "errors": 1,
             "results": [...],
             "summary": "2/3 erfolgreich | ..."

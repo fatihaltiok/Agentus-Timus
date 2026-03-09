@@ -5,15 +5,18 @@ Testet FeedbackEngine und Telegram InlineKeyboard-Struktur.
 """
 
 import json
-import os
 import sqlite3
-import tempfile
-from pathlib import Path
 
 import pytest
 
 # FeedbackEngine mit temporärer DB
-from orchestration.feedback_engine import FeedbackEngine, FeedbackEvent
+from orchestration.feedback_engine import (
+    FeedbackEngine,
+    clamp_feedback_target_score,
+    feedback_evidence_confidence,
+    next_feedback_target_score,
+)
+from utils.telegram_notify import build_feedback_callback_data, decode_feedback_signal
 
 
 @pytest.fixture
@@ -155,35 +158,30 @@ def test_get_recent_events_limit(engine):
 # ──────────────────────────────────────────────────────────────────
 
 def test_feedback_callback_data_structure():
-    """Prüft dass Callback-Daten korrekt aufgebaut sind."""
-    action_id = "test-action-123"
-    hook_names = ["Sei direkt", "Prüfe zuerst"]
+    """Prüft dass Callback-Daten kompakt und korrekt aufgebaut sind."""
+    token = "abc123token"
 
     for signal in ["positive", "negative", "neutral"]:
-        data = json.dumps({
-            "fb": signal,
-            "aid": action_id,
-            "hooks": json.dumps(hook_names),
-        })
+        data = build_feedback_callback_data(signal, token)
         parsed = json.loads(data)
-        assert parsed["fb"] == signal
-        assert parsed["aid"] == action_id
-        assert json.loads(parsed["hooks"]) == hook_names
+        assert parsed["type"] == "feedback"
+        assert decode_feedback_signal(parsed["s"]) == signal
+        assert parsed["t"] == token
+        assert len(data) <= 64
 
 
 def test_callback_data_parseable():
     """Callback-Daten müssen immer JSON-parseable sein."""
     samples = [
-        '{"fb": "positive", "aid": "abc123", "hooks": "[\\"hook1\\"]"}',
-        '{"fb": "negative", "aid": "xyz", "hooks": "[]"}',
-        '{"fb": "neutral", "aid": "id-1", "hooks": "[\\"A\\", \\"B\\"]"}',
+        build_feedback_callback_data("positive", "abc123"),
+        build_feedback_callback_data("negative", "xyz"),
+        build_feedback_callback_data("neutral", "id1"),
     ]
     for s in samples:
         parsed = json.loads(s)
-        assert "fb" in parsed
-        assert "aid" in parsed
-        hooks = json.loads(parsed["hooks"])
-        assert isinstance(hooks, list)
+        assert parsed["type"] == "feedback"
+        assert decode_feedback_signal(parsed["s"]) in {"positive", "negative", "neutral"}
+        assert parsed["t"]
 
 
 def test_feedback_engine_context_stored(engine):
@@ -195,3 +193,117 @@ def test_feedback_engine_context_stored(engine):
     )
     assert event.context["user_id"] == 42
     assert event.context["topic"] == "Python"
+
+
+def test_register_and_resolve_feedback_request(engine):
+    token = engine.register_feedback_request(
+        action_id="reply-1",
+        hook_names=["ambient_trigger"],
+        context={"source": "telegram_reply"},
+        feedback_targets=[{"namespace": "dispatcher_agent", "key": "meta"}],
+    )
+    payload = engine.resolve_feedback_request(token)
+    assert payload is not None
+    assert payload.action_id == "reply-1"
+    assert payload.context["source"] == "telegram_reply"
+    assert payload.feedback_targets == [{"namespace": "dispatcher_agent", "key": "meta"}]
+
+
+def test_feedback_target_scores_are_updated(engine):
+    engine.record_signal(
+        "reply-2",
+        "positive",
+        context={"dispatcher_agent": "meta"},
+        feedback_targets=[
+            {"namespace": "curiosity_topic", "key": "python"},
+            {"namespace": "visual_strategy", "key": "ocr_text"},
+            {"namespace": "reflection_pattern", "key": "direkt"},
+        ],
+    )
+    assert engine.get_target_score("dispatcher_agent", "meta") > 1.0
+    assert engine.get_target_score("curiosity_topic", "python") > 1.0
+    assert engine.get_target_score("visual_strategy", "ocr_text") > 1.0
+    assert engine.get_target_score("reflection_pattern", "direkt") > 1.0
+
+
+def test_feedback_target_stats_track_evidence_counts(engine):
+    for signal in ("positive", "negative", "neutral"):
+        engine.record_signal(
+            f"stats-{signal}",
+            signal,
+            feedback_targets=[{"namespace": "dispatcher_agent", "key": "meta"}],
+        )
+
+    stats = engine.get_target_stats("dispatcher_agent", "meta")
+
+    assert stats["positive_count"] == 1
+    assert stats["negative_count"] == 1
+    assert stats["neutral_count"] == 1
+    assert stats["evidence_count"] == 3
+
+
+def test_effective_target_score_is_damped_until_enough_evidence(engine):
+    engine.record_signal(
+        "evidence-1",
+        "positive",
+        feedback_targets=[{"namespace": "dispatcher_agent", "key": "meta"}],
+    )
+
+    raw_score = engine.get_target_score("dispatcher_agent", "meta")
+    effective_score = engine.get_effective_target_score("dispatcher_agent", "meta")
+
+    assert raw_score == pytest.approx(1.1)
+    assert effective_score == pytest.approx(1.02)
+
+    for index in range(2, 6):
+        engine.record_signal(
+            f"evidence-{index}",
+            "positive",
+            feedback_targets=[{"namespace": "dispatcher_agent", "key": "meta"}],
+        )
+
+    assert engine.get_effective_target_score("dispatcher_agent", "meta") == pytest.approx(
+        engine.get_target_score("dispatcher_agent", "meta")
+    )
+
+
+def test_feedback_target_score_clamps():
+    assert clamp_feedback_target_score(-10) == 0.1
+    assert clamp_feedback_target_score(99) == 3.0
+    assert next_feedback_target_score(3.0, "positive") == 3.0
+    assert next_feedback_target_score(0.1, "negative") == 0.1
+
+
+def test_feedback_evidence_confidence_is_bounded():
+    assert feedback_evidence_confidence(-5) == 0.0
+    assert feedback_evidence_confidence(0) == 0.0
+    assert feedback_evidence_confidence(2) == pytest.approx(0.4)
+    assert feedback_evidence_confidence(5) == 1.0
+    assert feedback_evidence_confidence(50) == 1.0
+
+
+def test_record_runtime_outcome_uses_damped_weight(engine):
+    event = engine.record_runtime_outcome(
+        "runtime-1",
+        success=True,
+        context={"dispatcher_agent": "meta"},
+        feedback_targets=[{"namespace": "dispatcher_agent", "key": "meta"}],
+    )
+
+    assert event.signal == "positive"
+    assert event.context["feedback_source"] == "runtime_outcome"
+    assert event.context["feedback_weight"] == pytest.approx(0.05)
+    assert engine.get_target_score("dispatcher_agent", "meta") == pytest.approx(1.05)
+
+
+def test_record_runtime_outcome_negative_updates_visual_strategy(engine):
+    engine.record_runtime_outcome(
+        "runtime-visual-1",
+        success=False,
+        context={"visual_strategy": "browser_flow"},
+        feedback_targets=[{"namespace": "visual_strategy", "key": "browser_flow"}],
+    )
+
+    stats = engine.get_target_stats("visual_strategy", "browser_flow")
+    assert stats["negative_count"] == 1
+    assert stats["score"] == pytest.approx(0.95)

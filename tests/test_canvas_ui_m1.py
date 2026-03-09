@@ -18,8 +18,11 @@ def test_build_canvas_ui_html_contains_core_sections():
     assert "POLL_MS = 1500" in html
     assert "selectedStillExists" in html
     assert "selectedCanvasId = items[0].id" in html
+    assert "API &amp; Kostenkontrolle" in html
+    assert "/status/snapshot" in html
 
 
 def test_canvas_ui_route_registered():
     paths = {route.path for route in app.routes}
     assert "/canvas/ui" in paths
+    assert "/status/snapshot" in paths

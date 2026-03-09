@@ -55,11 +55,19 @@ jobs:
         run: |
           pytest -q tests/test_milestone5_quality_gates.py tests/test_milestone6_e2e_readiness.py
 
-      - name: Gate 3 - Milestone Readiness
+      - name: Gate 3 - P0 Production Gates
+        run: |
+          python scripts/run_production_gates.py
+
+      - name: Gate 4 - Milestone Readiness
         run: |
           python verify_milestone6.py
 
-      - name: Gate 4 - Lean 4 Formal Verification
+      - name: Gate 5 - CrossHair Production Contracts
+        run: |
+          python -m crosshair check tests/test_production_gates_contracts.py --analysis_kind=deal
+
+      - name: Gate 6 - Lean 4 Formal Verification
         # Installiert elan (kein Mathlib — zu langsam für CI).
         # Prüft CiSpecs.lean mit Core-Lean + Std (~5s statt ~2min mit Mathlib).
         # Vollständige Mathlib-Specs laufen lokal via pre-commit hook.

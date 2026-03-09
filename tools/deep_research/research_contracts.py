@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from enum import Enum
+import re
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -189,6 +190,109 @@ _VENDOR_DOMAINS = (
     "z.ai",
     "moonshot.cn",
 )
+
+_CLAIM_QUERY_STOPWORDS = {
+    "the", "and", "for", "with", "from", "into", "about", "than", "that", "this",
+    "und", "oder", "der", "die", "das", "mit", "von", "über", "ueber", "fuer",
+    "into", "over", "under", "practical", "examples", "comparison", "compare", "vergleich", "vergleiche",
+    "capabilities", "capability", "performance", "cost", "costs", "availability",
+    "practical", "example", "practical", "agents", "agent", "ai", "llm", "llms",
+    "faehigkeiten", "modellfaehigkeiten",
+    "2024", "2025", "2026", "2027", "vs", "model", "models",
+}
+
+_TOPIC_ADMIN_PATTERNS = (
+    "contact address",
+    "kontaktadresse",
+    "organization/author",
+    "organisation/autor",
+    "als organisation",
+    "als kontaktadresse",
+    "als quelle wird",
+    "title is",
+    "titel lautet",
+)
+
+_TECH_RELEVANCE_TERMS = {
+    "reasoning", "training", "reward", "benchmark", "coding", "model", "models",
+    "agent", "agents", "tool", "tools", "architecture", "multimodal", "video",
+    "image", "text", "open-source", "opensource", "licensing", "performance",
+    "rl", "sft", "grpo", "paper", "research", "release", "released",
+    "modell", "modelle", "faehigkeit", "faehigkeiten", "benchmarks", "vergleich",
+    "qwen", "deepseek", "claude", "gpt", "gemini", "yi", "baichuan", "minimax",
+}
+
+
+def _tokenize_research_text(text: str) -> List[str]:
+    return re.findall(r"[a-zA-Z0-9]+", str(text or "").lower())
+
+
+def extract_query_anchor_terms(query: str) -> List[str]:
+    tokens = _tokenize_research_text(query)
+    anchors = [
+        token for token in tokens
+        if len(token) >= 3 and token not in _CLAIM_QUERY_STOPWORDS
+    ]
+    return list(dict.fromkeys(anchors))
+
+
+def extract_claim_source_count(notes: str) -> int:
+    match = re.search(r"source_count=(\d+)", str(notes or ""))
+    if not match:
+        return 0
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return 0
+
+
+def claim_is_on_topic(query: str, claim_text: str) -> bool:
+    query_anchors = set(extract_query_anchor_terms(query))
+    claim_tokens = set(_tokenize_research_text(claim_text))
+    claim_text_lower = str(claim_text or "").lower()
+    query_tokens = set(_tokenize_research_text(query))
+
+    if not claim_tokens:
+        return False
+    if any(pattern in claim_text_lower for pattern in _TOPIC_ADMIN_PATTERNS):
+        return False
+
+    anchor_hits = query_anchors & claim_tokens
+    relevance_hits = claim_tokens & _TECH_RELEVANCE_TERMS
+    broad_query = bool(query_tokens & {
+        "modell",
+        "model",
+        "models",
+        "modelle",
+        "llm",
+        "llms",
+        "agent",
+        "agents",
+        "faehigkeiten",
+        "modellfaehigkeiten",
+        "research",
+        "runtime",
+        "teste",
+        "test",
+        "pruefe",
+        "verify",
+        "vergleich",
+        "vergleiche",
+    })
+
+    if len(anchor_hits) >= 2:
+        return True
+    if len(anchor_hits) >= 1 and len(relevance_hits) >= 1:
+        return True
+    if broad_query and len(relevance_hits) >= 2:
+        return True
+    if not query_anchors and len(relevance_hits) >= 2:
+        return True
+    return False
+
+
+def filter_claims_for_query(claims: List["ClaimRecord"], query: str) -> List["ClaimRecord"]:
+    return [claim for claim in claims if claim_is_on_topic(query, claim.claim_text)]
 
 
 def choose_research_profile(query: str, metadata: Optional[Dict[str, Any]] = None) -> ResearchProfile:
@@ -381,7 +485,14 @@ def compute_claim_verdict(
     if contradicting and not supporting:
         return ClaimVerdict.MIXED_EVIDENCE
 
-    supporting_sources = [source_by_id.get(ev.source_id) for ev in supporting]
+    unique_supporting_ids: List[str] = []
+    seen_supporting_ids: set[str] = set()
+    for ev in supporting:
+        if ev.source_id and ev.source_id not in seen_supporting_ids:
+            seen_supporting_ids.add(ev.source_id)
+            unique_supporting_ids.append(ev.source_id)
+
+    supporting_sources = [source_by_id.get(source_id) for source_id in unique_supporting_ids]
     supporting_sources = [src for src in supporting_sources if src is not None]
     if not supporting_sources:
         return ClaimVerdict.INSUFFICIENT_EVIDENCE
@@ -428,6 +539,14 @@ def compute_claim_verdict(
         meets_confirmed = meets_confirmed and has_authoritative_support
     if policy.require_benchmark_or_methodology_for_confirmed:
         meets_confirmed = meets_confirmed and has_methodological_support
+
+    source_count_hint = 0
+    if supporting:
+        source_count_hint = extract_claim_source_count(supporting[0].notes)
+    effective_source_count = max(source_count_hint, len(unique_supporting_ids))
+    meets_confirmed = meets_confirmed and (
+        effective_source_count >= policy.min_high_quality_independent_for_confirmed
+    )
 
     if meets_confirmed:
         return ClaimVerdict.CONFIRMED

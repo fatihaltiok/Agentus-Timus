@@ -9,6 +9,7 @@ import asyncio
 import io
 import logging
 import os
+import threading
 import uuid
 from typing import Optional
 
@@ -476,7 +477,9 @@ class AutonomousRunner:
         scorecard = None
         if _scorecard_feature_enabled():
             scorecard = self._export_autonomy_scorecard_snapshot()
-            self._apply_autonomy_scorecard_control(scorecard=scorecard)
+            e2e_gate = self._collect_e2e_release_gate_sync()
+            ops_gate = self._collect_ops_release_gate_sync()
+            self._apply_autonomy_scorecard_control(scorecard=scorecard, e2e_gate=e2e_gate, ops_gate=ops_gate)
         if _hardening_feature_enabled():
             self._evaluate_rollout_hardening(scorecard=scorecard)
         if _scorecard_feature_enabled():
@@ -943,12 +946,140 @@ class AutonomousRunner:
 
         return scorecard
 
-    def _apply_autonomy_scorecard_control(self, *, scorecard: Optional[dict] = None) -> None:
+    async def _collect_e2e_release_gate(self) -> Optional[dict]:
+        """Sammelt die aktuelle E2E-Release-Gate-Entscheidung fuer Runtime-Steuerung."""
+        try:
+            from orchestration.browser_workflow_eval import (
+                BROWSER_WORKFLOW_EVAL_CASES,
+                evaluate_browser_workflow_case,
+            )
+            from orchestration.e2e_regression_matrix import build_e2e_regression_matrix
+            from orchestration.e2e_release_gate import evaluate_e2e_release_gate
+            from gateway.status_snapshot import collect_status_snapshot
+            from tools.email_tool.tool import get_email_status
+            from orchestration.task_queue import get_queue
+
+            queue = get_queue()
+            canary_state = queue.get_policy_runtime_state("canary_percent_override")
+            current_canary = int((canary_state or {}).get("state_value", 0) or 0)
+            snapshot = await collect_status_snapshot()
+            email_status = get_email_status()
+            browser_results = [
+                evaluate_browser_workflow_case(case)
+                for case in BROWSER_WORKFLOW_EVAL_CASES
+            ]
+            matrix = build_e2e_regression_matrix(
+                snapshot=snapshot,
+                email_status=email_status,
+                browser_eval_results=browser_results,
+            )
+            return evaluate_e2e_release_gate(matrix, current_canary_percent=current_canary)
+        except Exception as e:
+            log.debug("E2E-Release-Gate-Sammlung fehlgeschlagen: %s", e)
+            return None
+
+    async def _collect_ops_release_gate(self) -> Optional[dict]:
+        """Sammelt die aktuelle Ops-/Budget-Gate-Entscheidung fuer Runtime-Steuerung."""
+        try:
+            from gateway.status_snapshot import collect_status_snapshot
+            from orchestration.ops_release_gate import evaluate_ops_release_gate
+            from orchestration.task_queue import get_queue
+
+            queue = get_queue()
+            canary_state = queue.get_policy_runtime_state("canary_percent_override")
+            current_canary = int((canary_state or {}).get("state_value", 0) or 0)
+            snapshot = await collect_status_snapshot()
+            return evaluate_ops_release_gate(snapshot.get("ops", {}), current_canary_percent=current_canary)
+        except Exception as e:
+            log.debug("Ops-Release-Gate-Sammlung fehlgeschlagen: %s", e)
+            return None
+
+    def _collect_e2e_release_gate_sync(self) -> Optional[dict]:
+        """Sync-Wrapper fuer den Scheduler-Callback."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            try:
+                return asyncio.run(self._collect_e2e_release_gate())
+            except RuntimeError as e:
+                log.debug("E2E-Release-Gate Sync-Wrapper uebersprungen: %s", e)
+                return None
+
+        result_box: dict[str, Optional[dict]] = {"value": None}
+        error_box: dict[str, BaseException] = {}
+
+        def _runner() -> None:
+            try:
+                result_box["value"] = asyncio.run(self._collect_e2e_release_gate())
+            except BaseException as exc:  # pragma: no cover - defensive guard for thread handoff
+                error_box["error"] = exc
+
+        worker = threading.Thread(
+            target=_runner,
+            name="autonomous-runner-e2e-gate",
+            daemon=True,
+        )
+        worker.start()
+        worker.join(timeout=max(5, _env_int("AUTONOMY_E2E_GATE_SYNC_TIMEOUT_SEC", 30)))
+        if worker.is_alive():
+            log.warning("E2E-Release-Gate Sync-Wrapper Timeout nach %ss", max(5, _env_int("AUTONOMY_E2E_GATE_SYNC_TIMEOUT_SEC", 30)))
+            return None
+        if error_box:
+            log.debug("E2E-Release-Gate Sync-Wrapper fehlgeschlagen: %s", error_box["error"])
+            return None
+        return result_box["value"]
+
+    def _collect_ops_release_gate_sync(self) -> Optional[dict]:
+        """Sync-Wrapper fuer das Ops-/Budget-Gate."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            try:
+                return asyncio.run(self._collect_ops_release_gate())
+            except RuntimeError as e:
+                log.debug("Ops-Release-Gate Sync-Wrapper uebersprungen: %s", e)
+                return None
+
+        result_box: dict[str, Optional[dict]] = {"value": None}
+        error_box: dict[str, BaseException] = {}
+
+        def _runner() -> None:
+            try:
+                result_box["value"] = asyncio.run(self._collect_ops_release_gate())
+            except BaseException as exc:  # pragma: no cover - defensive guard for thread handoff
+                error_box["error"] = exc
+
+        worker = threading.Thread(
+            target=_runner,
+            name="autonomous-runner-ops-gate",
+            daemon=True,
+        )
+        worker.start()
+        worker.join(timeout=max(5, _env_int("AUTONOMY_OPS_GATE_SYNC_TIMEOUT_SEC", 30)))
+        if worker.is_alive():
+            log.warning("Ops-Release-Gate Sync-Wrapper Timeout nach %ss", max(5, _env_int("AUTONOMY_OPS_GATE_SYNC_TIMEOUT_SEC", 30)))
+            return None
+        if error_box:
+            log.debug("Ops-Release-Gate Sync-Wrapper fehlgeschlagen: %s", error_box["error"])
+            return None
+        return result_box["value"]
+
+    def _apply_autonomy_scorecard_control(
+        self,
+        *,
+        scorecard: Optional[dict] = None,
+        e2e_gate: Optional[dict] = None,
+        ops_gate: Optional[dict] = None,
+    ) -> None:
         """M5.2/M5.3: Scorecard-Control mit optional adaptiven Schwellen anwenden."""
         try:
             from orchestration.autonomy_scorecard import evaluate_and_apply_scorecard_control
 
-            control = evaluate_and_apply_scorecard_control(scorecard=scorecard)
+            control = evaluate_and_apply_scorecard_control(
+                scorecard=scorecard,
+                e2e_gate_decision=e2e_gate,
+                ops_gate_decision=ops_gate,
+            )
             action = str(control.get("action") or "none")
             governance = control.get("governance") if isinstance(control.get("governance"), dict) else {}
             governance_state = str(governance.get("state", "allow") or "allow")
@@ -958,9 +1089,13 @@ class AutonomousRunner:
                 "cooldown_active",
                 "governance_hold",
                 "governance_force_rollback",
+                "e2e_gate_hold",
+                "e2e_gate_blocked",
+                "ops_gate_hold",
+                "ops_gate_blocked",
             }:
                 log.warning(
-                    "🧭 Scorecard-Control: action=%s | score=%s | canary=%s->%s | strict_off=%s | thresholds=%.1f/%.1f | adaptive=%s | governance=%s",
+                    "🧭 Scorecard-Control: action=%s | score=%s | canary=%s->%s | strict_off=%s | thresholds=%.1f/%.1f | adaptive=%s | governance=%s | e2e=%s | ops=%s",
                     action,
                     control.get("overall_score", 0.0),
                     control.get("current_canary_percent"),
@@ -970,6 +1105,8 @@ class AutonomousRunner:
                     float(control.get("rollback_threshold", 0.0) or 0.0),
                     str(control.get("adaptive_mode", "off") or "off"),
                     governance_state,
+                    str((control.get("e2e_gate") or {}).get("state", "pass")),
+                    str((control.get("ops_gate") or {}).get("state", "pass")),
                 )
         except Exception as e:
             log.debug("Autonomy-Scorecard-Control fehlgeschlagen: %s", e)
@@ -1218,8 +1355,8 @@ class AutonomousRunner:
             from main_dispatcher import get_agent_decision
             from utils.model_failover import failover_run_agent
 
-            agent = target_agent if target_agent else await get_agent_decision(description)
             session_id = f"auto_{uuid.uuid4().hex[:8]}"
+            agent = target_agent if target_agent else await get_agent_decision(description, session_id=session_id)
 
             result = await failover_run_agent(
                 agent_name=agent,
