@@ -24,7 +24,9 @@ from agent.providers import AgentModelConfig, ModelProvider, MultiProviderClient
 from orchestration.llm_budget_guard import get_public_budget_status
 from orchestration.ops_observability import build_ops_observability_summary
 from orchestration.ops_release_gate import evaluate_ops_release_gate
+from orchestration.self_stabilization_gate import evaluate_self_stabilization_gate
 from orchestration.self_improvement_engine import get_improvement_engine
+from orchestration.task_queue import SelfHealingCircuitBreakerState, SelfHealingIncidentStatus, get_queue
 
 _DEFAULT_MCP_BASE_URL = os.getenv("MCP_URL", "http://127.0.0.1:5000").rstrip("/")
 _LOCAL_TIMEOUT_S = float(os.getenv("TELEGRAM_STATUS_LOCAL_TIMEOUT", "3"))
@@ -344,6 +346,86 @@ def _safe_engine_stat(engine: Any, method_name: str, *, default: Any, **kwargs: 
         return default
 
 
+def _build_self_healing_summary() -> Dict[str, Any]:
+    try:
+        queue = get_queue()
+        metrics = queue.get_self_healing_metrics()
+        resource_guard = queue.get_self_healing_runtime_state("resource_guard") or {}
+        resource_guard_meta = resource_guard.get("metadata", {}) or {}
+        open_breakers = queue.list_self_healing_circuit_breakers(
+            states=[SelfHealingCircuitBreakerState.OPEN],
+            limit=4,
+        )
+        incidents = queue.list_self_healing_incidents(
+            statuses=[SelfHealingIncidentStatus.OPEN],
+            limit=4,
+        )
+        rows: List[Dict[str, Any]] = []
+        for incident in incidents:
+            incident_key = str(incident.get("incident_key", "") or "")
+            notify_state = queue.get_self_healing_runtime_state(f"incident_notify:{incident_key.lower()}") or {}
+            notify_meta = notify_state.get("metadata", {}) or {}
+            phase_state = queue.get_self_healing_runtime_state(f"incident_phase:{incident_key.lower()}") or {}
+            phase_meta = phase_state.get("metadata", {}) or {}
+            quarantine_state = queue.get_self_healing_runtime_state(f"incident_quarantine:{incident_key.lower()}") or {}
+            quarantine_meta = quarantine_state.get("metadata", {}) or {}
+            memory_state = queue.get_self_healing_runtime_state(
+                f"incident_memory:{str(incident.get('component', '') or '').lower()}:{str(incident.get('signal', '') or '').lower()}"
+            ) or {}
+            memory_meta = memory_state.get("metadata", {}) or {}
+            rows.append(
+                {
+                    "incident_key": incident_key,
+                    "component": str(incident.get("component", "") or ""),
+                    "signal": str(incident.get("signal", "") or ""),
+                    "severity": str(incident.get("severity", "") or ""),
+                    "last_seen_at": str(incident.get("last_seen_at", "") or ""),
+                    "recovery_phase": str(phase_state.get("state_value", "unknown") or "unknown"),
+                    "recovery_stage": str(phase_meta.get("stage", "") or ""),
+                    "memory_state": str(memory_state.get("state_value", "new") or "new"),
+                    "memory_seen_count": int(memory_meta.get("seen_count", 0) or 0),
+                    "memory_last_outcome": str(memory_meta.get("last_outcome", "") or ""),
+                    "quarantine_state": str(quarantine_state.get("state_value", "none") or "none"),
+                    "quarantine_until": str(quarantine_meta.get("quarantine_until", "") or ""),
+                    "notification_state": str(notify_state.get("state_value", "none") or "none"),
+                    "cooldown_until": str(notify_meta.get("cooldown_until", "") or ""),
+                    "last_sent_at": str(notify_meta.get("last_sent_at", "") or ""),
+                    "last_channels": list(notify_meta.get("last_channels", []) or []),
+                }
+            )
+        return {
+            "open_incidents": int(metrics.get("open_incidents", 0) or 0),
+            "degrade_mode": str(metrics.get("degrade_mode", "normal") or "normal"),
+            "last_open": metrics.get("last_open"),
+            "circuit_breakers_open": int(metrics.get("circuit_breakers_open", 0) or 0),
+            "open_breakers": [
+                {
+                    "breaker_key": str(row.get("breaker_key", "") or ""),
+                    "component": str(row.get("component", "") or ""),
+                    "signal": str(row.get("signal", "") or ""),
+                    "opened_until": str(row.get("opened_until", "") or ""),
+                }
+                for row in open_breakers
+            ],
+            "resource_guard_state": str(resource_guard.get("state_value", "inactive") or "inactive"),
+            "resource_guard_reason": str(resource_guard_meta.get("reason", "") or ""),
+            "resource_guard_until": str(resource_guard_meta.get("deferred_until", "") or ""),
+            "incidents": rows,
+        }
+    except Exception:
+        return {
+            "open_incidents": 0,
+            "degrade_mode": "unknown",
+            "last_open": None,
+            "circuit_breakers_open": 0,
+            "open_breakers": [],
+            "resource_guard_state": "unknown",
+            "resource_guard_reason": "",
+            "resource_guard_until": "",
+            "incidents": [],
+        }
+
+
 async def collect_status_snapshot(mcp_base_url: str | None = None) -> Dict[str, Any]:
     base_url = (mcp_base_url or _DEFAULT_MCP_BASE_URL).rstrip("/")
     provider_client = get_provider_client()
@@ -393,6 +475,8 @@ async def collect_status_snapshot(mcp_base_url: str | None = None) -> Dict[str, 
         budget_status = get_public_budget_status()
     except Exception:
         budget_status = {"state": "unknown", "message": "", "scopes": [], "soft_max_tokens": 0, "window_days": 1}
+    self_healing_summary = _build_self_healing_summary()
+
     try:
         improvement_engine = get_improvement_engine()
         ops_summary = build_ops_observability_summary(
@@ -407,6 +491,7 @@ async def collect_status_snapshot(mcp_base_url: str | None = None) -> Dict[str, 
             ),
             llm_usage=usage_summary,
             budget=budget_status,
+            self_healing=self_healing_summary,
             limit=4,
         )
     except Exception:
@@ -432,6 +517,8 @@ async def collect_status_snapshot(mcp_base_url: str | None = None) -> Dict[str, 
         "budget": budget_status,
         "ops": ops_summary,
         "ops_gate": evaluate_ops_release_gate(ops_summary),
+        "self_healing": self_healing_summary,
+        "stability_gate": evaluate_self_stabilization_gate(self_healing_summary),
         "api_control": _build_api_control_summary(provider_results, usage_summary, budget_status),
         "thinking": bool((local_results["agent_status"].get("data", {}) or {}).get("thinking", False)),
     }
@@ -472,6 +559,8 @@ def format_status_message(snapshot: Dict[str, Any], summary_lines: List[str]) ->
     budget = snapshot.get("budget", {}) or {}
     ops = snapshot.get("ops", {}) or {}
     ops_gate = snapshot.get("ops_gate", {}) or {}
+    self_healing = snapshot.get("self_healing", {}) or {}
+    stability_gate = snapshot.get("stability_gate", {}) or {}
     thinking = snapshot.get("thinking", False)
 
     mcp_health = local.get("mcp_health", {}) or {}
@@ -493,6 +582,54 @@ def format_status_message(snapshot: Dict[str, Any], summary_lines: List[str]) ->
             f"Goals {autonomy_payload.get('goals', {}).get('open_alignment_rate', 0.0)}% | "
             f"Plans {autonomy_payload.get('planning', {}).get('active_plans', 0)} | "
             f"Healing {autonomy_payload.get('healing', {}).get('degrade_mode', 'normal')}"
+        )
+
+    healing_lines = ["", "Self-Healing"]
+    healing_lines.append(
+        f"🧯 Open {self_healing.get('open_incidents', 0)} | Degrade {self_healing.get('degrade_mode', 'unknown')}"
+    )
+    if stability_gate:
+        healing_lines.append(
+            "• Gate {state} | Breakers {breakers} | Quarantine {quarantine} | Cooldown {cooldown} | Patterns {patterns}".format(
+                state=stability_gate.get("state", "unknown"),
+                breakers=stability_gate.get("circuit_breakers_open", 0),
+                quarantine=stability_gate.get("quarantined_incidents", 0),
+                cooldown=stability_gate.get("cooldown_incidents", 0),
+                patterns=stability_gate.get("known_bad_patterns", 0),
+            )
+        )
+    if str(self_healing.get("resource_guard_state", "inactive")) != "inactive":
+        guard_until = str(self_healing.get("resource_guard_until", "") or "")
+        guard_suffix = f" | bis {guard_until[:16]}" if guard_until else ""
+        healing_lines.append(
+            f"• Resource-Guard {self_healing.get('resource_guard_state', 'unknown')} | {self_healing.get('resource_guard_reason', '')}{guard_suffix}"
+        )
+    for breaker in (self_healing.get("open_breakers", []) or [])[:2]:
+        opened_until = str(breaker.get("opened_until", "") or "")
+        opened_suffix = f" | offen bis {opened_until[:16]}" if opened_until else ""
+        healing_lines.append(
+            f"• Breaker {breaker.get('component', '?')}/{breaker.get('signal', '?')}{opened_suffix}"
+        )
+    for incident in (self_healing.get("incidents", []) or [])[:3]:
+        cooldown_until = str(incident.get("cooldown_until", "") or "")
+        cooldown_suffix = f" | cooldown bis {cooldown_until[:16]}" if cooldown_until else ""
+        quarantine_until = str(incident.get("quarantine_until", "") or "")
+        quarantine_suffix = f" | quarantine bis {quarantine_until[:16]}" if quarantine_until else ""
+        healing_lines.append(
+            "• {component}/{signal} [{severity}] | {phase}/{stage} | memory {memory} ({seen}x/{outcome}) | quarantine {quarantine} | notify {notify}{cooldown}{quarantine_suffix}".format(
+                component=incident.get("component", "?"),
+                signal=incident.get("signal", "?"),
+                severity=incident.get("severity", "?"),
+                phase=incident.get("recovery_phase", "unknown"),
+                stage=incident.get("recovery_stage", "") or "stage?",
+                memory=incident.get("memory_state", "new"),
+                seen=incident.get("memory_seen_count", 0),
+                outcome=incident.get("memory_last_outcome", "-") or "-",
+                quarantine=incident.get("quarantine_state", "none"),
+                notify=incident.get("notification_state", "none"),
+                cooldown=cooldown_suffix,
+                quarantine_suffix=quarantine_suffix,
+            )
         )
 
     provider_lines = ["", "LLM/API Health"]
@@ -617,6 +754,7 @@ def format_status_message(snapshot: Dict[str, Any], summary_lines: List[str]) ->
     lines.extend(core_lines)
     lines.append("")
     lines.extend(summary_lines)
+    lines.extend(healing_lines)
     lines.extend(ops_lines)
     lines.extend(provider_lines)
     lines.extend(usage_lines)

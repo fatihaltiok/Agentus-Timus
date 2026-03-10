@@ -49,6 +49,7 @@ from agent.shared.screenshot import (
 )
 from agent.shared.action_parser import parse_action as _shared_parse_action
 from agent.providers import ModelProvider, validate_configured_model_or_raise
+from utils.headless_service_guard import desktop_open_block_reason
 
 logging.basicConfig(
     level=logging.INFO,
@@ -446,6 +447,10 @@ KEIN Code, KEINE Erklärung - nur JSON!"""
                 # Für Browser: URL öffnen via xdg-open oder direkt
                 url = action.get("url", "")
                 if url:
+                    block_reason = desktop_open_block_reason(action_kind="url", target=url)
+                    if block_reason:
+                        log.warning("   🚫 Navigate blockiert: %s | %s", url, block_reason)
+                        return False, block_reason
                     try:
                         # Versuche Chrome/Chromium direkt
                         subprocess.Popen(

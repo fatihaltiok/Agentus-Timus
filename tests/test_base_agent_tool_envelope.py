@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -51,6 +52,23 @@ def test_extract_primary_file_path_reports_metadata_fallback():
 
     assert path == "/tmp/from-metadata.pdf"
     assert source == "metadata"
+
+
+def test_handle_file_artifacts_blocks_protected_logs_in_service(monkeypatch):
+    import agent.base_agent as base_agent_module
+
+    agent = _minimal_base_agent()
+    observation = {"filepath": "/home/fatih-ubuntu/dev/timus/timus_server.log"}
+
+    monkeypatch.setenv("AUTO_OPEN_FILES", "true")
+    monkeypatch.setenv("SYSTEMD_EXEC_PID", "123")
+    monkeypatch.setattr(base_agent_module.os.path, "exists", lambda path: True)
+    open_call = MagicMock()
+    monkeypatch.setattr(base_agent_module.subprocess, "call", open_call)
+
+    agent._handle_file_artifacts(observation)
+
+    open_call.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -157,6 +175,65 @@ async def test_call_tool_formats_jsonrpc_error_dict(monkeypatch):
     result = await agent._call_tool("delegate_to_agent", {"agent_type": "research", "task": "x"})
 
     assert result["error"] == "JSON-RPC Fehler: code=-32602 | Invalid params | missing session_id"
+
+
+@pytest.mark.asyncio
+async def test_call_tool_blocks_restart_without_explicit_restart_intent(monkeypatch):
+    import agent.base_agent as base_agent_module
+
+    agent = _minimal_base_agent()
+    agent._current_task_text = "Lies die Logs und pruefe den Zustand von Timus."
+    agent.http_client = SimpleNamespace(
+        post=AsyncMock(
+            return_value=SimpleNamespace(
+                json=lambda: {
+                    "jsonrpc": "2.0",
+                    "result": {"status": "pending_restart", "mode": "dispatcher"},
+                }
+            )
+        )
+    )
+
+    monkeypatch.setattr(base_agent_module, "evaluate_policy_gate", lambda **kwargs: {"allowed": True})
+    monkeypatch.setattr(base_agent_module, "audit_policy_decision", lambda decision: None)
+    monkeypatch.setattr(base_agent_module.registry_v2, "validate_tool_call", lambda *args, **kwargs: kwargs)
+
+    result = await agent._call_tool("restart_timus", {"mode": "dispatcher"})
+
+    assert result["blocked_by_policy"] is True
+    assert "expliziten Neustart-Wunsch" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_call_tool_allows_restart_with_explicit_restart_intent(monkeypatch):
+    import agent.base_agent as base_agent_module
+
+    agent = _minimal_base_agent()
+    agent._current_task_text = "Bitte starte den Dispatcher neu."
+    agent.http_client = SimpleNamespace(
+        post=AsyncMock(
+            return_value=SimpleNamespace(
+                json=lambda: {
+                    "jsonrpc": "2.0",
+                    "result": {
+                        "status": "pending_restart",
+                        "mode": "dispatcher",
+                        "message": "Detached Timus-Neustart gestartet",
+                    },
+                }
+            )
+        )
+    )
+
+    monkeypatch.setattr(base_agent_module, "evaluate_policy_gate", lambda **kwargs: {"allowed": True})
+    monkeypatch.setattr(base_agent_module, "audit_policy_decision", lambda decision: None)
+    monkeypatch.setattr(base_agent_module.registry_v2, "validate_tool_call", lambda *args, **kwargs: kwargs)
+
+    result = await agent._call_tool("restart_timus", {"mode": "dispatcher"})
+
+    payload = result.get("data") if isinstance(result.get("data"), dict) else result
+    assert payload["status"] == "pending_restart"
+    assert payload["mode"] == "dispatcher"
 
 
 def test_terminal_restart_tool_finalizes_agent_run():

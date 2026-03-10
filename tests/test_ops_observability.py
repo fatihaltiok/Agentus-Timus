@@ -35,6 +35,20 @@ def test_build_ops_observability_summary_collects_alerts():
         },
         llm_usage={"total_requests": 10, "success_rate": 0.83, "avg_latency_ms": 2500},
         budget={"state": "warn", "message": "budget warn"},
+        self_healing={
+            "open_incidents": 1,
+            "degrade_mode": "restricted",
+            "circuit_breakers_open": 1,
+            "open_breakers": [{"component": "mcp", "signal": "mcp_health"}],
+            "incidents": [
+                {
+                    "recovery_phase": "blocked",
+                    "quarantine_state": "active",
+                    "notification_state": "cooldown_active",
+                    "memory_state": "known_bad_pattern",
+                }
+            ],
+        },
         limit=10,
     )
 
@@ -48,6 +62,7 @@ def test_build_ops_observability_summary_collects_alerts():
     assert summary["error_classes"]["routing"] >= 1
     assert summary["error_classes"]["orchestration"] >= 1
     assert summary["slo"]["breached"] >= 1
+    assert summary["self_stabilization_gate"]["state"] == "blocked"
     assert any(item["name"] == "llm_latency" and item["breached"] for item in summary["slo"]["items"])
     assert summary["top_outliers"]
     messages = [item["message"] for item in summary["alerts"]]
@@ -57,6 +72,7 @@ def test_build_ops_observability_summary_collects_alerts():
     assert any("scan_ui_elements" in msg for msg in messages)
     assert any("Routing meta" in msg for msg in messages)
     assert any("budget warn" in msg for msg in messages)
+    assert any("Self-Healing gate blocked" in msg for msg in messages)
 
     gate = evaluate_ops_release_gate(summary, current_canary_percent=30)
     assert gate["state"] == "blocked"

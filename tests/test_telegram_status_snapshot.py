@@ -97,6 +97,83 @@ async def test_collect_status_snapshot_builds_agent_rows(monkeypatch):
     )
     monkeypatch.setattr(
         status_snapshot,
+        "get_queue",
+        lambda: SimpleNamespace(
+                get_self_healing_metrics=lambda: {
+                    "open_incidents": 1,
+                    "degrade_mode": "degraded",
+                    "circuit_breakers_open": 1,
+                    "last_open": {"incident_key": "m3_mcp_health_unavailable"},
+                },
+            list_self_healing_incidents=lambda statuses=None, limit=4: [
+                {
+                    "incident_key": "m3_mcp_health_unavailable",
+                    "component": "mcp",
+                    "signal": "mcp_health",
+                    "severity": "high",
+                    "last_seen_at": "2026-03-10T15:02:39",
+                }
+            ],
+            list_self_healing_circuit_breakers=lambda states=None, limit=4: [
+                {
+                    "breaker_key": "mcp:mcp_health",
+                    "component": "mcp",
+                    "signal": "mcp_health",
+                    "opened_until": "2026-03-10T15:18:00",
+                    "metadata": {},
+                }
+            ],
+            get_self_healing_runtime_state=lambda key: (
+                {
+                    "state_key": key,
+                    "state_value": "active",
+                    "metadata": {
+                        "reason": "degrade_mode=degraded,m3_system_pressure",
+                        "deferred_until": "2026-03-10T15:22:00",
+                    },
+                    "updated_at": "2026-03-10T15:02:39",
+                }
+                if str(key) == "resource_guard"
+                else {
+                    "state_key": key,
+                    "state_value": "known_bad_pattern",
+                    "metadata": {
+                        "seen_count": 3,
+                        "last_outcome": "escalated",
+                    },
+                    "updated_at": "2026-03-10T15:02:39",
+                }
+                if str(key).startswith("incident_memory:")
+                else {
+                    "state_key": key,
+                    "state_value": "recovering",
+                    "metadata": {
+                        "stage": "diagnose",
+                    },
+                    "updated_at": "2026-03-10T15:02:39",
+                }
+                if str(key).startswith("incident_phase:")
+                else {
+                    "state_key": key,
+                    "state_value": "active" if str(key).startswith("incident_quarantine:") else "cooldown_active",
+                    "metadata": (
+                        {
+                            "quarantine_until": "2026-03-10T15:15:00",
+                        }
+                        if str(key).startswith("incident_quarantine:")
+                        else {
+                            "cooldown_until": "2026-03-10T17:02:39",
+                            "last_sent_at": "2026-03-10T15:02:39",
+                            "last_channels": ["email"],
+                        }
+                    ),
+                    "updated_at": "2026-03-10T15:02:39",
+                }
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        status_snapshot,
         "build_ops_observability_summary",
         lambda **kwargs: {
             "state": "warn",
@@ -144,6 +221,17 @@ async def test_collect_status_snapshot_builds_agent_rows(monkeypatch):
     assert snapshot["usage"]["total_requests"] == 6
     assert snapshot["budget"]["state"] == "soft_limit"
     assert snapshot["ops"]["state"] == "warn"
+    assert snapshot["self_healing"]["open_incidents"] == 1
+    assert snapshot["self_healing"]["circuit_breakers_open"] == 1
+    assert snapshot["self_healing"]["open_breakers"][0]["component"] == "mcp"
+    assert snapshot["self_healing"]["incidents"][0]["notification_state"] == "cooldown_active"
+    assert snapshot["self_healing"]["incidents"][0]["recovery_phase"] == "recovering"
+    assert snapshot["self_healing"]["incidents"][0]["memory_state"] == "known_bad_pattern"
+    assert snapshot["self_healing"]["incidents"][0]["memory_seen_count"] == 3
+    assert snapshot["self_healing"]["incidents"][0]["memory_last_outcome"] == "escalated"
+    assert snapshot["self_healing"]["incidents"][0]["quarantine_state"] == "active"
+    assert snapshot["self_healing"]["resource_guard_state"] == "active"
+    assert snapshot["stability_gate"]["state"] == "blocked"
     assert snapshot["api_control"]["active_provider_count"] >= 1
     assert snapshot["api_control"]["providers"][0]["api_env"] == "X"
 
@@ -258,6 +346,44 @@ def test_format_status_message_contains_core_provider_and_agent_sections():
                 {"target": "openrouter", "message": "Provider openrouter: error"},
             ],
         },
+        "self_healing": {
+            "open_incidents": 1,
+            "degrade_mode": "degraded",
+            "circuit_breakers_open": 1,
+            "open_breakers": [
+                {
+                    "component": "mcp",
+                    "signal": "mcp_health",
+                    "opened_until": "2026-03-10T15:18:00",
+                }
+            ],
+            "resource_guard_state": "active",
+            "resource_guard_reason": "degrade_mode=degraded,m3_system_pressure",
+            "resource_guard_until": "2026-03-10T15:22:00",
+            "incidents": [
+                {
+                    "component": "mcp",
+                    "signal": "mcp_health",
+                    "severity": "high",
+                    "recovery_phase": "recovering",
+                    "recovery_stage": "diagnose",
+                    "memory_state": "known_bad_pattern",
+                    "memory_seen_count": 3,
+                    "memory_last_outcome": "escalated",
+                    "quarantine_state": "active",
+                    "quarantine_until": "2026-03-10T15:15:00",
+                    "notification_state": "cooldown_active",
+                    "cooldown_until": "2026-03-10T17:02:39",
+                }
+            ],
+        },
+        "stability_gate": {
+            "state": "blocked",
+            "circuit_breakers_open": 1,
+            "quarantined_incidents": 1,
+            "cooldown_incidents": 1,
+            "known_bad_patterns": 1,
+        },
         "thinking": True,
     }
 
@@ -265,6 +391,7 @@ def test_format_status_message_contains_core_provider_and_agent_sections():
 
     assert "🤖 Timus Status" in msg
     assert "Core" in msg
+    assert "Self-Healing" in msg
     assert "Ops" in msg
     assert "LLM/API Health" in msg
     assert "Kosten / Usage" in msg
@@ -273,6 +400,11 @@ def test_format_status_message_contains_core_provider_and_agent_sections():
     assert "🟠 State warn | Critical 0 | Warnings 2 | Services 0 | Providers 1" in msg
     assert "SLO: breached 2 | healthy 6" in msg
     assert "Classes: avail 1 | latency 0 | reliability 0 | routing 1 | budget 0 | orchestration 0" in msg
+    assert "Open 1 | Degrade degraded" in msg
+    assert "Gate blocked | Breakers 1 | Quarantine 1 | Cooldown 1 | Patterns 1" in msg
+    assert "Resource-Guard active | degrade_mode=degraded,m3_system_pressure | bis 2026-03-10T15:22" in msg
+    assert "Breaker mcp/mcp_health | offen bis 2026-03-10T15:18" in msg
+    assert "mcp/mcp_health [high] | recovering/diagnose | memory known_bad_pattern (3x/escalated) | quarantine active | notify cooldown_active | cooldown bis 2026-03-10T17:02 | quarantine bis 2026-03-10T15:15" in msg
     assert "warn [availability]: Provider openrouter: error" in msg
     assert "Outlier openrouter: Provider openrouter: error" in msg
     assert "openrouter: ok | HTTP 200 | 180 ms" in msg

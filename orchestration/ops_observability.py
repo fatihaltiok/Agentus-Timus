@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List
 
+from orchestration.self_stabilization_gate import evaluate_self_stabilization_gate
+
 
 def _env_float(name: str, default: float) -> float:
     raw = os.getenv(name)
@@ -207,6 +209,7 @@ def build_ops_observability_summary(
     routing_stats: Dict[str, Any],
     llm_usage: Dict[str, Any],
     budget: Dict[str, Any],
+    self_healing: Dict[str, Any] | None = None,
     limit: int = 5,
 ) -> Dict[str, Any]:
     """Combines service/provider/analytics signals into one ops summary."""
@@ -375,11 +378,50 @@ def build_ops_observability_summary(
             )
         )
 
+    stabilization_gate = evaluate_self_stabilization_gate(self_healing or {})
+    self_healing_alerts: List[Dict[str, Any]] = []
+    if stabilization_gate.get("state") == "blocked":
+        self_healing_alerts.append(
+            _make_alert(
+                kind="self_healing",
+                severity="critical",
+                error_class="orchestration",
+                target="self_healing",
+                message=(
+                    "Self-Healing gate blocked: "
+                    f"degrade={stabilization_gate.get('degrade_mode', 'unknown')} | "
+                    f"breakers={stabilization_gate.get('circuit_breakers_open', 0)} | "
+                    f"open={stabilization_gate.get('open_incidents', 0)}"
+                ),
+                slo="service_availability",
+                value=int(stabilization_gate.get("open_incidents", 0) or 0),
+            )
+        )
+    elif stabilization_gate.get("state") == "warn":
+        self_healing_alerts.append(
+            _make_alert(
+                kind="self_healing",
+                severity="warn",
+                error_class="orchestration",
+                target="self_healing",
+                message=(
+                    "Self-Healing gate warn: "
+                    f"degrade={stabilization_gate.get('degrade_mode', 'unknown')} | "
+                    f"quarantine={stabilization_gate.get('quarantined_incidents', 0)} | "
+                    f"cooldown={stabilization_gate.get('cooldown_incidents', 0)} | "
+                    f"patterns={stabilization_gate.get('known_bad_patterns', 0)}"
+                ),
+                slo="service_availability",
+                value=int(stabilization_gate.get("open_incidents", 0) or 0),
+            )
+        )
+
     alerts = (
         service_alerts
         + provider_state_alerts
         + provider_latency_alerts
         + budget_alerts
+        + self_healing_alerts
         + tool_failure_alerts
         + slow_tool_alerts
         + routing_alerts
@@ -442,4 +484,5 @@ def build_ops_observability_summary(
         "slo": slo,
         "llm_success_rate": llm_success_rate,
         "llm_avg_latency_ms": llm_avg_latency_ms,
+        "self_stabilization_gate": stabilization_gate,
     }

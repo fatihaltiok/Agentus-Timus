@@ -7,14 +7,17 @@ Bei jedem Heartbeat werden pending Tasks aus der SQLite-Queue autonom ausgeführ
 
 import asyncio
 import io
+import json
 import logging
 import os
 import threading
 import uuid
+from datetime import datetime, timedelta
 from typing import Optional
 
 from orchestration.scheduler import ProactiveScheduler, SchedulerEvent, init_scheduler
 from orchestration.task_queue import Priority, TaskType, get_queue
+from utils.stable_hash import stable_text_digest
 
 log = logging.getLogger("AutonomousRunner")
 
@@ -29,6 +32,75 @@ def _env_int(name: str, default: int) -> int:
         return int(os.getenv(name, str(default)).strip())
     except Exception:
         return default
+
+
+def _parse_iso(value: object) -> Optional[datetime]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+        if parsed.tzinfo is not None:
+            return parsed.astimezone().replace(tzinfo=None)
+        return parsed
+    except Exception:
+        return None
+
+
+def _parse_task_metadata(raw_metadata: object) -> dict:
+    if isinstance(raw_metadata, dict):
+        return dict(raw_metadata)
+    if isinstance(raw_metadata, str):
+        text = raw_metadata.strip()
+        if not text:
+            return {}
+        try:
+            loaded = json.loads(text)
+            if isinstance(loaded, dict):
+                return loaded
+        except Exception:
+            return {}
+    return {}
+
+
+def _build_incident_notification_key(description: str, metadata: dict) -> str:
+    incident_key = str((metadata or {}).get("incident_key") or "").strip()
+    if incident_key:
+        return incident_key
+    template = str((metadata or {}).get("playbook_template") or "").strip()
+    component = str((metadata or {}).get("component") or "").strip()
+    signal = str((metadata or {}).get("signal") or "").strip()
+    parts = [part for part in [template, component, signal, description.strip()] if part]
+    fingerprint_basis = " | ".join(parts) if parts else "autonomous-incident"
+    return f"derived:{stable_text_digest(fingerprint_basis, hex_chars=24)}"
+
+
+def _incident_notification_state_key(notification_key: str) -> str:
+    clean = (notification_key or "").strip().lower()
+    return f"incident_notify:{clean}"
+
+
+def _incident_quarantine_state_key(incident_key: str) -> str:
+    clean = (incident_key or "").strip().lower()
+    return f"incident_quarantine:{clean}"
+
+
+def _resource_guard_state_key() -> str:
+    return "resource_guard"
+
+
+def _incident_notification_cooldown_active(
+    *,
+    last_sent_at: object,
+    now: datetime,
+    cooldown_minutes: int,
+) -> bool:
+    if cooldown_minutes <= 0:
+        return False
+    last_sent_dt = _parse_iso(last_sent_at)
+    if last_sent_dt is None:
+        return False
+    return now < (last_sent_dt + timedelta(minutes=max(0, int(cooldown_minutes))))
 
 
 def _goals_feature_enabled() -> bool:
@@ -177,6 +249,235 @@ class AutonomousRunner:
         self._ambient_engine = None
         # M16
         self._feedback_engine = None
+
+    def _incident_notification_context(self, task_id: str, description: str, metadata: dict) -> Optional[dict]:
+        metadata_payload = metadata if isinstance(metadata, dict) else {}
+        is_self_healing = bool(metadata_payload.get("self_healing")) or description.startswith("Self-Healing Playbook")
+        if not is_self_healing:
+            return None
+
+        notification_key = _build_incident_notification_key(description, metadata_payload)
+        incident_key = str(metadata_payload.get("incident_key") or notification_key).strip()
+        component = str(metadata_payload.get("component") or "unknown").strip() or "unknown"
+        signal = str(metadata_payload.get("signal") or "unknown_signal").strip() or "unknown_signal"
+        playbook_template = str(metadata_payload.get("playbook_template") or "").strip()
+        return {
+            "task_id": task_id,
+            "incident_key": incident_key,
+            "notification_key": notification_key,
+            "state_key": _incident_notification_state_key(notification_key),
+            "component": component,
+            "signal": signal,
+            "playbook_template": playbook_template,
+            "description": description,
+        }
+
+    def _self_healing_task_context(self, task_id: str, description: str, metadata: dict) -> Optional[dict]:
+        context = self._incident_notification_context(task_id, description, metadata)
+        if context is None:
+            return None
+        breaker_key = f"{context['component']}:{context['signal']}"
+        context["breaker_key"] = breaker_key
+        context["quarantine_state_key"] = _incident_quarantine_state_key(context["incident_key"])
+        return context
+
+    def _self_healing_quarantine_decision(self, queue, task_id: str, description: str, metadata: dict) -> Optional[dict]:
+        context = self._self_healing_task_context(task_id, description, metadata)
+        if context is None:
+            return None
+
+        breaker = queue.get_self_healing_circuit_breaker(context["breaker_key"]) or {}
+        if str(breaker.get("state") or "") != "open":
+            return None
+
+        opened_until = _parse_iso(breaker.get("opened_until"))
+        now = datetime.now()
+        if opened_until is None or now >= opened_until:
+            return None
+
+        current = queue.get_self_healing_runtime_state(context["quarantine_state_key"]) or {}
+        current_meta = current.get("metadata", {}) or {}
+        quarantine_count = int(current_meta.get("quarantine_count", 0) or 0) + 1
+        context.update(
+            {
+                "breaker": breaker,
+                "current_quarantine_state": current,
+                "current_quarantine_meta": current_meta,
+                "quarantine_until": opened_until.isoformat(),
+                "quarantine_count": quarantine_count,
+                "reason": "breaker_open",
+                "now": now,
+            }
+        )
+        return context
+
+    def _record_self_healing_quarantine_state(self, queue, context: dict) -> None:
+        queue.set_self_healing_runtime_state(
+            context["quarantine_state_key"],
+            "active",
+            metadata_update={
+                "incident_key": context.get("incident_key", ""),
+                "breaker_key": context.get("breaker_key", ""),
+                "component": context.get("component", ""),
+                "signal": context.get("signal", ""),
+                "last_task_id": context.get("task_id", ""),
+                "reason": context.get("reason", "breaker_open"),
+                "quarantine_until": context.get("quarantine_until", ""),
+                "quarantine_count": int(context.get("quarantine_count", 0) or 0),
+                "open_incident": True,
+            },
+            observed_at=(context.get("now") or datetime.now()).isoformat(),
+        )
+
+    def _is_resource_heavy_task(self, description: str, target_agent: Optional[str], metadata: dict) -> bool:
+        agent = str(target_agent or "").strip().lower()
+        if agent in {"research", "visual", "creative", "development", "data", "document"}:
+            return True
+
+        text = f"{description} {json.dumps(metadata or {}, ensure_ascii=True)}".lower()
+        heavy_markers = (
+            "deep research",
+            "recherche",
+            "browser",
+            "booking.com",
+            "screenshot",
+            "pdf",
+            "bericht",
+            "video",
+            "youtube",
+            "scrape",
+            "crawl",
+        )
+        return any(marker in text for marker in heavy_markers)
+
+    def _resource_guard_decision(self, queue, *, task_id: str, description: str, priority: int, target_agent: Optional[str], metadata: dict) -> Optional[dict]:
+        if int(priority) <= int(Priority.HIGH):
+            return None
+        if not self._is_resource_heavy_task(description, target_agent, metadata):
+            return None
+
+        now = datetime.now()
+        reasons: list[str] = []
+        degrade_state = queue.get_self_healing_runtime_state("degrade_mode") or {}
+        degrade_mode = str(degrade_state.get("state_value", "normal") or "normal")
+        if degrade_mode in {"degraded", "emergency"}:
+            reasons.append(f"degrade_mode={degrade_mode}")
+
+        for incident_key in ("m3_system_pressure", "m3_queue_backlog"):
+            incident = queue.get_self_healing_incident(incident_key)
+            if incident and str(incident.get("status") or "") == "open":
+                reasons.append(incident_key)
+
+        if not reasons:
+            return None
+
+        defer_minutes = max(1, _env_int("AUTONOMY_RESOURCE_GUARD_DEFER_MINUTES", 20))
+        run_at = (now + timedelta(minutes=defer_minutes)).isoformat()
+        return {
+            "task_id": task_id,
+            "reason": ",".join(reasons),
+            "reasons": reasons,
+            "defer_minutes": defer_minutes,
+            "run_at": run_at,
+            "now": now,
+        }
+
+    def _record_resource_guard_state(self, queue, context: dict) -> None:
+        queue.set_self_healing_runtime_state(
+            _resource_guard_state_key(),
+            "active",
+            metadata_update={
+                "last_task_id": context.get("task_id", ""),
+                "reason": context.get("reason", ""),
+                "reasons": list(context.get("reasons", []) or []),
+                "defer_minutes": int(context.get("defer_minutes", 0) or 0),
+                "deferred_until": context.get("run_at", ""),
+                "updated_from": "autonomous_runner",
+            },
+            observed_at=(context.get("now") or datetime.now()).isoformat(),
+        )
+
+    def _notification_guard_decision(self, queue, task_id: str, description: str, metadata: dict) -> Optional[dict]:
+        context = self._incident_notification_context(task_id, description, metadata)
+        if context is None:
+            return None
+
+        cooldown_minutes = max(0, _env_int("AUTONOMY_INCIDENT_NOTIFICATION_COOLDOWN_MINUTES", 120))
+        now = datetime.now()
+        current = queue.get_self_healing_runtime_state(context["state_key"]) or {}
+        current_meta = current.get("metadata", {}) or {}
+        cooldown_active = _incident_notification_cooldown_active(
+            last_sent_at=current_meta.get("last_sent_at"),
+            now=now,
+            cooldown_minutes=cooldown_minutes,
+        )
+        context.update(
+            {
+                "current_state": current,
+                "current_meta": current_meta,
+                "cooldown_minutes": cooldown_minutes,
+                "now": now,
+                "send": not cooldown_active,
+                "reason": "cooldown_active" if cooldown_active else "allowed",
+            }
+        )
+        return context
+
+    def _record_incident_notification_state(
+        self,
+        queue,
+        context: dict,
+        *,
+        state_value: str,
+        telegram_sent: bool,
+        email_sent: bool,
+        result_preview: str,
+        suppression_reason: str = "",
+    ) -> None:
+        current_meta = dict((context or {}).get("current_meta", {}) or {})
+        now = context.get("now") if isinstance(context.get("now"), datetime) else datetime.now()
+        sent_count = int(current_meta.get("sent_count", 0) or 0)
+        suppressed_count = int(current_meta.get("suppressed_count", 0) or 0)
+        if state_value == "sent":
+            sent_count += 1
+        elif state_value == "cooldown_active":
+            suppressed_count += 1
+
+        channels = []
+        if telegram_sent:
+            channels.append("telegram")
+        if email_sent:
+            channels.append("email")
+
+        last_sent_at = current_meta.get("last_sent_at")
+        cooldown_until = current_meta.get("cooldown_until")
+        if state_value == "sent":
+            last_sent_at = now.isoformat()
+            cooldown_until = (now + timedelta(minutes=int(context.get("cooldown_minutes", 0) or 0))).isoformat()
+
+        queue.set_self_healing_runtime_state(
+            context["state_key"],
+            state_value,
+            metadata_update={
+                "incident_key": context.get("incident_key", ""),
+                "notification_key": context.get("notification_key", ""),
+                "component": context.get("component", ""),
+                "signal": context.get("signal", ""),
+                "playbook_template": context.get("playbook_template", ""),
+                "last_task_id": context.get("task_id", ""),
+                "last_description": context.get("description", "")[:240],
+                "last_result_preview": result_preview[:280],
+                "last_channels": channels,
+                "last_sent_at": last_sent_at,
+                "cooldown_until": cooldown_until,
+                "cooldown_minutes": int(context.get("cooldown_minutes", 0) or 0),
+                "sent_count": sent_count,
+                "suppressed_count": suppressed_count,
+                "suppression_reason": suppression_reason,
+                "open_incident": True,
+            },
+            observed_at=now.isoformat(),
+        )
 
     # ------------------------------------------------------------------
     # Öffentliche API
@@ -1310,6 +1611,7 @@ class AutonomousRunner:
         target_agent = task.get("target_agent")
         priority = task.get("priority", Priority.NORMAL)
         goal_id = task.get("goal_id")
+        metadata = _parse_task_metadata(task.get("metadata"))
         queue = get_queue()
 
         if not description:
@@ -1318,6 +1620,55 @@ class AutonomousRunner:
 
         prio_name = {0: "CRITICAL", 1: "HIGH", 2: "NORMAL", 3: "LOW"}.get(priority, str(priority))
         log.info(f"▶ [{prio_name}] Task [{task_id[:8]}]: {description[:80]}")
+
+        quarantine_guard = self._self_healing_quarantine_decision(queue, task_id, description, metadata)
+        if quarantine_guard is not None:
+            queue.requeue(
+                task_id,
+                run_at=quarantine_guard["quarantine_until"],
+                error=f"quarantined:{quarantine_guard['reason']}",
+                metadata_update={
+                    "quarantined": True,
+                    "quarantine_reason": quarantine_guard["reason"],
+                    "quarantine_until": quarantine_guard["quarantine_until"],
+                },
+            )
+            self._record_self_healing_quarantine_state(queue, quarantine_guard)
+            log.info(
+                "⛔ Self-Healing-Task quarantined [%s]: %s bis %s",
+                task_id[:8],
+                quarantine_guard.get("incident_key", ""),
+                quarantine_guard.get("quarantine_until", ""),
+            )
+            return
+
+        resource_guard = self._resource_guard_decision(
+            queue,
+            task_id=task_id,
+            description=description,
+            priority=int(priority),
+            target_agent=target_agent,
+            metadata=metadata,
+        )
+        if resource_guard is not None:
+            queue.requeue(
+                task_id,
+                run_at=resource_guard["run_at"],
+                error=f"resource_guard:{resource_guard['reason']}",
+                metadata_update={
+                    "resource_guarded": True,
+                    "resource_guard_reason": resource_guard["reason"],
+                    "resource_guard_until": resource_guard["run_at"],
+                },
+            )
+            self._record_resource_guard_state(queue, resource_guard)
+            log.info(
+                "⏸️ Resource-Guard deferred [%s]: %s bis %s",
+                task_id[:8],
+                resource_guard.get("reason", ""),
+                resource_guard.get("run_at", ""),
+            )
+            return
 
         if _policy_gates_feature_enabled():
             try:
@@ -1372,8 +1723,34 @@ class AutonomousRunner:
                 if goal_id and _goals_feature_enabled():
                     queue.refresh_goal_progress(goal_id, last_task_id=task_id, last_event="task_completed")
                 log.info(f"✅ Task [{task_id[:8]}] abgeschlossen")
-                await self._send_result_to_telegram(description, result_str)
-                await self._send_result_to_email(description, result_str)
+                notification_guard = self._notification_guard_decision(queue, task_id, description, metadata)
+                if notification_guard and not notification_guard.get("send", True):
+                    self._record_incident_notification_state(
+                        queue,
+                        notification_guard,
+                        state_value="cooldown_active",
+                        telegram_sent=False,
+                        email_sent=False,
+                        result_preview=result_str,
+                        suppression_reason=str(notification_guard.get("reason") or "cooldown_active"),
+                    )
+                    log.info(
+                        "🔕 Incident-Notification unterdrückt [%s]: %s",
+                        task_id[:8],
+                        notification_guard.get("incident_key", ""),
+                    )
+                else:
+                    telegram_sent = await self._send_result_to_telegram(description, result_str)
+                    email_sent = await self._send_result_to_email(description, result_str)
+                    if notification_guard is not None:
+                        self._record_incident_notification_state(
+                            queue,
+                            notification_guard,
+                            state_value="sent" if (telegram_sent or email_sent) else "send_failed",
+                            telegram_sent=telegram_sent,
+                            email_sent=email_sent,
+                            result_preview=result_str,
+                        )
             else:
                 queue.fail(task_id, "Alle Failover-Versuche erschöpft")
                 if goal_id and _goals_feature_enabled():
@@ -1425,7 +1802,7 @@ class AutonomousRunner:
             log.warning(f"Alert-Versand fehlgeschlagen: {e}")
 
 
-    async def _send_result_to_telegram(self, description: str, result: str) -> None:
+    async def _send_result_to_telegram(self, description: str, result: str) -> bool:
         """
         Sendet das Task-Ergebnis an alle erlaubten Telegram-User.
 
@@ -1437,12 +1814,13 @@ class AutonomousRunner:
         token = os.getenv("TELEGRAM_BOT_TOKEN", "")
         allowed_ids = os.getenv("TELEGRAM_ALLOWED_IDS", "")
         if not token or not allowed_ids:
-            return
+            return False
 
         try:
             from telegram import Bot
             bot = Bot(token=token)
             chat_ids = [int(x.strip()) for x in allowed_ids.split(",") if x.strip()]
+            delivered = False
 
             header = f"✅ *Autonomer Task abgeschlossen*\n_{description[:120]}_\n\n"
             MAX_TEXT = 3800
@@ -1463,6 +1841,7 @@ class AutonomousRunner:
                             with open(image_path, "rb") as f:
                                 await bot.send_photo(chat_id=chat_id, photo=f, caption=caption)
                             image_sent = True
+                            delivered = True
 
                     if not image_sent:
                         url_match = re.search(r'URL:\s*(https://[^\s\n]+)', result, re.IGNORECASE)
@@ -1475,6 +1854,7 @@ class AutonomousRunner:
                                     resp.raise_for_status()
                                 await bot.send_photo(chat_id=chat_id, photo=resp.content)
                                 image_sent = True
+                                delivered = True
                             except Exception as img_e:
                                 log.warning(f"Bild-URL-Versand fehlgeschlagen: {img_e}")
 
@@ -1488,6 +1868,7 @@ class AutonomousRunner:
                             text=header + result,
                             parse_mode="Markdown",
                         )
+                        delivered = True
                     else:
                         # Zu lang → als .md-Dokument senden
                         await bot.send_message(
@@ -1503,22 +1884,25 @@ class AutonomousRunner:
                             filename=f"timus_recherche_{safe_name}.md",
                             caption="📄 Vollständiger Bericht",
                         )
+                        delivered = True
 
                 except Exception as e:
                     log.warning(f"Ergebnis-Versand an {chat_id} fehlgeschlagen: {e}")
 
             await bot.close()
             log.info("📨 Task-Ergebnis via Telegram gesendet")
+            return delivered
 
         except Exception as e:
             log.warning(f"_send_result_to_telegram fehlgeschlagen: {e}")
+            return False
 
-    async def _send_result_to_email(self, description: str, result: str) -> None:
+    async def _send_result_to_email(self, description: str, result: str) -> bool:
         """Sendet das Task-Ergebnis per E-Mail (Resend/SMTP je nach EMAIL_BACKEND)."""
         import os
         recipient = os.getenv("USER_EMAIL_PRIMARY", "")
         if not recipient:
-            return
+            return False
         try:
             from utils.resend_email import send_email_resend
             from utils.smtp_email import send_email_smtp
@@ -1533,8 +1917,10 @@ class AutonomousRunner:
                 await send_email_smtp(to=recipient, subject=subject, body=body)
 
             log.info("📧 Task-Ergebnis via E-Mail gesendet")
+            return True
         except Exception as e:
             log.warning(f"_send_result_to_email fehlgeschlagen: {e}")
+            return False
 
 
 # ------------------------------------------------------------------

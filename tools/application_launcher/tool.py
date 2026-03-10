@@ -10,6 +10,7 @@ import platform
 import shlex
 
 from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
+from utils.headless_service_guard import desktop_open_block_reason
 
 log = logging.getLogger("application_launcher")
 
@@ -55,6 +56,11 @@ async def open_application(app_name: str, wait_for_start: bool = True) -> dict:
     Startet eine Anwendung auf dem Desktop (Cross-Platform).
     """
     log.info(f"🚀 Versuche Anwendung zu starten: '{app_name}'")
+
+    block_reason = desktop_open_block_reason(action_kind="application", target=app_name)
+    if block_reason:
+        log.warning("Desktop-App-Start blockiert: app=%s reason=%s", app_name, block_reason)
+        return {"status": "blocked", "app": app_name, "reason": block_reason}
 
     app_key = app_name.lower().strip()
     candidates = []

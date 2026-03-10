@@ -20,6 +20,28 @@ async def test_run_command_blocks_direct_restart_script():
 
 
 @pytest.mark.asyncio
+async def test_run_command_blocks_direct_timus_service_stop():
+    result = await run_command("sudo systemctl stop timus-mcp.service")
+    assert result["status"] == "blocked"
+    assert "Timus-Services" in result["reason"]
+
+
+@pytest.mark.asyncio
+async def test_run_command_allows_timus_service_status(monkeypatch):
+    def fake_run(cmd, capture_output, text, timeout, cwd=None):
+        class Proc:
+            returncode = 0
+            stdout = "active\n"
+            stderr = ""
+        return Proc()
+
+    monkeypatch.setattr(shell_tool.subprocess, "run", fake_run)
+    result = await run_command("systemctl status timus-mcp.service --no-pager")
+    assert result["status"] == "success"
+    assert result["returncode"] == 0
+
+
+@pytest.mark.asyncio
 async def test_run_script_blocks_restart_script():
     result = await run_script("scripts/restart_timus.sh")
     assert result["status"] == "blocked"

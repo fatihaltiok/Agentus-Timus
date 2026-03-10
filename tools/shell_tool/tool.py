@@ -81,6 +81,23 @@ _DEFAULT_WHITELIST = [
     "systemctl", "journalctl", "crontab",
 ]
 
+_SHELL_CONTROL_OPERATORS = {"&&", "||", ";", "|", "&"}
+_TIMUS_SERVICE_NAMES = {
+    "timus-mcp",
+    "timus-mcp.service",
+    "timus-dispatcher",
+    "timus-dispatcher.service",
+}
+_TIMUS_SYSTEMCTL_LIFECYCLE_ACTIONS = {
+    "stop",
+    "start",
+    "restart",
+    "try-restart",
+    "reload",
+    "reload-or-restart",
+    "reload-or-try-restart",
+}
+
 
 def _audit(command: str, dry_run: bool, blocked: bool, result: str, duration: float = 0.0):
     """Schreibt einen Eintrag in das Audit-Log."""
@@ -136,6 +153,42 @@ def _safe_shlex_split(raw: str) -> list[str]:
         return shlex.split(raw)
     except ValueError:
         return str(raw or "").split()
+
+
+def _check_timus_service_lifecycle_command(command: str) -> str | None:
+    tokens = _safe_shlex_split(command)
+    if not tokens:
+        return None
+
+    idx = 0
+    while idx < len(tokens):
+        token = tokens[idx]
+        if token in _SHELL_CONTROL_OPERATORS:
+            idx += 1
+            continue
+        if Path(token).name != "systemctl":
+            idx += 1
+            continue
+
+        idx += 1
+        action: str | None = None
+        services: list[str] = []
+        while idx < len(tokens) and tokens[idx] not in _SHELL_CONTROL_OPERATORS:
+            part = tokens[idx]
+            if not part.startswith("-") and action is None:
+                action = part.lower()
+            elif not part.startswith("-"):
+                services.append(part.lower())
+            idx += 1
+
+        if action in _TIMUS_SYSTEMCTL_LIFECYCLE_ACTIONS and any(
+            service in _TIMUS_SERVICE_NAMES for service in services
+        ):
+            return (
+                "Direkte systemctl-Lifecycle-Befehle fuer Timus-Services sind im Shell-Tool blockiert. "
+                "Nutze restart_timus(mode=...) fuer kontrollierte Neustarts oder fuehre den Befehl manuell ausserhalb von Timus aus."
+            )
+    return None
 
 
 def _shell_argv(command: str) -> list[str]:
@@ -417,6 +470,15 @@ async def run_command(
             return {
                 "status": "blocked",
                 "reason": reason,
+                "command": command,
+            }
+
+        service_reason = _check_timus_service_lifecycle_command(command)
+        if service_reason:
+            _audit(command, dry_run=False, blocked=True, result=service_reason)
+            return {
+                "status": "blocked",
+                "reason": service_reason,
                 "command": command,
             }
 

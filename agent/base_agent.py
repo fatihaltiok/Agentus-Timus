@@ -51,12 +51,31 @@ from orchestration.llm_budget_guard import (
 )
 from orchestration.self_improvement_engine import LLMUsageRecord, get_improvement_engine
 from utils.context_guard import ContextGuard, ContextStatus
+from utils.headless_service_guard import desktop_open_block_reason
 from utils.llm_usage import build_usage_payload
 
 log = logging.getLogger("TimusAgent-v4.4")
 
 MCP_URL = "http://127.0.0.1:5000"
 IMAGE_MODEL_NAME = os.getenv("IMAGE_GENERATION_MODEL", "gpt-image-1.5-2025-12-16")
+_RESTART_INTENT_KEYWORDS = (
+    "restart",
+    "neustart",
+    "neu starten",
+    "wieder hoch",
+    "hochfahren",
+    "bring zurueck",
+    "bring zurück",
+)
+_RESTART_TARGET_PATTERN = re.compile(
+    r"\b(timus|mcp|dispatcher|server|dienst|service)\b"
+)
+_RESTART_VERB_PATTERN = re.compile(
+    r"\b(restart|neustart|neu starten|starte|starten|fahre|fahr|bringe|bring)\b"
+)
+_RESTART_QUALIFIER_PATTERN = re.compile(
+    r"\b(neu|wieder|erneut|hoch|zurueck|zurück)\b"
+)
 
 
 AGENT_CAPABILITY_MAP = {
@@ -248,6 +267,7 @@ class BaseAgent(DynamicToolMixin):
         self._audit_step_logger: Optional[Callable[..., None]] = None
         self._active_phase = "idle"
         self._active_tool_name: Optional[str] = None
+        self._current_task_text: str = ""
 
         if self.use_screen_change_gate:
             log.info(f"Screen-Change-Gate AKTIV fuer {self.__class__.__name__}")
@@ -557,6 +577,15 @@ class BaseAgent(DynamicToolMixin):
 
         file_path, path_source = self._extract_primary_file_path(observation)
         if file_path and os.path.exists(file_path):
+            block_reason = desktop_open_block_reason(action_kind="file", target=file_path)
+            if block_reason:
+                log.warning(
+                    "Datei-Auto-Open blockiert: agent=%s path=%s reason=%s",
+                    getattr(self, "agent_type", "unknown"),
+                    file_path,
+                    block_reason,
+                )
+                return
             if path_source != "artifacts":
                 log.warning(
                     "Dateipfad-Fallback genutzt: agent=%s source=%s path=%s",
@@ -660,6 +689,40 @@ class BaseAgent(DynamicToolMixin):
     # MCP Tool Call (mit Loop-Detection und Lane-Integration)
     # ------------------------------------------------------------------
 
+    def _task_text_for_restart_guard(self) -> str:
+        text = str(getattr(self, "_current_task_text", "") or "")
+        for marker in (
+            "\n# SHELL-KONTEXT",
+            "\n# Bekannte Informationen (Agent-Blackboard):",
+            "\nWORKING_MEMORY_CONTEXT",
+        ):
+            if marker in text:
+                text = text.split(marker, 1)[0]
+        return text.strip().lower()
+
+    def _has_explicit_restart_intent(self) -> bool:
+        task_text = self._task_text_for_restart_guard()
+        if not task_text:
+            return False
+        if any(keyword in task_text for keyword in _RESTART_INTENT_KEYWORDS):
+            return True
+        if _RESTART_TARGET_PATTERN.search(task_text) and _RESTART_VERB_PATTERN.search(task_text):
+            return bool(_RESTART_QUALIFIER_PATTERN.search(task_text))
+        return False
+
+    def _check_restart_tool_intent(self, method: str, params: dict) -> str | None:
+        if method != "restart_timus":
+            return None
+        mode = str((params or {}).get("mode") or "full").strip().lower()
+        if mode == "status":
+            return None
+        if self._has_explicit_restart_intent():
+            return None
+        return (
+            "restart_timus ist ohne expliziten Neustart-Wunsch im aktuellen Task blockiert. "
+            "Diagnose- und Log-Leseaufgaben duerfen Timus nicht selbst neu starten."
+        )
+
     async def _call_tool(self, method: str, params: dict) -> dict:
         method, params = self._refine_tool_call(method, params)
         self._emit_live_status(
@@ -667,6 +730,19 @@ class BaseAgent(DynamicToolMixin):
             detail=str(params)[:120],
             tool_name=method,
         )
+
+        restart_guard_reason = self._check_restart_tool_intent(method, params)
+        if restart_guard_reason:
+            self._emit_live_status(
+                phase="tool_blocked",
+                detail=restart_guard_reason[:120],
+                tool_name=method,
+            )
+            return {
+                "error": restart_guard_reason,
+                "blocked_by_policy": True,
+                "blocked_reason": "restart_intent_missing",
+            }
 
         policy_decision = evaluate_policy_gate(
             gate="tool",
@@ -1750,6 +1826,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         self._run_started_at = time.time()
         self._active_tool_name = None
         self._memory_recall_last_meta = {}
+        self._current_task_text = task or ""
         self._emit_live_status(
             phase="start",
             detail=f"model={self.model} provider={self.provider.value}",

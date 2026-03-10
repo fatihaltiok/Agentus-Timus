@@ -4,7 +4,12 @@ import deal
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from tools.shell_tool.tool import _safe_shlex_split, _shell_argv, _systemctl_argv
+from tools.shell_tool.tool import (
+    _check_timus_service_lifecycle_command,
+    _safe_shlex_split,
+    _shell_argv,
+    _systemctl_argv,
+)
 
 
 @deal.pre(lambda command: bool(command.strip()))
@@ -22,6 +27,11 @@ def _contract_systemctl_status_argv(unit: str) -> list[str]:
 @deal.post(lambda r: isinstance(r, list))
 def _contract_safe_split(raw: str) -> list[str]:
     return _safe_shlex_split(raw)
+
+
+@deal.post(lambda r: r is None or "Timus-Services" in r)
+def _contract_timus_service_guard(raw: str) -> str | None:
+    return _check_timus_service_lifecycle_command(raw)
 
 
 @given(st.text(min_size=1, max_size=80).filter(lambda s: bool(s.strip())))
@@ -45,3 +55,13 @@ def test_hypothesis_systemctl_status_argv_shape(unit: str) -> None:
 def test_hypothesis_safe_split_never_crashes(raw: str) -> None:
     result = _contract_safe_split(raw)
     assert isinstance(result, list)
+
+
+@given(st.sampled_from([
+    "systemctl stop timus-mcp.service",
+    "sudo systemctl restart timus-dispatcher.service",
+    "/usr/bin/systemctl reload-or-restart timus-mcp.service timus-dispatcher.service",
+]))
+@settings(max_examples=20)
+def test_hypothesis_timus_service_lifecycle_commands_are_blocked(raw: str) -> None:
+    assert _contract_timus_service_guard(raw) is not None

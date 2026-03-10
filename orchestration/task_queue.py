@@ -4394,6 +4394,53 @@ class TaskQueue:
                 log.warning(f"Task [{task_id[:8]}] → endgültig fehlgeschlagen nach {new_count} Versuchen")
                 return False
 
+    def requeue(
+        self,
+        task_id: str,
+        *,
+        run_at: Optional[str] = None,
+        error: str = "",
+        metadata_update: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Legt einen bereits geclaimten Task ohne Retry-Erhöhung zurück in pending."""
+        if not task_id:
+            return False
+
+        now = datetime.now().isoformat()
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT metadata FROM tasks WHERE id=?",
+                (task_id,),
+            ).fetchone()
+            if not row:
+                return False
+
+            metadata_payload: Dict[str, Any] = {}
+            raw_meta = row["metadata"]
+            if raw_meta:
+                try:
+                    loaded = json.loads(raw_meta)
+                    if isinstance(loaded, dict):
+                        metadata_payload = loaded
+                except Exception:
+                    metadata_payload = {}
+            metadata_payload.update(metadata_update or {})
+            metadata_json = json.dumps(metadata_payload, ensure_ascii=True) if metadata_payload else None
+
+            conn.execute(
+                """UPDATE tasks
+                   SET status='pending', started_at=NULL, run_at=?, error=?, metadata=?
+                   WHERE id=?""",
+                (
+                    run_at,
+                    error[:500],
+                    metadata_json,
+                    task_id,
+                ),
+            )
+        log.info(f"Task [{task_id[:8]}] → zurück in pending (run_at={str(run_at or '')[:16]})")
+        return True
+
     def cancel(self, task_id: str) -> None:
         with self._conn() as conn:
             conn.execute(

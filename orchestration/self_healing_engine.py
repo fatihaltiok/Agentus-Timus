@@ -88,6 +88,169 @@ class SelfHealingEngine:
         self._system_stats_provider = system_stats_provider or self._default_system_stats_provider
         self._health_orchestrator = health_orchestrator or HealthOrchestrator(now_provider=self._now)
 
+    def _incident_phase_state_key(self, incident_key: str) -> str:
+        return f"incident_phase:{str(incident_key or '').strip().lower()}"
+
+    def _incident_memory_state_key(self, component: str, signal: str) -> str:
+        return f"incident_memory:{str(component or '').strip().lower()}:{str(signal or '').strip().lower()}"
+
+    def _get_incident_memory(self, *, component: str, signal: str) -> Dict[str, Any]:
+        state = self.queue.get_self_healing_runtime_state(self._incident_memory_state_key(component, signal)) or {}
+        metadata = state.get("metadata", {}) or {}
+        return {
+            "state": str(state.get("state_value", "new") or "new"),
+            "metadata": metadata,
+            "seen_count": int(metadata.get("seen_count", 0) or 0),
+            "resolved_count": int(metadata.get("resolved_count", 0) or 0),
+            "escalated_count": int(metadata.get("escalated_count", 0) or 0),
+            "failed_count": int(metadata.get("failed_count", 0) or 0),
+            "conservative_mode": bool(metadata.get("conservative_mode", False)),
+            "last_outcome": str(metadata.get("last_outcome", "") or ""),
+        }
+
+    def _record_incident_memory(
+        self,
+        *,
+        component: str,
+        signal: str,
+        incident_key: str,
+        outcome: str,
+        observed_at: Optional[str] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        key = self._incident_memory_state_key(component, signal)
+        current = self.queue.get_self_healing_runtime_state(key) or {}
+        current_meta = current.get("metadata", {}) or {}
+        seen_count = int(current_meta.get("seen_count", 0) or 0)
+        resolved_count = int(current_meta.get("resolved_count", 0) or 0)
+        escalated_count = int(current_meta.get("escalated_count", 0) or 0)
+        failed_count = int(current_meta.get("failed_count", 0) or 0)
+
+        if outcome == "opened":
+            seen_count += 1
+        elif outcome == "resolved":
+            resolved_count += 1
+        elif outcome == "escalated":
+            escalated_count += 1
+        elif outcome in {"failed", "blocked"}:
+            failed_count += 1
+
+        conservative_mode = (
+            failed_count >= 1
+            or escalated_count >= 1
+            or (seen_count >= 3 and resolved_count * 2 < seen_count)
+        )
+        state_value = "known_bad_pattern" if conservative_mode else ("known_pattern" if seen_count >= 2 else "new")
+        return self.queue.set_self_healing_runtime_state(
+            key,
+            state_value,
+            metadata_update={
+                "component": component,
+                "signal": signal,
+                "last_incident_key": incident_key,
+                "last_outcome": outcome,
+                "seen_count": seen_count,
+                "resolved_count": resolved_count,
+                "escalated_count": escalated_count,
+                "failed_count": failed_count,
+                "conservative_mode": conservative_mode,
+                **(extra or {}),
+            },
+            observed_at=observed_at,
+        )
+
+    def _is_verified_outage(self, *, component: str, signal: str, details: Dict[str, Any]) -> bool:
+        payload = details if isinstance(details, dict) else {}
+        if payload.get("ok") is False:
+            return True
+        if component == "mcp" and signal == "mcp_health":
+            if payload.get("status") in {"down", "unhealthy"}:
+                return True
+            if payload.get("error"):
+                return True
+        return False
+
+    def _set_incident_phase(
+        self,
+        *,
+        incident_key: str,
+        phase: str,
+        metadata_update: Optional[Dict[str, Any]] = None,
+        observed_at: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return self.queue.set_self_healing_runtime_state(
+            self._incident_phase_state_key(incident_key),
+            phase,
+            metadata_update=metadata_update or {},
+            observed_at=observed_at,
+        )
+
+    def _build_recovery_ladder_state(
+        self,
+        *,
+        incident_key: str,
+        component: str,
+        signal: str,
+        severity: str,
+        playbook_attempts: int,
+        max_attempts: int,
+        allow_playbook: bool,
+        retry_due: bool,
+        should_attempt: bool,
+        attempts_exhausted: bool,
+        verified_outage: bool,
+        conservative_mode: bool,
+        escalated: bool = False,
+    ) -> Dict[str, Any]:
+        if escalated:
+            return {
+                "phase": "blocked",
+                "stage": "human_escalation",
+                "reason": "open_incident_sla_breach",
+                "escalation_allowed": True,
+            }
+        if attempts_exhausted:
+            return {
+                "phase": "blocked",
+                "stage": "manual_review" if conservative_mode else ("restart_candidate" if verified_outage else "manual_review"),
+                "reason": "known_bad_pattern_budget_exhausted" if conservative_mode else "playbook_attempt_budget_exhausted",
+                "escalation_allowed": bool(verified_outage and not conservative_mode),
+            }
+        if not allow_playbook:
+            return {
+                "phase": "degraded",
+                "stage": "breaker_cooldown",
+                "reason": "circuit_breaker_open",
+                "escalation_allowed": False,
+            }
+        if conservative_mode and should_attempt:
+            return {
+                "phase": "degraded",
+                "stage": "known_bad_pattern",
+                "reason": "pattern_memory_conservative_mode",
+                "escalation_allowed": False,
+            }
+        if retry_due or (should_attempt and playbook_attempts >= 1):
+            return {
+                "phase": "recovering",
+                "stage": "fallback",
+                "reason": "recovery_retry_due" if retry_due else "playbook_retry",
+                "escalation_allowed": False,
+            }
+        if should_attempt:
+            return {
+                "phase": "recovering",
+                "stage": "diagnose",
+                "reason": "initial_playbook_dispatch",
+                "escalation_allowed": False,
+            }
+        return {
+            "phase": "degraded",
+            "stage": "observe",
+            "reason": "incident_open",
+            "escalation_allowed": False,
+        }
+
     def run_cycle(self) -> Dict[str, Any]:
         if not _self_healing_feature_enabled():
             return {
@@ -347,6 +510,8 @@ class SelfHealingEngine:
         except Exception:
             playbook_attempts = 0
         max_attempts = max(1, _env_int("AUTONOMY_SELF_HEALING_MAX_PLAYBOOK_ATTEMPTS", 3))
+        verified_outage = self._is_verified_outage(component=component, signal=signal, details=details)
+        incident_memory = self._get_incident_memory(component=component, signal=signal)
 
         breaker = self.queue.get_self_healing_circuit_breaker(breaker_key)
         allow_playbook = True
@@ -402,6 +567,55 @@ class SelfHealingEngine:
 
         should_attempt = bool(upsert.get("created") or upsert.get("reopened") or retry_due)
         attempts_exhausted = should_attempt and playbook_attempts >= max_attempts
+        ladder = self._build_recovery_ladder_state(
+            incident_key=incident_key,
+            component=component,
+            signal=signal,
+            severity=severity,
+            playbook_attempts=playbook_attempts,
+            max_attempts=max_attempts,
+            allow_playbook=allow_playbook,
+            retry_due=retry_due,
+            should_attempt=should_attempt,
+            attempts_exhausted=attempts_exhausted,
+            verified_outage=verified_outage,
+            conservative_mode=bool(incident_memory.get("conservative_mode")),
+        )
+        if upsert.get("created") or upsert.get("reopened"):
+            self._record_incident_memory(
+                component=component,
+                signal=signal,
+                incident_key=incident_key,
+                outcome="opened",
+                observed_at=now.isoformat(),
+                extra={
+                    "last_title": title,
+                    "verified_outage": verified_outage,
+                },
+            )
+        self._set_incident_phase(
+            incident_key=incident_key,
+            phase=ladder["phase"],
+            metadata_update={
+                "component": component,
+                "signal": signal,
+                "severity": severity,
+                "stage": ladder["stage"],
+                "reason": ladder["reason"],
+                "verified_outage": verified_outage,
+                "playbook_attempts": playbook_attempts,
+                "playbook_attempts_max": max_attempts,
+                "allow_playbook": allow_playbook,
+                "retry_due": retry_due,
+                "attempts_exhausted": attempts_exhausted,
+                "escalation_allowed": ladder["escalation_allowed"],
+                "incident_memory_state": incident_memory.get("state", "new"),
+                "incident_memory_seen_count": incident_memory.get("seen_count", 0),
+                "conservative_mode": bool(incident_memory.get("conservative_mode")),
+                "open_incident": True,
+            },
+            observed_at=now.isoformat(),
+        )
         if should_attempt:
             self._record_routing_decision(
                 summary=summary,
@@ -441,6 +655,10 @@ class SelfHealingEngine:
                         "playbook_attempts_max": max_attempts,
                         "breaker_key": breaker_key,
                         "retry_due": retry_due,
+                        "verified_outage": verified_outage,
+                        "recovery_phase": "recovering",
+                        "recovery_stage": "diagnose" if ladder["stage"] == "known_bad_pattern" else ladder["stage"],
+                        "incident_memory_state": incident_memory.get("state", "new"),
                         "route_lane": lane,
                         "route_class": route_class,
                         "route_reason": route_reason,
@@ -453,6 +671,14 @@ class SelfHealingEngine:
                 if action.get("blocked_by_policy"):
                     summary["policy_blocks"] += 1
                 summary["playbooks_failed"] += 1
+                self._record_incident_memory(
+                    component=component,
+                    signal=signal,
+                    incident_key=incident_key,
+                    outcome="failed" if not action.get("blocked_by_policy") else "blocked",
+                    observed_at=now.isoformat(),
+                    extra={"last_error": str(action.get("error") or "unknown")},
+                )
                 self.queue.upsert_self_healing_incident(
                     incident_key=incident_key,
                     component=component,
@@ -465,6 +691,9 @@ class SelfHealingEngine:
                         "playbook_attempts": playbook_attempts + 1,
                         "playbook_attempts_max": max_attempts,
                         "breaker_key": breaker_key,
+                        "verified_outage": verified_outage,
+                        "recovery_phase": "degraded",
+                        "recovery_stage": "policy_blocked" if action.get("blocked_by_policy") else "dispatch_failed",
                         "route_lane": lane,
                         "route_class": route_class,
                         "route_reason": route_reason,
@@ -486,6 +715,10 @@ class SelfHealingEngine:
                     "playbook_attempts_max": max_attempts,
                     "attempts_exhausted": True,
                     "breaker_key": breaker_key,
+                    "verified_outage": verified_outage,
+                    "recovery_phase": "blocked",
+                    "recovery_stage": ladder["stage"],
+                    "incident_memory_state": incident_memory.get("state", "new"),
                     "route_lane": lane,
                     "route_class": route_class,
                     "route_reason": route_reason,
@@ -493,6 +726,14 @@ class SelfHealingEngine:
                 recovery_action="playbook_attempt_budget_exhausted",
                 recovery_status="blocked",
                 observed_at=now.isoformat(),
+            )
+            self._record_incident_memory(
+                component=component,
+                signal=signal,
+                incident_key=incident_key,
+                outcome="blocked",
+                observed_at=now.isoformat(),
+                extra={"last_reason": "attempt_budget_exhausted"},
             )
         elif should_attempt and not allow_playbook:
             summary["playbooks_suppressed"] += 1
@@ -507,6 +748,10 @@ class SelfHealingEngine:
                     "playbook_attempts_max": max_attempts,
                     "breaker_key": breaker_key,
                     "suppressed": True,
+                    "verified_outage": verified_outage,
+                    "recovery_phase": "degraded",
+                    "recovery_stage": ladder["stage"],
+                    "incident_memory_state": incident_memory.get("state", "new"),
                     "route_lane": lane,
                     "route_class": route_class,
                     "route_reason": route_reason,
@@ -589,6 +834,8 @@ class SelfHealingEngine:
                 "playbook_attempts": 0,
                 "attempts_exhausted": False,
                 "escalated": False,
+                "recovery_phase": "ok",
+                "recovery_stage": "resolved",
             }
             if details:
                 resolved_details.update(details)
@@ -602,6 +849,24 @@ class SelfHealingEngine:
             )
             if ok:
                 summary["incidents_resolved"] += 1
+                self._record_incident_memory(
+                    component=component,
+                    signal=signal,
+                    incident_key=incident_key,
+                    outcome="resolved",
+                    observed_at=self._now().isoformat(),
+                    extra={"last_reason": str((details or {}).get("resolved_by") or "auto_recovered")},
+                )
+                self._set_incident_phase(
+                    incident_key=incident_key,
+                    phase="ok",
+                    metadata_update={
+                        "stage": "resolved",
+                        "reason": str((details or {}).get("resolved_by") or "auto_recovered"),
+                        "open_incident": False,
+                    },
+                    observed_at=self._now().isoformat(),
+                )
 
         breaker_result = self.queue.record_self_healing_circuit_breaker_result(
             breaker_key=breaker_key,
@@ -684,6 +949,24 @@ class SelfHealingEngine:
             details = details_raw if isinstance(details_raw, dict) else {}
             if bool(details.get("escalated")):
                 continue
+            playbook_attempts = int(details.get("playbook_attempts", 0) or 0)
+            max_attempts = max(1, int(details.get("playbook_attempts_max", _env_int("AUTONOMY_SELF_HEALING_MAX_PLAYBOOK_ATTEMPTS", 3)) or 0))
+            verified_outage = bool(details.get("verified_outage"))
+            if not verified_outage and playbook_attempts < max_attempts:
+                self._set_incident_phase(
+                    incident_key=str(incident.get("incident_key") or ""),
+                    phase="degraded",
+                    metadata_update={
+                        "stage": "observe",
+                        "reason": "awaiting_verified_outage_or_attempt_exhaustion",
+                        "playbook_attempts": playbook_attempts,
+                        "playbook_attempts_max": max_attempts,
+                        "verified_outage": verified_outage,
+                        "open_incident": True,
+                    },
+                    observed_at=now.isoformat(),
+                )
+                continue
             if self._escalate_open_incident(summary=summary, incident=incident, age_minutes=age_minutes):
                 escalated += 1
 
@@ -745,6 +1028,14 @@ class SelfHealingEngine:
 
         if not action.get("ok"):
             summary["playbooks_failed"] += 1
+            self._record_incident_memory(
+                component=component,
+                signal=signal,
+                incident_key=incident_key,
+                outcome="failed",
+                observed_at=self._now().isoformat(),
+                extra={"last_reason": "escalation_queue_task_failed"},
+            )
             self.queue.upsert_self_healing_incident(
                 incident_key=incident_key,
                 component=component,
@@ -765,6 +1056,26 @@ class SelfHealingEngine:
         summary["incidents_escalated"] += 1
         summary["escalation_tasks_created"] += 1
         summary["playbooks_triggered"] += 1
+        self._record_incident_memory(
+            component=component,
+            signal=signal,
+            incident_key=incident_key,
+            outcome="escalated",
+            observed_at=self._now().isoformat(),
+            extra={"last_reason": "open_incident_sla_breach"},
+        )
+        self._set_incident_phase(
+            incident_key=incident_key,
+            phase="blocked",
+            metadata_update={
+                "component": component,
+                "signal": signal,
+                "stage": "human_escalation",
+                "reason": "open_incident_sla_breach",
+                "open_incident": True,
+            },
+            observed_at=self._now().isoformat(),
+        )
         self.queue.upsert_self_healing_incident(
             incident_key=incident_key,
             component=component,
@@ -776,6 +1087,8 @@ class SelfHealingEngine:
                 "escalated_at": self._now().isoformat(),
                 "escalation_task_id": action.get("task_id"),
                 "escalation_age_minutes": round(age_minutes, 2),
+                "recovery_phase": "blocked",
+                "recovery_stage": "human_escalation",
                 "route_lane": lane,
                 "route_class": route_class,
                 "route_reason": route_reason,
