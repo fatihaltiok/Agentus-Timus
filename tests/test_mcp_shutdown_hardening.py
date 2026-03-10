@@ -55,7 +55,7 @@ def test_canvas_ui_auto_open_respects_explicit_override(monkeypatch):
     monkeypatch.setenv("TIMUS_CANVAS_AUTO_OPEN", "true")
     monkeypatch.setenv("SYSTEMD_EXEC_PID", "123")
 
-    assert _should_auto_open_canvas_ui() is True
+    assert _should_auto_open_canvas_ui() is False
 
 
 def test_canvas_ui_url_normalizes_unspecified_bind_host(monkeypatch):

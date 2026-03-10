@@ -20,9 +20,22 @@ def test_build_canvas_ui_html_contains_core_sections():
     assert "selectedCanvasId = items[0].id" in html
     assert "API &amp; Kostenkontrolle" in html
     assert "/status/snapshot" in html
+    assert "/files/recent" in html
+    assert "/files/download" in html
+    assert "/voice/synthesize" in html
+    assert "Uploads & Dokumente" in html
+    assert "Auto-Vorlesen" in html
+    assert "mobileVoiceName" in html
+    assert "liveConnectionChip" in html
+    assert "refreshMobileOperationalData" in html
+    assert "mobileHeroRefreshBtn" in html
+    assert "mobile-bottom-nav" in html
 
 
 def test_canvas_ui_route_registered():
     paths = {route.path for route in app.routes}
     assert "/canvas/ui" in paths
     assert "/status/snapshot" in paths
+    assert "/files/recent" in paths
+    assert "/files/download" in paths
+    assert "/voice/synthesize" in paths

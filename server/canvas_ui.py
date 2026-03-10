@@ -194,6 +194,56 @@ _TEMPLATE = r"""<!doctype html>
       letter-spacing: 0.5px;
     }
     .topbar .poll-info span { color: var(--text2); }
+    .live-connection-chip {
+      min-height: 26px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(0,212,240,0.16);
+      background: rgba(0,212,240,0.06);
+      color: var(--text2);
+      font-size: 10px;
+      letter-spacing: 0.9px;
+      text-transform: uppercase;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      flex-shrink: 0;
+    }
+    .live-connection-chip::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--cyan);
+      box-shadow: 0 0 10px rgba(0,212,240,0.22);
+    }
+    .live-connection-chip.ok {
+      border-color: rgba(0,224,154,0.18);
+      background: rgba(0,224,154,0.06);
+      color: var(--brand);
+    }
+    .live-connection-chip.ok::before {
+      background: var(--brand);
+      box-shadow: 0 0 10px rgba(0,224,154,0.24);
+    }
+    .live-connection-chip.warn {
+      border-color: rgba(251,191,36,0.22);
+      background: rgba(251,191,36,0.07);
+      color: var(--warn);
+    }
+    .live-connection-chip.warn::before {
+      background: var(--warn);
+      box-shadow: 0 0 10px rgba(251,191,36,0.24);
+    }
+    .live-connection-chip.error {
+      border-color: rgba(244,63,94,0.24);
+      background: rgba(244,63,94,0.08);
+      color: var(--err);
+    }
+    .live-connection-chip.error::before {
+      background: var(--err);
+      box-shadow: 0 0 10px rgba(244,63,94,0.22);
+    }
 
     /* Thinking-LED (Topbar) */
     .thinking-led {
@@ -1241,13 +1291,750 @@ _TEMPLATE = r"""<!doctype html>
       z-index: 5;
     }
 
+    /* ── MOBILE CONSOLE LAYER ───────────────────────────────────── */
+    .mobile-home-hero,
+    .mobile-bottom-nav {
+      display: none;
+    }
+
+    .mobile-home-hero {
+      margin: 12px 12px 0;
+      padding: 14px;
+      border-radius: 18px;
+      border: 1px solid rgba(0, 224, 154, 0.14);
+      background:
+        radial-gradient(circle at top left, rgba(0, 224, 154, 0.14), transparent 38%),
+        linear-gradient(145deg, rgba(10, 20, 32, 0.96) 0%, rgba(5, 10, 18, 0.98) 100%);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.03),
+        0 18px 48px rgba(0,0,0,0.42),
+        0 0 24px rgba(0,224,154,0.08);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      flex-shrink: 0;
+    }
+    .mobile-home-hero .hero-kicker {
+      font-size: 9px;
+      letter-spacing: 2.2px;
+      text-transform: uppercase;
+      color: var(--text3);
+      margin-bottom: 8px;
+    }
+    .mobile-hero-top {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .mobile-session-head {
+      min-width: 0;
+      flex: 1;
+    }
+    .mobile-session-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text);
+      line-height: 1.25;
+      margin-bottom: 4px;
+    }
+    .mobile-session-meta {
+      font-size: 11px;
+      color: var(--text2);
+      line-height: 1.45;
+    }
+    .mobile-score-orb-wrap {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    .mobile-score-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+    }
+    .mobile-score-value {
+      font-size: 30px;
+      line-height: 1;
+      font-weight: 700;
+      color: var(--brand);
+      text-shadow: 0 0 18px rgba(0,224,154,0.24);
+    }
+    .mobile-score-caption {
+      font-size: 10px;
+      letter-spacing: 1.6px;
+      text-transform: uppercase;
+      color: var(--text3);
+    }
+    .mobile-score-level {
+      align-self: flex-start;
+      padding: 5px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(0, 224, 154, 0.18);
+      background: rgba(0, 224, 154, 0.08);
+      font-size: 10px;
+      color: var(--text2);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .mobile-voice-orb {
+      width: 62px;
+      height: 62px;
+      flex-shrink: 0;
+      border: 1px solid rgba(0,224,154,0.22);
+      border-radius: 50%;
+      background:
+        radial-gradient(circle at 35% 35%, rgba(210,255,240,0.45) 0%, rgba(0,224,154,0.24) 34%, rgba(0,90,64,0.42) 100%);
+      box-shadow:
+        0 0 0 1px rgba(0,224,154,0.06),
+        0 0 22px rgba(0,224,154,0.22),
+        inset 0 0 18px rgba(0,224,154,0.10);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      cursor: pointer;
+      transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+    }
+    .mobile-voice-orb:hover {
+      transform: translateY(-1px);
+      border-color: rgba(0,224,154,0.35);
+      box-shadow:
+        0 0 0 1px rgba(0,224,154,0.10),
+        0 0 28px rgba(0,224,154,0.28),
+        inset 0 0 18px rgba(0,224,154,0.14);
+    }
+    .mobile-voice-orb::before {
+      content: "";
+      position: absolute;
+      inset: -8px;
+      border-radius: 50%;
+      border: 1px solid rgba(0,224,154,0.18);
+      opacity: 0;
+      transform: scale(0.88);
+    }
+    .mobile-voice-orb.listening,
+    .mobile-voice-orb.speaking,
+    .mobile-voice-orb.thinking {
+      animation: mobile-orb-glow 1.5s ease-in-out infinite;
+    }
+    .mobile-voice-orb.listening::before,
+    .mobile-voice-orb.speaking::before,
+    .mobile-voice-orb.thinking::before {
+      opacity: 1;
+      animation: mobile-orb-ring 1.5s ease-out infinite;
+    }
+    .mobile-voice-orb.listening {
+      border-color: rgba(0,224,154,0.55);
+      box-shadow: 0 0 30px rgba(0,224,154,0.32), inset 0 0 20px rgba(0,224,154,0.16);
+    }
+    .mobile-voice-orb.speaking {
+      border-color: rgba(0,212,240,0.55);
+      box-shadow: 0 0 30px rgba(0,212,240,0.30), inset 0 0 20px rgba(0,212,240,0.14);
+    }
+    .mobile-voice-orb.thinking {
+      border-color: rgba(167,139,250,0.5);
+      box-shadow: 0 0 30px rgba(167,139,250,0.24), inset 0 0 20px rgba(167,139,250,0.12);
+    }
+    .mobile-voice-orb.error {
+      border-color: rgba(244,63,94,0.55);
+      box-shadow: 0 0 30px rgba(244,63,94,0.24), inset 0 0 20px rgba(244,63,94,0.12);
+    }
+    @keyframes mobile-orb-glow {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.035); }
+    }
+    @keyframes mobile-orb-ring {
+      0%   { transform: scale(0.88); opacity: 0.62; }
+      100% { transform: scale(1.18); opacity: 0; }
+    }
+    .mobile-quick-pills {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .mobile-hero-actions {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .mobile-hero-action {
+      min-height: 38px;
+      padding: 8px 10px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.06);
+      background: rgba(255,255,255,0.02);
+      color: var(--text2);
+      font-size: 11px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      box-shadow: none;
+      transform: none;
+    }
+    .mobile-hero-action.active {
+      border-color: rgba(0,224,154,0.18);
+      background: rgba(0,224,154,0.08);
+      color: var(--brand);
+    }
+    .mobile-pill {
+      min-height: 48px;
+      padding: 9px 10px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: rgba(6, 11, 18, 0.78);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 3px;
+    }
+    .mobile-pill-label {
+      font-size: 9px;
+      letter-spacing: 1.4px;
+      text-transform: uppercase;
+      color: var(--text3);
+    }
+    .mobile-pill-value {
+      font-size: 12px;
+      color: var(--text);
+      font-weight: 600;
+      line-height: 1.35;
+    }
+    .mobile-pill.ok    { border-color: rgba(0,224,154,0.22); box-shadow: inset 0 0 0 1px rgba(0,224,154,0.05); }
+    .mobile-pill.warn  { border-color: rgba(251,191,36,0.26); box-shadow: inset 0 0 0 1px rgba(251,191,36,0.06); }
+    .mobile-pill.error { border-color: rgba(244,63,94,0.26); box-shadow: inset 0 0 0 1px rgba(244,63,94,0.06); }
+    .mobile-pill.info  { border-color: rgba(0,212,240,0.24); box-shadow: inset 0 0 0 1px rgba(0,212,240,0.05); }
+    .mobile-status-shell {
+      display: none;
+    }
+    .mobile-files-shell {
+      display: none;
+      padding: 12px 12px 0;
+    }
+    .mobile-files-actions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .mobile-file-action {
+      min-height: 46px;
+      padding: 9px 10px;
+      border-radius: 14px;
+      border: 1px solid rgba(0,224,154,0.12);
+      background: rgba(255,255,255,0.02);
+      color: var(--text);
+      text-align: left;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 3px;
+    }
+    .mobile-file-action .k {
+      font-size: 9px;
+      color: var(--text3);
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+    }
+    .mobile-file-action .v {
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1.35;
+    }
+    .mobile-files-list {
+      display: grid;
+      gap: 10px;
+    }
+    .mobile-file-card {
+      padding: 12px;
+      border-radius: 16px;
+      border: 1px solid rgba(0,224,154,0.10);
+      background: linear-gradient(145deg, rgba(9,17,28,0.95) 0%, rgba(5,10,18,0.985) 100%);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.02),
+        0 14px 26px rgba(0,0,0,0.28);
+    }
+    .mobile-file-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    .mobile-file-name {
+      font-size: 12px;
+      color: var(--text);
+      font-weight: 600;
+      line-height: 1.4;
+      word-break: break-word;
+    }
+    .mobile-file-badge {
+      flex-shrink: 0;
+      padding: 4px 8px;
+      border-radius: 999px;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text2);
+      border: 1px solid rgba(255,255,255,0.06);
+      background: rgba(255,255,255,0.03);
+    }
+    .mobile-file-badge.upload { color: var(--cyan); border-color: rgba(0,212,240,0.18); background: rgba(0,212,240,0.07); }
+    .mobile-file-badge.result { color: var(--brand); border-color: rgba(0,224,154,0.18); background: rgba(0,224,154,0.07); }
+    .mobile-file-meta {
+      font-size: 10px;
+      color: var(--text3);
+      line-height: 1.5;
+      margin-bottom: 10px;
+    }
+    .mobile-file-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .mobile-file-actions a,
+    .mobile-file-actions button {
+      min-height: 36px;
+      padding: 7px 11px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.06);
+      background: rgba(255,255,255,0.02);
+      color: var(--text2);
+      font-size: 11px;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: none;
+      transform: none;
+    }
+    .mobile-file-actions a:hover,
+    .mobile-file-actions button:hover {
+      color: var(--brand);
+      border-color: rgba(0,224,154,0.18);
+      box-shadow: none;
+      transform: none;
+    }
+    .mobile-status-shell .status-stack {
+      display: grid;
+      gap: 12px;
+      padding: 0 12px 12px;
+    }
+    .mobile-status-card {
+      border-radius: 16px;
+      border: 1px solid rgba(0,224,154,0.12);
+      background: linear-gradient(145deg, rgba(9,17,28,0.95) 0%, rgba(5,10,18,0.985) 100%);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.02),
+        0 14px 30px rgba(0,0,0,0.34);
+      padding: 13px 14px;
+    }
+    .mobile-status-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .mobile-status-kicker {
+      font-size: 9px;
+      letter-spacing: 1.7px;
+      text-transform: uppercase;
+      color: var(--text3);
+    }
+    .mobile-status-title {
+      font-size: 15px;
+      color: var(--text);
+      font-weight: 600;
+      line-height: 1.2;
+      margin-top: 3px;
+    }
+    .mobile-status-badge {
+      align-self: flex-start;
+      padding: 5px 10px;
+      border-radius: 999px;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      border: 1px solid var(--border);
+      color: var(--text2);
+      background: rgba(255,255,255,0.03);
+    }
+    .mobile-status-badge.ok { color: var(--brand); border-color: rgba(0,224,154,0.22); background: rgba(0,224,154,0.08); }
+    .mobile-status-badge.warn { color: var(--warn); border-color: rgba(251,191,36,0.24); background: rgba(251,191,36,0.08); }
+    .mobile-status-badge.error { color: var(--err); border-color: rgba(244,63,94,0.26); background: rgba(244,63,94,0.08); }
+    .mobile-status-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .mobile-status-metric {
+      padding: 10px 11px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.04);
+      background: rgba(255,255,255,0.02);
+    }
+    .mobile-status-metric .k {
+      display: block;
+      font-size: 9px;
+      color: var(--text3);
+      letter-spacing: 1.1px;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .mobile-status-metric .v {
+      display: block;
+      font-size: 12px;
+      color: var(--text);
+      line-height: 1.35;
+      font-weight: 600;
+    }
+    .mobile-status-list {
+      display: grid;
+      gap: 8px;
+    }
+    .mobile-status-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 9px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+    }
+    .mobile-status-row:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+    .mobile-status-row .name {
+      font-size: 12px;
+      color: var(--text);
+      font-weight: 600;
+      line-height: 1.35;
+    }
+    .mobile-status-row .meta {
+      margin-top: 3px;
+      font-size: 10px;
+      color: var(--text3);
+      line-height: 1.45;
+    }
+    .mobile-status-row .state {
+      flex-shrink: 0;
+      font-size: 10px;
+      color: var(--text2);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.06);
+      background: rgba(255,255,255,0.03);
+    }
+    .mobile-status-row .state.ok { color: var(--brand); border-color: rgba(0,224,154,0.18); background: rgba(0,224,154,0.08); }
+    .mobile-status-row .state.warn { color: var(--warn); border-color: rgba(251,191,36,0.18); background: rgba(251,191,36,0.08); }
+    .mobile-status-row .state.error { color: var(--err); border-color: rgba(244,63,94,0.18); background: rgba(244,63,94,0.08); }
+    .mobile-chat-summary {
+      display: none;
+      padding: 10px 12px;
+      gap: 8px;
+      background: linear-gradient(180deg, rgba(11,21,33,0.92) 0%, rgba(7,14,22,0.88) 100%);
+      border-bottom: 1px solid rgba(0,224,154,0.08);
+    }
+    .mobile-chat-summary-card {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      width: 100%;
+    }
+    .mobile-chat-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      width: 100%;
+      margin-top: 8px;
+    }
+    .mobile-chat-chip {
+      padding: 9px 10px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.05);
+      background: rgba(255,255,255,0.02);
+    }
+    .mobile-chat-chip .k {
+      display: block;
+      font-size: 9px;
+      color: var(--text3);
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      margin-bottom: 3px;
+    }
+    .mobile-chat-chip .v {
+      display: block;
+      font-size: 12px;
+      color: var(--text);
+      line-height: 1.35;
+      font-weight: 600;
+    }
+    .mobile-chat-action {
+      min-height: 36px;
+      padding: 8px 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.06);
+      background: rgba(255,255,255,0.02);
+      color: var(--text2);
+      font-size: 11px;
+      letter-spacing: 0.4px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      box-shadow: none;
+      transform: none;
+    }
+    .mobile-chat-action.active {
+      color: var(--brand);
+      border-color: rgba(0,224,154,0.20);
+      background: rgba(0,224,154,0.08);
+    }
+
+    .mobile-bottom-nav {
+      position: fixed;
+      left: 14px;
+      right: 14px;
+      bottom: calc(12px + env(safe-area-inset-bottom));
+      height: 74px;
+      padding: 8px 10px;
+      border-radius: 24px;
+      border: 1px solid rgba(0,224,154,0.14);
+      background: linear-gradient(180deg, rgba(8,14,24,0.97) 0%, rgba(5,10,18,0.985) 100%);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.03),
+        0 18px 40px rgba(0,0,0,0.5),
+        0 0 30px rgba(0,224,154,0.08);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      z-index: 50;
+      display: none;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 8px;
+      align-items: center;
+    }
+    .mobile-nav-btn {
+      min-width: 0;
+      height: 58px;
+      padding: 8px 6px;
+      border-radius: 18px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--text3);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      font-size: 10px;
+      letter-spacing: 0.6px;
+      text-transform: uppercase;
+      box-shadow: none;
+      transform: none;
+    }
+    .mobile-nav-btn:hover {
+      transform: none;
+      box-shadow: none;
+      color: var(--text2);
+    }
+    .mobile-nav-btn .mobile-nav-icon {
+      font-size: 18px;
+      line-height: 1;
+    }
+    .mobile-nav-btn.active {
+      color: var(--brand);
+      border-color: rgba(0,224,154,0.16);
+      background: rgba(0,224,154,0.08);
+      text-shadow: 0 0 14px rgba(0,224,154,0.18);
+    }
+    .mobile-nav-btn.voice-nav {
+      background: radial-gradient(circle at top, rgba(0,224,154,0.18), rgba(0,120,90,0.08) 70%);
+      border-color: rgba(0,224,154,0.18);
+      color: var(--text);
+    }
+    .mobile-nav-btn.voice-nav.active {
+      color: var(--brand);
+      background: radial-gradient(circle at top, rgba(0,224,154,0.24), rgba(0,120,90,0.1) 72%);
+    }
+    .mobile-nav-orb {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 35% 35%, rgba(220,255,245,0.95) 0%, rgba(0,224,154,0.8) 45%, rgba(0,140,95,0.9) 100%);
+      box-shadow: 0 0 16px rgba(0,224,154,0.30);
+    }
+
     /* ── RESPONSIVE ──────────────────────────────────────────────── */
     @media (max-width: 1280px) { .shell { grid-template-columns: 225px 1fr 5px 330px; } }
     @media (max-width: 960px)  {
-      .shell { grid-template-columns: 1fr; grid-template-rows: auto 1fr 280px; }
-      .main-area { border-right: none; }
+      body {
+        overflow: hidden;
+      }
+      .topbar {
+        height: 54px;
+        padding: 0 14px;
+      }
+      .topbar h1 {
+        font-size: 12px;
+        letter-spacing: 3px;
+      }
+      .topbar .poll-info,
+      #togglePollingBtn {
+        display: none;
+      }
+      .shell {
+        display: block;
+        position: relative;
+        flex: 1;
+        min-height: 0;
+      }
+      .sidebar,
+      .main-area,
+      .chat-panel {
+        display: none;
+        height: 100%;
+        min-height: 0;
+      }
       .resize-handle { display: none; }
-      .chat-panel { border-top: 1px solid var(--border); }
+      body[data-mobile-section="files"] .sidebar { display: block; }
+      body[data-mobile-section="home"] .main-area,
+      body[data-mobile-section="status"] .main-area { display: flex; }
+      body[data-mobile-section="chat"] .chat-panel { display: flex; }
+      .sidebar {
+        border-right: none;
+        background: linear-gradient(180deg, rgba(6,12,20,0.98) 0%, rgba(4,8,14,0.99) 100%);
+      }
+      .sidebar-scroll {
+        padding-bottom: 112px;
+      }
+      body[data-mobile-section="files"] .mobile-files-shell {
+        display: block;
+      }
+      body[data-mobile-section="files"] .sidebar-scroll > :not(.mobile-files-shell) {
+        display: none;
+      }
+      .main-area {
+        border-right: none;
+        background: var(--bg-base);
+      }
+      body[data-mobile-section="status"] .tab-bar {
+        display: flex;
+      }
+      body[data-mobile-section="status"] #tab-canvas-btn,
+      body[data-mobile-section="status"] #tab-kamera-btn,
+      body[data-mobile-section="status"] #tab-flow-btn {
+        display: none;
+      }
+      body[data-mobile-section="home"] .tab-bar {
+        display: none;
+      }
+      .mobile-home-hero {
+        display: block;
+      }
+      body:not([data-mobile-section="home"]) .mobile-home-hero {
+        display: none;
+      }
+      .tab-bar {
+        padding: 0 12px;
+        overflow-x: auto;
+        overflow-y: hidden;
+        gap: 4px;
+        scrollbar-width: none;
+      }
+      .tab-bar::-webkit-scrollbar { display: none; }
+      .tab-btn {
+        flex: 0 0 auto;
+        padding: 0 14px;
+        height: 44px;
+        font-size: 10px;
+      }
+      .cy-toolbar {
+        padding: 8px 12px;
+        gap: 6px;
+        overflow-x: auto;
+      }
+      .cy-toolbar select,
+      .cy-toolbar button {
+        flex: 0 0 auto;
+      }
+      #voiceCanvas {
+        width: 300px;
+        height: 300px;
+        left: 50%;
+        top: 48%;
+        transform: translate(-50%, -50%);
+        opacity: 0.85;
+      }
+      .chat-panel {
+        border-top: none;
+        background: linear-gradient(180deg, rgba(8,14,22,0.98) 0%, rgba(4,8,14,0.995) 100%);
+      }
+      .mobile-chat-summary {
+        display: flex;
+      }
+      .chat-header {
+        height: 52px;
+        padding: 0 16px;
+        font-size: 10px;
+      }
+      .chat-messages {
+        padding: 14px 14px 12px;
+      }
+      .chat-input-bar {
+        position: sticky;
+        bottom: 0;
+        gap: 8px;
+        padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+      }
+      #chatInput {
+        min-height: 42px;
+        font-size: 14px;
+        padding: 9px 12px;
+      }
+      .upload-label,
+      .mic-btn {
+        width: 42px;
+        height: 42px;
+      }
+      .mobile-bottom-nav {
+        display: grid;
+      }
+      .sidebar-scroll,
+      .tab-content,
+      .chat-messages,
+      .autonomy-view {
+        padding-bottom: max(100px, calc(88px + env(safe-area-inset-bottom)));
+      }
+      body[data-mobile-section="status"] .mobile-status-shell {
+        display: block;
+      }
+      body[data-mobile-section="status"] .auto-grid,
+      body[data-mobile-section="status"] #triggersPanel,
+      body[data-mobile-section="status"] #goalTreePanel,
+      body[data-mobile-section="status"] #improvementPanel,
+      body[data-mobile-section="status"] #plansPanel,
+      body[data-mobile-section="status"] #goalsList,
+      body[data-mobile-section="status"] #healingPanel,
+      body[data-mobile-section="status"] #apiCostPanel,
+      body[data-mobile-section="status"] .scorecard-header,
+      body[data-mobile-section="status"] #pillarBars,
+      body[data-mobile-section="status"] .setting-row {
+        display: none;
+      }
+      body[data-mobile-section="status"] .auto-card {
+        display: none;
+      }
+      body[data-mobile-section="status"] .autonomy-view {
+        padding: 12px 0 0;
+      }
     }
   </style>
 </head>
@@ -1259,6 +2046,7 @@ _TEMPLATE = r"""<!doctype html>
     <h1>Timus Canvas</h1>
     <span id="thinkingLabel"></span>
     <div class="spacer"></div>
+    <span class="live-connection-chip ok" id="liveConnectionChip">live</span>
     <span class="poll-info">
       Poll: <span id="pollState">on</span> · <span id="pollMs">__POLL_MS__</span> ms
     </span>
@@ -1270,6 +2058,30 @@ _TEMPLATE = r"""<!doctype html>
     <!-- ── SIDEBAR ─────────────────────────────────── -->
     <aside class="sidebar">
       <div class="sidebar-scroll">
+        <div class="mobile-files-shell">
+          <div class="mobile-status-card" style="margin-bottom:12px;">
+            <div class="mobile-status-head">
+              <div>
+                <div class="mobile-status-kicker">Dateien</div>
+                <div class="mobile-status-title">Uploads & Dokumente</div>
+              </div>
+              <span class="mobile-status-badge" id="mobileFilesBadge">lade…</span>
+            </div>
+            <div class="mobile-files-actions">
+              <button class="mobile-file-action" onclick="triggerMobileUpload()">
+                <span class="k">Upload</span>
+                <span class="v">Datei hochladen</span>
+              </button>
+              <button class="mobile-file-action" onclick="setMobileSection('chat')">
+                <span class="k">Chat</span>
+                <span class="v">Mit Datei arbeiten</span>
+              </button>
+            </div>
+            <div class="mobile-files-list" id="mobileFilesList">
+              <div class="empty">Lade…</div>
+            </div>
+          </div>
+        </div>
 
         <div class="section-label">Agenten</div>
         <div id="agentLeds"></div>
@@ -1340,6 +2152,54 @@ _TEMPLATE = r"""<!doctype html>
       <div class="tab-content active" id="tab-canvas" style="position:relative;">
         <!-- Voice Pulse Canvas (zentriert, pointer-events:none) -->
         <canvas id="voiceCanvas" width="504" height="504"></canvas>
+        <div class="mobile-home-hero" id="mobileHomeHero">
+          <div class="hero-kicker">Timus Mobile Console</div>
+          <div class="mobile-hero-top">
+            <div class="mobile-session-head">
+              <div class="mobile-session-title" id="mobileSessionTitle">Timus Session Canvas</div>
+              <div class="mobile-session-meta" id="mobileSessionMeta">Lade aktuellen Status…</div>
+            </div>
+          </div>
+          <div class="mobile-score-orb-wrap">
+            <div class="mobile-score-stack">
+              <div class="mobile-score-value" id="mobileAutonomyScore">–</div>
+              <div class="mobile-score-caption">Autonomy Score</div>
+              <div class="mobile-score-level" id="mobileAutonomyLevel">lade…</div>
+            </div>
+            <button class="mobile-voice-orb" id="mobileVoiceOrbBtn" title="Voice starten oder stoppen">
+              <span class="mobile-nav-orb"></span>
+            </button>
+          </div>
+          <div class="mobile-quick-pills">
+            <div class="mobile-pill info" id="mobilePillMcp">
+              <span class="mobile-pill-label">MCP</span>
+              <span class="mobile-pill-value">lade…</span>
+            </div>
+            <div class="mobile-pill info" id="mobilePillDispatcher">
+              <span class="mobile-pill-label">Dispatcher</span>
+              <span class="mobile-pill-value">lade…</span>
+            </div>
+            <div class="mobile-pill info" id="mobilePillOps">
+              <span class="mobile-pill-label">Ops Gate</span>
+              <span class="mobile-pill-value">lade…</span>
+            </div>
+            <div class="mobile-pill info" id="mobilePillBudget">
+              <span class="mobile-pill-label">Budget</span>
+              <span class="mobile-pill-value">lade…</span>
+            </div>
+          </div>
+          <div class="mobile-hero-actions">
+            <button class="mobile-hero-action active" id="mobileHeroRefreshBtn" onclick="refreshMobileOperationalData()">
+              Refresh
+            </button>
+            <button class="mobile-hero-action" id="mobileHeroAlertsBtn" onclick="setMobileSection('status')">
+              Alerts
+            </button>
+            <button class="mobile-hero-action" id="mobileHeroFilesBtn" onclick="setMobileSection('files')">
+              Dateien
+            </button>
+          </div>
+        </div>
         <div class="cy-toolbar">
           <span style="color:var(--text3);font-size:10px;letter-spacing:1px;text-transform:uppercase;">Layout</span>
           <select id="cyLayout" onchange="applyCyLayout()">
@@ -1439,6 +2299,63 @@ _TEMPLATE = r"""<!doctype html>
       <!-- Autonomy Tab -->
       <div class="tab-content" id="tab-autonomy">
         <div class="autonomy-view">
+          <div class="mobile-status-shell">
+            <div class="status-stack">
+              <section class="mobile-status-card">
+                <div class="mobile-status-head">
+                  <div>
+                    <div class="mobile-status-kicker">Operations</div>
+                    <div class="mobile-status-title">Systemstatus</div>
+                  </div>
+                  <span class="mobile-status-badge" id="mobileStatusBadge">lade…</span>
+                </div>
+                <div class="mobile-status-grid">
+                  <div class="mobile-status-metric">
+                    <span class="k">MCP</span>
+                    <span class="v" id="mobileStatusMcp">lade…</span>
+                  </div>
+                  <div class="mobile-status-metric">
+                    <span class="k">Dispatcher</span>
+                    <span class="v" id="mobileStatusDispatcher">lade…</span>
+                  </div>
+                  <div class="mobile-status-metric">
+                    <span class="k">Ops Gate</span>
+                    <span class="v" id="mobileStatusOpsGate">lade…</span>
+                  </div>
+                  <div class="mobile-status-metric">
+                    <span class="k">Stability</span>
+                    <span class="v" id="mobileStatusStability">lade…</span>
+                  </div>
+                </div>
+              </section>
+
+              <section class="mobile-status-card">
+                <div class="mobile-status-head">
+                  <div>
+                    <div class="mobile-status-kicker">Incidents</div>
+                    <div class="mobile-status-title">Self-Healing</div>
+                  </div>
+                  <span class="mobile-status-badge" id="mobileHealingBadge">lade…</span>
+                </div>
+                <div class="mobile-status-list" id="mobileIncidentList">
+                  <div class="empty">Lade…</div>
+                </div>
+              </section>
+
+              <section class="mobile-status-card">
+                <div class="mobile-status-head">
+                  <div>
+                    <div class="mobile-status-kicker">Modelle</div>
+                    <div class="mobile-status-title">Agenten</div>
+                  </div>
+                  <span class="mobile-status-badge" id="mobileAgentsBadge">13 Rollen</span>
+                </div>
+                <div class="mobile-status-list" id="mobileAgentList">
+                  <div class="empty">Lade…</div>
+                </div>
+              </section>
+            </div>
+          </div>
 
           <!-- Research Settings -->
           <div class="auto-card full" style="margin-bottom:10px;">
@@ -1722,6 +2639,36 @@ _TEMPLATE = r"""<!doctype html>
         Chat mit Timus
         <span title="Verbunden"></span>
       </div>
+      <div class="mobile-chat-summary">
+        <div class="mobile-chat-summary-card">
+          <div class="mobile-chat-chip">
+            <span class="k">Session</span>
+            <span class="v" id="mobileChatSession">lade…</span>
+          </div>
+          <div class="mobile-chat-chip">
+            <span class="k">Voice</span>
+            <span class="v" id="mobileChatVoice">bereit</span>
+          </div>
+        </div>
+        <div class="mobile-chat-summary-card">
+          <div class="mobile-chat-chip">
+            <span class="k">Stimme</span>
+            <span class="v" id="mobileVoiceName">lade…</span>
+          </div>
+          <div class="mobile-chat-chip">
+            <span class="k">Playback</span>
+            <span class="v" id="mobileVoicePlayback">browser</span>
+          </div>
+        </div>
+        <div class="mobile-chat-actions">
+          <button class="mobile-chat-action active" id="mobileVoiceAutoBtn" onclick="toggleVoiceAutoReply()">
+            Auto-Vorlesen
+          </button>
+          <button class="mobile-chat-action" id="mobileVoiceReplayBtn" onclick="replayLastVoiceReply()">
+            Letzte Antwort
+          </button>
+        </div>
+      </div>
       <div id="chatMessages" class="chat-messages">
         <div class="empty">Stelle Timus eine Frage…</div>
       </div>
@@ -1738,9 +2685,33 @@ _TEMPLATE = r"""<!doctype html>
         <button class="mic-btn" id="micBtn" title="Mikrofon ein/aus (Deutsch)" disabled>🎤</button>
         <button id="sendBtn">Senden</button>
       </div>
+      <audio id="voicePlayer" preload="none"></audio>
     </div>
 
   </div><!-- .shell -->
+
+  <nav class="mobile-bottom-nav" aria-label="Timus Mobile Navigation">
+    <button class="mobile-nav-btn active" id="mobileNav-home" onclick="setMobileSection('home')">
+      <span class="mobile-nav-icon">⌂</span>
+      <span>Home</span>
+    </button>
+    <button class="mobile-nav-btn" id="mobileNav-status" onclick="setMobileSection('status')">
+      <span class="mobile-nav-icon">◎</span>
+      <span>Status</span>
+    </button>
+    <button class="mobile-nav-btn voice-nav" id="mobileNav-voice" onclick="toggleMobileVoice()">
+      <span class="mobile-nav-orb"></span>
+      <span>Voice</span>
+    </button>
+    <button class="mobile-nav-btn" id="mobileNav-chat" onclick="setMobileSection('chat')">
+      <span class="mobile-nav-icon">◫</span>
+      <span>Chat</span>
+    </button>
+    <button class="mobile-nav-btn" id="mobileNav-files" onclick="setMobileSection('files')">
+      <span class="mobile-nav-icon">⌘</span>
+      <span>Dateien</span>
+    </button>
+  </nav>
 
 <script>
 "use strict";
@@ -1776,6 +2747,16 @@ let toolHistory      = [];
 let agentModels      = {};
 let activeTab        = "canvas";
 let cy               = null;
+let mobileSection    = "home";
+let lastStatusSnapshot = null;
+let lastCanvasItems    = [];
+let mobileVoiceState   = "idle";
+let lastRecentFiles    = [];
+let voiceAutoReply     = true;
+let lastVoiceReplyText = "";
+let lastVoiceAudioUrl  = "";
+let sseConnected       = false;
+let sseReconnectTimer  = null;
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function esc(v) {
@@ -1790,9 +2771,450 @@ async function api(url, opts) {
   return d;
 }
 
+function isMobileLayout() {
+  return window.matchMedia("(max-width: 960px)").matches;
+}
+
+function setMobilePill(id, label, value, state) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const normalized = ["ok", "warn", "error", "info"].includes(state) ? state : "info";
+  el.className = "mobile-pill " + normalized;
+  el.innerHTML =
+    `<span class="mobile-pill-label">${esc(label)}</span>` +
+    `<span class="mobile-pill-value">${esc(value)}</span>`;
+}
+
+function _mobileStateClass(state) {
+  const normalized = String(state || "unknown").toLowerCase();
+  if (["pass", "healthy", "active", "ok", "normal"].includes(normalized)) return "ok";
+  if (["warn", "soft_limit", "degraded", "recovering"].includes(normalized)) return "warn";
+  if (["blocked", "fail", "error", "inactive", "missing", "down"].includes(normalized)) return "error";
+  return "";
+}
+
+function setMobileBadge(id, text, state) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const cls = _mobileStateClass(state);
+  el.className = "mobile-status-badge" + (cls ? " " + cls : "");
+  el.textContent = text || "unknown";
+}
+
+function updateMobileScore(score, level) {
+  const scoreEl = document.getElementById("mobileAutonomyScore");
+  const levelEl = document.getElementById("mobileAutonomyLevel");
+  if (scoreEl) scoreEl.textContent = (parseFloat(score) || 0).toFixed(1);
+  if (levelEl) levelEl.textContent = (level || "–").replace(/_/g, " ");
+}
+
+function updateMobileVoiceState(state) {
+  mobileVoiceState = state || "idle";
+  const ids = ["mobileVoiceOrbBtn", "mobileNav-voice"];
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.remove("listening", "speaking", "thinking", "error", "active");
+    if (mobileVoiceState !== "idle") {
+      el.classList.add(mobileVoiceState);
+      el.classList.add("active");
+    }
+  });
+  const chatVoiceEl = document.getElementById("mobileChatVoice");
+  if (chatVoiceEl) {
+    const voiceText = mobileVoiceState === "listening"
+      ? "hört zu"
+      : mobileVoiceState === "speaking"
+      ? "spricht"
+      : mobileVoiceState === "thinking"
+      ? "verarbeitet"
+      : mobileVoiceState === "error"
+      ? "fehler"
+      : "bereit";
+    chatVoiceEl.textContent = voiceText;
+  }
+}
+
+function updateVoiceControlState() {
+  const autoBtn = document.getElementById("mobileVoiceAutoBtn");
+  if (autoBtn) {
+    autoBtn.classList.toggle("active", voiceAutoReply);
+    autoBtn.textContent = voiceAutoReply ? "Auto-Vorlesen" : "Auto-Vorlesen aus";
+  }
+  const replayBtn = document.getElementById("mobileVoiceReplayBtn");
+  if (replayBtn) {
+    const hasReply = Boolean(lastVoiceReplyText);
+    replayBtn.disabled = !hasReply;
+    replayBtn.classList.toggle("active", hasReply && mobileVoiceState === "speaking");
+  }
+}
+
+function updateLiveConnectionState(state, label) {
+  const chip = document.getElementById("liveConnectionChip");
+  if (!chip) return;
+  chip.classList.remove("ok", "warn", "error");
+  const normalized = state === "ok" || state === "warn" || state === "error" ? state : "warn";
+  chip.classList.add(normalized);
+  chip.textContent = label || (normalized === "ok" ? "live" : normalized === "warn" ? "reconnect" : "offline");
+}
+
+async function refreshMobileOperationalData() {
+  const btn = document.getElementById("mobileHeroRefreshBtn");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Lädt…";
+  }
+  try {
+    await Promise.all([
+      loadMobileSnapshot(),
+      loadRecentFiles(),
+      loadVoiceStatus(),
+      loadCanvasList(),
+    ]);
+    updateLiveConnectionState(navigator.onLine ? "ok" : "warn", navigator.onLine ? "live" : "offline");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Refresh";
+    }
+  }
+}
+
+async function loadVoiceStatus() {
+  try {
+    const data = await api("/voice/status");
+    const voice = data.voice || {};
+    const voiceNameEl = document.getElementById("mobileVoiceName");
+    if (voiceNameEl) {
+      voiceNameEl.textContent = voice.current_voice || "–";
+    }
+    const playbackEl = document.getElementById("mobileVoicePlayback");
+    if (playbackEl) {
+      const playback = voice.speaking ? "spricht" : voice.listening ? "hört zu" : "browser";
+      playbackEl.textContent = playback;
+    }
+  } catch (e) {
+    const voiceNameEl = document.getElementById("mobileVoiceName");
+    if (voiceNameEl) voiceNameEl.textContent = "nicht bereit";
+  }
+  updateVoiceControlState();
+}
+
+function toggleVoiceAutoReply() {
+  voiceAutoReply = !voiceAutoReply;
+  updateVoiceControlState();
+}
+
+function _resetVoiceAudioUrl() {
+  if (lastVoiceAudioUrl) {
+    try { URL.revokeObjectURL(lastVoiceAudioUrl); } catch {}
+    lastVoiceAudioUrl = "";
+  }
+}
+
+async function browserSpeakText(text) {
+  const clean = String(text || "").trim();
+  if (!clean) return false;
+  const player = document.getElementById("voicePlayer");
+  if (!player) return false;
+
+  lastVoiceReplyText = clean;
+  updateVoiceControlState();
+  updateMobileVoiceState("speaking");
+
+  try {
+    const response = await fetch("/voice/synthesize", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ text: clean }),
+    });
+    if (!response.ok) {
+      let detail = response.statusText;
+      try {
+        const body = await response.json();
+        detail = body.error || body.message || detail;
+      } catch {}
+      throw new Error(detail);
+    }
+
+    const audioBlob = await response.blob();
+    _resetVoiceAudioUrl();
+    lastVoiceAudioUrl = URL.createObjectURL(audioBlob);
+
+    player.pause();
+    player.src = lastVoiceAudioUrl;
+    player.currentTime = 0;
+    await player.play();
+    return true;
+  } catch (err) {
+    updateMobileVoiceState("error");
+    const transcript = document.getElementById("micTranscript");
+    if (transcript) {
+      transcript.textContent = "Voice-Playback Fehler: " + err.message;
+      transcript.classList.add("visible");
+      setTimeout(() => transcript.classList.remove("visible"), 3500);
+    }
+    updateVoiceControlState();
+    return false;
+  }
+}
+
+function replayLastVoiceReply() {
+  if (!lastVoiceReplyText) return;
+  browserSpeakText(lastVoiceReplyText).catch(() => {});
+}
+
+function applyMobileCanvasSummary(items) {
+  lastCanvasItems = Array.isArray(items) ? items : [];
+  const titleEl = document.getElementById("mobileSessionTitle");
+  const metaEl = document.getElementById("mobileSessionMeta");
+  if (!titleEl || !metaEl) return;
+  const selected = lastCanvasItems.find(c => c.id === selectedCanvasId) || lastCanvasItems[0] || null;
+  titleEl.textContent = selected?.title || "Timus Session Canvas";
+  const sessionCount = (selected?.session_ids || []).length;
+  const eventCount = (selected?.events || []).length;
+  metaEl.textContent =
+    selected
+      ? `${sessionCount} Sessions · ${eventCount} Events · ${chatSessionId}`
+      : `Keine aktive Session · ${chatSessionId}`;
+}
+
+function applyMobileSnapshot(snapshot) {
+  lastStatusSnapshot = snapshot || {};
+  const services = lastStatusSnapshot.services || {};
+  const opsGate = lastStatusSnapshot.ops_gate || {};
+  const budget = lastStatusSnapshot.budget || {};
+  const selfHealing = lastStatusSnapshot.self_healing || {};
+  const stabilityGate = lastStatusSnapshot.stability_gate || {};
+  const agents = lastStatusSnapshot.agents || [];
+
+  const mcpOk = Boolean((services.mcp || {}).ok);
+  const dispatcherOk = Boolean((services.dispatcher || {}).ok);
+  const opsState = String(opsGate.state || "unknown").toLowerCase();
+  const budgetState = String(budget.state || "unknown").toLowerCase();
+
+  setMobilePill(
+    "mobilePillMcp",
+    "MCP",
+    `${(services.mcp || {}).active || "unknown"} · ${selfHealing.open_incidents || 0} Incidents`,
+    mcpOk ? "ok" : "error",
+  );
+  setMobilePill(
+    "mobilePillDispatcher",
+    "Dispatcher",
+    `${(services.dispatcher || {}).active || "unknown"} · PID ${(services.dispatcher || {}).main_pid || 0}`,
+    dispatcherOk ? "ok" : "error",
+  );
+  setMobilePill(
+    "mobilePillOps",
+    "Ops Gate",
+    `${opsGate.state || "unknown"} · Canary ${opsGate.recommended_canary_percent || 0}%`,
+    opsState === "pass" ? "ok" : opsState === "warn" ? "warn" : "error",
+  );
+  setMobilePill(
+    "mobilePillBudget",
+    "Budget",
+    `${budget.state || "unknown"} · ${budget.message || `${budget.window_days || 1}d window`}`,
+    budgetState === "ok" || budgetState === "normal" ? "ok" : budgetState === "warn" || budgetState === "soft_limit" ? "warn" : "error",
+  );
+
+  const openIncidents = Number(selfHealing.open_incidents || 0);
+  const mcpHealth = (lastStatusSnapshot.local || {}).mcp_health || {};
+  const mcpPayload = mcpHealth.data || {};
+  const statusBadgeState = openIncidents > 0 ? selfHealing.degrade_mode || "warn" : opsGate.state || "ok";
+
+  setMobileBadge("mobileStatusBadge", `${selfHealing.degrade_mode || "normal"}`, statusBadgeState);
+  setMobileBadge("mobileHealingBadge", `${openIncidents} offen`, openIncidents > 0 ? selfHealing.degrade_mode || "warn" : "ok");
+  setMobileBadge("mobileAgentsBadge", `${agents.length || 0} Rollen`, agents.some(a => ["error", "warn"].includes(String(a.provider_state || "").toLowerCase())) ? "warn" : "ok");
+
+  const mcpStatusEl = document.getElementById("mobileStatusMcp");
+  const dispatcherStatusEl = document.getElementById("mobileStatusDispatcher");
+  const opsStatusEl = document.getElementById("mobileStatusOpsGate");
+  const stabilityEl = document.getElementById("mobileStatusStability");
+  if (mcpStatusEl) {
+    mcpStatusEl.textContent = `${(services.mcp || {}).active || "unknown"} · ${mcpPayload.status || "down"} · ${(mcpHealth.latency_ms ?? "–")} ms`;
+  }
+  if (dispatcherStatusEl) {
+    dispatcherStatusEl.textContent = `${(services.dispatcher || {}).active || "unknown"} · PID ${(services.dispatcher || {}).main_pid || 0}`;
+  }
+  if (opsStatusEl) {
+    opsStatusEl.textContent = `${opsGate.state || "unknown"} · Canary ${(opsGate.recommended_canary_percent || 0)}%`;
+  }
+  if (stabilityEl) {
+    stabilityEl.textContent = `${stabilityGate.state || "unknown"} · Breaker ${stabilityGate.circuit_breakers_open || 0}`;
+  }
+
+  const incidentList = document.getElementById("mobileIncidentList");
+  if (incidentList) {
+    const incidents = (selfHealing.incidents || []).slice(0, 3);
+    incidentList.innerHTML = incidents.length
+      ? incidents.map(incident => {
+          const state = incident.recovery_phase || incident.quarantine_state || incident.notification_state || "unknown";
+          return `
+            <div class="mobile-status-row">
+              <div>
+                <div class="name">${esc(incident.component || "unknown")} · ${esc(incident.signal || "signal")}</div>
+                <div class="meta">
+                  ${esc(incident.recovery_stage || "observe")} · ${esc(incident.memory_state || "new")}
+                  ${incident.cooldown_until ? ` · cooldown ${esc(incident.cooldown_until)}` : ""}
+                </div>
+              </div>
+              <span class="state ${_mobileStateClass(state)}">${esc(state)}</span>
+            </div>
+          `;
+        }).join("")
+      : '<div class="empty">Keine offenen Incidents.</div>';
+  }
+
+  const agentList = document.getElementById("mobileAgentList");
+  if (agentList) {
+    const rows = agents.slice(0, 5);
+    agentList.innerHTML = rows.length
+      ? rows.map(agent => {
+          const state = agent.runtime_status || agent.provider_state || "idle";
+          return `
+            <div class="mobile-status-row">
+              <div>
+                <div class="name">${esc(agent.agent || "agent")}</div>
+                <div class="meta">${esc(agent.provider || "provider")} · ${esc((agent.model || "").split("/").pop() || "–")}</div>
+              </div>
+              <span class="state ${_mobileStateClass(state)}">${esc(state)}</span>
+            </div>
+          `;
+        }).join("")
+      : '<div class="empty">Keine Agentendaten.</div>';
+  }
+
+  const chatSessionEl = document.getElementById("mobileChatSession");
+  if (chatSessionEl) chatSessionEl.textContent = chatSessionId;
+}
+
+async function loadMobileSnapshot() {
+  try {
+    const data = await api("/status/snapshot");
+    applyMobileSnapshot(data.snapshot || {});
+  } catch (e) {
+    setMobilePill("mobilePillMcp", "MCP", `Fehler: ${e.message}`, "error");
+  }
+}
+
+function setMobileSection(section) {
+  mobileSection = section;
+  if (!isMobileLayout()) return;
+  document.body.setAttribute("data-mobile-section", section);
+  document.querySelectorAll(".mobile-nav-btn").forEach(btn => btn.classList.remove("active"));
+  const activeBtn = document.getElementById("mobileNav-" + section);
+  if (activeBtn) activeBtn.classList.add("active");
+
+  if (section === "home") {
+    if (activeTab !== "canvas") switchTab("canvas");
+  } else if (section === "status") {
+    if (activeTab !== "autonomy") switchTab("autonomy");
+    loadAutonomyData().catch(() => {});
+  } else if (section === "chat") {
+    setTimeout(() => {
+      const input = document.getElementById("chatInput");
+      if (input) input.focus();
+    }, 60);
+  } else if (section === "files") {
+    loadRecentFiles().catch(() => {});
+  }
+}
+
+function syncMobileLayout() {
+  if (isMobileLayout()) {
+    document.body.setAttribute("data-mobile-section", mobileSection);
+  } else {
+    document.body.removeAttribute("data-mobile-section");
+  }
+}
+
+function toggleMobileVoice() {
+  const micBtn = document.getElementById("micBtn");
+  if (micBtn) micBtn.click();
+}
+
+function formatBytes(num) {
+  const size = Number(num || 0);
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+function triggerMobileUpload() {
+  document.getElementById("fileInput")?.click();
+}
+
+function useFileInChat(path) {
+  const input = document.getElementById("chatInput");
+  if (!input) return;
+  input.value = `Analysiere die Datei ${path} und fasse die wichtigsten Punkte zusammen.`;
+  input.style.height = "auto";
+  input.style.height = Math.min(input.scrollHeight, 120) + "px";
+  setMobileSection("chat");
+  setTimeout(() => input.focus(), 60);
+}
+
+function renderRecentFiles(files) {
+  lastRecentFiles = Array.isArray(files) ? files : [];
+  const badge = document.getElementById("mobileFilesBadge");
+  if (badge) {
+    badge.className = "mobile-status-badge ok";
+    badge.textContent = `${lastRecentFiles.length} Dateien`;
+  }
+  const list = document.getElementById("mobileFilesList");
+  if (!list) return;
+  if (!lastRecentFiles.length) {
+    list.innerHTML = '<div class="empty">Noch keine Uploads oder Ergebnisse.</div>';
+    return;
+  }
+  list.innerHTML = lastRecentFiles.map(file => {
+    const origin = String(file.origin || "result");
+    const badgeCls = origin === "upload" ? "upload" : "result";
+    const filePath = String(file.path || "");
+    const downloadHref = `/files/download?path=${encodeURIComponent(filePath)}`;
+    const modified = String(file.modified_at || "").replace("T", " ").slice(0, 16) || "–";
+    const jsPath = JSON.stringify(filePath);
+    return `
+      <div class="mobile-file-card">
+        <div class="mobile-file-top">
+          <div class="mobile-file-name">${esc(file.filename || file.path || "Datei")}</div>
+          <span class="mobile-file-badge ${badgeCls}">${esc(origin)}</span>
+        </div>
+        <div class="mobile-file-meta">
+          ${esc(file.type || "file")} · ${formatBytes(file.size_bytes)} · ${esc(modified)}
+        </div>
+        <div class="mobile-file-actions">
+          <a href="${downloadHref}" target="_blank" rel="noopener">Öffnen</a>
+          <a href="${downloadHref}" download>Download</a>
+          <button type="button" onclick='useFileInChat(${jsPath})'>Im Chat nutzen</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+async function loadRecentFiles() {
+  try {
+    const data = await api("/files/recent");
+    renderRecentFiles(data.files || []);
+  } catch (e) {
+    const list = document.getElementById("mobileFilesList");
+    if (list) list.innerHTML = `<div class="empty">Fehler: ${esc(e.message)}</div>`;
+  }
+}
+
 // ── Tab-Switch ────────────────────────────────────────────────────────────────
 function switchTab(tab) {
   activeTab = tab;
+  if (isMobileLayout()) {
+    mobileSection = tab === "canvas" ? "home" : "status";
+    document.body.setAttribute("data-mobile-section", mobileSection);
+    document.querySelectorAll(".mobile-nav-btn").forEach(btn => btn.classList.remove("active"));
+    const activeBtn = document.getElementById("mobileNav-" + mobileSection);
+    if (activeBtn) activeBtn.classList.add("active");
+  }
   document.querySelectorAll(".tab-content").forEach(el => el.classList.remove("active"));
   document.querySelectorAll(".tab-btn").forEach(el => el.classList.remove("active"));
   document.getElementById("tab-" + tab).classList.add("active");
@@ -1941,10 +3363,26 @@ function renderToolActivity() {
 let sseSource = null;
 function connectSSE() {
   if (sseSource) return;
+  updateLiveConnectionState(navigator.onLine ? "warn" : "error", navigator.onLine ? "verbinde" : "offline");
   sseSource = new EventSource("/events/stream");
+  sseSource.onopen = () => {
+    sseConnected = true;
+    updateLiveConnectionState("ok", "live");
+    if (sseReconnectTimer) {
+      clearTimeout(sseReconnectTimer);
+      sseReconnectTimer = null;
+    }
+  };
   // window.handleSSE erlaubt nachträgliches Patching durch voicePulse
   sseSource.onmessage = e => { try { (window.handleSSE || handleSSE)(JSON.parse(e.data)); } catch {} };
-  sseSource.onerror   = () => { sseSource.close(); sseSource = null; setTimeout(connectSSE, 5000); };
+  sseSource.onerror   = () => {
+    sseConnected = false;
+    updateLiveConnectionState(navigator.onLine ? "warn" : "error", navigator.onLine ? "reconnect" : "offline");
+    sseSource.close();
+    sseSource = null;
+    if (sseReconnectTimer) clearTimeout(sseReconnectTimer);
+    sseReconnectTimer = setTimeout(connectSSE, 5000);
+  };
 }
 
 function handleSSE(d) {
@@ -1969,6 +3407,7 @@ function handleSSE(d) {
   if (d.type === "upload") {
     appendChatMsg("assistant", "System",
       `📎 Datei gespeichert: ${d.filename} (${(d.size/1024).toFixed(1)} KB)\nPfad: ${d.path}`);
+    loadRecentFiles().catch(() => {});
     return;
   }
   if (d.type === "tool_start") { activeTool = { tool: d.tool, id: d.id }; renderToolActivity(); return; }
@@ -2014,6 +3453,14 @@ function appendChatMsg(role, sender, text) {
 
   wrap.appendChild(div);
   wrap.scrollTop = wrap.scrollHeight;
+
+  if (role === "assistant" && text && String(text).trim()) {
+    lastVoiceReplyText = String(text).trim();
+    updateVoiceControlState();
+  }
+
+  const sessionEl = document.getElementById("mobileChatSession");
+  if (sessionEl) sessionEl.textContent = chatSessionId;
 }
 
 function addChatThinking() {
@@ -2059,6 +3506,7 @@ async function handleFileUpload(file) {
     if (data.status === "success") {
       document.getElementById("chatInput").value = `Analysiere die hochgeladene Datei: ${data.abs_path || data.path}`;
       document.getElementById("chatInput").focus();
+      loadRecentFiles().catch(() => {});
     }
   } catch (err) { appendChatMsg("assistant", "⚠ Upload", "Upload fehlgeschlagen: " + err.message); }
 }
@@ -2074,6 +3522,7 @@ function updateSidebarScore(score, level) {
   if (!fill) return;
   scoreE.textContent = s.toFixed(1);
   levelE.textContent = (level || "–").replace(/_/g, " ");
+  updateMobileScore(s, level);
   fill.setAttribute("stroke-dashoffset", (RING_CIRC - (s/100)*RING_CIRC).toFixed(1));
   const c = s >= 75 ? "#00e09a" : s >= 45 ? "#fbbf24" : "#f43f5e";
   fill.setAttribute("stroke", c);
@@ -2268,6 +3717,7 @@ async function loadApiCostControl() {
   try {
     const data = await api("/status/snapshot");
     const snapshot = data.snapshot || {};
+    applyMobileSnapshot(snapshot);
     const apiControl = snapshot.api_control || {};
     const budget = snapshot.budget || {};
     const opsGate = snapshot.ops_gate || {};
@@ -4137,6 +5587,7 @@ function handleFlowRuntimeEvent(d) {
 // ── Canvas List ───────────────────────────────────────────────────────────────
 async function loadCanvasList() {
   const { items = [] } = await api("/canvas?limit=200").catch(() => ({ items: [] }));
+  applyMobileCanvasSummary(items);
   const list = document.getElementById("canvasList");
   list.innerHTML = "";
   if (!items.length) { list.innerHTML = '<div class="empty">Noch kein Canvas.</div>'; selectedCanvasId = ""; return; }
@@ -4174,7 +5625,10 @@ function setPolling(on) {
       loadCanvasList();
       if (activeTab === "canvas") reloadGraph();
       if (activeTab === "flow") reloadFlowRuntime();
-      if (_pollTick % Math.ceil(30000/POLL_MS) === 0) loadScorecard().catch(() => {});
+      if (_pollTick % Math.ceil(30000/POLL_MS) === 0) {
+        loadScorecard().catch(() => {});
+        loadMobileSnapshot().catch(() => {});
+      }
     }, POLL_MS);
   }
 }
@@ -4182,6 +5636,8 @@ function setPolling(on) {
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
   document.getElementById("pollMs").textContent = String(POLL_MS);
+  syncMobileLayout();
+  updateLiveConnectionState(navigator.onLine ? "warn" : "error", navigator.onLine ? "bereit" : "offline");
   renderAgentLeds({});
   renderToolActivity();
   initCytoscape();
@@ -4197,6 +5653,9 @@ async function init() {
     }
   } catch {}
   try { await loadScorecard(); } catch {}
+  try { await loadMobileSnapshot(); } catch {}
+  try { await loadRecentFiles(); } catch {}
+  try { await loadVoiceStatus(); } catch {}
 
   connectSSE();
   await loadCanvasList();
@@ -4209,6 +5668,33 @@ async function init() {
   ci.addEventListener("input",   () => { ci.style.height="auto"; ci.style.height=Math.min(ci.scrollHeight,120)+"px"; });
   document.getElementById("fileInput").addEventListener("change", e => { handleFileUpload(e.target.files[0]); e.target.value=""; });
   document.getElementById("togglePollingBtn").addEventListener("click", () => setPolling(!pollingEnabled));
+  window.addEventListener("resize", syncMobileLayout);
+  window.addEventListener("online", () => {
+    updateLiveConnectionState("warn", "reconnect");
+    if (!sseConnected) connectSSE();
+    refreshMobileOperationalData().catch(() => {});
+  });
+  window.addEventListener("offline", () => updateLiveConnectionState("error", "offline"));
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      refreshMobileOperationalData().catch(() => {});
+      if (!sseConnected) connectSSE();
+    }
+  });
+  document.getElementById("mobileVoiceOrbBtn")?.addEventListener("click", toggleMobileVoice);
+  const voicePlayer = document.getElementById("voicePlayer");
+  if (voicePlayer) {
+    voicePlayer.addEventListener("ended", () => {
+      updateMobileVoiceState(window.voiceActive ? "listening" : "idle");
+      updateVoiceControlState();
+      if (window.voiceActive) setTimeout(startMic, 450);
+    });
+    voicePlayer.addEventListener("error", () => {
+      updateMobileVoiceState("error");
+      updateVoiceControlState();
+    });
+  }
+  updateVoiceControlState();
 
   document.getElementById("createBtn").addEventListener("click", async () => {
     const title = prompt("Canvas-Titel", "Timus Session");
@@ -4443,15 +5929,20 @@ window.handleSSE = function(d) {
     if (d.type === "voice_speaking_start") { voicePulse.startSpeaking(d.text || ""); }
     if (d.type === "voice_speaking_end")   { voicePulse.stopThinking(); }
   }
+  if (d.type === "thinking") {
+    updateMobileVoiceState(d.active ? "thinking" : (window.voiceActive ? "listening" : "idle"));
+  }
+  if (d.type === "chat_reply" || d.type === "voice_speaking_start") {
+    updateMobileVoiceState("speaking");
+  }
+  if (d.type === "voice_speaking_end" && d.mode !== "browser") {
+    updateMobileVoiceState(window.voiceActive ? "listening" : "idle");
+  }
   // Timus Voice System: Voice-Events an Mic IIFE weiterleiten
   if (window.onVoiceSSE) window.onVoiceSSE(d);
   // Auto-Speak: Wenn Sprach-Modus aktiv, Antwort automatisch vorlesen
-  if (d.type === "chat_reply" && window.voiceActive && d.text) {
-    fetch("/voice/speak", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({text: d.text})
-    }).catch(() => {});
+  if (d.type === "chat_reply" && window.voiceActive && voiceAutoReply && d.text) {
+    browserSpeakText(d.text).catch(() => {});
   }
 };
 
@@ -4506,14 +5997,18 @@ window.handleSSE = function(d) {
   // ── SSE-Callback für Voice-Events ────────────────────────────────
   window.onVoiceSSE = function(d) {
     if (d.type === "voice_status") {
+      loadVoiceStatus().catch(() => {});
+      updateMobileVoiceState("thinking");
       transcript.textContent = "⏳ " + (d.message || "…");
       transcript.classList.add("visible");
     }
     if (d.type === "voice_listening_start") {
+      updateMobileVoiceState("listening");
       transcript.textContent = "● Höre zu…";
       transcript.classList.add("visible");
     }
     if (d.type === "voice_listening_stop") {
+      updateMobileVoiceState(window.voiceActive ? "listening" : "idle");
       transcript.classList.remove("visible");
     }
     if (d.type === "voice_transcript") {
@@ -4521,6 +6016,7 @@ window.handleSSE = function(d) {
       listening = false;
       micBtn.classList.remove("listening");
       micBtn.title = "Mikrofon ein/aus (Shift+M)";
+      updateMobileVoiceState("thinking");
       if (d.text && d.text.trim()) {
         chatInput.value = d.text.trim();
         chatInput.style.height = "auto";
@@ -4540,16 +6036,20 @@ window.handleSSE = function(d) {
       }
     }
     if (d.type === "voice_error") {
+      updateMobileVoiceState("error");
       transcript.textContent = "Fehler: " + (d.error || "unbekannt");
       transcript.classList.add("visible");
-      setTimeout(() => transcript.classList.remove("visible"), 4000);
+      setTimeout(() => {
+        transcript.classList.remove("visible");
+        updateMobileVoiceState(window.voiceActive ? "listening" : "idle");
+      }, 4000);
       stopLevelLoop();
       listening = false;
       micBtn.classList.remove("listening");
       micBtn.title = "Mikrofon ein/aus (Shift+M)";
     }
     // Nach dem Sprechen: im Sprach-Modus automatisch wieder lauschen
-    if (d.type === "voice_speaking_end" && window.voiceActive && !listening) {
+    if (d.type === "voice_speaking_end" && d.mode !== "browser" && window.voiceActive && !listening) {
       setTimeout(startMic, 900);
     }
   };
@@ -4561,6 +6061,7 @@ window.handleSSE = function(d) {
     window.voiceActive = true;
     micBtn.classList.add("listening");
     micBtn.title = "Mikrofon aktiv — klicken zum Stoppen";
+    updateMobileVoiceState("listening");
     transcript.textContent = "● Verbinde…";
     transcript.classList.add("visible");
 
@@ -4581,6 +6082,7 @@ window.handleSSE = function(d) {
       window.voiceActive = false;
       micBtn.classList.remove("listening");
       micBtn.title = "Mikrofon ein/aus (Shift+M)";
+      updateMobileVoiceState("error");
       return;
     }
 
@@ -4597,6 +6099,7 @@ window.handleSSE = function(d) {
     window.voiceActive = false;
     micBtn.classList.remove("listening");
     micBtn.title = "Mikrofon ein/aus (Shift+M)";
+    updateMobileVoiceState("idle");
     transcript.classList.remove("visible");
     stopLevelLoop();
     fetch("/voice/stop", { method: "POST" }).catch(() => {});

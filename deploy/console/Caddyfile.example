@@ -1,0 +1,41 @@
+{
+	email {$TIMUS_CONSOLE_ACME_EMAIL}
+}
+
+console.fatih-altiok.com {
+	route {
+		basicauth {
+			{$TIMUS_CONSOLE_USER} {$TIMUS_CONSOLE_PASSWORD_HASH}
+		}
+
+		header {
+			Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+			X-Content-Type-Options "nosniff"
+			X-Frame-Options "DENY"
+			Referrer-Policy "strict-origin-when-cross-origin"
+			Permissions-Policy "camera=(), microphone=(self), geolocation=()"
+		}
+
+		request_body {
+			max_size 64MB
+		}
+
+		encode zstd gzip
+
+		log {
+			output file /var/log/caddy/console.fatih-altiok.com.access.log
+			format console
+		}
+
+		@sse path /events/stream
+		handle @sse {
+			reverse_proxy {$TIMUS_CONSOLE_UPSTREAM} {
+				flush_interval -1
+			}
+		}
+
+		handle {
+			reverse_proxy {$TIMUS_CONSOLE_UPSTREAM}
+		}
+	}
+}

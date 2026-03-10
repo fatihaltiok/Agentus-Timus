@@ -29,6 +29,7 @@ from faster_whisper import WhisperModel
 from dotenv import load_dotenv
 
 from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
+from utils.voice_text import normalize_tts_text
 
 # --- Setup ---
 load_dotenv()
@@ -56,7 +57,6 @@ class VoiceConfig:
     silence_threshold: float = 0.003  # niedrig: bei 44.1 kHz float32 ist Sprache oft 0.01-0.1
     silence_duration: float = 1.8   # Sekunden Stille nach Sprache = Ende
     language: str = "de"
-
 
 class VoiceEngine:
     """
@@ -213,6 +213,53 @@ class VoiceEngine:
 
         return text
 
+    def synthesize_mp3(self, text: str, voice: Optional[str] = None) -> Optional[bytes]:
+        """
+        Erzeugt MP3-Audio via Inworld.AI TTS, ohne es lokal abzuspielen.
+
+        Args:
+            text: Zu sprechender Text
+            voice: Optionale Inworld-Stimme
+
+        Returns:
+            MP3-Bytes oder None bei Fehler.
+        """
+        if not INWORLD_API_KEY:
+            log.error("INWORLD_API_KEY nicht gesetzt")
+            return None
+
+        text = normalize_tts_text(text)
+        if not text:
+            return b""
+
+        voice_name = voice or self.config.inworld_voice
+
+        try:
+            response = requests.post(
+                INWORLD_TTS_URL,
+                json={
+                    "text": text,
+                    "voiceId": voice_name,
+                    "modelId": INWORLD_MODEL,
+                    "voiceSettings": {"speaking_rate": INWORLD_SPEAKING_RATE},
+                    "temperature": INWORLD_TEMPERATURE,
+                },
+                headers={
+                    "Authorization": f"Basic {INWORLD_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                timeout=30,
+            )
+            response.raise_for_status()
+            return base64.b64decode(response.json()["audioContent"])
+        except requests.exceptions.HTTPError as e:
+            log.error(f"❌ Inworld.AI HTTP-Fehler: {e}")
+            if e.response is not None and e.response.status_code == 401:
+                log.error("Authentifizierung fehlgeschlagen — prüfe INWORLD_API_KEY in .env")
+        except Exception as e:
+            log.error(f"❌ TTS-Synthese Fehler: {e}")
+        return None
+
     def speak(self, text: str, voice: Optional[str] = None) -> bool:
         """
         Spricht Text mit Inworld.AI TTS.
@@ -233,32 +280,15 @@ class VoiceEngine:
 
         self.is_speaking = True
         voice_name = voice or self.config.inworld_voice
-
-        # Länge begrenzen (API-Limit)
-        if len(text) > 500:
-            text = text[:500] + "..."
-
+        text = normalize_tts_text(text)
         log.info(f"🔊 Inworld.AI spricht ({voice_name}): {text[:60]}…")
 
         try:
-            response = requests.post(
-                INWORLD_TTS_URL,
-                json={
-                    "text": text,
-                    "voiceId": voice_name,
-                    "modelId": INWORLD_MODEL,
-                    "voiceSettings": {"speaking_rate": INWORLD_SPEAKING_RATE},
-                    "temperature": INWORLD_TEMPERATURE,
-                },
-                headers={
-                    "Authorization": f"Basic {INWORLD_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                timeout=30,
-            )
-            response.raise_for_status()
-
-            audio_bytes = base64.b64decode(response.json()["audioContent"])
+            audio_bytes = self.synthesize_mp3(text, voice_name)
+            if audio_bytes is None:
+                return False
+            if audio_bytes == b"":
+                return True
 
             from pydub import AudioSegment
             audio_segment = AudioSegment.from_mp3(io.BytesIO(audio_bytes))

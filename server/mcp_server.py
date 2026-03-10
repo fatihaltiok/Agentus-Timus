@@ -13,17 +13,19 @@ import re
 import uuid
 import webbrowser
 import ipaddress
+import mimetypes
 from collections import deque
 from datetime import datetime
 
 # --- Drittanbieter-Bibliotheken ---
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from jsonrpcserver import async_dispatch
 from dotenv import load_dotenv
 from utils.chroma_runtime import build_chroma_settings, configure_chroma_runtime
+from utils.headless_service_guard import is_service_headless_context
 
 # --- NumPy JSON Encoder für numpy Typen ---
 class NumpyJSONEncoder(_json.JSONEncoder):
@@ -123,6 +125,7 @@ _sse_lock = threading.Lock()
 _chat_history: list = []
 _chat_lock = threading.Lock()
 _SHUTDOWN_STEP_TIMEOUT_S = float(os.getenv("TIMUS_SHUTDOWN_STEP_TIMEOUT", "6"))
+_CONSOLE_FILE_DIRS = ("results", "data/uploads")
 
 
 def _broadcast_sse(event: dict) -> None:
@@ -147,6 +150,76 @@ def _broadcast_sse(event: dict) -> None:
                 _sse_queues.remove(q)
             except ValueError:
                 pass
+
+
+def _console_file_roots() -> list[Path]:
+    roots: list[Path] = []
+    for rel in _CONSOLE_FILE_DIRS:
+        path = (project_root / rel).resolve()
+        if path.exists():
+            roots.append(path)
+    return roots
+
+
+def _is_allowed_console_file(path: Path) -> bool:
+    resolved = path.resolve()
+    for root in _console_file_roots():
+        if resolved == root or root in resolved.parents:
+            return True
+    return False
+
+
+def _resolve_console_file_path(rel_path: str) -> Path | None:
+    candidate = (project_root / rel_path).resolve()
+    if not candidate.exists() or not candidate.is_file():
+        return None
+    if not _is_allowed_console_file(candidate):
+        return None
+    return candidate
+
+
+def _artifact_kind_for_console_path(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix == ".pdf":
+        return "pdf"
+    if suffix in {".doc", ".docx", ".md", ".txt"}:
+        return "document"
+    if suffix in {".xlsx", ".xls", ".csv"}:
+        return "spreadsheet"
+    if suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+        return "image"
+    if suffix == ".json":
+        return "data"
+    return "file"
+
+
+def _collect_console_files(limit: int = 24) -> list[dict]:
+    rows: list[dict] = []
+    base_root = project_root.resolve()
+    for root in _console_file_roots():
+        origin = "upload" if root.name == "uploads" else "result"
+        for item in root.glob("*"):
+            if not item.is_file():
+                continue
+            try:
+                stat = item.stat()
+                rel_path = str(item.resolve().relative_to(base_root))
+                mime = mimetypes.guess_type(item.name)[0] or "application/octet-stream"
+                rows.append(
+                    {
+                        "filename": item.name,
+                        "path": rel_path,
+                        "size_bytes": int(stat.st_size),
+                        "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                        "origin": origin,
+                        "type": _artifact_kind_for_console_path(item),
+                        "mime": mime,
+                    }
+                )
+            except Exception:
+                continue
+    rows.sort(key=lambda item: item.get("modified_at", ""), reverse=True)
+    return rows[: max(1, min(int(limit), 100))]
 
 
 def _set_agent_status(agent: str, status: str, query: str = "") -> None:
@@ -460,12 +533,12 @@ def _canvas_ui_url() -> str:
 
 def _should_auto_open_canvas_ui() -> bool:
     """Auto-Open nur in interaktiven Desktop-Sessions, nicht im 24/7-Servicebetrieb."""
+    if is_service_headless_context():
+        return False
+
     explicit = os.getenv("TIMUS_CANVAS_AUTO_OPEN")
     if explicit is not None:
         return _is_truthy_env(explicit, default=False)
-
-    if os.getenv("SYSTEMD_EXEC_PID") or os.getenv("INVOCATION_ID"):
-        return False
 
     if not (os.getenv("DISPLAY") or os.getenv("WAYLAND_DISPLAY")):
         return False
@@ -1706,6 +1779,8 @@ async def voice_status_endpoint():
                 "initialized": voice_engine._initialized,
                 "listening": voice_engine.is_listening,
                 "speaking": voice_engine.is_speaking,
+                "current_voice": voice_engine.config.inworld_voice,
+                "available_voices": voice_engine.get_available_voices(),
             },
         }
     except Exception as e:
@@ -1782,6 +1857,31 @@ async def voice_speak_endpoint(payload: dict):
     except Exception as e:
         log.error(f"Voice speak Fehler: {e}", exc_info=True)
         _broadcast_sse({"type": "voice_speaking_end", "success": False})
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.post("/voice/synthesize", summary="Text-to-Speech für Browser-Playback (Inworld.AI)")
+async def voice_synthesize_endpoint(payload: dict):
+    """Erzeugt MP3-Audio für browserseitige Wiedergabe."""
+    text = (payload or {}).get("text", "").strip()
+    voice = ((payload or {}).get("voice") or "").strip() or None
+    if not text:
+        return JSONResponse(status_code=400, content={"status": "error", "error": "Kein Text angegeben"})
+    try:
+        from tools.voice_tool.tool import voice_engine
+
+        _broadcast_sse({"type": "voice_speaking_start", "text": text, "mode": "browser"})
+        if not voice_engine._initialized:
+            await asyncio.to_thread(voice_engine.initialize)
+        mp3_bytes = await asyncio.to_thread(voice_engine.synthesize_mp3, text, voice)
+        if mp3_bytes is None:
+            _broadcast_sse({"type": "voice_speaking_end", "success": False, "mode": "browser"})
+            return JSONResponse(status_code=500, content={"status": "error", "error": "TTS-Synthese fehlgeschlagen"})
+        _broadcast_sse({"type": "voice_speaking_end", "success": True, "mode": "browser"})
+        return Response(content=mp3_bytes, media_type="audio/mpeg", headers={"Cache-Control": "no-store"})
+    except Exception as e:
+        log.error(f"Voice synthesize Fehler: {e}", exc_info=True)
+        _broadcast_sse({"type": "voice_speaking_end", "success": False, "mode": "browser"})
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
 
@@ -1946,6 +2046,33 @@ async def canvas_upload(request: Request):
         "abs_path": abs_path,
         "size": len(content),
     }
+
+
+@app.get("/files/recent", summary="Zuletzt verfügbare Uploads und Ergebnisse für die Konsole")
+async def recent_console_files(limit: int = 24):
+    files = _collect_console_files(limit=limit)
+    return {
+        "status": "success",
+        "count": len(files),
+        "files": files,
+        "roots": [str(root.relative_to(project_root.resolve())) for root in _console_file_roots()],
+    }
+
+
+@app.get("/files/download", summary="Sicherer Download für Konsolen-Dateien")
+async def download_console_file(path: str):
+    resolved = _resolve_console_file_path(path)
+    if resolved is None:
+        return JSONResponse(
+            status_code=404,
+            content={"status": "error", "error": "Datei nicht gefunden oder nicht freigegeben"},
+        )
+    mime = mimetypes.guess_type(resolved.name)[0] or "application/octet-stream"
+    return FileResponse(
+        path=resolved,
+        filename=resolved.name,
+        media_type=mime,
+    )
 
 
 @app.post("/", summary="JSON-RPC Endpoint")
