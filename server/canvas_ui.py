@@ -5963,6 +5963,8 @@ window.handleSSE = function(d) {
 
   let listening    = false;
   let micStream    = null;
+  let mediaRecorder = null;
+  let recordedChunks = [];
   let audioCtx     = null;
   let analyser     = null;
   let micAnimFrame = null;
@@ -6011,7 +6013,7 @@ window.handleSSE = function(d) {
       updateMobileVoiceState(window.voiceActive ? "listening" : "idle");
       transcript.classList.remove("visible");
     }
-    if (d.type === "voice_transcript") {
+    if (d.type === "voice_transcript" && d.source !== "browser_upload") {
       stopLevelLoop();
       listening = false;
       micBtn.classList.remove("listening");
@@ -6054,7 +6056,42 @@ window.handleSSE = function(d) {
     }
   };
 
-  // ── Timus Voice System starten (Whisper STT über Server) ─────────
+  async function transcribeRecordedAudio(audioBlob) {
+    const form = new FormData();
+    const mime = audioBlob?.type || "audio/webm";
+    const ext = mime.includes("ogg") ? "ogg" : mime.includes("mp4") || mime.includes("m4a") ? "m4a" : mime.includes("wav") ? "wav" : "webm";
+    form.append("file", audioBlob, `voice-input.${ext}`);
+
+    updateMobileVoiceState("thinking");
+    transcript.textContent = "⏳ Transkribiere…";
+    transcript.classList.add("visible");
+
+    const r = await fetch("/voice/transcribe", { method: "POST", body: form });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      throw new Error(data.error || ("HTTP " + r.status));
+    }
+
+    const text = (data.text || "").trim();
+    if (text) {
+      chatInput.value = text;
+      chatInput.style.height = "auto";
+      chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + "px";
+      transcript.textContent = "Erkannt: " + text;
+      transcript.classList.add("visible");
+      setTimeout(() => {
+        const sendBtn = document.getElementById("sendBtn");
+        if (sendBtn) sendBtn.click();
+        transcript.classList.remove("visible");
+      }, 350);
+    } else {
+      transcript.textContent = "Keine Sprache erkannt.";
+      transcript.classList.add("visible");
+      setTimeout(() => transcript.classList.remove("visible"), 3000);
+    }
+  }
+
+  // ── Timus Voice System starten (Browser-Mikro → Whisper über Server) ─────
   async function startMic() {
     if (listening) return;
     listening = true;
@@ -6062,17 +6099,33 @@ window.handleSSE = function(d) {
     micBtn.classList.add("listening");
     micBtn.title = "Mikrofon aktiv — klicken zum Stoppen";
     updateMobileVoiceState("listening");
-    transcript.textContent = "● Verbinde…";
+    transcript.textContent = "● Aufnahme läuft…";
     transcript.classList.add("visible");
 
-    // Server-seitig Whisper STT ZUERST starten (Priorität vor Browser-Mikro)
     try {
-      const r = await fetch("/voice/listen", { method: "POST" });
-      if (!r.ok) {
-        const body = await r.json().catch(() => ({}));
-        throw new Error((body.error || "HTTP " + r.status));
-      }
-      // Erfolg: Endpoint hat sofort geantwortet, Ergebnis kommt per SSE
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      recordedChunks = [];
+      mediaRecorder = new MediaRecorder(micStream);
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          recordedChunks.push(event.data);
+        }
+      };
+      mediaRecorder.onstop = async () => {
+        const chunkType = recordedChunks[0]?.type || mediaRecorder?.mimeType || "audio/webm";
+        const audioBlob = new Blob(recordedChunks, { type: chunkType });
+        recordedChunks = [];
+        try {
+          await transcribeRecordedAudio(audioBlob);
+        } catch (err) {
+          updateMobileVoiceState("error");
+          transcript.textContent = "Mikrofon-Fehler: " + err.message;
+          transcript.classList.add("visible");
+          setTimeout(() => transcript.classList.remove("visible"), 5000);
+        }
+      };
+      mediaRecorder.start();
+      startLevelLoop(micStream);
     } catch (err) {
       transcript.textContent = "Mikrofon-Fehler: " + err.message;
       transcript.classList.add("visible");
@@ -6083,26 +6136,22 @@ window.handleSSE = function(d) {
       micBtn.classList.remove("listening");
       micBtn.title = "Mikrofon ein/aus (Shift+M)";
       updateMobileVoiceState("error");
-      return;
     }
-
-    // Browser-Mikro für visuelle Pegelanzeige (nach Server-Start, nicht exklusiv)
-    try {
-      micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      startLevelLoop(micStream);
-    } catch { /* Pegel-Animation optional — kein showstopper */ }
   }
 
   function stopMic() {
     if (!listening && !window.voiceActive) return;
     listening = false;
-    window.voiceActive = false;
     micBtn.classList.remove("listening");
     micBtn.title = "Mikrofon ein/aus (Shift+M)";
-    updateMobileVoiceState("idle");
-    transcript.classList.remove("visible");
+    updateMobileVoiceState("thinking");
+    transcript.textContent = "⏳ Aufnahme wird verarbeitet…";
+    transcript.classList.add("visible");
+    if (mediaRecorder && mediaRecorder.state !== "inactive") {
+      mediaRecorder.stop();
+    }
     stopLevelLoop();
-    fetch("/voice/stop", { method: "POST" }).catch(() => {});
+    mediaRecorder = null;
   }
 
   micBtn.addEventListener("click", () => {

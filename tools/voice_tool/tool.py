@@ -213,6 +213,39 @@ class VoiceEngine:
 
         return text
 
+    def transcribe_audio_bytes(self, audio_bytes: bytes, audio_format: Optional[str] = None) -> str:
+        """
+        Transkribiert hochgeladene Audio-Bytes ohne lokalen Mikrofon-Zugriff.
+
+        Args:
+            audio_bytes: Audioinhalt aus Browser oder anderem Client
+            audio_format: Optionaler Format-Hinweis wie ``ogg``, ``webm`` oder ``mp3``
+
+        Returns:
+            Erkannter Text oder leerer String.
+        """
+        if not audio_bytes:
+            return ""
+        if not self.whisper_model:
+            self.initialize()
+
+        from pydub import AudioSegment
+
+        source = io.BytesIO(audio_bytes)
+        audio = AudioSegment.from_file(source, format=audio_format or None)
+        audio = audio.set_channels(1).set_frame_rate(16000)
+        samples = np.array(audio.get_array_of_samples(), dtype=np.float32) / 32768.0
+
+        segments, _ = self.whisper_model.transcribe(
+            samples,
+            language=self.config.language,
+            vad_filter=True,
+            beam_size=5,
+        )
+        text = " ".join(s.text.strip() for s in segments).strip()
+        log.info(f"📝 Browser-Audio erkannt: '{text}'")
+        return text
+
     def synthesize_mp3(self, text: str, voice: Optional[str] = None) -> Optional[bytes]:
         """
         Erzeugt MP3-Audio via Inworld.AI TTS, ohne es lokal abzuspielen.
@@ -321,6 +354,10 @@ class VoiceEngine:
     async def listen_async(self, duration: Optional[float] = None) -> str:
         """Asynchrone Version von listen()."""
         return await asyncio.to_thread(self.listen, duration)
+
+    async def transcribe_audio_bytes_async(self, audio_bytes: bytes, audio_format: Optional[str] = None) -> str:
+        """Asynchrone Browser-/Upload-Transkription ohne Audio-Device."""
+        return await asyncio.to_thread(self.transcribe_audio_bytes, audio_bytes, audio_format)
 
     def set_voice(self, voice_name: str) -> bool:
         """Wechselt die Inworld.AI Stimme."""

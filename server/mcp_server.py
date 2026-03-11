@@ -20,7 +20,7 @@ from datetime import datetime
 # --- Drittanbieter-Bibliotheken ---
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse, FileResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse, FileResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from jsonrpcserver import async_dispatch
 from dotenv import load_dotenv
@@ -1839,6 +1839,48 @@ async def voice_stop_endpoint():
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
 
+@app.post("/voice/transcribe", summary="Browser-Audio hochladen und mit Whisper transkribieren")
+async def voice_transcribe_endpoint(request: Request):
+    """Transkribiert browserseitig aufgenommenes Audio ohne lokalen Mikrofonzugriff."""
+    content_type = request.headers.get("content-type", "")
+    if "multipart" not in content_type:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "error": "multipart/form-data erforderlich"},
+        )
+
+    form = await request.form()
+    file_field = form.get("file")
+    if not file_field:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "error": "Kein 'file'-Feld im Formular"},
+        )
+
+    try:
+        from tools.voice_tool.tool import voice_engine
+
+        filename = getattr(file_field, "filename", "") or ""
+        suffix = Path(filename).suffix.lower().lstrip(".")
+        if suffix == "oga":
+            suffix = "ogg"
+        if suffix not in {"ogg", "webm", "mp3", "wav", "m4a"}:
+            suffix = None
+
+        _broadcast_sse({"type": "voice_status", "message": "Transkribiere Browser-Audio…"})
+        if not voice_engine._initialized:
+            await asyncio.to_thread(voice_engine.initialize)
+
+        audio_bytes = await file_field.read()
+        text = await voice_engine.transcribe_audio_bytes_async(audio_bytes, suffix)
+        _broadcast_sse({"type": "voice_transcript", "text": text, "success": bool(text), "source": "browser_upload"})
+        return {"status": "success", "text": text}
+    except Exception as e:
+        log.error(f"Voice transcribe Fehler: {e}", exc_info=True)
+        _broadcast_sse({"type": "voice_error", "error": str(e)})
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
 @app.post("/voice/speak", summary="Text-to-Speech (Inworld.AI)")
 async def voice_speak_endpoint(payload: dict):
     """Spricht den übergebenen Text mit Inworld.AI TTS."""
@@ -2073,6 +2115,12 @@ async def download_console_file(path: str):
         filename=resolved.name,
         media_type=mime,
     )
+
+
+@app.get("/", include_in_schema=False)
+async def root_console_redirect():
+    """Leitet Browser-Aufrufe der Root-URL auf die Canvas-Konsole um."""
+    return RedirectResponse(url="/canvas/ui", status_code=307)
 
 
 @app.post("/", summary="JSON-RPC Endpoint")

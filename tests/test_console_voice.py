@@ -18,6 +18,11 @@ class _FakeVoiceEngine:
             return None
         return b"ID3fake-mp3"
 
+    async def transcribe_audio_bytes_async(self, audio_bytes, audio_format=None):
+        if not audio_bytes:
+            return ""
+        return f"transcribed:{audio_format or 'unknown'}"
+
 
 async def test_voice_status_endpoint_includes_current_voice(monkeypatch):
     fake_engine = _FakeVoiceEngine()
@@ -38,3 +43,25 @@ async def test_voice_synthesize_endpoint_returns_audio(monkeypatch):
 
     assert response.media_type == "audio/mpeg"
     assert response.body == b"ID3fake-mp3"
+
+
+async def test_voice_transcribe_endpoint_returns_text(monkeypatch):
+    fake_engine = _FakeVoiceEngine()
+    monkeypatch.setattr("tools.voice_tool.tool.voice_engine", fake_engine)
+
+    class _FakeUpload:
+        filename = "voice-input.webm"
+
+        async def read(self):
+            return b"webm-audio"
+
+    class _FakeRequest:
+        headers = {"content-type": "multipart/form-data; boundary=test"}
+
+        async def form(self):
+            return {"file": _FakeUpload()}
+
+    response = await mcp_server.voice_transcribe_endpoint(_FakeRequest())
+
+    assert response["status"] == "success"
+    assert response["text"] == "transcribed:webm"

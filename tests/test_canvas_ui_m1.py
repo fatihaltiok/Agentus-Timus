@@ -22,6 +22,7 @@ def test_build_canvas_ui_html_contains_core_sections():
     assert "/status/snapshot" in html
     assert "/files/recent" in html
     assert "/files/download" in html
+    assert "/voice/transcribe" in html
     assert "/voice/synthesize" in html
     assert "Uploads & Dokumente" in html
     assert "Auto-Vorlesen" in html
@@ -34,8 +35,10 @@ def test_build_canvas_ui_html_contains_core_sections():
 
 def test_canvas_ui_route_registered():
     paths = {route.path for route in app.routes}
+    assert "/" in paths
     assert "/canvas/ui" in paths
     assert "/status/snapshot" in paths
     assert "/files/recent" in paths
     assert "/files/download" in paths
+    assert "/voice/transcribe" in paths
     assert "/voice/synthesize" in paths
