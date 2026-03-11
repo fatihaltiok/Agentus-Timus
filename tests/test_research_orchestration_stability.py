@@ -136,6 +136,43 @@ async def test_search_youtube_adds_location_code(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_search_youtube_falls_back_to_live_when_standard_task_not_found(monkeypatch):
+    from tools.search_tool import tool as search_tool_module
+
+    calls = []
+
+    def _fake_standard(spec, timeout=90, poll_interval=2.0):
+        raise ValueError("DataForSEO Task nicht erfolgreich: Task Not Found.")
+
+    def _fake_live(endpoint: str, payload: list) -> dict:
+        calls.append((endpoint, payload))
+        return {
+            "tasks": [{
+                "status_code": 20000,
+                "result": [{
+                    "items": [{
+                        "type": "youtube_video",
+                        "video_id": "fallback123",
+                        "title": "Fallback Demo",
+                        "url": "https://www.youtube.com/watch?v=fallback123",
+                    }]
+                }],
+            }]
+        }
+
+    monkeypatch.setattr(search_tool_module, "DATAFORSEO_USER", "u")
+    monkeypatch.setattr(search_tool_module, "DATAFORSEO_PASS", "p")
+    monkeypatch.setattr(search_tool_module, "_call_dataforseo_youtube_standard", _fake_standard)
+    monkeypatch.setattr(search_tool_module, "_call_dataforseo_youtube", _fake_live)
+
+    result = await search_tool_module.search_youtube("industrie 4.0", mode="standard")
+
+    assert result[0]["video_id"] == "fallback123"
+    assert calls
+    assert calls[0][0].endswith("/youtube/organic/live/advanced")
+
+
+@pytest.mark.asyncio
 async def test_hotkey_tool_presses_normalized_keys(monkeypatch):
     from tools.mouse_tool import tool as mouse_tool_module
 

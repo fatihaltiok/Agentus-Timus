@@ -6,7 +6,7 @@ from tools.deep_research.youtube_researcher import YouTubeResearcher
 
 
 @pytest.mark.asyncio
-async def test_youtube_researcher_uses_standard_mode_for_search_and_subtitles(monkeypatch):
+async def test_youtube_researcher_uses_live_mode_for_search_and_standard_mode_for_subtitles(monkeypatch):
     calls = []
 
     async def fake_call_tool_internal(name, params):
@@ -41,5 +41,5 @@ async def test_youtube_researcher_uses_standard_mode_for_search_and_subtitles(mo
     analyzed = await researcher.research_topic_on_youtube("agentic ai", session, max_videos=1)
 
     assert analyzed == 1
-    assert any(name == "search_youtube" and params.get("mode") == "standard" for name, params in calls)
+    assert any(name == "search_youtube" and params.get("mode") == "live" for name, params in calls)
     assert any(name == "get_youtube_subtitles" and params.get("mode") == "standard" for name, params in calls)

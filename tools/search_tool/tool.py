@@ -658,6 +658,11 @@ def _call_dataforseo_youtube_standard(
     )
 
 
+def _is_dataforseo_task_not_found(exc: Exception) -> bool:
+    message = str(exc or "").lower()
+    return "task not found" in message
+
+
 @tool(
     name="search_youtube",
     description="Sucht YouTube-Videos via DataForSEO und gibt Metadaten zurück.",
@@ -696,7 +701,28 @@ async def search_youtube(
 
     def _call():
         if spec.mode == DataForSEORetrievalMode.STANDARD:
-            return _call_dataforseo_youtube_standard(spec)
+            try:
+                return _call_dataforseo_youtube_standard(spec)
+            except Exception as exc:
+                if not _is_dataforseo_task_not_found(exc):
+                    raise
+                logger.warning(
+                    "search_youtube: DataForSEO standard task fehlgeschlagen (%s) — Fallback auf live",
+                    exc,
+                )
+                live_spec = YouTubeRequestSpec(
+                    request_type=spec.request_type,
+                    query=spec.query,
+                    video_id=spec.video_id,
+                    language_code=spec.language_code,
+                    location_code=spec.location_code,
+                    max_results=spec.max_results,
+                    device=spec.device,
+                    device_os=spec.device_os,
+                    mode=DataForSEORetrievalMode.LIVE,
+                )
+                endpoint, payload = build_youtube_request(live_spec)
+                return _call_dataforseo_youtube(endpoint, payload)
         endpoint, payload = build_youtube_request(spec)
         return _call_dataforseo_youtube(endpoint, payload)
 

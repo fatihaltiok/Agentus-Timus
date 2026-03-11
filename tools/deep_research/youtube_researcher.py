@@ -169,7 +169,7 @@ class YouTubeResearcher:
             if len(all_videos) >= max_videos * 2:
                 break  # Genug Kandidaten gesammelt
             try:
-                result = await call_tool_internal("search_youtube", {"query": q, "max_results": 5, "mode": "standard"})
+                result = await call_tool_internal("search_youtube", {"query": q, "max_results": 5, "mode": "live"})
                 if isinstance(result, list):
                     for v in result:
                         vid = v.get("video_id", "")
