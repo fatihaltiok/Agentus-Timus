@@ -11,6 +11,10 @@ from orchestration.browser_workflow_eval import evaluate_browser_workflow_case
 
 @deal.post(lambda r: 0.0 <= r["score"] <= 1.0)
 @deal.post(lambda r: isinstance(r["passed"], bool))
+@deal.post(lambda r: 0.0 <= float((r.get("benchmark", {}) or {}).get("state_score", 0.0)) <= 1.0)
+@deal.post(lambda r: 0.0 <= float((r.get("benchmark", {}) or {}).get("evidence_score", 0.0)) <= 1.0)
+@deal.post(lambda r: 0.0 <= float((r.get("benchmark", {}) or {}).get("verification_score", 0.0)) <= 1.0)
+@deal.post(lambda r: 0.0 <= float((r.get("benchmark", {}) or {}).get("recovery_score", 0.0)) <= 1.0)
 def _contract_evaluate_browser_workflow_case(case: dict) -> dict:
     return evaluate_browser_workflow_case(case)
 
@@ -31,3 +35,7 @@ def _contract_evaluate_browser_workflow_case(case: dict) -> dict:
 def test_hypothesis_browser_workflow_eval_score_range(case: dict):
     result = _contract_evaluate_browser_workflow_case(case)
     assert 0.0 <= result["score"] <= 1.0
+    assert 0.0 <= result["benchmark"]["state_score"] <= 1.0
+    assert 0.0 <= result["benchmark"]["evidence_score"] <= 1.0
+    assert 0.0 <= result["benchmark"]["verification_score"] <= 1.0
+    assert 0.0 <= result["benchmark"]["recovery_score"] <= 1.0

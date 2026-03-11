@@ -8,7 +8,7 @@ import asyncio
 import base64
 import time
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -17,7 +17,13 @@ from agent.providers import ModelProvider
 from agent.prompts import VISUAL_SYSTEM_PROMPT
 from agent.shared.json_utils import extract_json_robust
 from agent.shared.vision_formatter import convert_openai_to_anthropic
-from orchestration.browser_workflow_plan import build_browser_workflow_plan
+from orchestration.browser_workflow_plan import (
+    BrowserStateEvidence,
+    BrowserWorkflowPlan,
+    BrowserWorkflowStep,
+    build_browser_workflow_plan,
+    build_structured_browser_workflow_plan,
+)
 
 log = logging.getLogger("TimusAgent-v4.4")
 
@@ -50,6 +56,8 @@ class VisualAgent(BaseAgent):
         self.roi_stack: List[Dict] = []
         self.current_roi: Optional[Dict] = None
         self.current_workflow_plan: List[str] = []
+        self.current_structured_workflow_plan: Optional[BrowserWorkflowPlan] = None
+        self.current_browser_url: str = ""
 
     def _get_screenshot_as_base64(self) -> str:
         if not self._mss_module or not self._pil_image:
@@ -252,18 +260,40 @@ class VisualAgent(BaseAgent):
         task_text = str(task or "").strip()
         if not task_text:
             self.current_workflow_plan = []
+            self.current_structured_workflow_plan = None
             return ""
         task_lower = task_text.lower()
         if not any(token in task_lower for token in ("browser", "website", "webseite", "booking", ".com", ".de", "formular", "login", "anmelden")):
             self.current_workflow_plan = []
+            self.current_structured_workflow_plan = None
             return ""
 
-        self.current_workflow_plan = build_browser_workflow_plan(task_text, self._extract_browser_url(task_text))
-        plan_lines = [f"{index + 1}. {step}" for index, step in enumerate(self.current_workflow_plan[:8])]
+        self.current_structured_workflow_plan = build_structured_browser_workflow_plan(
+            task_text,
+            self._extract_browser_url(task_text),
+        )
+        self.current_workflow_plan = build_browser_workflow_plan(
+            task_text,
+            self._extract_browser_url(task_text),
+        )
+        plan_lines = []
+        for index, step in enumerate(self.current_structured_workflow_plan.steps[:8], start=1):
+            evidence = ", ".join(
+                f"{item.evidence_type}={item.value}" for item in step.success_signal[:2]
+            )
+            plan_lines.append(
+                f"{index}. action={step.action} target={step.target_type}:{step.target_text} "
+                f"expected_state={step.expected_state} timeout={step.timeout:.1f}s "
+                f"fallback={step.fallback_strategy}"
+                + (f" signal=[{evidence}]" if evidence else "")
+            )
         return (
             "STRIKTER BROWSER-ABLAUFPLAN:\n"
+            f"flow_type={self.current_structured_workflow_plan.flow_type} "
+            f"initial_state={self.current_structured_workflow_plan.initial_state}\n"
             + "\n".join(plan_lines)
-            + "\nArbeite strikt schrittweise. Verifiziere jeden Schritt sichtbar, bevor du den naechsten ausfuehrst."
+            + "\nArbeite strikt schrittweise. Wechsle Zustand nur bei harter Evidenz. "
+              "Nutze Fallbacks nur als echten Strategiewechsel, nicht als denselben Retry."
         )
 
     async def _call_llm(self, messages: List[Dict]) -> str:
@@ -371,11 +401,228 @@ class VisualAgent(BaseAgent):
                 "screen_id": "current_screen",
                 "elements": elements,
                 "anchors": [],
+                "current_url": self.current_browser_url,
             }
 
         except Exception as e:
             log.error(f"Screen-Analyse fehlgeschlagen: {e}")
             return None
+
+    def _normalize_match_text(self, value: str) -> str:
+        return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+    def _observation_contains_text(self, observation: Dict[str, Any], needle: str) -> bool:
+        target = self._normalize_match_text(needle)
+        if not target:
+            return False
+        for element in observation.get("elements", []) or []:
+            hay = self._normalize_match_text(element.get("text", ""))
+            if target in hay:
+                return True
+        return False
+
+    def _observation_matches_evidence(self, observation: Dict[str, Any], evidence: BrowserStateEvidence) -> bool:
+        value = str(evidence.value or "").strip()
+        if not value:
+            return False
+        if evidence.evidence_type == "url_contains":
+            current_url = str(observation.get("current_url", "") or "")
+            return value.lower() in current_url.lower()
+        if evidence.evidence_type == "visible_text":
+            return self._observation_contains_text(observation, value)
+        if evidence.evidence_type == "dom_selector":
+            selector = value.lower()
+            if selector in {"input", "textarea", "password"}:
+                return any(
+                    token in self._normalize_match_text(element.get("text", ""))
+                    for element in observation.get("elements", []) or []
+                    for token in ("suche", "search", "email", "e-mail", "name", "nachricht", "passwort", "password")
+                )
+            if selector in {"results", "autocomplete"}:
+                return any(
+                    token in self._normalize_match_text(element.get("text", ""))
+                    for element in observation.get("elements", []) or []
+                    for token in ("ergebnisse", "results", "hotels", "unterkünfte", "unterkuenfte")
+                )
+            return self._observation_contains_text(observation, value)
+        if evidence.evidence_type == "visual_marker":
+            marker = value.lower()
+            if marker == "calendar":
+                return any(
+                    token in self._normalize_match_text(element.get("text", ""))
+                    for element in observation.get("elements", []) or []
+                    for token in ("mär", "maerz", "march", "apr", "mai", "jun", "jul", "aug", "sep", "okt", "nov", "dez")
+                )
+            if marker == "password-filled":
+                return True
+            return self._observation_contains_text(observation, value)
+        return False
+
+    async def _verify_structured_step(self, step: BrowserWorkflowStep) -> Dict[str, Any]:
+        observation = await self._analyze_current_screen() or {"elements": [], "current_url": self.current_browser_url}
+        matched = [
+            f"{evidence.evidence_type}={evidence.value}"
+            for evidence in step.success_signal
+            if self._observation_matches_evidence(observation, evidence)
+        ]
+        return {
+            "success": bool(matched),
+            "matched_signals": matched,
+            "observation": observation,
+        }
+
+    async def _locate_target_coordinates(self, target_text: str, strategy: str) -> Optional[Dict[str, Any]]:
+        safe_target = str(target_text or "").strip()
+        if not safe_target:
+            return None
+        if strategy == "vision_scan":
+            await self._call_tool(
+                "scan_ui_elements",
+                {"element_types": ["button", "input", "text"], "use_zoom": False},
+            )
+        elif strategy == "roi_shift":
+            await self._detect_dynamic_ui_and_set_roi(safe_target)
+        fuzzy_threshold = 85 if strategy == "dom_lookup" else 65
+        try:
+            result = await self._call_tool(
+                "find_text_coordinates",
+                {"text_to_find": safe_target, "fuzzy_threshold": fuzzy_threshold},
+            )
+            if isinstance(result, dict) and result.get("found"):
+                return result
+        except Exception as e:
+            log.debug("Target-Lokalisierung fehlgeschlagen (%s): %s", strategy, e)
+        return None
+
+    def _build_fallback_chain(self, step: BrowserWorkflowStep) -> List[str]:
+        chain = [step.fallback_strategy]
+        for strategy in ("dom_lookup", "ocr_lookup", "vision_scan", "roi_shift"):
+            if strategy not in chain:
+                chain.append(strategy)
+        if "state_backtrack" not in chain:
+            chain.append("state_backtrack")
+        if "abort_with_handoff" not in chain:
+            chain.append("abort_with_handoff")
+        return chain
+
+    async def _execute_structured_step(self, step: BrowserWorkflowStep) -> Dict[str, Any]:
+        if step.action == "navigate":
+            target_url = step.target_text
+            if target_url and not target_url.startswith("http"):
+                target_url = f"https://{target_url}"
+            self.current_browser_url = target_url
+            result = await self._call_tool("start_visual_browser", {"url": target_url})
+            verify = await self._verify_structured_step(step)
+            return {
+                "success": bool(result and result.get("success", True)) and verify["success"],
+                "strategy": "direct_navigate",
+                "verification_result": verify,
+            }
+
+        if step.action == "verify_state":
+            verify = await self._verify_structured_step(step)
+            return {
+                "success": verify["success"],
+                "strategy": "verify_state",
+                "verification_result": verify,
+            }
+
+        fallback_chain = self._build_fallback_chain(step)
+        for strategy in fallback_chain:
+            if strategy == "state_backtrack":
+                verify = await self._verify_structured_step(step)
+                if verify["success"]:
+                    return {
+                        "success": True,
+                        "strategy": strategy,
+                        "verification_result": verify,
+                    }
+                continue
+            if strategy == "abort_with_handoff":
+                return {
+                    "success": False,
+                    "strategy": strategy,
+                    "verification_result": {"success": False, "matched_signals": []},
+                }
+
+            located = await self._locate_target_coordinates(step.target_text, strategy)
+            if not located:
+                continue
+
+            x = int(located.get("x", 0))
+            y = int(located.get("y", 0))
+            if step.action in {"dismiss_cookie", "select_option", "open_panel", "click_target", "submit", "focus_input"}:
+                await self._call_tool("click_at", {"x": x, "y": y})
+                if step.action == "submit":
+                    await self._wait_stable("click_at")
+            elif step.action == "type_text":
+                await self._call_tool("click_at", {"x": x, "y": y})
+                await self._call_tool(
+                    "type_text",
+                    {"text_to_type": step.target_text, "press_enter_after": False, "method": "write"},
+                )
+
+            verify = await self._verify_structured_step(step)
+            if verify["success"]:
+                return {
+                    "success": True,
+                    "strategy": strategy,
+                    "verification_result": verify,
+                }
+        return {
+            "success": False,
+            "strategy": fallback_chain[-1],
+            "verification_result": {"success": False, "matched_signals": []},
+        }
+
+    async def _execute_structured_workflow_plan(self, plan: BrowserWorkflowPlan) -> Dict[str, Any]:
+        execution_log: List[Dict[str, Any]] = []
+        current_state = plan.initial_state
+        plan_id = f"{plan.flow_type}-{int(time.time() * 1000)}"
+
+        for index, step in enumerate(plan.steps, start=1):
+            result = await self._execute_structured_step(step)
+            verification = result.get("verification_result", {}) or {}
+            success = bool(result.get("success"))
+            if success:
+                current_state = step.expected_state
+            log.info(
+                "StructuredBrowserStep plan_id=%s step=%d action=%s expected_state=%s strategy=%s success=%s matched=%s",
+                plan_id,
+                index,
+                step.action,
+                step.expected_state,
+                result.get("strategy", ""),
+                success,
+                verification.get("matched_signals", []),
+            )
+            execution_log.append(
+                {
+                    "plan_id": plan_id,
+                    "step_number": index,
+                    "current_state": current_state,
+                    "action": step.action,
+                    "strategy": result.get("strategy", ""),
+                    "fallback_reason": "" if success else "step_failed",
+                    "verification_result": verification,
+                }
+            )
+            if not success:
+                return {
+                    "success": False,
+                    "error": f"Structured step failed: {step.action}",
+                    "completed_steps": execution_log,
+                    "current_state": current_state,
+                    "plan_id": plan_id,
+                }
+
+        return {
+            "success": True,
+            "result": f"{plan.flow_type} erfolgreich ausgeführt",
+            "completed_steps": execution_log,
+            "current_state": current_state,
+            "plan_id": plan_id,
+        }
 
     async def _create_navigation_plan_with_llm(self, task: str, screen_state: Dict) -> Optional[Dict]:
         try:
@@ -483,6 +730,13 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
     async def _try_structured_navigation(self, task: str) -> Optional[Dict]:
         try:
             log.info("Versuche strukturierte Navigation...")
+
+            if self.current_structured_workflow_plan:
+                structured_result = await self._execute_structured_workflow_plan(
+                    self.current_structured_workflow_plan
+                )
+                if structured_result.get("success"):
+                    return structured_result
 
             screen_state = await self._analyze_current_screen()
             if not screen_state or not screen_state.get("elements"):

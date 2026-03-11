@@ -19,6 +19,7 @@ from hypothesis import strategies as st
 
 from agent import providers as providers_mod
 from agent.agents.visual import VisualAgent
+from orchestration.browser_workflow_plan import BrowserWorkflowPlan, BrowserWorkflowStep, BrowserStateEvidence
 
 
 def _make_agent() -> VisualAgent:
@@ -215,9 +216,106 @@ def test_browser_plan_context_embeds_verifiable_steps():
     )
 
     assert "STRIKTER BROWSER-ABLAUFPLAN" in context
-    assert "Navigiere zu booking.com" in context
-    assert "Verifiziere" in context
+    assert "flow_type=booking_search" in context
+    assert "expected_state=datepicker_open" in context
+    assert "fallback=" in context
     assert agent.current_workflow_plan
+    assert agent.current_structured_workflow_plan is not None
+
+
+@pytest.mark.asyncio
+async def test_execute_structured_workflow_plan_runs_steps_with_state_progression():
+    agent = _make_agent()
+    observation = {
+        "elements": [{"text": "booking", "x": 10, "y": 10}, {"text": "Ergebnisse", "x": 20, "y": 20}],
+        "current_url": "https://booking.com/search",
+    }
+
+    async def fake_call_tool(method, params):
+        if method in {"start_visual_browser", "click_at"}:
+            return {"success": True}
+        raise AssertionError(f"Unexpected tool call: {method}")
+
+    async def fake_analyze_current_screen():
+        return observation
+
+    agent._call_tool = fake_call_tool
+    agent._analyze_current_screen = fake_analyze_current_screen
+    agent.current_browser_url = "https://booking.com/search"
+
+    plan = BrowserWorkflowPlan(
+        flow_type="booking_search",
+        initial_state="landing",
+        steps=[
+            BrowserWorkflowStep(
+                action="navigate",
+                target_type="page",
+                target_text="booking.com",
+                expected_state="landing",
+                success_signal=[BrowserStateEvidence("url_contains", "booking.com")],
+                timeout=18.0,
+                fallback_strategy="abort_with_handoff",
+            ),
+            BrowserWorkflowStep(
+                action="verify_state",
+                target_type="results",
+                target_text="Suchergebnisse sichtbar",
+                expected_state="results_loaded",
+                success_signal=[BrowserStateEvidence("visible_text", "Ergebnisse")],
+                timeout=8.0,
+                fallback_strategy="abort_with_handoff",
+            ),
+        ],
+    )
+
+    result = await agent._execute_structured_workflow_plan(plan)
+
+    assert result["success"] is True
+    assert result["current_state"] == "results_loaded"
+    assert len(result["completed_steps"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_execute_structured_step_uses_real_fallback_strategy_switch(monkeypatch):
+    agent = _make_agent()
+    calls = []
+
+    async def fake_call_tool(method, params):
+        calls.append((method, dict(params)))
+        if method == "find_text_coordinates":
+            threshold = params.get("fuzzy_threshold")
+            if threshold == 85:
+                raise Exception("not found")
+            return {"found": True, "x": 120, "y": 240}
+        if method == "click_at":
+            return {"success": True}
+        return {"success": True}
+
+    async def fake_analyze_current_screen():
+        return {
+            "elements": [{"text": "Berlin", "x": 120, "y": 240}],
+            "current_url": "https://booking.com",
+        }
+
+    monkeypatch.setattr(agent, "_call_tool", fake_call_tool)
+    monkeypatch.setattr(agent, "_analyze_current_screen", fake_analyze_current_screen)
+
+    step = BrowserWorkflowStep(
+        action="click_target",
+        target_type="input",
+        target_text="Berlin",
+        expected_state="search_form",
+        success_signal=[BrowserStateEvidence("visible_text", "Berlin")],
+        timeout=6.0,
+        fallback_strategy="ocr_lookup",
+    )
+
+    result = await agent._execute_structured_step(step)
+
+    assert result["success"] is True
+    find_calls = [item for item in calls if item[0] == "find_text_coordinates"]
+    assert len(find_calls) >= 1
+    assert any(call[1].get("fuzzy_threshold") == 65 for call in find_calls)
 
 
 def test_loop_recovery_hint_references_browser_plan():

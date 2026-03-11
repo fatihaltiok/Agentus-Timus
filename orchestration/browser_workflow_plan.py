@@ -3,127 +3,641 @@
 from __future__ import annotations
 
 import re
-from typing import List
+from dataclasses import dataclass, field
+from typing import Iterable, List
+
+
+ALLOWED_ACTIONS = {
+    "navigate",
+    "dismiss_cookie",
+    "focus_input",
+    "type_text",
+    "select_option",
+    "open_panel",
+    "click_target",
+    "submit",
+    "verify_state",
+}
+ALLOWED_TARGET_TYPES = {
+    "page",
+    "banner",
+    "input",
+    "autocomplete",
+    "datepicker",
+    "button",
+    "form",
+    "modal",
+    "results",
+    "status",
+}
+ALLOWED_EVIDENCE_TYPES = {"url_contains", "visible_text", "dom_selector", "visual_marker"}
+ALLOWED_RECOVERY_TYPES = {
+    "dom_lookup",
+    "ocr_lookup",
+    "vision_scan",
+    "roi_shift",
+    "state_backtrack",
+    "abort_with_handoff",
+}
+ALLOWED_STATES = {
+    "landing",
+    "cookie_banner",
+    "search_form",
+    "autocomplete_open",
+    "datepicker_open",
+    "results_loaded",
+    "login_modal",
+    "form_ready",
+    "form_submitted",
+    "authenticated",
+}
+
+
+@dataclass(frozen=True)
+class BrowserStateEvidence:
+    evidence_type: str
+    value: str
+
+
+@dataclass(frozen=True)
+class BrowserWorkflowStep:
+    action: str
+    target_type: str
+    target_text: str
+    expected_state: str
+    success_signal: List[BrowserStateEvidence] = field(default_factory=list)
+    timeout: float = 8.0
+    retry_strategy: str = "same_step_once"
+    fallback_strategy: str = "dom_lookup"
+
+
+@dataclass(frozen=True)
+class BrowserWorkflowPlan:
+    flow_type: str
+    initial_state: str
+    steps: List[BrowserWorkflowStep]
+
+
+def _evidence(*pairs: tuple[str, str]) -> List[BrowserStateEvidence]:
+    return [
+        BrowserStateEvidence(evidence_type=evidence_type, value=value)
+        for evidence_type, value in pairs
+        if value
+    ]
+
+
+def _step(
+    action: str,
+    target_type: str,
+    target_text: str,
+    expected_state: str,
+    success_signal: Iterable[BrowserStateEvidence],
+    *,
+    timeout: float,
+    retry_strategy: str = "same_step_once",
+    fallback_strategy: str = "dom_lookup",
+) -> BrowserWorkflowStep:
+    return BrowserWorkflowStep(
+        action=action,
+        target_type=target_type,
+        target_text=target_text,
+        expected_state=expected_state,
+        success_signal=list(success_signal),
+        timeout=timeout,
+        retry_strategy=retry_strategy,
+        fallback_strategy=fallback_strategy,
+    )
+
+
+def _ensure_valid_step(step: BrowserWorkflowStep) -> BrowserWorkflowStep:
+    action = step.action if step.action in ALLOWED_ACTIONS else "verify_state"
+    target_type = step.target_type if step.target_type in ALLOWED_TARGET_TYPES else "status"
+    expected_state = step.expected_state if step.expected_state in ALLOWED_STATES else "landing"
+    fallback_strategy = (
+        step.fallback_strategy
+        if step.fallback_strategy in ALLOWED_RECOVERY_TYPES
+        else "abort_with_handoff"
+    )
+    timeout = float(step.timeout or 0.0)
+    timeout = timeout if timeout > 0 else 8.0
+    success_signal = [
+        evidence
+        for evidence in step.success_signal
+        if evidence.evidence_type in ALLOWED_EVIDENCE_TYPES and str(evidence.value or "").strip()
+    ]
+    if not success_signal:
+        success_signal = [BrowserStateEvidence(evidence_type="visible_text", value=step.target_text or expected_state)]
+    return BrowserWorkflowStep(
+        action=action,
+        target_type=target_type,
+        target_text=str(step.target_text or "").strip(),
+        expected_state=expected_state,
+        success_signal=success_signal,
+        timeout=timeout,
+        retry_strategy=str(step.retry_strategy or "same_step_once"),
+        fallback_strategy=fallback_strategy,
+    )
+
+
+def validate_browser_workflow_plan(plan: BrowserWorkflowPlan) -> BrowserWorkflowPlan:
+    steps = [_ensure_valid_step(step) for step in list(plan.steps or [])]
+    if not steps:
+        steps = [
+            _step(
+                "verify_state",
+                "status",
+                "Task abgeschlossen",
+                "landing",
+                _evidence(("visible_text", "Task abgeschlossen")),
+                timeout=4.0,
+                fallback_strategy="abort_with_handoff",
+            )
+        ]
+    initial_state = plan.initial_state if plan.initial_state in ALLOWED_STATES else "landing"
+    flow_type = str(plan.flow_type or "generic_browser_flow").strip() or "generic_browser_flow"
+    return BrowserWorkflowPlan(flow_type=flow_type, initial_state=initial_state, steps=steps)
+
+
+def _extract_domain(url: str) -> str:
+    return (url or "").replace("https://", "").replace("http://", "").split("/")[0]
+
+
+def _extract_destination(task: str) -> str:
+    search_match = re.search(
+        r"(?:suche(?:\s+nach)?|schau(?:\s+nach)?|finde)\s+(?:hotels?\s+in\s+)?(.+?)"
+        r"(?:\s+(?:für\s+den|für|am|vom|ab|und\s+dann|dann|anschließend|anschliessend)|\s+\d{1,2}[./]|$)",
+        task.lower(),
+    )
+    if not search_match:
+        return ""
+    start, end = search_match.span(1)
+    return task[start:end].strip().rstrip(",")
+
+
+def _build_booking_flow(task: str, url: str) -> BrowserWorkflowPlan:
+    safe_task = (task or "").strip()
+    safe_url = (url or "").strip()
+    domain = _extract_domain(safe_url)
+    destination = _extract_destination(safe_task)
+    date_matches = re.findall(r"\d{1,2}[./]\d{1,2}[./]\d{2,4}", safe_task)
+
+    steps: List[BrowserWorkflowStep] = [
+        _step(
+            "navigate",
+            "page",
+            domain or safe_url or "booking",
+            "landing",
+            _evidence(
+                ("url_contains", domain),
+                ("visible_text", "booking"),
+            ),
+            timeout=18.0,
+            fallback_strategy="abort_with_handoff",
+        ),
+        _step(
+            "dismiss_cookie",
+            "banner",
+            "Cookie-Banner nur falls sichtbar",
+            "search_form",
+            _evidence(
+                ("dom_selector", "input"),
+                ("visible_text", "Suche"),
+            ),
+            timeout=6.0,
+            fallback_strategy="vision_scan",
+        ),
+    ]
+
+    if destination:
+        steps.extend(
+            [
+                _step(
+                    "focus_input",
+                    "input",
+                    destination,
+                    "search_form",
+                    _evidence(
+                        ("dom_selector", "input"),
+                        ("visible_text", destination),
+                    ),
+                    timeout=6.0,
+                    fallback_strategy="dom_lookup",
+                ),
+                _step(
+                    "type_text",
+                    "input",
+                    destination,
+                    "search_form",
+                    _evidence(
+                        ("visible_text", destination),
+                        ("dom_selector", destination),
+                    ),
+                    timeout=8.0,
+                    fallback_strategy="ocr_lookup",
+                ),
+                _step(
+                    "select_option",
+                    "autocomplete",
+                    destination,
+                    "autocomplete_open",
+                    _evidence(
+                        ("visible_text", destination),
+                        ("dom_selector", "autocomplete"),
+                    ),
+                    timeout=6.0,
+                    fallback_strategy="vision_scan",
+                ),
+            ]
+        )
+
+    if len(date_matches) >= 2:
+        steps.extend(
+            [
+                _step(
+                    "open_panel",
+                    "datepicker",
+                    "Datepicker",
+                    "datepicker_open",
+                    _evidence(
+                        ("visible_text", date_matches[0]),
+                        ("visual_marker", "calendar"),
+                    ),
+                    timeout=8.0,
+                    fallback_strategy="roi_shift",
+                ),
+                _step(
+                    "select_option",
+                    "datepicker",
+                    date_matches[0],
+                    "datepicker_open",
+                    _evidence(
+                        ("visible_text", date_matches[0]),
+                        ("visual_marker", date_matches[0]),
+                    ),
+                    timeout=8.0,
+                    fallback_strategy="vision_scan",
+                ),
+                _step(
+                    "select_option",
+                    "datepicker",
+                    date_matches[1],
+                    "datepicker_open",
+                    _evidence(
+                        ("visible_text", date_matches[1]),
+                        ("visual_marker", date_matches[1]),
+                    ),
+                    timeout=8.0,
+                    fallback_strategy="vision_scan",
+                ),
+            ]
+        )
+
+    steps.extend(
+        [
+            _step(
+                "submit",
+                "button",
+                "Suche",
+                "results_loaded",
+                _evidence(
+                    ("visible_text", "Ergebnisse"),
+                    ("url_contains", "search"),
+                    ("dom_selector", "results"),
+                ),
+                timeout=16.0,
+                fallback_strategy="state_backtrack",
+            ),
+            _step(
+                "verify_state",
+                "results",
+                "Suchergebnisse sichtbar",
+                "results_loaded",
+                _evidence(
+                    ("visible_text", "Ergebnisse"),
+                    ("dom_selector", "results"),
+                ),
+                timeout=10.0,
+                fallback_strategy="abort_with_handoff",
+            ),
+        ]
+    )
+    return validate_browser_workflow_plan(
+        BrowserWorkflowPlan(flow_type="booking_search", initial_state="landing", steps=steps)
+    )
+
+
+def _build_login_flow(task: str, url: str) -> BrowserWorkflowPlan:
+    safe_task = (task or "").strip()
+    safe_url = (url or "").strip()
+    domain = _extract_domain(safe_url)
+    task_lower = safe_task.lower()
+    steps: List[BrowserWorkflowStep] = [
+        _step(
+            "navigate",
+            "page",
+            domain or safe_url or "login page",
+            "landing",
+            _evidence(
+                ("url_contains", domain),
+                ("visible_text", "login"),
+            ),
+            timeout=18.0,
+            fallback_strategy="abort_with_handoff",
+        ),
+        _step(
+            "verify_state",
+            "modal",
+            "Login-Maske oder Login-Formular",
+            "login_modal",
+            _evidence(
+                ("visible_text", "login"),
+                ("dom_selector", "password"),
+            ),
+            timeout=8.0,
+            fallback_strategy="dom_lookup",
+        ),
+    ]
+    if any(token in task_lower for token in ("benutzername", "username", "email", "e-mail")):
+        steps.extend(
+            [
+                _step(
+                    "focus_input",
+                    "input",
+                    "Benutzername oder E-Mail",
+                    "login_modal",
+                    _evidence(
+                        ("visible_text", "email"),
+                        ("dom_selector", "input"),
+                    ),
+                    timeout=6.0,
+                    fallback_strategy="dom_lookup",
+                ),
+                _step(
+                    "type_text",
+                    "input",
+                    "Benutzername oder E-Mail",
+                    "login_modal",
+                    _evidence(
+                        ("dom_selector", "input"),
+                        ("visible_text", "@"),
+                    ),
+                    timeout=8.0,
+                    fallback_strategy="ocr_lookup",
+                ),
+            ]
+        )
+    if "passwort" in task_lower or "password" in task_lower:
+        steps.extend(
+            [
+                _step(
+                    "focus_input",
+                    "input",
+                    "Passwort",
+                    "login_modal",
+                    _evidence(
+                        ("dom_selector", "password"),
+                        ("visible_text", "password"),
+                    ),
+                    timeout=6.0,
+                    fallback_strategy="dom_lookup",
+                ),
+                _step(
+                    "type_text",
+                    "input",
+                    "Passwort",
+                    "login_modal",
+                    _evidence(
+                        ("dom_selector", "password"),
+                        ("visual_marker", "password-filled"),
+                    ),
+                    timeout=8.0,
+                    fallback_strategy="ocr_lookup",
+                ),
+            ]
+        )
+    steps.extend(
+        [
+            _step(
+                "submit",
+                "button",
+                "Login oder Sign in",
+                "authenticated",
+                _evidence(
+                    ("visible_text", "dashboard"),
+                    ("url_contains", "dashboard"),
+                    ("visible_text", "falsch"),
+                ),
+                timeout=12.0,
+                fallback_strategy="state_backtrack",
+            ),
+            _step(
+                "verify_state",
+                "status",
+                "Eingeloggter Zustand oder sichtbare Fehlermeldung",
+                "authenticated",
+                _evidence(
+                    ("visible_text", "dashboard"),
+                    ("visible_text", "profil"),
+                    ("visible_text", "falsch"),
+                ),
+                timeout=8.0,
+                fallback_strategy="abort_with_handoff",
+            ),
+        ]
+    )
+    return validate_browser_workflow_plan(
+        BrowserWorkflowPlan(flow_type="login_flow", initial_state="landing", steps=steps)
+    )
+
+
+def _build_simple_form_flow(task: str, url: str) -> BrowserWorkflowPlan:
+    safe_task = (task or "").strip()
+    safe_url = (url or "").strip()
+    domain = _extract_domain(safe_url)
+    task_lower = safe_task.lower()
+    steps: List[BrowserWorkflowStep] = [
+        _step(
+            "navigate",
+            "page",
+            domain or safe_url or "formular",
+            "landing",
+            _evidence(
+                ("url_contains", domain),
+                ("visible_text", "formular"),
+            ),
+            timeout=18.0,
+            fallback_strategy="abort_with_handoff",
+        ),
+        _step(
+            "verify_state",
+            "form",
+            "Formular mit sichtbaren Pflichtfeldern",
+            "form_ready",
+            _evidence(
+                ("dom_selector", "form"),
+                ("visible_text", "pflicht"),
+            ),
+            timeout=8.0,
+            fallback_strategy="dom_lookup",
+        ),
+    ]
+    if "name" in task_lower:
+        steps.extend(
+            [
+                _step(
+                    "focus_input",
+                    "input",
+                    "Namensfeld",
+                    "form_ready",
+                    _evidence(("visible_text", "name"), ("dom_selector", "name")),
+                    timeout=6.0,
+                ),
+                _step(
+                    "type_text",
+                    "input",
+                    "Namensfeld",
+                    "form_ready",
+                    _evidence(("visible_text", "name"), ("dom_selector", "name")),
+                    timeout=8.0,
+                    fallback_strategy="ocr_lookup",
+                ),
+            ]
+        )
+    if any(token in task_lower for token in ("email", "e-mail")):
+        steps.extend(
+            [
+                _step(
+                    "focus_input",
+                    "input",
+                    "E-Mail-Feld",
+                    "form_ready",
+                    _evidence(("visible_text", "email"), ("dom_selector", "email")),
+                    timeout=6.0,
+                ),
+                _step(
+                    "type_text",
+                    "input",
+                    "E-Mail-Feld",
+                    "form_ready",
+                    _evidence(("visible_text", "@"), ("dom_selector", "email")),
+                    timeout=8.0,
+                    fallback_strategy="ocr_lookup",
+                ),
+            ]
+        )
+    if any(token in task_lower for token in ("nachricht", "message", "kommentar")):
+        steps.extend(
+            [
+                _step(
+                    "focus_input",
+                    "input",
+                    "Nachrichtenfeld",
+                    "form_ready",
+                    _evidence(("visible_text", "nachricht"), ("dom_selector", "textarea")),
+                    timeout=6.0,
+                ),
+                _step(
+                    "type_text",
+                    "input",
+                    "Nachrichtenfeld",
+                    "form_ready",
+                    _evidence(("dom_selector", "textarea"), ("visible_text", "nachricht")),
+                    timeout=8.0,
+                    fallback_strategy="ocr_lookup",
+                ),
+            ]
+        )
+    if any(token in task_lower for token in ("sende", "absenden", "submit")):
+        steps.extend(
+            [
+                _step(
+                    "submit",
+                    "button",
+                    "Absenden oder Submit",
+                    "form_submitted",
+                    _evidence(
+                        ("visible_text", "erfolgreich"),
+                        ("visible_text", "bestätigung"),
+                        ("visible_text", "fehler"),
+                    ),
+                    timeout=12.0,
+                    fallback_strategy="state_backtrack",
+                ),
+                _step(
+                    "verify_state",
+                    "status",
+                    "Bestätigung, Success-Meldung oder Fehlermeldung",
+                    "form_submitted",
+                    _evidence(
+                        ("visible_text", "erfolgreich"),
+                        ("visible_text", "bestätigung"),
+                        ("visible_text", "fehler"),
+                    ),
+                    timeout=8.0,
+                    fallback_strategy="abort_with_handoff",
+                ),
+            ]
+        )
+    return validate_browser_workflow_plan(
+        BrowserWorkflowPlan(flow_type="simple_form", initial_state="landing", steps=steps)
+    )
+
+
+def build_structured_browser_workflow_plan(task: str, url: str) -> BrowserWorkflowPlan:
+    safe_task = (task or "").strip()
+    safe_url = (url or "").strip()
+    task_lower = safe_task.lower()
+    if "booking" in task_lower or "booking." in safe_url:
+        return _build_booking_flow(safe_task, safe_url)
+    login_markers = ("login", "log in", "sign in", "anmelden", "einloggen")
+    if any(marker in task_lower for marker in login_markers) or "login" in safe_url:
+        return _build_login_flow(safe_task, safe_url)
+    form_markers = ("formular", "kontaktformular", "contact form", "fülle", "fuelle", "trage", "absenden", "sende ab")
+    if any(marker in task_lower for marker in form_markers):
+        return _build_simple_form_flow(safe_task, safe_url)
+    return validate_browser_workflow_plan(
+        BrowserWorkflowPlan(
+            flow_type="generic_browser_flow",
+            initial_state="landing",
+            steps=[
+                _step(
+                    "navigate",
+                    "page",
+                    _extract_domain(safe_url) or safe_url or "webseite",
+                    "landing",
+                    _evidence(
+                        ("url_contains", _extract_domain(safe_url)),
+                        ("visible_text", _extract_domain(safe_url) or "webseite"),
+                    ),
+                    timeout=18.0,
+                    fallback_strategy="abort_with_handoff",
+                ),
+                _step(
+                    "verify_state",
+                    "status",
+                    safe_task or "Browser-Workflow ausführen",
+                    "landing",
+                    _evidence(("visible_text", "sichtbar")),
+                    timeout=8.0,
+                    fallback_strategy="abort_with_handoff",
+                ),
+            ],
+        )
+    )
+
+
+def render_browser_workflow_step(step: BrowserWorkflowStep) -> str:
+    summary = f"{step.action}: {step.target_text}".strip(": ")
+    evidence = ", ".join(f"{item.evidence_type}={item.value}" for item in step.success_signal[:2])
+    return (
+        f"{summary} -> erwarte Zustand '{step.expected_state}'"
+        + (f" | Signal: {evidence}" if evidence else "")
+    )
 
 
 def build_browser_workflow_plan(task: str, url: str) -> List[str]:
     """Turns a natural-language browser task into explicit, verifiable steps."""
-    safe_task = (task or "").strip()
-    safe_url = (url or "").strip()
-    task_lower = safe_task.lower()
-    steps: List[str] = []
-
-    if safe_url:
-        domain = safe_url.replace("https://", "").replace("http://", "").split("/")[0]
-        steps.append(f"Navigiere zu {domain}")
-        steps.append("Verifiziere, dass die Zielseite geladen ist und der Hauptinhalt sichtbar ist")
-        steps.append(
-            "Akzeptiere Cookies NUR falls ein Cookie-Banner sichtbar ist — sonst direkt weiter"
-        )
-
-    search_match = re.search(
-        r"(?:suche(?:\s+nach)?|schau(?:\s+nach)?|finde)\s+(?:hotels?\s+in\s+)?(.+?)"
-        r"(?:\s+(?:für\s+den|für|am|vom|ab|und\s+dann|dann|anschließend|anschliessend)|\s+\d{1,2}[./]|$)",
-        task_lower,
-    )
-    if search_match:
-        start, end = search_match.span(1)
-        destination = safe_task[start:end].strip().rstrip(",")
-        steps.append(
-            f"Klicke auf das Suchfeld und tippe NUR: '{destination}'"
-        )
-        steps.append(
-            f"Wähle den ersten passenden Autocomplete-Vorschlag für '{destination}' "
-            "(falls kein Dropdown erscheint: drücke Enter)"
-        )
-        steps.append(
-            "Verifiziere, dass das Ziel im Suchfeld gesetzt ist oder als ausgewählte Destination sichtbar bleibt"
-        )
-
-    date_matches = re.findall(r"\d{1,2}[./]\d{1,2}[./]\d{2,4}", safe_task)
-    if len(date_matches) >= 2:
-        steps.append("Öffne den Datepicker bzw. Kalender falls er noch nicht sichtbar ist")
-        steps.append(
-            f"Wähle im Kalender das Anreisedatum {date_matches[0]}"
-        )
-        steps.append(
-            f"Wähle im Kalender das Abreisedatum {date_matches[1]}"
-        )
-        steps.append("Verifiziere, dass beide Daten im Datepicker oder Feld markiert sind")
-    elif len(date_matches) == 1:
-        steps.append("Öffne den Datepicker bzw. Kalender")
-        steps.append(f"Wähle im Kalender das Datum {date_matches[0]}")
-        steps.append("Verifiziere, dass das Datum im Feld sichtbar ist")
-
-    persons_match = re.search(
-        r"(\d+)\s*(?:person(?:en)?|erwachsene?|gäste?|reisende?)",
-        task_lower,
-    )
-    if persons_match:
-        steps.append("Öffne den Gäste-/Personen-Dialog")
-        steps.append(
-            f"Setze die Anzahl auf {persons_match.group(1)} Erwachsene"
-        )
-        steps.append("Verifiziere, dass die Gästeanzahl korrekt angezeigt wird")
-
-    login_markers = (
-        "login",
-        "log in",
-        "sign in",
-        "anmelden",
-        "einloggen",
-        "logge dich ein",
-    )
-    if any(marker in task_lower for marker in login_markers):
-        steps.append("Öffne die Login-Maske oder fokussiere das sichtbare Login-Formular")
-        if any(token in task_lower for token in ("benutzername", "username", "email", "e-mail")):
-            steps.append("Fülle das Feld für Benutzername oder E-Mail aus")
-            steps.append("Verifiziere, dass der Benutzername oder die E-Mail im Feld sichtbar ist")
-        if "passwort" in task_lower or "password" in task_lower:
-            steps.append("Fülle das Passwort-Feld aus")
-            steps.append("Verifiziere, dass das Passwort-Feld befüllt wirkt ohne Klartext anzuzeigen")
-        steps.append("Klicke auf den Login-/Sign-in-Button")
-        steps.append("Verifiziere, dass ein eingeloggter Zustand, Dashboard oder eine Erfolgs-/Fehlermeldung sichtbar ist")
-
-    form_markers = (
-        "formular",
-        "kontaktformular",
-        "contact form",
-        "fülle",
-        "fuelle",
-        "trage",
-        "absenden",
-        "sende ab",
-    )
-    if any(marker in task_lower for marker in form_markers):
-        steps.append("Fokussiere das relevante Formular und prüfe, dass alle Pflichtfelder sichtbar sind")
-        if "name" in task_lower:
-            steps.append("Fülle das Namensfeld aus")
-            steps.append("Verifiziere, dass der Name im Feld sichtbar ist")
-        if any(token in task_lower for token in ("email", "e-mail")):
-            steps.append("Fülle das E-Mail-Feld aus")
-            steps.append("Verifiziere, dass die E-Mail im Feld sichtbar ist")
-        if any(token in task_lower for token in ("nachricht", "message", "kommentar")):
-            steps.append("Fülle das Nachrichten- oder Textfeld aus")
-            steps.append("Verifiziere, dass der Nachrichtentext im Textfeld sichtbar ist")
-        if any(token in task_lower for token in ("sende", "absenden", "submit")):
-            steps.append("Klicke auf den Absenden-/Submit-Button")
-            steps.append("Verifiziere, dass eine Bestätigung, Success-Meldung oder Fehlermeldung sichtbar ist")
-
-    click_match = re.search(
-        r"(?:klicke\s+auf|extrahiere|zeige\s+(?:mir)?)\s+(.+?)(?:\s+(?:und|dann)|$)",
-        task_lower,
-    )
-    if search_match:
-        steps.append("Klicke auf den Suche-Button oder löse die Suche per Enter aus")
-        steps.append("Verifiziere, dass Suchergebnisse oder eine Ergebnisseite sichtbar sind")
-    if click_match:
-        start, end = click_match.span(1)
-        steps.append(f"Interagiere gezielt mit: {safe_task[start:end].strip()}")
-
-    if len(steps) <= 3:
-        steps.append(f"Führe den Browser-Workflow strukturiert aus: {safe_task}")
-        steps.append("Verifiziere nach jedem Schritt, dass die erwartete UI-Reaktion eingetreten ist")
-
+    plan = build_structured_browser_workflow_plan(task, url)
+    steps = [render_browser_workflow_step(step) for step in plan.steps]
     steps.append("Beende Task und berichte Ergebnisse")
     return steps
