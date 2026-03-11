@@ -37,6 +37,20 @@ def test_evaluate_query_orchestration_routes_login_workflow_to_meta():
     assert decision["reason"] in {"login_workflow", "multi_action"}
 
 
+def test_evaluate_query_orchestration_routes_interactive_youtube_and_x_workflows_to_meta():
+    youtube_decision = evaluate_query_orchestration(
+        "Öffne YouTube, suche nach KI News März 2026 und öffne das erste relevante Video"
+    )
+    x_decision = evaluate_query_orchestration(
+        "Öffne x.com und schreibe Hallo aus Timus in einen neuen Beitrag"
+    )
+
+    assert youtube_decision["route_to_meta"] is True
+    assert youtube_decision["reason"] in {"interactive_browser_workflow", "multi_action"}
+    assert x_decision["route_to_meta"] is True
+    assert x_decision["reason"] in {"interactive_browser_workflow", "multi_action"}
+
+
 def test_evaluate_parallel_tasks_blocks_explicit_dependencies():
     decision = evaluate_parallel_tasks(
         [

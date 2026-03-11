@@ -29,6 +29,9 @@ ALLOWED_TARGET_TYPES = {
     "modal",
     "results",
     "status",
+    "timeline",
+    "composer",
+    "video",
 }
 ALLOWED_EVIDENCE_TYPES = {"url_contains", "visible_text", "dom_selector", "visual_marker"}
 ALLOWED_RECOVERY_TYPES = {
@@ -50,6 +53,9 @@ ALLOWED_STATES = {
     "form_ready",
     "form_submitted",
     "authenticated",
+    "timeline_ready",
+    "compose_ready",
+    "video_page",
 }
 
 
@@ -583,12 +589,248 @@ def _build_simple_form_flow(task: str, url: str) -> BrowserWorkflowPlan:
     )
 
 
+def _build_youtube_flow(task: str, url: str) -> BrowserWorkflowPlan:
+    safe_task = (task or "").strip()
+    safe_url = (url or "").strip()
+    domain = _extract_domain(safe_url)
+    task_lower = safe_task.lower()
+    query_match = re.search(
+        r"(?:suche(?:\s+nach)?|finde)\s+(.+?)(?:\s+(?:auf|bei)\s+youtube|\s+dann|\s+und|$)",
+        task_lower,
+    )
+    query_text = safe_task[query_match.start(1):query_match.end(1)].strip() if query_match else "Suchbegriff"
+
+    steps: List[BrowserWorkflowStep] = [
+        _step(
+            "navigate",
+            "page",
+            domain or safe_url or "youtube.com",
+            "landing",
+            _evidence(
+                ("url_contains", "youtube"),
+                ("visible_text", "youtube"),
+            ),
+            timeout=18.0,
+            fallback_strategy="abort_with_handoff",
+        ),
+        _step(
+            "dismiss_cookie",
+            "banner",
+            "Cookie-Banner nur falls sichtbar",
+            "search_form",
+            _evidence(
+                ("visible_text", "Suche"),
+                ("dom_selector", "input"),
+            ),
+            timeout=6.0,
+            fallback_strategy="vision_scan",
+        ),
+        _step(
+            "focus_input",
+            "input",
+            "YouTube-Suche",
+            "search_form",
+            _evidence(
+                ("visible_text", "Suche"),
+                ("dom_selector", "input"),
+            ),
+            timeout=6.0,
+            fallback_strategy="dom_lookup",
+        ),
+        _step(
+            "type_text",
+            "input",
+            query_text,
+            "search_form",
+            _evidence(
+                ("visible_text", query_text),
+                ("dom_selector", "input"),
+            ),
+            timeout=8.0,
+            fallback_strategy="ocr_lookup",
+        ),
+        _step(
+            "submit",
+            "button",
+            "Suche",
+            "results_loaded",
+            _evidence(
+                ("url_contains", "results"),
+                ("visible_text", query_text),
+                ("dom_selector", "results"),
+            ),
+            timeout=14.0,
+            fallback_strategy="state_backtrack",
+        ),
+        _step(
+            "click_target",
+            "video",
+            "Erstes relevantes Video",
+            "video_page",
+            _evidence(
+                ("url_contains", "watch"),
+                ("visible_text", query_text),
+            ),
+            timeout=10.0,
+            fallback_strategy="vision_scan",
+        ),
+        _step(
+            "verify_state",
+            "video",
+            "Videoseite sichtbar",
+            "video_page",
+            _evidence(
+                ("url_contains", "watch"),
+                ("visible_text", query_text),
+            ),
+            timeout=8.0,
+            fallback_strategy="abort_with_handoff",
+        ),
+    ]
+    return validate_browser_workflow_plan(
+        BrowserWorkflowPlan(flow_type="youtube_search", initial_state="landing", steps=steps)
+    )
+
+
+def _build_x_compose_flow(task: str, url: str) -> BrowserWorkflowPlan:
+    safe_task = (task or "").strip()
+    safe_url = (url or "").strip()
+    domain = _extract_domain(safe_url)
+    task_lower = safe_task.lower()
+    post_text_match = re.search(
+        r"(?:schreibe|verfasse|poste|poste auf x|tweet(?:e)?)\s+(.+?)(?:\s+dann|\s+und|$)",
+        safe_task,
+        flags=re.IGNORECASE,
+    )
+    post_text = post_text_match.group(1).strip() if post_text_match else "Beitrag"
+    needs_login = any(token in task_lower for token in ("login", "anmelden", "sign in", "einloggen"))
+
+    steps: List[BrowserWorkflowStep] = [
+        _step(
+            "navigate",
+            "page",
+            domain or safe_url or "x.com",
+            "landing",
+            _evidence(
+                ("url_contains", "x.com"),
+                ("visible_text", "X"),
+            ),
+            timeout=18.0,
+            fallback_strategy="abort_with_handoff",
+        ),
+        _step(
+            "dismiss_cookie",
+            "banner",
+            "Cookie-Banner nur falls sichtbar",
+            "timeline_ready" if not needs_login else "login_modal",
+            _evidence(
+                ("visible_text", "Passwort" if needs_login else "Was gibt's Neues"),
+                ("url_contains", "login" if needs_login else "x.com"),
+            ),
+            timeout=6.0,
+            fallback_strategy="vision_scan",
+        ),
+    ]
+    if needs_login:
+        steps.extend(
+            [
+                _step(
+                    "verify_state",
+                    "modal",
+                    "Login-Maske sichtbar",
+                    "login_modal",
+                    _evidence(
+                        ("visible_text", "Passwort"),
+                        ("visible_text", "Telefon"),
+                    ),
+                    timeout=8.0,
+                    fallback_strategy="dom_lookup",
+                ),
+                _step(
+                    "verify_state",
+                    "timeline",
+                    "Timeline nach Login sichtbar",
+                    "timeline_ready",
+                    _evidence(
+                        ("visible_text", "Was gibt's Neues"),
+                        ("visible_text", "Startseite"),
+                    ),
+                    timeout=8.0,
+                    fallback_strategy="abort_with_handoff",
+                ),
+            ]
+        )
+    else:
+        steps.append(
+            _step(
+                "verify_state",
+                "timeline",
+                "Timeline sichtbar",
+                "timeline_ready",
+                _evidence(
+                    ("visible_text", "Was gibt's Neues"),
+                    ("visible_text", "Startseite"),
+                ),
+                timeout=8.0,
+                fallback_strategy="dom_lookup",
+            )
+        )
+
+    steps.extend(
+        [
+            _step(
+                "click_target",
+                "composer",
+                "Post verfassen",
+                "compose_ready",
+                _evidence(
+                    ("visible_text", "Was passiert"),
+                    ("visible_text", "Post"),
+                ),
+                timeout=8.0,
+                fallback_strategy="vision_scan",
+            ),
+            _step(
+                "type_text",
+                "composer",
+                post_text,
+                "compose_ready",
+                _evidence(
+                    ("visible_text", post_text),
+                    ("visible_text", "Post"),
+                ),
+                timeout=8.0,
+                fallback_strategy="ocr_lookup",
+            ),
+            _step(
+                "verify_state",
+                "composer",
+                "Composer mit Beitrag sichtbar",
+                "compose_ready",
+                _evidence(
+                    ("visible_text", post_text),
+                    ("visible_text", "Post"),
+                ),
+                timeout=8.0,
+                fallback_strategy="abort_with_handoff",
+            ),
+        ]
+    )
+    return validate_browser_workflow_plan(
+        BrowserWorkflowPlan(flow_type="x_compose", initial_state="landing", steps=steps)
+    )
+
+
 def build_structured_browser_workflow_plan(task: str, url: str) -> BrowserWorkflowPlan:
     safe_task = (task or "").strip()
     safe_url = (url or "").strip()
     task_lower = safe_task.lower()
     if "booking" in task_lower or "booking." in safe_url:
         return _build_booking_flow(safe_task, safe_url)
+    if "youtube" in task_lower or "youtube." in safe_url or "youtu.be" in safe_url:
+        return _build_youtube_flow(safe_task, safe_url)
+    if any(marker in task_lower for marker in ("x.com", "twitter", "tweet", "poste auf x", "beitrag auf x")) or "x.com" in safe_url:
+        return _build_x_compose_flow(safe_task, safe_url)
     login_markers = ("login", "log in", "sign in", "anmelden", "einloggen")
     if any(marker in task_lower for marker in login_markers) or "login" in safe_url:
         return _build_login_flow(safe_task, safe_url)

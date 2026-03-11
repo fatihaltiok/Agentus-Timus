@@ -82,6 +82,39 @@ BROWSER_WORKFLOW_EVAL_CASES: List[Dict[str, Any]] = [
             "form_submitted",
         ],
     },
+    {
+        "name": "youtube_search",
+        "query": "Öffne YouTube, suche nach KI News März 2026 und öffne das erste relevante Video",
+        "task": "Suche nach KI News März 2026 auf YouTube und öffne das erste relevante Video",
+        "url": "https://youtube.com",
+        "expected_route_to_meta": True,
+        "required_markers": [
+            "navigate: youtube.com",
+            "results_loaded",
+            "video_page",
+        ],
+        "required_states": [
+            "search_form",
+            "results_loaded",
+            "video_page",
+        ],
+    },
+    {
+        "name": "x_compose",
+        "query": "Öffne x.com und schreibe Hallo aus Timus in einen neuen Beitrag",
+        "task": "Öffne x.com und schreibe Hallo aus Timus in einen neuen Beitrag",
+        "url": "https://x.com",
+        "expected_route_to_meta": True,
+        "required_markers": [
+            "navigate: x.com",
+            "timeline_ready",
+            "compose_ready",
+        ],
+        "required_states": [
+            "timeline_ready",
+            "compose_ready",
+        ],
+    },
 ]
 
 

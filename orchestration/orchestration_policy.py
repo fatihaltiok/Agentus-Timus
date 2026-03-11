@@ -100,6 +100,17 @@ _LOGIN_MARKERS = (
     "logge dich ein",
 )
 
+_INTERACTIVE_BROWSER_DOMAINS = (
+    "booking.com",
+    "youtube",
+    "youtu.be",
+    "x.com",
+    "twitter",
+    "linkedin",
+    "outlook",
+    "github.com/login",
+)
+
 _DEPENDENCY_PATTERNS = (
     r"\baus schritt\b",
     r"\baus dem ergebnis\b",
@@ -137,6 +148,9 @@ def evaluate_query_orchestration(query: str) -> Dict[str, Any]:
             "sende",
             "schicke",
             "speichere",
+            "suche nach",
+            "suche",
+            "finde",
             "gib ein",
             "trage",
             "fülle",
@@ -156,6 +170,10 @@ def evaluate_query_orchestration(query: str) -> Dict[str, Any]:
     has_login_workflow = any(marker in normalized for marker in _LOGIN_MARKERS) and any(
         token in normalized for token in ("benutzername", "username", "email", "e-mail", "passwort", "password")
     )
+    has_interactive_browser_workflow = (
+        any(domain in normalized for domain in _INTERACTIVE_BROWSER_DOMAINS)
+        and action_count >= 2
+    )
 
     route_to_meta = (
         len(capability_hits) >= 2
@@ -163,6 +181,7 @@ def evaluate_query_orchestration(query: str) -> Dict[str, Any]:
         or bool(dependency_markers)
         or bool(deliverable_markers)
         or has_login_workflow
+        or has_interactive_browser_workflow
     )
     return {
         "route_to_meta": route_to_meta,
@@ -180,6 +199,8 @@ def evaluate_query_orchestration(query: str) -> Dict[str, Any]:
             if deliverable_markers
             else "login_workflow"
             if has_login_workflow
+            else "interactive_browser_workflow"
+            if has_interactive_browser_workflow
             else "multi_action"
             if action_count >= 3
             else "single_lane"

@@ -67,3 +67,21 @@ def test_build_structured_browser_workflow_plan_for_login_and_form_use_reference
     assert form_plan.flow_type == "simple_form"
     assert any(step.expected_state == "form_ready" for step in form_plan.steps)
     assert any(step.expected_state == "form_submitted" for step in form_plan.steps)
+
+
+def test_build_structured_browser_workflow_plan_for_youtube_and_x_use_site_profiles():
+    youtube_plan = build_structured_browser_workflow_plan(
+        "Suche nach KI News März 2026 auf YouTube und öffne das erste relevante Video",
+        "https://youtube.com",
+    )
+    x_plan = build_structured_browser_workflow_plan(
+        "Öffne x.com und schreibe Hallo aus Timus in einen neuen Beitrag",
+        "https://x.com",
+    )
+
+    assert youtube_plan.flow_type == "youtube_search"
+    assert any(step.expected_state == "results_loaded" for step in youtube_plan.steps)
+    assert any(step.expected_state == "video_page" for step in youtube_plan.steps)
+    assert x_plan.flow_type == "x_compose"
+    assert any(step.expected_state == "timeline_ready" for step in x_plan.steps)
+    assert any(step.expected_state == "compose_ready" for step in x_plan.steps)
