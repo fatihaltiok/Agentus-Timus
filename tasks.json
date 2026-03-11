@@ -155,10 +155,10 @@
       "description": "Phase 2 — Finalisiere Coverbild: Erstelle finales Cover, das die wichtigsten Erkenntnisse aus den Research-Tasks (OpenAI, Anthropic, Google) visuell zusammenfasst. Anforderungen: 1920x1080 PNG (Hauptdatei), zusätzliche Varianten/Crops für Mobile (z.B. 1080x1350) und eine editierbare Quelldatei (PSD oder SVG). Stil: futuristisch, Tech-Ästhetik, dunkle Farben, klare Typografie, Platz für Titel/Subtitel. Nutze vorhandenes vorläufiges Cover als Basis falls vorhanden. Speichern unter: /home/fatih-ubuntu/Bilder/ki_cover_final.png und /home/fatih-ubuntu/Bilder/ki_cover_final.psd. Deliverables: PNG 1920x1080, mobile Variant(en), PSD/SVG, kurze Notiz zu verwendeten Assets/Schriften.",
       "priority": 1,
       "target_agent": "creative",
-      "status": "pending",
+      "status": "in_progress",
       "created_at": "2026-02-24T14:32:20.506019",
       "completed_at": null,
-      "result_summary": null
+      "result_summary": "Delegation an creative-Agent fehlgeschlagen - Agent gibt leere Antwort zurück. Benötigt Debugging oder manuellen Eingriff."
     }
   ]
 }

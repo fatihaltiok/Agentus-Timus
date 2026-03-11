@@ -286,3 +286,11 @@ email: timus.assistent@outlook.com
 passwort:s2!XhXZY6H7Zw4P
 
 
+  sudo systemctl start timus-mcp.service
+  sudo systemctl start timus-dispatcher.service
+  systemctl status timus-mcp.service timus-dispatcher.service --no-pager
+  curl -sS http://127.0.0.1:5000/health
+
+
+
+

@@ -9,7 +9,7 @@ preferences:
 goals:
   - deinen autonmomie lever steigern
 constraints: []
-updated_at: 2026-03-09T22:55:23.817996
+updated_at: 2026-03-11T15:24:13.420181
 ---
 
 # Benutzer-Profil
@@ -38,4 +38,4 @@ Nicht gesetzt
 Keine Constraints
 
 ---
-*Zuletzt aktualisiert: 2026-03-09T22:55:23.817996*
+*Zuletzt aktualisiert: 2026-03-11T15:24:13.420181*
