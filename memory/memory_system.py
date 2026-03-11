@@ -1720,28 +1720,47 @@ class MemoryManager:
 
         # Wenn eine Session explizit angefragt ist, stelle sicher, dass ein
         # session-lokales Ereignis in den Top-Ergebnissen enthalten bleibt.
+        # Bei "offen"/temporal Recall soll bevorzugt ein ungelöstes Session-
+        # Ereignis vorne stehen statt ein fremdes altes Incident aus einer
+        # anderen Session.
         if session_id:
-            has_session_event = any(
-                item.get("source") == "interaction_event" and item.get("session_id") == session_id
-                for item in unique
-            )
-            if not has_session_event:
-                session_events = [
-                    item for item in event_memories if item.get("session_id") == session_id
-                ]
-                if session_events:
-                    session_events.sort(
-                        key=lambda item: item.get("relevance_score", 0.0),
-                        reverse=True,
-                    )
-                    preferred = session_events[0]
-                    unique = [preferred] + [
+            session_events = [
+                item for item in event_memories if item.get("session_id") == session_id
+            ]
+            preferred: Optional[Dict[str, Any]] = None
+            if session_events:
+                session_events.sort(
+                    key=lambda item: item.get("relevance_score", 0.0),
+                    reverse=True,
+                )
+                preferred = session_events[0]
+                if prefer_unresolved:
+                    unresolved_session_events = [
                         item
-                        for item in unique
-                        if self._normalize_text_for_prompt(item.get("id", ""))
-                        != self._normalize_text_for_prompt(preferred.get("id", ""))
+                        for item in session_events
+                        if self._is_unresolved_response_text(item.get("text", ""))
                     ]
-                    unique = unique[:n_results]
+                    if unresolved_session_events:
+                        unresolved_session_events.sort(
+                            key=lambda item: item.get("relevance_score", 0.0),
+                            reverse=True,
+                        )
+                        preferred = unresolved_session_events[0]
+
+            has_preferred_front = (
+                bool(unique)
+                and preferred is not None
+                and self._normalize_text_for_prompt(unique[0].get("id", ""))
+                == self._normalize_text_for_prompt(preferred.get("id", ""))
+            )
+            if preferred is not None and not has_preferred_front:
+                unique = [preferred] + [
+                    item
+                    for item in unique
+                    if self._normalize_text_for_prompt(item.get("id", ""))
+                    != self._normalize_text_for_prompt(preferred.get("id", ""))
+                ]
+                unique = unique[:n_results]
 
         return {
             "status": "success",
