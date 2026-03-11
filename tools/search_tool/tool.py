@@ -201,6 +201,10 @@ def build_youtube_request(spec: YouTubeRequestSpec) -> tuple[str, list[dict[str,
     payload = _youtube_payload_for_spec(spec)
 
     if spec.mode == DataForSEORetrievalMode.LIVE:
+        if spec.request_type == YouTubeRequestType.ORGANIC_SEARCH and payload:
+            # Der aktuelle YouTube live/advanced Endpoint lehnt `depth` ab.
+            # Wir slicen danach lokal auf `max_results`, daher lassen wir das Feld im Live-Pfad weg.
+            payload[0].pop("depth", None)
         return f"{base_path}/live/advanced", payload
     if spec.mode == DataForSEORetrievalMode.STANDARD:
         return f"{base_path}/task_post", payload

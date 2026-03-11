@@ -114,6 +114,21 @@ def test_build_youtube_request_standard_uses_task_post():
     )
     assert endpoint == "/v3/serp/youtube/organic/task_post"
     assert payload[0]["keyword"] == "agentic ai"
+    assert payload[0]["depth"] >= 1
+
+
+def test_build_youtube_request_live_omits_depth_for_organic_search():
+    endpoint, payload = build_youtube_request(
+        YouTubeRequestSpec(
+            request_type=YouTubeRequestType.ORGANIC_SEARCH,
+            query="agentic ai",
+            max_results=5,
+            mode=DataForSEORetrievalMode.LIVE,
+        )
+    )
+    assert endpoint == "/v3/serp/youtube/organic/live/advanced"
+    assert payload[0]["keyword"] == "agentic ai"
+    assert "depth" not in payload[0]
 
 
 def test_build_youtube_task_get_endpoint_is_advanced():
