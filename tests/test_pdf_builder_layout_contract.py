@@ -67,6 +67,22 @@ def test_build_template_sections_embeds_figures_and_lead(tmp_path):
     assert len(section["figures"]) == 1
 
 
+def test_build_template_sections_skips_heading_for_lead_and_deduplicates_body():
+    builder = ResearchPDFBuilder()
+
+    sections = builder._build_template_sections(
+        [("Methodik", "### Recherche-Ansatz\n\nErste Kernaussage.\n\nMehr Kontext.")],
+        {},
+    )
+
+    assert len(sections) == 1
+    section = sections[0]
+    assert section["lead"] == "Erste Kernaussage."
+    assert "<h3>Recherche-Ansatz</h3>" in section["text_html"]
+    assert section["text_html"].count("Erste Kernaussage.") == 0
+    assert "Mehr Kontext." in section["text_html"]
+
+
 def test_template_contains_new_cover_and_figure_hooks():
     template = Path("tools/deep_research/report_template.html").read_text(encoding="utf-8")
     assert 'class="cover"' in template

@@ -1850,6 +1850,20 @@ def _source_flag_string(source: Any) -> str:
     return ", ".join(flags) if flags else "-"
 
 
+def _research_confidence_snapshot(
+    *,
+    robust_claim_count: int,
+    contract_claims_count: int,
+    high_quality_percent: float,
+) -> tuple[str, str]:
+    reliability_rate = robust_claim_count / max(contract_claims_count, 1)
+    if robust_claim_count >= 3 and reliability_rate >= 0.6 and high_quality_percent >= 60:
+        return "Hoch", "mehrere belastbare Claims werden von einer ueberwiegend starken Quellenbasis getragen"
+    if robust_claim_count >= 1 and reliability_rate >= 0.3:
+        return "Mittel", "erste belastbare Claims liegen vor, die Evidenz ist aber noch nicht in allen Teilfragen gleich dicht"
+    return "Niedrig", "die belastbare Evidenz ist noch zu duenn oder zu ungleichmaessig verteilt"
+
+
 def _derive_research_state_from_metrics(
     *,
     quality_gate_passed: bool,
@@ -2023,6 +2037,20 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
     vendor_only_claims = meta["vendor_only_claims_count"]
     insufficient_claims = meta["insufficient_claims_count"]
     contract_claims = meta["contract_claims_count"]
+    robust_claim_count = confirmed_claims + likely_claims
+    excellent_count = session.source_quality_summary.get("excellent", 0)
+    good_count = session.source_quality_summary.get("good", 0)
+    high_quality_percent = ((excellent_count + good_count) / max(meta["total_sources_processed"], 1) * 100)
+    confidence_label, confidence_reason = _research_confidence_snapshot(
+        robust_claim_count=robust_claim_count,
+        contract_claims_count=contract_claims,
+        high_quality_percent=high_quality_percent,
+    )
+    conflict_claims = [
+        claim for claim in claims
+        if claim.verdict in {ClaimVerdict.CONTESTED, ClaimVerdict.MIXED_EVIDENCE} or claim.unknowns
+    ]
+    open_questions = list(dict.fromkeys(contract.open_questions))
 
     lines: List[str] = []
 
@@ -2052,54 +2080,142 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
     lines.extend([
         "---",
         "",
-        "## Inhaltsverzeichnis",
+        "## Executive Briefing",
         "",
-        "1. [Executive Summary](#executive-summary)",
-        "2. [Executive Verdict Table](#executive-verdict-table)",
-        "3. [Domain Scorecards](#domain-scorecards)",
-        "4. [Methodik](#methodik)",
-        "5. [Claim Register](#claim-register)",
-        "6. [These-Antithese-Synthese Analysen](#these-antithese-synthese-analysen)",
-        "7. [Conflicts & Unknowns](#conflicts--unknowns)",
-        "8. [Quellenqualitäts-Analyse](#quellenqualitäts-analyse)",
-        "9. [Limitationen & Unsicherheiten](#limitationen--unsicherheiten)",
-        "10. [Schlussfolgerungen](#schlussfolgerungen)",
-        "11. [Quellenanhang](#quellenanhang)",
-        "",
-        "---",
-        "",
-        "## Executive Summary",
+        f"**Forschungsfrage:** {session.query}",
         "",
     ])
 
     if claims:
         lines.extend([
             (
-                f"Diese Tiefenrecherche zum Thema '{session.query}' basiert auf der Analyse von "
-                f"{meta['total_sources_processed']} Quellen. Die Claim-Auswertung ergab "
-                f"{confirmed_claims} confirmed, {likely_claims} likely und "
-                f"{mixed_claims + vendor_only_claims} gemischte/noch eingeschränkte Claims "
-                f"bei insgesamt {contract_claims} strukturierten Claims."
+                f"**Kurzurteil:** Auf Basis von {meta['total_sources_processed']} Quellen lassen sich "
+                f"{robust_claim_count} von {contract_claims} strukturierten Claims als belastbar "
+                f"(confirmed/likely) einordnen. Gleichzeitig bleiben "
+                f"{mixed_claims + vendor_only_claims + insufficient_claims} Claims strittig, eingeschraenkt "
+                f"oder noch nicht tragfaehig belegt."
             ),
             "",
-            "**Zentrale Erkenntnisse:**",
+            f"**Confidence:** {confidence_label} - {confidence_reason}.",
+            "",
+            (
+                "**Leserichtung:** Zuerst folgen die Kernthesen, offenen Konflikte und Schlussfolgerungen. "
+                "Der anschliessende analytische Teil dokumentiert die Evidenzstruktur, Methodik und das Claim-Register."
+            ),
             "",
         ])
-        for idx, claim in enumerate(claims[:3], 1):
-            lines.append(f"{idx}. {claim.claim_text} *({_claim_verdict_label(claim.verdict.value)})*")
-        lines.append("")
     else:
         lines.extend([
-            "_Keine strukturierten Claims für die Executive Summary verfügbar._",
+            "**Kurzurteil:** Die Recherche hat noch keine ausreichend tragfaehigen strukturierten Claims geliefert.",
+            "",
+            "**Confidence:** Niedrig - die Evidenzbasis ist fuer ein belastbares Urteil noch zu duenn.",
             "",
         ])
 
     if session.source_quality_summary:
-        excellent_count = session.source_quality_summary.get("excellent", 0)
-        good_count = session.source_quality_summary.get("good", 0)
-        high_quality_percent = ((excellent_count + good_count) / max(meta["total_sources_processed"], 1) * 100)
         lines.extend([
-            f"**Quellenqualität:** {high_quality_percent:.0f}% der Quellen wurden als 'Excellent' oder 'Good' eingestuft.",
+            f"**Quellenqualitaet:** {high_quality_percent:.0f}% der Quellen wurden als 'Excellent' oder 'Good' eingestuft.",
+            "",
+        ])
+
+    lines.extend([
+        "---",
+        "",
+        "## Kernthesen",
+        "",
+    ])
+
+    if claims:
+        for idx, claim in enumerate(claims[:5], 1):
+            lines.extend([
+                f"### These {idx}",
+                "",
+                f"**Kernaussage:** {claim.claim_text}",
+                "",
+                (
+                    f"**Einordnung:** Verdict {_claim_verdict_label(claim.verdict.value)}, "
+                    f"Domain {claim.domain}, Confidence {claim.confidence:.2f}, "
+                    f"{len(claim.supports)} unterstuetzende und {len(claim.contradicts)} widersprechende Evidenzen."
+                ),
+                "",
+            ])
+            if claim.unknowns:
+                lines.append(f"**Grenzen:** {', '.join(claim.unknowns[:4])}")
+                lines.append("")
+    else:
+        lines.extend([
+            "_Keine belastbaren Kernthesen verfuegbar._",
+            "",
+        ])
+
+    lines.extend([
+        "---",
+        "",
+        "## Conflicts & Unknowns",
+        "",
+    ])
+
+    if conflict_claims or session.conflicting_info or open_questions:
+        lines.extend([
+            "### Konfliktbehaftete Claims",
+            "",
+        ])
+        for idx, claim in enumerate(conflict_claims[:10], 1):
+            lines.extend([
+                f"**Claim #{idx}:** {claim.claim_text}",
+                f"- **Verdict:** {_claim_verdict_label(claim.verdict.value)}",
+                f"- **Unknowns:** {', '.join(claim.unknowns[:4]) if claim.unknowns else '-'}",
+                f"- **Hinweise:** {claim.notes or '-'}",
+                "",
+            ])
+        if session.conflicting_info:
+            lines.extend(["### Laufzeit-Konflikte aus der Verifikation", ""])
+            for idx, conflict in enumerate(session.conflicting_info[:5], 1):
+                lines.extend([
+                    f"**Konflikt #{idx}:**",
+                    f"- **Fakt:** {conflict.get('fact', 'N/A')}",
+                    f"- **Interne Confidence:** {conflict.get('internal_confidence', 0):.2f}",
+                    f"- **Corroborator Confidence:** {conflict.get('corroborator_confidence', 0):.2f}",
+                    f"- **Hinweis:** {conflict.get('note', '')}",
+                    "",
+                ])
+        if open_questions:
+            lines.extend(["### Offene Fragen", ""])
+            for idx, item in enumerate(open_questions[:10], 1):
+                lines.append(f"{idx}. {item}")
+            lines.append("")
+    else:
+        lines.extend([
+            "Derzeit zeigen die strukturierten Claims keine ausgepraegte Konfliktlage; offene Punkte betreffen vor allem Reichweite und Vollstaendigkeit der Evidenz.",
+            "",
+        ])
+
+    lines.extend([
+        "---",
+        "",
+        "## Schlussfolgerungen",
+        "",
+    ])
+
+    if claims:
+        claim_reliability_rate = (robust_claim_count / max(contract_claims, 1) * 100)
+        lines.extend([
+            (
+                f"Die Recherche liefert derzeit {robust_claim_count} belastbare Claims aus {contract_claims} "
+                f"strukturierten Claims ({claim_reliability_rate:.1f}% confirmed/likely). "
+                "Am belastbarsten sind die Aussagen mit mehreren unterstuetzenden Evidenzen und klarer Domain-Zuordnung."
+            ),
+            "",
+        ])
+        if session.thesis_analyses:
+            lines.extend(["**Zentrale Schlussfolgerungen:**", ""])
+            for idx, analysis in enumerate(session.thesis_analyses, 1):
+                if analysis.synthesis:
+                    lines.append(f"{idx}. **{analysis.topic}:** {analysis.synthesis}")
+            lines.append("")
+    else:
+        lines.extend([
+            "Die Recherche konnte noch keine ausreichend belastbaren Claims liefern; weitere Primaer- oder Vergleichsquellen sind erforderlich.",
             "",
         ])
 
@@ -2112,9 +2228,9 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
         "|---------|-------|-----------|",
         f"| Confirmed | {claim_summary['confirmed']} | Mehrere starke, profilkonforme Evidenzen |",
         f"| Likely | {claim_summary['likely']} | Gute, aber noch nicht maximale Evidenzbasis |",
-        f"| Mixed / Contested | {claim_summary['mixed_evidence'] + claim_summary['contested']} | Widersprüchliche oder gemischte Evidenz |",
+        f"| Mixed / Contested | {claim_summary['mixed_evidence'] + claim_summary['contested']} | Widerspruechliche oder gemischte Evidenz |",
         f"| Vendor Claim Only | {claim_summary['vendor_claim_only']} | Nur Anbieter-/Eigenclaim |",
-        f"| Insufficient | {claim_summary['insufficient_evidence']} | Noch keine tragfähige Evidenz |",
+        f"| Insufficient | {claim_summary['insufficient_evidence']} | Noch keine tragfaehige Evidenz |",
         "",
         "---",
         "",
@@ -2135,7 +2251,7 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
         lines.append("")
     else:
         lines.extend([
-            "_Noch keine Domain-Scorecards verfügbar._",
+            "_Noch keine Domain-Scorecards verfuegbar._",
             "",
         ])
 
@@ -2147,11 +2263,11 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
             "",
             "### Recherche-Ansatz",
             "",
-            "Diese Tiefenrecherche wurde mit Multi-Query-Websuche, Quellenklassifikation, Claim->Evidence->Verdict-Logik und optionalem Fact-Corroborator durchgeführt.",
+            "Diese Tiefenrecherche wurde mit Multi-Query-Websuche, Quellenklassifikation, Claim->Evidence->Verdict-Logik und optionalem Fact-Corroborator durchgefuehrt.",
             "",
             f"- Verifikations-Modus: {'Strikt (≥3 Quellen)' if 'strict' in str(session.research_metadata.get('verification_mode', '')) else 'Moderat (≥2 Quellen)'}",
             "- Claim-Verdicts: confirmed, likely, mixed/contested, vendor-only, insufficient",
-            "- Profile-aware Beweismaßstäbe für News, Scientific, Policy, Vendor Comparison usw.",
+            "- Profile-aware Beweismassstaebe fuer News, Scientific, Policy, Vendor Comparison usw.",
             "",
             "---",
             "",
@@ -2183,7 +2299,7 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
                 f"- **Verdict:** {_claim_verdict_label(claim.verdict.value)}",
                 f"- **Domain:** {claim.domain}",
                 f"- **Confidence:** {claim.confidence:.2f}",
-                f"- **Unterstützende Evidenzen:** {len(claim.supports)}",
+                f"- **Unterstuetzende Evidenzen:** {len(claim.supports)}",
                 f"- **Widersprechende Evidenzen:** {len(claim.contradicts)}",
                 f"- **Beispielquellen:** {support_note}",
             ])
@@ -2196,7 +2312,7 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
             lines.append("")
     else:
         lines.extend([
-            "_Keine strukturierten Claims verfügbar._",
+            "_Keine strukturierten Claims verfuegbar._",
             "",
         ])
 
@@ -2206,29 +2322,29 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
         lines.extend([
             "## These-Antithese-Synthese Analysen",
             "",
-            "Folgende dialektische Analysen wurden durchgeführt, um ein ausgewogenes Verständnis zu erreichen:",
+            "Die folgenden dialektischen Analysen vertiefen die Kernthesen und zeigen, wo die Evidenz robust, widerspruechlich oder noch unsicher ist.",
             "",
         ])
         for idx, analysis in enumerate(session.thesis_analyses, 1):
             lines.extend([
                 f"### Analyse #{idx}: {analysis.topic}",
                 "",
-                "#### 📘 These",
+                "#### These",
                 "",
                 f"> {analysis.thesis}",
                 "",
                 f"**Confidence:** {analysis.thesis_confidence:.2f}",
-                f"**Unterstützende Quellen:** {len(analysis.supporting_sources)}",
+                f"**Unterstuetzende Quellen:** {len(analysis.supporting_sources)}",
                 "",
             ])
             if analysis.supporting_facts:
-                lines.append("**Unterstützende Evidenz:**")
+                lines.append("**Unterstuetzende Evidenz:**")
                 for fact in analysis.supporting_facts[:3]:
                     lines.append(f"- {fact.get('fact')}")
                 lines.append("")
             if analysis.antithesis:
                 lines.extend([
-                    "#### 📕 Antithese",
+                    "#### Antithese",
                     "",
                     f"> {analysis.antithesis}",
                     "",
@@ -2238,7 +2354,7 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
                 ])
             if analysis.synthesis:
                 lines.extend([
-                    "#### 📗 Synthese",
+                    "#### Synthese",
                     "",
                     f"> {analysis.synthesis}",
                     "",
@@ -2247,52 +2363,14 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
                 ])
             lines.extend(["---", ""])
 
-    conflict_claims = [
-        claim for claim in claims
-        if claim.verdict in {ClaimVerdict.CONTESTED, ClaimVerdict.MIXED_EVIDENCE} or claim.unknowns
-    ]
-    open_questions = list(dict.fromkeys(contract.open_questions))
-    if conflict_claims or session.conflicting_info or open_questions:
-        lines.extend([
-            "## Conflicts & Unknowns",
-            "",
-            "### Konfliktbehaftete Claims",
-            "",
-        ])
-        for idx, claim in enumerate(conflict_claims[:10], 1):
-            lines.extend([
-                f"**Claim #{idx}:** {claim.claim_text}",
-                f"- **Verdict:** {_claim_verdict_label(claim.verdict.value)}",
-                f"- **Unknowns:** {', '.join(claim.unknowns[:4]) if claim.unknowns else '-'}",
-                f"- **Hinweise:** {claim.notes or '-'}",
-                "",
-            ])
-        if session.conflicting_info:
-            lines.extend(["### Laufzeit-Konflikte aus der Verifikation", ""])
-            for idx, conflict in enumerate(session.conflicting_info[:5], 1):
-                lines.extend([
-                    f"**Konflikt #{idx}:**",
-                    f"- **Fakt:** {conflict.get('fact', 'N/A')}",
-                    f"- **Interne Confidence:** {conflict.get('internal_confidence', 0):.2f}",
-                    f"- **Corroborator Confidence:** {conflict.get('corroborator_confidence', 0):.2f}",
-                    f"- **Hinweis:** {conflict.get('note', '')}",
-                    "",
-                ])
-        if open_questions:
-            lines.extend(["### Offene Fragen", ""])
-            for idx, item in enumerate(open_questions[:10], 1):
-                lines.append(f"{idx}. {item}")
-            lines.append("")
-        lines.extend(["---", ""])
-
     if session.source_quality_summary or session.bias_summary:
-        lines.extend(["## Quellenqualitäts-Analyse", ""])
+        lines.extend(["## Quellenqualitaets-Analyse", ""])
         if session.source_quality_summary:
             lines.extend([
-                "### Qualitätsverteilung der Quellen",
+                "### Qualitaetsverteilung der Quellen",
                 "",
-                "| Qualitätsstufe | Anzahl | Prozent |",
-                "|----------------|--------|---------|",
+                "| Qualitaetsstufe | Anzahl | Prozent |",
+                "|-----------------|--------|---------|",
             ])
             total = max(1, sum(session.source_quality_summary.values()))
             for quality in ["excellent", "good", "medium", "poor", "unknown"]:
@@ -2326,14 +2404,14 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
     ])
     poor_count = session.source_quality_summary.get("poor", 0)
     if poor_count > 0:
-        poor_percent = (poor_count / max(meta["total_sources_processed"], 1) * 100)
+        poor_percent = poor_count / max(meta["total_sources_processed"], 1) * 100
         lines.extend([
-            f"2. **Quellenqualität:** {poor_percent:.0f}% der Quellen wurden als 'Poor' eingestuft.",
+            f"2. **Quellenqualitaet:** {poor_percent:.0f}% der Quellen wurden als 'Poor' eingestuft.",
             "",
         ])
     if meta["unverified_claims_count"] > 0:
         lines.extend([
-            f"3. **Noch offene Claims:** {meta['unverified_claims_count']} extrahierte Aussagen konnten nicht in confirmed/likely Claims überführt werden.",
+            f"3. **Noch offene Claims:** {meta['unverified_claims_count']} extrahierte Aussagen konnten nicht in confirmed/likely Claims ueberfuehrt werden.",
             "",
         ])
     if open_questions:
@@ -2342,42 +2420,13 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
             "",
         ])
     lines.extend([
-        "5. **Zeitpunkt:** Diese Recherche wurde zum angegebenen Datum durchgeführt.",
+        "5. **Zeitpunkt:** Diese Recherche wurde zum angegebenen Datum durchgefuehrt.",
         "",
-        "---",
-        "",
-        "## Schlussfolgerungen",
-        "",
-    ])
-
-    if claims:
-        claim_reliability_rate = ((confirmed_claims + likely_claims) / max(contract_claims, 1) * 100)
-        lines.extend([
-            (
-                f"Diese Tiefenrecherche liefert auf Basis von {meta['total_sources_processed']} Quellen "
-                f"{confirmed_claims + likely_claims} belastbare Claims aus {contract_claims} strukturierten Claims "
-                f"({claim_reliability_rate:.1f}% confirmed/likely)."
-            ),
-            "",
-        ])
-        if session.thesis_analyses:
-            lines.extend(["**Zentrale Schlussfolgerungen:**", ""])
-            for idx, analysis in enumerate(session.thesis_analyses, 1):
-                if analysis.synthesis:
-                    lines.append(f"{idx}. **{analysis.topic}:** {analysis.synthesis}")
-            lines.append("")
-    else:
-        lines.extend([
-            "Die Recherche konnte keine ausreichend belastbaren Claims liefern.",
-            "",
-        ])
-
-    lines.extend([
         "---",
         "",
         "## Quellenanhang",
         "",
-        "Alle im Research-Contract geführten Quellen mit Tier-, Typ- und Bias-Metadaten:",
+        "Alle im Research-Contract gefuehrten Quellen mit Tier-, Typ- und Bias-Metadaten:",
         "",
         "| # | Tier | Typ | Bias | Flags | Titel | URL |",
         "|---|------|-----|------|-------|-------|-----|",
@@ -2394,14 +2443,14 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
         "",
         "---",
         "",
-        "### Über diesen Bericht",
+        "### Ueber diesen Bericht",
         "",
         "Dieser Bericht wurde automatisiert von **Timus Deep Research v8.0 - Evidence Engine** erstellt.",
         "",
         "**Features:**",
         "- Claim -> Evidence -> Verdict",
         "- Profile-aware Verifikation",
-        "- Quellenqualitäts-Bewertung",
+        "- Quellenqualitaets-Bewertung",
         "- Bias-Erkennung",
         "- Transparente Methodik",
         "",

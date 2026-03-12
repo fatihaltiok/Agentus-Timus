@@ -215,12 +215,13 @@ class ResearchPDFBuilder:
     ) -> List[Dict[str, object]]:
         template_sections: List[Dict[str, object]] = []
         for idx, (heading, text) in enumerate(sections, start=1):
+            lead, body_markdown = self._extract_lead_and_body(text)
             template_sections.append({
                 "index": idx,
                 "heading": heading,
                 "slug": self._slugify(heading),
-                "lead": self._extract_lead(text),
-                "text_html": self._markdown_to_html(text),
+                "lead": lead,
+                "text_html": self._markdown_to_html(body_markdown),
                 "figures": figures_by_section.get(heading, []),
             })
         return template_sections
@@ -243,14 +244,37 @@ class ResearchPDFBuilder:
         return metrics
 
     @staticmethod
-    def _extract_lead(text: str) -> str:
-        for raw_line in text.splitlines():
+    def _extract_lead_and_body(text: str) -> Tuple[str, str]:
+        lines = text.splitlines()
+        lead_idx: Optional[int] = None
+        lead_text = ""
+
+        for idx, raw_line in enumerate(lines):
             line = raw_line.strip()
             if not line:
                 continue
-            line = re.sub(r"^\s*[-*•]\s+", "", line)
-            return line[:260]
-        return ""
+            if re.match(r"^#{1,6}\s+", line):
+                continue
+            if re.match(r"^\s*[-*•]\s+", raw_line):
+                continue
+            if line.startswith("|") and line.endswith("|"):
+                continue
+            if re.match(r"^\s*\d+\.\s+", raw_line):
+                continue
+            candidate = re.sub(r"^\s*>\s*", "", line)
+            if candidate:
+                lead_idx = idx
+                lead_text = candidate[:260]
+                break
+
+        if lead_idx is None:
+            return "", text
+
+        body_lines = [raw_line for idx, raw_line in enumerate(lines) if idx != lead_idx]
+        body_markdown = "\n".join(body_lines).strip()
+        if not body_markdown:
+            return "", text
+        return lead_text, body_markdown
 
     @staticmethod
     def _slugify(text: str) -> str:
@@ -349,6 +373,20 @@ class ResearchPDFBuilder:
             table_lines = []
 
         for line in lines:
+            if re.match(r"^####\s+", line):
+                flush_para()
+                flush_ul()
+                flush_table()
+                heading_text = re.sub(r"^####\s+", "", line).strip()
+                html_parts.append(f"<h4>{self._inline_md(heading_text)}</h4>")
+                continue
+            if re.match(r"^###\s+", line):
+                flush_para()
+                flush_ul()
+                flush_table()
+                heading_text = re.sub(r"^###\s+", "", line).strip()
+                html_parts.append(f"<h3>{self._inline_md(heading_text)}</h3>")
+                continue
             if is_table_line(line):
                 flush_para()
                 flush_ul()

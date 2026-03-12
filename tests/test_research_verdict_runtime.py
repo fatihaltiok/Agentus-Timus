@@ -134,8 +134,15 @@ def test_academic_report_uses_claim_language_instead_of_blanket_multisource_veri
     report = _create_academic_markdown_report(session)
 
     assert "**Claim-Status:** 1 confirmed" in report
+    assert "Executive Briefing" in report
+    assert "Kernthesen" in report
     assert "Executive Verdict Table" in report
     assert "Domain Scorecards" in report
     assert "Claim Register" in report
+    assert "Schlussfolgerungen" in report
     assert "Quellenanhang" in report
+    assert "## Inhaltsverzeichnis" not in report
     assert "durch mehrere unabhängige Quellen verifiziert werden" not in report
+    assert report.index("## Executive Briefing") < report.index("## Executive Verdict Table")
+    assert report.index("## Kernthesen") < report.index("## Claim Register")
+    assert report.index("## Schlussfolgerungen") < report.index("## Domain Scorecards")
