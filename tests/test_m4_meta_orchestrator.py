@@ -46,6 +46,15 @@ def test_meta_system_prompt_routes_browser_workflows_to_visual():
     assert "Jede Visual-Teilaufgabe braucht einen klaren Erfolgshinweis" in META_SYSTEM_PROMPT
 
 
+def test_meta_system_prompt_prefers_structured_delegation_handoffs():
+    from agent.prompts import META_SYSTEM_PROMPT
+
+    assert "STRUKTURIERTE DELEGATION" in META_SYSTEM_PROMPT
+    assert "# DELEGATION HANDOFF" in META_SYSTEM_PROMPT
+    assert "expected_output" in META_SYSTEM_PROMPT
+    assert "success_signal" in META_SYSTEM_PROMPT
+
+
 def test_meta_delegation_aliases():
     """T4.3 — 'koordinator' und 'orchestrator' sind Aliases fuer 'meta'."""
     from agent.agent_registry import AgentRegistry

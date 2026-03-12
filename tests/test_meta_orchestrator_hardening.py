@@ -73,6 +73,12 @@ async def test_meta_reroutes_send_email_to_communication(monkeypatch):
     assert captured["method"] == "delegate_to_agent"
     assert captured["params"]["agent_type"] == "communication"
     assert captured["params"]["session_id"] == "sess-meta-mail"
+    assert captured["params"]["task"].startswith("# DELEGATION HANDOFF")
+    assert "target_agent: communication" in captured["params"]["task"]
+    assert "expected_output: Nachricht oder Versandstatus" in captured["params"]["task"]
+    assert "success_signal: Nachricht formuliert oder versendet" in captured["params"]["task"]
+    assert "handoff_data:" in captured["params"]["task"]
+    assert "recipient: fatihaltiok@outlook.com" in captured["params"]["task"]
     assert "fatihaltiok@outlook.com" in captured["params"]["task"]
     assert "Bericht" in captured["params"]["task"]
 
@@ -101,6 +107,9 @@ async def test_meta_converts_empty_delegation_response_into_explicit_error(monke
     )
 
     assert captured["method"] == "delegate_to_agent"
+    assert captured["params"]["task"].startswith("# DELEGATION HANDOFF")
+    assert "target_agent: research" in captured["params"]["task"]
+    assert "expected_output: summary, sources oder artifacts" in captured["params"]["task"]
     assert result["status"] == "error"
     assert "leere oder unvollstaendige Antwort" in result["error"]
     assert result["metadata"]["delegation_transport_error"] is True

@@ -26,6 +26,11 @@ def test_evaluate_query_orchestration_keeps_single_lane_simple_browser_step():
 
     assert decision["route_to_meta"] is False
     assert "visual" in decision["capabilities"]
+    assert decision["task_type"] == "ui_navigation"
+    assert decision["site_kind"] == "booking"
+    assert decision["recommended_entry_agent"] == "visual"
+    assert decision["recommended_agent_chain"] == ["visual"]
+    assert decision["needs_structured_handoff"] is False
 
 
 def test_evaluate_query_orchestration_routes_login_workflow_to_meta():
@@ -47,8 +52,29 @@ def test_evaluate_query_orchestration_routes_interactive_youtube_and_x_workflows
 
     assert youtube_decision["route_to_meta"] is True
     assert youtube_decision["reason"] in {"interactive_browser_workflow", "multi_action"}
+    assert youtube_decision["task_type"] == "multi_stage_web_task"
+    assert youtube_decision["site_kind"] == "youtube"
+    assert youtube_decision["recommended_agent_chain"] == ["meta", "visual"]
     assert x_decision["route_to_meta"] is True
     assert x_decision["reason"] in {"interactive_browser_workflow", "multi_action"}
+    assert x_decision["task_type"] == "multi_stage_web_task"
+    assert x_decision["site_kind"] == "x"
+    assert x_decision["recommended_agent_chain"] == ["meta", "visual"]
+
+
+def test_evaluate_query_orchestration_classifies_youtube_content_extraction_chain():
+    decision = evaluate_query_orchestration(
+        "Öffne YouTube, hole maximal viel Inhalt aus dem Video und schreibe einen Bericht"
+    )
+
+    assert decision["task_type"] == "youtube_content_extraction"
+    assert decision["site_kind"] == "youtube"
+    assert decision["recommended_entry_agent"] == "meta"
+    assert decision["recommended_agent_chain"] == ["meta", "visual", "research", "document"]
+    assert decision["needs_structured_handoff"] is True
+    assert "browser_navigation" in decision["required_capabilities"]
+    assert "content_extraction" in decision["required_capabilities"]
+    assert "document_creation" in decision["required_capabilities"]
 
 
 def test_evaluate_parallel_tasks_blocks_explicit_dependencies():

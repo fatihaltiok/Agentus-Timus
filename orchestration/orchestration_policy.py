@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List
 
+from orchestration.meta_orchestration import classify_meta_task
+
 
 _CAPABILITY_KEYWORDS = {
     "research": (
@@ -183,6 +185,10 @@ def evaluate_query_orchestration(query: str) -> Dict[str, Any]:
         or has_login_workflow
         or has_interactive_browser_workflow
     )
+    meta_task = classify_meta_task(normalized, action_count=action_count)
+    route_to_meta = route_to_meta or meta_task["recommended_entry_agent"] == "meta" or len(
+        meta_task["recommended_agent_chain"]
+    ) > 1
     return {
         "route_to_meta": route_to_meta,
         "capabilities": sorted(capability_hits.keys()),
@@ -190,6 +196,23 @@ def evaluate_query_orchestration(query: str) -> Dict[str, Any]:
         "action_count": action_count,
         "dependency_markers": dependency_markers,
         "deliverable_markers": deliverable_markers,
+        "task_type": meta_task["task_type"],
+        "site_kind": meta_task["site_kind"],
+        "required_capabilities": meta_task["required_capabilities"],
+        "recommended_entry_agent": (
+            "meta"
+            if route_to_meta and meta_task["recommended_entry_agent"] != "meta"
+            else meta_task["recommended_entry_agent"]
+        ),
+        "recommended_agent_chain": (
+            meta_task["recommended_agent_chain"]
+            if not route_to_meta or meta_task["recommended_agent_chain"][0] == "meta"
+            else ["meta"] + meta_task["recommended_agent_chain"]
+        ),
+        "needs_structured_handoff": bool(route_to_meta or meta_task["needs_structured_handoff"]),
+        "meta_classification_reason": meta_task["reason"],
+        "recommended_recipe_id": meta_task.get("recommended_recipe_id"),
+        "recipe_stages": list(meta_task.get("recipe_stages") or []),
         "reason": (
             "multi_capability"
             if len(capability_hits) >= 2

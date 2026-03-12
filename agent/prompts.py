@@ -756,6 +756,27 @@ FORMAT fuer Delegation:
 Action: {{"method": "delegate_to_agent",
          "params": {{"agent_type": "research", "task": "...", "from_agent": "meta"}}}}
 
+STRUKTURIERTE DELEGATION (bevorzugt):
+Wenn du an Spezialagenten delegierst, verpacke die Aufgabe moeglichst als klaren Handoff:
+- Ziel / goal
+- erwarteter Output / expected_output
+- Erfolgssignal / success_signal
+- constraints
+- handoff_data
+
+Beispiel:
+# DELEGATION HANDOFF
+target_agent: visual
+goal: Oeffne die Zielseite und erreiche die Resultatliste.
+expected_output: page_state, captured_context
+success_signal: Resultatliste sichtbar oder Zielzustand bestaetigt
+constraints: keine_desktruktiven_aktionen
+handoff_data:
+- target_url: https://example.com
+
+# TASK
+Oeffne die Zielseite und bringe den Flow bis zur sichtbaren Resultatliste.
+
 ## AGENTERGEBNIS LESEN — METADATA ZUERST PRÜFEN
 
 Jede Delegation gibt ein strukturiertes Dict zurück:

@@ -56,6 +56,7 @@ from orchestration.lane_manager import lane_manager, LaneStatus
 from orchestration.browser_workflow_plan import build_browser_workflow_plan
 from orchestration.llm_budget_guard import evaluate_llm_budget, resolve_soft_budget_model_override
 from orchestration.orchestration_policy import evaluate_query_orchestration
+from orchestration.meta_orchestration import build_meta_feedback_targets, meta_agent_chain_key
 from orchestration.self_improvement_engine import LLMUsageRecord, get_improvement_engine
 from tools.tool_registry_v2 import registry_v2
 from agent.providers import ModelProvider, get_provider_client
@@ -1554,6 +1555,143 @@ def _apply_dispatcher_feedback_bias(user_query: str, decision: str) -> str:
     return candidate
 
 
+def _build_meta_handoff_payload(query: str) -> dict:
+    """Erzeugt ein kompaktes, strukturiertes Handoff fuer Meta."""
+    policy = evaluate_query_orchestration(query)
+    payload = {
+        "task_type": policy.get("task_type", "single_lane"),
+        "site_kind": policy.get("site_kind"),
+        "required_capabilities": list(policy.get("required_capabilities") or []),
+        "recommended_entry_agent": policy.get("recommended_entry_agent", "meta"),
+        "recommended_agent_chain": list(policy.get("recommended_agent_chain") or ["meta"]),
+        "needs_structured_handoff": bool(policy.get("needs_structured_handoff")),
+        "reason": policy.get("meta_classification_reason") or policy.get("reason") or "unknown",
+        "recommended_recipe_id": policy.get("recommended_recipe_id"),
+        "recipe_stages": list(policy.get("recipe_stages") or []),
+    }
+    payload["feedback_targets"] = build_meta_feedback_targets(payload)
+    payload["learning_snapshot"] = _build_meta_learning_snapshot(payload)
+    return payload
+
+
+def _build_meta_learning_snapshot(payload: dict) -> dict:
+    """Liefert konservative Outcome-Hinweise fuer Meta-Rezepte und Agentenketten."""
+    baseline = {
+        "posture": "neutral",
+        "recipe_score": None,
+        "recipe_evidence": 0,
+        "chain_key": None,
+        "chain_score": None,
+        "chain_evidence": 0,
+        "task_type_score": None,
+        "task_type_evidence": 0,
+    }
+    try:
+        from orchestration.feedback_engine import get_feedback_engine
+
+        engine = get_feedback_engine()
+        recipe_id = str(payload.get("recommended_recipe_id") or "").strip().lower()
+        task_type = str(payload.get("task_type") or "").strip().lower()
+        chain_key = meta_agent_chain_key(payload.get("recommended_agent_chain") or [])
+
+        def _score(namespace: str, key: str) -> tuple[float | None, int]:
+            if not key:
+                return None, 0
+            stats = engine.get_target_stats(namespace, key, default=1.0)
+            score = engine.get_effective_target_score(namespace, key, default=1.0)
+            return round(float(score), 2), int(stats.get("evidence_count", 0) or 0)
+
+        recipe_score, recipe_evidence = _score("meta_recipe", recipe_id)
+        chain_score, chain_evidence = _score("meta_agent_chain", chain_key)
+        task_type_score, task_type_evidence = _score("meta_task_type", task_type)
+
+        evidence = max(recipe_evidence, chain_evidence, task_type_evidence)
+        posture = "neutral"
+        observed_scores = [score for score in (recipe_score, chain_score, task_type_score) if score is not None]
+        if evidence >= 3 and observed_scores:
+            min_score = min(observed_scores)
+            max_score = max(observed_scores)
+            if min_score <= 0.95:
+                posture = "conservative"
+            elif max_score >= 1.08:
+                posture = "preferred"
+
+        return {
+            "posture": posture,
+            "recipe_score": recipe_score,
+            "recipe_evidence": recipe_evidence,
+            "chain_key": chain_key or None,
+            "chain_score": chain_score,
+            "chain_evidence": chain_evidence,
+            "task_type_score": task_type_score,
+            "task_type_evidence": task_type_evidence,
+        }
+    except Exception as e:
+        log.debug("Meta-Learning-Snapshot uebersprungen: %s", e)
+        return baseline
+
+
+def _render_meta_handoff_block(payload: dict) -> str:
+    """Formatiert den Dispatcher-zu-Meta-Handoff fuer den Prompt."""
+    lines = ["# META ORCHESTRATION HANDOFF"]
+    lines.append(f"task_type: {payload.get('task_type', 'single_lane')}")
+    if payload.get("site_kind"):
+        lines.append(f"site_kind: {payload['site_kind']}")
+    capabilities = list(payload.get("required_capabilities") or [])
+    if capabilities:
+        lines.append(f"required_capabilities: {', '.join(capabilities)}")
+    chain = list(payload.get("recommended_agent_chain") or [])
+    if chain:
+        lines.append(f"recommended_agent_chain: {' -> '.join(chain)}")
+    if payload.get("recommended_recipe_id"):
+        lines.append(f"recommended_recipe_id: {payload['recommended_recipe_id']}")
+    lines.append(
+        "needs_structured_handoff: "
+        + ("yes" if payload.get("needs_structured_handoff") else "no")
+    )
+    learning = payload.get("learning_snapshot") or {}
+    if learning:
+        lines.append(f"meta_learning_posture: {learning.get('posture', 'neutral')}")
+        if learning.get("recipe_score") is not None:
+            lines.append(
+                f"recipe_feedback_score: {learning['recipe_score']:.2f} "
+                f"(evidence={int(learning.get('recipe_evidence', 0) or 0)})"
+            )
+        if learning.get("chain_key"):
+            lines.append(f"recommended_agent_chain_key: {learning['chain_key']}")
+        if learning.get("chain_score") is not None:
+            lines.append(
+                f"chain_feedback_score: {learning['chain_score']:.2f} "
+                f"(evidence={int(learning.get('chain_evidence', 0) or 0)})"
+            )
+        if learning.get("task_type_score") is not None:
+            lines.append(
+                f"task_type_feedback_score: {learning['task_type_score']:.2f} "
+                f"(evidence={int(learning.get('task_type_evidence', 0) or 0)})"
+            )
+    lines.append(f"reason: {payload.get('reason', 'unknown')}")
+    recipe_stages = list(payload.get("recipe_stages") or [])
+    if recipe_stages:
+        lines.append("recipe_stages:")
+        for stage in recipe_stages:
+            optional_suffix = " (optional)" if stage.get("optional") else ""
+            lines.append(
+                f"- {stage.get('stage_id', 'stage')}: {stage.get('agent', 'unknown')}{optional_suffix}"
+            )
+            lines.append(f"  goal: {stage.get('goal', '')}")
+            lines.append(f"  expected_output: {stage.get('expected_output', '')}")
+    lines.append(
+        "Nutze diese Klassifikation als Orchestrierungsleitplanke. "
+        "Wenn der Handoff mehrstufig ist, plane zuerst die Agentenkette und "
+        "gib jedem Agenten nur den nötigen, strukturierten Teilkontext."
+    )
+    lines.append(
+        "Nutze Outcome-Lernen konservativ: bei posture=conservative plane expliziter, "
+        "delegiere enger und vermeide implizite Handoffs."
+    )
+    return "\n".join(lines)
+
+
 async def get_agent_decision(user_query: str, session_id: str | None = None) -> str:
     """Bestimmt welcher Agent für die Anfrage zuständig ist."""
     log.info(f"🧠 Analysiere Intention: '{user_query}'")
@@ -1615,6 +1753,7 @@ async def run_agent(
     query = _sanitize_user_query(raw_query)
     if not query:
         return None
+    agent_query = query
 
     audit = AuditLogger()
     audit.log_start(query, agent_name)
@@ -1738,6 +1877,11 @@ async def run_agent(
                 return result
         except Exception:
             pass  # Non-interactive: weitermachen
+
+    if agent_name == "meta":
+        meta_handoff = _build_meta_handoff_payload(query)
+        runtime_metadata["meta_orchestration"] = meta_handoff
+        agent_query = _render_meta_handoff_block(meta_handoff) + f"\n\n# ORIGINAL USER TASK\n{query}"
 
     log.info(f"\n🚀 Starte Agent: {agent_name.upper()}")
     _emit_dispatcher_status(agent_name, "start", "Initialisiere Agent")
@@ -1913,7 +2057,7 @@ Schritte: {steps_executed} ausgeführt{f" von {steps_planned} geplant" if steps_
         except Exception as e:
             log.debug(f"Audit-Step-Hook konnte nicht gesetzt werden: {e}")
 
-        final_answer = await agent_instance.run(query)
+        final_answer = await agent_instance.run(agent_query)
         _emit_dispatcher_status(agent_name, "done", "Agent-Run abgeschlossen")
         if hasattr(agent_instance, "get_runtime_telemetry"):
             try:
@@ -2001,19 +2145,38 @@ def _record_runtime_feedback(
         else:
             success = None
 
+        context = {
+            "source": "run_agent",
+            "session_id": session_id,
+            "dispatcher_agent": agent_name,
+            "selected_agent": agent_name,
+            "status": status,
+            "query_excerpt": str(query or "")[:120],
+            "execution_path": str((runtime_metadata or {}).get("execution_path", ""))[:80],
+        }
+        feedback_targets = [{"namespace": "dispatcher_agent", "key": agent_name}]
+
+        if agent_name == "meta":
+            meta_orchestration = (runtime_metadata or {}).get("meta_orchestration")
+            if isinstance(meta_orchestration, dict):
+                meta_targets = build_meta_feedback_targets(meta_orchestration)
+                if meta_targets:
+                    feedback_targets.extend(meta_targets)
+                task_type = str(meta_orchestration.get("task_type") or "").strip().lower()
+                recipe_id = str(meta_orchestration.get("recommended_recipe_id") or "").strip().lower()
+                chain_key = meta_agent_chain_key(meta_orchestration.get("recommended_agent_chain") or [])
+                if task_type:
+                    context["meta_task_type"] = task_type
+                if recipe_id:
+                    context["meta_recipe_id"] = recipe_id
+                if chain_key:
+                    context["meta_agent_chain"] = chain_key
+
         get_feedback_engine().record_runtime_outcome(
             action_id=f"runtime-{session_id}-{agent_name}",
             success=success,
-            context={
-                "source": "run_agent",
-                "session_id": session_id,
-                "dispatcher_agent": agent_name,
-                "selected_agent": agent_name,
-                "status": status,
-                "query_excerpt": str(query or "")[:120],
-                "execution_path": str((runtime_metadata or {}).get("execution_path", ""))[:80],
-            },
-            feedback_targets=[{"namespace": "dispatcher_agent", "key": agent_name}],
+            context=context,
+            feedback_targets=feedback_targets,
         )
     except Exception as e:
         log.debug("Runtime-Feedback fuer %s konnte nicht gespeichert werden: %s", agent_name, e)

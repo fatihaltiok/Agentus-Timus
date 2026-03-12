@@ -238,6 +238,92 @@ class MetaAgent(BaseAgent):
 
         return ""
 
+    @classmethod
+    def _build_specialist_handoff_payload(
+        cls,
+        specialist_agent: str,
+        method: str,
+        params: Dict[str, Any],
+        task: str,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "target_agent": specialist_agent,
+            "goal": task,
+            "expected_output": "Spezialistenergebnis",
+            "success_signal": "Belastbares Ergebnis geliefert",
+            "constraints": [],
+            "handoff_data": {"source_tool": method},
+        }
+
+        if specialist_agent == "research":
+            payload["expected_output"] = "summary, sources oder artifacts"
+            payload["success_signal"] = "Belastbare Quellen oder verifizierte Zusammenfassung vorhanden"
+            if params.get("query"):
+                payload["handoff_data"]["query"] = cls._shorten(params.get("query"))
+        elif specialist_agent == "document":
+            payload["expected_output"] = "PDF/DOCX/XLSX-Artefakt"
+            payload["success_signal"] = "Datei erzeugt und Artefaktpfad vorhanden"
+            if params.get("title"):
+                payload["handoff_data"]["title"] = cls._shorten(params.get("title"))
+            if params.get("format"):
+                payload["handoff_data"]["format"] = cls._shorten(params.get("format"))
+        elif specialist_agent == "communication":
+            payload["expected_output"] = "Nachricht oder Versandstatus"
+            payload["success_signal"] = "Nachricht formuliert oder versendet"
+            recipient = params.get("to") or params.get("recipient") or params.get("email")
+            if recipient:
+                payload["handoff_data"]["recipient"] = cls._shorten(recipient)
+            attachment = params.get("attachment_path") or params.get("attachment")
+            if attachment:
+                payload["handoff_data"]["attachment_path"] = cls._shorten(attachment)
+        elif specialist_agent == "shell":
+            payload["expected_output"] = "Kommandoausgabe oder Service-Status"
+            payload["success_signal"] = "Befehl sicher ausgefuehrt oder sauber blockiert"
+            payload["constraints"] = ["keine_destruktiven_befehle_ohne_expliziten_nutzerauftrag"]
+            command = params.get("command") or params.get("script_path") or params.get("script")
+            if command:
+                payload["handoff_data"]["command"] = cls._shorten(command)
+        elif specialist_agent == "visual":
+            payload["expected_output"] = "page_state, ui_result oder captured_context"
+            payload["success_signal"] = "Zielzustand oder UI-Signal sichtbar"
+            target_hint = params.get("description") or params.get("text") or params.get("selector") or params.get("task")
+            if target_hint:
+                payload["handoff_data"]["target_hint"] = cls._shorten(target_hint)
+        elif specialist_agent == "developer":
+            payload["expected_output"] = "Code, Patch oder Tool-Artefakt"
+            payload["success_signal"] = "Implementierung erstellt oder validierter Patch vorhanden"
+        elif specialist_agent == "creative":
+            payload["expected_output"] = "Bild/Text-Artefakt"
+            payload["success_signal"] = "Kreatives Ergebnis erzeugt"
+
+        return payload
+
+    @classmethod
+    def _render_structured_delegation_task(
+        cls,
+        specialist_agent: str,
+        method: str,
+        params: Dict[str, Any],
+        task: str,
+    ) -> str:
+        payload = cls._build_specialist_handoff_payload(specialist_agent, method, params, task)
+        lines = ["# DELEGATION HANDOFF"]
+        lines.append(f"target_agent: {payload['target_agent']}")
+        lines.append(f"goal: {payload['goal']}")
+        lines.append(f"expected_output: {payload['expected_output']}")
+        lines.append(f"success_signal: {payload['success_signal']}")
+        constraints = list(payload.get("constraints") or [])
+        lines.append("constraints: " + (", ".join(constraints) if constraints else "none"))
+        handoff_data = dict(payload.get("handoff_data") or {})
+        if handoff_data:
+            lines.append("handoff_data:")
+            for key, value in handoff_data.items():
+                lines.append(f"- {key}: {value}")
+        lines.append("")
+        lines.append("# TASK")
+        lines.append(task)
+        return "\n".join(lines)
+
     @staticmethod
     def _normalize_delegation_result(
         specialist_agent: str,
@@ -288,11 +374,17 @@ class MetaAgent(BaseAgent):
         if specialist_agent:
             task = self._build_specialist_delegation_task(method, params)
             if task:
+                structured_task = self._render_structured_delegation_task(
+                    specialist_agent=specialist_agent,
+                    method=method,
+                    params=params,
+                    task=task,
+                )
                 result = await super()._call_tool(
                     "delegate_to_agent",
                     {
                         "agent_type": specialist_agent,
-                        "task": task,
+                        "task": structured_task,
                         "from_agent": "meta",
                         "session_id": self.conversation_session_id,
                     },
