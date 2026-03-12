@@ -42,6 +42,7 @@ import re
 import asyncio
 import textwrap
 import logging
+import json
 import uuid
 import time
 from pathlib import Path
@@ -57,6 +58,7 @@ from orchestration.browser_workflow_plan import build_browser_workflow_plan
 from orchestration.llm_budget_guard import evaluate_llm_budget, resolve_soft_budget_model_override
 from orchestration.orchestration_policy import evaluate_query_orchestration
 from orchestration.meta_orchestration import build_meta_feedback_targets, meta_agent_chain_key
+from orchestration.meta_self_state import build_meta_self_state
 from orchestration.self_improvement_engine import LLMUsageRecord, get_improvement_engine
 from tools.tool_registry_v2 import registry_v2
 from agent.providers import ModelProvider, get_provider_client
@@ -1569,9 +1571,11 @@ def _build_meta_handoff_payload(query: str) -> dict:
         "recommended_recipe_id": policy.get("recommended_recipe_id"),
         "recipe_stages": list(policy.get("recipe_stages") or []),
         "recipe_recoveries": list(policy.get("recipe_recoveries") or []),
+        "alternative_recipes": list(policy.get("alternative_recipes") or []),
     }
     payload["feedback_targets"] = build_meta_feedback_targets(payload)
     payload["learning_snapshot"] = _build_meta_learning_snapshot(payload)
+    payload["meta_self_state"] = build_meta_self_state(payload, payload["learning_snapshot"])
     return payload
 
 
@@ -1671,6 +1675,16 @@ def _render_meta_handoff_block(payload: dict) -> str:
                 f"(evidence={int(learning.get('task_type_evidence', 0) or 0)})"
             )
     lines.append(f"reason: {payload.get('reason', 'unknown')}")
+    if payload.get("meta_self_state"):
+        lines.append(
+            "meta_self_state_json: "
+            + json.dumps(payload["meta_self_state"], ensure_ascii=False, sort_keys=True)
+        )
+    if payload.get("alternative_recipes"):
+        lines.append(
+            "alternative_recipes_json: "
+            + json.dumps(payload["alternative_recipes"], ensure_ascii=False, sort_keys=True)
+        )
     recipe_stages = list(payload.get("recipe_stages") or [])
     if recipe_stages:
         lines.append("recipe_stages:")

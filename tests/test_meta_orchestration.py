@@ -44,8 +44,10 @@ def test_classify_meta_task_recommends_visual_and_research_for_youtube_extractio
         "research_synthesis",
         "document_output",
     ]
+    assert result["alternative_recipes"][0]["recipe_id"] == "youtube_research_only"
     assert result["recipe_recoveries"][0]["failed_stage_id"] == "visual_access"
     assert result["recipe_recoveries"][0]["recovery_stage_id"] == "research_context_recovery"
+    assert result["recipe_recoveries"][0]["terminal"] is False
 
 
 def test_classify_meta_task_exposes_booking_recipe_for_multistage_workflow():
@@ -69,6 +71,7 @@ def test_classify_meta_task_exposes_system_diagnosis_recipe():
     assert result["task_type"] == "system_diagnosis"
     assert result["recommended_recipe_id"] == "system_diagnosis"
     assert result["recipe_stages"][0]["agent"] == "system"
+    assert result["alternative_recipes"][0]["recipe_id"] == "system_shell_probe_first"
 
 
 def test_build_meta_feedback_targets_emits_task_recipe_and_chain_targets():

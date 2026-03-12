@@ -12,6 +12,7 @@ Erweiterungen gegenüber BaseAgent:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -445,12 +446,107 @@ class MetaAgent(BaseAgent):
                 ]
             elif normalized_key == "needs_structured_handoff":
                 payload[normalized_key] = normalized_value.lower() == "yes"
+            elif normalized_key == "meta_self_state_json":
+                try:
+                    payload["meta_self_state"] = json.loads(normalized_value)
+                except json.JSONDecodeError:
+                    payload["meta_self_state"] = {"raw": normalized_value}
+            elif normalized_key == "alternative_recipes_json":
+                try:
+                    loaded = json.loads(normalized_value)
+                    payload["alternative_recipes"] = loaded if isinstance(loaded, list) else []
+                except json.JSONDecodeError:
+                    payload["alternative_recipes"] = []
             else:
                 payload[normalized_key] = normalized_value
 
         if not payload.get("recipe_stages"):
             return None
         return payload
+
+    @classmethod
+    def _current_recipe_payload_from_handoff(cls, handoff: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "recipe_id": str(handoff.get("recommended_recipe_id") or "").strip(),
+            "recipe_stages": [dict(stage) for stage in (handoff.get("recipe_stages") or [])],
+            "recipe_recoveries": [dict(item) for item in (handoff.get("recipe_recoveries") or [])],
+            "recommended_agent_chain": list(handoff.get("recommended_agent_chain") or []),
+        }
+
+    @classmethod
+    def _select_initial_recipe_payload(cls, handoff: Dict[str, Any]) -> Dict[str, Any]:
+        current = cls._current_recipe_payload_from_handoff(handoff)
+        self_state = dict(handoff.get("meta_self_state") or {})
+        runtime = dict(self_state.get("runtime_constraints") or {})
+        tool_rows = list(self_state.get("active_tools") or [])
+        task_type = str(handoff.get("task_type") or "").strip().lower()
+        stability_state = str(runtime.get("stability_gate_state", "") or "").strip().lower()
+
+        browser_tool_blocked = any(
+            str(item.get("tool") or "").strip() == "browser_workflow_plan"
+            and str(item.get("state") or "").strip().lower() == "blocked"
+            for item in tool_rows
+        )
+        if task_type == "youtube_content_extraction" and (browser_tool_blocked or stability_state == "blocked"):
+            for candidate in handoff.get("alternative_recipes") or []:
+                if str(candidate.get("recipe_id") or "").strip() == "youtube_research_only":
+                    return {
+                        "recipe_id": str(candidate.get("recipe_id") or "").strip(),
+                        "recipe_stages": [dict(stage) for stage in (candidate.get("recipe_stages") or [])],
+                        "recipe_recoveries": [dict(item) for item in (candidate.get("recipe_recoveries") or [])],
+                        "recommended_agent_chain": list(candidate.get("recommended_agent_chain") or []),
+                    }
+        if task_type == "system_diagnosis" and stability_state == "blocked":
+            for candidate in handoff.get("alternative_recipes") or []:
+                if str(candidate.get("recipe_id") or "").strip() == "system_shell_probe_first":
+                    return {
+                        "recipe_id": str(candidate.get("recipe_id") or "").strip(),
+                        "recipe_stages": [dict(stage) for stage in (candidate.get("recipe_stages") or [])],
+                        "recipe_recoveries": [dict(item) for item in (candidate.get("recipe_recoveries") or [])],
+                        "recommended_agent_chain": list(candidate.get("recommended_agent_chain") or []),
+                    }
+        return current
+
+    @classmethod
+    def _choose_alternative_recipe_payload(
+        cls,
+        handoff: Dict[str, Any],
+        *,
+        current_recipe_id: str,
+        failed_stage: Dict[str, Any],
+        attempted_recipe_ids: set[str],
+    ) -> Optional[Dict[str, Any]]:
+        failed_stage_id = str(failed_stage.get("stage_id") or "").strip()
+        failed_agent = str(failed_stage.get("agent") or "").strip().lower()
+        task_type = str(handoff.get("task_type") or "").strip().lower()
+
+        for candidate in handoff.get("alternative_recipes") or []:
+            recipe_id = str(candidate.get("recipe_id") or "").strip()
+            if not recipe_id or recipe_id == current_recipe_id or recipe_id in attempted_recipe_ids:
+                continue
+
+            if (
+                task_type == "youtube_content_extraction"
+                and recipe_id == "youtube_research_only"
+                and (failed_stage_id in {"visual_access", "research_context_seed"} or failed_agent == "visual")
+            ):
+                return {
+                    "recipe_id": recipe_id,
+                    "recipe_stages": [dict(stage) for stage in (candidate.get("recipe_stages") or [])],
+                    "recipe_recoveries": [dict(item) for item in (candidate.get("recipe_recoveries") or [])],
+                    "recommended_agent_chain": list(candidate.get("recommended_agent_chain") or []),
+                    "switch_reason": f"failed_stage:{failed_stage_id}",
+                }
+
+            if task_type == "system_diagnosis" and recipe_id == "system_shell_probe_first" and failed_stage_id == "system_observe":
+                return {
+                    "recipe_id": recipe_id,
+                    "recipe_stages": [dict(stage) for stage in (candidate.get("recipe_stages") or [])],
+                    "recipe_recoveries": [dict(item) for item in (candidate.get("recipe_recoveries") or [])],
+                    "recommended_agent_chain": list(candidate.get("recommended_agent_chain") or []),
+                    "switch_reason": f"failed_stage:{failed_stage_id}",
+                }
+        return None
 
     @classmethod
     def _should_execute_optional_recipe_stage(
@@ -842,26 +938,38 @@ class MetaAgent(BaseAgent):
         self,
         task: str,
         handoff: Dict[str, Any],
+        *,
+        recipe_payload: Optional[Dict[str, Any]] = None,
+        attempted_recipe_ids: Optional[set[str]] = None,
     ) -> Optional[str]:
-        recipe_id = str(handoff.get("recommended_recipe_id") or "").strip()
-        stages = [dict(stage) for stage in (handoff.get("recipe_stages") or [])]
+        selected_recipe = recipe_payload or self._select_initial_recipe_payload(handoff)
+        recipe_id = str(selected_recipe.get("recipe_id") or "").strip()
+        stages = [dict(stage) for stage in (selected_recipe.get("recipe_stages") or [])]
         if not recipe_id or not stages:
             return None
+        attempted = set(attempted_recipe_ids or set())
+        attempted.add(recipe_id)
 
         original_user_task = str(handoff.get("original_user_task") or task).strip()
+        handoff_for_recipe = dict(handoff)
+        handoff_for_recipe["recommended_recipe_id"] = recipe_id
+        handoff_for_recipe["recipe_stages"] = stages
+        handoff_for_recipe["recipe_recoveries"] = list(selected_recipe.get("recipe_recoveries") or [])
+        if selected_recipe.get("recommended_agent_chain"):
+            handoff_for_recipe["recommended_agent_chain"] = list(selected_recipe.get("recommended_agent_chain") or [])
         stage_history: List[Dict[str, Any]] = []
         previous_stage_result: Optional[Dict[str, Any]] = None
         stage_index = 0
         while stage_index < len(stages):
             stages = self._adapt_recipe_stages(
-                handoff=handoff,
+                handoff=handoff_for_recipe,
                 stages=stages,
                 original_user_task=original_user_task,
                 stage_history=stage_history,
                 previous_stage_result=previous_stage_result,
             )
             stage = stages[stage_index]
-            if not self._should_execute_optional_recipe_stage(handoff, stage):
+            if not self._should_execute_optional_recipe_stage(handoff_for_recipe, stage):
                 stage_history.append(
                     {
                         "stage_id": stage.get("stage_id", "stage"),
@@ -874,7 +982,7 @@ class MetaAgent(BaseAgent):
                 continue
 
             stage_task = self._build_recipe_stage_delegation_task(
-                handoff=handoff,
+                handoff=handoff_for_recipe,
                 stage=stage,
                 original_user_task=original_user_task,
                 previous_stage_result=previous_stage_result,
@@ -916,7 +1024,7 @@ class MetaAgent(BaseAgent):
                     stage_index += 1
                     continue
                 recovery_result = await self._attempt_recipe_recovery(
-                    handoff=handoff,
+                    handoff=handoff_for_recipe,
                     recipe_id=recipe_id,
                     failed_stage=history_entry,
                     original_user_task=original_user_task,
@@ -932,6 +1040,27 @@ class MetaAgent(BaseAgent):
                         )
                     stage_index += 1
                     continue
+                alternative_recipe = self._choose_alternative_recipe_payload(
+                    handoff_for_recipe,
+                    current_recipe_id=recipe_id,
+                    failed_stage=history_entry,
+                    attempted_recipe_ids=attempted,
+                )
+                if alternative_recipe is not None:
+                    switched = await self._execute_meta_recipe_handoff(
+                        task,
+                        handoff_for_recipe,
+                        recipe_payload=alternative_recipe,
+                        attempted_recipe_ids=attempted,
+                    )
+                    if switched:
+                        switch_reason = str(alternative_recipe.get("switch_reason") or "recipe_replan").strip()
+                        return (
+                            f"Meta-Rezept '{recipe_id}' wurde nach Fehler in Stage "
+                            f"'{history_entry.get('stage_id', 'stage')}' auf "
+                            f"'{alternative_recipe.get('recipe_id', 'alternative')}' umgestellt "
+                            f"({switch_reason}).\n\n{switched}"
+                        )
                 return self._render_recipe_execution_summary(
                     recipe_id=recipe_id,
                     original_user_task=original_user_task,

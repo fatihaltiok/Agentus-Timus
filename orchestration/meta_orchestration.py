@@ -164,6 +164,39 @@ _ORCHESTRATION_RECIPES: Dict[str, Tuple[OrchestrationRecipeStage, ...]] = {
             optional=True,
         ),
     ),
+    "youtube_research_only": (
+        OrchestrationRecipeStage(
+            stage_id="research_discovery",
+            agent="research",
+            goal="Nutze Suchbegriffe, bekannte Quellen und vorhandenen Kontext, um YouTube-Inhalt ohne direkten UI-Zugriff konservativ zu recherchieren.",
+            expected_output="summary, sources, extracted_content",
+            handoff_fields=("goal", "source_urls", "captured_context", "expected_output"),
+        ),
+        OrchestrationRecipeStage(
+            stage_id="document_output",
+            agent="document",
+            goal="Falls ein Bericht oder Artefakt gefordert ist, das Research-Ergebnis in das gewünschte Format ueberfuehren.",
+            expected_output="pdf/docx/xlsx artifact",
+            handoff_fields=("goal", "source_material", "format", "artifacts"),
+            optional=True,
+        ),
+    ),
+    "system_shell_probe_first": (
+        OrchestrationRecipeStage(
+            stage_id="shell_runtime_probe",
+            agent="shell",
+            goal="Fuehre sichere Runtime-Probes aus, um Service-, Prozess- und Portzustand kontrolliert zu ermitteln.",
+            expected_output="command_output, service_state",
+            handoff_fields=("goal", "command", "constraints", "success_signal"),
+        ),
+        OrchestrationRecipeStage(
+            stage_id="system_validation",
+            agent="system",
+            goal="Korrigiere die Diagnose auf Basis der Probe-Ausgaben und liefere eine belastbare Incident-Einordnung.",
+            expected_output="incident_summary, health_signals, suspected_root_cause",
+            handoff_fields=("goal", "signals", "success_signal"),
+        ),
+    ),
 }
 
 
@@ -180,7 +213,7 @@ _ORCHESTRATION_RECIPE_RECOVERIES: Dict[str, Tuple[OrchestrationRecipeRecovery, .
             ),
             expected_output="summary, sources, extracted_content",
             handoff_fields=("goal", "source_urls", "captured_context", "expected_output"),
-            terminal=True,
+            terminal=False,
         ),
     ),
     "system_diagnosis": (
@@ -197,6 +230,15 @@ _ORCHESTRATION_RECIPE_RECOVERIES: Dict[str, Tuple[OrchestrationRecipeRecovery, .
             terminal=True,
         ),
     ),
+}
+
+
+_ORCHESTRATION_RECIPE_AGENT_CHAINS: Dict[str, Tuple[str, ...]] = {
+    "youtube_content_extraction": ("meta", "visual", "research", "document"),
+    "youtube_research_only": ("meta", "research", "document"),
+    "booking_search": ("meta", "visual"),
+    "system_diagnosis": ("meta", "system", "shell"),
+    "system_shell_probe_first": ("meta", "shell", "system"),
 }
 
 
@@ -292,21 +334,55 @@ def build_meta_feedback_targets(classification: Dict[str, Any]) -> List[Dict[str
     return list(unique.values())
 
 
-def resolve_orchestration_recipe(task_type: str, site_kind: str | None = None) -> Dict[str, Any] | None:
-    recipe_id: str | None = None
+def _resolve_primary_recipe_id(task_type: str, site_kind: str | None = None) -> str | None:
     if task_type == "youtube_content_extraction":
-        recipe_id = "youtube_content_extraction"
-    elif task_type == "system_diagnosis":
-        recipe_id = "system_diagnosis"
-    elif site_kind == "booking" and task_type == "multi_stage_web_task":
-        recipe_id = "booking_search"
+        return "youtube_content_extraction"
+    if task_type == "system_diagnosis":
+        return "system_diagnosis"
+    if site_kind == "booking" and task_type == "multi_stage_web_task":
+        return "booking_search"
+    return None
 
-    if not recipe_id:
+
+def _build_recipe_payload(recipe_id: str) -> Dict[str, Any] | None:
+    if recipe_id not in _ORCHESTRATION_RECIPES:
         return None
-
     stages = [stage.to_dict() for stage in _ORCHESTRATION_RECIPES[recipe_id]]
     recoveries = [stage.to_dict() for stage in _ORCHESTRATION_RECIPE_RECOVERIES.get(recipe_id, ())]
-    return {"recipe_id": recipe_id, "recipe_stages": stages, "recipe_recoveries": recoveries}
+    return {
+        "recipe_id": recipe_id,
+        "recipe_stages": stages,
+        "recipe_recoveries": recoveries,
+        "recommended_agent_chain": list(_ORCHESTRATION_RECIPE_AGENT_CHAINS.get(recipe_id, ())),
+    }
+
+
+def resolve_orchestration_recipe(task_type: str, site_kind: str | None = None) -> Dict[str, Any] | None:
+    recipe_id = _resolve_primary_recipe_id(task_type, site_kind)
+    if not recipe_id:
+        return None
+    return _build_recipe_payload(recipe_id)
+
+
+def resolve_orchestration_alternative_recipes(
+    task_type: str,
+    site_kind: str | None = None,
+) -> List[Dict[str, Any]]:
+    primary_recipe = _resolve_primary_recipe_id(task_type, site_kind)
+    candidates: List[str] = []
+    if task_type == "youtube_content_extraction":
+        candidates.append("youtube_research_only")
+    elif task_type == "system_diagnosis":
+        candidates.append("system_shell_probe_first")
+
+    results: List[Dict[str, Any]] = []
+    for recipe_id in candidates:
+        if recipe_id == primary_recipe:
+            continue
+        payload = _build_recipe_payload(recipe_id)
+        if payload:
+            results.append(payload)
+    return results
 
 
 def _has_any(text: str, hints: Iterable[str]) -> bool:
@@ -420,6 +496,7 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
             deduped_chain.append(agent)
 
     recipe = resolve_orchestration_recipe(task_type, site_kind)
+    alternatives = resolve_orchestration_alternative_recipes(task_type, site_kind)
     return {
         "task_type": task_type,
         "site_kind": site_kind,
@@ -431,4 +508,5 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
         "recommended_recipe_id": None if not recipe else recipe["recipe_id"],
         "recipe_stages": [] if not recipe else recipe["recipe_stages"],
         "recipe_recoveries": [] if not recipe else recipe.get("recipe_recoveries", []),
+        "alternative_recipes": alternatives,
     }

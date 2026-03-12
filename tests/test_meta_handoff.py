@@ -27,6 +27,23 @@ class _DummyMetaAgent:
         return {"agent_type": "meta_test"}
 
 
+def _stable_runtime_constraints():
+    return {
+        "budget_state": "soft_limit",
+        "stability_gate_state": "warn",
+        "degrade_mode": "degraded",
+        "open_incidents": 2,
+        "circuit_breakers_open": 1,
+        "resource_guard_state": "active",
+        "resource_guard_reason": "queue_backlog",
+        "quarantined_incidents": 1,
+        "cooldown_incidents": 1,
+        "known_bad_patterns": 1,
+        "release_blocked": False,
+        "autonomy_hold": True,
+    }
+
+
 def _patch_dispatcher_dependencies(monkeypatch):
     monkeypatch.setattr("utils.audit_logger.AuditLogger", _DummyAuditLogger)
     monkeypatch.setattr("utils.policy_gate.audit_tool_call", lambda *_a, **_k: None)
@@ -36,9 +53,20 @@ def _patch_dispatcher_dependencies(monkeypatch):
 @pytest.mark.asyncio
 async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     import main_dispatcher
+    from agent.agents.meta import MetaAgent
+    from orchestration.meta_self_state import build_meta_self_state as _build_meta_self_state
 
     _patch_dispatcher_dependencies(monkeypatch)
     monkeypatch.setitem(main_dispatcher.AGENT_CLASS_MAP, "meta", _DummyMetaAgent)
+    monkeypatch.setattr(
+        main_dispatcher,
+        "build_meta_self_state",
+        lambda payload, learning: _build_meta_self_state(
+            payload,
+            learning,
+            _stable_runtime_constraints(),
+        ),
+    )
 
     calls = []
     monkeypatch.setattr(
@@ -59,11 +87,13 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert "site_kind: youtube" in result
     assert "recommended_agent_chain: meta -> visual -> research -> document" in result
     assert "recommended_recipe_id: youtube_content_extraction" in result
+    assert "meta_self_state_json:" in result
+    assert "alternative_recipes_json:" in result
     assert "recipe_stages:" in result
     assert "- visual_access: visual" in result
     assert "- research_synthesis: research" in result
     assert "recipe_recoveries:" in result
-    assert "- visual_access => research_context_recovery: research [terminal]" in result
+    assert "- visual_access => research_context_recovery: research" in result
     assert "# ORIGINAL USER TASK" in result
     assert "Hole aus einem YouTube-Video maximal viel Inhalt raus" in result
 
@@ -73,12 +103,20 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert meta["recommended_agent_chain"] == ["meta", "visual", "research", "document"]
     assert meta["needs_structured_handoff"] is True
     assert meta["recommended_recipe_id"] == "youtube_content_extraction"
+    assert meta["alternative_recipes"][0]["recipe_id"] == "youtube_research_only"
+    assert meta["meta_self_state"]["identity"] == "Timus"
+    assert meta["meta_self_state"]["strategy_posture"] in {"neutral", "preferred", "conservative"}
     assert len(meta["recipe_stages"]) == 3
     assert len(meta["recipe_recoveries"]) == 1
+    parsed = MetaAgent._parse_meta_orchestration_handoff(result)
+    assert parsed is not None
+    assert parsed["meta_self_state"]["identity"] == "Timus"
+    assert parsed["meta_self_state"]["runtime_constraints"]["budget_state"] == "soft_limit"
 
 
 def test_build_meta_handoff_payload_exposes_learning_snapshot(monkeypatch):
     import main_dispatcher
+    from orchestration.meta_self_state import build_meta_self_state as _build_meta_self_state
 
     class _FakeFeedbackEngine:
         def get_target_stats(self, namespace, target_key, default=1.0):
@@ -101,20 +139,38 @@ def test_build_meta_handoff_payload_exposes_learning_snapshot(monkeypatch):
         "orchestration.feedback_engine.get_feedback_engine",
         lambda: _FakeFeedbackEngine(),
     )
+    monkeypatch.setattr(
+        main_dispatcher,
+        "build_meta_self_state",
+        lambda payload, learning: _build_meta_self_state(
+            payload,
+            learning,
+            _stable_runtime_constraints(),
+        ),
+    )
 
     payload = main_dispatcher._build_meta_handoff_payload(
         "Hole aus einem YouTube-Video maximal viel Inhalt raus und schreibe einen Bericht dazu"
     )
 
     learning = payload["learning_snapshot"]
+    self_state = payload["meta_self_state"]
     assert learning["posture"] == "conservative"
     assert learning["recipe_score"] == 0.82
     assert learning["recipe_evidence"] == 6
     assert learning["chain_key"] == "meta__visual__research__document"
+    assert self_state["identity"] == "Timus"
+    assert self_state["strategy_posture"] == "conservative"
+    assert self_state["preferred_entry_agent"] == "meta"
+    assert "bounded_replanning_only" in self_state["known_limits"]
+    assert self_state["runtime_constraints"]["stability_gate_state"] == "warn"
+    assert any(risk["signal"] == "negative_outcome_history" for risk in self_state["active_risks"])
     rendered = main_dispatcher._render_meta_handoff_block(payload)
     assert "meta_learning_posture: conservative" in rendered
     assert "recipe_feedback_score: 0.82 (evidence=6)" in rendered
     assert "recommended_agent_chain_key: meta__visual__research__document" in rendered
+    assert "meta_self_state_json:" in rendered
+    assert "alternative_recipes_json:" in rendered
 
 
 def test_record_runtime_feedback_adds_meta_recipe_targets(monkeypatch):
