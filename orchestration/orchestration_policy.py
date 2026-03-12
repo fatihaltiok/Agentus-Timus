@@ -213,6 +213,7 @@ def evaluate_query_orchestration(query: str) -> Dict[str, Any]:
         "meta_classification_reason": meta_task["reason"],
         "recommended_recipe_id": meta_task.get("recommended_recipe_id"),
         "recipe_stages": list(meta_task.get("recipe_stages") or []),
+        "recipe_recoveries": list(meta_task.get("recipe_recoveries") or []),
         "reason": (
             "multi_capability"
             if len(capability_hits) >= 2

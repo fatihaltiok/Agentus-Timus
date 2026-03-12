@@ -44,6 +44,8 @@ def test_classify_meta_task_recommends_visual_and_research_for_youtube_extractio
         "research_synthesis",
         "document_output",
     ]
+    assert result["recipe_recoveries"][0]["failed_stage_id"] == "visual_access"
+    assert result["recipe_recoveries"][0]["recovery_stage_id"] == "research_context_recovery"
 
 
 def test_classify_meta_task_exposes_booking_recipe_for_multistage_workflow():

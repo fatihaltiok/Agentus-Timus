@@ -62,6 +62,8 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert "recipe_stages:" in result
     assert "- visual_access: visual" in result
     assert "- research_synthesis: research" in result
+    assert "recipe_recoveries:" in result
+    assert "- visual_access => research_context_recovery: research [terminal]" in result
     assert "# ORIGINAL USER TASK" in result
     assert "Hole aus einem YouTube-Video maximal viel Inhalt raus" in result
 
@@ -72,6 +74,7 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert meta["needs_structured_handoff"] is True
     assert meta["recommended_recipe_id"] == "youtube_content_extraction"
     assert len(meta["recipe_stages"]) == 3
+    assert len(meta["recipe_recoveries"]) == 1
 
 
 def test_build_meta_handoff_payload_exposes_learning_snapshot(monkeypatch):

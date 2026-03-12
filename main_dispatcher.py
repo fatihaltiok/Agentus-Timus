@@ -1568,6 +1568,7 @@ def _build_meta_handoff_payload(query: str) -> dict:
         "reason": policy.get("meta_classification_reason") or policy.get("reason") or "unknown",
         "recommended_recipe_id": policy.get("recommended_recipe_id"),
         "recipe_stages": list(policy.get("recipe_stages") or []),
+        "recipe_recoveries": list(policy.get("recipe_recoveries") or []),
     }
     payload["feedback_targets"] = build_meta_feedback_targets(payload)
     payload["learning_snapshot"] = _build_meta_learning_snapshot(payload)
@@ -1680,6 +1681,18 @@ def _render_meta_handoff_block(payload: dict) -> str:
             )
             lines.append(f"  goal: {stage.get('goal', '')}")
             lines.append(f"  expected_output: {stage.get('expected_output', '')}")
+    recipe_recoveries = list(payload.get("recipe_recoveries") or [])
+    if recipe_recoveries:
+        lines.append("recipe_recoveries:")
+        for recovery in recipe_recoveries:
+            terminal_suffix = " [terminal]" if recovery.get("terminal") else ""
+            lines.append(
+                f"- {recovery.get('failed_stage_id', 'stage')} => "
+                f"{recovery.get('recovery_stage_id', 'recovery')}: "
+                f"{recovery.get('agent', 'unknown')}{terminal_suffix}"
+            )
+            lines.append(f"  goal: {recovery.get('goal', '')}")
+            lines.append(f"  expected_output: {recovery.get('expected_output', '')}")
     lines.append(
         "Nutze diese Klassifikation als Orchestrierungsleitplanke. "
         "Wenn der Handoff mehrstufig ist, plane zuerst die Agentenkette und "

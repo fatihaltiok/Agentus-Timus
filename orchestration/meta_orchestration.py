@@ -37,6 +37,22 @@ class OrchestrationRecipeStage:
         return payload
 
 
+@dataclass(frozen=True)
+class OrchestrationRecipeRecovery:
+    failed_stage_id: str
+    recovery_stage_id: str
+    agent: str
+    goal: str
+    expected_output: str
+    handoff_fields: Tuple[str, ...]
+    terminal: bool = True
+
+    def to_dict(self) -> Dict[str, Any]:
+        payload = asdict(self)
+        payload["handoff_fields"] = list(self.handoff_fields)
+        return payload
+
+
 _AGENT_PROFILES: Dict[str, AgentCapabilityProfile] = {
     "meta": AgentCapabilityProfile(
         agent="meta",
@@ -151,6 +167,39 @@ _ORCHESTRATION_RECIPES: Dict[str, Tuple[OrchestrationRecipeStage, ...]] = {
 }
 
 
+_ORCHESTRATION_RECIPE_RECOVERIES: Dict[str, Tuple[OrchestrationRecipeRecovery, ...]] = {
+    "youtube_content_extraction": (
+        OrchestrationRecipeRecovery(
+            failed_stage_id="visual_access",
+            recovery_stage_id="research_context_recovery",
+            agent="research",
+            goal=(
+                "Wenn der direkte UI-Zugriff scheitert, nutze Originalanfrage, bekannte Quelle, "
+                "Suchbegriffe und vorhandene Kontextsignale, um den YouTube-Inhalt konservativ "
+                "direkt zu recherchieren und zusammenzufassen."
+            ),
+            expected_output="summary, sources, extracted_content",
+            handoff_fields=("goal", "source_urls", "captured_context", "expected_output"),
+            terminal=True,
+        ),
+    ),
+    "system_diagnosis": (
+        OrchestrationRecipeRecovery(
+            failed_stage_id="system_observe",
+            recovery_stage_id="shell_runtime_probe",
+            agent="shell",
+            goal=(
+                "Wenn die Systemanalyse fehlschlaegt, fuehre sichere Runtime-Probes aus, "
+                "um Service-, Prozess- und Portzustand kontrolliert zu ermitteln."
+            ),
+            expected_output="command_output, service_state",
+            handoff_fields=("goal", "command", "constraints", "success_signal"),
+            terminal=True,
+        ),
+    ),
+}
+
+
 _BROWSER_HINTS = (
     "browser",
     "webseite",
@@ -256,7 +305,8 @@ def resolve_orchestration_recipe(task_type: str, site_kind: str | None = None) -
         return None
 
     stages = [stage.to_dict() for stage in _ORCHESTRATION_RECIPES[recipe_id]]
-    return {"recipe_id": recipe_id, "recipe_stages": stages}
+    recoveries = [stage.to_dict() for stage in _ORCHESTRATION_RECIPE_RECOVERIES.get(recipe_id, ())]
+    return {"recipe_id": recipe_id, "recipe_stages": stages, "recipe_recoveries": recoveries}
 
 
 def _has_any(text: str, hints: Iterable[str]) -> bool:
@@ -380,4 +430,5 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
         "reason": reason,
         "recommended_recipe_id": None if not recipe else recipe["recipe_id"],
         "recipe_stages": [] if not recipe else recipe["recipe_stages"],
+        "recipe_recoveries": [] if not recipe else recipe.get("recipe_recoveries", []),
     }

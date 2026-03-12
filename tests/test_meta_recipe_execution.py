@@ -16,6 +16,7 @@ def _build_meta_task(
     original_task: str,
     task_type: str = "youtube_content_extraction",
     site_kind: str = "youtube",
+    recoveries: list[tuple[str, str, str, str, str, bool]] | None = None,
 ) -> str:
     lines = [
         "# META ORCHESTRATION HANDOFF",
@@ -32,6 +33,13 @@ def _build_meta_task(
         lines.append(f"- {stage_id}: {agent}{suffix}")
         lines.append(f"  goal: {goal}")
         lines.append(f"  expected_output: {expected_output}")
+    if recoveries:
+        lines.append("recipe_recoveries:")
+        for failed_stage_id, recovery_stage_id, agent, goal, expected_output, terminal in recoveries:
+            suffix = " [terminal]" if terminal else ""
+            lines.append(f"- {failed_stage_id} => {recovery_stage_id}: {agent}{suffix}")
+            lines.append(f"  goal: {goal}")
+            lines.append(f"  expected_output: {expected_output}")
     lines.extend(["", "# ORIGINAL USER TASK", original_task])
     return "\n".join(lines)
 
@@ -172,3 +180,64 @@ async def test_meta_recipe_execution_aborts_on_required_stage_error(monkeypatch)
     assert len(calls) == 1
     assert "Abbruch bei Pflicht-Stage 'visual_search_setup'" in result
     assert "Login-Maske konnte nicht verifiziert werden" in result
+
+
+@pytest.mark.asyncio
+async def test_meta_recipe_execution_uses_recovery_stage_for_required_failure(monkeypatch):
+    from agent.agents.meta import MetaAgent
+    from agent.base_agent import BaseAgent
+
+    calls = []
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        calls.append(dict(params))
+        if params["agent_type"] == "visual":
+            return {
+                "status": "error",
+                "agent": "visual",
+                "error": "Videoseite konnte nicht verifiziert werden",
+                "blackboard_key": "delegation:visual:error",
+                "metadata": {},
+                "artifacts": [],
+            }
+        if params["agent_type"] == "research":
+            return {
+                "status": "success",
+                "agent": "research",
+                "result": "Konservative Recovery-Zusammenfassung",
+                "blackboard_key": "delegation:research:recovery",
+                "metadata": {"sources": ["https://youtube.com/watch?v=123"]},
+                "artifacts": [],
+            }
+        raise AssertionError(f"Unerwarteter Agent: {params['agent_type']}")
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = MetaAgent.__new__(MetaAgent)
+    agent.conversation_session_id = "sess-meta-recovery"
+
+    task = _build_meta_task(
+        recipe_id="youtube_content_extraction",
+        chain="meta -> visual -> research",
+        stages=[
+            ("visual_access", "visual", "Oeffne YouTube", "page_state", False),
+            ("research_synthesis", "research", "Verdichte den Inhalt", "summary", False),
+        ],
+        recoveries=[
+            (
+                "visual_access",
+                "research_context_recovery",
+                "research",
+                "Erzeuge konservative Zusammenfassung ohne UI-Zugriff",
+                "summary",
+                True,
+            )
+        ],
+        original_task="Hole maximal viel Inhalt aus dem YouTube-Video.",
+    )
+
+    result = await MetaAgent.run(agent, task)
+
+    assert [call["agent_type"] for call in calls] == ["visual", "research"]
+    assert "Recovery fuer: visual_access" in result
+    assert "Konservative Recovery-Zusammenfassung" in result

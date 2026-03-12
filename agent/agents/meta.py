@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 
 from agent.base_agent import BaseAgent
 from agent.prompts import META_SYSTEM_PROMPT
+from orchestration.meta_orchestration import resolve_orchestration_recipe
 
 log = logging.getLogger("TimusAgent-v4.4")
 
@@ -339,10 +340,13 @@ class MetaAgent(BaseAgent):
 
         payload: Dict[str, Any] = {
             "recipe_stages": [],
+            "recipe_recoveries": [],
             "original_user_task": original_task.strip(),
         }
         current_stage: Optional[Dict[str, Any]] = None
+        current_recovery: Optional[Dict[str, Any]] = None
         in_recipe_stages = False
+        in_recipe_recoveries = False
 
         for raw_line in handoff_block.splitlines():
             stripped = raw_line.strip()
@@ -351,7 +355,14 @@ class MetaAgent(BaseAgent):
 
             if stripped == "recipe_stages:":
                 in_recipe_stages = True
+                in_recipe_recoveries = False
                 current_stage = None
+                continue
+
+            if stripped == "recipe_recoveries:":
+                in_recipe_recoveries = True
+                in_recipe_stages = False
+                current_recovery = None
                 continue
 
             if in_recipe_stages and stripped.startswith("- "):
@@ -372,6 +383,23 @@ class MetaAgent(BaseAgent):
                 payload["recipe_stages"].append(current_stage)
                 continue
 
+            if in_recipe_recoveries and stripped.startswith("- "):
+                recovery_label = stripped[2:]
+                match = re.match(
+                    r"(?P<failed>[^=]+)=>\s*(?P<recovery>[^:]+):\s*(?P<agent>[^\[]+?)(?:\s+\[(?P<terminal>terminal)\])?$",
+                    recovery_label,
+                )
+                if not match:
+                    continue
+                current_recovery = {
+                    "failed_stage_id": match.group("failed").strip(),
+                    "recovery_stage_id": match.group("recovery").strip(),
+                    "agent": match.group("agent").strip(),
+                    "terminal": bool(match.group("terminal")),
+                }
+                payload["recipe_recoveries"].append(current_recovery)
+                continue
+
             if in_recipe_stages and current_stage is not None:
                 if stripped.startswith("goal:"):
                     current_stage["goal"] = stripped.split(":", 1)[1].strip()
@@ -382,6 +410,18 @@ class MetaAgent(BaseAgent):
                 if stripped.startswith("Nutze diese Klassifikation") or stripped.startswith("Nutze Outcome-Lernen"):
                     in_recipe_stages = False
                     current_stage = None
+                    continue
+
+            if in_recipe_recoveries and current_recovery is not None:
+                if stripped.startswith("goal:"):
+                    current_recovery["goal"] = stripped.split(":", 1)[1].strip()
+                    continue
+                if stripped.startswith("expected_output:"):
+                    current_recovery["expected_output"] = stripped.split(":", 1)[1].strip()
+                    continue
+                if stripped.startswith("Nutze diese Klassifikation") or stripped.startswith("Nutze Outcome-Lernen"):
+                    in_recipe_recoveries = False
+                    current_recovery = None
                     continue
 
             if ":" not in stripped:
@@ -496,6 +536,8 @@ class MetaAgent(BaseAgent):
                 lines.append(f"  Blackboard: {entry['blackboard_key']}")
             if entry.get("result_preview"):
                 lines.append(f"  Ergebnis: {entry['result_preview']}")
+            if entry.get("recovery_for"):
+                lines.append(f"  Recovery fuer: {entry['recovery_for']}")
             if entry.get("error"):
                 lines.append(f"  Fehler: {entry['error']}")
 
@@ -516,6 +558,128 @@ class MetaAgent(BaseAgent):
             lines.append("Finales Ergebnis:")
             lines.append(str(final_success["result_full"]))
         return "\n".join(lines)
+
+    @classmethod
+    def _get_recipe_recoveries(
+        cls,
+        handoff: Dict[str, Any],
+        *,
+        recipe_id: str,
+        failed_stage_id: str,
+    ) -> List[Dict[str, Any]]:
+        recoveries = [
+            dict(item)
+            for item in (handoff.get("recipe_recoveries") or [])
+            if str(item.get("failed_stage_id") or "").strip() == failed_stage_id
+        ]
+        if recoveries:
+            return recoveries
+        recipe = resolve_orchestration_recipe(str(handoff.get("task_type") or ""), handoff.get("site_kind"))
+        if recipe and str(recipe.get("recipe_id") or "").strip() == recipe_id:
+            return [
+                dict(item)
+                for item in (recipe.get("recipe_recoveries") or [])
+                if str(item.get("failed_stage_id") or "").strip() == failed_stage_id
+            ]
+        return []
+
+    @classmethod
+    def _build_recipe_recovery_delegation_task(
+        cls,
+        *,
+        handoff: Dict[str, Any],
+        recovery: Dict[str, Any],
+        failed_stage: Dict[str, Any],
+        original_user_task: str,
+        stage_history: List[Dict[str, Any]],
+    ) -> str:
+        constraints = [
+            "handle_diesen_aufruf_als_recovery_und_bleibe_konservativ",
+            "wenn_signal_schwach_bleibt_erklaere_das_ausdruecklich",
+        ]
+        payload_lines = [
+            "# DELEGATION HANDOFF",
+            f"target_agent: {recovery.get('agent', 'unknown')}",
+            f"goal: {recovery.get('goal', original_user_task)}",
+            f"expected_output: {recovery.get('expected_output', 'Recovery-Ergebnis')}",
+            f"success_signal: Recovery fuer Stage '{failed_stage.get('stage_id', 'stage')}' abgeschlossen",
+            "constraints: " + ", ".join(constraints),
+            "handoff_data:",
+            f"- task_type: {handoff.get('task_type', 'single_lane')}",
+            f"- recipe_id: {handoff.get('recommended_recipe_id', '')}",
+            f"- recovery_stage_id: {recovery.get('recovery_stage_id', '')}",
+            f"- failed_stage_id: {failed_stage.get('stage_id', '')}",
+            f"- failed_stage_agent: {failed_stage.get('agent', '')}",
+            f"- failed_stage_error: {cls._shorten(failed_stage.get('error', ''), limit=220)}",
+            f"- original_user_task: {cls._shorten(original_user_task, limit=500)}",
+        ]
+        site_kind = str(handoff.get("site_kind") or "").strip()
+        if site_kind:
+            payload_lines.append(f"- site_kind: {site_kind}")
+        prior_keys = [entry.get("blackboard_key") for entry in stage_history if entry.get("blackboard_key")]
+        if prior_keys:
+            payload_lines.append(f"- prior_blackboard_keys: {', '.join(prior_keys)}")
+        payload_lines.extend(["", "# TASK", recovery.get("goal", original_user_task)])
+        return "\n".join(payload_lines)
+
+    async def _attempt_recipe_recovery(
+        self,
+        *,
+        handoff: Dict[str, Any],
+        recipe_id: str,
+        failed_stage: Dict[str, Any],
+        original_user_task: str,
+        stage_history: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        recoveries = self._get_recipe_recoveries(
+            handoff,
+            recipe_id=recipe_id,
+            failed_stage_id=str(failed_stage.get("stage_id") or ""),
+        )
+        for recovery in recoveries:
+            recovery_task = self._build_recipe_recovery_delegation_task(
+                handoff=handoff,
+                recovery=recovery,
+                failed_stage=failed_stage,
+                original_user_task=original_user_task,
+                stage_history=stage_history,
+            )
+            raw_result = await super()._call_tool(
+                "delegate_to_agent",
+                {
+                    "agent_type": recovery.get("agent", "unknown"),
+                    "task": recovery_task,
+                    "from_agent": "meta",
+                    "session_id": self.conversation_session_id,
+                },
+            )
+            normalized = self._normalize_delegation_result(
+                str(recovery.get("agent") or "unknown"),
+                f"recipe_recovery:{recovery.get('recovery_stage_id', 'recovery')}",
+                raw_result,
+            )
+            history_entry = {
+                "stage_id": recovery.get("recovery_stage_id", "recovery"),
+                "agent": recovery.get("agent", "unknown"),
+                "status": normalized.get("status", "error") if isinstance(normalized, dict) else "error",
+                "blackboard_key": normalized.get("blackboard_key", "") if isinstance(normalized, dict) else "",
+                "result_preview": self._shorten(
+                    (normalized.get("result") if isinstance(normalized, dict) else str(normalized)),
+                    limit=220,
+                ),
+                "result_full": normalized.get("result") if isinstance(normalized, dict) else str(normalized),
+                "error": normalized.get("error", "") if isinstance(normalized, dict) else "",
+                "metadata": normalized.get("metadata", {}) if isinstance(normalized, dict) else {},
+                "artifacts": normalized.get("artifacts", []) if isinstance(normalized, dict) else [],
+                "recovery_for": failed_stage.get("stage_id", ""),
+                "terminal": bool(recovery.get("terminal")),
+            }
+            stage_history.append(history_entry)
+            if history_entry["status"] == "success":
+                failed_stage["status"] = "recovered"
+                failed_stage["recovered_by"] = history_entry["stage_id"]
+                return history_entry
+        return None
 
     async def _execute_meta_recipe_handoff(
         self,
@@ -583,6 +747,22 @@ class MetaAgent(BaseAgent):
 
             if history_entry["status"] != "success":
                 if stage.get("optional"):
+                    continue
+                recovery_result = await self._attempt_recipe_recovery(
+                    handoff=handoff,
+                    recipe_id=recipe_id,
+                    failed_stage=history_entry,
+                    original_user_task=original_user_task,
+                    stage_history=stage_history,
+                )
+                if recovery_result and recovery_result["status"] == "success":
+                    previous_stage_result = recovery_result
+                    if recovery_result.get("terminal"):
+                        return self._render_recipe_execution_summary(
+                            recipe_id=recipe_id,
+                            original_user_task=original_user_task,
+                            stage_history=stage_history,
+                        )
                     continue
                 return self._render_recipe_execution_summary(
                     recipe_id=recipe_id,
