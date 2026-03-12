@@ -29,6 +29,8 @@ from agent.shared.json_utils import extract_json_robust  # noqa: F401 - re-expor
 
 
 class MetaAgent(BaseAgent):
+    _META_HANDOFF_HEADER = "# META ORCHESTRATION HANDOFF"
+    _ORIGINAL_TASK_HEADER = "# ORIGINAL USER TASK"
     _SPECIALIST_TOOL_AGENT_MAP = {
         "search_web": "research",
         "open_url": "research",
@@ -324,6 +326,277 @@ class MetaAgent(BaseAgent):
         lines.append(task)
         return "\n".join(lines)
 
+    @classmethod
+    def _parse_meta_orchestration_handoff(cls, task: str) -> Optional[Dict[str, Any]]:
+        if cls._META_HANDOFF_HEADER not in task:
+            return None
+
+        _, after_header = task.split(cls._META_HANDOFF_HEADER, 1)
+        if cls._ORIGINAL_TASK_HEADER in after_header:
+            handoff_block, original_task = after_header.split(cls._ORIGINAL_TASK_HEADER, 1)
+        else:
+            handoff_block, original_task = after_header, ""
+
+        payload: Dict[str, Any] = {
+            "recipe_stages": [],
+            "original_user_task": original_task.strip(),
+        }
+        current_stage: Optional[Dict[str, Any]] = None
+        in_recipe_stages = False
+
+        for raw_line in handoff_block.splitlines():
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+
+            if stripped == "recipe_stages:":
+                in_recipe_stages = True
+                current_stage = None
+                continue
+
+            if in_recipe_stages and stripped.startswith("- "):
+                stage_label = stripped[2:]
+                if ":" not in stage_label:
+                    continue
+                stage_id, agent_part = stage_label.split(":", 1)
+                agent_text = agent_part.strip()
+                optional = False
+                if agent_text.endswith("(optional)"):
+                    agent_text = agent_text[: -len("(optional)")].strip()
+                    optional = True
+                current_stage = {
+                    "stage_id": stage_id.strip(),
+                    "agent": agent_text,
+                    "optional": optional,
+                }
+                payload["recipe_stages"].append(current_stage)
+                continue
+
+            if in_recipe_stages and current_stage is not None:
+                if stripped.startswith("goal:"):
+                    current_stage["goal"] = stripped.split(":", 1)[1].strip()
+                    continue
+                if stripped.startswith("expected_output:"):
+                    current_stage["expected_output"] = stripped.split(":", 1)[1].strip()
+                    continue
+                if stripped.startswith("Nutze diese Klassifikation") or stripped.startswith("Nutze Outcome-Lernen"):
+                    in_recipe_stages = False
+                    current_stage = None
+                    continue
+
+            if ":" not in stripped:
+                continue
+
+            key, value = stripped.split(":", 1)
+            normalized_key = key.strip()
+            normalized_value = value.strip()
+
+            if normalized_key == "required_capabilities":
+                payload[normalized_key] = [
+                    item.strip()
+                    for item in normalized_value.split(",")
+                    if item.strip()
+                ]
+            elif normalized_key == "recommended_agent_chain":
+                payload[normalized_key] = [
+                    item.strip()
+                    for item in normalized_value.split("->")
+                    if item.strip()
+                ]
+            elif normalized_key == "needs_structured_handoff":
+                payload[normalized_key] = normalized_value.lower() == "yes"
+            else:
+                payload[normalized_key] = normalized_value
+
+        if not payload.get("recipe_stages"):
+            return None
+        return payload
+
+    @classmethod
+    def _should_execute_optional_recipe_stage(
+        cls, handoff: Dict[str, Any], stage: Dict[str, Any]
+    ) -> bool:
+        if not stage.get("optional"):
+            return True
+        recommended_chain = [
+            str(agent).strip().lower()
+            for agent in handoff.get("recommended_agent_chain") or []
+            if str(agent).strip()
+        ]
+        return str(stage.get("agent") or "").strip().lower() in recommended_chain
+
+    @classmethod
+    def _build_recipe_stage_delegation_task(
+        cls,
+        *,
+        handoff: Dict[str, Any],
+        stage: Dict[str, Any],
+        original_user_task: str,
+        previous_stage_result: Optional[Dict[str, Any]],
+        stage_history: List[Dict[str, Any]],
+    ) -> str:
+        constraints = ["folge_dem_rezept_und_erfinde_keine_neuen_stages"]
+        payload_lines = [
+            "# DELEGATION HANDOFF",
+            f"target_agent: {stage.get('agent', 'unknown')}",
+            f"goal: {stage.get('goal', original_user_task)}",
+            f"expected_output: {stage.get('expected_output', 'Spezialistenergebnis')}",
+            f"success_signal: Stage '{stage.get('stage_id', 'stage')}' erfolgreich abgeschlossen",
+            "constraints: " + ", ".join(constraints),
+            "handoff_data:",
+            f"- task_type: {handoff.get('task_type', 'single_lane')}",
+            f"- recipe_id: {handoff.get('recommended_recipe_id', '')}",
+            f"- stage_id: {stage.get('stage_id', '')}",
+            f"- original_user_task: {cls._shorten(original_user_task, limit=500)}",
+        ]
+        site_kind = str(handoff.get("site_kind") or "").strip()
+        if site_kind:
+            payload_lines.append(f"- site_kind: {site_kind}")
+
+        if previous_stage_result:
+            payload_lines.append(
+                f"- previous_stage_id: {previous_stage_result.get('stage_id', '')}"
+            )
+            payload_lines.append(
+                f"- previous_stage_agent: {previous_stage_result.get('agent', '')}"
+            )
+            if previous_stage_result.get("blackboard_key"):
+                payload_lines.append(
+                    f"- previous_blackboard_key: {previous_stage_result['blackboard_key']}"
+                )
+            if previous_stage_result.get("result_preview"):
+                payload_lines.append(
+                    f"- previous_stage_result: {previous_stage_result['result_preview']}"
+                )
+
+        prior_keys = [entry.get("blackboard_key") for entry in stage_history if entry.get("blackboard_key")]
+        if prior_keys:
+            payload_lines.append(f"- prior_blackboard_keys: {', '.join(prior_keys)}")
+
+        payload_lines.extend(["", "# TASK", stage.get("goal", original_user_task)])
+        return "\n".join(payload_lines)
+
+    @classmethod
+    def _render_recipe_execution_summary(
+        cls,
+        *,
+        recipe_id: str,
+        original_user_task: str,
+        stage_history: List[Dict[str, Any]],
+        failure: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        lines = [f"Meta-Rezept '{recipe_id}' ausgefuehrt."]
+        lines.append(f"Originale Aufgabe: {original_user_task}")
+        lines.append("")
+        lines.append("Stage-Verlauf:")
+        for entry in stage_history:
+            status = str(entry.get("status") or "unknown").upper()
+            lines.append(f"- [{status}] {entry.get('stage_id')} -> {entry.get('agent')}")
+            if entry.get("blackboard_key"):
+                lines.append(f"  Blackboard: {entry['blackboard_key']}")
+            if entry.get("result_preview"):
+                lines.append(f"  Ergebnis: {entry['result_preview']}")
+            if entry.get("error"):
+                lines.append(f"  Fehler: {entry['error']}")
+
+        if failure:
+            lines.append("")
+            lines.append(
+                f"Abbruch bei Pflicht-Stage '{failure.get('stage_id')}' ({failure.get('agent')}): "
+                f"{failure.get('error', 'unbekannter Fehler')}"
+            )
+            return "\n".join(lines)
+
+        final_success = next(
+            (entry for entry in reversed(stage_history) if entry.get("status") == "success"),
+            None,
+        )
+        if final_success and final_success.get("result_full"):
+            lines.append("")
+            lines.append("Finales Ergebnis:")
+            lines.append(str(final_success["result_full"]))
+        return "\n".join(lines)
+
+    async def _execute_meta_recipe_handoff(
+        self,
+        task: str,
+        handoff: Dict[str, Any],
+    ) -> Optional[str]:
+        recipe_id = str(handoff.get("recommended_recipe_id") or "").strip()
+        stages = list(handoff.get("recipe_stages") or [])
+        if not recipe_id or not stages:
+            return None
+
+        original_user_task = str(handoff.get("original_user_task") or task).strip()
+        stage_history: List[Dict[str, Any]] = []
+        previous_stage_result: Optional[Dict[str, Any]] = None
+
+        for stage in stages:
+            if not self._should_execute_optional_recipe_stage(handoff, stage):
+                stage_history.append(
+                    {
+                        "stage_id": stage.get("stage_id", "stage"),
+                        "agent": stage.get("agent", "unknown"),
+                        "status": "skipped",
+                        "result_preview": "Optionale Stage fuer diese Anfrage uebersprungen.",
+                    }
+                )
+                continue
+
+            stage_task = self._build_recipe_stage_delegation_task(
+                handoff=handoff,
+                stage=stage,
+                original_user_task=original_user_task,
+                previous_stage_result=previous_stage_result,
+                stage_history=stage_history,
+            )
+            raw_result = await super()._call_tool(
+                "delegate_to_agent",
+                {
+                    "agent_type": stage.get("agent", "unknown"),
+                    "task": stage_task,
+                    "from_agent": "meta",
+                    "session_id": self.conversation_session_id,
+                },
+            )
+            normalized = self._normalize_delegation_result(
+                str(stage.get("agent") or "unknown"),
+                f"recipe_stage:{stage.get('stage_id', 'stage')}",
+                raw_result,
+            )
+            history_entry = {
+                "stage_id": stage.get("stage_id", "stage"),
+                "agent": stage.get("agent", "unknown"),
+                "status": normalized.get("status", "error") if isinstance(normalized, dict) else "error",
+                "blackboard_key": normalized.get("blackboard_key", "") if isinstance(normalized, dict) else "",
+                "result_preview": self._shorten(
+                    (normalized.get("result") if isinstance(normalized, dict) else str(normalized)),
+                    limit=220,
+                ),
+                "result_full": normalized.get("result") if isinstance(normalized, dict) else str(normalized),
+                "error": normalized.get("error", "") if isinstance(normalized, dict) else "",
+                "metadata": normalized.get("metadata", {}) if isinstance(normalized, dict) else {},
+                "artifacts": normalized.get("artifacts", []) if isinstance(normalized, dict) else [],
+            }
+            stage_history.append(history_entry)
+            previous_stage_result = history_entry
+
+            if history_entry["status"] != "success":
+                if stage.get("optional"):
+                    continue
+                return self._render_recipe_execution_summary(
+                    recipe_id=recipe_id,
+                    original_user_task=original_user_task,
+                    stage_history=stage_history,
+                    failure=history_entry,
+                )
+
+        return self._render_recipe_execution_summary(
+            recipe_id=recipe_id,
+            original_user_task=original_user_task,
+            stage_history=stage_history,
+        )
+
     @staticmethod
     def _normalize_delegation_result(
         specialist_agent: str,
@@ -454,6 +727,12 @@ class MetaAgent(BaseAgent):
 
     async def run(self, task: str) -> str:
         log.info(f"MetaAgent mit Kontext + Skill-Orchestrierung: {task[:50]}...")
+
+        recipe_handoff = self._parse_meta_orchestration_handoff(task)
+        if recipe_handoff:
+            recipe_result = await self._execute_meta_recipe_handoff(task, recipe_handoff)
+            if recipe_result:
+                return recipe_result
 
         # 1. Timus Autonomie-Kontext laden
         meta_context = await self._build_meta_context()
