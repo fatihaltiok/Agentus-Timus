@@ -1,10 +1,14 @@
 """DocumentAgent — Dokumenten-Spezialist für PDF, DOCX, XLSX, TXT."""
 
+from __future__ import annotations
+
 import re
 import logging
+from typing import Optional
 
 from agent.base_agent import BaseAgent
 from agent.prompts import DOCUMENT_PROMPT_TEMPLATE
+from agent.shared.delegation_handoff import DelegationHandoff, parse_delegation_handoff
 
 log = logging.getLogger("TimusAgent-v4.4")
 
@@ -35,6 +39,39 @@ class DocumentAgent(BaseAgent):
         )
 
     async def run(self, task: str) -> str:
-        fmt = _detect_format(task)
+        handoff = parse_delegation_handoff(task)
+        effective_task = handoff.goal if handoff and handoff.goal else str(task or "").strip()
+        handoff_context = self._build_delegation_document_context(handoff)
+        fmt = _detect_format(effective_task)
         log.info(f"DocumentAgent | Format erkannt: {fmt}")
-        return await super().run(f"ERKANNTES_FORMAT: {fmt}\n\n{task}")
+        parts = [effective_task, f"ERKANNTES_FORMAT: {fmt}"]
+        if handoff_context:
+            parts.append(handoff_context)
+        return await super().run("\n\n".join(part for part in parts if part))
+
+    def _build_delegation_document_context(self, handoff: Optional[DelegationHandoff]) -> str:
+        if not handoff:
+            return ""
+
+        lines: list[str] = ["# STRUKTURIERTER DOCUMENT-HANDOFF"]
+        if handoff.expected_output:
+            lines.append(f"Erwarteter Output: {handoff.expected_output}")
+        if handoff.success_signal:
+            lines.append(f"Erfolgssignal: {handoff.success_signal}")
+        if handoff.constraints:
+            lines.append("Constraints: " + " | ".join(handoff.constraints))
+
+        for key, label in (
+            ("recipe_id", "Rezept"),
+            ("stage_id", "Stage"),
+            ("artifact_name", "Artefaktname"),
+            ("output_format", "Zielformat"),
+            ("source_urls", "Quell-URLs"),
+            ("captured_context", "Bereits erfasster Kontext"),
+            ("previous_stage_result", "Vorheriges Stage-Ergebnis"),
+            ("previous_blackboard_key", "Blackboard-Key"),
+        ):
+            value = handoff.handoff_data.get(key)
+            if value:
+                lines.append(f"{label}: {value}")
+        return "\n".join(lines)

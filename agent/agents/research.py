@@ -21,6 +21,7 @@ import httpx
 
 from agent.base_agent import BaseAgent
 from agent.prompts import DEEP_RESEARCH_PROMPT_TEMPLATE
+from agent.shared.delegation_handoff import DelegationHandoff, parse_delegation_handoff
 
 log = logging.getLogger("DeepResearchAgent")
 
@@ -75,11 +76,17 @@ class DeepResearchAgent(BaseAgent):
 
     async def run(self, task: str) -> str:
         """Reichert den Task mit Zielen und Blackboard-Vorwissen an."""
-        context = await self._build_research_context(task)
+        handoff = parse_delegation_handoff(task)
+        effective_task = handoff.goal if handoff and handoff.goal else task
+        context = await self._build_research_context(effective_task)
+        handoff_context = self._build_delegation_research_context(handoff)
+
+        parts = [effective_task]
         if context:
-            enriched_task = task + "\n\n" + context
-        else:
-            enriched_task = task
+            parts.append(context)
+        if handoff_context:
+            parts.append(handoff_context)
+        enriched_task = "\n\n".join(part for part in parts if part)
         return await super().run(enriched_task)
 
     # ------------------------------------------------------------------
@@ -119,6 +126,31 @@ class DeepResearchAgent(BaseAgent):
 
         # Kontext nur zurückgeben wenn er echten Inhalt hat
         return "\n".join(lines) if has_content else ""
+
+    def _build_delegation_research_context(self, handoff: Optional[DelegationHandoff]) -> str:
+        if not handoff:
+            return ""
+
+        lines: list[str] = ["# STRUKTURIERTER RESEARCH-HANDOFF"]
+        if handoff.expected_output:
+            lines.append(f"Erwarteter Output: {handoff.expected_output}")
+        if handoff.success_signal:
+            lines.append(f"Erfolgssignal: {handoff.success_signal}")
+        if handoff.constraints:
+            lines.append("Constraints: " + " | ".join(handoff.constraints))
+
+        for key, label in (
+            ("recipe_id", "Rezept"),
+            ("stage_id", "Stage"),
+            ("source_urls", "Quell-URLs"),
+            ("captured_context", "Bereits erfasster Kontext"),
+            ("previous_stage_result", "Vorheriges Stage-Ergebnis"),
+            ("previous_blackboard_key", "Blackboard-Key"),
+        ):
+            value = handoff.handoff_data.get(key)
+            if value:
+                lines.append(f"{label}: {value}")
+        return "\n".join(lines)
 
     def _get_active_goals(self) -> str:
         """Lädt aktive Ziele aus dem GoalQueueManager (M11)."""

@@ -103,7 +103,10 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert meta["recommended_agent_chain"] == ["meta", "visual", "research", "document"]
     assert meta["needs_structured_handoff"] is True
     assert meta["recommended_recipe_id"] == "youtube_content_extraction"
-    assert meta["alternative_recipes"][0]["recipe_id"] == "youtube_research_only"
+    assert [item["recipe_id"] for item in meta["alternative_recipes"]] == [
+        "youtube_search_then_visual",
+        "youtube_research_only",
+    ]
     assert meta["meta_self_state"]["identity"] == "Timus"
     assert meta["meta_self_state"]["strategy_posture"] in {"neutral", "preferred", "conservative"}
     assert len(meta["recipe_stages"]) == 3
@@ -122,6 +125,9 @@ def test_build_meta_handoff_payload_exposes_learning_snapshot(monkeypatch):
         def get_target_stats(self, namespace, target_key, default=1.0):
             mapping = {
                 ("meta_recipe", "youtube_content_extraction"): {"evidence_count": 6},
+                ("meta_site_recipe", "youtube::youtube_content_extraction"): {"evidence_count": 5},
+                ("meta_recipe", "youtube_research_only"): {"evidence_count": 4},
+                ("meta_site_recipe", "youtube::youtube_research_only"): {"evidence_count": 4},
                 ("meta_agent_chain", "meta__visual__research__document"): {"evidence_count": 4},
                 ("meta_task_type", "youtube_content_extraction"): {"evidence_count": 5},
             }
@@ -130,6 +136,9 @@ def test_build_meta_handoff_payload_exposes_learning_snapshot(monkeypatch):
         def get_effective_target_score(self, namespace, target_key, default=1.0):
             mapping = {
                 ("meta_recipe", "youtube_content_extraction"): 0.82,
+                ("meta_site_recipe", "youtube::youtube_content_extraction"): 0.78,
+                ("meta_recipe", "youtube_research_only"): 1.19,
+                ("meta_site_recipe", "youtube::youtube_research_only"): 1.11,
                 ("meta_agent_chain", "meta__visual__research__document"): 0.91,
                 ("meta_task_type", "youtube_content_extraction"): 0.95,
             }
@@ -158,7 +167,28 @@ def test_build_meta_handoff_payload_exposes_learning_snapshot(monkeypatch):
     assert learning["posture"] == "conservative"
     assert learning["recipe_score"] == 0.82
     assert learning["recipe_evidence"] == 6
+    assert learning["site_recipe_key"] == "youtube::youtube_content_extraction"
+    assert learning["site_recipe_score"] == 0.78
+    assert learning["site_recipe_evidence"] == 5
     assert learning["chain_key"] == "meta__visual__research__document"
+    assert learning["alternative_recipe_scores"] == [
+        {
+            "recipe_id": "youtube_search_then_visual",
+            "recipe_score": 1.0,
+            "recipe_evidence": 0,
+            "site_recipe_key": "youtube::youtube_search_then_visual",
+            "site_recipe_score": 1.0,
+            "site_recipe_evidence": 0,
+        },
+        {
+            "recipe_id": "youtube_research_only",
+            "recipe_score": 1.19,
+            "recipe_evidence": 4,
+            "site_recipe_key": "youtube::youtube_research_only",
+            "site_recipe_score": 1.11,
+            "site_recipe_evidence": 4,
+        },
+    ]
     assert self_state["identity"] == "Timus"
     assert self_state["strategy_posture"] == "conservative"
     assert self_state["preferred_entry_agent"] == "meta"
@@ -168,9 +198,12 @@ def test_build_meta_handoff_payload_exposes_learning_snapshot(monkeypatch):
     rendered = main_dispatcher._render_meta_handoff_block(payload)
     assert "meta_learning_posture: conservative" in rendered
     assert "recipe_feedback_score: 0.82 (evidence=6)" in rendered
+    assert "site_recipe_key: youtube::youtube_content_extraction" in rendered
+    assert "site_recipe_feedback_score: 0.78 (evidence=5)" in rendered
     assert "recommended_agent_chain_key: meta__visual__research__document" in rendered
     assert "meta_self_state_json:" in rendered
     assert "alternative_recipes_json:" in rendered
+    assert "alternative_recipe_scores_json:" in rendered
 
 
 def test_record_runtime_feedback_adds_meta_recipe_targets(monkeypatch):
@@ -196,6 +229,7 @@ def test_record_runtime_feedback_adds_meta_recipe_targets(monkeypatch):
             "execution_path": "standard",
             "meta_orchestration": {
                 "task_type": "youtube_content_extraction",
+                "site_kind": "youtube",
                 "recommended_recipe_id": "youtube_content_extraction",
                 "recommended_agent_chain": ["meta", "visual", "research", "document"],
             },
@@ -208,6 +242,10 @@ def test_record_runtime_feedback_adds_meta_recipe_targets(monkeypatch):
     assert captured["context"]["meta_agent_chain"] == "meta__visual__research__document"
     assert {"namespace": "dispatcher_agent", "key": "meta"} in captured["feedback_targets"]
     assert {"namespace": "meta_recipe", "key": "youtube_content_extraction"} in captured["feedback_targets"]
+    assert {
+        "namespace": "meta_site_recipe",
+        "key": "youtube::youtube_content_extraction",
+    } in captured["feedback_targets"]
     assert {
         "namespace": "meta_agent_chain",
         "key": "meta__visual__research__document",

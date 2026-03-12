@@ -16,10 +16,11 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from agent.base_agent import BaseAgent
 from agent.prompts import COMMUNICATION_PROMPT_TEMPLATE
+from agent.shared.delegation_handoff import DelegationHandoff, parse_delegation_handoff
 
 log = logging.getLogger("CommunicationAgent")
 
@@ -53,10 +54,16 @@ class CommunicationAgent(BaseAgent):
 
     async def run(self, task: str) -> str:
         """Reichert den Task mit E-Mail-Status und Nutzerprofil an."""
+        handoff = parse_delegation_handoff(task)
+        effective_task = handoff.goal if handoff and handoff.goal else str(task or "").strip()
         context = await self._build_comm_context()
-        enriched_task = task + "\n\n" + context
+        handoff_context = self._build_delegation_communication_context(handoff)
+        parts = [effective_task, context]
+        if handoff_context:
+            parts.append(handoff_context)
+        enriched_task = "\n\n".join(part for part in parts if part)
         result = await super().run(enriched_task)
-        if not self._email_send_requested(task):
+        if not self._email_send_requested(effective_task):
             return result
         if self._has_verified_email_send():
             return result
@@ -67,6 +74,34 @@ class CommunicationAgent(BaseAgent):
                 "Bitte prüfe Backend-Status und Tool-Ergebnis erneut."
             )
         return result
+
+    def _build_delegation_communication_context(self, handoff: Optional[DelegationHandoff]) -> str:
+        if not handoff:
+            return ""
+
+        lines: list[str] = ["# STRUKTURIERTER COMMUNICATION-HANDOFF"]
+        if handoff.expected_output:
+            lines.append(f"Erwarteter Output: {handoff.expected_output}")
+        if handoff.success_signal:
+            lines.append(f"Erfolgssignal: {handoff.success_signal}")
+        if handoff.constraints:
+            lines.append("Constraints: " + " | ".join(handoff.constraints))
+
+        for key, label in (
+            ("recipe_id", "Rezept"),
+            ("stage_id", "Stage"),
+            ("channel", "Kanal"),
+            ("recipient", "Empfaenger"),
+            ("subject_hint", "Betreff-Hinweis"),
+            ("source_urls", "Quell-URLs"),
+            ("captured_context", "Bereits erfasster Kontext"),
+            ("previous_stage_result", "Vorheriges Stage-Ergebnis"),
+            ("previous_blackboard_key", "Blackboard-Key"),
+        ):
+            value = handoff.handoff_data.get(key)
+            if value:
+                lines.append(f"{label}: {value}")
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------
     # Kommunikations-Kontext aufbauen

@@ -477,6 +477,88 @@ async def test_meta_recipe_execution_selects_initial_alternative_recipe_from_sel
     result = await MetaAgent.run(agent, task)
 
     assert [call["agent_type"] for call in calls] == ["research", "document"]
+    assert "stage_id: research_discovery" in calls[0]["task"]
+    assert "Meta-Rezept 'youtube_research_only' ausgefuehrt." in result
+    assert "research_discovery" in result
+
+
+@pytest.mark.asyncio
+async def test_meta_recipe_execution_prefers_learned_alternative_recipe(monkeypatch):
+    from agent.agents.meta import MetaAgent
+    from agent.base_agent import BaseAgent
+
+    calls = []
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        calls.append(dict(params))
+        return {
+            "status": "success",
+            "agent": params["agent_type"],
+            "result": f"{params['agent_type']} ok",
+            "blackboard_key": f"delegation:{params['agent_type']}:1",
+            "metadata": {},
+            "artifacts": [],
+        }
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = MetaAgent.__new__(MetaAgent)
+    agent.conversation_session_id = "sess-meta-learning-preference"
+
+    task = (
+        _build_meta_task(
+            recipe_id="youtube_content_extraction",
+            chain="meta -> visual -> research -> document",
+            stages=[
+                ("visual_access", "visual", "Oeffne YouTube", "page_state", False),
+                ("research_synthesis", "research", "Verdichte den Inhalt", "summary", False),
+                ("document_output", "document", "Erzeuge Bericht", "pdf", True),
+            ],
+            alternative_recipes=[
+                {
+                    "recipe_id": "youtube_research_only",
+                    "recipe_stages": [
+                        {
+                            "stage_id": "research_discovery",
+                            "agent": "research",
+                            "goal": "Recherchiere das Video ohne UI-Zugriff",
+                            "expected_output": "summary",
+                            "optional": False,
+                        },
+                        {
+                            "stage_id": "document_output",
+                            "agent": "document",
+                            "goal": "Erzeuge Bericht",
+                            "expected_output": "pdf",
+                            "optional": True,
+                        },
+                    ],
+                    "recipe_recoveries": [],
+                    "recommended_agent_chain": ["meta", "research", "document"],
+                }
+            ],
+            original_task="Hole maximal viel Inhalt aus dem YouTube-Video und erstelle einen Bericht.",
+        )
+        .replace(
+            "reason: test",
+            (
+                "meta_learning_posture: conservative\n"
+                "site_recipe_feedback_score: 0.82 (evidence=5)\n"
+                "recipe_feedback_score: 0.80 (evidence=6)\n"
+                "alternative_recipe_scores_json: "
+                '[{"recipe_evidence":4,"recipe_id":"youtube_research_only","recipe_score":1.21,'
+                '"site_recipe_evidence":4,"site_recipe_key":"youtube::youtube_research_only",'
+                '"site_recipe_score":1.11}]\n'
+                "reason: test"
+            ),
+        )
+    )
+
+    result = await MetaAgent.run(agent, task)
+
+    assert [call["agent_type"] for call in calls] == ["research", "research", "document"]
+    assert "stage_id: research_context_seed" in calls[0]["task"]
+    assert "stage_id: research_discovery" in calls[1]["task"]
     assert "Meta-Rezept 'youtube_research_only' ausgefuehrt." in result
     assert "research_discovery" in result
 
@@ -566,3 +648,114 @@ async def test_meta_recipe_execution_switches_to_alternative_recipe_after_stage_
         "'visual_access' auf 'youtube_research_only' umgestellt" in result
     )
     assert "Meta-Rezept 'youtube_research_only' ausgefuehrt." in result
+
+
+@pytest.mark.asyncio
+async def test_meta_recipe_execution_records_actual_executed_recipe_outcomes(monkeypatch):
+    from agent.agents.meta import MetaAgent
+    from agent.base_agent import BaseAgent
+
+    recorded = []
+
+    class _FakeFeedbackEngine:
+        def record_runtime_outcome(self, **kwargs):
+            recorded.append(kwargs)
+
+    calls = []
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        calls.append(dict(params))
+        if params["agent_type"] == "visual":
+            return {
+                "status": "error",
+                "agent": "visual",
+                "error": "Video konnte nicht geladen werden",
+                "blackboard_key": "delegation:visual:error",
+                "metadata": {},
+                "artifacts": [],
+            }
+        if params["agent_type"] == "research" and "recovery_stage_id: research_context_recovery" in params["task"]:
+            return {
+                "status": "error",
+                "agent": "research",
+                "error": "Recovery lieferte zu wenig belastbare Quellen",
+                "blackboard_key": "delegation:research:error",
+                "metadata": {},
+                "artifacts": [],
+            }
+        return {
+            "status": "success",
+            "agent": params["agent_type"],
+            "result": f"{params['agent_type']} ok",
+            "blackboard_key": f"delegation:{params['agent_type']}:1",
+            "metadata": {},
+            "artifacts": [],
+        }
+
+    monkeypatch.setattr("orchestration.feedback_engine.get_feedback_engine", lambda: _FakeFeedbackEngine())
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = MetaAgent.__new__(MetaAgent)
+    agent.conversation_session_id = "sess-meta-record-outcomes"
+
+    task = _build_meta_task(
+        recipe_id="youtube_content_extraction",
+        chain="meta -> visual -> research -> document",
+        stages=[
+            ("visual_access", "visual", "Oeffne YouTube", "page_state", False),
+            ("research_synthesis", "research", "Verdichte den Inhalt", "summary", False),
+            ("document_output", "document", "Erzeuge Bericht", "pdf", True),
+        ],
+        recoveries=[
+            (
+                "visual_access",
+                "research_context_recovery",
+                "research",
+                "Erzeuge konservative Zusammenfassung ohne UI-Zugriff",
+                "summary",
+                False,
+            )
+        ],
+        alternative_recipes=[
+            {
+                "recipe_id": "youtube_research_only",
+                "recipe_stages": [
+                    {
+                        "stage_id": "research_discovery",
+                        "agent": "research",
+                        "goal": "Recherchiere das Video ohne UI-Zugriff",
+                        "expected_output": "summary",
+                        "optional": False,
+                    },
+                    {
+                        "stage_id": "document_output",
+                        "agent": "document",
+                        "goal": "Erzeuge Bericht",
+                        "expected_output": "pdf",
+                        "optional": True,
+                    },
+                ],
+                "recipe_recoveries": [],
+                "recommended_agent_chain": ["meta", "research", "document"],
+            }
+        ],
+        original_task="Hole maximal viel Inhalt aus dem YouTube-Video und erstelle einen Bericht.",
+    )
+
+    result = await MetaAgent.run(agent, task)
+
+    assert "Meta-Rezept 'youtube_research_only' ausgefuehrt." in result
+    assert [entry["success"] for entry in recorded] == [False, True]
+    assert recorded[0]["context"]["meta_recipe_id"] == "youtube_content_extraction"
+    assert recorded[0]["context"]["failed_stage_id"] == "visual_access"
+    assert recorded[0]["context"]["switch_reason"].startswith("failed_stage:visual_access")
+    assert {
+        "namespace": "meta_site_recipe",
+        "key": "youtube::youtube_content_extraction",
+    } in recorded[0]["feedback_targets"]
+    assert recorded[1]["context"]["meta_recipe_id"] == "youtube_research_only"
+    assert recorded[1]["context"]["meta_agent_chain"] == "meta -> research -> document"
+    assert {
+        "namespace": "meta_site_recipe",
+        "key": "youtube::youtube_research_only",
+    } in recorded[1]["feedback_targets"]

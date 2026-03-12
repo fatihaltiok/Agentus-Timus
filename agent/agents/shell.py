@@ -17,9 +17,11 @@ import subprocess
 import tempfile
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from agent.base_agent import BaseAgent
 from agent.prompts import SHELL_PROMPT_TEMPLATE
+from agent.shared.delegation_handoff import DelegationHandoff, parse_delegation_handoff
 
 log = logging.getLogger("ShellAgent")
 
@@ -55,9 +57,43 @@ class ShellAgent(BaseAgent):
 
     async def run(self, task: str) -> str:
         """Reichert den Task vor der Ausführung mit System-Kontext an."""
+        handoff = parse_delegation_handoff(task)
+        effective_task = handoff.goal if handoff and handoff.goal else str(task or "").strip()
         context = await self._build_shell_context()
-        enriched_task = task + "\n\n" + context
+        handoff_context = self._build_delegation_shell_context(handoff)
+        parts = [effective_task, context]
+        if handoff_context:
+            parts.append(handoff_context)
+        enriched_task = "\n\n".join(part for part in parts if part)
         return await super().run(enriched_task)
+
+    def _build_delegation_shell_context(self, handoff: Optional[DelegationHandoff]) -> str:
+        if not handoff:
+            return ""
+
+        lines: list[str] = ["# STRUKTURIERTER SHELL-HANDOFF"]
+        if handoff.expected_output:
+            lines.append(f"Erwarteter Output: {handoff.expected_output}")
+        if handoff.success_signal:
+            lines.append(f"Erfolgssignal: {handoff.success_signal}")
+        if handoff.constraints:
+            lines.append("Constraints: " + " | ".join(handoff.constraints))
+
+        for key, label in (
+            ("recipe_id", "Rezept"),
+            ("stage_id", "Stage"),
+            ("service_name", "Service"),
+            ("target_path", "Zielpfad"),
+            ("source_path", "Quellpfad"),
+            ("allowed_command_context", "Erlaubter Kommando-Kontext"),
+            ("previous_stage_result", "Vorheriges Stage-Ergebnis"),
+            ("captured_context", "Bereits erfasster Kontext"),
+            ("previous_blackboard_key", "Blackboard-Key"),
+        ):
+            value = handoff.handoff_data.get(key)
+            if value:
+                lines.append(f"{label}: {value}")
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------
     # System-Kontext aufbauen

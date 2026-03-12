@@ -44,7 +44,10 @@ def test_classify_meta_task_recommends_visual_and_research_for_youtube_extractio
         "research_synthesis",
         "document_output",
     ]
-    assert result["alternative_recipes"][0]["recipe_id"] == "youtube_research_only"
+    assert [item["recipe_id"] for item in result["alternative_recipes"]] == [
+        "youtube_search_then_visual",
+        "youtube_research_only",
+    ]
     assert result["recipe_recoveries"][0]["failed_stage_id"] == "visual_access"
     assert result["recipe_recoveries"][0]["recovery_stage_id"] == "research_context_recovery"
     assert result["recipe_recoveries"][0]["terminal"] is False
@@ -60,6 +63,19 @@ def test_classify_meta_task_exposes_booking_recipe_for_multistage_workflow():
     assert result["site_kind"] == "booking"
     assert result["recommended_recipe_id"] == "booking_search"
     assert [stage["agent"] for stage in result["recipe_stages"]] == ["visual", "visual"]
+
+
+def test_classify_meta_task_exposes_generic_web_recipe_for_x_summary():
+    result = classify_meta_task(
+        "Öffne x.com, lies den Thread zu KI-Agenten und fasse die wichtigsten Punkte zusammen",
+        action_count=3,
+    )
+
+    assert result["task_type"] == "web_content_extraction"
+    assert result["site_kind"] == "x"
+    assert result["recommended_recipe_id"] == "web_visual_research_summary"
+    assert result["alternative_recipes"][0]["recipe_id"] == "web_research_only"
+    assert result["recipe_recoveries"][0]["recovery_stage_id"] == "research_context_recovery"
 
 
 def test_classify_meta_task_exposes_system_diagnosis_recipe():
@@ -84,6 +100,10 @@ def test_build_meta_feedback_targets_emits_task_recipe_and_chain_targets():
 
     assert {"namespace": "meta_task_type", "key": "youtube_content_extraction"} in targets
     assert {"namespace": "meta_recipe", "key": "youtube_content_extraction"} in targets
+    assert {
+        "namespace": "meta_site_recipe",
+        "key": "youtube::youtube_content_extraction",
+    } in targets
     assert {
         "namespace": "meta_agent_chain",
         "key": "meta__visual__research__document",

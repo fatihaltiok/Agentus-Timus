@@ -57,7 +57,11 @@ from orchestration.lane_manager import lane_manager, LaneStatus
 from orchestration.browser_workflow_plan import build_browser_workflow_plan
 from orchestration.llm_budget_guard import evaluate_llm_budget, resolve_soft_budget_model_override
 from orchestration.orchestration_policy import evaluate_query_orchestration
-from orchestration.meta_orchestration import build_meta_feedback_targets, meta_agent_chain_key
+from orchestration.meta_orchestration import (
+    build_meta_feedback_targets,
+    meta_agent_chain_key,
+    meta_site_recipe_key,
+)
 from orchestration.meta_self_state import build_meta_self_state
 from orchestration.self_improvement_engine import LLMUsageRecord, get_improvement_engine
 from tools.tool_registry_v2 import registry_v2
@@ -1585,11 +1589,15 @@ def _build_meta_learning_snapshot(payload: dict) -> dict:
         "posture": "neutral",
         "recipe_score": None,
         "recipe_evidence": 0,
+        "site_recipe_key": None,
+        "site_recipe_score": None,
+        "site_recipe_evidence": 0,
         "chain_key": None,
         "chain_score": None,
         "chain_evidence": 0,
         "task_type_score": None,
         "task_type_evidence": 0,
+        "alternative_recipe_scores": [],
     }
     try:
         from orchestration.feedback_engine import get_feedback_engine
@@ -1597,7 +1605,9 @@ def _build_meta_learning_snapshot(payload: dict) -> dict:
         engine = get_feedback_engine()
         recipe_id = str(payload.get("recommended_recipe_id") or "").strip().lower()
         task_type = str(payload.get("task_type") or "").strip().lower()
+        site_kind = str(payload.get("site_kind") or "").strip().lower()
         chain_key = meta_agent_chain_key(payload.get("recommended_agent_chain") or [])
+        site_recipe_key = meta_site_recipe_key(site_kind, recipe_id)
 
         def _score(namespace: str, key: str) -> tuple[float | None, int]:
             if not key:
@@ -1607,12 +1617,35 @@ def _build_meta_learning_snapshot(payload: dict) -> dict:
             return round(float(score), 2), int(stats.get("evidence_count", 0) or 0)
 
         recipe_score, recipe_evidence = _score("meta_recipe", recipe_id)
+        site_recipe_score, site_recipe_evidence = _score("meta_site_recipe", site_recipe_key)
         chain_score, chain_evidence = _score("meta_agent_chain", chain_key)
         task_type_score, task_type_evidence = _score("meta_task_type", task_type)
+        alternative_recipe_scores = []
+        for candidate in payload.get("alternative_recipes") or []:
+            candidate_recipe_id = str(candidate.get("recipe_id") or "").strip().lower()
+            if not candidate_recipe_id:
+                continue
+            candidate_score, candidate_evidence = _score("meta_recipe", candidate_recipe_id)
+            candidate_site_key = meta_site_recipe_key(site_kind, candidate_recipe_id)
+            candidate_site_score, candidate_site_evidence = _score("meta_site_recipe", candidate_site_key)
+            alternative_recipe_scores.append(
+                {
+                    "recipe_id": candidate_recipe_id,
+                    "recipe_score": candidate_score,
+                    "recipe_evidence": candidate_evidence,
+                    "site_recipe_key": candidate_site_key or None,
+                    "site_recipe_score": candidate_site_score,
+                    "site_recipe_evidence": candidate_site_evidence,
+                }
+            )
 
-        evidence = max(recipe_evidence, chain_evidence, task_type_evidence)
+        evidence = max(recipe_evidence, site_recipe_evidence, chain_evidence, task_type_evidence)
         posture = "neutral"
-        observed_scores = [score for score in (recipe_score, chain_score, task_type_score) if score is not None]
+        observed_scores = [
+            score
+            for score in (recipe_score, site_recipe_score, chain_score, task_type_score)
+            if score is not None
+        ]
         if evidence >= 3 and observed_scores:
             min_score = min(observed_scores)
             max_score = max(observed_scores)
@@ -1625,11 +1658,15 @@ def _build_meta_learning_snapshot(payload: dict) -> dict:
             "posture": posture,
             "recipe_score": recipe_score,
             "recipe_evidence": recipe_evidence,
+            "site_recipe_key": site_recipe_key or None,
+            "site_recipe_score": site_recipe_score,
+            "site_recipe_evidence": site_recipe_evidence,
             "chain_key": chain_key or None,
             "chain_score": chain_score,
             "chain_evidence": chain_evidence,
             "task_type_score": task_type_score,
             "task_type_evidence": task_type_evidence,
+            "alternative_recipe_scores": alternative_recipe_scores,
         }
     except Exception as e:
         log.debug("Meta-Learning-Snapshot uebersprungen: %s", e)
@@ -1662,6 +1699,13 @@ def _render_meta_handoff_block(payload: dict) -> str:
                 f"recipe_feedback_score: {learning['recipe_score']:.2f} "
                 f"(evidence={int(learning.get('recipe_evidence', 0) or 0)})"
             )
+        if learning.get("site_recipe_key"):
+            lines.append(f"site_recipe_key: {learning['site_recipe_key']}")
+        if learning.get("site_recipe_score") is not None:
+            lines.append(
+                f"site_recipe_feedback_score: {learning['site_recipe_score']:.2f} "
+                f"(evidence={int(learning.get('site_recipe_evidence', 0) or 0)})"
+            )
         if learning.get("chain_key"):
             lines.append(f"recommended_agent_chain_key: {learning['chain_key']}")
         if learning.get("chain_score") is not None:
@@ -1684,6 +1728,11 @@ def _render_meta_handoff_block(payload: dict) -> str:
         lines.append(
             "alternative_recipes_json: "
             + json.dumps(payload["alternative_recipes"], ensure_ascii=False, sort_keys=True)
+        )
+    if learning.get("alternative_recipe_scores"):
+        lines.append(
+            "alternative_recipe_scores_json: "
+            + json.dumps(learning["alternative_recipe_scores"], ensure_ascii=False, sort_keys=True)
         )
     recipe_stages = list(payload.get("recipe_stages") or [])
     if recipe_stages:

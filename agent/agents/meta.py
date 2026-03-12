@@ -16,13 +16,14 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from agent.base_agent import BaseAgent
 from agent.prompts import META_SYSTEM_PROMPT
-from orchestration.meta_orchestration import resolve_orchestration_recipe
+from orchestration.meta_orchestration import build_meta_feedback_targets, resolve_orchestration_recipe
 
 log = logging.getLogger("TimusAgent-v4.4")
 
@@ -457,6 +458,12 @@ class MetaAgent(BaseAgent):
                     payload["alternative_recipes"] = loaded if isinstance(loaded, list) else []
                 except json.JSONDecodeError:
                     payload["alternative_recipes"] = []
+            elif normalized_key == "alternative_recipe_scores_json":
+                try:
+                    loaded = json.loads(normalized_value)
+                    payload["alternative_recipe_scores"] = loaded if isinstance(loaded, list) else []
+                except json.JSONDecodeError:
+                    payload["alternative_recipe_scores"] = []
             else:
                 payload[normalized_key] = normalized_value
 
@@ -487,6 +494,10 @@ class MetaAgent(BaseAgent):
             and str(item.get("state") or "").strip().lower() == "blocked"
             for item in tool_rows
         )
+        if browser_tool_blocked or stability_state == "blocked":
+            safer = cls._prefer_non_browser_alternative(handoff, current_recipe_id=str(current.get("recipe_id") or ""))
+            if safer is not None:
+                return safer
         if task_type == "youtube_content_extraction" and (browser_tool_blocked or stability_state == "blocked"):
             for candidate in handoff.get("alternative_recipes") or []:
                 if str(candidate.get("recipe_id") or "").strip() == "youtube_research_only":
@@ -505,7 +516,94 @@ class MetaAgent(BaseAgent):
                         "recipe_recoveries": [dict(item) for item in (candidate.get("recipe_recoveries") or [])],
                         "recommended_agent_chain": list(candidate.get("recommended_agent_chain") or []),
                     }
+        selected = cls._preferred_alternative_by_learning(handoff, current_recipe_id=str(current.get("recipe_id") or ""))
+        if selected is not None:
+            return selected
         return current
+
+    @classmethod
+    def _prefer_non_browser_alternative(
+        cls,
+        handoff: Dict[str, Any],
+        *,
+        current_recipe_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        for candidate in handoff.get("alternative_recipes") or []:
+            recipe_id = str(candidate.get("recipe_id") or "").strip()
+            if not recipe_id or recipe_id == current_recipe_id:
+                continue
+            chain = [str(item).strip().lower() for item in candidate.get("recommended_agent_chain") or []]
+            if "visual" in chain:
+                continue
+            return {
+                "recipe_id": recipe_id,
+                "recipe_stages": [dict(stage) for stage in (candidate.get("recipe_stages") or [])],
+                "recipe_recoveries": [dict(item) for item in (candidate.get("recipe_recoveries") or [])],
+                "recommended_agent_chain": list(candidate.get("recommended_agent_chain") or []),
+                "switch_reason": "non_browser_runtime_guard",
+            }
+        return None
+
+    @classmethod
+    def _preferred_alternative_by_learning(
+        cls,
+        handoff: Dict[str, Any],
+        *,
+        current_recipe_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        posture = str(handoff.get("meta_learning_posture") or handoff.get("learning_posture") or "").strip().lower()
+        if posture != "conservative":
+            return None
+
+        current_scores = [
+            cls._as_float(handoff.get("recipe_feedback_score")),
+            cls._as_float(handoff.get("site_recipe_feedback_score")),
+        ]
+        current_floor = max(score for score in current_scores if score is not None) if any(
+            score is not None for score in current_scores
+        ) else None
+
+        best_payload: Optional[Dict[str, Any]] = None
+        best_score: Optional[float] = None
+        for candidate in handoff.get("alternative_recipes") or []:
+            recipe_id = str(candidate.get("recipe_id") or "").strip()
+            if not recipe_id or recipe_id == current_recipe_id:
+                continue
+            learned = next(
+                (
+                    item
+                    for item in handoff.get("alternative_recipe_scores") or []
+                    if str(item.get("recipe_id") or "").strip() == recipe_id
+                ),
+                None,
+            )
+            if not learned:
+                continue
+            evidence = max(
+                int(learned.get("recipe_evidence") or 0),
+                int(learned.get("site_recipe_evidence") or 0),
+            )
+            candidate_scores = [
+                cls._as_float(learned.get("recipe_score")),
+                cls._as_float(learned.get("site_recipe_score")),
+            ]
+            candidate_score = max(score for score in candidate_scores if score is not None) if any(
+                score is not None for score in candidate_scores
+            ) else None
+            if candidate_score is None or evidence < 3:
+                continue
+            if current_floor is not None and candidate_score < current_floor + 0.12:
+                continue
+            if best_score is None or candidate_score > best_score:
+                best_score = candidate_score
+                best_payload = {
+                    "recipe_id": recipe_id,
+                    "recipe_stages": [dict(stage) for stage in (candidate.get("recipe_stages") or [])],
+                    "recipe_recoveries": [dict(item) for item in (candidate.get("recipe_recoveries") or [])],
+                    "recommended_agent_chain": list(candidate.get("recommended_agent_chain") or []),
+                    "switch_reason": "learning_preference",
+                }
+        return best_payload
 
     @classmethod
     def _choose_alternative_recipe_payload(
@@ -524,6 +622,29 @@ class MetaAgent(BaseAgent):
             recipe_id = str(candidate.get("recipe_id") or "").strip()
             if not recipe_id or recipe_id == current_recipe_id or recipe_id in attempted_recipe_ids:
                 continue
+            learned = next(
+                (
+                    item
+                    for item in handoff.get("alternative_recipe_scores") or []
+                    if str(item.get("recipe_id") or "").strip() == recipe_id
+                ),
+                None,
+            )
+            learning_reason = ""
+            if learned:
+                evidence = max(
+                    int(learned.get("recipe_evidence") or 0),
+                    int(learned.get("site_recipe_evidence") or 0),
+                )
+                learned_scores = [
+                    cls._as_float(learned.get("recipe_score")),
+                    cls._as_float(learned.get("site_recipe_score")),
+                ]
+                candidate_score = max(score for score in learned_scores if score is not None) if any(
+                    score is not None for score in learned_scores
+                ) else None
+                if evidence >= 3 and candidate_score is not None and candidate_score >= 1.05:
+                    learning_reason = f"learning_score:{candidate_score:.2f}"
 
             if (
                 task_type == "youtube_content_extraction"
@@ -535,7 +656,7 @@ class MetaAgent(BaseAgent):
                     "recipe_stages": [dict(stage) for stage in (candidate.get("recipe_stages") or [])],
                     "recipe_recoveries": [dict(item) for item in (candidate.get("recipe_recoveries") or [])],
                     "recommended_agent_chain": list(candidate.get("recommended_agent_chain") or []),
-                    "switch_reason": f"failed_stage:{failed_stage_id}",
+                    "switch_reason": f"failed_stage:{failed_stage_id}" + (f"+{learning_reason}" if learning_reason else ""),
                 }
 
             if task_type == "system_diagnosis" and recipe_id == "system_shell_probe_first" and failed_stage_id == "system_observe":
@@ -544,9 +665,128 @@ class MetaAgent(BaseAgent):
                     "recipe_stages": [dict(stage) for stage in (candidate.get("recipe_stages") or [])],
                     "recipe_recoveries": [dict(item) for item in (candidate.get("recipe_recoveries") or [])],
                     "recommended_agent_chain": list(candidate.get("recommended_agent_chain") or []),
-                    "switch_reason": f"failed_stage:{failed_stage_id}",
+                    "switch_reason": f"failed_stage:{failed_stage_id}" + (f"+{learning_reason}" if learning_reason else ""),
                 }
-        return None
+        return cls._generic_alternative_recipe_payload(
+            handoff,
+            current_recipe_id=current_recipe_id,
+            failed_stage=failed_stage,
+            attempted_recipe_ids=attempted_recipe_ids,
+        )
+
+    @classmethod
+    def _generic_alternative_recipe_payload(
+        cls,
+        handoff: Dict[str, Any],
+        *,
+        current_recipe_id: str,
+        failed_stage: Dict[str, Any],
+        attempted_recipe_ids: set[str],
+    ) -> Optional[Dict[str, Any]]:
+        failed_stage_id = str(failed_stage.get("stage_id") or "").strip()
+        failed_agent = str(failed_stage.get("agent") or "").strip().lower()
+        best_payload: Optional[Dict[str, Any]] = None
+        best_score = 0.0
+
+        for candidate in handoff.get("alternative_recipes") or []:
+            recipe_id = str(candidate.get("recipe_id") or "").strip()
+            if not recipe_id or recipe_id == current_recipe_id or recipe_id in attempted_recipe_ids:
+                continue
+            stage_defs = [dict(stage) for stage in (candidate.get("recipe_stages") or [])]
+            if not stage_defs:
+                continue
+            stage_ids = {str(stage.get("stage_id") or "").strip() for stage in stage_defs}
+            chain = [str(item).strip().lower() for item in (candidate.get("recommended_agent_chain") or [])]
+            first_agent = str(stage_defs[0].get("agent") or "").strip().lower()
+
+            score = 0.0
+            if first_agent and first_agent != failed_agent:
+                score += 0.35
+            if failed_stage_id and failed_stage_id not in stage_ids:
+                score += 0.25
+            if failed_agent and failed_agent not in chain:
+                score += 0.2
+
+            learned = next(
+                (
+                    item
+                    for item in handoff.get("alternative_recipe_scores") or []
+                    if str(item.get("recipe_id") or "").strip() == recipe_id
+                ),
+                None,
+            )
+            learning_reason = ""
+            if learned:
+                evidence = max(
+                    int(learned.get("recipe_evidence") or 0),
+                    int(learned.get("site_recipe_evidence") or 0),
+                )
+                learned_scores = [
+                    cls._as_float(learned.get("recipe_score")),
+                    cls._as_float(learned.get("site_recipe_score")),
+                ]
+                candidate_score = max(score for score in learned_scores if score is not None) if any(
+                    score is not None for score in learned_scores
+                ) else None
+                if evidence >= 3 and candidate_score is not None:
+                    score += min(0.45, max(0.0, candidate_score - 0.9))
+                    learning_reason = f"learning_score:{candidate_score:.2f}"
+
+            if score <= best_score or score < 0.35:
+                continue
+            best_score = score
+            best_payload = {
+                "recipe_id": recipe_id,
+                "recipe_stages": stage_defs,
+                "recipe_recoveries": [dict(item) for item in (candidate.get("recipe_recoveries") or [])],
+                "recommended_agent_chain": list(candidate.get("recommended_agent_chain") or []),
+                "switch_reason": f"failed_stage:{failed_stage_id}" + (f"+{learning_reason}" if learning_reason else ""),
+            }
+
+        return best_payload
+
+    @classmethod
+    def _record_recipe_execution_outcome(
+        cls,
+        *,
+        handoff: Dict[str, Any],
+        recipe_payload: Dict[str, Any],
+        success: bool,
+        stage_history: List[Dict[str, Any]],
+        failure: Optional[Dict[str, Any]] = None,
+        switch_reason: str = "",
+    ) -> None:
+        try:
+            from orchestration.feedback_engine import get_feedback_engine
+
+            recipe_id = str(recipe_payload.get("recipe_id") or "").strip().lower()
+            chain = list(recipe_payload.get("recommended_agent_chain") or handoff.get("recommended_agent_chain") or [])
+            feedback_targets = build_meta_feedback_targets(
+                {
+                    "task_type": handoff.get("task_type"),
+                    "site_kind": handoff.get("site_kind"),
+                    "recommended_recipe_id": recipe_id,
+                    "recommended_agent_chain": chain,
+                }
+            )
+            get_feedback_engine().record_runtime_outcome(
+                action_id=f"meta-recipe-{recipe_id}-{int(time.time() * 1000)}",
+                success=success,
+                context={
+                    "agent": "meta",
+                    "feedback_source": "meta_recipe_execution",
+                    "meta_task_type": str(handoff.get("task_type") or "")[:80],
+                    "meta_recipe_id": recipe_id[:80],
+                    "meta_agent_chain": " -> ".join(str(agent) for agent in chain)[:200],
+                    "meta_site_kind": str(handoff.get("site_kind") or "")[:40],
+                    "stage_count": len(stage_history),
+                    "failed_stage_id": str((failure or {}).get("stage_id") or "")[:80],
+                    "switch_reason": str(switch_reason or "")[:120],
+                },
+                feedback_targets=feedback_targets,
+            )
+        except Exception:
+            pass
 
     @classmethod
     def _should_execute_optional_recipe_stage(
@@ -1033,6 +1273,12 @@ class MetaAgent(BaseAgent):
                 if recovery_result and recovery_result["status"] == "success":
                     previous_stage_result = recovery_result
                     if recovery_result.get("terminal"):
+                        self._record_recipe_execution_outcome(
+                            handoff=handoff_for_recipe,
+                            recipe_payload=selected_recipe,
+                            success=True,
+                            stage_history=stage_history,
+                        )
                         return self._render_recipe_execution_summary(
                             recipe_id=recipe_id,
                             original_user_task=original_user_task,
@@ -1047,6 +1293,14 @@ class MetaAgent(BaseAgent):
                     attempted_recipe_ids=attempted,
                 )
                 if alternative_recipe is not None:
+                    self._record_recipe_execution_outcome(
+                        handoff=handoff_for_recipe,
+                        recipe_payload=selected_recipe,
+                        success=False,
+                        stage_history=stage_history,
+                        failure=history_entry,
+                        switch_reason=str(alternative_recipe.get("switch_reason") or ""),
+                    )
                     switched = await self._execute_meta_recipe_handoff(
                         task,
                         handoff_for_recipe,
@@ -1061,6 +1315,13 @@ class MetaAgent(BaseAgent):
                             f"'{alternative_recipe.get('recipe_id', 'alternative')}' umgestellt "
                             f"({switch_reason}).\n\n{switched}"
                         )
+                self._record_recipe_execution_outcome(
+                    handoff=handoff_for_recipe,
+                    recipe_payload=selected_recipe,
+                    success=False,
+                    stage_history=stage_history,
+                    failure=history_entry,
+                )
                 return self._render_recipe_execution_summary(
                     recipe_id=recipe_id,
                     original_user_task=original_user_task,
@@ -1069,6 +1330,12 @@ class MetaAgent(BaseAgent):
                 )
             stage_index += 1
 
+        self._record_recipe_execution_outcome(
+            handoff=handoff_for_recipe,
+            recipe_payload=selected_recipe,
+            success=True,
+            stage_history=stage_history,
+        )
         return self._render_recipe_execution_summary(
             recipe_id=recipe_id,
             original_user_task=original_user_task,

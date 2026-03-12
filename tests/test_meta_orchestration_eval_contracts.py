@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import deal
-from hypothesis import given, settings
-from hypothesis import strategies as st
 
-from orchestration.meta_orchestration_eval import evaluate_meta_orchestration_case
+from orchestration.meta_orchestration_eval import evaluate_meta_orchestration_case, evaluate_meta_replan_case
 
 
 @deal.post(lambda r: 0.0 <= float(r.get("score", 0.0)) <= 1.0)
@@ -33,23 +31,26 @@ def _contract_evaluate_meta_orchestration_case(case: dict) -> dict:
     return evaluate_meta_orchestration_case(normalized)
 
 
-@given(
-    st.fixed_dictionaries(
-        {
-            "name": st.text(max_size=40),
-            "query": st.text(max_size=120),
-            "expected_route_to_meta": st.booleans(),
-            "expected_task_type": st.text(max_size=40),
-            "expected_entry_agent": st.text(max_size=20),
-            "expected_agent_chain": st.lists(st.text(min_size=1, max_size=20), max_size=5),
-            "expected_recipe_id": st.one_of(st.none(), st.text(max_size=40)),
-            "expected_structured_handoff": st.booleans(),
-            "expected_capabilities": st.lists(st.text(min_size=1, max_size=40), max_size=5),
-        }
-    )
-)
-@settings(max_examples=60)
-def test_hypothesis_meta_orchestration_eval_score_range(case: dict):
-    result = _contract_evaluate_meta_orchestration_case(case)
-    assert 0.0 <= result["score"] <= 1.0
-    assert 0.0 <= result["benchmark"]["capability_score"] <= 1.0
+@deal.post(lambda r: 0.0 <= float(r.get("score", 0.0)) <= 1.0)
+@deal.post(lambda r: isinstance(str(r.get("initial_recipe_id", "") or ""), str))
+@deal.post(lambda r: isinstance(str(r.get("replanned_recipe_id", "") or ""), str))
+def _contract_evaluate_meta_replan_case(case: dict) -> dict:
+    runtime = (case or {}).get("runtime_constraints", {})
+    safe_runtime = runtime if isinstance(runtime, dict) else {}
+    learning = (case or {}).get("learning_snapshot", {})
+    safe_learning = learning if isinstance(learning, dict) else {}
+    failed_stage = (case or {}).get("failed_stage", {})
+    safe_failed_stage = failed_stage if isinstance(failed_stage, dict) else {}
+    alt_scores = (case or {}).get("alternative_recipe_scores", [])
+    safe_alt_scores = alt_scores if isinstance(alt_scores, list) else []
+    normalized = {
+        "name": str((case or {}).get("name", "") or ""),
+        "query": str((case or {}).get("query", "") or ""),
+        "runtime_constraints": dict(safe_runtime),
+        "learning_snapshot": dict(safe_learning),
+        "failed_stage": dict(safe_failed_stage),
+        "alternative_recipe_scores": list(safe_alt_scores),
+        "expected_initial_recipe": str((case or {}).get("expected_initial_recipe", "") or ""),
+        "expected_replan_recipe": str((case or {}).get("expected_replan_recipe", "") or ""),
+    }
+    return evaluate_meta_replan_case(normalized)

@@ -181,6 +181,62 @@ _ORCHESTRATION_RECIPES: Dict[str, Tuple[OrchestrationRecipeStage, ...]] = {
             optional=True,
         ),
     ),
+    "youtube_search_then_visual": (
+        OrchestrationRecipeStage(
+            stage_id="research_discovery",
+            agent="research",
+            goal="Sammle zuerst Suchbegriffe, bekannte Quellen und moegliche Video-Hinweise, bevor der UI-Zugriff versucht wird.",
+            expected_output="source_urls, query_variants, captured_context",
+            handoff_fields=("goal", "source_urls", "captured_context", "expected_output"),
+        ),
+        OrchestrationRecipeStage(
+            stage_id="visual_access",
+            agent="visual",
+            goal="Nutze die vorbereiteten Suchsignale, um die passende YouTube-Seite oder Videoseite gezielt zu erreichen.",
+            expected_output="source_url, page_state, page_title, captured_context",
+            handoff_fields=("goal", "expected_state", "success_signal", "captured_context"),
+        ),
+        OrchestrationRecipeStage(
+            stage_id="research_synthesis",
+            agent="research",
+            goal="Verdichte Video-Inhalt, Beschreibungen und weitere Signale zu einer belastbaren Zusammenfassung.",
+            expected_output="summary, sources, extracted_content",
+            handoff_fields=("goal", "source_urls", "captured_context", "expected_output"),
+        ),
+        OrchestrationRecipeStage(
+            stage_id="document_output",
+            agent="document",
+            goal="Falls ein Bericht oder Artefakt gefordert ist, das Research-Ergebnis in das gewünschte Format ueberfuehren.",
+            expected_output="pdf/docx/xlsx artifact",
+            handoff_fields=("goal", "source_material", "format", "artifacts"),
+            optional=True,
+        ),
+    ),
+    "web_visual_research_summary": (
+        OrchestrationRecipeStage(
+            stage_id="visual_access",
+            agent="visual",
+            goal="Erreiche die relevante Webseite, den Thread oder den Inhaltskontext und sammle belastbare Seitensignale.",
+            expected_output="source_url, page_state, page_title, captured_context",
+            handoff_fields=("goal", "expected_state", "success_signal", "captured_context"),
+        ),
+        OrchestrationRecipeStage(
+            stage_id="research_synthesis",
+            agent="research",
+            goal="Verdichte den erreichbaren Web-Inhalt zu einer verifizierten Zusammenfassung oder Inhaltsanalyse.",
+            expected_output="summary, sources, extracted_content",
+            handoff_fields=("goal", "source_urls", "captured_context", "expected_output"),
+        ),
+    ),
+    "web_research_only": (
+        OrchestrationRecipeStage(
+            stage_id="research_discovery",
+            agent="research",
+            goal="Recherchiere den Web-Inhalt konservativ über bekannte Quellen, Snippets und vorhandenen Kontext ohne direkten UI-Zugriff.",
+            expected_output="summary, sources, extracted_content",
+            handoff_fields=("goal", "source_urls", "captured_context", "expected_output"),
+        ),
+    ),
     "system_shell_probe_first": (
         OrchestrationRecipeStage(
             stage_id="shell_runtime_probe",
@@ -216,6 +272,20 @@ _ORCHESTRATION_RECIPE_RECOVERIES: Dict[str, Tuple[OrchestrationRecipeRecovery, .
             terminal=False,
         ),
     ),
+    "web_visual_research_summary": (
+        OrchestrationRecipeRecovery(
+            failed_stage_id="visual_access",
+            recovery_stage_id="research_context_recovery",
+            agent="research",
+            goal=(
+                "Wenn der direkte Web-Zugriff scheitert, nutze Anfrage, bekannte Quelle und "
+                "vorhandene Kontextsignale fuer eine konservative Inhaltsrecherche."
+            ),
+            expected_output="summary, sources, extracted_content",
+            handoff_fields=("goal", "source_urls", "captured_context", "expected_output"),
+            terminal=False,
+        ),
+    ),
     "system_diagnosis": (
         OrchestrationRecipeRecovery(
             failed_stage_id="system_observe",
@@ -235,7 +305,10 @@ _ORCHESTRATION_RECIPE_RECOVERIES: Dict[str, Tuple[OrchestrationRecipeRecovery, .
 
 _ORCHESTRATION_RECIPE_AGENT_CHAINS: Dict[str, Tuple[str, ...]] = {
     "youtube_content_extraction": ("meta", "visual", "research", "document"),
+    "youtube_search_then_visual": ("meta", "research", "visual", "research", "document"),
     "youtube_research_only": ("meta", "research", "document"),
+    "web_visual_research_summary": ("meta", "visual", "research"),
+    "web_research_only": ("meta", "research"),
     "booking_search": ("meta", "visual"),
     "system_diagnosis": ("meta", "system", "shell"),
     "system_shell_probe_first": ("meta", "shell", "system"),
@@ -312,6 +385,15 @@ def meta_agent_chain_key(agent_chain: Iterable[str]) -> str:
     return "__".join(cleaned[:8])
 
 
+def meta_site_recipe_key(site_kind: str | None, recipe_id: str | None) -> str:
+    """Stabile Repräsentation eines Rezepts innerhalb einer Seitenklasse."""
+    site = str(site_kind or "").strip().lower()
+    recipe = str(recipe_id or "").strip().lower()
+    if not site or not recipe:
+        return ""
+    return f"{site}::{recipe}"
+
+
 def build_meta_feedback_targets(classification: Dict[str, Any]) -> List[Dict[str, str]]:
     """Leitet konservative Feedback-Ziele aus Meta-Klassifikation ab."""
     targets: List[Dict[str, str]] = []
@@ -323,6 +405,9 @@ def build_meta_feedback_targets(classification: Dict[str, Any]) -> List[Dict[str
     recipe_id = str(classification.get("recommended_recipe_id") or "").strip().lower()
     if recipe_id:
         targets.append({"namespace": "meta_recipe", "key": recipe_id})
+        site_recipe_key = meta_site_recipe_key(classification.get("site_kind"), recipe_id)
+        if site_recipe_key:
+            targets.append({"namespace": "meta_site_recipe", "key": site_recipe_key})
 
     chain_key = meta_agent_chain_key(classification.get("recommended_agent_chain") or [])
     if chain_key:
@@ -337,6 +422,8 @@ def build_meta_feedback_targets(classification: Dict[str, Any]) -> List[Dict[str
 def _resolve_primary_recipe_id(task_type: str, site_kind: str | None = None) -> str | None:
     if task_type == "youtube_content_extraction":
         return "youtube_content_extraction"
+    if task_type == "web_content_extraction":
+        return "web_visual_research_summary"
     if task_type == "system_diagnosis":
         return "system_diagnosis"
     if site_kind == "booking" and task_type == "multi_stage_web_task":
@@ -371,7 +458,9 @@ def resolve_orchestration_alternative_recipes(
     primary_recipe = _resolve_primary_recipe_id(task_type, site_kind)
     candidates: List[str] = []
     if task_type == "youtube_content_extraction":
-        candidates.append("youtube_research_only")
+        candidates.extend(["youtube_search_then_visual", "youtube_research_only"])
+    elif task_type == "web_content_extraction":
+        candidates.append("web_research_only")
     elif task_type == "system_diagnosis":
         candidates.append("system_shell_probe_first")
 
