@@ -24,6 +24,7 @@ import logging
 import time
 import asyncio
 import subprocess
+import os
 from urllib.parse import urljoin
 from typing import Optional, Any, Dict, List, Union
 import json
@@ -68,6 +69,8 @@ if not log.handlers:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s | %(levelname)-7s | %(name)-12s | %(message)s")
+
+BROWSER_ENGINE = (os.getenv("TIMUS_BROWSER_ENGINE", "firefox") or "firefox").strip().lower()
 
 
 # =================================================================
@@ -149,15 +152,20 @@ class BrowserSession:
         try:
             self.play = await async_playwright().start()
             try:
-                self.browser_instance = await self.play.firefox.launch(headless=True)
+                launcher = getattr(self.play, BROWSER_ENGINE)
+                self.browser_instance = await launcher.launch(headless=True)
             except PlaywrightTimeoutError as e:
                 if "ENOENT" in str(e) or "no such file or directory" in str(e):
-                    log.warning(f"Browser-Dateien nicht gefunden. Starte automatische Reparatur: 'playwright install firefox'")
-                    process = await asyncio.create_subprocess_exec("playwright", "install", "firefox")
+                    log.warning(
+                        "Browser-Dateien nicht gefunden. Starte automatische Reparatur: 'playwright install %s'",
+                        BROWSER_ENGINE,
+                    )
+                    process = await asyncio.create_subprocess_exec("playwright", "install", BROWSER_ENGINE)
                     await process.wait()
                     if process.returncode == 0:
                         log.info("✅ Playwright-Installation erfolgreich. Versuche erneut, den Browser zu starten.")
-                        self.browser_instance = await self.play.firefox.launch(headless=True)
+                        launcher = getattr(self.play, BROWSER_ENGINE)
+                        self.browser_instance = await launcher.launch(headless=True)
                     else:
                         raise RuntimeError("Automatische Reparatur der Playwright-Installation fehlgeschlagen.")
                 else:
@@ -169,7 +177,7 @@ class BrowserSession:
             )
             self.page = await self.context.new_page()
             self.is_initialized = True
-            log.info("✅ Playwright Browser-Session erfolgreich initialisiert.")
+            log.info("✅ Playwright Browser-Session erfolgreich initialisiert (engine=%s).", BROWSER_ENGINE)
         except Exception as e:
             log.error(f"❌ Kritischer Fehler bei Initialisierung der Playwright-Session: {e}", exc_info=True)
             self.is_initialized = False

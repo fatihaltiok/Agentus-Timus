@@ -185,6 +185,7 @@ class DesktopController:
         self.mcp = mcp_client
         self.elements: List[Dict] = []  # Gescannte UI-Elemente
         self.last_screenshot: Optional[Image.Image] = None
+        self.last_navigation_result: Optional[Dict[str, Any]] = None
     
     async def start(self):
         """Initialisiert Desktop (kein Browser-Start nötig)."""
@@ -444,31 +445,51 @@ KEIN Code, KEINE Erklärung - nur JSON!"""
                 log.info(f"   ⏳ Warte {secs}s")
                 
             elif act_type == "navigate":
-                # Für Browser: URL öffnen via xdg-open oder direkt
+                # Für Browser: Im Service-Kontext immer den internen Browser-Controller
+                # nutzen; Desktop-Open via Chrome/xdg-open bleibt nur für lokale,
+                # interaktive Nicht-Service-Läufe erlaubt.
                 url = action.get("url", "")
                 if url:
-                    block_reason = desktop_open_block_reason(action_kind="url", target=url)
-                    if block_reason:
-                        log.warning("   🚫 Navigate blockiert: %s | %s", url, block_reason)
-                        return False, block_reason
-                    try:
-                        # Versuche Chrome/Chromium direkt
-                        subprocess.Popen(
-                            ["google-chrome", "--new-window", url],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL
+                    self.last_navigation_result = None
+                    if desktop_open_block_reason(action_kind="url", target=url):
+                        result = await self.mcp.call_tool(
+                            "open_url",
+                            {"url": url, "session_id": "visual_nemotron"},
                         )
-                        log.info(f"   🌐 Öffne: {url}")
-                        await asyncio.sleep(3)  # Zeit zum Laden
-                    except:
-                        # Fallback zu xdg-open
-                        subprocess.Popen(
-                            ["xdg-open", url],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL
+                        self.last_navigation_result = result if isinstance(result, dict) else {"error": "ungueltige Antwort"}
+                        if result.get("error"):
+                            log.warning("   🚫 Interne Browser-Navigation fehlgeschlagen: %s | %s", url, result["error"])
+                            return False, str(result["error"])
+                        nav_ok = bool(
+                            result.get("success")
+                            or result.get("status") in {"opened", "success"}
+                            or (isinstance(result.get("data"), dict) and result["data"].get("status") == "opened")
                         )
-                        log.info(f"   🌐 Öffne (fallback): {url}")
-                        await asyncio.sleep(3)
+                        if not nav_ok:
+                            error = result.get("error") or "Navigation fehlgeschlagen"
+                            log.warning("   🚫 Interne Browser-Navigation ohne Erfolg: %s | %s", url, error)
+                            return False, str(error)
+                        log.info("   🌐 Öffne intern via open_url: %s", url)
+                        await asyncio.sleep(1.0)
+                    else:
+                        try:
+                            # Versuche Chrome/Chromium direkt
+                            subprocess.Popen(
+                                ["google-chrome", "--new-window", url],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL
+                            )
+                            log.info(f"   🌐 Öffne: {url}")
+                            await asyncio.sleep(3)  # Zeit zum Laden
+                        except:
+                            # Fallback zu xdg-open
+                            subprocess.Popen(
+                                ["xdg-open", url],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL
+                            )
+                            log.info(f"   🌐 Öffne (fallback): {url}")
+                            await asyncio.sleep(3)
                         
             elif act_type == "scan":
                 # Explizites Scan-Kommando
@@ -1415,6 +1436,10 @@ class VisualNemotronAgentV4:
 
         else:
             done, error = await self.desktop.execute_action(action)
+            if act_type == "navigate":
+                nav_result = getattr(self.desktop, "last_navigation_result", None) or {}
+                verified = bool(nav_result.get("success")) and not bool(error)
+                return done, error, verified
             return done, error, True  # nicht-verifizierbare Aktionen immer OK
 
     async def _execute_step_with_retry(
@@ -1430,6 +1455,11 @@ class VisualNemotronAgentV4:
         Führt einen einzelnen To-Do-Schritt aus, mit Retry bei Fehlschlag.
         Returns True wenn Schritt erfolgreich abgeschlossen.
         """
+        step_lower = step.lower()
+        navigation_required = any(
+            token in step_lower for token in ("navigiere", "oeffne ", "öffne ", "gehe zu", "go to")
+        )
+
         for attempt in range(max_retries):
             if attempt > 0:
                 log.info(f"   🔄 Retry {attempt}/{max_retries - 1}: '{step[:50]}'")
@@ -1458,9 +1488,9 @@ class VisualNemotronAgentV4:
             status = nemotron_result.get("status", "in_progress")
             if status == "step_done":
                 # Sicherheits-Check: Schritte mit Pflicht-Aktionen nie still überspringen
-                _step_lower = step.lower()
-                _action_required = any(kw in _step_lower for kw in [
-                    "suche-button", "enter", "klicke", "gib ein", "tippe", "drücke"
+                _action_required = any(kw in step_lower for kw in [
+                    "suche-button", "enter", "klicke", "gib ein", "tippe", "drücke",
+                    "navigiere", "oeffne ", "öffne ", "gehe zu", "go to",
                 ])
                 actions_proposed = nemotron_result.get("actions", [])
                 if _action_required and not actions_proposed:
@@ -1492,6 +1522,7 @@ class VisualNemotronAgentV4:
 
             step_verified = False
             last_type_verified = True  # True = kein type ausgeführt, kein Problem
+            navigation_verified = False
             for action in actions[:max_actions_per_retry]:
                 # Loop-Schutz
                 if self.loop_detector.add_state(screenshot, action):
@@ -1518,7 +1549,11 @@ class VisualNemotronAgentV4:
                 if error:
                     log.warning(f"   ⚠️ Aktion fehlgeschlagen: {error}")
                 if verified:
-                    step_verified = True
+                    if act_type == "navigate":
+                        navigation_verified = True
+                        step_verified = True
+                    elif not navigation_required:
+                        step_verified = True
 
                 # type-Aktionen separat tracken: nicht-verifiziertes Tippen → Retry
                 if act_type == "type":
@@ -1530,6 +1565,10 @@ class VisualNemotronAgentV4:
                         )
 
             # Schritt nur als erledigt werten wenn KEIN nicht-verifiziertes type vorliegt
+            if navigation_required and not navigation_verified:
+                log.info("   🔁 Navigationsschritt noch nicht verifiziert → Retry")
+                await asyncio.sleep(0.5)
+                continue
             if step_verified and last_type_verified:
                 return True
             if not last_type_verified:
