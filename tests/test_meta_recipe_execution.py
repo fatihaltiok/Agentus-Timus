@@ -241,3 +241,165 @@ async def test_meta_recipe_execution_uses_recovery_stage_for_required_failure(mo
     assert [call["agent_type"] for call in calls] == ["visual", "research"]
     assert "Recovery fuer: visual_access" in result
     assert "Konservative Recovery-Zusammenfassung" in result
+
+
+@pytest.mark.asyncio
+async def test_meta_recipe_execution_continues_after_nonterminal_recovery(monkeypatch):
+    from agent.agents.meta import MetaAgent
+    from agent.base_agent import BaseAgent
+
+    calls = []
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        calls.append(dict(params))
+        if params["agent_type"] == "visual":
+            return {
+                "status": "error",
+                "agent": "visual",
+                "error": "Videoseite konnte nicht verifiziert werden",
+                "blackboard_key": "delegation:visual:error",
+                "metadata": {},
+                "artifacts": [],
+            }
+        if params["agent_type"] == "research":
+            return {
+                "status": "success",
+                "agent": "research",
+                "result": "Konservative Recovery-Zusammenfassung",
+                "blackboard_key": "delegation:research:recovery",
+                "metadata": {"sources": ["https://youtube.com/watch?v=123"]},
+                "artifacts": [],
+            }
+        if params["agent_type"] == "document":
+            return {
+                "status": "success",
+                "agent": "document",
+                "result": "PDF-Bericht erstellt",
+                "blackboard_key": "delegation:document:1",
+                "metadata": {"artifact": "report.pdf"},
+                "artifacts": ["report.pdf"],
+            }
+        raise AssertionError(f"Unerwarteter Agent: {params['agent_type']}")
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = MetaAgent.__new__(MetaAgent)
+    agent.conversation_session_id = "sess-meta-recovery-continue"
+
+    task = _build_meta_task(
+        recipe_id="youtube_content_extraction",
+        chain="meta -> visual -> research -> document",
+        stages=[
+            ("visual_access", "visual", "Oeffne YouTube", "page_state", False),
+            ("research_synthesis", "research", "Verdichte den Inhalt", "summary", False),
+            ("document_output", "document", "Erzeuge Bericht", "pdf", True),
+        ],
+        recoveries=[
+            (
+                "visual_access",
+                "research_context_recovery",
+                "research",
+                "Erzeuge konservative Zusammenfassung ohne UI-Zugriff",
+                "summary",
+                False,
+            )
+        ],
+        original_task="Hole maximal viel Inhalt aus dem YouTube-Video und erstelle einen Bericht.",
+    )
+
+    result = await MetaAgent.run(agent, task)
+
+    assert [call["agent_type"] for call in calls] == ["visual", "research", "research", "document"]
+    assert "research_validation_gate" in result
+    assert "Validiere die bisherige Quellenlage" in calls[2]["task"]
+    assert "PDF-Bericht erstellt" in result
+    assert "Recovery fuer: visual_access" in result
+
+
+@pytest.mark.asyncio
+async def test_meta_recipe_execution_inserts_learning_preflight(monkeypatch):
+    from agent.agents.meta import MetaAgent
+    from agent.base_agent import BaseAgent
+
+    calls = []
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        calls.append(dict(params))
+        return {
+            "status": "success",
+            "agent": params["agent_type"],
+            "result": f"{params['agent_type']} ok",
+            "blackboard_key": f"delegation:{params['agent_type']}:1",
+            "metadata": {},
+            "artifacts": [],
+        }
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = MetaAgent.__new__(MetaAgent)
+    agent.conversation_session_id = "sess-meta-learning"
+
+    task = (
+        _build_meta_task(
+            recipe_id="youtube_content_extraction",
+            chain="meta -> visual -> research",
+            stages=[
+                ("visual_access", "visual", "Oeffne YouTube", "page_state", False),
+                ("research_synthesis", "research", "Verdichte den Inhalt", "summary", False),
+            ],
+            original_task="Hole maximal viel Inhalt aus dem YouTube-Video.",
+        )
+        .replace("reason: test", "meta_learning_posture: conservative\nreason: test")
+    )
+
+    result = await MetaAgent.run(agent, task)
+
+    assert [call["agent_type"] for call in calls] == ["research", "visual", "research"]
+    assert "research_context_seed" in result
+
+
+@pytest.mark.asyncio
+async def test_meta_recipe_execution_inserts_validation_for_negative_learning_scores(monkeypatch):
+    from agent.agents.meta import MetaAgent
+    from agent.base_agent import BaseAgent
+
+    calls = []
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        calls.append(dict(params))
+        return {
+            "status": "success",
+            "agent": params["agent_type"],
+            "result": f"{params['agent_type']} ok",
+            "blackboard_key": f"delegation:{params['agent_type']}:1",
+            "metadata": {},
+            "artifacts": [],
+        }
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = MetaAgent.__new__(MetaAgent)
+    agent.conversation_session_id = "sess-meta-negative-learning"
+
+    task = (
+        _build_meta_task(
+            recipe_id="youtube_content_extraction",
+            chain="meta -> visual -> research -> document",
+            stages=[
+                ("visual_access", "visual", "Oeffne YouTube", "page_state", False),
+                ("research_synthesis", "research", "Verdichte den Inhalt", "summary", False),
+                ("document_output", "document", "Erzeuge Bericht", "pdf", True),
+            ],
+            original_task="Hole maximal viel Inhalt aus dem YouTube-Video und erstelle einen Bericht.",
+        )
+        .replace(
+            "reason: test",
+            "recipe_feedback_score: -0.40\nchain_feedback_score: -0.30\ntask_type_feedback_score: -0.10\nreason: test",
+        )
+    )
+
+    result = await MetaAgent.run(agent, task)
+
+    assert [call["agent_type"] for call in calls] == ["visual", "research", "research", "document"]
+    assert "research_validation_gate" in result
+    assert "Validiere die bisherige Quellenlage" in calls[2]["task"]

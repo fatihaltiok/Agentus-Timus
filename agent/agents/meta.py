@@ -622,6 +622,163 @@ class MetaAgent(BaseAgent):
         payload_lines.extend(["", "# TASK", recovery.get("goal", original_user_task)])
         return "\n".join(payload_lines)
 
+    @classmethod
+    def _build_learning_preflight_stage(
+        cls,
+        *,
+        handoff: Dict[str, Any],
+        original_user_task: str,
+    ) -> Optional[Dict[str, Any]]:
+        posture = str(handoff.get("meta_learning_posture") or handoff.get("learning_posture") or "").strip().lower()
+        task_type = str(handoff.get("task_type") or "").strip().lower()
+        site_kind = str(handoff.get("site_kind") or "").strip().lower()
+        if posture != "conservative":
+            return None
+        if task_type not in {"youtube_content_extraction", "web_content_extraction"}:
+            return None
+        if site_kind not in {"youtube", "x", "linkedin", "outlook", "booking", ""}:
+            return None
+        return {
+            "stage_id": "research_context_seed",
+            "agent": "research",
+            "goal": (
+                "Sammle vor dem UI-Zugriff konservativ Suchbegriffe, bekannte Quellen, Seitensignale "
+                "und moegliche Zugangspfade fuer die Aufgabe."
+            ),
+            "expected_output": "source_urls, query_variants, captured_context",
+            "optional": False,
+            "adaptive": True,
+            "adaptive_reason": "conservative_learning_posture",
+        }
+
+    @classmethod
+    def _as_float(cls, value: Any) -> Optional[float]:
+        if value is None:
+            return None
+        try:
+            return float(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _build_research_validation_stage(
+        cls,
+        *,
+        handoff: Dict[str, Any],
+        stages: List[Dict[str, Any]],
+        stage_history: List[Dict[str, Any]],
+        previous_stage_result: Optional[Dict[str, Any]],
+    ) -> Optional[Tuple[int, Dict[str, Any]]]:
+        task_type = str(handoff.get("task_type") or "").strip().lower()
+        if task_type not in {"youtube_content_extraction", "web_content_extraction"}:
+            return None
+
+        known_stage_ids = {
+            str(stage.get("stage_id") or "").strip()
+            for stage in stages
+        }
+        known_stage_ids.update(
+            str(entry.get("stage_id") or "").strip()
+            for entry in stage_history
+        )
+        if "research_validation_gate" in known_stage_ids:
+            return None
+
+        document_index = next(
+            (
+                index
+                for index, stage in enumerate(stages)
+                if str(stage.get("stage_id") or "").strip() == "document_output"
+            ),
+            None,
+        )
+        if document_index is None:
+            return None
+
+        triggered_by_recovery = bool(
+            previous_stage_result
+            and previous_stage_result.get("status") == "success"
+            and previous_stage_result.get("recovery_for") == "visual_access"
+        )
+        score_candidates = [
+            cls._as_float(handoff.get("recipe_feedback_score")),
+            cls._as_float(handoff.get("chain_feedback_score")),
+            cls._as_float(handoff.get("task_type_feedback_score")),
+        ]
+        negative_learning = any(
+            score is not None and score <= -0.15
+            for score in score_candidates
+        )
+        if not triggered_by_recovery and not negative_learning:
+            return None
+
+        adaptive_reason = (
+            "post_recovery_validation"
+            if triggered_by_recovery
+            else "negative_learning_scores"
+        )
+        return (
+            document_index,
+            {
+                "stage_id": "research_validation_gate",
+                "agent": "research",
+                "goal": (
+                    "Validiere die bisherige Quellenlage und Zusammenfassung kritisch, "
+                    "schliesse erkennbare Luecken und liefere belastbares Material fuer den "
+                    "folgenden Dokumentschritt."
+                ),
+                "expected_output": "validated_summary, validation_signals, source_confidence",
+                "optional": False,
+                "adaptive": True,
+                "adaptive_reason": adaptive_reason,
+            },
+        )
+
+    @classmethod
+    def _adapt_recipe_stages(
+        cls,
+        *,
+        handoff: Dict[str, Any],
+        stages: List[Dict[str, Any]],
+        original_user_task: str,
+        stage_history: List[Dict[str, Any]],
+        previous_stage_result: Optional[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        adapted = [dict(stage) for stage in stages]
+        if not stage_history:
+            preflight = cls._build_learning_preflight_stage(
+                handoff=handoff,
+                original_user_task=original_user_task,
+            )
+            if preflight and not any(stage.get("stage_id") == preflight["stage_id"] for stage in adapted):
+                adapted.insert(0, preflight)
+
+        if (
+            previous_stage_result
+            and previous_stage_result.get("status") == "success"
+            and previous_stage_result.get("recovery_for") == "visual_access"
+        ):
+            adapted = [
+                stage
+                for stage in adapted
+                if not (
+                    str(stage.get("stage_id") or "").strip() == "research_synthesis"
+                    and str(stage.get("agent") or "").strip() == "research"
+                )
+            ]
+
+        validation_stage = cls._build_research_validation_stage(
+            handoff=handoff,
+            stages=adapted,
+            stage_history=stage_history,
+            previous_stage_result=previous_stage_result,
+        )
+        if validation_stage:
+            insert_at, stage = validation_stage
+            adapted.insert(insert_at, stage)
+
+        return adapted
+
     async def _attempt_recipe_recovery(
         self,
         *,
@@ -687,15 +844,23 @@ class MetaAgent(BaseAgent):
         handoff: Dict[str, Any],
     ) -> Optional[str]:
         recipe_id = str(handoff.get("recommended_recipe_id") or "").strip()
-        stages = list(handoff.get("recipe_stages") or [])
+        stages = [dict(stage) for stage in (handoff.get("recipe_stages") or [])]
         if not recipe_id or not stages:
             return None
 
         original_user_task = str(handoff.get("original_user_task") or task).strip()
         stage_history: List[Dict[str, Any]] = []
         previous_stage_result: Optional[Dict[str, Any]] = None
-
-        for stage in stages:
+        stage_index = 0
+        while stage_index < len(stages):
+            stages = self._adapt_recipe_stages(
+                handoff=handoff,
+                stages=stages,
+                original_user_task=original_user_task,
+                stage_history=stage_history,
+                previous_stage_result=previous_stage_result,
+            )
+            stage = stages[stage_index]
             if not self._should_execute_optional_recipe_stage(handoff, stage):
                 stage_history.append(
                     {
@@ -705,6 +870,7 @@ class MetaAgent(BaseAgent):
                         "result_preview": "Optionale Stage fuer diese Anfrage uebersprungen.",
                     }
                 )
+                stage_index += 1
                 continue
 
             stage_task = self._build_recipe_stage_delegation_task(
@@ -747,6 +913,7 @@ class MetaAgent(BaseAgent):
 
             if history_entry["status"] != "success":
                 if stage.get("optional"):
+                    stage_index += 1
                     continue
                 recovery_result = await self._attempt_recipe_recovery(
                     handoff=handoff,
@@ -763,6 +930,7 @@ class MetaAgent(BaseAgent):
                             original_user_task=original_user_task,
                             stage_history=stage_history,
                         )
+                    stage_index += 1
                     continue
                 return self._render_recipe_execution_summary(
                     recipe_id=recipe_id,
@@ -770,6 +938,7 @@ class MetaAgent(BaseAgent):
                     stage_history=stage_history,
                     failure=history_entry,
                 )
+            stage_index += 1
 
         return self._render_recipe_execution_summary(
             recipe_id=recipe_id,
