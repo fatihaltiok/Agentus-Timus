@@ -9,6 +9,7 @@ Tests für:
 
 import sys
 import os
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -223,6 +224,14 @@ def test_browser_plan_context_embeds_verifiable_steps():
     assert agent.current_structured_workflow_plan is not None
 
 
+def test_preferred_text_entry_method_uses_clipboard_for_layout_sensitive_text():
+    agent = _make_agent()
+
+    assert agent._preferred_text_entry_method("https://www.youtube.com/watch?v=abc") == "clipboard"
+    assert agent._preferred_text_entry_method("name@example.com") == "clipboard"
+    assert agent._preferred_text_entry_method("leder jacken") == "auto"
+
+
 @pytest.mark.asyncio
 async def test_execute_structured_workflow_plan_runs_steps_with_state_progression():
     agent = _make_agent()
@@ -276,6 +285,44 @@ async def test_execute_structured_workflow_plan_runs_steps_with_state_progressio
 
 
 @pytest.mark.asyncio
+async def test_execute_structured_step_uses_clipboard_for_url_like_input(monkeypatch):
+    agent = _make_agent()
+    calls = []
+
+    async def fake_call_tool(method, params):
+        calls.append((method, dict(params)))
+        if method == "find_text_coordinates":
+            return {"found": True, "x": 120, "y": 240}
+        return {"success": True}
+
+    async def fake_analyze_current_screen():
+        return {
+            "elements": [{"text": "https://www.youtube.com/watch?v=abc", "x": 120, "y": 240}],
+            "current_url": "https://example.com",
+        }
+
+    monkeypatch.setattr(agent, "_call_tool", fake_call_tool)
+    monkeypatch.setattr(agent, "_analyze_current_screen", fake_analyze_current_screen)
+
+    step = BrowserWorkflowStep(
+        action="type_text",
+        target_type="input",
+        target_text="https://www.youtube.com/watch?v=abc",
+        expected_state="form_ready",
+        success_signal=[BrowserStateEvidence("visible_text", "https://www.youtube.com/watch?v=abc")],
+        timeout=6.0,
+        fallback_strategy="dom_lookup",
+    )
+
+    result = await agent._execute_structured_step(step)
+
+    assert result["success"] is True
+    type_calls = [item for item in calls if item[0] == "type_text"]
+    assert type_calls
+    assert type_calls[-1][1]["method"] == "clipboard"
+
+
+@pytest.mark.asyncio
 async def test_execute_structured_step_uses_real_fallback_strategy_switch(monkeypatch):
     agent = _make_agent()
     calls = []
@@ -318,6 +365,27 @@ async def test_execute_structured_step_uses_real_fallback_strategy_switch(monkey
     assert any(call[1].get("fuzzy_threshold") == 65 for call in find_calls)
 
 
+@pytest.mark.asyncio
+async def test_run_action_verified_treats_failed_navigation_as_unverified(monkeypatch):
+    import agent.visual_nemotron_agent_v4 as visual_v4
+    from types import SimpleNamespace
+
+    agent = visual_v4.VisualNemotronAgentV4.__new__(visual_v4.VisualNemotronAgentV4)
+    agent.desktop = SimpleNamespace(
+        execute_action=AsyncMock(return_value=(False, "Navigation fehlgeschlagen")),
+        last_navigation_result={"success": False, "error": "Navigation fehlgeschlagen"},
+    )
+
+    done, error, verified = await agent._run_action_verified(
+        {"action": "navigate", "url": "https://amazon.com"},
+        "Navigiere zu amazon.com",
+    )
+
+    assert done is False
+    assert error == "Navigation fehlgeschlagen"
+    assert verified is False
+
+
 def test_loop_recovery_hint_references_browser_plan():
     agent = _make_agent()
     agent.current_workflow_plan = ["Navigiere zu booking.com", "Verifiziere Suchfeld"]
@@ -357,3 +425,61 @@ async def test_create_navigation_plan_with_llm_uses_robust_json_extraction(monke
     assert plan is not None
     assert plan["goal"] == "Booking Suche"
     assert len(plan["steps"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_visual_nemotron_navigation_step_requires_real_navigation_success(monkeypatch):
+    import agent.visual_nemotron_agent_v4 as visual_v4
+
+    agent = visual_v4.VisualNemotronAgentV4.__new__(visual_v4.VisualNemotronAgentV4)
+    agent.history = []
+    agent.loop_detector = SimpleNamespace(add_state=lambda *_args, **_kwargs: False)
+    agent.desktop = SimpleNamespace(
+        screenshot=AsyncMock(return_value=object()),
+        elements=[],
+        scan_elements=AsyncMock(return_value=[]),
+        last_navigation_result={"success": False, "error": "Navigation fehlgeschlagen"},
+    )
+    agent.vision = SimpleNamespace(analyze=AsyncMock(return_value="screen"))
+    agent.nemotron = SimpleNamespace(
+        generate_step=AsyncMock(
+            return_value={
+                "status": "in_progress",
+                "actions": [{"action": "scan", "element_types": ["link"]}],
+            }
+        )
+    )
+    agent._run_action_verified = AsyncMock(return_value=(False, None, True))
+
+    result = await agent._execute_step_with_retry(
+        step="Navigiere zu amazon.com",
+        step_num=1,
+        completed=[],
+        pending=[],
+        max_retries=1,
+    )
+
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_visual_nemotron_type_action_prefers_clipboard_for_url():
+    import agent.visual_nemotron_agent_v4 as visual_v4
+
+    controller = visual_v4.DesktopController.__new__(visual_v4.DesktopController)
+    controller.mcp = SimpleNamespace(
+        click_and_focus=AsyncMock(return_value={"success": True}),
+        type_text=AsyncMock(return_value={"success": True}),
+    )
+
+    done, error = await controller.execute_action(
+        {
+            "action": "type",
+            "text_input": "https://www.youtube.com/watch?v=abc",
+            "coordinates": {"x": 50, "y": 60},
+        }
+    )
+
+    assert done is False
+    assert error is None
+    assert controller.mcp.type_text.await_args.kwargs["method"] == "clipboard"

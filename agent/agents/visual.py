@@ -15,6 +15,7 @@ import httpx
 from agent.base_agent import BaseAgent, MCP_URL
 from agent.providers import ModelProvider
 from agent.prompts import VISUAL_SYSTEM_PROMPT
+from agent.shared.delegation_handoff import parse_delegation_handoff
 from agent.shared.json_utils import extract_json_robust
 from agent.shared.vision_formatter import convert_openai_to_anthropic
 from orchestration.browser_workflow_plan import (
@@ -256,6 +257,16 @@ class VisualAgent(BaseAgent):
             return f"https://{domain.group(1)}"
         return ""
 
+    def _preferred_text_entry_method(self, text: str) -> str:
+        candidate = str(text or "").strip()
+        if not candidate:
+            return "auto"
+        if candidate.startswith(("http://", "https://", "www.")):
+            return "clipboard"
+        if re.search(r"[:/?=&%#@+~^\\|]", candidate):
+            return "clipboard"
+        return "auto"
+
     def _build_browser_plan_context(self, task: str) -> str:
         task_text = str(task or "").strip()
         if not task_text:
@@ -295,6 +306,43 @@ class VisualAgent(BaseAgent):
             + "\nArbeite strikt schrittweise. Wechsle Zustand nur bei harter Evidenz. "
               "Nutze Fallbacks nur als echten Strategiewechsel, nicht als denselben Retry."
         )
+
+    def _prepare_visual_task(self, task: str) -> tuple[str, str]:
+        handoff = parse_delegation_handoff(task)
+        if not handoff:
+            return str(task or "").strip(), ""
+
+        effective_task = handoff.goal or str(task or "").strip()
+        if handoff.handoff_data.get("source_url"):
+            self.current_browser_url = str(handoff.handoff_data["source_url"]).strip()
+        elif handoff.handoff_data.get("results_url"):
+            self.current_browser_url = str(handoff.handoff_data["results_url"]).strip()
+
+        lines = ["STRUKTURIERTER VISUAL-HANDOFF:"]
+        if handoff.expected_output:
+            lines.append(f"expected_output={handoff.expected_output}")
+        if handoff.success_signal:
+            lines.append(f"success_signal={handoff.success_signal}")
+        if handoff.constraints:
+            lines.append("constraints=" + " | ".join(handoff.constraints))
+
+        for key in (
+            "recipe_id",
+            "stage_id",
+            "expected_state",
+            "target_hint",
+            "source_url",
+            "results_url",
+            "previous_stage_result",
+            "captured_context",
+            "browser_plan",
+            "previous_blackboard_key",
+        ):
+            value = handoff.handoff_data.get(key)
+            if value:
+                lines.append(f"{key}={value}")
+
+        return effective_task, "\n".join(lines)
 
     async def _call_llm(self, messages: List[Dict]) -> str:
         if self.provider == ModelProvider.ANTHROPIC:
@@ -557,9 +605,10 @@ class VisualAgent(BaseAgent):
                     await self._wait_stable("click_at")
             elif step.action == "type_text":
                 await self._call_tool("click_at", {"x": x, "y": y})
+                method = self._preferred_text_entry_method(step.target_text)
                 await self._call_tool(
                     "type_text",
-                    {"text_to_type": step.target_text, "press_enter_after": False, "method": "write"},
+                    {"text_to_type": step.target_text, "press_enter_after": False, "method": method},
                 )
 
             verify = await self._verify_structured_step(step)
@@ -766,32 +815,34 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             return None
 
     async def run(self, task: str) -> str:
-        log.info(f"VisualAgent: {task}")
-        browser_plan_context = self._build_browser_plan_context(task)
+        effective_task, handoff_context = self._prepare_visual_task(task)
+        log.info(f"VisualAgent: {effective_task}")
+        browser_plan_context = self._build_browser_plan_context(effective_task)
+        user_sections = [f"AUFGABE: {effective_task}"]
+        if handoff_context:
+            user_sections.append(handoff_context)
+        if browser_plan_context:
+            user_sections.append(browser_plan_context)
         self.history = [
             {"role": "system", "content": self.system_prompt},
             {
                 "role": "user",
-                "content": (
-                    f"AUFGABE: {task}\n\n{browser_plan_context}"
-                    if browser_plan_context
-                    else f"AUFGABE: {task}"
-                ),
+                "content": "\n\n".join(user_sections),
             },
         ]
 
-        roi_set = await self._detect_dynamic_ui_and_set_roi(task)
+        roi_set = await self._detect_dynamic_ui_and_set_roi(effective_task)
 
         consecutive_loops = 0
         force_vision_mode = False
         runtime_feedback_recorded = False
 
-        structured_result = await self._try_structured_navigation(task)
+        structured_result = await self._try_structured_navigation(effective_task)
         if structured_result and structured_result.get("success"):
             log.info(f"Strukturierte Navigation erfolgreich: {structured_result['result']}")
             if roi_set:
                 self._clear_roi()
-            self._record_runtime_feedback(task, success=True, strategy="browser_flow", stage="structured_navigation")
+            self._record_runtime_feedback(effective_task, success=True, strategy="browser_flow", stage="structured_navigation")
             runtime_feedback_recorded = True
             return structured_result["result"]
         else:
@@ -817,7 +868,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             screenshot = await asyncio.to_thread(self._get_screenshot_as_base64)
             if not screenshot:
                 if not runtime_feedback_recorded:
-                    self._record_runtime_feedback(task, success=False, stage="screenshot_capture")
+                    self._record_runtime_feedback(effective_task, success=False, stage="screenshot_capture")
                     runtime_feedback_recorded = True
                 return "Screenshot-Fehler"
 
@@ -837,7 +888,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 if roi_set:
                     self._clear_roi()
                 if not runtime_feedback_recorded:
-                    self._record_runtime_feedback(task, success=True, stage="vision_final_answer")
+                    self._record_runtime_feedback(effective_task, success=True, stage="vision_final_answer")
                     runtime_feedback_recorded = True
                 return reply.split("Final Answer:")[1].strip()
 
@@ -853,7 +904,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 if roi_set:
                     self._clear_roi()
                 if not runtime_feedback_recorded:
-                    self._record_runtime_feedback(task, success=True, strategy="browser_flow", stage="finish_task")
+                    self._record_runtime_feedback(effective_task, success=True, strategy="browser_flow", stage="finish_task")
                     runtime_feedback_recorded = True
                 return params.get("message", "Fertig")
 
@@ -870,7 +921,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                     force_vision_mode = True
                     if consecutive_loops >= 2 and not runtime_feedback_recorded:
                         self._record_runtime_feedback(
-                            task,
+                            effective_task,
                             success=False,
                             strategy=self._preferred_recovery_strategy(),
                             stage="scan_ui_loop",
@@ -895,6 +946,6 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             self._clear_roi()
 
         if not runtime_feedback_recorded:
-            self._record_runtime_feedback(task, success=False, stage="max_iterations")
+            self._record_runtime_feedback(effective_task, success=False, stage="max_iterations")
             runtime_feedback_recorded = True
         return "Max Iterationen."

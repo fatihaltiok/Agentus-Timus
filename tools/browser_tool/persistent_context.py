@@ -59,6 +59,7 @@ DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) "
     "Gecko/20100101 Firefox/115.0"
 )
+DEFAULT_BROWSER_ENGINE = os.getenv("TIMUS_BROWSER_ENGINE", "firefox").strip().lower() or "firefox"
 
 
 @dataclass
@@ -143,6 +144,7 @@ class PersistentContextManager:
         self.base_storage_dir.mkdir(parents=True, exist_ok=True)
         self.headless = headless
         self.user_agent = user_agent
+        self.browser_engine = DEFAULT_BROWSER_ENGINE
         self.viewport_width = int(os.getenv("BROWSER_VIEWPORT_WIDTH", "1280"))
         self.viewport_height = int(os.getenv("BROWSER_VIEWPORT_HEIGHT", "720"))
         self.device_scale_factor = sanitize_scale(
@@ -186,23 +188,24 @@ class PersistentContextManager:
         try:
             self._playwright = await async_playwright().start()
 
-            # Firefox starten (headless)
+            # Browser-Engine starten (Firefox default, Chromium optional)
             try:
-                self._browser = await self._playwright.firefox.launch(
-                    headless=self.headless
-                )
+                launcher = getattr(self._playwright, self.browser_engine)
+                self._browser = await launcher.launch(headless=self.headless)
             except Exception as e:
                 # Auto-Repair falls Browser nicht installiert
                 if "ENOENT" in str(e) or "no such file" in str(e).lower():
-                    log.warning("Browser nicht gefunden. Starte 'playwright install firefox'...")
+                    log.warning(
+                        "Browser nicht gefunden. Starte 'playwright install %s'...",
+                        self.browser_engine,
+                    )
                     process = await asyncio.create_subprocess_exec(
-                        "playwright", "install", "firefox"
+                        "playwright", "install", self.browser_engine
                     )
                     await process.wait()
                     if process.returncode == 0:
-                        self._browser = await self._playwright.firefox.launch(
-                            headless=self.headless
-                        )
+                        launcher = getattr(self._playwright, self.browser_engine)
+                        self._browser = await launcher.launch(headless=self.headless)
                     else:
                         raise RuntimeError("Playwright-Installation fehlgeschlagen")
                 else:
@@ -211,7 +214,7 @@ class PersistentContextManager:
             self._initialized = True
             log.info(
                 f"✅ PersistentContextManager initialisiert "
-                f"(headless={self.headless}, max_contexts={MAX_CONTEXTS})"
+                f"(engine={self.browser_engine}, headless={self.headless}, max_contexts={MAX_CONTEXTS})"
             )
             return True
 

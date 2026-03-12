@@ -65,20 +65,46 @@ async def hybrid_click_or_fill(
 
             # Phase 3.1: activeElement-Check — SPAs reagieren oft nicht auf fill()
             # direkt nach click(), prüfen ob das Feld wirklich den Fokus hat
-            active_tag = await page.evaluate("() => document.activeElement.tagName.toUpperCase()")
+            active_info = await page.evaluate(
+                """() => {
+                    const el = document.activeElement;
+                    if (!el) {
+                        return { tag: "", isContentEditable: false };
+                    }
+                    return {
+                        tag: (el.tagName || "").toUpperCase(),
+                        isContentEditable: !!el.isContentEditable,
+                    };
+                }"""
+            )
+            active_tag = str(active_info.get("tag", "")).upper()
+            is_content_editable = bool(active_info.get("isContentEditable"))
 
-            if active_tag in ("INPUT", "TEXTAREA"):
-                # Keyboard.type() ist zuverlässiger als fill() bei React/Vue/Angular SPAs
-                await page.keyboard.type(value, delay=30)
-                logger.info(f"✅ DOM-TYPE (keyboard) [{active_tag}]: {value[:40]}...")
+            if active_tag in ("INPUT", "TEXTAREA") or is_content_editable:
+                try:
+                    await page.keyboard.insert_text(value)
+                    logger.info(
+                        "✅ DOM-INSERT-TEXT [%s%s]: %s...",
+                        active_tag or "UNKNOWN",
+                        "+CONTENTEDITABLE" if is_content_editable else "",
+                        value[:40],
+                    )
+                    return True, "DOM_INSERT_TEXT"
+                except Exception as exc:
+                    logger.debug("insert_text fehlgeschlagen, fallback zu fill(): %s", exc)
+                    await element.fill(value)
+                    logger.info(f"✅ DOM-FILL [{active_tag or 'UNKNOWN'}]: {value[:40]}...")
+                    return True, "DOM_FILL"
             else:
                 # fill() für Standard-HTML-Formulare
                 await element.fill(value)
                 logger.info(f"✅ DOM-FILL [{active_tag}]: {value[:40]}...")
+                return True, "DOM_FILL"
+
         else:
             await element.click(timeout=timeout)
             logger.info("✅ DOM-CLICK erfolgreich")
-
+            return True, "DOM_CLICK"
         return True, "DOM_SUCCESS"
 
     except Exception as exc:

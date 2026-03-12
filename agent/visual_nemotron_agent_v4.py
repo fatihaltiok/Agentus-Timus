@@ -113,6 +113,17 @@ def _visual_v4_temp_path(filename: str) -> Path:
     return _ensure_visual_v4_temp_dir() / filename
 
 
+def _preferred_text_entry_method(text: str) -> str:
+    candidate = str(text or "").strip()
+    if not candidate:
+        return "auto"
+    if candidate.startswith(("http://", "https://", "www.")):
+        return "clipboard"
+    if re.search(r"[:/?=&%#@+~^\\|]", candidate):
+        return "clipboard"
+    return "auto"
+
+
 # ============================================================================
 # TOOL CLIENTS
 # ============================================================================
@@ -213,7 +224,7 @@ class DesktopController:
             return img
         detail = _shared_last_screenshot_error() or "unbekannter Fehler"
         raise RuntimeError(f"Screenshot fehlgeschlagen: {detail}")
-    
+
     async def find_element_by_type(self, element_type: str) -> Optional[Tuple[int, int]]:
         """Findet Element nach Typ und gibt Koordinaten zurück."""
         # Zuerst scannen
@@ -412,7 +423,11 @@ KEIN Code, KEINE Erklärung - nur JSON!"""
                     await self.mcp.click_and_focus(int(type_coords["x"]), int(type_coords["y"]))
                     await asyncio.sleep(0.3)
                     log.info(f"   🖱️  Fokus-Klick vor type bei ({type_coords['x']}, {type_coords['y']})")
-                result = await self.mcp.type_text(text, press_enter)
+                result = await self.mcp.type_text(
+                    text,
+                    press_enter,
+                    method=_preferred_text_entry_method(text),
+                )
                 if "error" in result:
                     return False, result["error"].get("message", "Tippen fehlgeschlagen")
                 log.info(f"   ⌨️  Getippt: {text[:30]}{'...' if len(text) > 30 else ''}")
