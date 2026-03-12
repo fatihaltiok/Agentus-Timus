@@ -20,12 +20,9 @@ import base64
 import queue
 import time
 import requests
-from typing import Optional
+from typing import Optional, Any
 from dataclasses import dataclass
 
-import numpy as np
-import sounddevice as sd
-from faster_whisper import WhisperModel
 from dotenv import load_dotenv
 
 from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
@@ -39,6 +36,9 @@ log = logging.getLogger("voice_tool")
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "medium")  # small, medium, large-v3
 WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cuda")  # cuda oder cpu
 SAMPLE_RATE = 16000
+VOICE_TRANSCRIBE_BACKEND = os.getenv("VOICE_TRANSCRIBE_BACKEND", "openai_api")
+OPENAI_TRANSCRIBE_MODEL = os.getenv("OPENAI_TRANSCRIBE_MODEL", "whisper-1")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # Inworld.AI TTS
 INWORLD_API_KEY     = os.getenv("INWORLD_API_KEY")
@@ -72,9 +72,25 @@ class VoiceEngine:
         self._initialized = False
 
     def initialize(self):
-        """Initialisiert Whisper und prüft Inworld.AI Konfiguration."""
+        """Initialisiert explizit das Whisper-Modell und prüft TTS-Konfiguration."""
         if self._initialized:
             return
+
+        self.ensure_whisper_model()
+
+        if INWORLD_API_KEY:
+            log.info(f"✅ Inworld.AI TTS bereit (Voice: {INWORLD_VOICE}, Model: {INWORLD_MODEL})")
+        else:
+            log.warning("⚠️ INWORLD_API_KEY nicht gesetzt - Sprachausgabe deaktiviert")
+
+        self._initialized = True
+
+    def ensure_whisper_model(self):
+        """Lädt Whisper nur bei echtem STT-Bedarf lazily nach."""
+        if self.whisper_model is not None:
+            return
+
+        from faster_whisper import WhisperModel
 
         log.info(f"🎤 Lade Whisper Modell '{WHISPER_MODEL}' auf {WHISPER_DEVICE}...")
         try:
@@ -89,16 +105,10 @@ class VoiceEngine:
             log.info("Versuche CPU-Fallback...")
             self.whisper_model = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
 
-        if INWORLD_API_KEY:
-            log.info(f"✅ Inworld.AI TTS bereit (Voice: {INWORLD_VOICE}, Model: {INWORLD_MODEL})")
-        else:
-            log.warning("⚠️ INWORLD_API_KEY nicht gesetzt - Sprachausgabe deaktiviert")
-
-        self._initialized = True
-
     def _device_rate(self) -> int:
         """Gibt die native Samplerate des Standard-Eingabegeräts zurück."""
         try:
+            import sounddevice as sd
             info = sd.query_devices(kind='input')
             rate = int(info['default_samplerate'])
             log.debug(f"Gerät native Samplerate: {rate} Hz")
@@ -106,8 +116,9 @@ class VoiceEngine:
         except Exception:
             return SAMPLE_RATE
 
-    def _resample(self, audio: np.ndarray, from_rate: int) -> np.ndarray:
+    def _resample(self, audio: Any, from_rate: int) -> Any:
         """Resampled Audio von from_rate auf SAMPLE_RATE (16 kHz) via scipy (hohe Qualität)."""
+        import numpy as np
         if from_rate == SAMPLE_RATE or len(audio) == 0:
             return audio
         from scipy.signal import resample_poly
@@ -117,16 +128,19 @@ class VoiceEngine:
         resampled = resample_poly(audio, up, down)
         return resampled.astype('float32')
 
-    def _record_audio(self, duration: float) -> np.ndarray:
+    def _record_audio(self, duration: float) -> Any:
         """Nimmt Audio für eine bestimmte Dauer auf (native Rate, dann resampeln)."""
+        import sounddevice as sd
         rate = self._device_rate()
         log.debug(f"Aufnahme für {duration}s bei {rate} Hz...")
         audio = sd.rec(int(duration * rate), samplerate=rate, channels=1, dtype='float32')
         sd.wait()
         return self._resample(audio.flatten(), rate)
 
-    def _record_until_silence(self, max_duration: float = 30.0) -> np.ndarray:
+    def _record_until_silence(self, max_duration: float = 30.0) -> Any:
         """Nimmt kontinuierlich Audio auf bis Stille erkannt wird (native Rate → 16 kHz)."""
+        import numpy as np
+        import sounddevice as sd
         log.debug("Aufnahme bis Stille...")
         rate = self._device_rate()
 
@@ -184,8 +198,7 @@ class VoiceEngine:
         Returns:
             Transkribierter Text
         """
-        if not self.whisper_model:
-            self.initialize()
+        self.ensure_whisper_model()
 
         log.info("🎤 Höre zu...")
 
@@ -226,10 +239,14 @@ class VoiceEngine:
         """
         if not audio_bytes:
             return ""
-        if not self.whisper_model:
-            self.initialize()
+        if VOICE_TRANSCRIBE_BACKEND == "openai_api" and OPENAI_API_KEY:
+            text = self._transcribe_audio_bytes_via_openai(audio_bytes, audio_format)
+            if text is not None:
+                return text
+        self.ensure_whisper_model()
 
         from pydub import AudioSegment
+        import numpy as np
 
         source = io.BytesIO(audio_bytes)
         audio = AudioSegment.from_file(source, format=audio_format or None)
@@ -245,6 +262,36 @@ class VoiceEngine:
         text = " ".join(s.text.strip() for s in segments).strip()
         log.info(f"📝 Browser-Audio erkannt: '{text}'")
         return text
+
+    def _transcribe_audio_bytes_via_openai(
+        self,
+        audio_bytes: bytes,
+        audio_format: Optional[str] = None,
+    ) -> Optional[str]:
+        """Nutzt die OpenAI-Audio-API für Browser-/App-Uploads."""
+        if not OPENAI_API_KEY:
+            return None
+
+        try:
+            from openai import OpenAI
+
+            suffix = (audio_format or "webm").strip(".")
+            file_like = io.BytesIO(audio_bytes)
+            file_like.name = f"voice-upload.{suffix}"
+
+            client = OpenAI(api_key=OPENAI_API_KEY)
+            response = client.audio.transcriptions.create(
+                model=OPENAI_TRANSCRIBE_MODEL,
+                file=file_like,
+                language=self.config.language,
+            )
+            text = getattr(response, "text", "") or ""
+            text = text.strip()
+            log.info(f"📝 OpenAI-Audio-Transkript erkannt: '{text}'")
+            return text
+        except Exception as e:
+            log.error(f"❌ OpenAI-Transkriptionsfehler: {e}")
+            return None
 
     def synthesize_mp3(self, text: str, voice: Optional[str] = None) -> Optional[bytes]:
         """
@@ -324,6 +371,8 @@ class VoiceEngine:
                 return True
 
             from pydub import AudioSegment
+            import numpy as np
+            import sounddevice as sd
             audio_segment = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
             samples = np.array(audio_segment.get_array_of_samples(), dtype=np.float32)
             samples = samples / (np.max(np.abs(samples)) or 1.0)

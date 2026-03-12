@@ -6,18 +6,20 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 
 private val TimusDarkColors = darkColorScheme(
-    primary = Glow,
+    primary = TimusPrimary,
     onPrimary = Night0,
-    secondary = Accent,
+    secondary = TimusAccent,
     onSecondary = Night0,
-    tertiary = GlowSoft,
+    tertiary = TimusPrimarySoft,
     background = Night0,
     onBackground = TextStrong,
     surface = Night1,
     onSurface = TextStrong,
-    surfaceVariant = Panel,
+    surfaceVariant = PanelStrong,
     onSurfaceVariant = TextMuted,
-    error = Danger,
+    error = TimusError,
+    outline = PanelBorder,
+    outlineVariant = PanelBorderBright,
 )
 
 @Composable

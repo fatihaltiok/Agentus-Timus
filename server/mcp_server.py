@@ -1424,6 +1424,7 @@ async def canvas_chat(request: Request):
         return JSONResponse(
             status_code=400, content={"status": "error", "error": "query_required"}
         )
+    response_language = ((body or {}).get("response_language") or "").strip().lower()
 
     session_id = (body or {}).get("session_id") or f"canvas_{uuid.uuid4().hex[:8]}"
     ts = datetime.utcnow().isoformat() + "Z"
@@ -1445,9 +1446,17 @@ async def canvas_chat(request: Request):
         agent = await get_agent_decision(query, session_id=session_id)
         _set_agent_status(agent, "thinking", query)
 
+        query_for_agent = query
+        if response_language in {"de", "deutsch", "german"} and agent not in {"visual", "visual_nemotron"}:
+            query_for_agent = (
+                "Antworte ausschließlich auf Deutsch. "
+                "Nutze nur dann englische Fachbegriffe, wenn sie technisch nötig sind.\n\n"
+                f"Nutzeranfrage:\n{query}"
+            )
+
         result = await run_agent(
             agent_name=agent,
-            query=query,
+            query=query_for_agent,
             tools_description=tools_desc,
             session_id=session_id,
         )
@@ -1772,15 +1781,14 @@ async def update_setting(request: Request):
 async def voice_status_endpoint():
     """Gibt den aktuellen Status des Voice-Systems zurück."""
     try:
-        from tools.voice_tool.tool import voice_engine
         return {
             "status": "success",
             "voice": {
-                "initialized": voice_engine._initialized,
-                "listening": voice_engine.is_listening,
-                "speaking": voice_engine.is_speaking,
-                "current_voice": voice_engine.config.inworld_voice,
-                "available_voices": voice_engine.get_available_voices(),
+                "initialized": bool(os.getenv("INWORLD_API_KEY") or os.getenv("OPENAI_API_KEY")),
+                "listening": False,
+                "speaking": False,
+                "current_voice": os.getenv("INWORLD_VOICE", "Lennart"),
+                "available_voices": ["Lennart", "Ashley", "Derek"],
             },
         }
     except Exception as e:

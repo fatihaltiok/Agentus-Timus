@@ -25,14 +25,14 @@ class _FakeVoiceEngine:
 
 
 async def test_voice_status_endpoint_includes_current_voice(monkeypatch):
-    fake_engine = _FakeVoiceEngine()
-    monkeypatch.setattr("tools.voice_tool.tool.voice_engine", fake_engine)
+    monkeypatch.setenv("INWORLD_VOICE", "Lennart")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
 
     data = await mcp_server.voice_status_endpoint()
 
     assert data["status"] == "success"
     assert data["voice"]["current_voice"] == "Lennart"
-    assert "de" in data["voice"]["available_voices"]
+    assert "Lennart" in data["voice"]["available_voices"]
 
 
 async def test_voice_synthesize_endpoint_returns_audio(monkeypatch):

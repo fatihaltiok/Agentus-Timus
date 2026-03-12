@@ -17,12 +17,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -31,16 +33,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.fatihaltiok.timus.mobile.model.VoiceUiState
 import com.fatihaltiok.timus.mobile.ui.components.TimusCard
-import com.fatihaltiok.timus.mobile.ui.theme.Glow
+import com.fatihaltiok.timus.mobile.ui.components.VoiceOrb
+import com.fatihaltiok.timus.mobile.ui.theme.GlowPrimary
 import com.fatihaltiok.timus.mobile.ui.theme.Night0
+import com.fatihaltiok.timus.mobile.ui.theme.Night1
 import com.fatihaltiok.timus.mobile.ui.theme.Panel
+import com.fatihaltiok.timus.mobile.ui.theme.PanelStrong
 import com.fatihaltiok.timus.mobile.ui.theme.TextMuted
+import com.fatihaltiok.timus.mobile.ui.theme.TimusPrimary
+import com.fatihaltiok.timus.mobile.ui.theme.statusColorFor
 import java.io.File
 
 @Composable
@@ -147,48 +156,89 @@ fun VoiceScreen(
         player.start()
     }
 
+    LaunchedEffect(voiceState.playbackNonce) {
+        if (voiceState.playbackNonce > 0 && voiceState.lastSynthesizedAudio != null) {
+            playLastReplyAudio()
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(24.dp),
-        verticalArrangement = Arrangement.Center,
+            .padding(horizontal = 20.dp, vertical = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box(
             modifier = Modifier
-                .size(180.dp)
-                .clip(CircleShape)
-                .background(Panel),
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(34.dp))
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(PanelStrong, Panel, Night1),
+                    ),
+                )
+                .padding(vertical = 28.dp, horizontal = 20.dp),
             contentAlignment = Alignment.Center,
         ) {
-            Box(
-                modifier = Modifier
-                    .size(84.dp)
-                    .clip(CircleShape)
-                    .background(Glow.copy(alpha = 0.88f)),
-            )
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(190.dp)
+                        .clip(CircleShape)
+                        .background(GlowPrimary.copy(alpha = 0.10f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(146.dp)
+                            .clip(CircleShape)
+                            .background(GlowPrimary.copy(alpha = 0.08f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        VoiceOrb(state = voiceState.state, size = 74.dp)
+                    }
+                }
+                Text(
+                    text = voiceState.state.uppercase(),
+                    fontWeight = FontWeight.Bold,
+                    color = statusColorFor(voiceState.state),
+                )
+                Text(
+                    text = voiceState.statusMessage.ifBlank { "Voice-first Gespräch mit Timus" },
+                    color = TextMuted,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
-        Text(
-            text = voiceState.state.uppercase(),
-            modifier = Modifier.padding(top = 22.dp),
-            fontWeight = FontWeight.Bold,
-        )
-        Text(
-            text = voiceState.statusMessage.ifBlank { "Voice-first Gespräch mit Timus" },
-            color = TextMuted,
+
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 12.dp, bottom = 22.dp),
-        )
+                .clip(RoundedCornerShape(22.dp))
+                .background(Panel.copy(alpha = 0.65f))
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+        ) {
+            Text(
+                text = "Sprich mit Timus wie mit einem persönlichen Operator. Aufnahme, Transkript und Antwort laufen direkt in einem Voice-Flow.",
+                color = TextMuted,
+            )
+        }
 
         TimusCard(
             title = "Transkript",
             subtitle = voiceState.transcript.ifBlank { "Noch kein Transkript." },
+            status = if (voiceState.transcript.isBlank()) "idle" else "ok",
         )
         TimusCard(
             title = "Letzte Antwort",
             subtitle = voiceState.lastReply.ifBlank { "Noch keine Antwort." },
+            status = if (voiceState.lastReply.isBlank()) "idle" else "ok",
         )
         TimusCard(
             title = "Aktive Stimme",
@@ -197,12 +247,13 @@ fun VoiceScreen(
             } else {
                 voiceState.currentVoice
             },
+            status = voiceState.state,
         )
 
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 12.dp),
+                .padding(top = 4.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Button(
@@ -215,7 +266,7 @@ fun VoiceScreen(
                 },
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Glow,
+                    containerColor = TimusPrimary,
                     contentColor = Night0,
                 ),
             ) {
@@ -225,26 +276,30 @@ fun VoiceScreen(
                 onClick = onSendTranscript,
                 modifier = Modifier.fillMaxWidth(),
                 enabled = voiceState.transcript.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(containerColor = PanelStrong),
             ) {
-                Text("Transkript an Chat senden")
+                Text("Transkript manuell senden")
             }
             Button(
                 onClick = onSynthesize,
                 modifier = Modifier.fillMaxWidth(),
                 enabled = voiceState.lastReply.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(containerColor = PanelStrong),
             ) {
-                Text("Antwort in Audio umwandeln")
+                Text("Antwort manuell in Audio umwandeln")
             }
             Button(
                 onClick = ::playLastReplyAudio,
                 modifier = Modifier.fillMaxWidth(),
                 enabled = voiceState.lastSynthesizedAudio != null,
+                colors = ButtonDefaults.buttonColors(containerColor = PanelStrong),
             ) {
                 Text("Letzte Audioantwort abspielen")
             }
             Button(
                 onClick = onRefreshStatus,
                 modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = Night1),
             ) {
                 Text("Voice-Status aktualisieren")
             }

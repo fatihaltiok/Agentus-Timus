@@ -20,9 +20,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.fatihaltiok.timus.mobile.data.TimusConfig
-import com.fatihaltiok.timus.mobile.ui.theme.Glow
 import com.fatihaltiok.timus.mobile.ui.theme.Night0
+import com.fatihaltiok.timus.mobile.ui.theme.PanelStrong
 import com.fatihaltiok.timus.mobile.ui.theme.TextMuted
+import com.fatihaltiok.timus.mobile.ui.theme.TimusPrimary
 
 @Composable
 fun LoginScreen(
@@ -87,8 +88,9 @@ fun LoginScreen(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(20.dp),
             colors = ButtonDefaults.buttonColors(
-                containerColor = Glow,
+                containerColor = TimusPrimary,
                 contentColor = Night0,
+                disabledContainerColor = PanelStrong,
             ),
         ) {
             Text("In die Konsole")

@@ -20,8 +20,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.fatihaltiok.timus.mobile.model.ChatMessage
 import com.fatihaltiok.timus.mobile.ui.components.TimusCard
-import com.fatihaltiok.timus.mobile.ui.theme.Glow
 import com.fatihaltiok.timus.mobile.ui.theme.Night0
+import com.fatihaltiok.timus.mobile.ui.theme.PanelStrong
+import com.fatihaltiok.timus.mobile.ui.theme.TimusPrimary
 
 @Composable
 fun ChatScreen(
@@ -40,11 +41,13 @@ fun ChatScreen(
         TimusCard(
             title = "Chat",
             subtitle = "Voice-first Verlauf mit Text-Fallback und Live-Antworten.",
+            status = "idle",
         )
         if (!error.isNullOrBlank()) {
             TimusCard(
                 title = "Fehler",
                 subtitle = error,
+                status = "error",
             )
         }
         LazyColumn(
@@ -56,6 +59,7 @@ fun ChatScreen(
                 TimusCard(
                     title = if (message.role == "user") "Du" else (message.agent ?: "Timus"),
                     subtitle = message.text,
+                    status = if (message.role == "user") "idle" else "ok",
                 )
             }
         }
@@ -75,8 +79,9 @@ fun ChatScreen(
                 enabled = draft.isNotBlank() && !loading,
                 shape = RoundedCornerShape(18.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Glow,
+                    containerColor = TimusPrimary,
                     contentColor = Night0,
+                    disabledContainerColor = PanelStrong,
                 ),
             ) {
                 if (loading) {

@@ -29,4 +29,5 @@ data class VoiceUiState(
     val statusMessage: String = "",
     val availableVoices: List<String> = emptyList(),
     val lastSynthesizedAudio: ByteArray? = null,
+    val playbackNonce: Int = 0,
 )

@@ -60,17 +60,24 @@ class AppSessionViewModel(
     }
 
     fun sendDraft() {
+        sendMessage(_uiState.value.draft.trim(), fromVoice = false)
+    }
+
+    private fun sendMessage(message: String, fromVoice: Boolean) {
         val state = _uiState.value
-        val message = state.draft.trim()
         if (message.isBlank() || !state.authenticated) return
 
         val optimisticMessage = ChatMessage(role = "user", text = message)
         _uiState.value = state.copy(
             loading = true,
-            draft = "",
+            draft = if (fromVoice) message else "",
             error = null,
             messages = state.messages + optimisticMessage,
-            voice = state.voice.copy(state = "thinking", transcript = message),
+            voice = state.voice.copy(
+                state = "thinking",
+                transcript = message,
+                statusMessage = if (fromVoice) "Verarbeite Sprachanfrage…" else state.voice.statusMessage,
+            ),
         )
 
         viewModelScope.launch {
@@ -79,7 +86,7 @@ class AppSessionViewModel(
                 query = message,
                 sessionId = state.sessionId,
             ).onSuccess { reply ->
-                _uiState.value = _uiState.value.copy(
+                val nextState = _uiState.value.copy(
                     sessionId = reply.sessionId,
                     loading = false,
                     messages = _uiState.value.messages + ChatMessage(
@@ -88,12 +95,16 @@ class AppSessionViewModel(
                         agent = reply.agent,
                     ),
                     voice = _uiState.value.voice.copy(
-                        state = "idle",
+                        state = if (fromVoice) "speaking" else "idle",
                         lastReply = reply.reply,
                         statusMessage = "Antwort von ${reply.agent}",
                     ),
                     error = null,
                 )
+                _uiState.value = nextState
+                if (fromVoice) {
+                    synthesizeLastReply()
+                }
             }.onFailure { error ->
                 _uiState.value = _uiState.value.copy(
                     loading = false,
@@ -156,11 +167,12 @@ class AppSessionViewModel(
                     _uiState.value = _uiState.value.copy(
                         draft = transcript,
                         voice = _uiState.value.voice.copy(
-                            state = "idle",
+                            state = "thinking",
                             transcript = transcript,
-                            statusMessage = "Transkript bereit",
+                            statusMessage = "Transkript bereit — sende an Timus…",
                         ),
                     )
+                    sendMessage(transcript, fromVoice = true)
                 }
                 .onFailure { error ->
                     _uiState.value = _uiState.value.copy(
@@ -190,6 +202,7 @@ class AppSessionViewModel(
                             state = "speaking",
                             lastSynthesizedAudio = audio,
                             statusMessage = "Audio bereit",
+                            playbackNonce = _uiState.value.voice.playbackNonce + 1,
                         ),
                     )
                 }
