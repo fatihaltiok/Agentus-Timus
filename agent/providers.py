@@ -253,17 +253,40 @@ class AgentModelConfig:
             return model, provider
 
         model_env, provider_env, fallback_model, fallback_provider = cls.AGENT_CONFIGS[agent_type]
-        model = os.getenv(model_env, fallback_model)
-        provider_str = os.getenv(provider_env, fallback_provider.value)
-
-        try:
-            provider = ModelProvider(provider_str.lower())
-        except ValueError:
-            log.warning(f"Unbekannter Provider '{provider_str}', nutze Fallback")
-            provider = fallback_provider
+        model, provider = resolve_model_provider_env(
+            model_env=model_env,
+            provider_env=provider_env,
+            fallback_model=fallback_model,
+            fallback_provider=fallback_provider,
+        )
 
         get_provider_client().validate_model_or_raise(provider, model, agent_type=agent_type)
         return model, provider
+
+
+def resolve_model_provider_env(
+    *,
+    model_env: str,
+    provider_env: str,
+    fallback_model: str,
+    fallback_provider: ModelProvider,
+) -> Tuple[str, ModelProvider]:
+    model = str(os.getenv(model_env, fallback_model) or fallback_model).strip() or fallback_model
+    provider_str = str(os.getenv(provider_env, fallback_provider.value) or fallback_provider.value).strip().lower()
+
+    try:
+        provider = ModelProvider(provider_str)
+    except ValueError:
+        log.warning(
+            "Unbekannter Provider '%s' fuer %s/%s, nutze Fallback %s",
+            provider_str,
+            model_env,
+            provider_env,
+            fallback_provider.value,
+        )
+        provider = fallback_provider
+
+    return model, provider
 
 
 # Globale Provider-Client Instanz

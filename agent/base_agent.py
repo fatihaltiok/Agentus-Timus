@@ -28,6 +28,7 @@ from agent.providers import (
     ModelProvider,
     AgentModelConfig,
     get_provider_client,
+    resolve_model_provider_env,
 )
 from agent.shared.mcp_client import MCPClient
 from agent.shared.screenshot import capture_screenshot_base64
@@ -1041,8 +1042,12 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             old_model = self.model
             old_provider = self.provider
 
-            self.model = os.getenv("REASONING_MODEL", "nvidia/nemotron-3-nano-30b-a3b")
-            self.provider = ModelProvider.OPENROUTER
+            self.model, self.provider = resolve_model_provider_env(
+                model_env="REASONING_MODEL",
+                provider_env="REASONING_MODEL_PROVIDER",
+                fallback_model="qwen/qwq-32b",
+                fallback_provider=ModelProvider.OPENROUTER,
+            )
 
             old_thinking = os.environ.get("NEMOTRON_ENABLE_THINKING")
             os.environ["NEMOTRON_ENABLE_THINKING"] = "true"

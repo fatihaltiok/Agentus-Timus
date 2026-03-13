@@ -1779,9 +1779,13 @@ Antworte NUR mit dem JSON, keine Markdown, keine Erklärungen."""
             old_model = self.model
             old_provider = self.provider
 
-            from agent.providers import ModelProvider
-            self.model = os.getenv("REASONING_MODEL", "nvidia/nemotron-3-nano-30b-a3b")
-            self.provider = ModelProvider.OPENROUTER
+            from agent.providers import ModelProvider, resolve_model_provider_env
+            self.model, self.provider = resolve_model_provider_env(
+                model_env="REASONING_MODEL",
+                provider_env="REASONING_MODEL_PROVIDER",
+                fallback_model="qwen/qwq-32b",
+                fallback_provider=ModelProvider.OPENROUTER,
+            )
 
             response = await self._call_llm([
                 {"role": "user", "content": plan_prompt}

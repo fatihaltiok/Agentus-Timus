@@ -1,4 +1,4 @@
-"""CreativeAgent - Bilder, kreative Texte (HYBRID: GPT-5.1 + Nemotron)."""
+"""CreativeAgent - Bilder, kreative Texte (HYBRID: OpenAI Prompting + OpenRouter Structuring)."""
 
 import os
 import re
@@ -6,10 +6,36 @@ import asyncio
 import logging
 
 from agent.base_agent import BaseAgent
-from agent.providers import ModelProvider
+from agent.providers import ModelProvider, resolve_model_provider_env
 from agent.prompts import CREATIVE_SYSTEM_PROMPT
 
 log = logging.getLogger("TimusAgent-v4.4")
+
+
+def _resolve_openai_creative_model() -> str:
+    creative_model = str(os.getenv("CREATIVE_MODEL", "") or "").strip()
+    creative_provider = str(os.getenv("CREATIVE_MODEL_PROVIDER", "") or "").strip().lower()
+    if creative_model and creative_provider == "openai":
+        return creative_model
+
+    smart_model = str(os.getenv("SMART_MODEL", "") or "").strip()
+    if smart_model:
+        return smart_model
+
+    return "gpt-5.4"
+
+
+def _resolve_openrouter_structuring_model() -> str:
+    for model_env, provider_env in (
+        ("REASONING_MODEL", "REASONING_MODEL_PROVIDER"),
+        ("FAST_MODEL", "FAST_MODEL_PROVIDER"),
+        ("VISUAL_MODEL", "VISUAL_MODEL_PROVIDER"),
+    ):
+        model = str(os.getenv(model_env, "") or "").strip()
+        provider = str(os.getenv(provider_env, "") or "").strip().lower()
+        if model and provider == "openrouter":
+            return model
+    return "nvidia/nemotron-3-nano-30b-a3b"
 
 
 class CreativeAgent(BaseAgent):
@@ -49,7 +75,7 @@ NUR DEN PROMPT AUSGEBEN, KEINE ERKLAERUNGEN!"""
         try:
             response = await asyncio.to_thread(
                 self.provider_client.get_client(ModelProvider.OPENAI).chat.completions.create,
-                model="gpt-5.1",
+                model=_resolve_openai_creative_model(),
                 messages=[{"role": "user", "content": prompt}],
                 temperature=1.0,
                 max_completion_tokens=200,
@@ -99,7 +125,7 @@ Gib NUR das Action-JSON zurueck!"""
         try:
             response = await asyncio.to_thread(
                 self.nemotron_client.chat.completions.create,
-                model="nvidia/nemotron-3-nano-30b-a3b",
+                model=_resolve_openrouter_structuring_model(),
                 messages=[
                     {"role": "system", "content": nemotron_system},
                     {"role": "user", "content": user_message},

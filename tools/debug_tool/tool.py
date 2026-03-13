@@ -1,6 +1,7 @@
 # tools/debug_tool/tool.py
 import logging
 import asyncio
+import os
 
 # V2 Tool Registry
 from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
@@ -8,6 +9,11 @@ from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 from tools.shared_context import inception_client
 
 log = logging.getLogger(__name__)
+MODEL_NAME = (
+    os.getenv("CODE_MODEL")
+    or os.getenv("INCEPTION_MODEL")
+    or "mercury-2"
+)
 
 @tool(
     name="test_inception_api",
@@ -31,7 +37,7 @@ async def test_inception_api(prompt: str) -> dict:
         # Wir wollen die rohe Antwort sehen, also fangen wir das ganze Objekt ab
         raw_response = await asyncio.to_thread(
             inception_client.chat.completions.create,
-            model="mercury-coder",
+            model=MODEL_NAME,
             messages=[{"role": "user", "content": prompt}]
         )
 

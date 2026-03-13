@@ -2,8 +2,8 @@
 orchestration/meta_analyzer.py
 
 Schicht 3 — Zeitbasierte Meta-Analyse des Autonomie-Zustands.
-deepseek-v3.2 analysiert 24h Scorecard-History + letzte Incidents alle 60 Minuten
-und speichert Erkenntnisse als canvas_store-Event.
+Das konfigurierte Planning-/Meta-Modell analysiert 24h Scorecard-History +
+letzte Incidents und speichert Erkenntnisse als canvas_store-Event.
 """
 
 from __future__ import annotations
@@ -115,9 +115,32 @@ class MetaAnalyzer:
         incidents: List[Dict[str, Any]],
         improvement_context: str = "",
     ) -> Dict[str, Any]:
-        from agent.providers import ModelProvider, get_provider_client
+        from agent.providers import (
+            ModelProvider,
+            get_provider_client,
+            resolve_model_provider_env,
+        )
 
-        client = get_provider_client().get_client(ModelProvider.OPENROUTER)
+        model, provider = resolve_model_provider_env(
+            model_env="PLANNING_MODEL",
+            provider_env="PLANNING_MODEL_PROVIDER",
+            fallback_model="z-ai/glm-5",
+            fallback_provider=ModelProvider.OPENROUTER,
+        )
+        if provider not in {
+            ModelProvider.OPENAI,
+            ModelProvider.ZAI,
+            ModelProvider.DEEPSEEK,
+            ModelProvider.INCEPTION,
+            ModelProvider.NVIDIA,
+            ModelProvider.OPENROUTER,
+        }:
+            log.debug(
+                "Meta-Analyse uebersprungen: planning provider '%s' ist hier nicht openai-kompatibel",
+                provider.value,
+            )
+            return {}
+        client = get_provider_client().get_client(provider)
 
         history_summary = json.dumps(history[-10:], ensure_ascii=False)
         incidents_summary = json.dumps(incidents, ensure_ascii=False)
@@ -141,7 +164,7 @@ class MetaAnalyzer:
         )
 
         response = client.chat.completions.create(
-            model="deepseek/deepseek-v3.2",
+            model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
             max_tokens=400,

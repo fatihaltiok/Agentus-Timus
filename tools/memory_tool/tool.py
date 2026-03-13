@@ -34,11 +34,29 @@ from dataclasses import dataclass, field
 from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 from utils.stable_hash import stable_text_digest
 from dotenv import load_dotenv
+from agent.providers import ModelProvider, resolve_model_provider_env
 
 load_dotenv()
 
 # === LOGGING ===
 log = logging.getLogger("memory_tool")
+
+
+def _resolve_memory_summary_model() -> str:
+    model, provider = resolve_model_provider_env(
+        model_env="SMART_MODEL",
+        provider_env="SMART_MODEL_PROVIDER",
+        fallback_model="gpt-5.4",
+        fallback_provider=ModelProvider.OPENAI,
+    )
+    if provider == ModelProvider.OPENAI:
+        return model
+
+    main_model = str(os.getenv("MAIN_LLM_MODEL", "") or "").strip()
+    if main_model:
+        return main_model
+
+    return "gpt-5.4"
 
 # === IMPORTS AUS SHARED CONTEXT ===
 memory_collection = None
@@ -642,7 +660,7 @@ class MemoryManager:
 
             response = await asyncio.to_thread(
                 openai_client.chat.completions.create,
-                model="gpt-4o-mini",
+                model=_resolve_memory_summary_model(),
                 messages=[
                     {
                         "role": "system",

@@ -23,9 +23,12 @@ INCEPTION_KEY = os.getenv("INCEPTION_API_KEY")
 # 2. URL aus Anleitung (Fallback auf .env, sonst Default)
 INCEPTION_URL = os.getenv("INCEPTION_API_URL", "https://api.inceptionlabs.ai/v1")
 
-# 3. Modell aus Anleitung (Fallback auf .env, sonst 'mercury-coder')
-# Wir bevorzugen hier 'mercury-coder', da es das spezialisierte Coding-Modell ist.
-MODEL_NAME = os.getenv("INCEPTION_MODEL", "mercury-coder")
+# 3. Modell aus Timus-Konfiguration (bevorzugt CODE_MODEL, sonst INCEPTION_MODEL)
+MODEL_NAME = (
+    os.getenv("CODE_MODEL")
+    or os.getenv("INCEPTION_MODEL")
+    or "mercury-2"
+)
 
 try:
     if INCEPTION_KEY:
@@ -60,7 +63,7 @@ def _write_file_safe(path_str: str, content: str):
 
 @tool(
     name="implement_feature",
-    description="Schreibt Code mit der Inception Labs 'mercury-coder' Engine.",
+    description="Schreibt Code mit dem konfigurierten Inception/Coding-Modell.",
     parameters=[
         P("instruction", "string", "Anweisung, was implementiert werden soll", required=True),
         P("file_paths", "string", "Dateipfad(e) als String oder Liste von Strings", required=True),
@@ -75,7 +78,7 @@ async def implement_feature(
     context_files: Optional[List[str]] = None
 ) -> dict:
     """
-    Schreibt Code mit der Inception Labs 'mercury-coder' Engine.
+    Schreibt Code mit dem konfigurierten Inception/Coding-Modell.
     """
     if not client:
         raise Exception("Inception API Key fehlt.")

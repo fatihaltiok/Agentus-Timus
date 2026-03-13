@@ -8,6 +8,7 @@ from agent.providers import (
     ModelConfigurationError,
     ModelProvider,
     MultiProviderClient,
+    resolve_model_provider_env,
 )
 
 
@@ -121,3 +122,18 @@ def test_agent_model_config_fails_fast_for_invalid_model(monkeypatch):
 
     assert "invalid/model" in str(exc.value)
     assert "document" in str(exc.value)
+
+
+def test_resolve_model_provider_env_uses_explicit_provider(monkeypatch):
+    monkeypatch.setenv("REASONING_MODEL", "glm-5")
+    monkeypatch.setenv("REASONING_MODEL_PROVIDER", "zai")
+
+    model, provider = resolve_model_provider_env(
+        model_env="REASONING_MODEL",
+        provider_env="REASONING_MODEL_PROVIDER",
+        fallback_model="qwen/qwq-32b",
+        fallback_provider=ModelProvider.OPENROUTER,
+    )
+
+    assert model == "glm-5"
+    assert provider == ModelProvider.ZAI

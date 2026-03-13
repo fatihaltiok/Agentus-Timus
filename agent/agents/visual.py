@@ -14,6 +14,7 @@ import httpx
 
 from agent.base_agent import BaseAgent, MCP_URL
 from agent.providers import ModelProvider
+from agent.providers import resolve_model_provider_env
 from agent.prompts import VISUAL_SYSTEM_PROMPT
 from agent.shared.delegation_handoff import parse_delegation_handoff
 from agent.shared.json_utils import extract_json_robust
@@ -723,8 +724,12 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             old_model = self.model
             old_provider = self.provider
 
-            self.model = os.getenv("REASONING_MODEL", "nvidia/nemotron-3-nano-30b-a3b")
-            self.provider = ModelProvider.OPENROUTER
+            self.model, self.provider = resolve_model_provider_env(
+                model_env="REASONING_MODEL",
+                provider_env="REASONING_MODEL_PROVIDER",
+                fallback_model="qwen/qwq-32b",
+                fallback_provider=ModelProvider.OPENROUTER,
+            )
 
             old_thinking = os.environ.get("NEMOTRON_ENABLE_THINKING")
             os.environ["NEMOTRON_ENABLE_THINKING"] = "true"

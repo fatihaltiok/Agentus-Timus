@@ -68,6 +68,13 @@ def _get_env_str(name: str) -> str:
     return str(os.getenv(name, "") or "").strip()
 
 
+OPENAI_VISION_FALLBACK_MODEL = (
+    _get_env_str("VISION_MODEL")
+    if _get_env_str("VISION_MODEL_PROVIDER").lower() == "openai"
+    else (_get_env_str("VISUAL_MODEL") if _get_env_str("VISUAL_MODEL_PROVIDER").lower() == "openai" else "gpt-5.4")
+)
+
+
 def _resolve_openrouter_vision_model() -> str:
     # Eigener Vision-Fallback hat eine separate Env und darf NICHT implizit
     # auf ein OpenAI-Direktmodell aus VISUAL_MODEL kippen.
@@ -276,7 +283,7 @@ KEIN Code, KEINE Erklärung - nur JSON!"""
                     "https://api.openai.com/v1/chat/completions",
                     headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
                     json={
-                        "model": "gpt-4o-mini",  # Schnell & günstig
+                        "model": OPENAI_VISION_FALLBACK_MODEL,
                         "messages": [{
                             "role": "user",
                             "content": [
@@ -1159,7 +1166,7 @@ Antworte strukturiert und präzise. NUR beschreiben, KEIN Code."""
                     "https://api.openai.com/v1/chat/completions",
                     headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
                     json={
-                        "model": "gpt-4o-mini",
+                        "model": OPENAI_VISION_FALLBACK_MODEL,
                         "messages": [{
                             "role": "user",
                             "content": [

@@ -1260,13 +1260,29 @@ class SelfHealingEngine:
         title: str,
         details: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Schicht 2: Analysiert einen neuen Incident mit qwen3.5-plus via OpenRouter."""
+        """Schicht 2: Analysiert einen neuen Incident mit dem konfigurierten System-Modell."""
         import re
 
         try:
-            from agent.providers import ModelProvider, get_provider_client
+            from agent.providers import ModelProvider, get_provider_client, resolve_model_provider_env
 
-            client = get_provider_client().get_client(ModelProvider.OPENROUTER)
+            model, provider = resolve_model_provider_env(
+                model_env="SYSTEM_MODEL",
+                provider_env="SYSTEM_MODEL_PROVIDER",
+                fallback_model="qwen/qwen3.5-plus-02-15",
+                fallback_provider=ModelProvider.OPENROUTER,
+            )
+            if provider not in {
+                ModelProvider.OPENAI,
+                ModelProvider.ZAI,
+                ModelProvider.DEEPSEEK,
+                ModelProvider.INCEPTION,
+                ModelProvider.NVIDIA,
+                ModelProvider.OPENROUTER,
+            }:
+                log.debug("LLM-Diagnose uebersprungen: system provider '%s' ist hier nicht openai-kompatibel", provider.value)
+                return {}
+            client = get_provider_client().get_client(provider)
             prompt = (
                 "Du bist ein KI-System-Diagnostiker für den autonomen Agenten Timus.\n"
                 "Analysiere folgenden Incident und antworte NUR mit validem JSON.\n\n"
@@ -1281,7 +1297,7 @@ class SelfHealingEngine:
                 '"pattern_hint": "..."}'
             )
             response = client.chat.completions.create(
-                model="qwen/qwen3.5-plus-02-15",
+                model=model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
                 max_tokens=300,
