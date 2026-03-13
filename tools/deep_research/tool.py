@@ -167,6 +167,46 @@ def _build_report_artifacts(*paths: Optional[str]) -> List[Dict[str, Any]]:
     return artifacts
 
 
+def _build_research_pdf(
+    content: str,
+    images: List[Any],
+    session: "DeepResearchSession",
+    output_dir: str,
+    session_id: str,
+    require_pdf: bool = True,
+) -> Optional[str]:
+    """Erstellt den PDF-Artefaktpfad strikt oder tolerant.
+
+    Wenn `require_pdf=True`, wird bei fehlgeschlagener PDF-Erstellung eine Exception
+    geworfen statt den Fehler still zu schlucken.
+    """
+    pdf_enabled = os.getenv("DEEP_RESEARCH_PDF_ENABLED", "true").lower() == "true"
+    if not pdf_enabled:
+        if require_pdf:
+            raise RuntimeError("PDF-Erstellung ist deaktiviert, aber require_pdf=True.")
+        return None
+
+    from pathlib import Path as _Path
+    from tools.deep_research.pdf_builder import ResearchPDFBuilder
+
+    pdf_path = str(_Path(output_dir) / f"DeepResearch_PDF_{session_id}.pdf")
+    try:
+        pdf_filepath = ResearchPDFBuilder().build_pdf(content, images, session, pdf_path)
+    except Exception as exc:
+        if require_pdf:
+            raise RuntimeError(f"PDF-Erstellung fehlgeschlagen: {exc}") from exc
+        logger.warning("PDF-Erstellung fehlgeschlagen (toleriert): %s", exc)
+        return None
+
+    if not pdf_filepath or not _Path(pdf_filepath).exists():
+        message = f"PDF-Erstellung fehlgeschlagen: Kein gueltiger PDF-Artefaktpfad fuer Session {session_id}."
+        if require_pdf:
+            raise RuntimeError(message)
+        logger.warning("%s", message)
+        return None
+    return str(_Path(pdf_filepath))
+
+
 def _merge_report_images(
     base_images: List[Any],
     image_paths: Optional[List[str]] = None,
@@ -3019,6 +3059,7 @@ async def get_research_status(session_id: str) -> dict:
         P("image_paths", "array", "Optionale Bildpfade fuer den Bericht", required=False),
         P("image_captions", "array", "Optionale Bildunterschriften passend zu image_paths", required=False),
         P("image_sections", "array", "Optionale Abschnittstitel passend zu image_paths", required=False),
+        P("require_pdf", "boolean", "Wenn true, gilt fehlende PDF-Erzeugung als Fehler statt als tolerierter Teil-Erfolg.", required=False, default="true"),
     ],
     capabilities=["research", "deep_research"],
     category=C.RESEARCH
@@ -3032,6 +3073,7 @@ async def generate_research_report(
     image_paths: Optional[List[str]] = None,
     image_captions: Optional[List[str]] = None,
     image_sections: Optional[List[str]] = None,
+    require_pdf: bool = True,
 ) -> dict:
     """
     Erstellt einen druckreifen Bericht für Timus Deep Research v8.0 - Evidence Engine.
@@ -3152,22 +3194,22 @@ async def generate_research_report(
             logger.warning(f"Externe Bildintegration fehlgeschlagen (unkritisch): {e}")
 
     # PDF erstellen
-    pdf_filepath = None
-    if os.getenv("DEEP_RESEARCH_PDF_ENABLED", "true").lower() == "true":
-        try:
-            from pathlib import Path as _Path
-            from tools.deep_research.pdf_builder import ResearchPDFBuilder
-            base_dir_pdf = (
-                _Path(filepath).parent if filepath
-                else _Path("/home/fatih-ubuntu/dev/timus/results")
-            )
-            pdf_path = str(base_dir_pdf / f"DeepResearch_PDF_{actual_session_id}.pdf")
-            pdf_filepath = ResearchPDFBuilder().build_pdf(
-                content, images, session, pdf_path
-            )
-            logger.info(f"📄 PDF erstellt: {pdf_filepath}")
-        except Exception as e:
-            logger.warning(f"PDF-Erstellung fehlgeschlagen (unkritisch): {e}")
+    from pathlib import Path as _Path
+
+    base_dir_pdf = (
+        str(_Path(filepath).parent) if filepath
+        else "/home/fatih-ubuntu/dev/timus/results"
+    )
+    pdf_filepath = _build_research_pdf(
+        content=content,
+        images=images,
+        session=session,
+        output_dir=base_dir_pdf,
+        session_id=actual_session_id,
+        require_pdf=require_pdf,
+    )
+    if pdf_filepath:
+        logger.info("📄 PDF erstellt: %s", pdf_filepath)
 
     yt_count = len([c for c in session.unverified_claims if c.get("source_type") == "youtube"])
 

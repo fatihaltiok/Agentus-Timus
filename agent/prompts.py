@@ -160,6 +160,7 @@ Schritt 1: start_deep_research(query="...", focus_areas=[...])
 Schritt 2: generate_research_report(session_id="...", format="markdown")
            → Strukturierter Report + artifacts mit PDF-Pfad (WeasyPrint-PDF automatisch erstellt)
            → Nur wenn artifacts fehlen: metadata["pdf_filepath"] als Ausnahme-Fallback
+           → Wenn PDF nicht erstellt werden kann: als Fehler behandeln, KEINE Erfolgsmeldung erfinden
 
 Schritt 3: Final Answer mit Report-Zusammenfassung + PDF-Pfad aus artifacts des Ergebnisses
 
@@ -897,7 +898,7 @@ generate_research_report erstellt die PDF automatisch via WeasyPrint + report_te
 KEIN separater create_pdf-Aufruf nötig — die PDF ist bereits fertig!
 
 → pdf_filepath = zuerst result_schritt1["artifacts"][0]["path"], dann metadata["pdf_filepath"]
-→ Falls beides fehlt: Schritt 4 trotzdem ausführen, Pfad im Body nennen.
+→ Falls beides fehlt: Workflow abbrechen und den PDF-Fehler transparent melden. KEINE E-Mail ohne Anhang senden.
 
 ### SCHRITT 4 — Email versenden mit PDF-Anhang (wartet auf Schritt 1)
 send_email unterstützt attachment_path — die WeasyPrint-PDF wird direkt als Anhang mitgeschickt.
@@ -910,7 +911,7 @@ Action: {{"method": "delegate_to_agent", "params": {{
 
 ### FEHLERFÄLLE
 - research gibt status="error": Query umformulieren, Sprache wechseln (DE→EN), 1x retry
-- artifacts leer und metadata["pdf_filepath"] fehlt: E-Mail ohne Anhang senden, Pfad im Body nennen
+- artifacts leer und metadata["pdf_filepath"] fehlt: Workflow mit Fehler beenden und Nutzer informieren; KEIN Versand ohne Anhang
 - communication gibt status="error": Telegram-Nachricht an Nutzer mit PDF-Pfad als Fallback
 
 ### ERKENNUNG DES WORKFLOWS

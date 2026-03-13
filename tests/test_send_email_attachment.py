@@ -419,8 +419,8 @@ def test_tool_resolves_relative_path():
         assert result.get("attachment") == "test.pdf"
 
 
-def test_tool_missing_attachment_graceful():
-    """Nicht vorhandener Anhang → E-Mail wird trotzdem versendet (success=True)."""
+def test_tool_missing_attachment_fails_fast():
+    """Nicht vorhandener Anhang → Tool-Layer bricht vor Versand hart ab."""
     def fake_post(url, headers, json, timeout):
         mock_resp = MagicMock()
         mock_resp.status_code = 202
@@ -437,8 +437,9 @@ def test_tool_missing_attachment_graceful():
                     attachment_path="/tmp/existiert_nicht_xyz_abc.pdf",
                 )
 
-    assert result["success"] is True
-    assert "attachment" not in result
+    assert result["success"] is False
+    assert result["attachment_required"] is True
+    assert "Anhang nicht gefunden" in result["error"]
     assert result["artifacts"] == []
 
 

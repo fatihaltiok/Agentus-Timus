@@ -158,6 +158,25 @@ def _attachment_artifact(path: str) -> Dict[str, Any]:
     }
 
 
+def _resolve_attachment_path(attachment_path: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """Löst einen optionalen Anhangspfad auf.
+
+    Returns:
+        (resolved_path, error_message)
+    """
+    if not attachment_path:
+        return None, None
+
+    from pathlib import Path as _Path
+
+    path = _Path(attachment_path)
+    if not path.is_absolute():
+        path = _PROJECT_ROOT / attachment_path
+    if not path.exists():
+        return None, f"Anhang nicht gefunden: {attachment_path}"
+    return str(path), None
+
+
 # ── MCP-Tools ─────────────────────────────────────────────────────────────────
 
 @tool(
@@ -196,17 +215,22 @@ def send_email(
     backend = os.getenv("EMAIL_BACKEND", "resend").lower()
 
     # Anhang-Pfad auflösen (relativ → absolut ab Projektroot)
-    resolved_attachment: Optional[str] = None
-    if attachment_path:
-        from pathlib import Path as _Path
-        p = _Path(attachment_path)
-        if not p.is_absolute():
-            p = _PROJECT_ROOT / attachment_path
-        if p.exists():
-            resolved_attachment = str(p)
-            log.info("send_email: Anhang gefunden: %s (%d Bytes)", p.name, p.stat().st_size)
-        else:
-            log.warning("send_email: Anhang nicht gefunden: %s — wird ohne Anhang gesendet", attachment_path)
+    resolved_attachment, attachment_error = _resolve_attachment_path(attachment_path)
+    if attachment_error:
+        log.error("send_email: %s — Versand wird abgebrochen", attachment_error)
+        return {
+            "success": False,
+            "error": attachment_error,
+            "attachment_required": True,
+            "artifacts": [],
+        }
+    if resolved_attachment:
+        attachment_file = Path(resolved_attachment)
+        log.info(
+            "send_email: Anhang gefunden: %s (%d Bytes)",
+            attachment_file.name,
+            attachment_file.stat().st_size,
+        )
 
     # ── Resend oder SMTP (async → sync wrapper) ───────────────────────────────
     if backend in ("resend", "smtp"):

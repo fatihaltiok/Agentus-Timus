@@ -119,6 +119,21 @@ class TestSendEmailResend:
         assert result["success"] is False
         assert "connection timeout" in result["error"]
 
+    def test_send_email_fails_fast_when_attachment_missing(self, tool, monkeypatch):
+        """Explizit angeforderter Anhang darf nicht stillschweigend entfallen."""
+        monkeypatch.setenv("EMAIL_BACKEND", "resend")
+        with patch("utils.resend_email.send_email_resend", new_callable=AsyncMock) as mock_send:
+            result = tool.send_email(
+                to="x@example.com",
+                subject="Test",
+                body="Hallo",
+                attachment_path="/tmp/dieser_anhang_fehlt.pdf",
+            )
+        assert result["success"] is False
+        assert result["attachment_required"] is True
+        assert "Anhang nicht gefunden" in result["error"]
+        mock_send.assert_not_awaited()
+
 
 # ── send_email — SMTP Backend ─────────────────────────────────────────────────
 
