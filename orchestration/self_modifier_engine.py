@@ -14,6 +14,15 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from memory.agent_blackboard import get_blackboard
+from orchestration.self_modification_patch_pipeline import (
+    cleanup_isolated_patch_workspace,
+    create_isolated_patch_workspace,
+    promote_isolated_patch,
+)
+from orchestration.self_modification_canary import run_self_modification_canary
+from orchestration.self_modification_policy import evaluate_self_modification_policy
+from orchestration.self_modification_risk import classify_self_modification_risk
+from orchestration.self_modification_verification import run_self_modification_verification
 from tools.code_editor_tool.tool import (
     CORE_FILES_REQUIRE_APPROVAL,
     MERCURY_APPLY_ENDPOINT,
@@ -55,6 +64,27 @@ CREATE TABLE IF NOT EXISTS self_modify_pending (
     require_tests      INTEGER DEFAULT 1,
     created_at         TEXT
 );
+
+CREATE TABLE IF NOT EXISTS self_modify_change_memory (
+    change_key            TEXT PRIMARY KEY,
+    audit_id              TEXT,
+    file_path             TEXT,
+    change_description    TEXT,
+    policy_zone           TEXT,
+    risk_level            TEXT,
+    risk_reason           TEXT,
+    test_result           TEXT,
+    verification_summary  TEXT,
+    canary_state          TEXT,
+    canary_summary        TEXT,
+    outcome_status        TEXT,
+    rollback_applied      INTEGER DEFAULT 0,
+    regression_detected   INTEGER DEFAULT 0,
+    workspace_mode        TEXT,
+    session_id            TEXT,
+    created_at            TEXT,
+    updated_at            TEXT
+);
 """
 
 
@@ -66,6 +96,26 @@ class SelfModifyResult:
     backup_ref: str
     test_result: str
     audit_id: str
+    policy_zone: str = ""
+    risk_level: str = ""
+    risk_reason: str = ""
+    workspace_mode: str = ""
+    patch_diff: str = ""
+    verification_summary: str = ""
+    canary_state: str = ""
+    canary_summary: str = ""
+
+
+@dataclass(frozen=True)
+class SelfModificationChangeMemorySummary:
+    total: int = 0
+    success_count: int = 0
+    rolled_back_count: int = 0
+    blocked_count: int = 0
+    pending_approval_count: int = 0
+    error_count: int = 0
+    rollback_count: int = 0
+    regression_count: int = 0
 
 
 class SelfModifierEngine:
@@ -89,18 +139,70 @@ class SelfModifierEngine:
         change_description: str,
         update_snippet: Optional[str] = None,
         *,
+        change_type: str = "auto",
         require_tests: bool = True,
         session_id: str = "",
     ) -> SelfModifyResult:
         audit_id = uuid.uuid4().hex
+        change_key = audit_id
         backup_ref = ""
         rel_path = str(file_path or "")
+        policy_zone = ""
+        risk_level = ""
+        risk_reason = ""
+        workspace_mode = ""
+        patch_diff = ""
+        verification_summary = ""
+        canary_state = ""
+        canary_summary = ""
         try:
             safety = safety_check(file_path)
             rel_path = str(safety["relative_path"])
         except Exception as exc:
             self._audit_log(audit_id, rel_path, change_description, "blocked", backup_ref, session_id)
+            self._record_change_memory(
+                change_key=change_key,
+                audit_id=audit_id,
+                file_path=rel_path,
+                change_description=change_description,
+                policy_zone=policy_zone,
+                risk_level=risk_level,
+                risk_reason=risk_reason,
+                test_result="skipped",
+                verification_summary=verification_summary,
+                canary_state=canary_state,
+                canary_summary=canary_summary,
+                outcome_status="blocked",
+                rollback_applied=False,
+                regression_detected=False,
+                workspace_mode=workspace_mode,
+                session_id=session_id,
+            )
             return SelfModifyResult("blocked", rel_path, change_description, backup_ref, "skipped", audit_id)
+
+        policy = evaluate_self_modification_policy(rel_path, change_type=change_type)
+        policy_zone = policy.zone_id
+        if not policy.allowed:
+            self._audit_log(audit_id, rel_path, f"{change_description}\n[policy] {policy.reason}", "blocked", backup_ref, session_id)
+            self._record_change_memory(
+                change_key=change_key,
+                audit_id=audit_id,
+                file_path=rel_path,
+                change_description=change_description,
+                policy_zone=policy_zone,
+                risk_level=risk_level,
+                risk_reason=policy.reason,
+                test_result="skipped",
+                verification_summary=verification_summary,
+                canary_state=canary_state,
+                canary_summary=canary_summary,
+                outcome_status="blocked",
+                rollback_applied=False,
+                regression_detected=False,
+                workspace_mode=workspace_mode,
+                session_id=session_id,
+            )
+            return SelfModifyResult("blocked", rel_path, change_description, backup_ref, "skipped", audit_id, policy_zone=policy_zone)
 
         try:
             original = Path(PROJECT_ROOT / rel_path).read_text(encoding="utf-8")
@@ -112,15 +214,99 @@ class SelfModifierEngine:
             )
             if not result.get("success"):
                 self._audit_log(audit_id, rel_path, change_description, "error", backup_ref, session_id)
-                return SelfModifyResult("error", rel_path, change_description, backup_ref, "skipped", audit_id)
+                self._record_change_memory(
+                    change_key=change_key,
+                    audit_id=audit_id,
+                    file_path=rel_path,
+                    change_description=change_description,
+                    policy_zone=policy_zone,
+                    risk_level=risk_level,
+                    risk_reason=risk_reason,
+                    test_result="skipped",
+                    verification_summary=verification_summary,
+                    canary_state=canary_state,
+                    canary_summary=canary_summary,
+                    outcome_status="error",
+                    rollback_applied=False,
+                    regression_detected=False,
+                    workspace_mode=workspace_mode,
+                    session_id=session_id,
+                )
+                return SelfModifyResult("error", rel_path, change_description, backup_ref, "skipped", audit_id, policy_zone=policy_zone)
 
             modified = str(result.get("modified_code") or "")
             syntax = self._validate_syntax(modified, rel_path)
             if not syntax.get("valid"):
                 self._audit_log(audit_id, rel_path, change_description, "error", backup_ref, session_id)
-                return SelfModifyResult("error", rel_path, change_description, backup_ref, "skipped", audit_id)
+                self._record_change_memory(
+                    change_key=change_key,
+                    audit_id=audit_id,
+                    file_path=rel_path,
+                    change_description=change_description,
+                    policy_zone=policy_zone,
+                    risk_level=risk_level,
+                    risk_reason=risk_reason,
+                    test_result="skipped",
+                    verification_summary=verification_summary,
+                    canary_state=canary_state,
+                    canary_summary=canary_summary,
+                    outcome_status="error",
+                    rollback_applied=False,
+                    regression_detected=False,
+                    workspace_mode=workspace_mode,
+                    session_id=session_id,
+                )
+                return SelfModifyResult("error", rel_path, change_description, backup_ref, "skipped", audit_id, policy_zone=policy_zone)
 
-            if requires_core_approval(rel_path) and _env_bool("SELF_MODIFY_REQUIRE_APPROVAL", True):
+            risk = classify_self_modification_risk(
+                file_path=rel_path,
+                change_description=change_description,
+                original_code=original,
+                modified_code=modified,
+                policy=policy,
+            )
+            risk_level = risk.risk_level
+            risk_reason = risk.reason
+
+            require_approval = bool(
+                policy.require_approval
+                or risk.risk_level != "low"
+                or (requires_core_approval(rel_path) and _env_bool("SELF_MODIFY_REQUIRE_APPROVAL", True))
+            )
+            require_tests = bool(require_tests or bool(policy.required_test_targets))
+
+            if require_approval:
+                if risk.risk_level != "low" and not _env_bool("SELF_MODIFY_REQUIRE_APPROVAL", True):
+                    self._audit_log(audit_id, rel_path, f"{change_description}\n[risk] {risk.risk_level}:{risk.reason}", "blocked", backup_ref, session_id)
+                    self._record_change_memory(
+                        change_key=change_key,
+                        audit_id=audit_id,
+                        file_path=rel_path,
+                        change_description=change_description,
+                        policy_zone=policy_zone,
+                        risk_level=risk_level,
+                        risk_reason=risk_reason,
+                        test_result="skipped",
+                        verification_summary=verification_summary,
+                        canary_state=canary_state,
+                        canary_summary=canary_summary,
+                        outcome_status="blocked",
+                        rollback_applied=False,
+                        regression_detected=False,
+                        workspace_mode=workspace_mode,
+                        session_id=session_id,
+                    )
+                    return SelfModifyResult(
+                        "blocked",
+                        rel_path,
+                        change_description,
+                        backup_ref,
+                        "skipped",
+                        audit_id,
+                        policy_zone=policy_zone,
+                        risk_level=risk_level,
+                        risk_reason=risk_reason,
+                    )
                 pending_id = self._store_pending(
                     file_path=rel_path,
                     original=original,
@@ -131,29 +317,189 @@ class SelfModifierEngine:
                     session_id=session_id,
                     require_tests=require_tests,
                 )
+                change_key = pending_id
                 await self._telegram_approval_request(
                     pending_id=pending_id,
                     file_path=rel_path,
                     change_description=change_description,
                     original=original,
                     modified=modified,
+                    risk_level=risk.risk_level,
+                    risk_reason=risk.reason,
                 )
                 self._audit_log(audit_id, rel_path, change_description, "pending_approval", backup_ref, session_id)
-                return SelfModifyResult("pending_approval", rel_path, change_description, backup_ref, "skipped", audit_id)
+                self._record_change_memory(
+                    change_key=change_key,
+                    audit_id=audit_id,
+                    file_path=rel_path,
+                    change_description=change_description,
+                    policy_zone=policy_zone,
+                    risk_level=risk_level,
+                    risk_reason=risk_reason,
+                    test_result="skipped",
+                    verification_summary=verification_summary,
+                    canary_state=canary_state,
+                    canary_summary=canary_summary,
+                    outcome_status="pending_approval",
+                    rollback_applied=False,
+                    regression_detected=False,
+                    workspace_mode=workspace_mode,
+                    session_id=session_id,
+                )
+                return SelfModifyResult(
+                    "pending_approval",
+                    rel_path,
+                    change_description,
+                    backup_ref,
+                    "skipped",
+                    audit_id,
+                    policy_zone=policy_zone,
+                    risk_level=risk_level,
+                    risk_reason=risk_reason,
+                )
 
-            self._write_file(rel_path, modified)
-            test_result = "skipped"
-            if require_tests and _env_bool("SELF_MODIFY_REQUIRE_TESTS", True):
-                test_result = self._run_tests(rel_path)
-            if test_result == "failed":
+            workspace = create_isolated_patch_workspace(
+                project_root=PROJECT_ROOT,
+                relative_path=rel_path,
+                original_code=original,
+                modified_code=modified,
+                change_description=change_description,
+                session_id=session_id,
+            )
+            workspace_mode = workspace.mode
+            patch_diff = workspace.diff_path.read_text(encoding="utf-8")
+            try:
+                verification = run_self_modification_verification(
+                    project_root=workspace.root_path,
+                    relative_path=rel_path,
+                    policy=policy,
+                    pytest_runner=self._run_tests,
+                )
+                test_result = verification.status
+                verification_summary = verification.summary
+                if test_result == "failed":
+                    self._audit_log(audit_id, rel_path, change_description, "rolled_back", backup_ref, session_id)
+                    self._write_blackboard(rel_path, change_description, "rolled_back", session_id)
+                    self._record_change_memory(
+                        change_key=change_key,
+                        audit_id=audit_id,
+                        file_path=rel_path,
+                        change_description=change_description,
+                        policy_zone=policy_zone,
+                        risk_level=risk_level,
+                        risk_reason=risk_reason,
+                        test_result=test_result,
+                        verification_summary=verification_summary,
+                        canary_state=canary_state,
+                        canary_summary=canary_summary,
+                        outcome_status="rolled_back",
+                        rollback_applied=True,
+                        regression_detected=True,
+                        workspace_mode=workspace_mode,
+                        session_id=session_id,
+                    )
+                    return SelfModifyResult(
+                        "rolled_back",
+                        rel_path,
+                        change_description,
+                        backup_ref,
+                        test_result,
+                        audit_id,
+                        policy_zone=policy_zone,
+                        risk_level=risk_level,
+                        risk_reason=risk_reason,
+                        workspace_mode=workspace_mode,
+                        patch_diff=patch_diff,
+                        verification_summary=verification_summary,
+                    )
+
+                promote_isolated_patch(project_root=PROJECT_ROOT, workspace=workspace)
+            finally:
+                cleanup_isolated_patch_workspace(project_root=PROJECT_ROOT, workspace=workspace)
+
+            canary = run_self_modification_canary(
+                project_root=PROJECT_ROOT,
+                relative_path=rel_path,
+                policy=policy,
+                pytest_runner=self._run_tests,
+            )
+            canary_state = canary.state
+            canary_summary = canary.summary
+            if canary.rollback_required:
                 self._rollback(rel_path, backup_ref)
-                self._audit_log(audit_id, rel_path, change_description, "rolled_back", backup_ref, session_id)
+                self._audit_log(audit_id, rel_path, f"{change_description}\n[canary] {canary_summary}", "rolled_back", backup_ref, session_id)
                 self._write_blackboard(rel_path, change_description, "rolled_back", session_id)
-                return SelfModifyResult("rolled_back", rel_path, change_description, backup_ref, test_result, audit_id)
+                self._record_change_memory(
+                    change_key=change_key,
+                    audit_id=audit_id,
+                    file_path=rel_path,
+                    change_description=change_description,
+                    policy_zone=policy_zone,
+                    risk_level=risk_level,
+                    risk_reason=risk_reason,
+                    test_result="failed",
+                    verification_summary=verification_summary,
+                    canary_state=canary_state,
+                    canary_summary=canary_summary,
+                    outcome_status="rolled_back",
+                    rollback_applied=True,
+                    regression_detected=True,
+                    workspace_mode=workspace_mode,
+                    session_id=session_id,
+                )
+                return SelfModifyResult(
+                    "rolled_back",
+                    rel_path,
+                    change_description,
+                    backup_ref,
+                    "failed",
+                    audit_id,
+                    policy_zone=policy_zone,
+                    risk_level=risk_level,
+                    risk_reason=risk_reason,
+                    workspace_mode=workspace_mode,
+                    patch_diff=patch_diff,
+                    verification_summary=verification_summary,
+                    canary_state=canary_state,
+                    canary_summary=canary_summary,
+                )
 
             self._audit_log(audit_id, rel_path, change_description, "success", backup_ref, session_id)
             self._write_blackboard(rel_path, change_description, "success", session_id)
-            return SelfModifyResult("success", rel_path, change_description, backup_ref, test_result, audit_id)
+            self._record_change_memory(
+                change_key=change_key,
+                audit_id=audit_id,
+                file_path=rel_path,
+                change_description=change_description,
+                policy_zone=policy_zone,
+                risk_level=risk_level,
+                risk_reason=risk_reason,
+                test_result=test_result,
+                verification_summary=verification_summary,
+                canary_state=canary_state,
+                canary_summary=canary_summary,
+                outcome_status="success",
+                rollback_applied=False,
+                regression_detected=False,
+                workspace_mode=workspace_mode,
+                session_id=session_id,
+            )
+            return SelfModifyResult(
+                "success",
+                rel_path,
+                change_description,
+                backup_ref,
+                test_result,
+                audit_id,
+                policy_zone=policy_zone,
+                risk_level=risk_level,
+                risk_reason=risk_reason,
+                workspace_mode=workspace_mode,
+                patch_diff=patch_diff,
+                verification_summary=verification_summary,
+                canary_state=canary_state,
+                canary_summary=canary_summary,
+            )
         except Exception as exc:
             log.error("SelfModify modify_file fehlgeschlagen: %s", exc, exc_info=True)
             if backup_ref and rel_path:
@@ -162,7 +508,38 @@ class SelfModifierEngine:
                 except Exception:
                     pass
             self._audit_log(audit_id, rel_path, change_description, "error", backup_ref, session_id)
-            return SelfModifyResult("error", rel_path, change_description, backup_ref, "skipped", audit_id)
+            self._record_change_memory(
+                change_key=change_key,
+                audit_id=audit_id,
+                file_path=rel_path,
+                change_description=change_description,
+                policy_zone=policy_zone,
+                risk_level=risk_level,
+                risk_reason=risk_reason,
+                test_result="skipped",
+                verification_summary=verification_summary,
+                canary_state=canary_state,
+                canary_summary=canary_summary,
+                outcome_status="error",
+                rollback_applied=bool(backup_ref and rel_path),
+                regression_detected=False,
+                workspace_mode=workspace_mode,
+                session_id=session_id,
+            )
+            return SelfModifyResult(
+                "error",
+                rel_path,
+                change_description,
+                backup_ref,
+                "skipped",
+                audit_id,
+                policy_zone=policy_zone,
+                risk_level=risk_level,
+                risk_reason=risk_reason,
+                workspace_mode=workspace_mode,
+                patch_diff=patch_diff,
+                verification_summary=verification_summary,
+            )
 
     async def approve_pending(self, pending_id: str, approver: str = "") -> SelfModifyResult:
         row = self._load_pending(pending_id)
@@ -170,27 +547,190 @@ class SelfModifierEngine:
             return SelfModifyResult("error", "", "", "", "skipped", "")
 
         audit_id = uuid.uuid4().hex
+        change_key = pending_id
         rel_path = str(row["file_path"])
         backup_ref = str(row["backup_ref"])
         change_description = str(row["change_description"])
         session_id = str(row["session_id"])
         modified = str(row["modified_code"])
-        self._write_file(rel_path, modified)
-        test_result = "skipped"
-        require_tests = bool(int(row.get("require_tests", 1) or 0))
-        if require_tests and _env_bool("SELF_MODIFY_REQUIRE_TESTS", True):
-            test_result = self._run_tests(rel_path)
-        if test_result == "failed":
+        original = str(row["original_code"])
+        workspace = create_isolated_patch_workspace(
+            project_root=PROJECT_ROOT,
+            relative_path=rel_path,
+            original_code=original,
+            modified_code=modified,
+            change_description=change_description,
+            session_id=session_id,
+        )
+        workspace_mode = workspace.mode
+        patch_diff = workspace.diff_path.read_text(encoding="utf-8")
+        verification_summary = ""
+        canary_state = ""
+        canary_summary = ""
+        try:
+            policy = evaluate_self_modification_policy(rel_path)
+            if not policy.allowed:
+                self._delete_pending(pending_id)
+                self._audit_log(audit_id, rel_path, f"{change_description}\n[policy] {policy.reason}", "blocked", backup_ref, session_id)
+                self._write_blackboard(rel_path, change_description, "blocked", session_id)
+                self._record_change_memory(
+                    change_key=change_key,
+                    audit_id=audit_id,
+                    file_path=rel_path,
+                    change_description=change_description,
+                    policy_zone=policy.zone_id,
+                    risk_level="",
+                    risk_reason=policy.reason,
+                    test_result="skipped",
+                    verification_summary=verification_summary,
+                    canary_state=canary_state,
+                    canary_summary=canary_summary,
+                    outcome_status="blocked",
+                    rollback_applied=False,
+                    regression_detected=False,
+                    workspace_mode=workspace_mode,
+                    session_id=session_id,
+                )
+                return SelfModifyResult(
+                    "blocked",
+                    rel_path,
+                    change_description,
+                    backup_ref,
+                    "skipped",
+                    audit_id,
+                    policy_zone=policy.zone_id,
+                    workspace_mode=workspace_mode,
+                    patch_diff=patch_diff,
+                )
+
+            verification = run_self_modification_verification(
+                project_root=workspace.root_path,
+                relative_path=rel_path,
+                policy=policy,
+                pytest_runner=self._run_tests,
+            )
+            test_result = verification.status
+            verification_summary = verification.summary
+            if test_result == "failed":
+                self._delete_pending(pending_id)
+                self._audit_log(audit_id, rel_path, change_description, "rolled_back", backup_ref, session_id)
+                self._write_blackboard(rel_path, change_description, "rolled_back", session_id)
+                self._record_change_memory(
+                    change_key=change_key,
+                    audit_id=audit_id,
+                    file_path=rel_path,
+                    change_description=change_description,
+                    policy_zone=policy.zone_id,
+                    risk_level="",
+                    risk_reason="",
+                    test_result=test_result,
+                    verification_summary=verification_summary,
+                    canary_state=canary_state,
+                    canary_summary=canary_summary,
+                    outcome_status="rolled_back",
+                    rollback_applied=True,
+                    regression_detected=True,
+                    workspace_mode=workspace_mode,
+                    session_id=session_id,
+                )
+                return SelfModifyResult(
+                    "rolled_back",
+                    rel_path,
+                    change_description,
+                    backup_ref,
+                    test_result,
+                    audit_id,
+                    policy_zone=policy.zone_id,
+                    workspace_mode=workspace_mode,
+                    patch_diff=patch_diff,
+                    verification_summary=verification_summary,
+                )
+
+            promote_isolated_patch(project_root=PROJECT_ROOT, workspace=workspace)
+        finally:
+            cleanup_isolated_patch_workspace(project_root=PROJECT_ROOT, workspace=workspace)
+
+        canary = run_self_modification_canary(
+            project_root=PROJECT_ROOT,
+            relative_path=rel_path,
+            policy=policy,
+            pytest_runner=self._run_tests,
+        )
+        canary_state = canary.state
+        canary_summary = canary.summary
+        if canary.rollback_required:
             self._rollback(rel_path, backup_ref)
             self._delete_pending(pending_id)
-            self._audit_log(audit_id, rel_path, change_description, "rolled_back", backup_ref, session_id)
+            self._audit_log(audit_id, rel_path, f"{change_description}\n[canary] {canary_summary}", "rolled_back", backup_ref, session_id)
             self._write_blackboard(rel_path, change_description, "rolled_back", session_id)
-            return SelfModifyResult("rolled_back", rel_path, change_description, backup_ref, test_result, audit_id)
+            self._record_change_memory(
+                change_key=change_key,
+                audit_id=audit_id,
+                file_path=rel_path,
+                change_description=change_description,
+                policy_zone=policy.zone_id,
+                risk_level="",
+                risk_reason="",
+                test_result="failed",
+                verification_summary=verification_summary,
+                canary_state=canary_state,
+                canary_summary=canary_summary,
+                outcome_status="rolled_back",
+                rollback_applied=True,
+                regression_detected=True,
+                workspace_mode=workspace_mode,
+                session_id=session_id,
+            )
+            return SelfModifyResult(
+                "rolled_back",
+                rel_path,
+                change_description,
+                backup_ref,
+                "failed",
+                audit_id,
+                policy_zone=policy.zone_id,
+                workspace_mode=workspace_mode,
+                patch_diff=patch_diff,
+                verification_summary=verification_summary,
+                canary_state=canary_state,
+                canary_summary=canary_summary,
+            )
 
         self._delete_pending(pending_id)
         self._audit_log(audit_id, rel_path, change_description, "success", backup_ref, session_id)
         self._write_blackboard(rel_path, change_description, "success", session_id)
-        return SelfModifyResult("success", rel_path, change_description, backup_ref, test_result, audit_id)
+        self._record_change_memory(
+            change_key=change_key,
+            audit_id=audit_id,
+            file_path=rel_path,
+            change_description=change_description,
+            policy_zone=policy.zone_id,
+            risk_level="",
+            risk_reason="",
+            test_result=test_result,
+            verification_summary=verification_summary,
+            canary_state=canary_state,
+            canary_summary=canary_summary,
+            outcome_status="success",
+            rollback_applied=False,
+            regression_detected=False,
+            workspace_mode=workspace_mode,
+            session_id=session_id,
+        )
+        return SelfModifyResult(
+            "success",
+            rel_path,
+            change_description,
+            backup_ref,
+            test_result,
+            audit_id,
+            policy_zone=policy.zone_id,
+            workspace_mode=workspace_mode,
+            patch_diff=patch_diff,
+            verification_summary=verification_summary,
+            canary_state=canary_state,
+            canary_summary=canary_summary,
+        )
 
     async def reject_pending(self, pending_id: str, approver: str = "") -> SelfModifyResult:
         row = self._load_pending(pending_id)
@@ -204,6 +744,24 @@ class SelfModifierEngine:
         session_id = str(row["session_id"])
         self._audit_log(audit_id, rel_path, change_description, "blocked", backup_ref, session_id)
         self._write_blackboard(rel_path, change_description, "blocked", session_id)
+        self._record_change_memory(
+            change_key=pending_id,
+            audit_id=audit_id,
+            file_path=rel_path,
+            change_description=change_description,
+            policy_zone="",
+            risk_level="",
+            risk_reason="rejected_by_approver",
+            test_result="skipped",
+            verification_summary="",
+            canary_state="",
+            canary_summary="",
+            outcome_status="blocked",
+            rollback_applied=False,
+            regression_detected=False,
+            workspace_mode="",
+            session_id=session_id,
+        )
         return SelfModifyResult("blocked", rel_path, change_description, backup_ref, "skipped", audit_id)
 
     def run_cycle(self) -> Dict[str, Any]:
@@ -220,6 +778,43 @@ class SelfModifierEngine:
         with sqlite3.connect(str(self.db_path)) as conn:
             row = conn.execute("SELECT COUNT(*) FROM self_modify_pending").fetchone()
         return int((row or [0])[0] or 0)
+
+    def list_change_memory(self, limit: int = 50) -> list[dict[str, Any]]:
+        with sqlite3.connect(str(self.db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM self_modify_change_memory ORDER BY updated_at DESC LIMIT ?",
+                (max(1, int(limit)),),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def summarize_change_memory(self, limit: int = 100) -> SelfModificationChangeMemorySummary:
+        rows = self.list_change_memory(limit=limit)
+        counts: dict[str, int] = {
+            "success": 0,
+            "rolled_back": 0,
+            "blocked": 0,
+            "pending_approval": 0,
+            "error": 0,
+        }
+        rollback_count = 0
+        regression_count = 0
+        for row in rows:
+            status = str(row.get("outcome_status") or "")
+            if status in counts:
+                counts[status] += 1
+            rollback_count += 1 if int(row.get("rollback_applied") or 0) else 0
+            regression_count += 1 if int(row.get("regression_detected") or 0) else 0
+        return SelfModificationChangeMemorySummary(
+            total=len(rows),
+            success_count=counts["success"],
+            rolled_back_count=counts["rolled_back"],
+            blocked_count=counts["blocked"],
+            pending_approval_count=counts["pending_approval"],
+            error_count=counts["error"],
+            rollback_count=rollback_count,
+            regression_count=regression_count,
+        )
 
     def _save_git_backup(self, file_path: str, original: str) -> str:
         backup_dir = PROJECT_ROOT / "data" / "self_modify_backups"
@@ -246,32 +841,35 @@ class SelfModifierEngine:
         original = backup_path.read_text(encoding="utf-8")
         self._write_file(file_path, original)
 
-    def _find_test_file(self, changed_file: str) -> str:
+    def _find_test_file(self, changed_file: str, project_root: Path = PROJECT_ROOT) -> str:
         path = Path(changed_file)
         stem = path.stem
         parent_name = path.parent.name
         candidates = [
-            PROJECT_ROOT / "tests" / f"test_{parent_name}.py",
-            PROJECT_ROOT / "tests" / f"test_{parent_name}s.py",
-            PROJECT_ROOT / "tests" / f"test_{stem}.py",
+            project_root / "tests" / f"test_{parent_name}.py",
+            project_root / "tests" / f"test_{parent_name}s.py",
+            project_root / "tests" / f"test_{stem}.py",
         ]
         for candidate in candidates:
             if candidate.exists():
                 return str(candidate)
         return ""
 
-    def _run_tests(self, file_path: str) -> str:
-        test_file = self._find_test_file(file_path)
-        if not test_file:
-            return "skipped"
+    def _run_tests(self, file_path: str, policy_test_targets: tuple[str, ...] = (), project_root: Path = PROJECT_ROOT) -> str:
+        test_targets = [target for target in policy_test_targets if str(target).strip()]
+        if not test_targets:
+            test_file = self._find_test_file(file_path, project_root=project_root)
+            if not test_file:
+                return "skipped"
+            test_targets = [test_file]
         import subprocess
 
         result = subprocess.run(
-            ["python", "-m", "pytest", test_file, "-x", "-q"],
-            cwd=PROJECT_ROOT,
+            ["python", "-m", "pytest", *test_targets, "-x", "-q"],
+            cwd=project_root,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=180,
         )
         return "passed" if result.returncode == 0 else "failed"
 
@@ -289,6 +887,64 @@ class SelfModifierEngine:
             conn.execute(
                 "INSERT OR REPLACE INTO self_modify_log (id, file_path, change, status, backup_ref, session_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (audit_id, file_path, change_description, status, backup_ref, session_id, created_at),
+            )
+            conn.commit()
+
+    def _record_change_memory(
+        self,
+        *,
+        change_key: str,
+        audit_id: str,
+        file_path: str,
+        change_description: str,
+        policy_zone: str,
+        risk_level: str,
+        risk_reason: str,
+        test_result: str,
+        verification_summary: str,
+        canary_state: str,
+        canary_summary: str,
+        outcome_status: str,
+        rollback_applied: bool,
+        regression_detected: bool,
+        workspace_mode: str,
+        session_id: str,
+    ) -> None:
+        now_iso = datetime.utcnow().isoformat()
+        with sqlite3.connect(str(self.db_path)) as conn:
+            row = conn.execute(
+                "SELECT created_at FROM self_modify_change_memory WHERE change_key = ?",
+                (change_key,),
+            ).fetchone()
+            created_at = str((row or [now_iso])[0] or now_iso)
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO self_modify_change_memory (
+                    change_key, audit_id, file_path, change_description, policy_zone, risk_level, risk_reason,
+                    test_result, verification_summary, canary_state, canary_summary, outcome_status,
+                    rollback_applied, regression_detected, workspace_mode, session_id, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    change_key,
+                    audit_id,
+                    file_path,
+                    change_description,
+                    policy_zone,
+                    risk_level,
+                    risk_reason,
+                    test_result,
+                    verification_summary,
+                    canary_state,
+                    canary_summary,
+                    outcome_status,
+                    1 if rollback_applied else 0,
+                    1 if regression_detected else 0,
+                    workspace_mode,
+                    session_id,
+                    created_at,
+                    now_iso,
+                ),
             )
             conn.commit()
 
@@ -343,6 +999,8 @@ class SelfModifierEngine:
         change_description: str,
         original: str,
         modified: str,
+        risk_level: str = "",
+        risk_reason: str = "",
     ) -> None:
         token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
         allowed_ids = os.getenv("TELEGRAM_ALLOWED_IDS", "").strip()
@@ -374,6 +1032,7 @@ class SelfModifierEngine:
             "🔧 *Code-Änderung beantragt*\n"
             f"Datei: `{file_path}`\n"
             f"Änderung: \"{change_description[:160]}\"\n\n"
+            f"Risiko: `{risk_level or 'unknown'}` ({risk_reason or 'n/a'})\n\n"
             "--- Vorher/Nachher ---\n"
             f"```diff\n{preview[:1400]}\n```"
         )
