@@ -724,6 +724,21 @@ class SelfImprovementEngine:
             log.debug("get_suggestions: %s", e)
             return []
 
+    def mark_suggestion_applied(self, suggestion_id: str, applied: bool = True) -> None:
+        """Markiert eine Suggestion als bearbeitet bzw. wieder offen."""
+        safe_id = str(suggestion_id or "").strip()
+        if not safe_id:
+            return
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.execute(
+                    "UPDATE improvement_suggestions_m12 SET applied=? WHERE id=?",
+                    (1 if applied else 0, safe_id),
+                )
+                conn.commit()
+        except Exception as e:
+            log.debug("mark_suggestion_applied: %s", e)
+
     # ------------------------------------------------------------------
     # Hilfsmethoden
     # ------------------------------------------------------------------

@@ -31,6 +31,68 @@ class _DummyAwaitable:
         return _inner().__await__()
 
 
+class _FakeQueue:
+    def __init__(self, *, ops: str = "pass", e2e: str = "pass", strict_force_off: str = "false") -> None:
+        self.ops = ops
+        self.e2e = e2e
+        self.strict_force_off = strict_force_off
+
+    def get_self_healing_metrics(self):
+        return {"degrade_mode": "normal", "open_incidents": 0}
+
+    def get_self_healing_runtime_state(self, key: str):
+        assert key == "resource_guard"
+        return {"state_value": "inactive"}
+
+    def get_self_healing_circuit_breaker_metrics(self):
+        return {"open_breakers": 0, "top_tripped": []}
+
+    def get_policy_runtime_state(self, key: str):
+        if key == "scorecard_ops_gate_state":
+            return {"state_value": self.ops}
+        if key == "scorecard_e2e_gate_state":
+            return {"state_value": self.e2e}
+        if key == "strict_force_off":
+            return {"state_value": self.strict_force_off}
+        return {"state_value": "unknown"}
+
+
+class _FakeImprovementEngine:
+    def __init__(self, suggestions):
+        self.suggestions = list(suggestions)
+        self.marked: list[tuple[str, bool]] = []
+
+    def get_suggestions(self, applied: bool = False):
+        return list(self.suggestions)
+
+    def mark_suggestion_applied(self, suggestion_id: str, applied: bool = True) -> None:
+        self.marked.append((str(suggestion_id), bool(applied)))
+
+
+def _make_routing_suggestion(suggestion_id: int, *, target: str = "research", severity: str = "medium", confidence: float = 0.8):
+    return {
+        "id": suggestion_id,
+        "type": "routing",
+        "target": target,
+        "finding": f"{target} confidence drift",
+        "suggestion": "Prompt cues verbessern",
+        "confidence": confidence,
+        "severity": severity,
+    }
+
+
+def _install_sm7_dependencies(monkeypatch: pytest.MonkeyPatch, *, queue: _FakeQueue, improvement_engine: _FakeImprovementEngine, stability_state: str = "pass") -> None:
+    monkeypatch.setattr(
+        "orchestration.self_improvement_engine.get_improvement_engine",
+        lambda db_path=None: improvement_engine,
+    )
+    monkeypatch.setattr(
+        "orchestration.self_stabilization_gate.evaluate_self_stabilization_gate",
+        lambda payload: {"state": stability_state},
+    )
+    monkeypatch.setattr("orchestration.task_queue.get_queue", lambda: queue)
+
+
 @pytest.mark.asyncio
 async def test_safety_gate_blocks_never_modify(tmp_path, monkeypatch):
     db_path = tmp_path / "memory.db"
@@ -355,9 +417,112 @@ def test_run_cycle_enabled_reports_max_per_cycle(tmp_path, monkeypatch):
     monkeypatch.setenv("AUTONOMY_SELF_MODIFY_ENABLED", "true")
     monkeypatch.setenv("SELF_MODIFY_MAX_PER_CYCLE", "5")
     engine = SelfModifierEngine(tmp_path / "memory.db")
+    _install_sm7_dependencies(
+        monkeypatch,
+        queue=_FakeQueue(),
+        improvement_engine=_FakeImprovementEngine([]),
+    )
     summary = engine.run_cycle()
     assert summary["status"] == "enabled"
     assert summary["max_per_cycle"] == 5
+
+
+def test_run_cycle_blocks_when_stability_gate_blocked(tmp_path, monkeypatch):
+    monkeypatch.setenv("AUTONOMY_SELF_MODIFY_ENABLED", "true")
+    engine = SelfModifierEngine(tmp_path / "memory.db")
+    _install_sm7_dependencies(
+        monkeypatch,
+        queue=_FakeQueue(),
+        improvement_engine=_FakeImprovementEngine([_make_routing_suggestion(1)]),
+        stability_state="blocked",
+    )
+
+    summary = engine.run_cycle()
+
+    assert summary["controller_state"] == "blocked"
+    assert "stability_gate_blocked" in summary["controller_reasons"]
+    assert summary["attempted"] == 0
+    assert summary["candidates_considered"] == 0
+
+
+def test_run_cycle_warn_mode_allows_two_low_risk_candidates(tmp_path, monkeypatch):
+    monkeypatch.setenv("AUTONOMY_SELF_MODIFY_ENABLED", "true")
+    monkeypatch.setenv("SELF_MODIFY_MAX_PER_CYCLE", "3")
+    engine = SelfModifierEngine(tmp_path / "memory.db")
+    suggestions = [
+        _make_routing_suggestion(1, target="research", confidence=0.91),
+        _make_routing_suggestion(2, target="system", confidence=0.74),
+        _make_routing_suggestion(3, target="shell", confidence=0.63),
+    ]
+    improvement = _FakeImprovementEngine(suggestions)
+    _install_sm7_dependencies(
+        monkeypatch,
+        queue=_FakeQueue(ops="warn"),
+        improvement_engine=improvement,
+        stability_state="pass",
+    )
+
+    async def _fake_modify_file(file_path: str, change_description: str, **kwargs):
+        return SelfModifyResult(
+            "success",
+            file_path,
+            change_description,
+            "",
+            "passed",
+            f"audit-{kwargs['session_id']}",
+            policy_zone="meta_orchestration",
+            risk_level="low",
+            risk_reason="contract",
+        )
+
+    monkeypatch.setattr(engine, "modify_file", _fake_modify_file)
+
+    summary = engine.run_cycle()
+
+    assert summary["controller_state"] == "warn"
+    assert summary["max_per_cycle"] == 2
+    assert summary["attempted"] == 2
+    assert summary["applied"] == 2
+    assert len(summary["selected_candidates"]) == 2
+    assert improvement.marked == [("1", True), ("2", True)]
+    assert engine._list_autonomous_source_ids(states=("success",)) == {"1", "2"}
+
+
+def test_run_cycle_blocks_when_pending_approvals_hit_cap(tmp_path, monkeypatch):
+    monkeypatch.setenv("AUTONOMY_SELF_MODIFY_ENABLED", "true")
+    monkeypatch.setenv("SELF_MODIFY_MAX_PENDING_APPROVALS", "2")
+    engine = SelfModifierEngine(tmp_path / "memory.db")
+    engine._store_pending(
+        file_path="agent/prompts.py",
+        original="a",
+        modified="b",
+        change_description="prompt tweak",
+        update_snippet="prompt tweak",
+        backup_ref="backup",
+        session_id="s1",
+        require_tests=True,
+    )
+    engine._store_pending(
+        file_path="agent/prompts.py",
+        original="a",
+        modified="c",
+        change_description="prompt tweak",
+        update_snippet="prompt tweak",
+        backup_ref="backup",
+        session_id="s2",
+        require_tests=True,
+    )
+    _install_sm7_dependencies(
+        monkeypatch,
+        queue=_FakeQueue(),
+        improvement_engine=_FakeImprovementEngine([_make_routing_suggestion(1)]),
+    )
+
+    summary = engine.run_cycle()
+
+    assert summary["controller_state"] == "blocked"
+    assert "pending_approvals>=2" in summary["controller_reasons"]
+    assert summary["attempted"] == 0
 
 
 @given(st.sampled_from(["agent/agents/meta.py", "tools/x.py", "orchestration/demo.py"]))

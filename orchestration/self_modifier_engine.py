@@ -7,6 +7,7 @@ import logging
 import os
 import sqlite3
 import tempfile
+import threading
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -20,6 +21,11 @@ from orchestration.self_modification_patch_pipeline import (
     promote_isolated_patch,
 )
 from orchestration.self_modification_canary import run_self_modification_canary
+from orchestration.self_modification_controller import (
+    AutonomousSelfModificationCandidate,
+    build_autonomous_self_modification_candidates,
+    evaluate_self_modification_controller,
+)
 from orchestration.self_modification_policy import evaluate_self_modification_policy
 from orchestration.self_modification_risk import classify_self_modification_risk
 from orchestration.self_modification_verification import run_self_modification_verification
@@ -84,6 +90,17 @@ CREATE TABLE IF NOT EXISTS self_modify_change_memory (
     session_id            TEXT,
     created_at            TEXT,
     updated_at            TEXT
+);
+
+CREATE TABLE IF NOT EXISTS self_modify_autonomous_source_state (
+    source_kind TEXT NOT NULL,
+    source_id   TEXT NOT NULL,
+    status      TEXT NOT NULL,
+    file_path   TEXT,
+    audit_id    TEXT,
+    note        TEXT,
+    updated_at  TEXT,
+    PRIMARY KEY (source_kind, source_id)
 );
 """
 
@@ -767,12 +784,116 @@ class SelfModifierEngine:
     def run_cycle(self) -> Dict[str, Any]:
         if not _env_bool("AUTONOMY_SELF_MODIFY_ENABLED", False):
             return {"status": "disabled", "applied": 0, "pending": self.pending_count()}
-        return {
-            "status": "enabled",
-            "applied": 0,
-            "pending": self.pending_count(),
-            "max_per_cycle": _env_int("SELF_MODIFY_MAX_PER_CYCLE", 3),
+        from orchestration.self_improvement_engine import get_improvement_engine
+        from orchestration.self_stabilization_gate import evaluate_self_stabilization_gate
+        from orchestration.task_queue import get_queue
+
+        queue = get_queue()
+        configured_max = _env_int("SELF_MODIFY_MAX_PER_CYCLE", 3)
+        max_pending = _env_int("SELF_MODIFY_MAX_PENDING_APPROVALS", 4)
+        pending = self.pending_count()
+
+        healing_metrics = queue.get_self_healing_metrics() or {}
+        resource_guard = queue.get_self_healing_runtime_state("resource_guard") or {}
+        breaker_metrics = queue.get_self_healing_circuit_breaker_metrics() or {}
+        self_healing_payload = {
+            "incidents": [],
+            "degrade_mode": str(healing_metrics.get("degrade_mode", "normal") or "normal"),
+            "open_incidents": int(healing_metrics.get("open_incidents", 0) or 0),
+            "resource_guard_state": str(resource_guard.get("state_value", "inactive") or "inactive"),
+            "circuit_breakers_open": int(breaker_metrics.get("open_breakers", 0) or 0),
+            "open_breakers": [str(item.get("breaker_key") or "") for item in (breaker_metrics.get("top_tripped") or []) if str(item.get("breaker_key") or "").strip()],
         }
+        stability_gate = evaluate_self_stabilization_gate(self_healing_payload)
+        ops_gate_state = str((queue.get_policy_runtime_state("scorecard_ops_gate_state") or {}).get("state_value", "unknown") or "unknown")
+        e2e_gate_state = str((queue.get_policy_runtime_state("scorecard_e2e_gate_state") or {}).get("state_value", "unknown") or "unknown")
+        strict_force_off = str((queue.get_policy_runtime_state("strict_force_off") or {}).get("state_value", "false") or "false").strip().lower() == "true"
+        memory_summary = self.summarize_change_memory(limit=25)
+        controller = evaluate_self_modification_controller(
+            stability_gate_state=str(stability_gate.get("state", "unknown") or "unknown"),
+            ops_gate_state=ops_gate_state,
+            e2e_gate_state=e2e_gate_state,
+            strict_force_off=strict_force_off,
+            pending_approvals=pending,
+            rollback_count_recent=memory_summary.rollback_count,
+            regression_count_recent=memory_summary.regression_count,
+            configured_max_per_cycle=configured_max,
+            max_pending_approvals=max_pending,
+        )
+
+        summary: Dict[str, Any] = {
+            "status": "enabled",
+            "controller_state": controller.state,
+            "controller_reasons": list(controller.reasons),
+            "applied": 0,
+            "pending": pending,
+            "attempted": 0,
+            "blocked": 0,
+            "max_per_cycle": controller.max_apply_count,
+            "candidates_considered": 0,
+            "selected_candidates": [],
+        }
+        if not controller.allow_autonomous_apply:
+            return summary
+
+        improvement_engine = get_improvement_engine(self.db_path)
+        suggestions = improvement_engine.get_suggestions(applied=False)
+        reserved = self._list_autonomous_source_ids(states=("claimed", "pending_approval", "applied"))
+        candidates = build_autonomous_self_modification_candidates(
+            suggestions,
+            reserved_source_ids=reserved,
+        )
+        summary["candidates_considered"] = len(candidates)
+        if not candidates:
+            return summary
+
+        selected = candidates[: max(0, int(controller.max_apply_count))]
+        summary["selected_candidates"] = [
+            {
+                "source_id": candidate.source_id,
+                "file_path": candidate.file_path,
+                "change_type": candidate.change_type,
+                "priority": candidate.priority,
+            }
+            for candidate in selected
+        ]
+
+        for candidate in selected:
+            self._set_autonomous_source_state(
+                candidate.source_kind,
+                candidate.source_id,
+                status="claimed",
+                file_path=candidate.file_path,
+                note=candidate.change_description[:240],
+            )
+            result = self._run_async_sync(
+                self.modify_file(
+                    candidate.file_path,
+                    candidate.change_description,
+                    change_type=candidate.change_type,
+                    require_tests=True,
+                    session_id=f"sm7:{candidate.source_id}",
+                )
+            )
+            summary["attempted"] += 1
+            self._set_autonomous_source_state(
+                candidate.source_kind,
+                candidate.source_id,
+                status=result.status,
+                file_path=candidate.file_path,
+                audit_id=result.audit_id,
+                note=result.risk_reason or result.verification_summary or result.canary_summary,
+            )
+            if result.status == "success":
+                improvement_engine.mark_suggestion_applied(candidate.source_id, True)
+                summary["applied"] += 1
+            elif result.status == "pending_approval":
+                improvement_engine.mark_suggestion_applied(candidate.source_id, True)
+                summary["pending"] += 1
+            elif result.status == "blocked":
+                summary["blocked"] += 1
+
+        return summary
 
     def pending_count(self) -> int:
         with sqlite3.connect(str(self.db_path)) as conn:
@@ -815,6 +936,90 @@ class SelfModifierEngine:
             rollback_count=rollback_count,
             regression_count=regression_count,
         )
+
+    def _run_async_sync(self, coro):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(coro)
+
+        result_box: dict[str, Any] = {"value": None}
+        error_box: dict[str, BaseException] = {}
+
+        def _runner() -> None:
+            try:
+                result_box["value"] = asyncio.run(coro)
+            except BaseException as exc:  # pragma: no cover - defensive thread handoff
+                error_box["error"] = exc
+
+        worker = threading.Thread(
+            target=_runner,
+            name="self-modifier-run-cycle",
+            daemon=True,
+        )
+        worker.start()
+        worker.join(timeout=max(10, _env_int("SELF_MODIFY_SYNC_TIMEOUT_SEC", 120)))
+        if worker.is_alive():
+            raise TimeoutError("SelfModifierEngine.run_cycle timed out waiting for async patch apply")
+        if error_box:
+            raise RuntimeError("SelfModifierEngine.run_cycle async apply failed") from error_box["error"]
+        return result_box["value"]
+
+    def _list_autonomous_source_ids(self, *, states: tuple[str, ...]) -> set[str]:
+        normalized_states = tuple(str(item or "").strip() for item in states if str(item or "").strip())
+        if not normalized_states:
+            return set()
+        encoded_states = json.dumps(list(normalized_states), ensure_ascii=True)
+        with sqlite3.connect(str(self.db_path)) as conn:
+            rows = conn.execute(
+                """
+                SELECT source_id
+                FROM self_modify_autonomous_source_state
+                WHERE status IN (SELECT value FROM json_each(?))
+                """,
+                (encoded_states,),
+            ).fetchall()
+        return {str((row or [""])[0] or "").strip() for row in rows if str((row or [""])[0] or "").strip()}
+
+    def _set_autonomous_source_state(
+        self,
+        source_kind: str,
+        source_id: str,
+        *,
+        status: str,
+        file_path: str = "",
+        audit_id: str = "",
+        note: str = "",
+    ) -> None:
+        safe_kind = str(source_kind or "").strip()
+        safe_id = str(source_id or "").strip()
+        if not safe_kind or not safe_id:
+            return
+        now = datetime.now().isoformat()
+        with sqlite3.connect(str(self.db_path)) as conn:
+            conn.execute(
+                """
+                INSERT INTO self_modify_autonomous_source_state
+                    (source_kind, source_id, status, file_path, audit_id, note, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source_kind, source_id) DO UPDATE SET
+                    status=excluded.status,
+                    file_path=excluded.file_path,
+                    audit_id=excluded.audit_id,
+                    note=excluded.note,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    safe_kind,
+                    safe_id,
+                    str(status or "").strip() or "unknown",
+                    str(file_path or ""),
+                    str(audit_id or ""),
+                    str(note or "")[:500],
+                    now,
+                ),
+            )
+            conn.commit()
 
     def _save_git_backup(self, file_path: str, original: str) -> str:
         backup_dir = PROJECT_ROOT / "data" / "self_modify_backups"
