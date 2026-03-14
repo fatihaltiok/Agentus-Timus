@@ -1,7 +1,11 @@
 package com.fatihaltiok.timus.mobile.ui.screens
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.os.Build
@@ -29,6 +33,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,13 +62,19 @@ fun VoiceScreen(
     voiceState: VoiceUiState,
     onRefreshStatus: () -> Unit,
     onSendTranscript: () -> Unit,
-    onTranscribeAudio: (fileName: String, mimeType: String, audioBytes: ByteArray) -> Unit,
+    onTranscribeAudio: (fileName: String, mimeType: String, audioBytes: ByteArray, autoSend: Boolean) -> Unit,
     onSynthesize: () -> Unit,
     onSetVoiceState: (String) -> Unit,
 ) {
     val context = LocalContext.current
+    val audioManager = remember(context) {
+        context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    }
     var recorder by remember { mutableStateOf<MediaRecorder?>(null) }
+    var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
+    var audioFocusRequest by remember { mutableStateOf<AudioFocusRequest?>(null) }
     var recordingFile by remember { mutableStateOf<File?>(null) }
+    var autoStartPending by rememberSaveable { mutableStateOf(true) }
     var permissionGranted by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(
@@ -79,7 +90,10 @@ fun VoiceScreen(
         contract = ActivityResultContracts.RequestPermission(),
     ) { granted ->
         permissionGranted = granted
-        if (!granted) {
+        if (granted) {
+            autoStartPending = true
+        } else {
+            autoStartPending = false
             latestSetVoiceState("error")
         }
     }
@@ -88,10 +102,21 @@ fun VoiceScreen(
         onDispose {
             recorder?.runCatching { stop() }
             recorder?.release()
+            mediaPlayer?.runCatching { stop() }
+            mediaPlayer?.release()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                audioFocusRequest?.let { request ->
+                    audioManager.abandonAudioFocusRequest(request)
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.abandonAudioFocus(null)
+            }
         }
     }
 
     fun startRecording() {
+        if (recorder != null) return
         if (!permissionGranted) {
             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
             return
@@ -118,7 +143,7 @@ fun VoiceScreen(
         onSetVoiceState("listening")
     }
 
-    fun stopRecording() {
+    fun stopRecording(autoSend: Boolean) {
         val currentRecorder = recorder ?: return
         runCatching {
             currentRecorder.stop()
@@ -129,7 +154,7 @@ fun VoiceScreen(
         recordingFile = null
         if (file != null && file.exists()) {
             onSetVoiceState("transcribing")
-            latestTranscribe(file.name, "audio/mp4", file.readBytes())
+            latestTranscribe(file.name, "audio/mp4", file.readBytes(), autoSend)
         } else {
             onSetVoiceState("error")
         }
@@ -137,28 +162,98 @@ fun VoiceScreen(
 
     fun playLastReplyAudio() {
         val audio = voiceState.lastSynthesizedAudio ?: return
+        mediaPlayer?.runCatching { stop() }
+        mediaPlayer?.release()
+        mediaPlayer = null
+
+        val focusGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build(),
+                )
+                .setAcceptsDelayedFocusGain(false)
+                .build()
+            audioFocusRequest = request
+            audioManager.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.requestAudioFocus(
+                null,
+                AudioManager.STREAM_MUSIC,
+                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK,
+            ) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        }
+        if (!focusGranted) {
+            onSetVoiceState("error")
+            return
+        }
+
         val file = File(context.cacheDir, "timus-last-reply.mp3")
         file.writeBytes(audio)
         val player = MediaPlayer().apply {
+            setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build(),
+            )
             setDataSource(file.absolutePath)
-            prepare()
             setOnCompletionListener {
                 onSetVoiceState("idle")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    audioFocusRequest?.let { request ->
+                        audioManager.abandonAudioFocusRequest(request)
+                    }
+                } else {
+                    @Suppress("DEPRECATION")
+                    audioManager.abandonAudioFocus(null)
+                }
+                mediaPlayer = null
                 release()
             }
             setOnErrorListener { mp, _, _ ->
                 onSetVoiceState("error")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    audioFocusRequest?.let { request ->
+                        audioManager.abandonAudioFocusRequest(request)
+                    }
+                } else {
+                    @Suppress("DEPRECATION")
+                    audioManager.abandonAudioFocus(null)
+                }
+                mediaPlayer = null
                 mp.release()
                 true
             }
+            setOnPreparedListener {
+                onSetVoiceState("speaking")
+                it.start()
+            }
         }
-        onSetVoiceState("speaking")
-        player.start()
+        mediaPlayer = player
+        player.prepareAsync()
     }
 
     LaunchedEffect(voiceState.playbackNonce) {
         if (voiceState.playbackNonce > 0 && voiceState.lastSynthesizedAudio != null) {
             playLastReplyAudio()
+        }
+    }
+
+    LaunchedEffect(permissionGranted, autoStartPending, voiceState.state) {
+        val busyStates = setOf("listening", "transcribing", "thinking", "speaking")
+        if (!autoStartPending) return@LaunchedEffect
+        if (!permissionGranted) {
+            autoStartPending = false
+            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            return@LaunchedEffect
+        }
+        if (voiceState.state !in busyStates && recorder == null) {
+            autoStartPending = false
+            startRecording()
         }
     }
 
@@ -259,26 +354,40 @@ fun VoiceScreen(
             Button(
                 onClick = {
                     if (voiceState.state == "listening") {
-                        stopRecording()
+                        stopRecording(autoSend = true)
                     } else {
+                        autoStartPending = false
                         startRecording()
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
+                enabled = voiceState.state !in setOf("transcribing", "thinking", "speaking"),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = TimusPrimary,
                     contentColor = Night0,
                 ),
             ) {
-                Text(if (voiceState.state == "listening") "Aufnahme stoppen" else "Aufnahme starten")
+                Text(
+                    when (voiceState.state) {
+                        "listening" -> "Antworte"
+                        "transcribing", "thinking", "speaking" -> "Verarbeite…"
+                        else -> "Erneut zuhören"
+                    },
+                )
             }
             Button(
-                onClick = onSendTranscript,
+                onClick = {
+                    if (voiceState.state == "listening") {
+                        stopRecording(autoSend = false)
+                    } else {
+                        onSendTranscript()
+                    }
+                },
                 modifier = Modifier.fillMaxWidth(),
-                enabled = voiceState.transcript.isNotBlank(),
+                enabled = voiceState.state == "listening" || voiceState.transcript.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(containerColor = PanelStrong),
             ) {
-                Text("Transkript manuell senden")
+                Text(if (voiceState.state == "listening") "Nur transkribieren" else "Transkript senden")
             }
             Button(
                 onClick = onSynthesize,

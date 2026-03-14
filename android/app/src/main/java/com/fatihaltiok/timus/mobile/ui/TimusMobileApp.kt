@@ -7,14 +7,24 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Text
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.fatihaltiok.timus.mobile.data.TimusConfigStore
 import com.fatihaltiok.timus.mobile.data.TimusMockData
 import com.fatihaltiok.timus.mobile.location.AndroidLocationClient
 import com.fatihaltiok.timus.mobile.model.AppDestination
@@ -31,7 +41,9 @@ fun TimusMobileApp() {
     val sessionViewModel: AppSessionViewModel = viewModel()
     val uiState by sessionViewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val configStore = remember(context) { TimusConfigStore(context) }
     val locationClient = remember(context) { AndroidLocationClient(context) }
+    var autoLoginChecked by remember { mutableStateOf(false) }
     val hasLocationPermission = remember(context, uiState.authenticated, uiState.location.permissionState) {
         ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
             ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
@@ -49,10 +61,32 @@ fun TimusMobileApp() {
         }
     }
 
+    LaunchedEffect(Unit) {
+        if (!autoLoginChecked) {
+            configStore.load()?.let { savedConfig ->
+                sessionViewModel.login(savedConfig)
+            }
+            autoLoginChecked = true
+        }
+    }
+
+    if (!autoLoginChecked) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            CircularProgressIndicator()
+            Text("Stelle Timus-Session wieder her")
+        }
+        return
+    }
+
     if (!uiState.authenticated) {
         LoginScreen(
             initialConfig = uiState.config,
             onLogin = {
+                configStore.save(it)
                 sessionViewModel.login(it)
             },
         )
@@ -114,7 +148,14 @@ fun TimusMobileApp() {
                     voiceState = uiState.voice,
                     onRefreshStatus = sessionViewModel::refreshVoiceStatus,
                     onSendTranscript = sessionViewModel::sendDraft,
-                    onTranscribeAudio = sessionViewModel::transcribeRecordedAudio,
+                    onTranscribeAudio = { fileName, mimeType, audioBytes, autoSend ->
+                        sessionViewModel.transcribeRecordedAudio(
+                            fileName = fileName,
+                            mimeType = mimeType,
+                            audioBytes = audioBytes,
+                            autoSend = autoSend,
+                        )
+                    },
                     onSynthesize = sessionViewModel::synthesizeLastReply,
                     onSetVoiceState = sessionViewModel::setVoiceState,
                 )

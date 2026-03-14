@@ -300,6 +300,7 @@ class AppSessionViewModel(
         fileName: String,
         mimeType: String,
         audioBytes: ByteArray,
+        autoSend: Boolean = true,
     ) {
         val state = _uiState.value
         if (!state.authenticated) return
@@ -313,15 +314,26 @@ class AppSessionViewModel(
         viewModelScope.launch {
             repository.transcribeAudio(state.config, fileName, mimeType, audioBytes)
                 .onSuccess { transcript ->
-                    _uiState.value = _uiState.value.copy(
-                        draft = transcript,
-                        voice = _uiState.value.voice.copy(
-                            state = "thinking",
-                            transcript = transcript,
-                            statusMessage = "Transkript bereit — sende an Timus…",
-                        ),
-                    )
-                    sendMessage(transcript, fromVoice = true)
+                    if (autoSend) {
+                        _uiState.value = _uiState.value.copy(
+                            draft = transcript,
+                            voice = _uiState.value.voice.copy(
+                                state = "thinking",
+                                transcript = transcript,
+                                statusMessage = "Transkript bereit — sende an Timus…",
+                            ),
+                        )
+                        sendMessage(transcript, fromVoice = true)
+                    } else {
+                        _uiState.value = _uiState.value.copy(
+                            draft = transcript,
+                            voice = _uiState.value.voice.copy(
+                                state = "idle",
+                                transcript = transcript,
+                                statusMessage = "Transkript bereit — noch nicht an Timus gesendet",
+                            ),
+                        )
+                    }
                 }
                 .onFailure { error ->
                     _uiState.value = _uiState.value.copy(
