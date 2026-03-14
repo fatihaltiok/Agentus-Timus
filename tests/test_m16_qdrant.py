@@ -172,14 +172,14 @@ def test_add_without_embeddings_uses_zero_vector(qdrant_provider):
 # ──────────────────────────────────────────────────────────────────
 
 def test_memory_backend_env_default():
-    """MEMORY_BACKEND Default ist chromadb."""
-    assert os.getenv("MEMORY_BACKEND", "chromadb") in {"chromadb", "qdrant"}
+    """MEMORY_BACKEND Default ist qdrant oder wird explizit gesetzt."""
+    assert os.getenv("MEMORY_BACKEND", "qdrant") in {"chromadb", "qdrant", "none"}
 
 
 def test_memory_backend_qdrant_recognized():
     """MEMORY_BACKEND=qdrant wird korrekt ausgelesen."""
     with patch.dict(os.environ, {"MEMORY_BACKEND": "qdrant"}):
-        backend = os.getenv("MEMORY_BACKEND", "chromadb").lower()
+        backend = os.getenv("MEMORY_BACKEND", "qdrant").lower()
         assert backend == "qdrant"
 
 

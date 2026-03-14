@@ -37,6 +37,10 @@ from utils.chroma_runtime import build_chroma_settings, configure_chroma_runtime
 from utils.openai_compat import prepare_openai_params
 from utils.stable_hash import stable_text_digest
 from dotenv import load_dotenv
+from memory.semantic_backend_policy import (
+    normalize_semantic_memory_backend,
+    resolve_semantic_memory_backend,
+)
 
 if TYPE_CHECKING:
     import chromadb
@@ -138,7 +142,22 @@ class SemanticMemoryStore:
     
     def is_available(self) -> bool:
         """Prüft ob ChromaDB verfügbar ist."""
-        return self._initialized and self.collection is not None
+        if not self._initialized or self.collection is None:
+            return False
+        availability_fn = getattr(self.collection, "is_available", None)
+        if callable(availability_fn):
+            try:
+                return bool(availability_fn())
+            except Exception:
+                return False
+        return True
+
+    def backend_name(self) -> str:
+        if self.collection is None:
+            return "none"
+        if hasattr(self.collection, "is_available") and hasattr(self.collection, "_collection"):
+            return "qdrant"
+        return "chromadb"
     
     def store_embedding(self, item: MemoryItem) -> Optional[str]:
         """Speichert MemoryItem mit Embedding in ChromaDB."""
@@ -231,7 +250,7 @@ class SemanticMemoryStore:
                 category=metadatas[i].get("category", "unknown") if i < len(metadatas) else "unknown",
                 importance=metadatas[i].get("importance", 0.5) if i < len(metadatas) else 0.5,
                 distance=distances[i] if i < len(distances) else 0.0,
-                source="chromadb",
+                source=self.backend_name(),
                 key=metadatas[i].get("key", "") if i < len(metadatas) else "",
                 created_at=metadatas[i].get("created_at", "") if i < len(metadatas) else "",
             ))
@@ -262,7 +281,7 @@ class SemanticMemoryStore:
                     category=category,
                     importance=metadatas[i].get("importance", 0.5) if i < len(metadatas) else 0.5,
                     distance=0.0,
-                    source="chromadb",
+                    source=self.backend_name(),
                     key=metadatas[i].get("key", "") if i < len(metadatas) else "",
                     created_at=metadatas[i].get("created_at", "") if i < len(metadatas) else "",
                 ))
@@ -282,7 +301,8 @@ class SemanticMemoryStore:
             return {
                 "available": True,
                 "count": count,
-                "name": self.collection.name
+                "name": getattr(self.collection, "name", self.backend_name()),
+                "backend": self.backend_name(),
             }
         except Exception as e:
             return {"available": False, "error": str(e)}
@@ -938,6 +958,11 @@ class MemoryManager:
         
         # NEW: Semantic Memory Store (ChromaDB)
         self.semantic_store: Optional[SemanticMemoryStore] = None
+        self.semantic_backend_requested = normalize_semantic_memory_backend(
+            os.getenv("MEMORY_BACKEND")
+        )
+        self.semantic_backend_active = "none"
+        self.semantic_backend_reason = "uninitialized"
         self._init_semantic_store()
         
         # NEW: Markdown Store for bidirectional sync
@@ -948,41 +973,76 @@ class MemoryManager:
     def get_last_working_memory_stats(self) -> Dict[str, Any]:
         """Gibt Metadaten des letzten Working-Memory-Builds zurück."""
         return dict(self._last_working_memory_stats)
+
+    def _set_semantic_backend_status(self, active: str, reason: str) -> None:
+        self.semantic_backend_active = active
+        self.semantic_backend_reason = reason
     
     def _init_semantic_store(self):
         """Initialisiert ChromaDB-Store wenn verfügbar.
 
         Strategie:
-        1. shared_context (mcp_server.py läuft) — bevorzugt
-        2. Direkter ChromaDB-Fallback (memory_db/) — unabhängig von mcp_server
+        1. Qdrant (Produktivdefault)
+        2. ChromaDB nur bei explizitem Opt-in
+        3. sonst FTS5-only
         """
-        # 1. Versuch: shared_context (mcp_server.py aktiv)
+        requested = self.semantic_backend_requested
+
+        if requested == "none":
+            self.semantic_store = None
+            self._set_semantic_backend_status("none", "disabled_by_config")
+            log.info("ℹ️ SemanticMemoryStore deaktiviert (MEMORY_BACKEND=none)")
+            return
+
+        if requested == "qdrant":
+            try:
+                from memory.qdrant_provider import QdrantProvider
+
+                qdrant = QdrantProvider()
+                if qdrant.is_available():
+                    self.semantic_store = SemanticMemoryStore(qdrant)
+                    active, reason = resolve_semantic_memory_backend(
+                        requested,
+                        qdrant_available=True,
+                        chromadb_available=False,
+                    )
+                    self._set_semantic_backend_status(active, reason)
+                    log.info("✅ SemanticMemoryStore via Qdrant initialisiert")
+                    return
+            except Exception as e:
+                log.warning("Qdrant-Backend fehlgeschlagen, wechsle auf FTS5-only: %s", e)
+
+            active, reason = resolve_semantic_memory_backend(
+                requested,
+                qdrant_available=False,
+                chromadb_available=False,
+            )
+            self.semantic_store = None
+            self._set_semantic_backend_status(active, reason)
+            log.warning("⚠️ SemanticMemoryStore ohne Vektor-Backend: %s", reason)
+            return
+
+        # Chroma nur noch bei explizitem Opt-in
         try:
             import tools.shared_context as sc
-            if hasattr(sc, 'memory_collection') and sc.memory_collection:
+
+            if hasattr(sc, "memory_collection") and sc.memory_collection:
                 self.semantic_store = SemanticMemoryStore(sc.memory_collection)
-                log.info("✅ SemanticMemoryStore via shared_context initialisiert")
+                active, reason = resolve_semantic_memory_backend(
+                    requested,
+                    qdrant_available=False,
+                    chromadb_available=True,
+                )
+                self._set_semantic_backend_status(active, f"{reason}_shared_context")
+                log.info("✅ SemanticMemoryStore via shared_context/ChromaDB initialisiert")
                 return
         except Exception:
             pass
 
-        # 2. Backend-Switch: Qdrant oder ChromaDB (M16)
-        memory_backend = os.getenv("MEMORY_BACKEND", "chromadb").lower()
-
-        if memory_backend == "qdrant":
-            try:
-                from memory.qdrant_provider import QdrantProvider
-                qdrant = QdrantProvider()
-                self.semantic_store = SemanticMemoryStore(qdrant)
-                log.info("✅ SemanticMemoryStore via Qdrant initialisiert")
-                return
-            except Exception as e:
-                log.warning("Qdrant-Backend fehlgeschlagen, Fallback auf ChromaDB: %s", e)
-
-        # Direkter ChromaDB-Fallback (immer verfügbar, kein mcp_server nötig)
         try:
             import chromadb
             from utils.embedding_provider import get_embedding_function
+
             db_path = Path(__file__).parent.parent / "memory_db"
             db_path.mkdir(parents=True, exist_ok=True)
             client = chromadb.PersistentClient(
@@ -994,9 +1054,24 @@ class MemoryManager:
                 embedding_function=get_embedding_function(),
             )
             self.semantic_store = SemanticMemoryStore(collection)
-            log.info("✅ SemanticMemoryStore direkt initialisiert (%s)", db_path)
+            active, reason = resolve_semantic_memory_backend(
+                requested,
+                qdrant_available=False,
+                chromadb_available=True,
+            )
+            self._set_semantic_backend_status(active, f"{reason}_direct")
+            log.info("✅ SemanticMemoryStore via ChromaDB initialisiert (%s)", db_path)
+            return
         except Exception as e:
             log.warning("ChromaDB-Direktverbindung fehlgeschlagen, nur FTS5: %s", e)
+
+        active, reason = resolve_semantic_memory_backend(
+            requested,
+            qdrant_available=False,
+            chromadb_available=False,
+        )
+        self.semantic_store = None
+        self._set_semantic_backend_status(active, reason)
     
     def _get_markdown_store(self):
         """Lazy-Load Markdown Store."""
@@ -1891,6 +1966,9 @@ class MemoryManager:
                 "long_term": section_shares[1],
                 "stable": section_shares[2],
             },
+            "semantic_backend_requested": self.semantic_backend_requested,
+            "semantic_backend_active": self.semantic_backend_active,
+            "semantic_backend_reason": self.semantic_backend_reason,
         }
 
         # --- 1) Kurzzeitkontext aus persistenten Interaktions-Events ---
@@ -2549,6 +2627,10 @@ Antworte im JSON-Format:
             "entities_tracked": len(self.session.entities),
             "current_topic": self.session.current_topic or "",
             "open_threads": len(self.session.open_threads),
+            "semantic_backend_requested": self.semantic_backend_requested,
+            "semantic_backend_active": self.semantic_backend_active,
+            "semantic_backend_reason": self.semantic_backend_reason,
+            "semantic_memory_available": bool(self.semantic_store and self.semantic_store.is_available()),
         }
 
     def get_runtime_memory_snapshot(

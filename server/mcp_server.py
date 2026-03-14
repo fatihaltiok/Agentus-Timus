@@ -106,6 +106,7 @@ from utils.policy_gate import (
 )
 from orchestration.canvas_store import canvas_store
 from server.canvas_ui import build_canvas_ui_html
+from memory.semantic_backend_policy import normalize_semantic_memory_backend
 from gateway.status_snapshot import collect_status_snapshot
 
 log = logging.getLogger("mcp_server")
@@ -812,25 +813,33 @@ def _initialize_shared_clients():
         log.error(f"❌ Fehler bei Initialisierung des OpenAI-Clients: {e}")
 
     try:
-        import chromadb
-        from utils.embedding_provider import get_embedding_function
+        requested_memory_backend = normalize_semantic_memory_backend(os.getenv("MEMORY_BACKEND"))
+        if requested_memory_backend == "chromadb":
+            import chromadb
+            from utils.embedding_provider import get_embedding_function
 
-        if shared_context.openai_client:
-            db_path = project_root / "memory_db"
-            chroma_db_client = chromadb.PersistentClient(
-                path=str(db_path),
-                settings=build_chroma_settings(chromadb_module=chromadb),
-            )
-            openai_ef = get_embedding_function()
-            shared_context.memory_collection = (
-                chroma_db_client.get_or_create_collection(
-                    name="timus_long_term_memory", embedding_function=openai_ef
+            if shared_context.openai_client:
+                db_path = project_root / "memory_db"
+                chroma_db_client = chromadb.PersistentClient(
+                    path=str(db_path),
+                    settings=build_chroma_settings(chromadb_module=chromadb),
                 )
-            )
-            log.info(f"✅ Geteilte Memory-Collection ('{db_path}') initialisiert.")
+                openai_ef = get_embedding_function()
+                shared_context.memory_collection = (
+                    chroma_db_client.get_or_create_collection(
+                        name="timus_long_term_memory", embedding_function=openai_ef
+                    )
+                )
+                log.info(f"✅ Geteilte Memory-Collection ('{db_path}') initialisiert.")
+            else:
+                log.warning(
+                    "⚠️ Memory-Collection nicht initialisiert, da OpenAI-Client fehlt."
+                )
         else:
-            log.warning(
-                "⚠️ Memory-Collection nicht initialisiert, da OpenAI-Client fehlt."
+            shared_context.memory_collection = None
+            log.info(
+                "ℹ️ Geteilte Chroma-Memory-Collection uebersprungen (MEMORY_BACKEND=%s).",
+                requested_memory_backend,
             )
     except Exception as e:
         log.error(f"❌ Fehler bei Initialisierung der Memory-Collection: {e}")

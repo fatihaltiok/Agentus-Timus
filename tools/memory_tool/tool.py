@@ -35,6 +35,7 @@ from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 from utils.stable_hash import stable_text_digest
 from dotenv import load_dotenv
 from agent.providers import ModelProvider, resolve_model_provider_env
+from memory.semantic_backend_policy import normalize_semantic_memory_backend
 
 load_dotenv()
 
@@ -62,13 +63,14 @@ def _resolve_memory_summary_model() -> str:
 memory_collection = None
 openai_client = None
 CHROMADB_AVAILABLE = False
+_REQUESTED_MEMORY_BACKEND = normalize_semantic_memory_backend(os.getenv("MEMORY_BACKEND"))
 
 try:
     from tools.shared_context import memory_collection as _mc, openai_client as _oc, log as _log
     memory_collection = _mc
     openai_client = _oc
     log = _log
-    CHROMADB_AVAILABLE = memory_collection is not None
+    CHROMADB_AVAILABLE = _REQUESTED_MEMORY_BACKEND == "chromadb" and memory_collection is not None
 except ImportError:
     pass
 
@@ -77,6 +79,11 @@ except ImportError:
 def _init_chromadb_fallback():
     """Initialisiert ChromaDB selbst, falls nicht über MCP Server geladen."""
     global memory_collection, openai_client, CHROMADB_AVAILABLE
+
+    if _REQUESTED_MEMORY_BACKEND != "chromadb":
+        CHROMADB_AVAILABLE = False
+        memory_collection = None
+        return
 
     if memory_collection is not None:
         return  # Schon über shared_context initialisiert

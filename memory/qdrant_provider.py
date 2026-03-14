@@ -76,6 +76,13 @@ class QdrantProvider:
             log.error("Qdrant Initialisierung fehlgeschlagen: %s", e)
             self._client = None
 
+    @property
+    def name(self) -> str:
+        return self._collection
+
+    def is_available(self) -> bool:
+        return self._client is not None
+
     def _get_embedding_fn(self):
         if self._embedding_fn is None:
             try:
