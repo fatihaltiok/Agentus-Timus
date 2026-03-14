@@ -1,6 +1,6 @@
 # Timus — Architektur-Übersicht
 
-**Hinweis:** Diese Datei ist die kurze Architekturübersicht. Die aktuelle, ausführliche Systemdokumentation liegt in [TIMUS_ARCHITEKTUR_UND_SYSTEMDOKUMENTATION_2026-03-13.md](/home/fatih-ubuntu/dev/timus/docs/TIMUS_ARCHITEKTUR_UND_SYSTEMDOKUMENTATION_2026-03-13.md).
+**Hinweis:** Diese Datei ist die kurze Architekturuebersicht. Die aktuelle, ausfuehrliche Systemdokumentation liegt in [TIMUS_AUSFUEHRLICHE_SYSTEMDOKUMENTATION_2026-03-14.md](/home/fatih-ubuntu/dev/timus/docs/TIMUS_AUSFUEHRLICHE_SYSTEMDOKUMENTATION_2026-03-14.md). Der kompakte Begleitbericht liegt in [BERICHT_2026-03-14_TIMUS_SYSTEMSTATUS_UND_ARCHITEKTUR.md](/home/fatih-ubuntu/dev/timus/docs/BERICHT_2026-03-14_TIMUS_SYSTEMSTATUS_UND_ARCHITEKTUR.md).
 
 **Version:** v4.8+ (Stand 2026-03-13)
 **Stack:** Python 3.11 · FastAPI · SQLite WAL · Qdrant/Chroma-orientierte Memory-Schichten · Telegram · systemd · Caddy · Android-App-Prototyp
