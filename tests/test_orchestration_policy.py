@@ -77,6 +77,25 @@ def test_evaluate_query_orchestration_classifies_youtube_content_extraction_chai
     assert "document_creation" in decision["required_capabilities"]
 
 
+def test_evaluate_query_orchestration_routes_casual_youtube_discovery_to_meta_executor():
+    decision = evaluate_query_orchestration(
+        "Schau mal was es auf YouTube so gibt zu KI-Agenten"
+    )
+
+    assert decision["route_to_meta"] is True
+    assert decision["task_type"] == "youtube_light_research"
+    assert decision["site_kind"] == "youtube"
+    assert decision["recommended_entry_agent"] == "meta"
+    assert decision["recommended_agent_chain"] == ["meta", "executor"]
+    assert decision["recommended_recipe_id"] == "youtube_light_research"
+    assert decision["recipe_stages"][0]["agent"] == "executor"
+    assert decision["needs_structured_handoff"] is True
+    assert decision["task_profile"]["intent"] == "casual_lookup"
+    assert decision["selected_strategy"]["strategy_id"] == "youtube_lightweight_scan"
+    assert "search_youtube" in decision["selected_strategy"]["preferred_tools"]
+    assert any(item["name"] == "search_youtube" for item in decision["tool_affordances"])
+
+
 def test_evaluate_parallel_tasks_blocks_explicit_dependencies():
     decision = evaluate_parallel_tasks(
         [

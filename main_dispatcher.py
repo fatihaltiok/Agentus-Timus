@@ -1576,6 +1576,9 @@ def _build_meta_handoff_payload(query: str) -> dict:
         "recipe_stages": list(policy.get("recipe_stages") or []),
         "recipe_recoveries": list(policy.get("recipe_recoveries") or []),
         "alternative_recipes": list(policy.get("alternative_recipes") or []),
+        "task_profile": dict(policy.get("task_profile") or {}),
+        "tool_affordances": list(policy.get("tool_affordances") or []),
+        "selected_strategy": dict(policy.get("selected_strategy") or {}),
     }
     payload["feedback_targets"] = build_meta_feedback_targets(payload)
     payload["learning_snapshot"] = _build_meta_learning_snapshot(payload)
@@ -1691,6 +1694,16 @@ def _render_meta_handoff_block(payload: dict) -> str:
         "needs_structured_handoff: "
         + ("yes" if payload.get("needs_structured_handoff") else "no")
     )
+    task_profile = payload.get("task_profile") or {}
+    if task_profile.get("intent"):
+        lines.append(f"task_profile_intent: {task_profile['intent']}")
+    selected_strategy = payload.get("selected_strategy") or {}
+    if selected_strategy.get("strategy_id"):
+        lines.append(f"selected_strategy_id: {selected_strategy['strategy_id']}")
+    if selected_strategy.get("strategy_mode"):
+        lines.append(f"selected_strategy_mode: {selected_strategy['strategy_mode']}")
+    if selected_strategy.get("error_strategy"):
+        lines.append(f"selected_error_strategy: {selected_strategy['error_strategy']}")
     learning = payload.get("learning_snapshot") or {}
     if learning:
         lines.append(f"meta_learning_posture: {learning.get('posture', 'neutral')}")
@@ -1723,6 +1736,21 @@ def _render_meta_handoff_block(payload: dict) -> str:
         lines.append(
             "meta_self_state_json: "
             + json.dumps(payload["meta_self_state"], ensure_ascii=False, sort_keys=True)
+        )
+    if payload.get("task_profile"):
+        lines.append(
+            "task_profile_json: "
+            + json.dumps(payload["task_profile"], ensure_ascii=False, sort_keys=True)
+        )
+    if payload.get("tool_affordances"):
+        lines.append(
+            "tool_affordances_json: "
+            + json.dumps(payload["tool_affordances"], ensure_ascii=False, sort_keys=True)
+        )
+    if payload.get("selected_strategy"):
+        lines.append(
+            "selected_strategy_json: "
+            + json.dumps(payload["selected_strategy"], ensure_ascii=False, sort_keys=True)
         )
     if payload.get("alternative_recipes"):
         lines.append(

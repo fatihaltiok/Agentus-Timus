@@ -452,6 +452,22 @@ class MetaAgent(BaseAgent):
                     payload["meta_self_state"] = json.loads(normalized_value)
                 except json.JSONDecodeError:
                     payload["meta_self_state"] = {"raw": normalized_value}
+            elif normalized_key == "task_profile_json":
+                try:
+                    payload["task_profile"] = json.loads(normalized_value)
+                except json.JSONDecodeError:
+                    payload["task_profile"] = {"raw": normalized_value}
+            elif normalized_key == "tool_affordances_json":
+                try:
+                    loaded = json.loads(normalized_value)
+                    payload["tool_affordances"] = loaded if isinstance(loaded, list) else []
+                except json.JSONDecodeError:
+                    payload["tool_affordances"] = []
+            elif normalized_key == "selected_strategy_json":
+                try:
+                    payload["selected_strategy"] = json.loads(normalized_value)
+                except json.JSONDecodeError:
+                    payload["selected_strategy"] = {"raw": normalized_value}
             elif normalized_key == "alternative_recipes_json":
                 try:
                     loaded = json.loads(normalized_value)
@@ -483,6 +499,12 @@ class MetaAgent(BaseAgent):
     @classmethod
     def _select_initial_recipe_payload(cls, handoff: Dict[str, Any]) -> Dict[str, Any]:
         current = cls._current_recipe_payload_from_handoff(handoff)
+        strategy_selected = cls._strategy_preferred_recipe_payload(
+            handoff,
+            current_recipe_id=str(current.get("recipe_id") or ""),
+        )
+        if strategy_selected is not None:
+            current = strategy_selected
         self_state = dict(handoff.get("meta_self_state") or {})
         runtime = dict(self_state.get("runtime_constraints") or {})
         tool_rows = list(self_state.get("active_tools") or [])
@@ -520,6 +542,36 @@ class MetaAgent(BaseAgent):
         if selected is not None:
             return selected
         return current
+
+    @classmethod
+    def _strategy_preferred_recipe_payload(
+        cls,
+        handoff: Dict[str, Any],
+        *,
+        current_recipe_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        strategy = dict(handoff.get("selected_strategy") or {})
+        preferred_recipe_id = str(strategy.get("primary_recipe_id") or "").strip()
+        if not preferred_recipe_id or preferred_recipe_id == current_recipe_id:
+            return None
+
+        if str(handoff.get("recommended_recipe_id") or "").strip() == preferred_recipe_id:
+            return cls._current_recipe_payload_from_handoff(
+                {**handoff, "recommended_recipe_id": preferred_recipe_id}
+            )
+
+        for candidate in handoff.get("alternative_recipes") or []:
+            recipe_id = str(candidate.get("recipe_id") or "").strip()
+            if recipe_id != preferred_recipe_id:
+                continue
+            return {
+                "recipe_id": recipe_id,
+                "recipe_stages": [dict(stage) for stage in (candidate.get("recipe_stages") or [])],
+                "recipe_recoveries": [dict(item) for item in (candidate.get("recipe_recoveries") or [])],
+                "recommended_agent_chain": list(candidate.get("recommended_agent_chain") or []),
+                "switch_reason": "selected_strategy_primary",
+            }
+        return None
 
     @classmethod
     def _prefer_non_browser_alternative(
@@ -614,6 +666,14 @@ class MetaAgent(BaseAgent):
         failed_stage: Dict[str, Any],
         attempted_recipe_ids: set[str],
     ) -> Optional[Dict[str, Any]]:
+        strategy_fallback = cls._strategy_fallback_recipe_payload(
+            handoff,
+            current_recipe_id=current_recipe_id,
+            attempted_recipe_ids=attempted_recipe_ids,
+        )
+        if strategy_fallback is not None:
+            return strategy_fallback
+
         failed_stage_id = str(failed_stage.get("stage_id") or "").strip()
         failed_agent = str(failed_stage.get("agent") or "").strip().lower()
         task_type = str(handoff.get("task_type") or "").strip().lower()
@@ -673,6 +733,32 @@ class MetaAgent(BaseAgent):
             failed_stage=failed_stage,
             attempted_recipe_ids=attempted_recipe_ids,
         )
+
+    @classmethod
+    def _strategy_fallback_recipe_payload(
+        cls,
+        handoff: Dict[str, Any],
+        *,
+        current_recipe_id: str,
+        attempted_recipe_ids: set[str],
+    ) -> Optional[Dict[str, Any]]:
+        strategy = dict(handoff.get("selected_strategy") or {})
+        fallback_recipe_id = str(strategy.get("fallback_recipe_id") or "").strip()
+        if not fallback_recipe_id or fallback_recipe_id == current_recipe_id or fallback_recipe_id in attempted_recipe_ids:
+            return None
+
+        for candidate in handoff.get("alternative_recipes") or []:
+            recipe_id = str(candidate.get("recipe_id") or "").strip()
+            if recipe_id != fallback_recipe_id:
+                continue
+            return {
+                "recipe_id": recipe_id,
+                "recipe_stages": [dict(stage) for stage in (candidate.get("recipe_stages") or [])],
+                "recipe_recoveries": [dict(item) for item in (candidate.get("recipe_recoveries") or [])],
+                "recommended_agent_chain": list(candidate.get("recommended_agent_chain") or []),
+                "switch_reason": "selected_strategy_fallback",
+            }
+        return None
 
     @classmethod
     def _generic_alternative_recipe_payload(
@@ -825,9 +911,33 @@ class MetaAgent(BaseAgent):
             f"- stage_id: {stage.get('stage_id', '')}",
             f"- original_user_task: {cls._shorten(original_user_task, limit=500)}",
         ]
+        selected_strategy = dict(handoff.get("selected_strategy") or {})
+        if selected_strategy.get("strategy_id"):
+            payload_lines.append(f"- strategy_id: {selected_strategy['strategy_id']}")
+        if selected_strategy.get("strategy_mode"):
+            payload_lines.append(f"- strategy_mode: {selected_strategy['strategy_mode']}")
+        if selected_strategy.get("error_strategy"):
+            payload_lines.append(f"- error_strategy: {selected_strategy['error_strategy']}")
+        preferred_tools = selected_strategy.get("preferred_tools") or []
+        if preferred_tools:
+            payload_lines.append("- preferred_tools: " + ", ".join(str(item) for item in preferred_tools))
+        fallback_tools = selected_strategy.get("fallback_tools") or []
+        if fallback_tools:
+            payload_lines.append("- fallback_tools: " + ", ".join(str(item) for item in fallback_tools))
+        avoid_tools = selected_strategy.get("avoid_tools") or []
+        if avoid_tools:
+            payload_lines.append("- avoid_tools: " + ", ".join(str(item) for item in avoid_tools))
         site_kind = str(handoff.get("site_kind") or "").strip()
         if site_kind:
             payload_lines.append(f"- site_kind: {site_kind}")
+        if (
+            str(handoff.get("task_type") or "").strip().lower() == "youtube_light_research"
+            and str(stage.get("agent") or "").strip().lower() == "executor"
+        ):
+            payload_lines.append("- preferred_search_tool: search_youtube")
+            payload_lines.append("- search_mode: live")
+            payload_lines.append("- avoid_deep_research: yes")
+            payload_lines.append("- max_results: 5")
 
         if previous_stage_result:
             payload_lines.append(

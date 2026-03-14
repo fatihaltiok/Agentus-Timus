@@ -6,6 +6,11 @@ import re
 from typing import Any, Dict, List
 
 from orchestration.meta_orchestration import classify_meta_task
+from orchestration.self_selected_strategy import (
+    build_task_profile,
+    select_strategy,
+    select_tool_affordances,
+)
 
 
 _CAPABILITY_KEYWORDS = {
@@ -186,6 +191,9 @@ def evaluate_query_orchestration(query: str) -> Dict[str, Any]:
         or has_interactive_browser_workflow
     )
     meta_task = classify_meta_task(normalized, action_count=action_count)
+    task_profile = build_task_profile(normalized, meta_task)
+    tool_affordances = select_tool_affordances(meta_task, task_profile)
+    selected_strategy = select_strategy(normalized, meta_task, task_profile, tool_affordances)
     route_to_meta = route_to_meta or meta_task["recommended_entry_agent"] == "meta" or len(
         meta_task["recommended_agent_chain"]
     ) > 1
@@ -215,6 +223,9 @@ def evaluate_query_orchestration(query: str) -> Dict[str, Any]:
         "recipe_stages": list(meta_task.get("recipe_stages") or []),
         "recipe_recoveries": list(meta_task.get("recipe_recoveries") or []),
         "alternative_recipes": list(meta_task.get("alternative_recipes") or []),
+        "task_profile": task_profile,
+        "tool_affordances": tool_affordances,
+        "selected_strategy": selected_strategy,
         "reason": (
             "multi_capability"
             if len(capability_hits) >= 2

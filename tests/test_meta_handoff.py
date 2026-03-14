@@ -87,6 +87,8 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert "site_kind: youtube" in result
     assert "recommended_agent_chain: meta -> visual -> research -> document" in result
     assert "recommended_recipe_id: youtube_content_extraction" in result
+    assert "task_profile_json:" in result
+    assert "selected_strategy_json:" in result
     assert "meta_self_state_json:" in result
     assert "alternative_recipes_json:" in result
     assert "recipe_stages:" in result
@@ -103,17 +105,22 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert meta["recommended_agent_chain"] == ["meta", "visual", "research", "document"]
     assert meta["needs_structured_handoff"] is True
     assert meta["recommended_recipe_id"] == "youtube_content_extraction"
+    assert meta["task_profile"]["intent"] == "content_extraction"
+    assert meta["selected_strategy"]["strategy_id"] == "layered_youtube_extraction"
     assert [item["recipe_id"] for item in meta["alternative_recipes"]] == [
         "youtube_search_then_visual",
         "youtube_research_only",
     ]
     assert meta["meta_self_state"]["identity"] == "Timus"
+    assert any(item["name"] == "get_youtube_subtitles" for item in meta["tool_affordances"])
     assert meta["meta_self_state"]["strategy_posture"] in {"neutral", "preferred", "conservative"}
     assert len(meta["recipe_stages"]) == 3
     assert len(meta["recipe_recoveries"]) == 1
     parsed = MetaAgent._parse_meta_orchestration_handoff(result)
     assert parsed is not None
     assert parsed["meta_self_state"]["identity"] == "Timus"
+    assert parsed["task_profile"]["intent"] == "content_extraction"
+    assert parsed["selected_strategy"]["strategy_id"] == "layered_youtube_extraction"
     assert parsed["meta_self_state"]["runtime_constraints"]["budget_state"] == "soft_limit"
 
 
@@ -196,12 +203,18 @@ def test_build_meta_handoff_payload_exposes_learning_snapshot(monkeypatch):
     assert self_state["runtime_constraints"]["stability_gate_state"] == "warn"
     assert any(risk["signal"] == "negative_outcome_history" for risk in self_state["active_risks"])
     rendered = main_dispatcher._render_meta_handoff_block(payload)
+    assert payload["task_profile"]["intent"] == "content_extraction"
+    assert payload["selected_strategy"]["strategy_id"] == "layered_youtube_extraction"
     assert "meta_learning_posture: conservative" in rendered
+    assert "task_profile_intent: content_extraction" in rendered
+    assert "selected_strategy_id: layered_youtube_extraction" in rendered
     assert "recipe_feedback_score: 0.82 (evidence=6)" in rendered
     assert "site_recipe_key: youtube::youtube_content_extraction" in rendered
     assert "site_recipe_feedback_score: 0.78 (evidence=5)" in rendered
     assert "recommended_agent_chain_key: meta__visual__research__document" in rendered
     assert "meta_self_state_json:" in rendered
+    assert "task_profile_json:" in rendered
+    assert "selected_strategy_json:" in rendered
     assert "alternative_recipes_json:" in rendered
     assert "alternative_recipe_scores_json:" in rendered
 

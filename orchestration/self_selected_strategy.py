@@ -1,0 +1,380 @@
+"""Self-selected tool and agent strategies for lightweight orchestration."""
+
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from typing import Any, Dict, Iterable, List, Tuple
+
+
+@dataclass(frozen=True)
+class TaskProfile:
+    intent: str
+    desired_depth: str
+    effort_level: str
+    risk_level: str
+    browser_need: str
+    latency_expectation: str
+    cost_sensitivity: str
+    output_mode: str
+    error_recovery_bias: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class ToolAffordance:
+    name: str
+    kind: str
+    cost: str
+    latency: str
+    reliability: str
+    good_for: Tuple[str, ...]
+    avoid_when: Tuple[str, ...]
+
+    def to_dict(self) -> Dict[str, Any]:
+        payload = asdict(self)
+        payload["good_for"] = list(self.good_for)
+        payload["avoid_when"] = list(self.avoid_when)
+        return payload
+
+
+@dataclass(frozen=True)
+class SelectedStrategy:
+    strategy_id: str
+    strategy_mode: str
+    primary_recipe_id: str
+    fallback_recipe_id: str
+    preferred_tools: Tuple[str, ...]
+    fallback_tools: Tuple[str, ...]
+    avoid_tools: Tuple[str, ...]
+    error_strategy: str
+    rationale: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        payload = asdict(self)
+        for key in ("preferred_tools", "fallback_tools", "avoid_tools"):
+            payload[key] = list(payload[key])
+        return payload
+
+
+_AFFORDANCE_CATALOG: Dict[str, ToolAffordance] = {
+    "executor": ToolAffordance(
+        name="executor",
+        kind="agent",
+        cost="low",
+        latency="low",
+        reliability="high",
+        good_for=("casual_lookup", "quick_summaries", "light_search"),
+        avoid_when=("deep_artifact_generation", "multi_step_ui"),
+    ),
+    "visual": ToolAffordance(
+        name="visual",
+        kind="agent",
+        cost="medium",
+        latency="medium",
+        reliability="medium",
+        good_for=("ui_navigation", "interactive_sites", "state_capture"),
+        avoid_when=("casual_lookup", "search_only_tasks"),
+    ),
+    "research": ToolAffordance(
+        name="research",
+        kind="agent",
+        cost="medium",
+        latency="medium",
+        reliability="high",
+        good_for=("content_extraction", "source_comparison", "transcript_analysis"),
+        avoid_when=("very_light_lookup",),
+    ),
+    "system": ToolAffordance(
+        name="system",
+        kind="agent",
+        cost="low",
+        latency="medium",
+        reliability="high",
+        good_for=("diagnostics", "health_analysis", "log_triage"),
+        avoid_when=("browser_tasks",),
+    ),
+    "shell": ToolAffordance(
+        name="shell",
+        kind="agent",
+        cost="medium",
+        latency="medium",
+        reliability="medium",
+        good_for=("controlled_runtime_probe", "service_actions"),
+        avoid_when=("casual_lookup", "high_risk_without_confirmation"),
+    ),
+    "document": ToolAffordance(
+        name="document",
+        kind="agent",
+        cost="medium",
+        latency="medium",
+        reliability="high",
+        good_for=("artifact_generation", "report_exports"),
+        avoid_when=("quick_summary_only",),
+    ),
+    "search_youtube": ToolAffordance(
+        name="search_youtube",
+        kind="tool",
+        cost="low",
+        latency="low",
+        reliability="high",
+        good_for=("youtube_discovery", "lightweight_scan", "top_results"),
+        avoid_when=("full_transcript_extraction",),
+    ),
+    "get_youtube_video_info": ToolAffordance(
+        name="get_youtube_video_info",
+        kind="tool",
+        cost="low",
+        latency="low",
+        reliability="high",
+        good_for=("video_metadata", "related_videos", "comments_context"),
+        avoid_when=("generic_web_search",),
+    ),
+    "get_youtube_subtitles": ToolAffordance(
+        name="get_youtube_subtitles",
+        kind="tool",
+        cost="low",
+        latency="low",
+        reliability="medium",
+        good_for=("transcript_extraction", "chapter_signals", "content_synthesis"),
+        avoid_when=("videos_without_captions",),
+    ),
+    "search_web": ToolAffordance(
+        name="search_web",
+        kind="tool",
+        cost="low",
+        latency="low",
+        reliability="medium",
+        good_for=("fallback_discovery", "cross_source_search"),
+        avoid_when=("direct_ui_state_needed",),
+    ),
+    "start_deep_research": ToolAffordance(
+        name="start_deep_research",
+        kind="tool",
+        cost="high",
+        latency="high",
+        reliability="medium",
+        good_for=("evidence_heavy_reports", "artifact_focused_research"),
+        avoid_when=("casual_lookup", "quick_scan", "soft_latency_budget"),
+    ),
+    "open_url": ToolAffordance(
+        name="open_url",
+        kind="tool",
+        cost="low",
+        latency="low",
+        reliability="high",
+        good_for=("direct_navigation", "non_interactive_fetch"),
+        avoid_when=("forms_and_login",),
+    ),
+    "run_command": ToolAffordance(
+        name="run_command",
+        kind="tool",
+        cost="medium",
+        latency="medium",
+        reliability="medium",
+        good_for=("runtime_probe", "controlled_system_checks"),
+        avoid_when=("casual_lookup", "unsafe_runtime_actions"),
+    ),
+}
+
+
+def build_task_profile(query: str, classification: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = str(query or "").strip().lower()
+    task_type = str(classification.get("task_type") or "").strip().lower()
+    chain = [str(agent).strip().lower() for agent in (classification.get("recommended_agent_chain") or [])]
+    needs_document = "document" in chain
+
+    if task_type == "youtube_light_research":
+        profile = TaskProfile(
+            intent="casual_lookup",
+            desired_depth="light",
+            effort_level="light",
+            risk_level="low",
+            browser_need="avoid_if_possible",
+            latency_expectation="fast",
+            cost_sensitivity="high",
+            output_mode="quick_summary",
+            error_recovery_bias="switch_tool_then_degrade",
+        )
+    elif task_type == "youtube_content_extraction":
+        profile = TaskProfile(
+            intent="content_extraction",
+            desired_depth="deep",
+            effort_level="medium",
+            risk_level="medium",
+            browser_need="prefer_direct_source",
+            latency_expectation="balanced",
+            cost_sensitivity="medium",
+            output_mode="artifact" if needs_document else "detailed_summary",
+            error_recovery_bias="recover_then_continue",
+        )
+    elif task_type == "web_content_extraction":
+        profile = TaskProfile(
+            intent="content_extraction",
+            desired_depth="medium",
+            effort_level="medium",
+            risk_level="medium",
+            browser_need="prefer_when_source_specific",
+            latency_expectation="balanced",
+            cost_sensitivity="medium",
+            output_mode="summary",
+            error_recovery_bias="switch_tool_then_continue",
+        )
+    elif task_type == "multi_stage_web_task":
+        profile = TaskProfile(
+            intent="interactive_navigation",
+            desired_depth="task_completion",
+            effort_level="medium",
+            risk_level="medium",
+            browser_need="required",
+            latency_expectation="balanced",
+            cost_sensitivity="low",
+            output_mode="verified_state",
+            error_recovery_bias="inspect_then_retry",
+        )
+    elif task_type == "system_diagnosis":
+        profile = TaskProfile(
+            intent="system_diagnosis",
+            desired_depth="medium",
+            effort_level="medium",
+            risk_level="high" if any(token in normalized for token in ("restart", "systemctl", "sudo")) else "medium",
+            browser_need="none",
+            latency_expectation="balanced",
+            cost_sensitivity="medium",
+            output_mode="incident_summary",
+            error_recovery_bias="observe_then_escalate",
+        )
+    else:
+        profile = TaskProfile(
+            intent="general_task",
+            desired_depth="medium",
+            effort_level="light",
+            risk_level="low",
+            browser_need="none",
+            latency_expectation="balanced",
+            cost_sensitivity="medium",
+            output_mode="answer",
+            error_recovery_bias="degrade_cleanly",
+        )
+
+    return profile.to_dict()
+
+
+def select_tool_affordances(classification: Dict[str, Any], task_profile: Dict[str, Any]) -> List[Dict[str, Any]]:
+    task_type = str(classification.get("task_type") or "").strip().lower()
+    names: List[str]
+    if task_type == "youtube_light_research":
+        names = ["executor", "search_youtube", "search_web", "start_deep_research"]
+    elif task_type == "youtube_content_extraction":
+        names = [
+            "visual",
+            "research",
+            "document",
+            "search_youtube",
+            "get_youtube_video_info",
+            "get_youtube_subtitles",
+            "start_deep_research",
+        ]
+    elif task_type == "web_content_extraction":
+        names = ["visual", "research", "open_url", "search_web"]
+    elif task_type == "system_diagnosis":
+        names = ["system", "shell", "run_command"]
+    elif task_type == "multi_stage_web_task":
+        names = ["visual", "open_url", "search_web"]
+    else:
+        names = ["executor", "research", "search_web"]
+
+    if str(task_profile.get("output_mode") or "") == "artifact" and "document" not in names:
+        names.append("document")
+
+    return [_AFFORDANCE_CATALOG[name].to_dict() for name in names if name in _AFFORDANCE_CATALOG]
+
+
+def select_strategy(
+    query: str,
+    classification: Dict[str, Any],
+    task_profile: Dict[str, Any],
+    tool_affordances: Iterable[Dict[str, Any]],
+) -> Dict[str, Any]:
+    normalized = str(query or "").strip().lower()
+    task_type = str(classification.get("task_type") or "").strip().lower()
+    recommended_recipe_id = str(classification.get("recommended_recipe_id") or "").strip()
+
+    if task_type == "youtube_light_research":
+        strategy = SelectedStrategy(
+            strategy_id="youtube_lightweight_scan",
+            strategy_mode="lightweight_first",
+            primary_recipe_id=recommended_recipe_id or "youtube_light_research",
+            fallback_recipe_id="",
+            preferred_tools=("search_youtube", "executor"),
+            fallback_tools=("search_web",),
+            avoid_tools=("start_deep_research",),
+            error_strategy="switch_tool_then_degrade",
+            rationale="Lockere YouTube-Anfrage zuerst mit leichtem Suchpfad beantworten.",
+        )
+    elif task_type == "youtube_content_extraction":
+        fallback_recipe_id = "youtube_search_then_visual" if any(
+            token in normalized for token in ("suche", "finde", "relevante video", "erstes video")
+        ) else "youtube_research_only"
+        strategy = SelectedStrategy(
+            strategy_id="layered_youtube_extraction",
+            strategy_mode="layered_extraction",
+            primary_recipe_id=recommended_recipe_id or "youtube_content_extraction",
+            fallback_recipe_id=fallback_recipe_id,
+            preferred_tools=("get_youtube_video_info", "get_youtube_subtitles", "search_youtube"),
+            fallback_tools=("search_web", "start_deep_research"),
+            avoid_tools=(),
+            error_strategy="recover_then_continue",
+            rationale="Video-Inhalt erst direkt und strukturiert extrahieren, erst spaeter auf teurere Pfade gehen.",
+        )
+    elif task_type == "web_content_extraction":
+        strategy = SelectedStrategy(
+            strategy_id="web_source_then_summarize",
+            strategy_mode="source_first",
+            primary_recipe_id=recommended_recipe_id or "web_visual_research_summary",
+            fallback_recipe_id="web_research_only",
+            preferred_tools=("open_url", "search_web", "research"),
+            fallback_tools=("search_web",),
+            avoid_tools=("start_deep_research",),
+            error_strategy="switch_tool_then_continue",
+            rationale="Web-Inhalt zuerst direkt lesen oder erreichen, dann verdichten.",
+        )
+    elif task_type == "system_diagnosis":
+        strategy = SelectedStrategy(
+            strategy_id="observe_before_action",
+            strategy_mode="diagnose_first",
+            primary_recipe_id=recommended_recipe_id or "system_diagnosis",
+            fallback_recipe_id="system_shell_probe_first",
+            preferred_tools=("system", "run_command"),
+            fallback_tools=("shell",),
+            avoid_tools=(),
+            error_strategy="observe_then_escalate",
+            rationale="Systemfehler zuerst beobachten und nur dann in Shell-Probes kippen, wenn Diagnose stockt.",
+        )
+    elif task_type == "multi_stage_web_task":
+        strategy = SelectedStrategy(
+            strategy_id="interactive_visual_flow",
+            strategy_mode="stateful_navigation",
+            primary_recipe_id=recommended_recipe_id,
+            fallback_recipe_id="",
+            preferred_tools=("visual", "open_url"),
+            fallback_tools=("search_web",),
+            avoid_tools=("start_deep_research",),
+            error_strategy="inspect_then_retry",
+            rationale="Interaktive Web-Aufgaben brauchen verifizierte UI-Zustaende statt schwerer Recherche.",
+        )
+    else:
+        strategy = SelectedStrategy(
+            strategy_id="general_lightweight_answer",
+            strategy_mode="lightweight_first",
+            primary_recipe_id=recommended_recipe_id,
+            fallback_recipe_id="",
+            preferred_tools=("executor", "search_web"),
+            fallback_tools=("research",),
+            avoid_tools=("start_deep_research",),
+            error_strategy=str(task_profile.get("error_recovery_bias") or "degrade_cleanly"),
+            rationale="Allgemeine Aufgaben zuerst mit leichtem Pfad beantworten.",
+        )
+
+    return strategy.to_dict()
