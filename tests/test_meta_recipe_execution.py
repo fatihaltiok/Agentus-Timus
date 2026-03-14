@@ -19,6 +19,7 @@ def _build_meta_task(
     recoveries: list[tuple[str, str, str, str, str, bool]] | None = None,
     alternative_recipes: list[dict] | None = None,
     meta_self_state: dict | None = None,
+    selected_strategy: dict | None = None,
 ) -> str:
     import json
 
@@ -33,6 +34,8 @@ def _build_meta_task(
     ]
     if meta_self_state is not None:
         lines.append("meta_self_state_json: " + json.dumps(meta_self_state, ensure_ascii=False, sort_keys=True))
+    if selected_strategy is not None:
+        lines.append("selected_strategy_json: " + json.dumps(selected_strategy, ensure_ascii=False, sort_keys=True))
     if alternative_recipes is not None:
         lines.append("alternative_recipes_json: " + json.dumps(alternative_recipes, ensure_ascii=False, sort_keys=True))
     lines.append("recipe_stages:")
@@ -104,6 +107,55 @@ async def test_meta_recipe_execution_runs_stages_sequentially(monkeypatch):
     assert "previous_stage_result: YouTube-Seite erreicht" in calls[1]["task"]
     assert "Finales Ergebnis:" in result
     assert "Zusammenfassung erstellt" in result
+
+
+@pytest.mark.asyncio
+async def test_meta_recipe_execution_inserts_strategy_lightweight_preflight(monkeypatch):
+    from agent.agents.meta import MetaAgent
+    from agent.base_agent import BaseAgent
+
+    calls = []
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        calls.append(dict(params))
+        return {
+            "status": "success",
+            "agent": params["agent_type"],
+            "result": f"{params['agent_type']} ok",
+            "blackboard_key": f"delegation:{params['agent_type']}:1",
+            "metadata": {},
+            "artifacts": [],
+        }
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = MetaAgent.__new__(MetaAgent)
+    agent.conversation_session_id = "sess-meta-strategy-preflight"
+
+    task = _build_meta_task(
+        recipe_id="youtube_content_extraction",
+        chain="meta -> visual -> research",
+        stages=[
+            ("visual_access", "visual", "Oeffne YouTube", "page_state", False),
+            ("research_synthesis", "research", "Verdichte den Inhalt", "summary", False),
+        ],
+        original_task="Hole maximal viel Inhalt aus dem YouTube-Video.",
+        selected_strategy={
+            "strategy_id": "layered_youtube_extraction",
+            "strategy_mode": "layered_extraction",
+            "error_strategy": "recover_then_continue",
+            "preferred_tools": ["search_youtube", "get_youtube_video_info", "get_youtube_subtitles"],
+            "fallback_tools": ["search_web"],
+            "avoid_tools": ["start_deep_research"],
+        },
+    )
+
+    result = await MetaAgent.run(agent, task)
+
+    assert [call["agent_type"] for call in calls] == ["research", "visual", "research"]
+    assert "stage_id: research_context_seed" in calls[0]["task"]
+    assert "preferred_tools: search_youtube, get_youtube_video_info, get_youtube_subtitles" in calls[0]["task"]
+    assert "research_context_seed" in result
 
 
 @pytest.mark.asyncio
@@ -651,6 +703,71 @@ async def test_meta_recipe_execution_switches_to_alternative_recipe_after_stage_
 
 
 @pytest.mark.asyncio
+async def test_meta_recipe_execution_passes_error_classification_into_recovery(monkeypatch):
+    from agent.agents.meta import MetaAgent
+    from agent.base_agent import BaseAgent
+
+    calls = []
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        calls.append(dict(params))
+        if params["agent_type"] == "visual":
+            return {
+                "status": "error",
+                "agent": "visual",
+                "error": "Videoseite konnte nicht verifiziert werden",
+                "blackboard_key": "delegation:visual:error",
+                "metadata": {},
+                "artifacts": [],
+            }
+        return {
+            "status": "success",
+            "agent": "research",
+            "result": "Konservative Recovery-Zusammenfassung",
+            "blackboard_key": "delegation:research:recovery",
+            "metadata": {},
+            "artifacts": [],
+        }
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = MetaAgent.__new__(MetaAgent)
+    agent.conversation_session_id = "sess-meta-error-signal"
+
+    task = _build_meta_task(
+        recipe_id="youtube_content_extraction",
+        chain="meta -> visual -> research",
+        stages=[
+            ("visual_access", "visual", "Oeffne YouTube", "page_state", False),
+            ("research_synthesis", "research", "Verdichte den Inhalt", "summary", False),
+        ],
+        recoveries=[
+            (
+                "visual_access",
+                "research_context_recovery",
+                "research",
+                "Erzeuge konservative Zusammenfassung ohne UI-Zugriff",
+                "summary",
+                True,
+            )
+        ],
+        original_task="Hole maximal viel Inhalt aus dem YouTube-Video.",
+        selected_strategy={
+            "strategy_id": "layered_youtube_extraction",
+            "strategy_mode": "layered_extraction",
+            "fallback_recipe_id": "youtube_research_only",
+            "error_strategy": "recover_then_continue",
+        },
+    )
+
+    await MetaAgent.run(agent, task)
+
+    assert [call["agent_type"] for call in calls] == ["research", "visual", "research"]
+    assert "failed_error_class: browser_runtime_failure" in calls[2]["task"]
+    assert "failed_error_reaction: switch_to_non_browser_fallback" in calls[2]["task"]
+
+
+@pytest.mark.asyncio
 async def test_meta_recipe_execution_records_actual_executed_recipe_outcomes(monkeypatch):
     from agent.agents.meta import MetaAgent
     from agent.base_agent import BaseAgent
@@ -748,7 +865,7 @@ async def test_meta_recipe_execution_records_actual_executed_recipe_outcomes(mon
     assert [entry["success"] for entry in recorded] == [False, True]
     assert recorded[0]["context"]["meta_recipe_id"] == "youtube_content_extraction"
     assert recorded[0]["context"]["failed_stage_id"] == "visual_access"
-    assert recorded[0]["context"]["switch_reason"].startswith("failed_stage:visual_access")
+    assert recorded[0]["context"]["switch_reason"].startswith("error_class:browser_runtime_failure")
     assert {
         "namespace": "meta_site_recipe",
         "key": "youtube::youtube_content_extraction",

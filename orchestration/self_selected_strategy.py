@@ -58,6 +58,19 @@ class SelectedStrategy:
         return payload
 
 
+@dataclass(frozen=True)
+class StrategyErrorSignal:
+    error_class: str
+    cause_hint: str
+    suggested_reaction: str
+    prefer_non_browser_fallback: bool = False
+    prefer_recipe_id: str = ""
+    degrade_ok: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
 _AFFORDANCE_CATALOG: Dict[str, ToolAffordance] = {
     "executor": ToolAffordance(
         name="executor",
@@ -378,3 +391,85 @@ def select_strategy(
         )
 
     return strategy.to_dict()
+
+
+def classify_strategy_error(
+    *,
+    handoff: Dict[str, Any],
+    failed_stage: Dict[str, Any],
+) -> Dict[str, Any]:
+    error_text = str(failed_stage.get("error") or "").strip().lower()
+    failed_agent = str(failed_stage.get("agent") or "").strip().lower()
+    task_type = str(handoff.get("task_type") or "").strip().lower()
+    site_kind = str(handoff.get("site_kind") or "").strip().lower()
+    strategy = dict(handoff.get("selected_strategy") or {})
+    fallback_recipe_id = str(strategy.get("fallback_recipe_id") or "").strip()
+
+    if any(token in error_text for token in ("status=11", "segv", "core dumped", "service unavailable", "backend down")):
+        signal = StrategyErrorSignal(
+            error_class="backend_runtime_failure",
+            cause_hint="Backend- oder nativer Laufzeitfehler auf einem schweren Pfad.",
+            suggested_reaction="avoid_heavy_path_and_switch",
+            prefer_non_browser_fallback=True,
+            prefer_recipe_id=fallback_recipe_id,
+            degrade_ok=False,
+        )
+    elif any(token in error_text for token in ("failed to fetch", "timeout", "connection", "429", "tempor", "net::")):
+        signal = StrategyErrorSignal(
+            error_class="transport_failure",
+            cause_hint="Transport- oder Netzfehler beim aktuellen Pfad.",
+            suggested_reaction="switch_tool_then_retry",
+            prefer_non_browser_fallback=failed_agent == "visual",
+            prefer_recipe_id=fallback_recipe_id,
+            degrade_ok=True,
+        )
+    elif failed_agent == "visual" or any(
+        token in error_text
+        for token in ("konnte nicht verifiziert", "nicht geladen", "selector", "login-maske", "videoseite")
+    ):
+        signal = StrategyErrorSignal(
+            error_class="browser_runtime_failure",
+            cause_hint="UI- oder Browserzustand war nicht robust erreichbar.",
+            suggested_reaction="switch_to_non_browser_fallback",
+            prefer_non_browser_fallback=True,
+            prefer_recipe_id=fallback_recipe_id,
+            degrade_ok=task_type in {"youtube_content_extraction", "web_content_extraction"},
+        )
+    elif any(token in error_text for token in ("untertitel", "transcript", "caption", "captions", "no transcript")):
+        signal = StrategyErrorSignal(
+            error_class="missing_transcript",
+            cause_hint="Das Video lieferte keinen nutzbaren Transcript-/Caption-Pfad.",
+            suggested_reaction="use_metadata_and_context_fallback",
+            prefer_non_browser_fallback=False,
+            prefer_recipe_id="youtube_research_only" if site_kind == "youtube" else fallback_recipe_id,
+            degrade_ok=True,
+        )
+    elif any(token in error_text for token in ("pdf", "anhang", "attachment", "artifact")):
+        signal = StrategyErrorSignal(
+            error_class="artifact_generation_failure",
+            cause_hint="Die Artefakterzeugung ist fehlgeschlagen, nicht die inhaltliche Recherche.",
+            suggested_reaction="preserve_content_and_degrade_artifact",
+            prefer_non_browser_fallback=False,
+            prefer_recipe_id="",
+            degrade_ok=True,
+        )
+    elif any(token in error_text for token in ("leer", "unvollständig", "unvollstaendig", "zu wenig belastbare quellen")):
+        signal = StrategyErrorSignal(
+            error_class="weak_result_signal",
+            cause_hint="Der aktuelle Pfad lieferte zu schwache oder unvollständige Evidenz.",
+            suggested_reaction="switch_strategy_or_validate",
+            prefer_non_browser_fallback=False,
+            prefer_recipe_id=fallback_recipe_id,
+            degrade_ok=True,
+        )
+    else:
+        signal = StrategyErrorSignal(
+            error_class="unknown_failure",
+            cause_hint="Unklassifizierter Fehler im aktuellen Pfad.",
+            suggested_reaction=str(strategy.get("error_strategy") or "degrade_cleanly"),
+            prefer_non_browser_fallback=False,
+            prefer_recipe_id=fallback_recipe_id,
+            degrade_ok=True,
+        )
+
+    return signal.to_dict()

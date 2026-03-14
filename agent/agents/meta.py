@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional
 from agent.base_agent import BaseAgent
 from agent.prompts import META_SYSTEM_PROMPT
 from orchestration.meta_orchestration import build_meta_feedback_targets, resolve_orchestration_recipe
+from orchestration.self_selected_strategy import classify_strategy_error
 
 log = logging.getLogger("TimusAgent-v4.4")
 
@@ -666,6 +667,16 @@ class MetaAgent(BaseAgent):
         failed_stage: Dict[str, Any],
         attempted_recipe_ids: set[str],
     ) -> Optional[Dict[str, Any]]:
+        error_signal = dict(failed_stage.get("error_signal") or {})
+        strategy_error_preferred = cls._strategy_error_recipe_payload(
+            handoff,
+            current_recipe_id=current_recipe_id,
+            attempted_recipe_ids=attempted_recipe_ids,
+            error_signal=error_signal,
+        )
+        if strategy_error_preferred is not None:
+            return strategy_error_preferred
+
         strategy_fallback = cls._strategy_fallback_recipe_payload(
             handoff,
             current_recipe_id=current_recipe_id,
@@ -733,6 +744,39 @@ class MetaAgent(BaseAgent):
             failed_stage=failed_stage,
             attempted_recipe_ids=attempted_recipe_ids,
         )
+
+    @classmethod
+    def _strategy_error_recipe_payload(
+        cls,
+        handoff: Dict[str, Any],
+        *,
+        current_recipe_id: str,
+        attempted_recipe_ids: set[str],
+        error_signal: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        preferred_recipe_id = str(error_signal.get("prefer_recipe_id") or "").strip()
+        prefer_non_browser = bool(error_signal.get("prefer_non_browser_fallback"))
+        error_class = str(error_signal.get("error_class") or "").strip()
+
+        if preferred_recipe_id and preferred_recipe_id != current_recipe_id and preferred_recipe_id not in attempted_recipe_ids:
+            for candidate in handoff.get("alternative_recipes") or []:
+                recipe_id = str(candidate.get("recipe_id") or "").strip()
+                if recipe_id != preferred_recipe_id:
+                    continue
+                return {
+                    "recipe_id": recipe_id,
+                    "recipe_stages": [dict(stage) for stage in (candidate.get("recipe_stages") or [])],
+                    "recipe_recoveries": [dict(item) for item in (candidate.get("recipe_recoveries") or [])],
+                    "recommended_agent_chain": list(candidate.get("recommended_agent_chain") or []),
+                    "switch_reason": f"error_class:{error_class}" if error_class else "error_signal_preference",
+                }
+
+        if prefer_non_browser:
+            safer = cls._prefer_non_browser_alternative(handoff, current_recipe_id=current_recipe_id)
+            if safer is not None:
+                safer["switch_reason"] = f"error_class:{error_class}" if error_class else "error_signal_non_browser"
+                return safer
+        return None
 
     @classmethod
     def _strategy_fallback_recipe_payload(
@@ -1059,6 +1103,15 @@ class MetaAgent(BaseAgent):
             f"- failed_stage_error: {cls._shorten(failed_stage.get('error', ''), limit=220)}",
             f"- original_user_task: {cls._shorten(original_user_task, limit=500)}",
         ]
+        error_signal = dict(failed_stage.get("error_signal") or {})
+        if error_signal.get("error_class"):
+            payload_lines.append(f"- failed_error_class: {error_signal['error_class']}")
+        if error_signal.get("cause_hint"):
+            payload_lines.append(
+                f"- failed_error_cause_hint: {cls._shorten(error_signal['cause_hint'], limit=160)}"
+            )
+        if error_signal.get("suggested_reaction"):
+            payload_lines.append(f"- failed_error_reaction: {error_signal['suggested_reaction']}")
         site_kind = str(handoff.get("site_kind") or "").strip()
         if site_kind:
             payload_lines.append(f"- site_kind: {site_kind}")
@@ -1096,6 +1149,45 @@ class MetaAgent(BaseAgent):
             "adaptive": True,
             "adaptive_reason": "conservative_learning_posture",
         }
+
+    @classmethod
+    def _build_strategy_preflight_stage(
+        cls,
+        *,
+        handoff: Dict[str, Any],
+        original_user_task: str,
+    ) -> Optional[Dict[str, Any]]:
+        selected_strategy = dict(handoff.get("selected_strategy") or {})
+        strategy_mode = str(selected_strategy.get("strategy_mode") or "").strip().lower()
+        task_type = str(handoff.get("task_type") or "").strip().lower()
+
+        if task_type == "youtube_content_extraction" and strategy_mode == "layered_extraction":
+            return {
+                "stage_id": "research_context_seed",
+                "agent": "research",
+                "goal": (
+                    "Nutze zuerst leichte YouTube-Such-, Metadaten- und Transcript-Pfade, "
+                    "bevor du auf schwereren UI-Zugriff oder teure Recherche eskalierst."
+                ),
+                "expected_output": "source_urls, query_variants, captured_context",
+                "optional": False,
+                "adaptive": True,
+                "adaptive_reason": "strategy_lightweight_first",
+            }
+        if task_type == "web_content_extraction" and strategy_mode == "source_first":
+            return {
+                "stage_id": "research_context_seed",
+                "agent": "research",
+                "goal": (
+                    "Sammle zuerst leichte Quellen-, URL- und Kontextsignale, bevor du "
+                    "einen schwereren Browser- oder UI-Pfad ausfuehrst."
+                ),
+                "expected_output": "source_urls, query_variants, captured_context",
+                "optional": False,
+                "adaptive": True,
+                "adaptive_reason": "strategy_lightweight_first",
+            }
+        return None
 
     @classmethod
     def _as_float(cls, value: Any) -> Optional[float]:
@@ -1192,6 +1284,12 @@ class MetaAgent(BaseAgent):
     ) -> List[Dict[str, Any]]:
         adapted = [dict(stage) for stage in stages]
         if not stage_history:
+            strategy_preflight = cls._build_strategy_preflight_stage(
+                handoff=handoff,
+                original_user_task=original_user_task,
+            )
+            if strategy_preflight and not any(stage.get("stage_id") == strategy_preflight["stage_id"] for stage in adapted):
+                adapted.insert(0, strategy_preflight)
             preflight = cls._build_learning_preflight_stage(
                 handoff=handoff,
                 original_user_task=original_user_task,
@@ -1366,6 +1464,11 @@ class MetaAgent(BaseAgent):
                 "metadata": normalized.get("metadata", {}) if isinstance(normalized, dict) else {},
                 "artifacts": normalized.get("artifacts", []) if isinstance(normalized, dict) else [],
             }
+            if history_entry["status"] != "success":
+                history_entry["error_signal"] = classify_strategy_error(
+                    handoff=handoff_for_recipe,
+                    failed_stage=history_entry,
+                )
             stage_history.append(history_entry)
             previous_stage_result = history_entry
 

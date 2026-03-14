@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from orchestration.self_selected_strategy import (
     build_task_profile,
+    classify_strategy_error,
     select_strategy,
     select_tool_affordances,
 )
@@ -64,3 +65,26 @@ def test_self_selected_strategy_prefers_layered_youtube_extraction():
     assert strategy["fallback_recipe_id"] == "youtube_research_only"
     assert "get_youtube_video_info" in strategy["preferred_tools"]
     assert "start_deep_research" in strategy["fallback_tools"]
+
+
+def test_self_selected_strategy_classifies_browser_failure_as_non_browser_fallback():
+    handoff = {
+        "task_type": "youtube_content_extraction",
+        "site_kind": "youtube",
+        "selected_strategy": {
+            "fallback_recipe_id": "youtube_research_only",
+            "error_strategy": "recover_then_continue",
+        },
+    }
+    failed_stage = {
+        "stage_id": "visual_access",
+        "agent": "visual",
+        "error": "Videoseite konnte nicht verifiziert werden",
+    }
+
+    signal = classify_strategy_error(handoff=handoff, failed_stage=failed_stage)
+
+    assert signal["error_class"] == "browser_runtime_failure"
+    assert signal["prefer_non_browser_fallback"] is True
+    assert signal["prefer_recipe_id"] == "youtube_research_only"
+    assert signal["suggested_reaction"] == "switch_to_non_browser_fallback"
