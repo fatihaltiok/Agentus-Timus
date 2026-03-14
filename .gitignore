@@ -71,6 +71,16 @@ secrets.yaml
 tasks.db
 memory/markdown_store/search_index.db
 
+# Markdown-Store Laufzeit-/Profil-Daten
+memory/markdown_store/MEMORY.md
+memory/markdown_store/SOUL.md
+memory/markdown_store/USER.md
+memory/markdown_store/daily/*.md
+
+# Lokale Skill-/Prototyp-Experimente
+skills/calendar-manager/
+skills/calendar_skill.py
+
 # Shell-Agent-Bug: fehlerhafte Output-Dateien im Root
 hier
 ich
