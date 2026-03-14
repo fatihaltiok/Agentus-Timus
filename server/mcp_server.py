@@ -14,8 +14,11 @@ import uuid
 import webbrowser
 import ipaddress
 import mimetypes
+import copy
 from collections import deque
 from datetime import datetime
+from urllib.parse import urlencode
+import requests
 
 # --- Drittanbieter-Bibliotheken ---
 from contextlib import asynccontextmanager
@@ -91,6 +94,7 @@ configure_chroma_runtime()
 
 # Runtime-Settings: Persistenz ohne Server-Neustart (wird in lifespan geladen)
 _RUNTIME_SETTINGS_PATH = project_root / "data" / "runtime_settings.json"
+_RUNTIME_LOCATION_SNAPSHOT_PATH = project_root / "data" / "runtime_location_snapshot.json"
 
 # --- Lokale Module und Kontext importieren ---
 import tools.shared_context as shared_context
@@ -124,6 +128,8 @@ _sse_queues: list = []
 _sse_lock = threading.Lock()
 _chat_history: list = []
 _chat_lock = threading.Lock()
+_location_snapshot: dict | None = None
+_location_snapshot_lock = threading.Lock()
 _SHUTDOWN_STEP_TIMEOUT_S = float(os.getenv("TIMUS_SHUTDOWN_STEP_TIMEOUT", "6"))
 _CONSOLE_FILE_DIRS = ("results", "data/uploads")
 
@@ -233,6 +239,138 @@ def _set_agent_status(agent: str, status: str, query: str = "") -> None:
     _thinking_active = any(v["status"] == "thinking" for v in _agent_status.values())
     _broadcast_sse({"type": "agent_status", "agent": agent, "status": status})
     _broadcast_sse({"type": "thinking", "active": _thinking_active})
+
+
+def _google_maps_api_key() -> str:
+    return os.getenv("GOOGLE_MAPS_API_KEY", "").strip()
+
+
+def _build_google_maps_url(latitude: float, longitude: float) -> str:
+    return f"https://www.google.com/maps/search/?api=1&query={latitude},{longitude}"
+
+
+def _copy_location_snapshot(snapshot: dict | None) -> dict | None:
+    return copy.deepcopy(snapshot) if snapshot else None
+
+
+def _load_location_snapshot_from_disk() -> None:
+    global _location_snapshot
+    if not _RUNTIME_LOCATION_SNAPSHOT_PATH.exists():
+        return
+    try:
+        with open(_RUNTIME_LOCATION_SNAPSHOT_PATH) as handle:
+            payload = _json.load(handle)
+        if isinstance(payload, dict):
+            with _location_snapshot_lock:
+                _location_snapshot = payload
+            log.info(f"✅ Runtime-Standort geladen: {_RUNTIME_LOCATION_SNAPSHOT_PATH}")
+    except Exception as exc:
+        log.warning(f"⚠️ Runtime-Standort konnte nicht geladen werden: {exc}")
+
+
+def _persist_location_snapshot(snapshot: dict) -> None:
+    _RUNTIME_LOCATION_SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(_RUNTIME_LOCATION_SNAPSHOT_PATH, "w") as handle:
+        _json.dump(snapshot, handle, indent=2, ensure_ascii=False)
+
+
+def _set_location_snapshot(snapshot: dict) -> None:
+    global _location_snapshot
+    with _location_snapshot_lock:
+        _location_snapshot = _copy_location_snapshot(snapshot)
+    _persist_location_snapshot(snapshot)
+
+
+def _get_location_snapshot() -> dict | None:
+    with _location_snapshot_lock:
+        if _location_snapshot is not None:
+            return _copy_location_snapshot(_location_snapshot)
+    _load_location_snapshot_from_disk()
+    with _location_snapshot_lock:
+        return _copy_location_snapshot(_location_snapshot)
+
+
+def _address_component(components: list[dict], type_name: str, short: bool = False) -> str:
+    key = "short_name" if short else "long_name"
+    for component in components:
+        if type_name in (component.get("types") or []):
+            return str(component.get(key) or "")
+    return ""
+
+
+def _reverse_geocode_with_google(latitude: float, longitude: float) -> dict | None:
+    api_key = _google_maps_api_key()
+    if not api_key:
+        return None
+    params = urlencode(
+        {
+            "latlng": f"{latitude},{longitude}",
+            "language": "de",
+            "key": api_key,
+        }
+    )
+    url = f"https://maps.googleapis.com/maps/api/geocode/json?{params}"
+    try:
+        response = requests.get(url, timeout=12)
+        response.raise_for_status()
+        payload = response.json()
+        results = payload.get("results") or []
+        top = results[0] if results else {}
+        components = top.get("address_components") or []
+        locality = (
+            _address_component(components, "locality")
+            or _address_component(components, "postal_town")
+            or _address_component(components, "administrative_area_level_2")
+        )
+        return {
+            "display_name": str(top.get("formatted_address") or ""),
+            "locality": locality,
+            "admin_area": _address_component(components, "administrative_area_level_1"),
+            "country_name": _address_component(components, "country"),
+            "country_code": _address_component(components, "country", short=True),
+            "geocode_provider": "google_maps",
+        }
+    except Exception as exc:
+        log.warning(f"⚠️ Google Reverse-Geocoding fehlgeschlagen: {exc}")
+        return None
+
+
+def _normalize_location_snapshot(payload: dict) -> dict:
+    latitude = float(payload.get("latitude"))
+    longitude = float(payload.get("longitude"))
+    accuracy = payload.get("accuracy_meters")
+    accuracy_value = float(accuracy) if accuracy not in (None, "") else None
+    captured_at = str(payload.get("captured_at") or datetime.utcnow().isoformat() + "Z")
+    source = str(payload.get("source") or "android_fused")
+    device_fields = {
+        "display_name": str(payload.get("display_name") or ""),
+        "locality": str(payload.get("locality") or ""),
+        "admin_area": str(payload.get("admin_area") or ""),
+        "country_name": str(payload.get("country_name") or ""),
+        "country_code": str(payload.get("country_code") or ""),
+    }
+    google_fields = _reverse_geocode_with_google(latitude, longitude)
+    chosen_fields = dict(device_fields)
+    if google_fields:
+        chosen_fields.update({key: value for key, value in google_fields.items() if value})
+    display_name = chosen_fields.get("display_name") or ", ".join(
+        [part for part in [chosen_fields.get("locality"), chosen_fields.get("admin_area"), chosen_fields.get("country_name")] if part]
+    )
+    geocode_provider = chosen_fields.get("geocode_provider") or ("device_geocoder" if any(device_fields.values()) else "coordinates_only")
+    return {
+        "latitude": latitude,
+        "longitude": longitude,
+        "accuracy_meters": accuracy_value,
+        "source": source,
+        "captured_at": captured_at,
+        "display_name": display_name,
+        "locality": chosen_fields.get("locality") or "",
+        "admin_area": chosen_fields.get("admin_area") or "",
+        "country_name": chosen_fields.get("country_name") or "",
+        "country_code": chosen_fields.get("country_code") or "",
+        "geocode_provider": geocode_provider,
+        "maps_url": _build_google_maps_url(latitude, longitude),
+    }
 
 
 try:
@@ -753,6 +891,8 @@ async def lifespan(app: FastAPI):
             log.info(f"✅ Runtime-Settings geladen: {_RUNTIME_SETTINGS_PATH}")
         except Exception as _e:
             log.warning(f"⚠️ Runtime-Settings konnten nicht geladen werden: {_e}")
+
+    _load_location_snapshot_from_disk()
 
     # Canvas-MVP Bootstrap (best effort)
     try:
@@ -1775,6 +1915,31 @@ async def update_setting(request: Request):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
     return {"key": key, "value": value, "status": "ok"}
+
+
+@app.get("/location/status", summary="Letzten bekannten Mobil-Standort abrufen")
+async def location_status_endpoint():
+    """Liefert den zuletzt normalisierten Standort-Snapshot, falls vorhanden."""
+    try:
+        return {"status": "success", "location": _get_location_snapshot()}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.post("/location/resolve", summary="Mobil-Standort normalisieren und speichern")
+async def location_resolve_endpoint(request: Request):
+    """Normalisiert Android-Standortdaten und persistiert den letzten Snapshot."""
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"status": "error", "error": "invalid_json"})
+
+    try:
+        snapshot = _normalize_location_snapshot(payload or {})
+        _set_location_snapshot(snapshot)
+        return {"status": "success", "location": snapshot}
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"status": "error", "error": f"invalid_location_payload: {e}"})
 
 
 @app.get("/voice/status", summary="Voice-System Status")

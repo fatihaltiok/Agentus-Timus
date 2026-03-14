@@ -19,11 +19,13 @@ import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.DataObject
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.MyLocation
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.SettingsSuggest
 import androidx.compose.material.icons.outlined.Terminal
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -37,6 +39,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fatihaltiok.timus.mobile.data.SessionSummary
+import com.fatihaltiok.timus.mobile.model.LocationUiState
 import com.fatihaltiok.timus.mobile.ui.components.TimusCard
 import com.fatihaltiok.timus.mobile.ui.components.VoiceOrb
 import com.fatihaltiok.timus.mobile.ui.theme.GlowAccent
@@ -81,6 +84,8 @@ private val orbitNodes = listOf(
 fun HomeScreen(
     summary: SessionSummary,
     voiceState: String,
+    locationState: LocationUiState,
+    onRefreshLocation: () -> Unit,
 ) {
     val scoreText = String.format("%.1f", summary.autonomyScore * 10)
     Column(
@@ -89,9 +94,6 @@ fun HomeScreen(
             .padding(top = 8.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-
-        1
-
         TimusCanvasHero(
             summary = summary,
             voiceState = voiceState,
@@ -130,6 +132,27 @@ fun HomeScreen(
             title = "TXMS Session 02.json",
             subtitle = "Heute, 09:41\nLetzte Session · Gestern, 16:05",
             status = "idle",
+        )
+
+        TimusCard(
+            title = "Standort",
+            subtitle = buildLocationSubtitle(locationState),
+            status = locationStatus(locationState),
+            trailing = {
+                TextButton(onClick = onRefreshLocation) {
+                    Icon(
+                        imageVector = Icons.Outlined.MyLocation,
+                        contentDescription = "Standort aktualisieren",
+                        tint = TimusPrimary,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Text(
+                        text = if (locationState.lastResolvedLocation == null) "Abrufen" else "Aktualisieren",
+                        color = TimusPrimary,
+                        modifier = Modifier.padding(start = 6.dp),
+                    )
+                }
+            },
         )
     }
 }
@@ -340,3 +363,29 @@ private fun TimusMiniStatCard(
         }
     }
 }
+
+private fun buildLocationSubtitle(locationState: LocationUiState): String {
+    val resolved = locationState.lastResolvedLocation
+    val accuracy = resolved?.accuracyMeters?.let { "Genauigkeit ±${it.toInt()} m" }
+    val capturedAt = resolved?.capturedAt
+        ?.replace("T", " ")
+        ?.removeSuffix("Z")
+        ?.take(16)
+        ?.let { "Zuletzt: $it" }
+
+    return buildList {
+        add(locationState.statusMessage)
+        if (!accuracy.isNullOrBlank()) add(accuracy)
+        if (!capturedAt.isNullOrBlank()) add(capturedAt)
+        if (!resolved?.mapsUrl.isNullOrBlank()) add("Google Maps bereit")
+        if (!locationState.error.isNullOrBlank()) add("Fehler: ${locationState.error}")
+    }.joinToString("\n")
+}
+
+private fun locationStatus(locationState: LocationUiState): String =
+    when (locationState.state.lowercase()) {
+        "ready" -> "ok"
+        "warning", "requesting_permission", "fetching", "syncing" -> "warning"
+        "error", "denied" -> "error"
+        else -> "idle"
+    }
