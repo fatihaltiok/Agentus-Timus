@@ -1332,6 +1332,15 @@ SYSTEM_KEYWORDS = [
     "zeige mir die logs",
 ]
 
+SELF_STATUS_KEYWORDS = [
+    "was hast du fuer probleme",
+    "was hast du für probleme",
+    "welche probleme hast du",
+    "welche probleme gibt es",
+    "was ist los",
+    "wo hakt es",
+]
+
 
 def _structure_task(task: str, url: str) -> List[str]:
     """Legacy wrapper fuer den extrahierten Browser-Workflow-Planer."""
@@ -1346,6 +1355,11 @@ def quick_intent_check(query: str) -> Optional[str]:
     """Schnelle Keyword-basierte Intent-Erkennung."""
     query_lower = query.lower()
     orchestration_policy = evaluate_query_orchestration(query_lower)
+
+    if any(keyword in query_lower for keyword in SELF_STATUS_KEYWORDS):
+        return "executor"
+    if query_lower.strip() == "sag du es mir":
+        return "executor"
 
     # Browser-Automation muss vor generischen Shell-Phrasen erkannt werden.
     # Komplexe Browser-Workflows gehen an META, damit der Orchestrator

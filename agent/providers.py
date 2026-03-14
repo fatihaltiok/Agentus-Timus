@@ -59,6 +59,10 @@ class MultiProviderClient:
         ModelProvider.GOOGLE: "GOOGLE_API_KEY",
     }
 
+    API_KEY_ALIASES = {
+        ModelProvider.GOOGLE: ("GEMINI_API_KEY",),
+    }
+
     def __init__(self):
         self._clients: Dict[ModelProvider, Any] = {}
         self._api_keys: Dict[ModelProvider, str] = {}
@@ -69,6 +73,11 @@ class MultiProviderClient:
     def _load_api_keys(self):
         for provider, env_var in self.API_KEY_ENV.items():
             key = os.getenv(env_var)
+            if not key:
+                for alias in self.API_KEY_ALIASES.get(provider, ()):
+                    key = os.getenv(alias)
+                    if key:
+                        break
             if key:
                 key = key.strip()
             if key:
@@ -223,7 +232,7 @@ class AgentModelConfig:
     """Konfiguration welches Modell/Provider jeder Agent-Typ nutzt."""
 
     AGENT_CONFIGS = {
-        "executor": ("FAST_MODEL", "FAST_MODEL_PROVIDER", "qwen/qwen3-8b", ModelProvider.OPENROUTER),
+        "executor": ("FAST_MODEL", "FAST_MODEL_PROVIDER", "gemini-3-flash-preview", ModelProvider.GOOGLE),
         "deep_research": ("RESEARCH_MODEL", "RESEARCH_MODEL_PROVIDER", "deepseek/deepseek-v3.2", ModelProvider.OPENROUTER),
         "creative": ("CREATIVE_MODEL", "CREATIVE_MODEL_PROVIDER", "gpt-5.2", ModelProvider.OPENAI),
         "developer": ("CODE_MODEL", "CODE_MODEL_PROVIDER", "mercury-2", ModelProvider.INCEPTION),

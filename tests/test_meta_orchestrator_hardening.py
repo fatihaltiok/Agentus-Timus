@@ -84,6 +84,32 @@ async def test_meta_reroutes_send_email_to_communication(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_meta_reroutes_screen_text_tools_to_visual(monkeypatch):
+    from agent.agents.meta import MetaAgent
+    from agent.base_agent import BaseAgent
+
+    captured = {}
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        captured["method"] = method
+        captured["params"] = dict(params)
+        return {"status": "success", "agent": "visual", "result": "sichtbarer Text"}
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = MetaAgent.__new__(MetaAgent)
+    agent.conversation_session_id = "sess-meta-visual-reroute"
+
+    result = await MetaAgent._call_tool(agent, "get_all_screen_text", {})
+
+    assert result["status"] == "success"
+    assert captured["method"] == "delegate_to_agent"
+    assert captured["params"]["agent_type"] == "visual"
+    assert "target_agent: visual" in captured["params"]["task"]
+    assert "Lies den sichtbaren Bildschirmtext ueber den Visual-Agenten aus." in captured["params"]["task"]
+
+
+@pytest.mark.asyncio
 async def test_meta_converts_empty_delegation_response_into_explicit_error(monkeypatch):
     from agent.agents.meta import MetaAgent
     from agent.base_agent import BaseAgent

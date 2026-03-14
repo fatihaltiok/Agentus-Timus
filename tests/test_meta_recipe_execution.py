@@ -110,6 +110,44 @@ async def test_meta_recipe_execution_runs_stages_sequentially(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_meta_recipe_execution_returns_direct_result_for_location_light_recipe(monkeypatch):
+    from agent.agents.meta import MetaAgent
+    from agent.base_agent import BaseAgent
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        assert method == "delegate_to_agent"
+        return {
+            "status": "success",
+            "agent": "executor",
+            "result": "Du bist gerade in Offenbach am Main, Flutstraße 33. In der Nähe sind REWE und ROSSMANN offen.",
+            "blackboard_key": "delegation:executor:1",
+            "metadata": {},
+            "artifacts": [],
+        }
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = MetaAgent.__new__(MetaAgent)
+    agent.conversation_session_id = "sess-meta-location-direct"
+
+    task = _build_meta_task(
+        recipe_id="location_local_search",
+        chain="meta -> executor",
+        stages=[
+            ("location_context_scan", "executor", "Bestimme Standort und nearby Places", "location_summary", False),
+        ],
+        original_task="Wo bin ich gerade und was ist in meiner Nähe offen?",
+        task_type="location_local_search",
+        site_kind="maps",
+    )
+
+    result = await MetaAgent.run(agent, task)
+
+    assert "Offenbach am Main" in result
+    assert "Meta-Rezept 'location_local_search' ausgefuehrt." not in result
+
+
+@pytest.mark.asyncio
 async def test_meta_recipe_execution_inserts_strategy_lightweight_preflight(monkeypatch):
     from agent.agents.meta import MetaAgent
     from agent.base_agent import BaseAgent

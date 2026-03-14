@@ -33,6 +33,7 @@ from agent.shared.json_utils import extract_json_robust  # noqa: F401 - re-expor
 
 
 class MetaAgent(BaseAgent):
+    _RECIPE_DIRECT_RESULT_IDS = {"youtube_light_research", "location_local_search"}
     _META_HANDOFF_HEADER = "# META ORCHESTRATION HANDOFF"
     _ORIGINAL_TASK_HEADER = "# ORIGINAL USER TASK"
     _SPECIALIST_TOOL_AGENT_MAP = {
@@ -53,6 +54,15 @@ class MetaAgent(BaseAgent):
         "take_screenshot": "visual",
         "click_element": "visual",
         "type_in_field": "visual",
+        "should_analyze_screen": "visual",
+        "analyze_screen_state": "visual",
+        "get_all_screen_text": "visual",
+        "read_text_from_screen": "visual",
+        "find_element_by_description": "visual",
+        "find_text_coordinates": "visual",
+        "find_ui_element_by_text": "visual",
+        "find_all_text_occurrences": "visual",
+        "verify_screen_condition": "visual",
         "execute_action_plan": "visual",
         "execute_visual_task": "visual",
         "execute_visual_task_quick": "visual",
@@ -234,8 +244,31 @@ class MetaAgent(BaseAgent):
             command = cls._shorten(params.get("command") or params.get("script_path") or params.get("script"))
             return f"Fuehre die Shell-Aufgabe sicher aus: {command}".strip()
 
-        if method in {"take_screenshot", "click_element", "type_in_field"}:
+        if method in {
+            "take_screenshot",
+            "click_element",
+            "type_in_field",
+            "should_analyze_screen",
+            "analyze_screen_state",
+            "get_all_screen_text",
+            "read_text_from_screen",
+            "find_element_by_description",
+            "find_text_coordinates",
+            "find_ui_element_by_text",
+            "find_all_text_occurrences",
+            "verify_screen_condition",
+        }:
             detail = cls._shorten(params.get("description") or params.get("text") or params.get("selector"))
+            if method in {"get_all_screen_text", "read_text_from_screen"}:
+                return (
+                    f"Lies den sichtbaren Bildschirmtext ueber den Visual-Agenten aus. "
+                    f"Kontext: {detail}"
+                ).strip()
+            if method in {"should_analyze_screen", "analyze_screen_state", "verify_screen_condition"}:
+                return (
+                    f"Pruefe den aktuellen Bildschirmzustand ueber den Visual-Agenten. "
+                    f"Kontext: {detail}"
+                ).strip()
             return f"Fuehre die visuelle UI-Aufgabe aus: {method}. Kontext: {detail}".strip()
 
         if method in {"execute_action_plan", "execute_visual_task", "execute_visual_task_quick"}:
@@ -1044,6 +1077,8 @@ class MetaAgent(BaseAgent):
             None,
         )
         if final_success and final_success.get("result_full"):
+            if recipe_id in cls._RECIPE_DIRECT_RESULT_IDS:
+                return str(final_success["result_full"])
             lines.append("")
             lines.append("Finales Ergebnis:")
             lines.append(str(final_success["result_full"]))

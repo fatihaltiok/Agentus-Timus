@@ -137,3 +137,12 @@ def test_resolve_model_provider_env_uses_explicit_provider(monkeypatch):
 
     assert model == "glm-5"
     assert provider == ModelProvider.ZAI
+
+
+def test_multi_provider_client_accepts_gemini_api_key_alias(monkeypatch):
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "gem-test-key")
+
+    client = MultiProviderClient()
+
+    assert client.get_api_key(ModelProvider.GOOGLE) == "gem-test-key"
