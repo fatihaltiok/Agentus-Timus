@@ -1,15 +1,6 @@
-# memory/markdown_store/__init__.py
-"""
-Markdown Store - Mensch-editierbares Gedächtnis.
-"""
+"""Lazy exports for the markdown store package."""
 
-from .store import (
-    MarkdownStore,
-    UserProfile,
-    SoulProfile,
-    MemoryEntry,
-    markdown_store,
-)
+from importlib import import_module
 
 __all__ = [
     "MarkdownStore",
@@ -18,3 +9,14 @@ __all__ = [
     "MemoryEntry",
     "markdown_store",
 ]
+
+
+def __getattr__(name: str):
+    if name in __all__:
+        module = import_module(".store", __name__)
+        return getattr(module, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))

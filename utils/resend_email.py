@@ -41,6 +41,12 @@ def _parse_addresses(addrs: Optional[str]) -> List[str]:
     return [addr for _, addr in getaddresses([addrs]) if addr]
 
 
+def _sanitize_subject(subject: str) -> str:
+    """Resend akzeptiert keine Zeilenumbrueche im Betreff."""
+    normalized = " ".join(str(subject or "").replace("\r", " ").replace("\n", " ").split())
+    return normalized or "(kein Betreff)"
+
+
 async def send_email_resend(
     to: str,
     subject: str,
@@ -83,7 +89,7 @@ async def send_email_resend(
     payload: dict = {
         "from": _from_address(),
         "to": to_addrs,
-        "subject": subject,
+        "subject": _sanitize_subject(subject),
     }
     if cc_addrs:
         payload["cc"] = cc_addrs

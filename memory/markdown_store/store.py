@@ -39,6 +39,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field, asdict
 import json
 import re
+from memory.markdown_store.query_utils import build_safe_fts_query
 
 log = logging.getLogger("MarkdownStore")
 
@@ -766,6 +767,10 @@ class HybridSearchIndex:
 
         return chunks if chunks else [text[:max_chars]]
 
+    @staticmethod
+    def _build_fts_query(query: str) -> str:
+        return build_safe_fts_query(query)
+
     def search(self, query: str, limit: int = 10) -> List[SearchResult]:
         """
         Durchsucht den FTS5-Index.
@@ -776,10 +781,9 @@ class HybridSearchIndex:
             return []
 
         results = []
-        # FTS5-Query: Woerter mit * fuer Prefix-Match
-        fts_query = " OR ".join(
-            f'"{w}"*' for w in query.strip().split() if w
-        )
+        fts_query = self._build_fts_query(query)
+        if not fts_query:
+            return []
 
         try:
             with sqlite3.connect(self.db_path) as conn:

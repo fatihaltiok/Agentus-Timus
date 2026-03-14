@@ -110,6 +110,31 @@ async def test_resend_supports_multi_recipient_headers():
 
 
 @pytest.mark.asyncio
+async def test_resend_sanitizes_subject_newlines():
+    """Resend-Payload entfernt Zeilenumbrueche im Subject."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"id": "xyz"}
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client.post.return_value = mock_resp
+
+        with patch.dict(os.environ, {"RESEND_API_KEY": "re_test123"}):
+            from utils.resend_email import send_email_resend
+            ok = await send_email_resend(
+                to="test@example.com",
+                subject="Zeile 1\nZeile 2\r\nZeile 3",
+                body="Hallo",
+            )
+
+    assert ok is True
+    payload = mock_client.post.call_args.kwargs["json"]
+    assert payload["subject"] == "Zeile 1 Zeile 2 Zeile 3"
+
+
+@pytest.mark.asyncio
 async def test_resend_missing_file_sends_without_attachment(caplog):
     """Nicht existierende Anhang-Datei → E-Mail wird trotzdem gesendet (kein 'attachments')."""
     mock_resp = MagicMock()

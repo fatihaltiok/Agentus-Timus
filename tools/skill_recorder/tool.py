@@ -30,6 +30,8 @@ try:
 except ImportError:
     PYNPUT_AVAILABLE = False
     log.warning("⚠️ pynput nicht installiert. Event-Listening deaktiviert.")
+    keyboard = None
+    Key = None
 
 # Screenshot Import
 try:
@@ -50,7 +52,7 @@ recording_state = {
     "start_time": None,
     "current_text_buffer": "",  # Sammelt getippten Text
     "listeners": None,
-    "stop_key_combo": {keyboard.Key.ctrl, keyboard.Key.shift},  # Ctrl+Shift zum Stoppen
+    "stop_key_combo": {Key.ctrl, Key.shift} if Key is not None else set(),  # Ctrl+Shift zum Stoppen
     "pressed_keys": set()
 }
 
@@ -76,10 +78,8 @@ class ActionRecorder:
     def _init_ocr(self):
         """Initialisiert die OCR-Engine."""
         try:
-            # Versuche die zentrale OCR-Engine zu nutzen
-            import sys
-            sys.path.insert(0, str(PROJECT_ROOT))
-            from ocr_engine import OCREngine
+            # Nutze das zentrale OCR-Modul ueber den Paketpfad.
+            from tools.engines.ocr_engine import OCREngine
             self.ocr_engine = OCREngine()
             log.info("✅ OCR-Engine für Recording geladen")
         except Exception as e:
