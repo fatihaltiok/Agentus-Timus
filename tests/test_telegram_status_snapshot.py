@@ -16,8 +16,34 @@ class _DummyAsyncClient:
         return False
 
 
+class _PlaintextResponse:
+    def __init__(self, *, text: str, status_code: int = 200):
+        self.text = text
+        self.status_code = status_code
+
+    def json(self):
+        raise ValueError("not json")
+
+
+@pytest.mark.asyncio
+async def test_fetch_local_json_falls_back_to_plaintext_status():
+    class _Client:
+        async def get(self, _url: str, timeout: float):
+            del timeout
+            return _PlaintextResponse(text="all shards are ready", status_code=200)
+
+    result = await status_snapshot._fetch_local_json(_Client(), "http://127.0.0.1:6333/readyz")
+
+    assert result["ok"] is True
+    assert result["status_code"] == 200
+    assert result["data"]["status"] == "all shards are ready"
+
+
 @pytest.mark.asyncio
 async def test_collect_status_snapshot_builds_agent_rows(monkeypatch):
+    monkeypatch.setenv("QDRANT_MODE", "server")
+    monkeypatch.setenv("QDRANT_URL", "http://127.0.0.1:6333")
+
     async def fake_fetch_local_json(_client, url: str):
         if url.endswith("/agent_status"):
             return {
@@ -39,6 +65,14 @@ async def test_collect_status_snapshot_builds_agent_rows(monkeypatch):
                 "status_code": 200,
                 "latency_ms": 25,
                 "data": {"status": "healthy", "total_rpc_methods": 123},
+                "error": "",
+            }
+        if url.endswith("/readyz"):
+            return {
+                "ok": True,
+                "status_code": 200,
+                "latency_ms": 11,
+                "data": {"title": "qdrant - vector search engine"},
                 "error": "",
             }
         return {
@@ -216,6 +250,8 @@ async def test_collect_status_snapshot_builds_agent_rows(monkeypatch):
 
     assert snapshot["thinking"] is True
     assert snapshot["services"]["mcp"]["active"] == "active"
+    assert snapshot["services"]["qdrant"]["active"] == "active"
+    assert snapshot["local"]["qdrant_ready"]["status_code"] == 200
     assert snapshot["restart"]["status"] in {"missing", "completed", "running", "error", "unknown"}
     assert snapshot["providers"]["openrouter"]["state"] == "ok"
     assert snapshot["usage"]["total_requests"] == 6

@@ -17,7 +17,8 @@ def test_normalize_gate_status_falls_back_to_failed():
     assert normalize_gate_status("unknown") == "failed"
 
 
-def test_default_production_gates_include_security_and_smoke():
+def test_default_production_gates_include_security_and_smoke(monkeypatch):
+    monkeypatch.setenv("QDRANT_MODE", "embedded")
     gates = default_production_gates("python")
     names = [gate.name for gate in gates]
     assert names == [
@@ -27,6 +28,17 @@ def test_default_production_gates_include_security_and_smoke():
         "production_smoke",
     ]
     assert blocking_gate_names(gates) == names
+
+
+def test_default_production_gates_include_qdrant_health_in_server_mode(monkeypatch):
+    monkeypatch.setenv("QDRANT_MODE", "server")
+    monkeypatch.setenv("QDRANT_URL", "http://127.0.0.1:6333")
+
+    gates = default_production_gates("python")
+    names = [gate.name for gate in gates]
+
+    assert names[-1] == "qdrant_server_health"
+    assert gates[-1].command[-1] == "http://127.0.0.1:6333/readyz"
 
 
 def test_p0_targets_are_nonempty():

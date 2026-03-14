@@ -79,6 +79,14 @@ _SELF_PRIORITY_PATTERNS = (
     r"\bwas machst du als erstes\b",
 )
 
+_SELF_RECALL_PATTERNS = (
+    r"\bwie war nochmal\b",
+    r"\bwas war nochmal\b",
+    r"\berinner\b",
+    r"\bwie hattest du\b",
+    r"\bwas hattest du\b",
+)
+
 _YOUTUBE_GENERIC_PATTERNS = (
     r"^hey\s+timus[, ]*",
     r"^herr\s+thimus[, ]*",
@@ -188,6 +196,56 @@ class ExecutorAgent(BaseAgent):
         return text
 
     @staticmethod
+    def _recover_semantic_recall(task_text: str) -> list[str]:
+        text = str(task_text or "")
+        match = re.search(
+            r"semantic_recall:\s*(.+?)(?:\n#\s*current user query|\Z)",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not match:
+            return []
+        raw = match.group(1).strip()
+        if not raw:
+            return []
+        return [part.strip() for part in raw.split("||") if part.strip()]
+
+    @staticmethod
+    def _recover_recent_assistant_replies(task_text: str) -> list[str]:
+        text = str(task_text or "")
+        match = re.search(
+            r"recent_assistant_replies:\s*(.+?)(?:\n[#a-z_]+:|\n#\s*current user query|\Z)",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not match:
+            return []
+        raw = match.group(1).strip()
+        if not raw:
+            return []
+        return [part.strip() for part in raw.split("||") if part.strip()]
+
+    @staticmethod
+    def _recover_session_summary(task_text: str) -> str:
+        text = str(task_text or "")
+        match = re.search(
+            r"session_summary:\s*(.+?)(?:\n[a-z_]+:|\n#\s*current user query|\Z)",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not match:
+            return ""
+        return match.group(1).strip()
+
+    @staticmethod
+    def _recover_followup_session_id(task_text: str) -> str:
+        text = str(task_text or "")
+        match = re.search(r"session_id:\s*([^\n]+)", text, flags=re.IGNORECASE)
+        if not match:
+            return ""
+        return match.group(1).strip()
+
+    @staticmethod
     def _tool_payload(result: dict[str, Any] | Any) -> dict[str, Any]:
         if not isinstance(result, dict):
             return {}
@@ -208,6 +266,47 @@ class ExecutorAgent(BaseAgent):
         if isinstance(result.get("results"), list):
             return [item for item in result["results"] if isinstance(item, dict)]
         return []
+
+    @staticmethod
+    def _record_conversation_recall(
+        *,
+        session_id: str,
+        query: str,
+        source: str,
+        semantic_recall: list[str],
+        recent_assistant_replies: list[str],
+        session_summary: str,
+    ) -> None:
+        try:
+            from orchestration.self_improvement_engine import (
+                ConversationRecallRecord,
+                get_improvement_engine,
+            )
+
+            top_agent = ""
+            top_role = ""
+            top_distance = 0.0
+            if semantic_recall:
+                header = str(semantic_recall[0]).split("=>", 1)[0].strip()
+                if ":" in header:
+                    top_role, top_agent = [part.strip() for part in header.split(":", 1)]
+                else:
+                    top_role = header
+            get_improvement_engine().record_conversation_recall(
+                ConversationRecallRecord(
+                    session_id=session_id,
+                    query=query,
+                    source=source,
+                    semantic_candidates=len(semantic_recall),
+                    recent_reply_candidates=len(recent_assistant_replies),
+                    used_summary=bool(session_summary),
+                    top_agent=top_agent,
+                    top_role=top_role,
+                    top_distance=top_distance,
+                )
+            )
+        except Exception:
+            return
 
     @staticmethod
     def _format_distance(distance_meters: Any) -> str:
@@ -313,6 +412,15 @@ class ExecutorAgent(BaseAgent):
         if len(normalized.split()) > 20:
             return False
         return any(re.search(pattern, normalized) for pattern in _SELF_PRIORITY_PATTERNS)
+
+    @staticmethod
+    def _is_self_recall_query(task: str) -> bool:
+        normalized = str(task or "").strip().lower()
+        if not normalized:
+            return False
+        if len(normalized.split()) > 24:
+            return False
+        return any(re.search(pattern, normalized) for pattern in _SELF_RECALL_PATTERNS)
 
     @classmethod
     def _format_ops_self_status(cls, ops: dict[str, Any]) -> str:
@@ -421,6 +529,32 @@ class ExecutorAgent(BaseAgent):
                 "Als Erstes wuerde ich das hier angehen:",
                 f"- {first_step}",
                 f"- Warum zuerst: {reason}",
+            ]
+        )
+
+    @classmethod
+    def _format_semantic_recall_response(
+        cls,
+        user_task: str,
+        recall_lines: list[str],
+        session_summary: str = "",
+    ) -> str:
+        if not recall_lines and not session_summary:
+            return ""
+
+        primary = recall_lines[0] if recall_lines else session_summary[:240]
+        if "visual" in str(user_task or "").lower():
+            return "\n".join(
+                [
+                    "Daran erinnere ich mich aus dem bisherigen Verlauf:",
+                    f"- {primary}",
+                    "- Das ist weiter mein relevanter Bezugspunkt fuer den Visual-Pfad.",
+                ]
+            )
+        return "\n".join(
+            [
+                "Daran erinnere ich mich aus dem bisherigen Verlauf:",
+                f"- {primary}",
             ]
         )
 
@@ -685,6 +819,10 @@ class ExecutorAgent(BaseAgent):
     async def run(self, task: str) -> str:
         handoff = parse_delegation_handoff(task)
         plain_task = self._recover_user_query(task)
+        semantic_recall = self._recover_semantic_recall(task)
+        recent_assistant_replies = self._recover_recent_assistant_replies(task)
+        session_summary = self._recover_session_summary(task)
+        followup_session_id = self._recover_followup_session_id(task)
         if handoff and handoff.handoff_data.get("task_type") == "location_local_search":
             return await self._run_location_local_search(handoff)
         if handoff and handoff.handoff_data.get("task_type") == "youtube_light_research":
@@ -695,6 +833,32 @@ class ExecutorAgent(BaseAgent):
             return await self._run_self_remediation_probe()
         if not handoff and self._is_self_priority_query(plain_task):
             return await self._run_self_priority_probe()
+        if not handoff and self._is_self_recall_query(plain_task):
+            recall_basis = semantic_recall or recent_assistant_replies
+            recall_source = (
+                "semantic"
+                if semantic_recall
+                else "recent_assistant"
+                if recent_assistant_replies
+                else "summary"
+                if session_summary
+                else "none"
+            )
+            self._record_conversation_recall(
+                session_id=followup_session_id,
+                query=plain_task,
+                source=recall_source,
+                semantic_recall=semantic_recall,
+                recent_assistant_replies=recent_assistant_replies,
+                session_summary=session_summary,
+            )
+            formatted_recall = self._format_semantic_recall_response(
+                plain_task,
+                recall_basis,
+                session_summary=session_summary,
+            )
+            if formatted_recall:
+                return formatted_recall
         if not handoff and self._is_smalltalk_query(plain_task):
             return self._smalltalk_response(plain_task)
         effective_task = handoff.goal if handoff and handoff.goal else task

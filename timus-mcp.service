@@ -1,7 +1,7 @@
 [Unit]
 Description=Timus MCP Server (Tool Registry)
-After=network.target graphical.target
-Wants=network.target graphical.target
+After=network.target graphical.target qdrant.service
+Wants=network.target graphical.target qdrant.service
 
 [Service]
 Type=simple

@@ -106,8 +106,10 @@ from utils.policy_gate import (
 )
 from orchestration.canvas_store import canvas_store
 from server.canvas_ui import build_canvas_ui_html
-from memory.semantic_backend_policy import normalize_semantic_memory_backend
+from server.conversation_qdrant import recall_chat_turns as _semantic_recall_chat_turns
+from server.conversation_qdrant import store_chat_turn as _semantic_store_chat_turn
 from gateway.status_snapshot import collect_status_snapshot
+from memory.semantic_backend_policy import normalize_semantic_memory_backend
 
 log = logging.getLogger("mcp_server")
 
@@ -145,6 +147,17 @@ _FOLLOWUP_PATTERNS = (
     r"\bwie behebst du das\b",
     r"\bwas kannst du dagegen tun\b",
     r"\bsag du es mir\b",
+)
+
+_CONTEXTUAL_RECALL_PATTERNS = (
+    r"\bnochmal\b",
+    r"\bvorhin\b",
+    r"\bfrueher\b",
+    r"\bfrüher\b",
+    r"\berinner\b",
+    r"\bwie war\b",
+    r"\bwas war\b",
+    r"\bdaran\b",
 )
 
 _VISUAL_INTENT_TOKENS = (
@@ -293,6 +306,7 @@ def _append_chat_entry(*, session_id: str, role: str, text: str, ts: str, agent:
         if len(_chat_history) > _CHAT_HISTORY_LIMIT:
             _chat_history[:] = _chat_history[-_CHAT_HISTORY_LIMIT:]
     _append_session_capsule_entry(session_id, entry)
+    _semantic_store_chat_turn(session_id=session_id, role=role, text=text, ts=ts, agent=agent)
 
 
 def _get_session_chat_entries(session_id: str, *, limit: int = 8) -> list[dict]:
@@ -316,7 +330,16 @@ def _is_followup_query(query: str) -> bool:
     return any(re.search(pattern, normalized) for pattern in _FOLLOWUP_PATTERNS)
 
 
-def _build_followup_capsule(session_id: str) -> dict:
+def _is_contextual_recall_query(query: str) -> bool:
+    normalized = str(query or "").strip().lower()
+    if not normalized:
+        return False
+    if len(normalized.split()) > 24:
+        return False
+    return any(re.search(pattern, normalized) for pattern in _CONTEXTUAL_RECALL_PATTERNS)
+
+
+def _build_followup_capsule(session_id: str, query: str = "") -> dict:
     capsule = _load_session_capsule(session_id)
     entries = _get_session_chat_entries(session_id, limit=12)
     last_user = ""
@@ -348,7 +371,19 @@ def _build_followup_capsule(session_id: str) -> dict:
             if agent:
                 recent_agents.append(agent)
 
+    semantic_recall = _semantic_recall_chat_turns(
+        session_id=session_id,
+        query=query,
+        exclude_texts=[
+            last_user,
+            last_assistant,
+            *recent_user_queries,
+            *recent_assistant_replies,
+        ],
+    )
+
     return {
+        "session_id": session_id,
         "last_user": last_user,
         "last_assistant": last_assistant,
         "last_agent": last_agent,
@@ -356,6 +391,7 @@ def _build_followup_capsule(session_id: str) -> dict:
         "recent_user_queries": recent_user_queries[-3:],
         "recent_assistant_replies": recent_assistant_replies[-2:],
         "recent_agents": recent_agents[-3:],
+        "semantic_recall": semantic_recall,
     }
 
 
@@ -378,15 +414,17 @@ def _resolve_followup_agent(query: str, capsule: dict[str, str]) -> str:
 
 
 def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
-    if not _is_followup_query(query):
+    if not (_is_followup_query(query) or _is_contextual_recall_query(query)):
         return query
     last_agent = str(capsule.get("last_agent") or "").strip()
+    session_id = str(capsule.get("session_id") or "").strip()
     last_user = str(capsule.get("last_user") or "").strip()
     last_assistant = str(capsule.get("last_assistant") or "").strip()
     session_summary = str(capsule.get("session_summary") or "").strip()
     recent_user_queries = capsule.get("recent_user_queries") or []
     recent_assistant_replies = capsule.get("recent_assistant_replies") or []
     recent_agents = capsule.get("recent_agents") or []
+    semantic_recall = capsule.get("semantic_recall") or []
     if not (
         last_agent
         or last_user
@@ -394,11 +432,14 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
         or session_summary
         or recent_user_queries
         or recent_assistant_replies
+        or semantic_recall
     ):
         return query
     parts = ["# FOLLOW-UP CONTEXT"]
     if last_agent:
         parts.append(f"last_agent: {last_agent}")
+    if session_id:
+        parts.append(f"session_id: {session_id}")
     if last_user:
         parts.append(f"last_user: {last_user[:300]}")
     if last_assistant:
@@ -414,6 +455,20 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
             "recent_assistant_replies: "
             + " || ".join(str(text) for text in recent_assistant_replies[:2])
         )
+    if semantic_recall:
+        recall_lines = []
+        for item in semantic_recall[:4]:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "").strip() or "unknown"
+            agent = str(item.get("agent") or "").strip()
+            text = str(item.get("text") or "").strip()
+            if not text:
+                continue
+            label = f"{role}:{agent}" if agent else role
+            recall_lines.append(f"{label} => {text[:220]}")
+        if recall_lines:
+            parts.append("semantic_recall: " + " || ".join(recall_lines))
     parts.extend(["", "# CURRENT USER QUERY", query])
     return "\n".join(parts)
 
@@ -1837,7 +1892,7 @@ async def canvas_chat(request: Request):
     session_id = (body or {}).get("session_id") or f"canvas_{uuid.uuid4().hex[:8]}"
     ts = datetime.utcnow().isoformat() + "Z"
 
-    followup_capsule = _build_followup_capsule(session_id)
+    followup_capsule = _build_followup_capsule(session_id, query=query)
     followup_agent = _resolve_followup_agent(query, followup_capsule)
     dispatcher_query = _augment_query_with_followup_capsule(query, followup_capsule)
 

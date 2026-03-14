@@ -16,6 +16,8 @@ async def test_canvas_chat_honors_response_language_german(monkeypatch, tmp_path
     captured = {}
     mcp_server._chat_history.clear()
     monkeypatch.setenv("TIMUS_SESSION_STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setattr(mcp_server, "_semantic_store_chat_turn", lambda **kwargs: None)
+    monkeypatch.setattr(mcp_server, "_semantic_recall_chat_turns", lambda **kwargs: [])
 
     async def fake_build_tools_description():
         return "tools"
@@ -61,6 +63,8 @@ async def test_canvas_chat_routes_followup_to_same_executor_lane(monkeypatch, tm
     captured = {"decision_queries": [], "run_queries": []}
     mcp_server._chat_history.clear()
     monkeypatch.setenv("TIMUS_SESSION_STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setattr(mcp_server, "_semantic_store_chat_turn", lambda **kwargs: None)
+    monkeypatch.setattr(mcp_server, "_semantic_recall_chat_turns", lambda **kwargs: [])
 
     async def fake_build_tools_description():
         return "tools"
@@ -113,6 +117,7 @@ async def test_canvas_chat_routes_followup_to_same_executor_lane(monkeypatch, tm
     assert followup_tools == "tools"
     assert "# FOLLOW-UP CONTEXT" in followup_query
     assert "last_agent: executor" in followup_query
+    assert "session_id: followup_lane" in followup_query
     assert "last_user: Was hast du fuer Probleme?" in followup_query
     assert "last_assistant: Gerade sehe ich diese Baustellen bei mir." in followup_query
     assert "recent_agents: executor" in followup_query
@@ -138,6 +143,8 @@ def test_session_capsule_rolls_old_entries_into_summary(tmp_path, monkeypatch):
     monkeypatch.setenv("TIMUS_SESSION_STORAGE_ROOT", str(tmp_path))
     monkeypatch.setenv("TIMUS_SESSION_ENTRY_LIMIT", "4")
     monkeypatch.setenv("TIMUS_SESSION_SUMMARY_CHAR_LIMIT", "800")
+    monkeypatch.setattr(mcp_server, "_semantic_store_chat_turn", lambda **kwargs: None)
+    monkeypatch.setattr(mcp_server, "_semantic_recall_chat_turns", lambda **kwargs: [])
 
     session_id = "capsule_rollup"
     for idx in range(8):
@@ -166,3 +173,44 @@ def test_session_capsule_rolls_old_entries_into_summary(tmp_path, monkeypatch):
     augmented = mcp_server._augment_query_with_followup_capsule("und was jetzt", followup_capsule)
     assert "session_summary:" in augmented
     assert "recent_user_queries:" in augmented
+
+
+def test_followup_capsule_includes_semantic_recall(tmp_path, monkeypatch):
+    mcp_server._chat_history.clear()
+    monkeypatch.setenv("TIMUS_SESSION_STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setattr(mcp_server, "_semantic_store_chat_turn", lambda **kwargs: None)
+    monkeypatch.setattr(
+        mcp_server,
+        "_semantic_recall_chat_turns",
+        lambda **kwargs: [
+            {
+                "role": "assistant",
+                "agent": "executor",
+                "text": "Frueher habe ich den Visual-Pfad bereits als Hauptproblem markiert.",
+                "distance": 0.08,
+            }
+        ],
+    )
+
+    mcp_server._append_chat_entry(
+        session_id="semantic_followup",
+        role="assistant",
+        text="Gerade sehe ich diese Baustellen bei mir.",
+        ts="2026-03-14T20:10:00Z",
+        agent="executor",
+    )
+    capsule = mcp_server._build_followup_capsule(
+        "semantic_followup",
+        query="wie war nochmal dein plan fuer visual",
+    )
+
+    assert capsule["session_id"] == "semantic_followup"
+    assert capsule["semantic_recall"]
+    assert "Visual-Pfad" in capsule["semantic_recall"][0]["text"]
+
+    augmented = mcp_server._augment_query_with_followup_capsule(
+        "wie war nochmal dein plan fuer visual",
+        capsule,
+    )
+    assert "semantic_recall:" in augmented
+    assert "executor =>" in augmented

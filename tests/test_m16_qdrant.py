@@ -8,7 +8,6 @@ via Mocking, und mit qdrant-client falls installiert).
 import os
 import sys
 import pytest
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 
@@ -33,8 +32,8 @@ def make_mock_qdrant():
     # scroll gibt leere Liste zurück
     mock_client_instance.scroll.return_value = ([], None)
 
-    # search gibt leere Liste zurück
-    mock_client_instance.search.return_value = []
+    # query_points gibt leere Liste zurück
+    mock_client_instance.query_points.return_value = MagicMock(points=[])
 
     # retrieve gibt leere Liste zurück
     mock_client_instance.retrieve.return_value = []
@@ -65,6 +64,106 @@ def qdrant_provider(tmp_path):
         provider = QdrantProvider(path=tmp_path / "qdrant_test", collection_name="test")
         provider._client = mock_client
         yield provider, mock_client
+
+
+def test_normalize_qdrant_mode_defaults_to_embedded():
+    from memory.qdrant_provider import normalize_qdrant_mode
+
+    assert normalize_qdrant_mode("") == "embedded"
+    assert normalize_qdrant_mode(None) == "embedded"
+    assert normalize_qdrant_mode("weird") == "embedded"
+
+
+def test_normalize_qdrant_mode_accepts_server_aliases():
+    from memory.qdrant_provider import normalize_qdrant_mode
+
+    assert normalize_qdrant_mode("server") == "server"
+    assert normalize_qdrant_mode("remote") == "server"
+    assert normalize_qdrant_mode("https") == "server"
+
+
+def test_resolve_qdrant_url_defaults_to_localhost():
+    from memory.qdrant_provider import resolve_qdrant_url
+
+    assert resolve_qdrant_url("") == "http://127.0.0.1:6333"
+    assert resolve_qdrant_url("http://") == "http://127.0.0.1:6333"
+    assert resolve_qdrant_url("ftp://bad") == "http://127.0.0.1:6333"
+    assert resolve_qdrant_url("https://qdrant.local") == "https://qdrant.local"
+
+
+def test_resolve_qdrant_ready_url_appends_readyz():
+    from memory.qdrant_provider import resolve_qdrant_ready_url
+
+    assert resolve_qdrant_ready_url("") == "http://127.0.0.1:6333/readyz"
+    assert resolve_qdrant_ready_url("http://qdrant.internal:6333/") == "http://qdrant.internal:6333/readyz"
+
+
+def test_provider_server_mode_uses_url(tmp_path):
+    mock_qdrant, mock_client = make_mock_qdrant()
+
+    with patch.dict(sys.modules, {
+        "qdrant_client": mock_qdrant,
+        "qdrant_client.models": mock_qdrant.models,
+    }):
+        from memory.qdrant_provider import QdrantProvider
+
+        provider = QdrantProvider(
+            mode="server",
+            url="http://qdrant.internal:6333",
+            collection_name="server_test",
+            path=tmp_path / "ignored",
+        )
+
+    mock_qdrant.QdrantClient.assert_called_with(
+        url="http://qdrant.internal:6333",
+        api_key=None,
+    )
+    assert provider.mode == "server"
+    assert provider.endpoint == "http://qdrant.internal:6333"
+    assert provider.is_available() is True
+
+
+def test_provider_embedded_mode_uses_path(tmp_path):
+    mock_qdrant, _ = make_mock_qdrant()
+    embedded_path = tmp_path / "qdrant_embedded"
+
+    with patch.dict(sys.modules, {
+        "qdrant_client": mock_qdrant,
+        "qdrant_client.models": mock_qdrant.models,
+    }):
+        from memory.qdrant_provider import QdrantProvider
+
+        provider = QdrantProvider(
+            mode="embedded",
+            path=embedded_path,
+            collection_name="embedded_test",
+        )
+
+    mock_qdrant.QdrantClient.assert_called_with(path=str(embedded_path))
+    assert provider.mode == "embedded"
+    assert provider.endpoint == str(embedded_path)
+    assert provider.is_available() is True
+
+
+def test_provider_captures_server_init_failure(tmp_path):
+    mock_qdrant, _ = make_mock_qdrant()
+    mock_qdrant.QdrantClient.side_effect = RuntimeError("server down")
+
+    with patch.dict(sys.modules, {
+        "qdrant_client": mock_qdrant,
+        "qdrant_client.models": mock_qdrant.models,
+    }):
+        from memory.qdrant_provider import QdrantProvider
+
+        provider = QdrantProvider(
+            mode="server",
+            url="http://qdrant.internal:6333",
+            collection_name="server_test",
+            path=tmp_path / "ignored",
+        )
+
+    assert provider.is_available() is False
+    assert "server down" in provider.last_error
 
 
 def test_provider_has_add_method(qdrant_provider):
@@ -106,7 +205,6 @@ def test_add_calls_upsert(qdrant_provider):
 
 def test_query_returns_chromadb_format(qdrant_provider):
     provider, mock_client = qdrant_provider
-    mock_client.search.return_value = []
     result = provider.query(
         query_embeddings=[[0.1] * 384],
         n_results=5,

@@ -56,6 +56,22 @@ async def test_get_ops_observability_returns_central_summary(monkeypatch):
                 "top_agents": [],
                 "top_models": [],
             },
+            get_conversation_recall_stats=lambda days=7: {
+                "analysis_days": days,
+                "total_queries": 4,
+                "semantic_hits": 1,
+                "recent_hits": 1,
+                "summary_hits": 1,
+                "none_hits": 1,
+                "semantic_rate": 0.25,
+                "recent_reply_rate": 0.25,
+                "summary_fallback_rate": 0.25,
+                "none_rate": 0.25,
+                "avg_semantic_candidates": 1.5,
+                "avg_recent_reply_candidates": 1.0,
+                "avg_top_distance": 0.18,
+                "top_sources": [{"source": "semantic", "total": 1}],
+            },
         ),
     )
 
@@ -66,6 +82,8 @@ async def test_get_ops_observability_returns_central_summary(monkeypatch):
     assert result["state"] == "critical"
     assert result["failing_services"] == 1
     assert result["unhealthy_providers"] == 1
+    assert result["recall"]["total_queries"] == 4
+    assert result["top_recall_risks"]
     assert result["error_classes"]["availability"] >= 1
     assert result["slo"]["breached"] >= 1
     messages = [item["message"] for item in result["alerts"]]

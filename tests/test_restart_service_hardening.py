@@ -13,6 +13,17 @@ def test_timus_mcp_service_has_bounded_graceful_shutdown():
     assert "KillSignal=SIGINT" in unit
     assert "TimeoutStopSec=20" in unit
     assert "TimeoutStartSec=45" in unit
+    assert "qdrant.service" in unit
+
+
+def test_qdrant_service_exists_and_timus_units_wait_for_it():
+    qdrant_unit = (PROJECT_ROOT / "qdrant.service").read_text(encoding="utf-8")
+    dispatcher_unit = (PROJECT_ROOT / "timus-dispatcher.service").read_text(encoding="utf-8")
+
+    assert "ExecStart=/home/fatih-ubuntu/dev/timus/scripts/start_qdrant_server.sh" in qdrant_unit
+    assert "Wants=network.target local-fs.target" in qdrant_unit
+    assert "After=network.target timus-mcp.service qdrant.service" in dispatcher_unit
+    assert "Wants=network.target qdrant.service" in dispatcher_unit
 
 
 def test_restart_script_resets_failed_state_before_restart():
@@ -27,3 +38,5 @@ def test_sudoers_allows_reset_failed_for_timus_services():
 
     assert "/usr/bin/systemctl reset-failed timus-mcp.service" in sudoers
     assert "/usr/bin/systemctl reset-failed timus-dispatcher.service" in sudoers
+    assert "/usr/bin/systemctl reset-failed qdrant.service" in sudoers
+    assert "/usr/bin/systemctl status qdrant.service" in sudoers

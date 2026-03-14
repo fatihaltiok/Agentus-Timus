@@ -9,7 +9,10 @@ Diese Phase kapselt die minimalen Blocker-Gates fuer produktionsnahen Betrieb:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
 from typing import Any, Dict, Iterable, List, Sequence
+
+from memory.qdrant_provider import normalize_qdrant_mode, resolve_qdrant_ready_url
 
 VALID_GATE_STATUSES = {"passed", "failed", "skipped"}
 
@@ -85,7 +88,7 @@ def format_gate_summary(results: Sequence[GateResult]) -> str:
 
 
 def default_production_gates(python_executable: str = "python") -> List[ProductionGate]:
-    return [
+    gates = [
         ProductionGate(
             name="syntax_compile",
             command=[python_executable, "-m", "py_compile", *P0_SYNTAX_TARGETS],
@@ -117,6 +120,20 @@ def default_production_gates(python_executable: str = "python") -> List[Producti
             description="Deterministische Smoke-Suite fuer Kernpfade",
         ),
     ]
+    if normalize_qdrant_mode(os.getenv("QDRANT_MODE")) == "server":
+        gates.append(
+            ProductionGate(
+                name="qdrant_server_health",
+                command=[
+                    python_executable,
+                    "scripts/check_qdrant_health.py",
+                    "--url",
+                    resolve_qdrant_ready_url(os.getenv("QDRANT_URL")),
+                ],
+                description="Readiness-Check fuer den zentralen Qdrant-Server",
+            )
+        )
+    return gates
 
 
 def blocking_gate_names(gates: Iterable[ProductionGate]) -> List[str]:

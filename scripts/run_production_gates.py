@@ -12,9 +12,13 @@ import sys
 from pathlib import Path
 from typing import List
 
+from dotenv import load_dotenv
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+load_dotenv(dotenv_path=PROJECT_ROOT / ".env", override=False)
 
 from orchestration.production_gates import (
     GateResult,

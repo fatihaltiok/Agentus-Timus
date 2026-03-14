@@ -90,6 +90,26 @@ CREATE INDEX IF NOT EXISTS idx_llm_usage_session
 
 CREATE INDEX IF NOT EXISTS idx_llm_usage_agent
     ON llm_usage_analytics (agent, timestamp DESC);
+
+CREATE TABLE IF NOT EXISTS conversation_recall_analytics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT DEFAULT '',
+    query TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'none',
+    semantic_candidates INTEGER NOT NULL DEFAULT 0,
+    recent_reply_candidates INTEGER NOT NULL DEFAULT 0,
+    used_summary INTEGER NOT NULL DEFAULT 0,
+    top_agent TEXT DEFAULT '',
+    top_role TEXT DEFAULT '',
+    top_distance REAL DEFAULT 0.0,
+    timestamp TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_recall_ts
+    ON conversation_recall_analytics (timestamp DESC);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_recall_source
+    ON conversation_recall_analytics (source, timestamp DESC);
 """
 
 
@@ -128,6 +148,7 @@ class ImprovementReport:
     suggestions: List[dict] = field(default_factory=list)
     tool_stats: List[dict] = field(default_factory=list)
     routing_stats: dict = field(default_factory=dict)
+    recall_stats: dict = field(default_factory=dict)
     analyzed_at: str = field(default_factory=lambda: datetime.now().isoformat())
     critical_count: int = 0
 
@@ -145,6 +166,20 @@ class LLMUsageRecord:
     cost_usd: float = 0.0
     latency_ms: int = 0
     success: bool = True
+    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+
+
+@dataclass
+class ConversationRecallRecord:
+    session_id: str = ""
+    query: str = ""
+    source: str = "none"  # semantic | recent_assistant | summary | none
+    semantic_candidates: int = 0
+    recent_reply_candidates: int = 0
+    used_summary: bool = False
+    top_agent: str = ""
+    top_role: str = ""
+    top_distance: float = 0.0
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
 
 
@@ -235,6 +270,32 @@ class SelfImprovementEngine:
         except Exception as e:
             log.debug("record_llm_usage: %s", e)
 
+    def record_conversation_recall(self, record: ConversationRecallRecord) -> None:
+        """Speichert Recall-Telemetrie für Folge- und Rückfragen."""
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.execute(
+                    """INSERT INTO conversation_recall_analytics
+                       (session_id, query, source, semantic_candidates, recent_reply_candidates,
+                        used_summary, top_agent, top_role, top_distance, timestamp)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        record.session_id,
+                        record.query,
+                        record.source,
+                        max(int(record.semantic_candidates or 0), 0),
+                        max(int(record.recent_reply_candidates or 0), 0),
+                        int(record.used_summary),
+                        record.top_agent,
+                        record.top_role,
+                        max(float(record.top_distance or 0.0), 0.0),
+                        record.timestamp,
+                    ),
+                )
+                conn.commit()
+        except Exception as e:
+            log.debug("record_conversation_recall: %s", e)
+
     # ------------------------------------------------------------------
     # Analyse
     # ------------------------------------------------------------------
@@ -253,9 +314,11 @@ class SelfImprovementEngine:
 
             tool_stats = self.get_tool_stats(days=ANALYSIS_DAYS)
             routing_stats = self.get_routing_stats(days=ANALYSIS_DAYS)
+            recall_stats = self.get_conversation_recall_stats(days=ANALYSIS_DAYS)
 
             report.tool_stats = tool_stats
             report.routing_stats = routing_stats
+            report.recall_stats = recall_stats
 
             suggestions = []
 
@@ -318,6 +381,60 @@ class SelfImprovementEngine:
                         "suggestion": "Caching, asynchrone Verarbeitung oder Timeout-Optimierung prüfen.",
                         "confidence": 0.6,
                         "severity": "low",
+                    })
+
+            # 4. Recall-Qualität (Proxy) -> Suggestion
+            total_recall = int(recall_stats.get("total_queries", 0) or 0)
+            if total_recall >= MIN_SAMPLES:
+                none_rate = float(recall_stats.get("none_rate", 0.0) or 0.0)
+                summary_rate = float(recall_stats.get("summary_fallback_rate", 0.0) or 0.0)
+                semantic_rate = float(recall_stats.get("semantic_rate", 0.0) or 0.0)
+                avg_distance = float(recall_stats.get("avg_top_distance", 0.0) or 0.0)
+
+                if none_rate >= 0.20:
+                    suggestions.append({
+                        "type": "conversation_recall",
+                        "target": "followup_capsule",
+                        "finding": (
+                            "Konversationeller Recall faellt zu oft komplett aus: "
+                            f"{none_rate:.2f} none bei {total_recall} Recall-Queries"
+                        ),
+                        "suggestion": (
+                            "Follow-up Resolver verbreitern und mehr semantische Session-Signale "
+                            "in die Recall-Kapsel geben."
+                        ),
+                        "confidence": 0.78,
+                        "severity": "high" if none_rate >= 0.35 else "medium",
+                    })
+                if summary_rate >= 0.35:
+                    suggestions.append({
+                        "type": "conversation_recall",
+                        "target": "qdrant_ranking",
+                        "finding": (
+                            "Conversation recall faellt haeufig auf Session-Summary zurueck: "
+                            f"{summary_rate:.2f} summary_fallback"
+                        ),
+                        "suggestion": (
+                            "Qdrant-Ranking und Recall-Filter schaerfen, damit fruehere "
+                            "Antwortstellen haeufiger vor der generischen Summary landen."
+                        ),
+                        "confidence": 0.72,
+                        "severity": "medium",
+                    })
+                if semantic_rate < 0.45 and avg_distance > 0.20:
+                    suggestions.append({
+                        "type": "conversation_recall",
+                        "target": "semantic_recall",
+                        "finding": (
+                            "Semantischer Recall greift selten oder zu unpraezise: "
+                            f"semantic_rate {semantic_rate:.2f}, avg_top_distance {avg_distance:.2f}"
+                        ),
+                        "suggestion": (
+                            "Embedding-/Ranking-Gewichte und Query-Normalisierung fuer "
+                            "Konversations-Recall ueberarbeiten."
+                        ),
+                        "confidence": 0.68,
+                        "severity": "medium",
                     })
 
             # Suggestions speichern
@@ -689,6 +806,78 @@ class SelfImprovementEngine:
                 "top_agents": [],
                 "top_models": [],
                 "top_providers": [],
+            }
+
+    def get_conversation_recall_stats(self, days: int = 7) -> dict:
+        """Aggregierte Recall-Telemetrie fuer längere Gespräche."""
+        try:
+            safe_days = max(1, min(90, int(days)))
+            cutoff = (datetime.now() - timedelta(days=safe_days)).isoformat()
+            with sqlite3.connect(str(self.db_path)) as conn:
+                totals = conn.execute(
+                    """SELECT COUNT(*) as total_queries,
+                              SUM(CASE WHEN source = 'semantic' THEN 1 ELSE 0 END) as semantic_hits,
+                              SUM(CASE WHEN source = 'recent_assistant' THEN 1 ELSE 0 END) as recent_hits,
+                              SUM(CASE WHEN source = 'summary' THEN 1 ELSE 0 END) as summary_hits,
+                              SUM(CASE WHEN source = 'none' THEN 1 ELSE 0 END) as none_hits,
+                              AVG(semantic_candidates) as avg_semantic_candidates,
+                              AVG(recent_reply_candidates) as avg_recent_candidates,
+                              AVG(top_distance) as avg_top_distance
+                       FROM conversation_recall_analytics
+                       WHERE timestamp >= ?""",
+                    (cutoff,),
+                ).fetchone()
+                top_sources_rows = conn.execute(
+                    """SELECT source, COUNT(*) as total
+                       FROM conversation_recall_analytics
+                       WHERE timestamp >= ?
+                       GROUP BY source
+                       ORDER BY total DESC""",
+                    (cutoff,),
+                ).fetchall()
+
+            total = int((totals[0] if totals else 0) or 0)
+            semantic_hits = int((totals[1] if totals else 0) or 0)
+            recent_hits = int((totals[2] if totals else 0) or 0)
+            summary_hits = int((totals[3] if totals else 0) or 0)
+            none_hits = int((totals[4] if totals else 0) or 0)
+
+            return {
+                "analysis_days": safe_days,
+                "total_queries": total,
+                "semantic_hits": semantic_hits,
+                "recent_hits": recent_hits,
+                "summary_hits": summary_hits,
+                "none_hits": none_hits,
+                "semantic_rate": round(semantic_hits / total, 3) if total else 0.0,
+                "recent_reply_rate": round(recent_hits / total, 3) if total else 0.0,
+                "summary_fallback_rate": round(summary_hits / total, 3) if total else 0.0,
+                "none_rate": round(none_hits / total, 3) if total else 0.0,
+                "avg_semantic_candidates": round(float((totals[5] if totals else 0.0) or 0.0), 3),
+                "avg_recent_reply_candidates": round(float((totals[6] if totals else 0.0) or 0.0), 3),
+                "avg_top_distance": round(float((totals[7] if totals else 0.0) or 0.0), 3),
+                "top_sources": [
+                    {"source": str(row[0] or ""), "total": int(row[1] or 0)}
+                    for row in top_sources_rows
+                ],
+            }
+        except Exception as e:
+            log.debug("get_conversation_recall_stats: %s", e)
+            return {
+                "analysis_days": days,
+                "total_queries": 0,
+                "semantic_hits": 0,
+                "recent_hits": 0,
+                "summary_hits": 0,
+                "none_hits": 0,
+                "semantic_rate": 0.0,
+                "recent_reply_rate": 0.0,
+                "summary_fallback_rate": 0.0,
+                "none_rate": 0.0,
+                "avg_semantic_candidates": 0.0,
+                "avg_recent_reply_candidates": 0.0,
+                "avg_top_distance": 0.0,
+                "top_sources": [],
             }
 
     def get_suggestions(self, applied: bool = False) -> List[dict]:

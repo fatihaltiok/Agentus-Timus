@@ -203,3 +203,65 @@ async def test_executor_handles_self_priority_without_llm(monkeypatch):
 
     assert "Als Erstes" in result
     assert "Visual-Pfad" in result
+
+
+@pytest.mark.asyncio
+async def test_executor_handles_semantic_recall_without_llm(monkeypatch):
+    from agent.agents.executor import ExecutorAgent
+    from agent.base_agent import BaseAgent
+
+    async def _unexpected_run(self, task: str):
+        raise AssertionError("BaseAgent.run darf fuer semantischen Recall nicht aufgerufen werden")
+
+    recorded = {}
+
+    monkeypatch.setattr(BaseAgent, "run", _unexpected_run)
+    monkeypatch.setattr(
+        ExecutorAgent,
+        "_record_conversation_recall",
+        staticmethod(lambda **kwargs: recorded.update(kwargs)),
+    )
+
+    agent = ExecutorAgent.__new__(ExecutorAgent)
+    result = await ExecutorAgent.run(
+        agent,
+        "# FOLLOW-UP CONTEXT\nlast_agent: executor\nsession_id: recall_semantic\n"
+        "semantic_recall: assistant:executor => Frueher habe ich den Visual-Pfad bereits als Hauptproblem markiert.\n\n"
+        "# CURRENT USER QUERY\nwie war nochmal dein plan fuer visual",
+    )
+
+    assert "Daran erinnere ich mich" in result
+    assert "Visual-Pfad" in result
+    assert recorded["source"] == "semantic"
+    assert recorded["session_id"] == "recall_semantic"
+
+
+@pytest.mark.asyncio
+async def test_executor_uses_recent_assistant_replies_for_recall_without_llm(monkeypatch):
+    from agent.agents.executor import ExecutorAgent
+    from agent.base_agent import BaseAgent
+
+    async def _unexpected_run(self, task: str):
+        raise AssertionError("BaseAgent.run darf fuer Recall-Fallback nicht aufgerufen werden")
+
+    recorded = {}
+
+    monkeypatch.setattr(BaseAgent, "run", _unexpected_run)
+    monkeypatch.setattr(
+        ExecutorAgent,
+        "_record_conversation_recall",
+        staticmethod(lambda **kwargs: recorded.update(kwargs)),
+    )
+
+    agent = ExecutorAgent.__new__(ExecutorAgent)
+    result = await ExecutorAgent.run(
+        agent,
+        "# FOLLOW-UP CONTEXT\nlast_agent: executor\nsession_id: recall_recent\n"
+        "recent_assistant_replies: Dagegen kann ich im Moment konkret Folgendes tun: Visual strenger nur fuer echte UI-Aufgaben verwenden.\n\n"
+        "# CURRENT USER QUERY\nwie war nochmal dein plan fuer visual",
+    )
+
+    assert "Daran erinnere ich mich" in result
+    assert "Visual strenger" in result
+    assert recorded["source"] == "recent_assistant"
+    assert recorded["session_id"] == "recall_recent"

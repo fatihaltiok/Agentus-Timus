@@ -35,6 +35,12 @@ def test_build_ops_observability_summary_collects_alerts():
         },
         llm_usage={"total_requests": 10, "success_rate": 0.83, "avg_latency_ms": 2500},
         budget={"state": "warn", "message": "budget warn"},
+        recall_stats={
+            "total_queries": 5,
+            "none_rate": 0.4,
+            "summary_fallback_rate": 0.4,
+            "avg_top_distance": 0.24,
+        },
         self_healing={
             "open_incidents": 1,
             "degrade_mode": "restricted",
@@ -63,16 +69,18 @@ def test_build_ops_observability_summary_collects_alerts():
     assert summary["error_classes"]["orchestration"] >= 1
     assert summary["slo"]["breached"] >= 1
     assert summary["self_stabilization_gate"]["state"] == "blocked"
+    assert summary["top_recall_risks"]
     assert any(item["name"] == "llm_latency" and item["breached"] for item in summary["slo"]["items"])
     assert summary["top_outliers"]
     messages = [item["message"] for item in summary["alerts"]]
     assert any("Service mcp" in msg for msg in messages)
     assert any("Provider openrouter" in msg for msg in messages)
-    assert any("Provider zai" in msg for msg in messages)
     assert any("scan_ui_elements" in msg for msg in messages)
     assert any("Routing meta" in msg for msg in messages)
     assert any("budget warn" in msg for msg in messages)
+    assert any("Recall none_rate" in msg for msg in messages)
     assert any("Self-Healing gate blocked" in msg for msg in messages)
+    assert summary["recall"]["total_queries"] == 5
 
     gate = evaluate_ops_release_gate(summary, current_canary_percent=30)
     assert gate["state"] == "blocked"

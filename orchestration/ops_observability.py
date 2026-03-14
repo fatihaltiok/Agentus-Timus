@@ -209,6 +209,7 @@ def build_ops_observability_summary(
     routing_stats: Dict[str, Any],
     llm_usage: Dict[str, Any],
     budget: Dict[str, Any],
+    recall_stats: Dict[str, Any] | None = None,
     self_healing: Dict[str, Any] | None = None,
     limit: int = 5,
 ) -> Dict[str, Any]:
@@ -221,6 +222,9 @@ def build_ops_observability_summary(
     routing_success_threshold = _env_float("OPS_ROUTING_SUCCESS_THRESHOLD", 0.70)
     llm_success_threshold = _env_float("OPS_LLM_SUCCESS_THRESHOLD", 0.95)
     llm_latency_threshold_ms = _env_int("OPS_LLM_LATENCY_MS", 2000)
+    recall_none_threshold = _env_float("OPS_RECALL_NONE_THRESHOLD", 0.20)
+    recall_summary_threshold = _env_float("OPS_RECALL_SUMMARY_THRESHOLD", 0.35)
+    recall_distance_threshold = _env_float("OPS_RECALL_DISTANCE_THRESHOLD", 0.20)
 
     service_alerts: List[Dict[str, Any]] = []
     for service_name, info in (services or {}).items():
@@ -378,6 +382,48 @@ def build_ops_observability_summary(
             )
         )
 
+    recall_alerts: List[Dict[str, Any]] = []
+    recall_total_queries = int((recall_stats or {}).get("total_queries", 0) or 0)
+    recall_none_rate = float((recall_stats or {}).get("none_rate", 0.0) or 0.0)
+    recall_summary_rate = float((recall_stats or {}).get("summary_fallback_rate", 0.0) or 0.0)
+    recall_top_distance = float((recall_stats or {}).get("avg_top_distance", 0.0) or 0.0)
+    if recall_total_queries >= 3 and recall_none_rate >= recall_none_threshold:
+        recall_alerts.append(
+            _make_alert(
+                kind="conversation_recall",
+                severity="critical" if recall_none_rate >= 0.35 else "warn",
+                error_class="orchestration",
+                target="conversation_recall",
+                message=f"Recall none_rate {recall_none_rate:.2f}",
+                slo="conversation_recall",
+                value=recall_none_rate,
+            )
+        )
+    if recall_total_queries >= 3 and recall_summary_rate >= recall_summary_threshold:
+        recall_alerts.append(
+            _make_alert(
+                kind="conversation_recall",
+                severity="warn",
+                error_class="orchestration",
+                target="conversation_recall",
+                message=f"Recall summary_fallback {recall_summary_rate:.2f}",
+                slo="conversation_recall",
+                value=recall_summary_rate,
+            )
+        )
+    if recall_total_queries >= 3 and recall_top_distance >= recall_distance_threshold:
+        recall_alerts.append(
+            _make_alert(
+                kind="conversation_recall",
+                severity="warn",
+                error_class="routing",
+                target="conversation_recall",
+                message=f"Recall avg distance {recall_top_distance:.2f}",
+                slo="conversation_recall",
+                value=recall_top_distance,
+            )
+        )
+
     stabilization_gate = evaluate_self_stabilization_gate(self_healing or {})
     self_healing_alerts: List[Dict[str, Any]] = []
     if stabilization_gate.get("state") == "blocked":
@@ -416,19 +462,20 @@ def build_ops_observability_summary(
             )
         )
 
-    alerts = (
+    all_alerts = (
         service_alerts
         + provider_state_alerts
         + provider_latency_alerts
         + budget_alerts
         + self_healing_alerts
+        + recall_alerts
         + tool_failure_alerts
         + slow_tool_alerts
         + routing_alerts
         + llm_alerts
     )
     alerts = sorted(
-        alerts,
+        all_alerts,
         key=lambda alert: (
             _severity_rank(str(alert.get("severity", "warn"))),
             _error_class_rank(str(alert.get("error_class", "reliability"))),
@@ -437,11 +484,11 @@ def build_ops_observability_summary(
         ),
     )[:safe_limit]
 
-    critical_alerts = sum(1 for alert in alerts if alert.get("severity") == "critical")
-    warnings = sum(1 for alert in alerts if alert.get("severity") != "critical")
+    critical_alerts = sum(1 for alert in all_alerts if alert.get("severity") == "critical")
+    warnings = sum(1 for alert in all_alerts if alert.get("severity") != "critical")
     failing_services = len(service_alerts)
     unhealthy_providers = len(provider_state_alerts)
-    error_classes = _count_by_error_class(alerts)
+    error_classes = _count_by_error_class(all_alerts)
 
     state = classify_ops_state(
         failing_services=failing_services,
@@ -451,7 +498,7 @@ def build_ops_observability_summary(
     )
 
     top_outliers = sorted(
-        alerts,
+        all_alerts,
         key=lambda alert: (
             _severity_rank(str(alert.get("severity", "warn"))),
             -float(alert.get("value", 0.0) or 0.0),
@@ -479,10 +526,12 @@ def build_ops_observability_summary(
         "alerts": alerts,
         "top_tool_failures": tool_failure_alerts[:safe_limit],
         "top_routing_risks": routing_alerts[:safe_limit],
+        "top_recall_risks": recall_alerts[:safe_limit],
         "top_outliers": top_outliers,
         "error_classes": error_classes,
         "slo": slo,
         "llm_success_rate": llm_success_rate,
         "llm_avg_latency_ms": llm_avg_latency_ms,
+        "recall": recall_stats or {},
         "self_stabilization_gate": stabilization_gate,
     }

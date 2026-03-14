@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Tuple
 import httpx
 
 from agent.providers import AgentModelConfig, ModelProvider, MultiProviderClient, get_provider_client
+from memory.qdrant_provider import normalize_qdrant_mode, resolve_qdrant_ready_url
 from orchestration.llm_budget_guard import get_public_budget_status
 from orchestration.ops_observability import build_ops_observability_summary
 from orchestration.ops_release_gate import evaluate_ops_release_gate
@@ -142,7 +143,10 @@ async def _fetch_local_json(client: httpx.AsyncClient, url: str) -> Dict[str, An
     try:
         response = await client.get(url, timeout=_LOCAL_TIMEOUT_S)
         latency_ms = round((time.perf_counter() - started) * 1000)
-        data = response.json()
+        try:
+            data = response.json()
+        except Exception:
+            data = {"status": (response.text or "").strip()}
         return {
             "ok": response.status_code == 200,
             "status_code": response.status_code,
@@ -183,6 +187,10 @@ def _providers_to_check() -> List[ModelProvider]:
         if provider_client.has_provider(provider) and provider not in used:
             used.append(provider)
     return used
+
+
+def _qdrant_server_mode_enabled() -> bool:
+    return normalize_qdrant_mode(os.getenv("QDRANT_MODE")) == "server"
 
 
 async def _check_provider_api(
@@ -430,6 +438,7 @@ async def collect_status_snapshot(mcp_base_url: str | None = None) -> Dict[str, 
     base_url = (mcp_base_url or _DEFAULT_MCP_BASE_URL).rstrip("/")
     provider_client = get_provider_client()
     providers = _providers_to_check()
+    qdrant_server_mode = _qdrant_server_mode_enabled()
 
     async with httpx.AsyncClient(trust_env=False) as client:
         local_tasks = {
@@ -437,6 +446,10 @@ async def collect_status_snapshot(mcp_base_url: str | None = None) -> Dict[str, 
             "agent_status": asyncio.create_task(_fetch_local_json(client, f"{base_url}/agent_status")),
             "autonomy_health": asyncio.create_task(_fetch_local_json(client, f"{base_url}/autonomy/health")),
         }
+        if qdrant_server_mode:
+            local_tasks["qdrant_ready"] = asyncio.create_task(
+                _fetch_local_json(client, resolve_qdrant_ready_url(os.getenv("QDRANT_URL")))
+            )
         provider_tasks = {
             provider.value: asyncio.create_task(
                 _check_provider_api(client, provider, provider_client=provider_client)
@@ -452,6 +465,15 @@ async def collect_status_snapshot(mcp_base_url: str | None = None) -> Dict[str, 
         "mcp": _service_state("timus-mcp.service"),
         "dispatcher": _service_state("timus-dispatcher.service"),
     }
+    if qdrant_server_mode:
+        qdrant_service = _service_state("qdrant.service")
+        qdrant_ready = local_results.get("qdrant_ready", {}) or {}
+        if qdrant_service.get("ok", False) and not bool(qdrant_ready.get("ok", False)):
+            qdrant_service = dict(qdrant_service)
+            qdrant_service["ok"] = False
+            qdrant_service["active"] = "degraded"
+            qdrant_service["detail"] = str(qdrant_ready.get("error", "") or "readyz failed")
+        services["qdrant"] = qdrant_service
 
     try:
         usage_summary = get_improvement_engine().get_llm_usage_summary(days=1, limit=3)
@@ -576,6 +598,14 @@ def format_status_message(snapshot: Dict[str, Any], summary_lines: List[str]) ->
         f"{_service_icon(services.get('dispatcher', {}).get('ok', False))} Dispatcher: {services.get('dispatcher', {}).get('active', 'unknown')}",
         f"{'🤔' if thinking else '⚪'} Thinking: {'aktiv' if thinking else 'inaktiv'}",
     ]
+    if "qdrant" in services:
+        qdrant_ready = local.get("qdrant_ready", {}) or {}
+        ready_suffix = ""
+        if qdrant_ready:
+            ready_suffix = f" | ready {qdrant_ready.get('status_code', '?')} | {qdrant_ready.get('latency_ms', '?')} ms"
+        core_lines.append(
+            f"{_service_icon(services.get('qdrant', {}).get('ok', False))} Qdrant: {services.get('qdrant', {}).get('active', 'unknown')}{ready_suffix}"
+        )
     if autonomy_payload:
         core_lines.append(
             "🛠️ Autonomy-Health: "
