@@ -69,6 +69,16 @@ _SELF_REMEDIATION_PATTERNS = (
     r"\bwas machst du jetzt dagegen\b",
 )
 
+_SELF_PRIORITY_PATTERNS = (
+    r"\bwas davon machst du zuerst\b",
+    r"\bwomit faengst du an\b",
+    r"\bwomit fängst du an\b",
+    r"\bwas zuerst\b",
+    r"\bwelchen schritt zuerst\b",
+    r"\bwie priorisierst du das\b",
+    r"\bwas machst du als erstes\b",
+)
+
 _YOUTUBE_GENERIC_PATTERNS = (
     r"^hey\s+timus[, ]*",
     r"^herr\s+thimus[, ]*",
@@ -295,6 +305,15 @@ class ExecutorAgent(BaseAgent):
             return False
         return any(re.search(pattern, normalized) for pattern in _SELF_REMEDIATION_PATTERNS)
 
+    @staticmethod
+    def _is_self_priority_query(task: str) -> bool:
+        normalized = str(task or "").strip().lower()
+        if not normalized:
+            return False
+        if len(normalized.split()) > 20:
+            return False
+        return any(re.search(pattern, normalized) for pattern in _SELF_PRIORITY_PATTERNS)
+
     @classmethod
     def _format_ops_self_status(cls, ops: dict[str, Any]) -> str:
         state = str(ops.get("state") or "unknown").strip().lower()
@@ -365,6 +384,45 @@ class ExecutorAgent(BaseAgent):
         for action in actions[:4]:
             lines.append(f"- {action}")
         return "\n".join(lines)
+
+    @classmethod
+    def _format_ops_priority(cls, ops: dict[str, Any]) -> str:
+        alerts = ops.get("alerts") or []
+        if not isinstance(alerts, list):
+            alerts = []
+        messages = [
+            str(alert.get("message") or "").strip().lower()
+            for alert in alerts
+            if isinstance(alert, dict) and str(alert.get("message") or "").strip()
+        ]
+
+        first_step = "Zuerst die auffaelligste Warnung isolieren und dann den naechsten Engpass nachziehen."
+        reason = "Das reduziert das akute Risiko am schnellsten."
+
+        if any("routing visual" in message for message in messages):
+            first_step = (
+                "Zuerst den Visual-Pfad haerten und vage Folgefragen strikt aus dem Screen-/UI-Pfad heraushalten."
+            )
+            reason = "Der Visual-Routing-Fehler ist aktuell der kritischste und fuehrt direkt in Absturzpfade."
+        elif any("routing research" in message for message in messages):
+            first_step = (
+                "Zuerst leichte Recherchefaelle aus Deep-Research herausziehen und im executor deterministisch beantworten."
+            )
+            reason = "Damit sinken Last, Latenz und Fehlrouting gleichzeitig."
+        elif int(ops.get("failing_services") or 0) > 0:
+            first_step = "Zuerst die betroffenen Services stabilisieren und Health-Checks enger auswerten."
+            reason = "Wenn Services wackeln, bringt Optimierung auf höherer Ebene wenig."
+        elif int(ops.get("unhealthy_providers") or 0) > 0:
+            first_step = "Zuerst den instabilsten Modellpfad auf einen robusteren Provider umlegen."
+            reason = "Ein instabiler Provider zieht sonst weitere Fehlerketten nach sich."
+
+        return "\n".join(
+            [
+                "Als Erstes wuerde ich das hier angehen:",
+                f"- {first_step}",
+                f"- Warum zuerst: {reason}",
+            ]
+        )
 
     @staticmethod
     def _infer_youtube_search_query(user_task: str) -> str:
@@ -615,6 +673,15 @@ class ExecutorAgent(BaseAgent):
         payload = self._tool_payload(ops_result)
         return self._format_ops_remediation(payload)
 
+    async def _run_self_priority_probe(self) -> str:
+        ops_result = await self._call_tool("get_ops_observability", {"days": 7, "limit": 4})
+        if isinstance(ops_result, dict) and ops_result.get("error"):
+            return (
+                f"Ich kann meine Priorisierung gerade nicht sauber ableiten: {ops_result['error']}"
+            )
+        payload = self._tool_payload(ops_result)
+        return self._format_ops_priority(payload)
+
     async def run(self, task: str) -> str:
         handoff = parse_delegation_handoff(task)
         plain_task = self._recover_user_query(task)
@@ -626,6 +693,8 @@ class ExecutorAgent(BaseAgent):
             return await self._run_self_status_probe()
         if not handoff and self._is_self_remediation_query(plain_task):
             return await self._run_self_remediation_probe()
+        if not handoff and self._is_self_priority_query(plain_task):
+            return await self._run_self_priority_probe()
         if not handoff and self._is_smalltalk_query(plain_task):
             return self._smalltalk_response(plain_task)
         effective_task = handoff.goal if handoff and handoff.goal else task

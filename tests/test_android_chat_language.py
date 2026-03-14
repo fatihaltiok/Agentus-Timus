@@ -12,8 +12,10 @@ class _FakeRequest:
         return self._payload
 
 
-async def test_canvas_chat_honors_response_language_german(monkeypatch):
+async def test_canvas_chat_honors_response_language_german(monkeypatch, tmp_path):
     captured = {}
+    mcp_server._chat_history.clear()
+    monkeypatch.setenv("TIMUS_SESSION_STORAGE_ROOT", str(tmp_path))
 
     async def fake_build_tools_description():
         return "tools"
@@ -55,9 +57,10 @@ async def test_canvas_chat_honors_response_language_german(monkeypatch):
     assert "Sag hallo" in captured["run_query"]
 
 
-async def test_canvas_chat_routes_followup_to_same_executor_lane(monkeypatch):
+async def test_canvas_chat_routes_followup_to_same_executor_lane(monkeypatch, tmp_path):
     captured = {"decision_queries": [], "run_queries": []}
     mcp_server._chat_history.clear()
+    monkeypatch.setenv("TIMUS_SESSION_STORAGE_ROOT", str(tmp_path))
 
     async def fake_build_tools_description():
         return "tools"
@@ -112,6 +115,9 @@ async def test_canvas_chat_routes_followup_to_same_executor_lane(monkeypatch):
     assert "last_agent: executor" in followup_query
     assert "last_user: Was hast du fuer Probleme?" in followup_query
     assert "last_assistant: Gerade sehe ich diese Baustellen bei mir." in followup_query
+    assert "recent_agents: executor" in followup_query
+    assert "recent_user_queries:" in followup_query
+    assert "recent_assistant_replies:" in followup_query
     assert "# CURRENT USER QUERY" in followup_query
     assert "und was kannst du dagegen tun" in followup_query
 
@@ -125,3 +131,38 @@ def test_followup_resolver_does_not_keep_visual_without_visual_intent():
 
     assert mcp_server._resolve_followup_agent("und was jetzt", capsule) == "meta"
     assert mcp_server._resolve_followup_agent("und klick den button", capsule) == "visual"
+
+
+def test_session_capsule_rolls_old_entries_into_summary(tmp_path, monkeypatch):
+    mcp_server._chat_history.clear()
+    monkeypatch.setenv("TIMUS_SESSION_STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setenv("TIMUS_SESSION_ENTRY_LIMIT", "4")
+    monkeypatch.setenv("TIMUS_SESSION_SUMMARY_CHAR_LIMIT", "800")
+
+    session_id = "capsule_rollup"
+    for idx in range(8):
+        role = "user" if idx % 2 == 0 else "assistant"
+        agent = "executor" if role == "assistant" else ""
+        mcp_server._append_chat_entry(
+            session_id=session_id,
+            role=role,
+            text=f"Nachricht {idx}",
+            ts=f"2026-03-14T19:5{idx}:00Z",
+            agent=agent,
+        )
+
+    capsule = mcp_server._load_session_capsule(session_id)
+    assert capsule["session_id"] == session_id
+    assert len(capsule["entries"]) <= 4
+    assert "Nachricht 0" in capsule["summary"]
+    assert "Nachricht 1" in capsule["summary"]
+
+    followup_capsule = mcp_server._build_followup_capsule(session_id)
+    assert followup_capsule["last_agent"] == "executor"
+    assert "Nachricht 6" in followup_capsule["recent_user_queries"][-1]
+    assert "Nachricht 7" in followup_capsule["recent_assistant_replies"][-1]
+    assert "Nachricht 0" in followup_capsule["session_summary"]
+
+    augmented = mcp_server._augment_query_with_followup_capsule("und was jetzt", followup_capsule)
+    assert "session_summary:" in augmented
+    assert "recent_user_queries:" in augmented

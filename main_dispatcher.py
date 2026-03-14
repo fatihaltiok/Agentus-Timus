@@ -1351,6 +1351,16 @@ SELF_REMEDIATION_KEYWORDS = [
     "was machst du jetzt dagegen",
 ]
 
+SELF_PRIORITY_KEYWORDS = [
+    "was davon machst du zuerst",
+    "womit faengst du an",
+    "womit fängst du an",
+    "was zuerst",
+    "welchen schritt zuerst",
+    "wie priorisierst du das",
+    "was machst du als erstes",
+]
+
 
 def _structure_task(task: str, url: str) -> List[str]:
     """Legacy wrapper fuer den extrahierten Browser-Workflow-Planer."""
@@ -1369,6 +1379,8 @@ def quick_intent_check(query: str) -> Optional[str]:
     if any(keyword in query_lower for keyword in SELF_STATUS_KEYWORDS):
         return "executor"
     if any(keyword in query_lower for keyword in SELF_REMEDIATION_KEYWORDS):
+        return "executor"
+    if any(keyword in query_lower for keyword in SELF_PRIORITY_KEYWORDS):
         return "executor"
     if query_lower.strip() == "sag du es mir":
         return "executor"

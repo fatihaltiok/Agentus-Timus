@@ -132,6 +132,7 @@ _location_snapshot: dict | None = None
 _location_snapshot_lock = threading.Lock()
 _SHUTDOWN_STEP_TIMEOUT_S = float(os.getenv("TIMUS_SHUTDOWN_STEP_TIMEOUT", "6"))
 _CONSOLE_FILE_DIRS = ("results", "data/uploads")
+_CHAT_HISTORY_LIMIT = int(os.getenv("TIMUS_CHAT_HISTORY_LIMIT", "200"))
 
 _FOLLOWUP_PATTERNS = (
     r"^\s*und\b",
@@ -158,6 +159,104 @@ _VISUAL_INTENT_TOKENS = (
     "seite",
     "fenster",
 )
+
+
+def _session_storage_root() -> Path:
+    raw = str(os.getenv("TIMUS_SESSION_STORAGE_ROOT") or "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    return project_root / "data" / "session_capsules"
+
+
+def _session_entry_limit() -> int:
+    raw = str(os.getenv("TIMUS_SESSION_ENTRY_LIMIT") or "24").strip()
+    try:
+        return max(4, min(int(raw), 200))
+    except (TypeError, ValueError):
+        return 24
+
+
+def _session_summary_char_limit() -> int:
+    raw = str(os.getenv("TIMUS_SESSION_SUMMARY_CHAR_LIMIT") or "4000").strip()
+    try:
+        return max(400, min(int(raw), 24000))
+    except (TypeError, ValueError):
+        return 4000
+
+
+def _session_capsule_path(session_id: str) -> Path:
+    safe = re.sub(r"[^a-zA-Z0-9_.-]", "_", str(session_id or "default")).strip("._")
+    if not safe:
+        safe = "default"
+    return _session_storage_root() / f"{safe}.json"
+
+
+def _load_session_capsule(session_id: str) -> dict:
+    path = _session_capsule_path(session_id)
+    if not path.exists():
+        return {"session_id": session_id, "summary": "", "entries": []}
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = _json.load(handle)
+        if not isinstance(payload, dict):
+            raise ValueError("invalid capsule payload")
+        entries = payload.get("entries")
+        if not isinstance(entries, list):
+            entries = []
+        payload["entries"] = [entry for entry in entries if isinstance(entry, dict)]
+        payload["summary"] = str(payload.get("summary") or "").strip()
+        payload["session_id"] = str(payload.get("session_id") or session_id)
+        return payload
+    except Exception as exc:
+        log.warning(f"⚠️ Session-Capsule konnte nicht geladen werden ({session_id}): {exc}")
+        return {"session_id": session_id, "summary": "", "entries": []}
+
+
+def _trim_summary_text(summary: str) -> str:
+    text = str(summary or "").strip()
+    if len(text) <= _session_summary_char_limit():
+        return text
+    return text[-_session_summary_char_limit():].lstrip()
+
+
+def _entry_digest(entry: dict) -> str:
+    role = str(entry.get("role") or "").strip() or "unknown"
+    agent = str(entry.get("agent") or "").strip()
+    text = str(entry.get("text") or "").strip()
+    if not text:
+        return ""
+    label = f"{role}:{agent}" if agent and role == "assistant" else role
+    return f"- {label}: {text[:180]}"
+
+
+def _merge_session_summary(existing_summary: str, folded_entries: list[dict]) -> str:
+    parts: list[str] = []
+    current = str(existing_summary or "").strip()
+    if current:
+        parts.append(current)
+    parts.extend(line for entry in folded_entries if (line := _entry_digest(entry)))
+    return _trim_summary_text("\n".join(parts))
+
+
+def _store_session_capsule(capsule: dict) -> None:
+    path = _session_capsule_path(str(capsule.get("session_id") or "default"))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        _json.dump(capsule, handle, ensure_ascii=False, indent=2)
+
+
+def _append_session_capsule_entry(session_id: str, entry: dict) -> None:
+    capsule = _load_session_capsule(session_id)
+    entries = [item for item in capsule.get("entries", []) if isinstance(item, dict)]
+    entries.append(entry)
+    overflow = len(entries) - _session_entry_limit()
+    if overflow > 0:
+        capsule["summary"] = _merge_session_summary(capsule.get("summary", ""), entries[:overflow])
+        entries = entries[overflow:]
+    capsule["session_id"] = session_id
+    capsule["entries"] = entries
+    capsule["last_updated"] = str(entry.get("ts") or datetime.utcnow().isoformat() + "Z")
+    _store_session_capsule(capsule)
 
 
 def _broadcast_sse(event: dict) -> None:
@@ -190,13 +289,18 @@ def _append_chat_entry(*, session_id: str, role: str, text: str, ts: str, agent:
         entry["agent"] = agent
     with _chat_lock:
         _chat_history.append(entry)
-        if len(_chat_history) > 200:
-            _chat_history[:] = _chat_history[-200:]
+        if len(_chat_history) > _CHAT_HISTORY_LIMIT:
+            _chat_history[:] = _chat_history[-_CHAT_HISTORY_LIMIT:]
+    _append_session_capsule_entry(session_id, entry)
 
 
 def _get_session_chat_entries(session_id: str, *, limit: int = 8) -> list[dict]:
     if not session_id:
         return []
+    capsule = _load_session_capsule(session_id)
+    persisted_entries = capsule.get("entries") or []
+    if isinstance(persisted_entries, list) and persisted_entries:
+        return [entry for entry in persisted_entries if isinstance(entry, dict)][-limit:]
     with _chat_lock:
         entries = [entry for entry in _chat_history if entry.get("session_id") == session_id]
     return entries[-limit:]
@@ -211,26 +315,46 @@ def _is_followup_query(query: str) -> bool:
     return any(re.search(pattern, normalized) for pattern in _FOLLOWUP_PATTERNS)
 
 
-def _build_followup_capsule(session_id: str) -> dict[str, str]:
-    entries = _get_session_chat_entries(session_id, limit=8)
+def _build_followup_capsule(session_id: str) -> dict:
+    capsule = _load_session_capsule(session_id)
+    entries = _get_session_chat_entries(session_id, limit=12)
     last_user = ""
     last_assistant = ""
     last_agent = ""
+    recent_user_queries: list[str] = []
+    recent_assistant_replies: list[str] = []
+    recent_agents: list[str] = []
 
     for entry in reversed(entries):
         role = str(entry.get("role") or "")
         if not last_assistant and role == "assistant":
             last_assistant = str(entry.get("text") or "").strip()
             last_agent = str(entry.get("agent") or "").strip()
-            continue
-        if last_assistant and role == "user":
+        elif last_assistant and role == "user":
             last_user = str(entry.get("text") or "").strip()
             break
+
+    for entry in entries:
+        role = str(entry.get("role") or "").strip()
+        text = str(entry.get("text") or "").strip()
+        if not text:
+            continue
+        if role == "user":
+            recent_user_queries.append(text[:180])
+        elif role == "assistant":
+            recent_assistant_replies.append(text[:220])
+            agent = str(entry.get("agent") or "").strip()
+            if agent:
+                recent_agents.append(agent)
 
     return {
         "last_user": last_user,
         "last_assistant": last_assistant,
         "last_agent": last_agent,
+        "session_summary": str(capsule.get("summary") or "").strip(),
+        "recent_user_queries": recent_user_queries[-3:],
+        "recent_assistant_replies": recent_assistant_replies[-2:],
+        "recent_agents": recent_agents[-3:],
     }
 
 
@@ -252,13 +376,24 @@ def _resolve_followup_agent(query: str, capsule: dict[str, str]) -> str:
     return last_agent if last_agent == "meta" else ""
 
 
-def _augment_query_with_followup_capsule(query: str, capsule: dict[str, str]) -> str:
+def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
     if not _is_followup_query(query):
         return query
     last_agent = str(capsule.get("last_agent") or "").strip()
     last_user = str(capsule.get("last_user") or "").strip()
     last_assistant = str(capsule.get("last_assistant") or "").strip()
-    if not (last_agent or last_user or last_assistant):
+    session_summary = str(capsule.get("session_summary") or "").strip()
+    recent_user_queries = capsule.get("recent_user_queries") or []
+    recent_assistant_replies = capsule.get("recent_assistant_replies") or []
+    recent_agents = capsule.get("recent_agents") or []
+    if not (
+        last_agent
+        or last_user
+        or last_assistant
+        or session_summary
+        or recent_user_queries
+        or recent_assistant_replies
+    ):
         return query
     parts = ["# FOLLOW-UP CONTEXT"]
     if last_agent:
@@ -267,6 +402,17 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict[str, str]) ->
         parts.append(f"last_user: {last_user[:300]}")
     if last_assistant:
         parts.append(f"last_assistant: {last_assistant[:500]}")
+    if session_summary:
+        parts.append(f"session_summary: {session_summary[:800]}")
+    if recent_agents:
+        parts.append("recent_agents: " + " | ".join(str(agent) for agent in recent_agents[:3]))
+    if recent_user_queries:
+        parts.append("recent_user_queries: " + " || ".join(str(text) for text in recent_user_queries[:3]))
+    if recent_assistant_replies:
+        parts.append(
+            "recent_assistant_replies: "
+            + " || ".join(str(text) for text in recent_assistant_replies[:2])
+        )
     parts.extend(["", "# CURRENT USER QUERY", query])
     return "\n".join(parts)
 
