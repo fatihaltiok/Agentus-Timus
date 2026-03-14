@@ -59,6 +59,16 @@ _SELF_STATUS_PATTERNS = (
     r"\bsag du es mir\b",
 )
 
+_SELF_REMEDIATION_PATTERNS = (
+    r"\bwas kannst du dagegen tun\b",
+    r"\bund was kannst du dagegen tun\b",
+    r"\bwas tust du dagegen\b",
+    r"\bwie behebst du das\b",
+    r"\bwie willst du das beheben\b",
+    r"\bund was jetzt\b",
+    r"\bwas machst du jetzt dagegen\b",
+)
+
 _YOUTUBE_GENERIC_PATTERNS = (
     r"^hey\s+timus[, ]*",
     r"^herr\s+thimus[, ]*",
@@ -146,6 +156,15 @@ class ExecutorAgent(BaseAgent):
         text = str(task_text or "").strip()
         if not text:
             return ""
+        current_query_match = re.search(
+            r"#\s*current user query\s*(.+)$",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if current_query_match:
+            recovered = current_query_match.group(1).strip()
+            if recovered:
+                return recovered
         match = re.search(r"nutzeranfrage:\s*(.+)$", text, flags=re.IGNORECASE | re.DOTALL)
         if match:
             recovered = match.group(1).strip()
@@ -267,6 +286,15 @@ class ExecutorAgent(BaseAgent):
             return False
         return any(re.search(pattern, normalized) for pattern in _SELF_STATUS_PATTERNS)
 
+    @staticmethod
+    def _is_self_remediation_query(task: str) -> bool:
+        normalized = str(task or "").strip().lower()
+        if not normalized:
+            return False
+        if len(normalized.split()) > 20:
+            return False
+        return any(re.search(pattern, normalized) for pattern in _SELF_REMEDIATION_PATTERNS)
+
     @classmethod
     def _format_ops_self_status(cls, ops: dict[str, Any]) -> str:
         state = str(ops.get("state") or "unknown").strip().lower()
@@ -300,6 +328,42 @@ class ExecutorAgent(BaseAgent):
             severity = str(alert.get("severity") or "warn").strip()
             if message:
                 lines.append(f"- {severity}: {message}")
+        return "\n".join(lines)
+
+    @classmethod
+    def _format_ops_remediation(cls, ops: dict[str, Any]) -> str:
+        alerts = ops.get("alerts") or []
+        if not isinstance(alerts, list):
+            alerts = []
+        messages = [
+            str(alert.get("message") or "").strip().lower()
+            for alert in alerts
+            if isinstance(alert, dict) and str(alert.get("message") or "").strip()
+        ]
+
+        actions: list[str] = []
+        if any("routing visual" in message for message in messages):
+            actions.append(
+                "Visual strenger nur fuer echte UI-Aufgaben verwenden und lockere Text-/Statusfragen davor abfangen."
+            )
+        if any("routing research" in message for message in messages):
+            actions.append(
+                "Leichte Recherchefaelle im executor halten und Research erst bei echter Tiefe oder Quellenpflicht zuschalten."
+            )
+        if int(ops.get("failing_services") or 0) > 0:
+            actions.append(
+                "Die betroffenen Services gezielt beobachten, Health-Checks schaerfer auswerten und Absturzpfade isolieren."
+            )
+        if int(ops.get("unhealthy_providers") or 0) > 0:
+            actions.append(
+                "Instabile Modellpfade auf stabilere Provider umlegen und Fallbacks frueher aktivieren."
+            )
+        if not actions:
+            actions.append("Die aktuellen Warnungen weiter beobachten und die auffaelligen Routing-Pfade gezielt haerten.")
+
+        lines = ["Dagegen kann ich im Moment konkret Folgendes tun:"]
+        for action in actions[:4]:
+            lines.append(f"- {action}")
         return "\n".join(lines)
 
     @staticmethod
@@ -542,6 +606,15 @@ class ExecutorAgent(BaseAgent):
         payload = self._tool_payload(ops_result)
         return self._format_ops_self_status(payload)
 
+    async def _run_self_remediation_probe(self) -> str:
+        ops_result = await self._call_tool("get_ops_observability", {"days": 7, "limit": 4})
+        if isinstance(ops_result, dict) and ops_result.get("error"):
+            return (
+                f"Ich kann meine Gegenmassnahmen gerade nicht sauber ableiten: {ops_result['error']}"
+            )
+        payload = self._tool_payload(ops_result)
+        return self._format_ops_remediation(payload)
+
     async def run(self, task: str) -> str:
         handoff = parse_delegation_handoff(task)
         plain_task = self._recover_user_query(task)
@@ -551,6 +624,8 @@ class ExecutorAgent(BaseAgent):
             return await self._run_youtube_light_research(handoff)
         if not handoff and self._is_self_status_query(plain_task):
             return await self._run_self_status_probe()
+        if not handoff and self._is_self_remediation_query(plain_task):
+            return await self._run_self_remediation_probe()
         if not handoff and self._is_smalltalk_query(plain_task):
             return self._smalltalk_response(plain_task)
         effective_task = handoff.goal if handoff and handoff.goal else task

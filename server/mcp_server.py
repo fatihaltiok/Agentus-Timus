@@ -133,6 +133,32 @@ _location_snapshot_lock = threading.Lock()
 _SHUTDOWN_STEP_TIMEOUT_S = float(os.getenv("TIMUS_SHUTDOWN_STEP_TIMEOUT", "6"))
 _CONSOLE_FILE_DIRS = ("results", "data/uploads")
 
+_FOLLOWUP_PATTERNS = (
+    r"^\s*und\b",
+    r"\bdagegen\b",
+    r"\bdas\b",
+    r"\bdazu\b",
+    r"\bwas jetzt\b",
+    r"\bund was jetzt\b",
+    r"\bwie behebst du das\b",
+    r"\bwas kannst du dagegen tun\b",
+    r"\bsag du es mir\b",
+)
+
+_VISUAL_INTENT_TOKENS = (
+    "bildschirm",
+    "screen",
+    "sichtbar",
+    "klick",
+    "tippe",
+    "tippen",
+    "button",
+    "formular",
+    "browser",
+    "seite",
+    "fenster",
+)
+
 
 def _broadcast_sse(event: dict) -> None:
     """Sendet ein SSE-Event an alle verbundenen Browser-Clients."""
@@ -156,6 +182,93 @@ def _broadcast_sse(event: dict) -> None:
                 _sse_queues.remove(q)
             except ValueError:
                 pass
+
+
+def _append_chat_entry(*, session_id: str, role: str, text: str, ts: str, agent: str = "") -> None:
+    entry = {"session_id": session_id, "role": role, "text": text, "ts": ts}
+    if agent:
+        entry["agent"] = agent
+    with _chat_lock:
+        _chat_history.append(entry)
+        if len(_chat_history) > 200:
+            _chat_history[:] = _chat_history[-200:]
+
+
+def _get_session_chat_entries(session_id: str, *, limit: int = 8) -> list[dict]:
+    if not session_id:
+        return []
+    with _chat_lock:
+        entries = [entry for entry in _chat_history if entry.get("session_id") == session_id]
+    return entries[-limit:]
+
+
+def _is_followup_query(query: str) -> bool:
+    normalized = str(query or "").strip().lower()
+    if not normalized:
+        return False
+    if len(normalized.split()) > 18:
+        return False
+    return any(re.search(pattern, normalized) for pattern in _FOLLOWUP_PATTERNS)
+
+
+def _build_followup_capsule(session_id: str) -> dict[str, str]:
+    entries = _get_session_chat_entries(session_id, limit=8)
+    last_user = ""
+    last_assistant = ""
+    last_agent = ""
+
+    for entry in reversed(entries):
+        role = str(entry.get("role") or "")
+        if not last_assistant and role == "assistant":
+            last_assistant = str(entry.get("text") or "").strip()
+            last_agent = str(entry.get("agent") or "").strip()
+            continue
+        if last_assistant and role == "user":
+            last_user = str(entry.get("text") or "").strip()
+            break
+
+    return {
+        "last_user": last_user,
+        "last_assistant": last_assistant,
+        "last_agent": last_agent,
+    }
+
+
+def _resolve_followup_agent(query: str, capsule: dict[str, str]) -> str:
+    normalized = str(query or "").strip().lower()
+    if not _is_followup_query(normalized):
+        return ""
+    last_agent = str(capsule.get("last_agent") or "").strip().lower()
+    if not last_agent:
+        return ""
+    if last_agent == "executor":
+        return "executor"
+    if last_agent in {"system", "research", "communication", "document", "data"}:
+        return last_agent
+    if last_agent in {"visual", "visual_nemotron"}:
+        if any(token in normalized for token in _VISUAL_INTENT_TOKENS):
+            return last_agent
+        return "meta"
+    return last_agent if last_agent == "meta" else ""
+
+
+def _augment_query_with_followup_capsule(query: str, capsule: dict[str, str]) -> str:
+    if not _is_followup_query(query):
+        return query
+    last_agent = str(capsule.get("last_agent") or "").strip()
+    last_user = str(capsule.get("last_user") or "").strip()
+    last_assistant = str(capsule.get("last_assistant") or "").strip()
+    if not (last_agent or last_user or last_assistant):
+        return query
+    parts = ["# FOLLOW-UP CONTEXT"]
+    if last_agent:
+        parts.append(f"last_agent: {last_agent}")
+    if last_user:
+        parts.append(f"last_user: {last_user[:300]}")
+    if last_assistant:
+        parts.append(f"last_assistant: {last_assistant[:500]}")
+    parts.extend(["", "# CURRENT USER QUERY", query])
+    return "\n".join(parts)
 
 
 def _console_file_roots() -> list[Path]:
@@ -1569,10 +1682,11 @@ async def canvas_chat(request: Request):
     session_id = (body or {}).get("session_id") or f"canvas_{uuid.uuid4().hex[:8]}"
     ts = datetime.utcnow().isoformat() + "Z"
 
-    with _chat_lock:
-        _chat_history.append({"role": "user", "text": query, "ts": ts})
-        if len(_chat_history) > 200:
-            _chat_history[:] = _chat_history[-200:]
+    followup_capsule = _build_followup_capsule(session_id)
+    followup_agent = _resolve_followup_agent(query, followup_capsule)
+    dispatcher_query = _augment_query_with_followup_capsule(query, followup_capsule)
+
+    _append_chat_entry(session_id=session_id, role="user", text=query, ts=ts)
 
     _broadcast_sse({"type": "chat_user", "text": query, "ts": ts})
 
@@ -1583,15 +1697,15 @@ async def canvas_chat(request: Request):
         # Tool-Beschreibungen — identisch zu /get_tool_descriptions
         tools_desc = await _build_tools_description()
 
-        agent = await get_agent_decision(query, session_id=session_id)
+        agent = followup_agent or await get_agent_decision(dispatcher_query, session_id=session_id)
         _set_agent_status(agent, "thinking", query)
 
-        query_for_agent = query
+        query_for_agent = dispatcher_query
         if response_language in {"de", "deutsch", "german"} and agent not in {"visual", "visual_nemotron"}:
             query_for_agent = (
                 "Antworte ausschließlich auf Deutsch. "
                 "Nutze nur dann englische Fachbegriffe, wenn sie technisch nötig sind.\n\n"
-                f"Nutzeranfrage:\n{query}"
+                f"Nutzeranfrage:\n{dispatcher_query}"
             )
 
         result = await run_agent(
@@ -1605,10 +1719,13 @@ async def canvas_chat(request: Request):
         reply = str(result) if result else "(keine Antwort)"
         reply_ts = datetime.utcnow().isoformat() + "Z"
 
-        with _chat_lock:
-            _chat_history.append(
-                {"role": "assistant", "agent": agent, "text": reply, "ts": reply_ts}
-            )
+        _append_chat_entry(
+            session_id=session_id,
+            role="assistant",
+            agent=agent,
+            text=reply,
+            ts=reply_ts,
+        )
 
         _broadcast_sse({"type": "chat_reply", "agent": agent, "text": reply, "ts": reply_ts})
         return {"status": "success", "agent": agent, "reply": reply, "session_id": session_id}

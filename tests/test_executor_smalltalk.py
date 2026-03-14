@@ -102,3 +102,71 @@ async def test_executor_handles_prefixed_self_status_without_llm(monkeypatch):
     )
 
     assert "nichts Kritisches" in result
+
+
+@pytest.mark.asyncio
+async def test_executor_handles_self_remediation_without_llm(monkeypatch):
+    from agent.agents.executor import ExecutorAgent
+    from agent.base_agent import BaseAgent
+
+    async def _unexpected_run(self, task: str):
+        raise AssertionError("BaseAgent.run darf fuer Self-Remediation nicht aufgerufen werden")
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        assert method == "get_ops_observability"
+        return {
+            "status": "ok",
+            "state": "critical",
+            "critical_alerts": 2,
+            "warnings": 2,
+            "failing_services": 0,
+            "unhealthy_providers": 0,
+            "alerts": [
+                {"severity": "critical", "message": "Routing visual: success 0.40"},
+                {"severity": "critical", "message": "Routing research: success 0.29"},
+            ],
+        }
+
+    monkeypatch.setattr(BaseAgent, "run", _unexpected_run)
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = ExecutorAgent.__new__(ExecutorAgent)
+    result = await ExecutorAgent.run(agent, "und was kannst du dagegen tun")
+
+    assert "Dagegen kann ich" in result
+    assert "Visual strenger" in result
+    assert "Leichte Recherchefaelle" in result
+
+
+@pytest.mark.asyncio
+async def test_executor_recovers_current_query_from_followup_capsule(monkeypatch):
+    from agent.agents.executor import ExecutorAgent
+    from agent.base_agent import BaseAgent
+
+    async def _unexpected_run(self, task: str):
+        raise AssertionError("BaseAgent.run darf fuer Follow-up-Capsules nicht aufgerufen werden")
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        assert method == "get_ops_observability"
+        return {
+            "status": "ok",
+            "state": "warning",
+            "critical_alerts": 0,
+            "warnings": 1,
+            "failing_services": 0,
+            "unhealthy_providers": 0,
+            "alerts": [],
+        }
+
+    monkeypatch.setattr(BaseAgent, "run", _unexpected_run)
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = ExecutorAgent.__new__(ExecutorAgent)
+    result = await ExecutorAgent.run(
+        agent,
+        "# FOLLOW-UP CONTEXT\nlast_agent: executor\nlast_user: Was hast du fuer Probleme?\n"
+        "last_assistant: Gerade sehe ich diese Baustellen bei mir.\n\n"
+        "# CURRENT USER QUERY\nund was kannst du dagegen tun",
+    )
+
+    assert "Dagegen kann ich" in result

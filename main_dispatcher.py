@@ -1341,6 +1341,16 @@ SELF_STATUS_KEYWORDS = [
     "wo hakt es",
 ]
 
+SELF_REMEDIATION_KEYWORDS = [
+    "was kannst du dagegen tun",
+    "und was kannst du dagegen tun",
+    "was tust du dagegen",
+    "wie behebst du das",
+    "wie willst du das beheben",
+    "und was jetzt",
+    "was machst du jetzt dagegen",
+]
+
 
 def _structure_task(task: str, url: str) -> List[str]:
     """Legacy wrapper fuer den extrahierten Browser-Workflow-Planer."""
@@ -1357,6 +1367,8 @@ def quick_intent_check(query: str) -> Optional[str]:
     orchestration_policy = evaluate_query_orchestration(query_lower)
 
     if any(keyword in query_lower for keyword in SELF_STATUS_KEYWORDS):
+        return "executor"
+    if any(keyword in query_lower for keyword in SELF_REMEDIATION_KEYWORDS):
         return "executor"
     if query_lower.strip() == "sag du es mir":
         return "executor"

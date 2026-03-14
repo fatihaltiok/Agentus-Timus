@@ -11,3 +11,4 @@ def test_quick_intent_routes_self_status_to_executor():
 
     assert main_dispatcher.quick_intent_check("Was hast du fuer Probleme?") == "executor"
     assert main_dispatcher.quick_intent_check("sag du es mir") == "executor"
+    assert main_dispatcher.quick_intent_check("und was kannst du dagegen tun") == "executor"
