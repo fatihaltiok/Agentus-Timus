@@ -1942,6 +1942,24 @@ async def location_resolve_endpoint(request: Request):
         return JSONResponse(status_code=400, content={"status": "error", "error": f"invalid_location_payload: {e}"})
 
 
+@app.get("/location/nearby", summary="Orte in der Naehe des aktuellen Mobil-Standorts suchen")
+async def location_nearby_endpoint(q: str, max_results: int = 5):
+    """Sucht lokale Orte rund um den zuletzt synchronisierten Mobil-Standort via Google Maps / SerpApi."""
+    safe_query = str(q or "").strip()
+    if not safe_query:
+        return JSONResponse(status_code=400, content={"status": "error", "error": "missing_query"})
+    try:
+        from tools.search_tool.tool import search_google_maps_places
+
+        result = await search_google_maps_places(
+            query=safe_query,
+            max_results=max_results,
+        )
+        return {"status": "success", **result}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
 @app.get("/voice/status", summary="Voice-System Status")
 async def voice_status_endpoint():
     """Gibt den aktuellen Status des Voice-Systems zurück."""

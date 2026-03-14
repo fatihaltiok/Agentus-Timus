@@ -88,3 +88,52 @@ def test_self_selected_strategy_classifies_browser_failure_as_non_browser_fallba
     assert signal["prefer_non_browser_fallback"] is True
     assert signal["prefer_recipe_id"] == "youtube_research_only"
     assert signal["suggested_reaction"] == "switch_to_non_browser_fallback"
+
+
+def test_self_selected_strategy_prefers_location_context_then_maps():
+    classification = {
+        "task_type": "location_local_search",
+        "recommended_recipe_id": "location_local_search",
+        "recommended_agent_chain": ["meta", "executor"],
+    }
+
+    task_profile = build_task_profile(
+        "Was ist hier in meiner Nähe gerade offen?",
+        classification,
+    )
+    affordances = select_tool_affordances(classification, task_profile)
+    strategy = select_strategy(
+        "Was ist hier in meiner Nähe gerade offen?",
+        classification,
+        task_profile,
+        affordances,
+    )
+
+    assert task_profile["intent"] == "local_lookup"
+    assert task_profile["desired_depth"] == "light"
+    assert any(item["name"] == "search_google_maps_places" for item in affordances)
+    assert strategy["strategy_id"] == "location_context_then_maps"
+    assert "get_current_location_context" in strategy["preferred_tools"]
+    assert "search_google_maps_places" in strategy["preferred_tools"]
+
+
+def test_self_selected_strategy_classifies_missing_device_location():
+    handoff = {
+        "task_type": "location_local_search",
+        "site_kind": "maps",
+        "selected_strategy": {
+            "fallback_recipe_id": "",
+            "error_strategy": "switch_tool_then_degrade",
+        },
+    }
+    failed_stage = {
+        "stage_id": "location_context_scan",
+        "agent": "executor",
+        "error": "Kein aktueller Mobil-Standort verfuegbar.",
+    }
+
+    signal = classify_strategy_error(handoff=handoff, failed_stage=failed_stage)
+
+    assert signal["error_class"] == "missing_device_location"
+    assert signal["suggested_reaction"] == "degrade_or_request_location_refresh"
+    assert signal["degrade_ok"] is True

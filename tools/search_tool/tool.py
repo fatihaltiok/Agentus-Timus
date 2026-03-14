@@ -13,10 +13,13 @@ import json
 import logging
 import asyncio
 import base64
+import math
 import time
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import List, Dict, Any, Optional
+from urllib.parse import quote_plus
 
 import requests
 from dotenv import load_dotenv
@@ -40,6 +43,8 @@ SERPAPI_BASE_URL = "https://serpapi.com/search.json"
 DEFAULT_API_TIMEOUT = 45
 DEFAULT_STANDARD_TIMEOUT = 90
 DEFAULT_STANDARD_POLL_INTERVAL = 2.0
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_RUNTIME_LOCATION_SNAPSHOT_PATH = _PROJECT_ROOT / "data" / "runtime_location_snapshot.json"
 
 # Endpunkt-Mapping
 API_ENDPOINTS = {
@@ -597,6 +602,131 @@ async def search_scholar(
     )
 
 
+@tool(
+    name="get_current_location_context",
+    description=(
+        "Gibt den zuletzt vom Handy synchronisierten GPS-Standort zurueck. "
+        "Nuetzlich fuer Fragen wie 'wo bin ich' oder als Basis fuer lokale Maps-Suche."
+    ),
+    parameters=[],
+    capabilities=["location", "maps", "context"],
+    category=C.SEARCH,
+)
+async def get_current_location_context() -> dict:
+    snapshot = _load_runtime_location_snapshot()
+    if not snapshot:
+        return {
+            "has_location": False,
+            "location": None,
+            "source_provider": "runtime_snapshot",
+        }
+    return {
+        "has_location": True,
+        "location": snapshot,
+        "source_provider": "runtime_snapshot",
+    }
+
+
+@tool(
+    name="search_google_maps_places",
+    description=(
+        "Durchsucht Google Maps via SerpApi in der Naehe des zuletzt synchronisierten Handy-Standorts "
+        "oder expliziter Koordinaten und liefert lokale Orte normalisiert zurueck."
+    ),
+    parameters=[
+        P("query", "string", "Orts- oder Kategorienanfrage, z.B. 'Cafe', 'Apotheke', 'Supermarkt'"),
+        P("max_results", "integer", "Maximale Anzahl Orte", required=False, default=5),
+        P("latitude", "number", "Explizite Breite; wenn leer, wird der aktuelle Handy-Standort genutzt", required=False, default=None),
+        P("longitude", "number", "Explizite Laenge; wenn leer, wird der aktuelle Handy-Standort genutzt", required=False, default=None),
+        P("zoom", "integer", "Google-Maps-Zoom fuer lokalen Kontext", required=False, default=15),
+        P("language_code", "string", "Sprachcode fuer lokalisierte Ergebnisse", required=False, default="de"),
+    ],
+    capabilities=["search", "maps", "location"],
+    category=C.SEARCH,
+)
+async def search_google_maps_places(
+    query: str,
+    max_results: int = 5,
+    latitude: float | None = None,
+    longitude: float | None = None,
+    zoom: int = 15,
+    language_code: str = "de",
+) -> dict:
+    if not SERPAPI_API_KEY:
+        raise Exception("SERPAPI_API_KEY nicht konfiguriert.")
+    safe_query = str(query or "").strip()
+    if not safe_query:
+        raise ValueError("Google-Maps-Suche erfordert eine Query.")
+
+    origin, origin_latitude, origin_longitude = _resolve_maps_origin(
+        latitude=latitude,
+        longitude=longitude,
+    )
+    safe_max_results = max(1, min(int(max_results or 5), 10))
+    params = {
+        "engine": "google_maps",
+        "type": "search",
+        "q": safe_query,
+        "hl": str(language_code or "de").strip() or "de",
+        "ll": _serpapi_maps_ll(origin_latitude, origin_longitude, zoom),
+    }
+    data = await asyncio.to_thread(_call_serpapi_json, params)
+    return _serpapi_maps_search_result(
+        data,
+        query=safe_query,
+        origin=origin,
+        origin_latitude=origin_latitude,
+        origin_longitude=origin_longitude,
+        max_results=safe_max_results,
+    )
+
+
+@tool(
+    name="get_google_maps_place",
+    description=(
+        "Liefert Detailinformationen zu einem Google-Maps-Ort via SerpApi. "
+        "Nutze place_id oder data_cid aus vorherigen Maps-Suchergebnissen."
+    ),
+    parameters=[
+        P("place_id", "string", "Google Maps place_id", required=False, default=""),
+        P("data_cid", "string", "Google Maps data_cid", required=False, default=""),
+        P("language_code", "string", "Sprachcode fuer lokalisierte Details", required=False, default="de"),
+    ],
+    capabilities=["search", "maps", "location"],
+    category=C.SEARCH,
+)
+async def get_google_maps_place(
+    place_id: str = "",
+    data_cid: str = "",
+    language_code: str = "de",
+) -> dict:
+    if not SERPAPI_API_KEY:
+        raise Exception("SERPAPI_API_KEY nicht konfiguriert.")
+    safe_place_id = str(place_id or "").strip()
+    safe_data_cid = str(data_cid or "").strip()
+    if not safe_place_id and not safe_data_cid:
+        raise ValueError("get_google_maps_place erfordert place_id oder data_cid.")
+
+    params = {
+        "engine": "google_maps",
+        "hl": str(language_code or "de").strip() or "de",
+    }
+    if safe_place_id:
+        params["place_id"] = safe_place_id
+    if safe_data_cid:
+        params["data_cid"] = safe_data_cid
+
+    snapshot = _load_runtime_location_snapshot()
+    if isinstance(snapshot, dict):
+        latitude = _as_float(snapshot.get("latitude"))
+        longitude = _as_float(snapshot.get("longitude"))
+        if latitude is not None and longitude is not None:
+            params["ll"] = _serpapi_maps_ll(latitude, longitude, 15)
+
+    data = await asyncio.to_thread(_call_serpapi_json, params)
+    return _serpapi_maps_place_result(data)
+
+
 def _call_dataforseo_youtube(endpoint: str, payload: list) -> dict:
     """Führt einen DataForSEO YouTube-API-Aufruf durch und gibt die rohe Response zurück."""
     return _call_dataforseo_json("POST", endpoint, payload=payload, timeout=DEFAULT_API_TIMEOUT)
@@ -615,6 +745,232 @@ def _call_serpapi_json(params: dict[str, Any], timeout: float = DEFAULT_API_TIME
     if data.get("error"):
         raise ValueError(f"SerpApi Fehler: {data['error']}")
     return data
+
+
+def _load_runtime_location_snapshot() -> dict[str, Any] | None:
+    if not _RUNTIME_LOCATION_SNAPSHOT_PATH.exists():
+        return None
+    try:
+        with open(_RUNTIME_LOCATION_SNAPSHOT_PATH, encoding="utf-8") as handle:
+            payload = json.load(handle)
+        return payload if isinstance(payload, dict) else None
+    except Exception as exc:
+        logger.warning("Runtime-Standort konnte nicht geladen werden: %s", exc)
+        return None
+
+
+def _as_float(value: Any) -> float | None:
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _as_int(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    text = str(value).strip().replace(",", "")
+    if not text:
+        return None
+    try:
+        return int(float(text))
+    except Exception:
+        return None
+
+
+def _resolve_maps_origin(
+    *,
+    latitude: float | None = None,
+    longitude: float | None = None,
+) -> tuple[dict[str, Any], float, float]:
+    snapshot = _load_runtime_location_snapshot()
+    resolved_latitude = _as_float(latitude)
+    resolved_longitude = _as_float(longitude)
+
+    if resolved_latitude is None or resolved_longitude is None:
+        if not snapshot:
+            raise ValueError("Kein aktueller Mobil-Standort verfuegbar. Bitte Standort im Handy zuerst synchronisieren.")
+        resolved_latitude = _as_float(snapshot.get("latitude"))
+        resolved_longitude = _as_float(snapshot.get("longitude"))
+
+    if resolved_latitude is None or resolved_longitude is None:
+        raise ValueError("Runtime-Standort ist unvollstaendig und enthaelt keine gueltigen Koordinaten.")
+
+    origin = {
+        "latitude": resolved_latitude,
+        "longitude": resolved_longitude,
+        "display_name": str((snapshot or {}).get("display_name") or ""),
+        "locality": str((snapshot or {}).get("locality") or ""),
+        "admin_area": str((snapshot or {}).get("admin_area") or ""),
+        "country_name": str((snapshot or {}).get("country_name") or ""),
+        "country_code": str((snapshot or {}).get("country_code") or ""),
+        "accuracy_meters": _as_float((snapshot or {}).get("accuracy_meters")),
+        "captured_at": str((snapshot or {}).get("captured_at") or ""),
+        "source": str((snapshot or {}).get("source") or "runtime_snapshot"),
+        "maps_url": str((snapshot or {}).get("maps_url") or f"https://www.google.com/maps/search/?api=1&query={resolved_latitude},{resolved_longitude}"),
+    }
+    return origin, resolved_latitude, resolved_longitude
+
+
+def _serpapi_maps_ll(latitude: float, longitude: float, zoom: int) -> str:
+    safe_zoom = max(3, min(int(zoom or 15), 20))
+    return f"@{latitude},{longitude},{safe_zoom}z"
+
+
+def _distance_meters(origin_lat: float, origin_lon: float, target_lat: float | None, target_lon: float | None) -> int | None:
+    if target_lat is None or target_lon is None:
+        return None
+    radius_m = 6_371_000
+    lat1 = math.radians(origin_lat)
+    lon1 = math.radians(origin_lon)
+    lat2 = math.radians(target_lat)
+    lon2 = math.radians(target_lon)
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return int(radius_m * c)
+
+
+def _maps_search_url(query: str, *, place_id: str = "", latitude: float | None = None, longitude: float | None = None) -> str:
+    encoded_query = quote_plus(str(query or "").strip())
+    if place_id:
+        if encoded_query:
+            return f"https://www.google.com/maps/search/?api=1&query={encoded_query}&query_place_id={quote_plus(place_id)}"
+        return f"https://www.google.com/maps/search/?api=1&query_place_id={quote_plus(place_id)}"
+    if latitude is not None and longitude is not None and not encoded_query:
+        return f"https://www.google.com/maps/search/?api=1&query={latitude},{longitude}"
+    return f"https://www.google.com/maps/search/?api=1&query={encoded_query}"
+
+
+def _serpapi_maps_hours(raw: dict[str, Any]) -> str:
+    for key in ("hours", "open_state", "service_options"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    operating_hours = raw.get("operating_hours")
+    if isinstance(operating_hours, dict):
+        summary = operating_hours.get("hours")
+        if isinstance(summary, str) and summary.strip():
+            return summary.strip()
+    return ""
+
+
+def _serpapi_maps_search_result(
+    data: dict[str, Any],
+    *,
+    query: str,
+    origin: dict[str, Any],
+    origin_latitude: float,
+    origin_longitude: float,
+    max_results: int,
+) -> dict[str, Any]:
+    raw_results = data.get("local_results") or []
+    if not raw_results and isinstance(data.get("place_results"), dict):
+        raw_results = [data.get("place_results")]
+
+    results: list[dict[str, Any]] = []
+    for raw in raw_results:
+        if not isinstance(raw, dict):
+            continue
+        title = str(raw.get("title") or raw.get("name") or "").strip()
+        if not title:
+            continue
+        coords = raw.get("gps_coordinates") if isinstance(raw.get("gps_coordinates"), dict) else {}
+        place_latitude = _as_float(coords.get("latitude"))
+        place_longitude = _as_float(coords.get("longitude"))
+        place_id = str(raw.get("place_id") or "").strip()
+        website = raw.get("website")
+        if not website and isinstance(raw.get("links"), dict):
+            website = raw["links"].get("website")
+        result = {
+            "position": _as_int(raw.get("position")) or (len(results) + 1),
+            "title": title,
+            "type": str(raw.get("type") or "").strip(),
+            "address": str(raw.get("address") or raw.get("full_address") or "").strip(),
+            "rating": _as_float(raw.get("rating")),
+            "reviews": _as_int(raw.get("reviews")) or 0,
+            "price": str(raw.get("price") or "").strip(),
+            "phone": str(raw.get("phone") or raw.get("phone_number") or "").strip(),
+            "website": str(website or "").strip(),
+            "hours_summary": _serpapi_maps_hours(raw),
+            "place_id": place_id,
+            "data_id": str(raw.get("data_id") or "").strip(),
+            "data_cid": str(raw.get("data_cid") or "").strip(),
+            "thumbnail_url": str(raw.get("thumbnail") or raw.get("serpapi_thumbnail") or "").strip(),
+            "gps_coordinates": {
+                "latitude": place_latitude,
+                "longitude": place_longitude,
+            },
+            "distance_meters": _distance_meters(
+                origin_latitude,
+                origin_longitude,
+                place_latitude,
+                place_longitude,
+            ),
+            "maps_url": _maps_search_url(
+                title,
+                place_id=place_id,
+                latitude=place_latitude,
+                longitude=place_longitude,
+            ),
+        }
+        results.append(result)
+        if len(results) >= max_results:
+            break
+
+    return {
+        "query": query,
+        "origin": origin,
+        "results": results,
+        "source_provider": "serpapi",
+        "engine": "google_maps",
+    }
+
+
+def _serpapi_maps_place_result(data: dict[str, Any]) -> dict[str, Any]:
+    raw = data.get("place_results") or data.get("place_result") or {}
+    if not isinstance(raw, dict):
+        raw = {}
+    coords = raw.get("gps_coordinates") if isinstance(raw.get("gps_coordinates"), dict) else {}
+    latitude = _as_float(coords.get("latitude"))
+    longitude = _as_float(coords.get("longitude"))
+    title = str(raw.get("title") or raw.get("name") or "").strip()
+    place_id = str(raw.get("place_id") or "").strip()
+    website = raw.get("website")
+    if not website and isinstance(raw.get("links"), dict):
+        website = raw["links"].get("website")
+    reviews_link = ""
+    if isinstance(raw.get("reviews_link"), str):
+        reviews_link = raw.get("reviews_link") or ""
+    elif isinstance(raw.get("links"), dict):
+        reviews_link = str(raw["links"].get("reviews") or "")
+    return {
+        "title": title,
+        "type": str(raw.get("type") or "").strip(),
+        "address": str(raw.get("address") or raw.get("full_address") or "").strip(),
+        "rating": _as_float(raw.get("rating")),
+        "reviews": _as_int(raw.get("reviews")) or 0,
+        "price": str(raw.get("price") or "").strip(),
+        "phone": str(raw.get("phone") or raw.get("phone_number") or "").strip(),
+        "website": str(website or "").strip(),
+        "hours_summary": _serpapi_maps_hours(raw),
+        "description": str(raw.get("description") or "").strip(),
+        "place_id": place_id,
+        "data_id": str(raw.get("data_id") or "").strip(),
+        "data_cid": str(raw.get("data_cid") or "").strip(),
+        "reviews_link": reviews_link,
+        "maps_url": _maps_search_url(title, place_id=place_id, latitude=latitude, longitude=longitude),
+        "gps_coordinates": {"latitude": latitude, "longitude": longitude},
+        "source_provider": "serpapi",
+        "engine": "google_maps",
+    }
 
 
 def _call_dataforseo_json(

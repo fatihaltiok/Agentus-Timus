@@ -22,6 +22,7 @@ def test_location_routes_registered():
     paths = {route.path for route in mcp_server.app.routes}
     assert "/location/status" in paths
     assert "/location/resolve" in paths
+    assert "/location/nearby" in paths
 
 
 @pytest.mark.asyncio
@@ -86,3 +87,26 @@ async def test_location_status_endpoint_reads_persisted_snapshot(monkeypatch, tm
     assert response["status"] == "success"
     assert response["location"]["locality"] == "München"
     assert response["location"]["display_name"] == "Marienplatz, München, Deutschland"
+
+
+@pytest.mark.asyncio
+async def test_location_nearby_endpoint_delegates_to_maps_search(monkeypatch):
+    async def fake_search_google_maps_places(query: str, max_results: int = 5, **_kwargs):
+        return {
+            "query": query,
+            "origin": {"locality": "Berlin"},
+            "results": [{"title": "Cafe Test", "distance_meters": 120}],
+            "source_provider": "serpapi",
+            "engine": "google_maps",
+        }
+
+    from tools.search_tool import tool as search_tool_module
+
+    monkeypatch.setattr(search_tool_module, "search_google_maps_places", fake_search_google_maps_places)
+
+    response = await mcp_server.location_nearby_endpoint("Cafe", max_results=3)
+
+    assert response["status"] == "success"
+    assert response["query"] == "Cafe"
+    assert response["origin"]["locality"] == "Berlin"
+    assert response["results"][0]["title"] == "Cafe Test"

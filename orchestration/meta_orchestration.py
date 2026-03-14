@@ -126,6 +126,18 @@ _ORCHESTRATION_RECIPES: Dict[str, Tuple[OrchestrationRecipeStage, ...]] = {
             handoff_fields=("goal", "expected_output", "success_signal", "query", "preferred_search_tool"),
         ),
     ),
+    "location_local_search": (
+        OrchestrationRecipeStage(
+            stage_id="location_context_scan",
+            agent="executor",
+            goal=(
+                "Nutze den aktuellen Mobil-Standort, ordne ihn auf Google Maps ein und liefere "
+                "lokalen Kontext oder nearby Places ohne schweren Research-Pfad."
+            ),
+            expected_output="location_context, nearby_places, quick_summary, source_urls",
+            handoff_fields=("goal", "expected_output", "success_signal", "query", "preferred_search_tool"),
+        ),
+    ),
     "youtube_content_extraction": (
         OrchestrationRecipeStage(
             stage_id="visual_access",
@@ -324,6 +336,7 @@ _ORCHESTRATION_RECIPE_RECOVERIES: Dict[str, Tuple[OrchestrationRecipeRecovery, .
 
 _ORCHESTRATION_RECIPE_AGENT_CHAINS: Dict[str, Tuple[str, ...]] = {
     "youtube_light_research": ("meta", "executor"),
+    "location_local_search": ("meta", "executor"),
     "youtube_content_extraction": ("meta", "visual", "research", "document"),
     "youtube_search_then_visual": ("meta", "research", "visual", "research", "document"),
     "youtube_research_only": ("meta", "research", "document"),
@@ -377,6 +390,22 @@ _YOUTUBE_LIGHT_HINTS = (
     "auf youtube so",
     "auf youtube gerade",
     "auf youtube aktuell",
+)
+
+_LOCAL_SEARCH_HINTS = (
+    "in meiner nähe",
+    "in meiner naehe",
+    "um mich herum",
+    "hier in der nähe",
+    "hier in der naehe",
+    "in der umgebung",
+    "in meiner umgebung",
+    "wo bin ich",
+    "wo ist hier",
+    "google maps",
+    "landkarte",
+    "nächste ",
+    "naechste ",
 )
 
 _DOCUMENT_HINTS = (
@@ -455,6 +484,8 @@ def build_meta_feedback_targets(classification: Dict[str, Any]) -> List[Dict[str
 def _resolve_primary_recipe_id(task_type: str, site_kind: str | None = None) -> str | None:
     if task_type == "youtube_light_research":
         return "youtube_light_research"
+    if task_type == "location_local_search":
+        return "location_local_search"
     if task_type == "youtube_content_extraction":
         return "youtube_content_extraction"
     if task_type == "web_content_extraction":
@@ -496,6 +527,8 @@ def resolve_orchestration_alternative_recipes(
         candidates.extend(["youtube_search_then_visual", "youtube_research_only"])
     elif task_type == "youtube_light_research":
         candidates.extend([])
+    elif task_type == "location_local_search":
+        candidates.extend([])
     elif task_type == "web_content_extraction":
         candidates.append("web_research_only")
     elif task_type == "system_diagnosis":
@@ -518,6 +551,8 @@ def _has_any(text: str, hints: Iterable[str]) -> bool:
 def _site_kind(text: str) -> str | None:
     if "youtube" in text or "youtu.be" in text:
         return "youtube"
+    if "google maps" in text or "landkarte" in text or _has_any(text, _LOCAL_SEARCH_HINTS):
+        return "maps"
     if "booking.com" in text:
         return "booking"
     if "x.com" in text or "twitter" in text:
@@ -538,6 +573,7 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
     has_summary_request = ("fasse" in normalized and "zusammen" in normalized) or "wichtigsten punkte" in normalized
     has_extraction = _has_any(normalized, _EXTRACTION_HINTS) or has_summary_request
     has_youtube_light = site_kind == "youtube" and _has_any(normalized, _YOUTUBE_LIGHT_HINTS)
+    has_local_search = site_kind == "maps" and _has_any(normalized, _LOCAL_SEARCH_HINTS)
     has_document = _has_any(normalized, _DOCUMENT_HINTS)
     has_delivery = _has_any(normalized, _DELIVERY_HINTS)
     has_system = _has_any(normalized, _SYSTEM_HINTS)
@@ -561,6 +597,11 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
         if "systemctl" in normalized or "journalctl" in normalized or "sudo" in normalized:
             required_capabilities.append("terminal_execution")
             recommended_chain.append("shell")
+    elif has_local_search:
+        required_capabilities.extend(["location_context", "local_maps_search"])
+        recommended_chain = ["meta", "executor"]
+        task_type = "location_local_search"
+        reason = "device_location_local_search"
     elif site_kind == "youtube" and has_youtube_light and not has_extraction and not has_multistep_browser:
         required_capabilities.extend(["youtube_search", "lightweight_summary"])
         recommended_chain = ["meta", "executor"]

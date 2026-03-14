@@ -162,6 +162,33 @@ _AFFORDANCE_CATALOG: Dict[str, ToolAffordance] = {
         good_for=("fallback_discovery", "cross_source_search"),
         avoid_when=("direct_ui_state_needed",),
     ),
+    "get_current_location_context": ToolAffordance(
+        name="get_current_location_context",
+        kind="tool",
+        cost="low",
+        latency="low",
+        reliability="high",
+        good_for=("location_context", "where_am_i", "nearby_search_setup"),
+        avoid_when=("non_location_tasks",),
+    ),
+    "search_google_maps_places": ToolAffordance(
+        name="search_google_maps_places",
+        kind="tool",
+        cost="low",
+        latency="low",
+        reliability="high",
+        good_for=("nearby_places", "local_lookup", "maps_search"),
+        avoid_when=("global_web_search",),
+    ),
+    "get_google_maps_place": ToolAffordance(
+        name="get_google_maps_place",
+        kind="tool",
+        cost="low",
+        latency="low",
+        reliability="medium",
+        good_for=("place_details", "opening_hours", "contact_lookup"),
+        avoid_when=("broad_discovery_without_place",),
+    ),
     "start_deep_research": ToolAffordance(
         name="start_deep_research",
         kind="tool",
@@ -258,6 +285,18 @@ def build_task_profile(query: str, classification: Dict[str, Any]) -> Dict[str, 
             output_mode="incident_summary",
             error_recovery_bias="observe_then_escalate",
         )
+    elif task_type == "location_local_search":
+        profile = TaskProfile(
+            intent="local_lookup",
+            desired_depth="light",
+            effort_level="light",
+            risk_level="low",
+            browser_need="none",
+            latency_expectation="fast",
+            cost_sensitivity="high",
+            output_mode="location_summary",
+            error_recovery_bias="switch_tool_then_degrade",
+        )
     else:
         profile = TaskProfile(
             intent="general_task",
@@ -293,6 +332,14 @@ def select_tool_affordances(classification: Dict[str, Any], task_profile: Dict[s
         names = ["visual", "research", "open_url", "search_web"]
     elif task_type == "system_diagnosis":
         names = ["system", "shell", "run_command"]
+    elif task_type == "location_local_search":
+        names = [
+            "executor",
+            "get_current_location_context",
+            "search_google_maps_places",
+            "get_google_maps_place",
+            "search_web",
+        ]
     elif task_type == "multi_stage_web_task":
         names = ["visual", "open_url", "search_web"]
     else:
@@ -364,6 +411,18 @@ def select_strategy(
             avoid_tools=(),
             error_strategy="observe_then_escalate",
             rationale="Systemfehler zuerst beobachten und nur dann in Shell-Probes kippen, wenn Diagnose stockt.",
+        )
+    elif task_type == "location_local_search":
+        strategy = SelectedStrategy(
+            strategy_id="location_context_then_maps",
+            strategy_mode="lightweight_first",
+            primary_recipe_id=recommended_recipe_id or "location_local_search",
+            fallback_recipe_id="",
+            preferred_tools=("get_current_location_context", "search_google_maps_places", "get_google_maps_place"),
+            fallback_tools=("search_web",),
+            avoid_tools=("start_deep_research",),
+            error_strategy="switch_tool_then_degrade",
+            rationale="Lokale Anfragen zuerst aus aktuellem Geraetestandort und leichter Maps-Suche beantworten.",
         )
     elif task_type == "multi_stage_web_task":
         strategy = SelectedStrategy(
@@ -460,6 +519,15 @@ def classify_strategy_error(
             suggested_reaction="switch_strategy_or_validate",
             prefer_non_browser_fallback=False,
             prefer_recipe_id=fallback_recipe_id,
+            degrade_ok=True,
+        )
+    elif any(token in error_text for token in ("kein aktueller mobil-standort", "runtime-standort", "permission denied", "missing_query")):
+        signal = StrategyErrorSignal(
+            error_class="missing_device_location",
+            cause_hint="Es fehlt ein aktueller oder nutzbarer Handy-Standort fuer lokale Suche.",
+            suggested_reaction="degrade_or_request_location_refresh",
+            prefer_non_browser_fallback=True,
+            prefer_recipe_id="",
             degrade_ok=True,
         )
     else:

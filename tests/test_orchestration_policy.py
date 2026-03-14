@@ -96,6 +96,22 @@ def test_evaluate_query_orchestration_routes_casual_youtube_discovery_to_meta_ex
     assert any(item["name"] == "search_youtube" for item in decision["tool_affordances"])
 
 
+def test_evaluate_query_orchestration_routes_local_maps_queries_to_meta_executor():
+    decision = evaluate_query_orchestration(
+        "Was ist hier in meiner Nähe und welche Apotheke hat noch offen?"
+    )
+
+    assert decision["route_to_meta"] is True
+    assert decision["task_type"] == "location_local_search"
+    assert decision["site_kind"] == "maps"
+    assert decision["recommended_agent_chain"] == ["meta", "executor"]
+    assert decision["recommended_recipe_id"] == "location_local_search"
+    assert decision["task_profile"]["intent"] == "local_lookup"
+    assert decision["selected_strategy"]["strategy_id"] == "location_context_then_maps"
+    assert "search_google_maps_places" in decision["selected_strategy"]["preferred_tools"]
+    assert any(item["name"] == "get_current_location_context" for item in decision["tool_affordances"])
+
+
 def test_evaluate_parallel_tasks_blocks_explicit_dependencies():
     decision = evaluate_parallel_tasks(
         [
