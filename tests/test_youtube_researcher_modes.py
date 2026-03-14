@@ -15,6 +15,8 @@ async def test_youtube_researcher_uses_live_mode_for_search_and_standard_mode_fo
             return [{"video_id": "vid-1", "title": "Demo", "url": "https://youtube.com/watch?v=vid-1"}]
         if name == "get_youtube_subtitles":
             return {"video_id": "vid-1", "full_text": "a" * 200, "items": [{"text": "demo"}]}
+        if name == "get_youtube_video_info":
+            return {"video_id": "vid-1", "title": "Demo", "description": "Kurzbeschreibung"}
         raise AssertionError(f"Unexpected tool call: {name}")
 
     async def fake_analyze_text(self, text, query):
@@ -43,3 +45,4 @@ async def test_youtube_researcher_uses_live_mode_for_search_and_standard_mode_fo
     assert analyzed == 1
     assert any(name == "search_youtube" and params.get("mode") == "live" for name, params in calls)
     assert any(name == "get_youtube_subtitles" and params.get("mode") == "standard" for name, params in calls)
+    assert any(name == "get_youtube_video_info" and params.get("mode") == "live" for name, params in calls)

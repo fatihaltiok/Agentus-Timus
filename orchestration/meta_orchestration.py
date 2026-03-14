@@ -54,6 +54,13 @@ class OrchestrationRecipeRecovery:
 
 
 _AGENT_PROFILES: Dict[str, AgentCapabilityProfile] = {
+    "executor": AgentCapabilityProfile(
+        agent="executor",
+        capabilities=("quick_tool_execution", "light_search", "youtube_discovery", "short_summaries"),
+        strengths=("casual_requests", "fast_search_flows", "lightweight_followups"),
+        typical_outputs=("top_results", "quick_summary", "source_urls"),
+        handoff_fields=("goal", "expected_output", "success_signal", "constraints", "handoff_data"),
+    ),
     "meta": AgentCapabilityProfile(
         agent="meta",
         capabilities=("planning", "delegation", "workflow_orchestration", "handoff_synthesis"),
@@ -107,6 +114,18 @@ _AGENT_PROFILES: Dict[str, AgentCapabilityProfile] = {
 
 
 _ORCHESTRATION_RECIPES: Dict[str, Tuple[OrchestrationRecipeStage, ...]] = {
+    "youtube_light_research": (
+        OrchestrationRecipeStage(
+            stage_id="youtube_search_scan",
+            agent="executor",
+            goal=(
+                "Durchsuche YouTube leichtgewichtig mit Suchtools und liefere die relevantesten Videos "
+                "mit kurzer Einordnung, ohne Deep Research zu starten."
+            ),
+            expected_output="top_videos, quick_summary, source_urls",
+            handoff_fields=("goal", "expected_output", "success_signal", "query", "preferred_search_tool"),
+        ),
+    ),
     "youtube_content_extraction": (
         OrchestrationRecipeStage(
             stage_id="visual_access",
@@ -304,6 +323,7 @@ _ORCHESTRATION_RECIPE_RECOVERIES: Dict[str, Tuple[OrchestrationRecipeRecovery, .
 
 
 _ORCHESTRATION_RECIPE_AGENT_CHAINS: Dict[str, Tuple[str, ...]] = {
+    "youtube_light_research": ("meta", "executor"),
     "youtube_content_extraction": ("meta", "visual", "research", "document"),
     "youtube_search_then_visual": ("meta", "research", "visual", "research", "document"),
     "youtube_research_only": ("meta", "research", "document"),
@@ -344,6 +364,19 @@ _EXTRACTION_HINTS = (
     "analysiere",
     "werte aus",
     "recherchiere",
+)
+
+_YOUTUBE_LIGHT_HINTS = (
+    "schau mal",
+    "was gibt",
+    "was geht",
+    "gib mir einen überblick",
+    "gib mir einen ueberblick",
+    "durchsuche youtube",
+    "youtube trends",
+    "auf youtube so",
+    "auf youtube gerade",
+    "auf youtube aktuell",
 )
 
 _DOCUMENT_HINTS = (
@@ -420,6 +453,8 @@ def build_meta_feedback_targets(classification: Dict[str, Any]) -> List[Dict[str
 
 
 def _resolve_primary_recipe_id(task_type: str, site_kind: str | None = None) -> str | None:
+    if task_type == "youtube_light_research":
+        return "youtube_light_research"
     if task_type == "youtube_content_extraction":
         return "youtube_content_extraction"
     if task_type == "web_content_extraction":
@@ -459,6 +494,8 @@ def resolve_orchestration_alternative_recipes(
     candidates: List[str] = []
     if task_type == "youtube_content_extraction":
         candidates.extend(["youtube_search_then_visual", "youtube_research_only"])
+    elif task_type == "youtube_light_research":
+        candidates.extend([])
     elif task_type == "web_content_extraction":
         candidates.append("web_research_only")
     elif task_type == "system_diagnosis":
@@ -500,6 +537,7 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
     has_browser = _has_any(normalized, _BROWSER_HINTS)
     has_summary_request = ("fasse" in normalized and "zusammen" in normalized) or "wichtigsten punkte" in normalized
     has_extraction = _has_any(normalized, _EXTRACTION_HINTS) or has_summary_request
+    has_youtube_light = site_kind == "youtube" and _has_any(normalized, _YOUTUBE_LIGHT_HINTS)
     has_document = _has_any(normalized, _DOCUMENT_HINTS)
     has_delivery = _has_any(normalized, _DELIVERY_HINTS)
     has_system = _has_any(normalized, _SYSTEM_HINTS)
@@ -523,6 +561,11 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
         if "systemctl" in normalized or "journalctl" in normalized or "sudo" in normalized:
             required_capabilities.append("terminal_execution")
             recommended_chain.append("shell")
+    elif site_kind == "youtube" and has_youtube_light and not has_extraction and not has_multistep_browser:
+        required_capabilities.extend(["youtube_search", "lightweight_summary"])
+        recommended_chain = ["meta", "executor"]
+        task_type = "youtube_light_research"
+        reason = "youtube_light_discovery"
     elif site_kind == "youtube" and has_extraction:
         required_capabilities.extend(["browser_navigation", "content_extraction"])
         recommended_chain = ["meta", "visual", "research"]

@@ -29,12 +29,14 @@ logger = logging.getLogger("search_tool")
 load_dotenv()
 DATAFORSEO_USER = os.getenv("DATAFORSEO_USER")
 DATAFORSEO_PASS = os.getenv("DATAFORSEO_PASS")
+SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY")
 
 if not (DATAFORSEO_USER and DATAFORSEO_PASS):
     logger.warning("⚠️ DATAFORSEO_USER oder DATAFORSEO_PASS fehlt. Websuche wird fehlschlagen.")
 
 # --- API Konstanten ---
 DATAFORSEO_BASE_URL = "https://api.dataforseo.com"
+SERPAPI_BASE_URL = "https://serpapi.com/search.json"
 DEFAULT_API_TIMEOUT = 45
 DEFAULT_STANDARD_TIMEOUT = 90
 DEFAULT_STANDARD_POLL_INTERVAL = 2.0
@@ -600,6 +602,21 @@ def _call_dataforseo_youtube(endpoint: str, payload: list) -> dict:
     return _call_dataforseo_json("POST", endpoint, payload=payload, timeout=DEFAULT_API_TIMEOUT)
 
 
+def _call_serpapi_json(params: dict[str, Any], timeout: float = DEFAULT_API_TIMEOUT) -> dict:
+    """Fuehrt einen SerpApi-Aufruf aus und gibt die JSON-Antwort zurueck."""
+    if not SERPAPI_API_KEY:
+        raise ValueError("SERPAPI_API_KEY nicht konfiguriert.")
+
+    request_params = dict(params)
+    request_params["api_key"] = SERPAPI_API_KEY
+    response = requests.get(SERPAPI_BASE_URL, params=request_params, timeout=timeout)
+    response.raise_for_status()
+    data = response.json()
+    if data.get("error"):
+        raise ValueError(f"SerpApi Fehler: {data['error']}")
+    return data
+
+
 def _call_dataforseo_json(
     method: str,
     endpoint: str,
@@ -665,6 +682,133 @@ def _call_dataforseo_youtube_standard(
 def _is_dataforseo_task_not_found(exc: Exception) -> bool:
     message = str(exc or "").lower()
     return "task not found" in message
+
+
+def _serpapi_transcript_result(data: dict, video_id: str) -> dict:
+    """Normalisiert SerpApi-Transcriptdaten auf das bestehende Untertitel-Format."""
+    raw_segments = data.get("transcript") or data.get("transcripts") or []
+    items: list[dict[str, Any]] = []
+
+    for raw in raw_segments:
+        if not isinstance(raw, dict):
+            continue
+        text = str(raw.get("snippet", "")).strip()
+        if not text:
+            continue
+
+        start_ms = raw.get("start_ms")
+        end_ms = raw.get("end_ms")
+        start_time = float(start_ms) / 1000.0 if isinstance(start_ms, (int, float)) else 0.0
+        end_time = float(end_ms) / 1000.0 if isinstance(end_ms, (int, float)) else start_time
+
+        items.append(
+            {
+                "text": text,
+                "start_time": start_time,
+                "end_time": end_time,
+                "start_time_text": str(raw.get("start_time_text", "")).strip(),
+            }
+        )
+
+    full_text = " ".join(item["text"] for item in items)
+    if len(full_text) > 8000:
+        full_text = full_text[:8000]
+
+    return {
+        "video_id": video_id,
+        "full_text": full_text,
+        "items": items,
+        "available_transcripts": data.get("available_transcripts", []),
+        "chapters": data.get("chapters", []),
+        "source_provider": "serpapi",
+    }
+
+
+def _serpapi_video_info_result(data: dict, video_id: str) -> dict:
+    """Normalisiert SerpApi-Video-Details auf ein Timus-freundliches Format."""
+    video_results = data.get("video_results")
+    if not isinstance(video_results, dict):
+        video_results = {}
+
+    channel = video_results.get("channel")
+    if not isinstance(channel, dict):
+        channel = {}
+
+    thumbnails = video_results.get("thumbnail") or video_results.get("thumbnails") or []
+    if isinstance(thumbnails, list):
+        thumbnail_url = thumbnails[0] if thumbnails else ""
+    else:
+        thumbnail_url = str(thumbnails or "")
+
+    comments: list[dict[str, str]] = []
+    for raw in data.get("comments", [])[:5]:
+        if not isinstance(raw, dict):
+            continue
+        comments.append(
+            {
+                "author": str(raw.get("author", "")).strip(),
+                "text": str(raw.get("content", raw.get("text", ""))).strip(),
+            }
+        )
+
+    related_videos: list[dict[str, str]] = []
+    for raw in data.get("related_videos", [])[:5]:
+        if not isinstance(raw, dict):
+            continue
+        related_id = str(raw.get("id", raw.get("video_id", ""))).strip()
+        related_videos.append(
+            {
+                "video_id": related_id,
+                "title": str(raw.get("title", "")).strip(),
+                "url": raw.get("link") or (f"https://www.youtube.com/watch?v={related_id}" if related_id else ""),
+            }
+        )
+
+    return {
+        "video_id": video_id,
+        "title": str(video_results.get("title", "")).strip(),
+        "url": video_results.get("link") or f"https://www.youtube.com/watch?v={video_id}",
+        "description": str(video_results.get("description", "")).strip(),
+        "channel_name": str(channel.get("name", video_results.get("channel_name", ""))).strip(),
+        "channel_url": str(channel.get("link", "")).strip(),
+        "thumbnail_url": thumbnail_url,
+        "duration": str(video_results.get("duration", "")).strip(),
+        "views": video_results.get("views") or video_results.get("views_count") or 0,
+        "published_date": str(video_results.get("published_date", video_results.get("date", ""))).strip(),
+        "chapters": data.get("chapters", []),
+        "comments": comments,
+        "related_videos": related_videos,
+        "source_provider": "serpapi",
+    }
+
+
+def _dataforseo_video_info_result(data: dict, video_id: str) -> dict:
+    """Konservativer Parser fuer DataForSEO video_info-Antworten."""
+    task = _first_dataforseo_task(data)
+    result_wrappers = task.get("result", [])
+    wrapper = result_wrappers[0] if result_wrappers else {}
+    if not isinstance(wrapper, dict):
+        wrapper = {}
+    item = wrapper.get("items", [{}])[0] if isinstance(wrapper.get("items"), list) and wrapper.get("items") else wrapper
+    if not isinstance(item, dict):
+        item = {}
+
+    return {
+        "video_id": video_id,
+        "title": str(item.get("title", wrapper.get("title", ""))).strip(),
+        "url": item.get("url") or wrapper.get("url") or f"https://www.youtube.com/watch?v={video_id}",
+        "description": str(item.get("description", wrapper.get("description", ""))).strip(),
+        "channel_name": str(item.get("channel_name", item.get("channel", ""))).strip(),
+        "channel_url": "",
+        "thumbnail_url": item.get("thumbnail_url") or item.get("thumbnail", ""),
+        "duration": str(item.get("duration", item.get("duration_time", ""))).strip(),
+        "views": item.get("views_count") or item.get("views") or 0,
+        "published_date": str(item.get("published_date", item.get("date", ""))).strip(),
+        "chapters": [],
+        "comments": [],
+        "related_videos": [],
+        "source_provider": "dataforseo",
+    }
 
 
 @tool(
@@ -769,7 +913,7 @@ async def search_youtube(
 
 @tool(
     name="get_youtube_subtitles",
-    description="Ruft Untertitel/Transkript eines YouTube-Videos via DataForSEO ab.",
+    description="Ruft Untertitel/Transkript eines YouTube-Videos via SerpApi oder DataForSEO ab.",
     parameters=[
         P("video_id", "string", "YouTube Video-ID (z.B. dQw4w9WgXcQ)"),
         P("language_code", "string", "Bevorzugte Sprache, Fallback auf 'en'", required=False, default="de"),
@@ -789,8 +933,39 @@ async def get_youtube_subtitles(
     Returns:
         {video_id, full_text, items: [{text, start_time, end_time}]}
     """
+    if not (SERPAPI_API_KEY or (DATAFORSEO_USER and DATAFORSEO_PASS)):
+        raise Exception("Weder SERPAPI_API_KEY noch DataForSEO Credentials sind konfiguriert.")
+
+    preferred_languages: list[str] = []
+    for lang in [language_code, "en"]:
+        lang = str(lang or "").strip().lower()
+        if lang and lang not in preferred_languages:
+            preferred_languages.append(lang)
+
+    if SERPAPI_API_KEY:
+        for lang in preferred_languages:
+            try:
+                data = await asyncio.to_thread(
+                    _call_serpapi_json,
+                    {
+                        "engine": "youtube_video_transcript",
+                        "v": video_id,
+                        "language_code": lang,
+                    },
+                )
+                result = _serpapi_transcript_result(data, video_id)
+                if result["items"]:
+                    logger.info(
+                        "📺 get_youtube_subtitles: %s Segmente via SerpApi (%s)",
+                        len(result["items"]),
+                        lang,
+                    )
+                    return result
+            except Exception as e:
+                logger.warning(f"SerpApi Transcript ({lang}) fehlgeschlagen: {e}")
+
     if not (DATAFORSEO_USER and DATAFORSEO_PASS):
-        raise Exception("DataForSEO Credentials nicht konfiguriert.")
+        return {"video_id": video_id, "full_text": "", "items": [], "source_provider": "none"}
 
     async def _fetch(lang: str) -> dict:
         spec = YouTubeRequestSpec(
@@ -807,9 +982,8 @@ async def get_youtube_subtitles(
             return _call_dataforseo_youtube(endpoint, payload)
         return await asyncio.to_thread(_call)
 
-    # Erst gewünschte Sprache, Fallback auf Englisch
     data = None
-    for lang in ([language_code] if language_code != "en" else []) + ["en"]:
+    for lang in preferred_languages:
         try:
             data = await _fetch(lang)
             break
@@ -840,4 +1014,57 @@ async def get_youtube_subtitles(
         full_text = full_text[:8000]
 
     logger.info(f"📺 get_youtube_subtitles: {len(items)} Segmente, {len(full_text)} Zeichen")
-    return {"video_id": video_id, "full_text": full_text, "items": items}
+    return {"video_id": video_id, "full_text": full_text, "items": items, "source_provider": "dataforseo"}
+
+
+@tool(
+    name="get_youtube_video_info",
+    description="Ruft Detailinformationen zu einem YouTube-Video via SerpApi oder DataForSEO ab.",
+    parameters=[
+        P("video_id", "string", "YouTube Video-ID (z.B. dQw4w9WgXcQ)"),
+        P("language_code", "string", "Bevorzugte Sprache fuer lokalisierte Metadaten", required=False, default="de"),
+        P("mode", "string", "DataForSEO Modus: live oder standard", required=False, default="live"),
+    ],
+    capabilities=["search", "youtube"],
+    category=C.SEARCH
+)
+async def get_youtube_video_info(
+    video_id: str,
+    language_code: str = "de",
+    mode: str = "live",
+) -> dict:
+    """Liefert Detailinformationen, Beschreibung, Kommentare und verwandte Videos."""
+    if SERPAPI_API_KEY:
+        try:
+            data = await asyncio.to_thread(
+                _call_serpapi_json,
+                {
+                    "engine": "youtube_video",
+                    "v": video_id,
+                    "hl": language_code,
+                },
+            )
+            result = _serpapi_video_info_result(data, video_id)
+            if result.get("title") or result.get("description") or result.get("comments"):
+                return result
+        except Exception as e:
+            logger.warning(f"SerpApi Video-Info fehlgeschlagen ({video_id}): {e}")
+
+    if not (DATAFORSEO_USER and DATAFORSEO_PASS):
+        raise Exception("Weder SERPAPI_API_KEY noch DataForSEO Credentials sind konfiguriert.")
+
+    spec = YouTubeRequestSpec(
+        request_type=YouTubeRequestType.VIDEO_INFO,
+        video_id=video_id,
+        language_code=language_code,
+        mode=parse_dataforseo_mode(mode),
+    )
+
+    def _call():
+        if spec.mode == DataForSEORetrievalMode.STANDARD:
+            return _call_dataforseo_youtube_standard(spec)
+        endpoint, payload = build_youtube_request(spec)
+        return _call_dataforseo_youtube(endpoint, payload)
+
+    data = await asyncio.to_thread(_call)
+    return _dataforseo_video_info_result(data, video_id)

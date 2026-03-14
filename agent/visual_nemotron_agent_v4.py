@@ -39,7 +39,7 @@ from openai import OpenAI
 # Setup
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
-load_dotenv(dotenv_path=PROJECT_ROOT / ".env", override=True)
+load_dotenv(dotenv_path=PROJECT_ROOT / ".env", override=False)
 
 # Shared Utilities
 from agent.shared.mcp_client import MCPClient as _SharedMCPClient

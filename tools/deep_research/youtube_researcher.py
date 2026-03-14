@@ -102,7 +102,7 @@ class YouTubeResearcher:
         async def _analyze_video(video: dict) -> bool:
             """
             Primär: Qwen2.5-VL analysiert das Video direkt (URL → Video-Verständnis).
-            Fallback: Transkript-Text-Analyse + optionale NVIDIA-Thumbnail-Analyse.
+            Fallback: Transcript-/Video-Kontext-Analyse + optionale NVIDIA-Thumbnail-Analyse.
             """
             try:
                 video_id = video["video_id"]
@@ -120,25 +120,38 @@ class YouTubeResearcher:
                         f"— {len(video_facts.get('facts', []))} Fakten (Video-Analyse)"
                     )
                 else:
-                    # Fallback: Transkript + NVIDIA-Thumbnail parallel
+                    # Fallback: Transkript, Video-Kontext und NVIDIA-Thumbnail parallel
                     async def _maybe_thumbnail() -> dict:
                         if thumbnail_url:
                             return await self._analyze_thumbnail(thumbnail_url, query)
                         return {}
 
-                    transcript, visual_info = await asyncio.gather(
+                    transcript, visual_info, video_context = await asyncio.gather(
                         self._get_transcript_with_fallback(video_id),
                         _maybe_thumbnail(),
+                        self._get_video_context(video_id),
                     )
                     if not isinstance(visual_info, dict):
                         visual_info = {}
 
+                    context_text = self._video_context_to_text(video_context)
+                    if video_context.get("description"):
+                        visual_info["video_description"] = str(video_context.get("description", "")).strip()
+                    if video_context.get("comments"):
+                        visual_info["comment_highlights"] = [
+                            str(item.get("text", "")).strip()
+                            for item in video_context.get("comments", [])[:3]
+                            if isinstance(item, dict) and str(item.get("text", "")).strip()
+                        ]
+
                     text_facts = {}
-                    if transcript and len(transcript) > 100:
-                        text_facts = await self._analyze_text(transcript, query)
+                    analysis_text = transcript if transcript and len(transcript) > 100 else context_text
+                    if analysis_text and len(analysis_text) > 100:
+                        text_facts = await self._analyze_text(analysis_text, query)
                     logger.info(
                         f"📺 Fallback: '{video.get('title', video_id)}' "
-                        f"— {len(text_facts.get('facts', []))} Fakten (Transkript)"
+                        f"— {len(text_facts.get('facts', []))} Fakten "
+                        f"({'Transkript' if analysis_text == transcript else 'Video-Kontext'})"
                     )
 
                 self._add_to_session(session, video, text_facts, visual_info)
@@ -206,6 +219,55 @@ class YouTubeResearcher:
 
         de_text, en_text = await asyncio.gather(_fetch("de"), _fetch("en"))
         return de_text or en_text
+
+    async def _get_video_context(self, video_id: str) -> dict:
+        """Lädt Metadaten und optional Kommentare/Chapters für ein Video."""
+        try:
+            result = await call_tool_internal(
+                "get_youtube_video_info",
+                {"video_id": video_id, "language_code": "de", "mode": "live"},
+            )
+            if isinstance(result, dict):
+                return result
+        except Exception as e:
+            logger.warning(f"📺 Video-Info fehlgeschlagen ({video_id}): {e}")
+        return {}
+
+    @staticmethod
+    def _video_context_to_text(video_context: dict) -> str:
+        """Verdichtet Video-Metadaten zu einem analysierbaren Textfallback."""
+        if not isinstance(video_context, dict):
+            return ""
+
+        parts: list[str] = []
+        title = str(video_context.get("title", "")).strip()
+        channel_name = str(video_context.get("channel_name", "")).strip()
+        description = str(video_context.get("description", "")).strip()
+
+        if title:
+            parts.append(f"Titel: {title}")
+        if channel_name:
+            parts.append(f"Kanal: {channel_name}")
+        if description:
+            parts.append(f"Beschreibung: {description[:2000]}")
+
+        chapter_titles = [
+            str(chapter.get("title", "")).strip()
+            for chapter in video_context.get("chapters", [])[:5]
+            if isinstance(chapter, dict) and str(chapter.get("title", "")).strip()
+        ]
+        if chapter_titles:
+            parts.append("Kapitel: " + "; ".join(chapter_titles))
+
+        comment_texts = [
+            str(comment.get("text", "")).strip()
+            for comment in video_context.get("comments", [])[:3]
+            if isinstance(comment, dict) and str(comment.get("text", "")).strip()
+        ]
+        if comment_texts:
+            parts.append("Kommentare: " + " | ".join(comment_texts))
+
+        return "\n".join(parts).strip()
 
     async def _analyze_video_with_qwen(self, video_id: str, query: str) -> dict:
         """
@@ -341,6 +403,8 @@ class YouTubeResearcher:
         key_quote = text_facts.get("key_quote", "")
         relevance = text_facts.get("relevance", 5)
         visual_desc = visual_info.get("visual_description", "")
+        video_description = str(visual_info.get("video_description", "")).strip()
+        comment_highlights = visual_info.get("comment_highlights") or []
 
         if facts or key_quote:
             combined = "; ".join(facts[:5])
@@ -348,6 +412,10 @@ class YouTubeResearcher:
                 combined += f' | Zitat: "{key_quote}"'
             if visual_desc:
                 combined += f" | Bild: {visual_desc}"
+            if video_description:
+                combined += f" | Beschreibung: {video_description[:500]}"
+            if comment_highlights:
+                combined += f" | Kommentare: {' | '.join(comment_highlights[:2])}"
 
             session.unverified_claims.append({
                 "fact": combined,

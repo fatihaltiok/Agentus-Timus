@@ -8,13 +8,13 @@ from pathlib import Path
 def test_openrouter_vision_model_prefers_dedicated_env(monkeypatch):
     monkeypatch.setenv("VISUAL_MODEL", "gpt-5.4-2026-03-05")
     monkeypatch.setenv("VISUAL_MODEL_PROVIDER", "openai")
-    monkeypatch.setenv("OPENROUTER_VISION_MODEL", "qwen/qwen2.5-vl-72b-instruct")
+    monkeypatch.setenv("OPENROUTER_VISION_MODEL", "Qwen3.5-397B-A17B")
 
     import agent.visual_nemotron_agent_v4 as visual_v4
 
     visual_v4 = importlib.reload(visual_v4)
 
-    assert visual_v4.OPENROUTER_VISION_MODEL == "qwen/qwen2.5-vl-72b-instruct"
+    assert visual_v4.OPENROUTER_VISION_MODEL == "Qwen3.5-397B-A17B"
 
 
 def test_openrouter_vision_model_does_not_fall_back_to_openai_visual_model(monkeypatch):
