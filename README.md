@@ -52,6 +52,7 @@ Stand vom **10. März 2026**:
 
 Wichtige Dokumente:
 
+- Architektur-Gesamtdokumentation: [TIMUS_ARCHITEKTUR_UND_SYSTEMDOKUMENTATION_2026-03-13.md](/home/fatih-ubuntu/dev/timus/docs/TIMUS_ARCHITEKTUR_UND_SYSTEMDOKUMENTATION_2026-03-13.md)
 - Gesamtänderungen: [RELEASE_NOTES_2026-03-09_PRODUCTION_PROGRAM.md](/home/fatih-ubuntu/dev/timus/docs/RELEASE_NOTES_2026-03-09_PRODUCTION_PROGRAM.md)
 - P0-Härtung: [PRODUCTION_READINESS_P0.md](/home/fatih-ubuntu/dev/timus/docs/PRODUCTION_READINESS_P0.md)
 - P4-Bericht: [BERICHT_2026-03-09_P4_TELEMETRIE_FEEDBACK_E2E.md](/home/fatih-ubuntu/dev/timus/docs/BERICHT_2026-03-09_P4_TELEMETRIE_FEEDBACK_E2E.md)
