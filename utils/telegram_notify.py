@@ -4,16 +4,23 @@ utils/telegram_notify.py — Zentraler Telegram-Sender (DRY-Refactoring)
 Einheitlicher Telegram-Sender für alle Autonomie-Module.
 Liest TELEGRAM_BOT_TOKEN + TELEGRAM_ALLOWED_IDS aus os.getenv().
 
+Digest-Modus (Standard):
+    send_telegram() puffert Nachrichten und schickt alle 30 Minuten einen
+    Sammel-Block. Sofort-Versand über urgent=True oder send_with_feedback().
+    Intervall steuerbar per TELEGRAM_DIGEST_INTERVAL_MINUTES (default: 30).
+
 Verwendung:
     from utils.telegram_notify import send_telegram
-    await send_telegram("Hallo! 🎉")
+    await send_telegram("Hallo!")              # gebuffert
+    await send_telegram("FEHLER!", urgent=True) # sofort
 
-M16: send_with_feedback() sendet Nachrichten mit 👍/👎/🤷 InlineKeyboard.
+M16: send_with_feedback() sendet immer sofort (interaktiv, braucht Feedback-Buttons).
 """
 
 import json
 import logging
 import os
+import time
 from typing import Any, Dict, List, Optional
 
 log = logging.getLogger("telegram_notify")
@@ -25,18 +32,23 @@ _FEEDBACK_SIGNAL_CODES = {
 }
 _FEEDBACK_SIGNAL_FROM_CODE = {v: k for k, v in _FEEDBACK_SIGNAL_CODES.items()}
 
+# ── Digest-Buffer ────────────────────────────────────────────────────────────
+_buf: List[str] = []
+_last_flush: float = 0.0
 
-async def send_telegram(msg: str, parse_mode: str = "Markdown") -> bool:
-    """
-    Sendet eine Nachricht via Telegram an alle konfigurierten Chat-IDs.
 
-    Args:
-        msg: Die zu sendende Nachricht
-        parse_mode: "Markdown" (default) oder "HTML"
+def _digest_interval_seconds() -> float:
+    return float(os.getenv("TELEGRAM_DIGEST_INTERVAL_MINUTES", "30")) * 60
 
-    Returns:
-        True wenn mindestens eine Nachricht erfolgreich gesendet wurde, sonst False
-    """
+
+def _should_flush() -> bool:
+    return (time.monotonic() - _last_flush) >= _digest_interval_seconds()
+
+
+# ── Interner Low-Level-Sender ────────────────────────────────────────────────
+
+async def _send_raw(msg: str, parse_mode: str = "Markdown") -> bool:
+    """Schickt eine Nachricht direkt ohne Buffer."""
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     allowed_ids = os.getenv("TELEGRAM_ALLOWED_IDS", "").strip()
 
@@ -56,6 +68,10 @@ async def send_telegram(msg: str, parse_mode: str = "Markdown") -> bool:
     if not chat_ids:
         log.warning("Telegram: Keine gültigen Chat-IDs konfiguriert")
         return False
+
+    # Telegram-Limit: 4096 Zeichen pro Nachricht
+    if len(msg) > 4000:
+        msg = msg[:3970] + "\n\n_[...gekürzt]_"
 
     any_sent = False
     try:
@@ -87,6 +103,65 @@ async def send_telegram(msg: str, parse_mode: str = "Markdown") -> bool:
     return any_sent
 
 
+async def _flush_buffer() -> bool:
+    """Fasst gepufferte Nachrichten zu einem Digest zusammen und sendet ihn."""
+    global _buf, _last_flush
+
+    if not _buf:
+        _last_flush = time.monotonic()
+        return False
+
+    count = len(_buf)
+    label = "Meldung" if count == 1 else "Meldungen"
+    lines = [f"📬 *Timus — {count} {label}*"]
+    for entry in _buf:
+        lines.append("─" * 24)
+        lines.append(entry)
+
+    digest = "\n".join(lines)
+    _buf.clear()
+    _last_flush = time.monotonic()
+
+    log.debug("Telegram Digest: %d Meldungen gesendet", count)
+    return await _send_raw(digest)
+
+
+# ── Öffentliche API ──────────────────────────────────────────────────────────
+
+async def send_telegram(msg: str, parse_mode: str = "Markdown", urgent: bool = False) -> bool:
+    """
+    Sendet eine Nachricht via Telegram.
+
+    Standardmäßig wird die Nachricht gepuffert und mit anderen Meldungen
+    alle TELEGRAM_DIGEST_INTERVAL_MINUTES (default: 30) Minuten als Digest
+    verschickt.
+
+    urgent=True umgeht den Buffer (z.B. für kritische Fehler-Alerts).
+    """
+    global _buf, _last_flush
+
+    if urgent:
+        log.debug("Telegram [urgent]: sofort senden")
+        return await _send_raw(msg, parse_mode)
+
+    _buf.append(msg)
+
+    if _should_flush():
+        return await _flush_buffer()
+
+    log.debug(
+        "Telegram: Nachricht gepuffert (%d im Buffer, nächster Flush in %.0fs)",
+        len(_buf),
+        max(0, _digest_interval_seconds() - (time.monotonic() - _last_flush)),
+    )
+    return True
+
+
+async def flush_telegram_digest() -> bool:
+    """Explizites Flushen des Buffers — z.B. beim Herunterfahren."""
+    return await _flush_buffer()
+
+
 async def send_with_feedback(
     msg: str,
     action_id: str,
@@ -98,14 +173,7 @@ async def send_with_feedback(
     """
     Sendet eine Telegram-Nachricht mit InlineKeyboard [👍][👎][🤷] für M16-Feedback.
 
-    Args:
-        msg: Die Nachricht
-        action_id: ID der Aktion (für FeedbackEngine)
-        hook_names: Betroffene behavior_hooks
-        parse_mode: "Markdown" oder "HTML"
-
-    Returns:
-        True wenn erfolgreich gesendet
+    Immer sofort — interaktive Nachrichten brauchen unmittelbare Zustellung.
     """
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     allowed_ids = os.getenv("TELEGRAM_ALLOWED_IDS", "").strip()
