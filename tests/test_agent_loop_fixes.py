@@ -115,7 +115,7 @@ def test_reasoning_prompt_has_format_rule():
 
 def test_research_prompt_updated_iterations():
     from agent.prompts import DEEP_RESEARCH_PROMPT_TEMPLATE
-    assert "12" in DEEP_RESEARCH_PROMPT_TEMPLATE
+    assert "6" in DEEP_RESEARCH_PROMPT_TEMPLATE
 
 def test_research_prompt_has_format_rule():
     from agent.prompts import DEEP_RESEARCH_PROMPT_TEMPLATE
