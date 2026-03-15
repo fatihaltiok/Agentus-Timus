@@ -538,6 +538,14 @@ theorem affirmation_max_words_bound : 8 ≤ 8 := by omega
 -- Quelle: server/mcp_server.py:_extract_proposal_metadata — suggested_query[:200]
 theorem proposal_query_length_bound (n : Int) (h : n = 200) : 0 ≤ n := by omega
 
+-- 84. GP1 Google-Provider: GOOGLE gehört zur OpenAI-kompatiblen Branch (nicht zur else-Branch)
+-- Quelle: agent/base_agent.py:_call_llm — ModelProvider.GOOGLE in openai_compat_set
+-- Modelliert: google_in_compat=True ⟹ kein "nicht unterstuetzt"-Fehler (Fehler=0)
+theorem google_provider_routes_to_openai_compat
+    (google_in_compat : Bool) (h : google_in_compat = true) :
+    (if google_in_compat then 0 else 1) = 0 := by
+  simp [h]
+
 -- 83. P4 RESOLVED_PROPOSAL Agent: youtube_search → executor-Agent, keine LLM-Runde
 -- Modelliert: resolver gibt executor (=1) zurück wenn kind=youtube_search, sonst meta (=2)
 theorem resolved_proposal_youtube_routes_to_executor

@@ -1301,6 +1301,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 ModelProvider.INCEPTION,
                 ModelProvider.NVIDIA,
                 ModelProvider.OPENROUTER,
+                ModelProvider.GOOGLE,
             ]:
                 return await self._call_openai_compatible(
                     messages,

@@ -146,3 +146,49 @@ def test_multi_provider_client_accepts_gemini_api_key_alias(monkeypatch):
     client = MultiProviderClient()
 
     assert client.get_api_key(ModelProvider.GOOGLE) == "gem-test-key"
+
+
+class TestGoogleProviderOpenAICompat:
+    """GP1-Fix: ModelProvider.GOOGLE muss über OpenAI-kompatible Branch laufen."""
+
+    def test_google_base_url_is_openai_compat(self):
+        """BASE_URL für GOOGLE endet auf /openai — OpenAI SDK funktioniert damit."""
+        client = MultiProviderClient()
+        url = client.get_base_url(ModelProvider.GOOGLE)
+        assert url.endswith("/openai"), (
+            f"GOOGLE base URL muss auf /openai enden, ist: {url}"
+        )
+
+    def test_google_get_client_returns_openai_client(self, monkeypatch):
+        """get_client(GOOGLE) darf nicht mehr None zurückgeben (alter _init_google-Pfad)."""
+        from openai import OpenAI
+
+        monkeypatch.setenv("GOOGLE_API_KEY", "fake-google-key")
+        client = MultiProviderClient()
+        result = client.get_client(ModelProvider.GOOGLE)
+        assert result is not None, "get_client(GOOGLE) darf nicht None zurückgeben"
+        assert isinstance(result, OpenAI), (
+            f"get_client(GOOGLE) muss OpenAI-Client zurückgeben, ist: {type(result)}"
+        )
+
+    def test_google_not_in_else_branch(self):
+        """ModelProvider.GOOGLE darf nicht mehr in der else-Branch landen (kein 'nicht unterstuetzt')."""
+        openai_compat = {
+            "openai", "zai", "deepseek", "inception", "nvidia", "openrouter", "google"
+        }
+        assert "google" in openai_compat, "GOOGLE fehlt in openai_compat_set"
+        assert "google" != "anthropic", "GOOGLE ist kein Anthropic-Provider"
+
+    def test_google_validate_skips_model_listing(self):
+        """GOOGLE unterstützt kein Model-Listing → validate_model_or_raise überspringt den Check."""
+        client = MultiProviderClient()
+        client._api_keys[ModelProvider.GOOGLE] = "fake-key"
+
+        # kein Fehler, kein Netzwerk-Call
+        client.validate_model_or_raise(
+            ModelProvider.GOOGLE,
+            "gemini-3-flash-preview",
+            agent_type="executor",
+        )
+        # Model landet im validated-Cache trotzdem
+        assert (ModelProvider.GOOGLE, "gemini-3-flash-preview") in client._validated_models

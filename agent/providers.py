@@ -45,7 +45,7 @@ class MultiProviderClient:
         ModelProvider.INCEPTION: "https://api.inceptionlabs.ai/v1",
         ModelProvider.NVIDIA: "https://integrate.api.nvidia.com/v1",
         ModelProvider.OPENROUTER: "https://openrouter.ai/api/v1",
-        ModelProvider.GOOGLE: "https://generativelanguage.googleapis.com/v1beta",
+        ModelProvider.GOOGLE: "https://generativelanguage.googleapis.com/v1beta/openai",
     }
 
     API_KEY_ENV = {
@@ -113,13 +113,11 @@ class MultiProviderClient:
         if provider in [
             ModelProvider.OPENAI, ModelProvider.ZAI, ModelProvider.DEEPSEEK,
             ModelProvider.INCEPTION, ModelProvider.NVIDIA,
-            ModelProvider.OPENROUTER,
+            ModelProvider.OPENROUTER, ModelProvider.GOOGLE,
         ]:
             client = self._init_openai_compatible(provider)
         elif provider == ModelProvider.ANTHROPIC:
             client = self._init_anthropic()
-        elif provider == ModelProvider.GOOGLE:
-            client = self._init_google()
         else:
             raise ValueError(f"Unbekannter Provider: {provider}")
 
