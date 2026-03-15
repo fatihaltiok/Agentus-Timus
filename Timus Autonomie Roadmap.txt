@@ -290,6 +290,119 @@ passwort:s2!XhXZY6H7Zw4P
   sudo systemctl start timus-dispatcher.service
   systemctl status timus-mcp.service timus-dispatcher.service --no-pager
   curl -sS http://127.0.0.1:5000/health
+  
+  
+  
+  
+    Der saubere Start ist:
+
+  sudo systemctl start qdrant.service
+  sudo systemctl start timus-mcp.service
+  sudo systemctl start timus-dispatcher.service
+
+  Prüfen kannst du es so:
+
+  systemctl status qdrant.service
+  systemctl status timus-mcp.service
+  systemctl status timus-dispatcher.service
+
+  Die relevanten Units liegen im Repo hier:
+
+  - qdrant.service
+  - timus-mcp.service
+  - timus-dispatcher.service
+
+  Praktisch heißt das:
+
+  - qdrant = semantisches Memory / Recall
+  - timus-mcp = API-/Tool-Server
+  - timus-dispatcher = Orchestrator / Agentenlauf
+
+
+
+
+Für den Alltag brauchst du im Grunde nur diese Befehle.
+
+  Start
+
+  sudo systemctl start qdrant.service
+  sudo systemctl start timus-mcp.service
+  sudo systemctl start timus-dispatcher.service
+
+  Stop
+
+  sudo systemctl stop timus-dispatcher.service
+  sudo systemctl stop timus-mcp.service
+  sudo systemctl stop qdrant.service
+
+  Restart
+
+  sudo systemctl restart qdrant.service
+  sudo systemctl restart timus-mcp.service
+  sudo systemctl restart timus-dispatcher.service
+
+  Status prüfen
+
+  systemctl status qdrant.service
+  systemctl status timus-mcp.service
+  systemctl status timus-dispatcher.service
+
+  Logs live ansehen
+
+  journalctl -u qdrant.service -f
+  journalctl -u timus-mcp.service -f
+  journalctl -u timus-dispatcher.service -f
+
+  Autostart beim Boot aktivieren
+
+  sudo systemctl enable qdrant.service
+  sudo systemctl enable timus-mcp.service
+  sudo systemctl enable timus-dispatcher.service
+
+  Autostart wieder deaktivieren
+
+  sudo systemctl disable qdrant.service
+  sudo systemctl disable timus-mcp.service
+  sudo systemctl disable timus-dispatcher.service
+
+  Schneller Gesundheitscheck
+
+  curl -s http://127.0.0.1:6333/readyz
+  curl -s http://127.0.0.1:5000/health
+  python scripts/run_production_gates.py
+
+  Empfohlene Reihenfolge ist immer:
+
+  1. qdrant
+  2. timus-mcp
+  3. timus-dispatcher
+  
+  
+  Das Skript ist drin: timusctl.sh
+
+  Nutzung:
+
+  bash scripts/timusctl.sh up
+  bash scripts/timusctl.sh down
+  bash scripts/timusctl.sh restart
+  bash scripts/timusctl.sh status
+  bash scripts/timusctl.sh health
+  bash scripts/timusctl.sh logs
+  bash scripts/timusctl.sh logs qdrant
+  bash scripts/timusctl.sh logs mcp
+  bash scripts/timusctl.sh logs dispatcher
+
+  Es steuert jetzt den ganzen Stack in der richtigen Reihenfolge:
+
+  - qdrant
+  - timus-mcp
+  - timus-dispatcher
+
+  Verifiziert:
+
+  - Syntaxcheck grün
+  - status live gegen systemd geprüft
+  - alle drei Services aktuell active (running)
 
 
 
