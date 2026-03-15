@@ -1463,115 +1463,99 @@ MCP-Server :5000 (FastAPI + JSON-RPC)
 
 ```mermaid
 flowchart TD
-    U["User Input\nCLI / Telegram / Console / Canvas / Terminal"] --> RP["Caddy Reverse Proxy\nHTTPS + Auth\nconsole.fatih-altiok.com"]
-    RP --> CU["Canvas UI / Mobile Console\nChat · Status · Dateien · Voice"]
-    CU --> D["main_dispatcher.py"]
-    U --> D
-    D --> DS["Query Sanitizing"]
-    D --> DI["Intent Analyse LLM"]
-    D --> DP["Policy Gate"]
-    D --> DL["Lane + Session"]
-    DL --> A["AGENT_CLASS_MAP\n13 Agenten"]
+    U["User Input\nCLI / Telegram / Terminal"] --> D
+    AND["Android App\nKotlin · Chat · Voice · GPS\nAccessibilityService"] --> D
+    AND --> RP
+    RP["Caddy Reverse Proxy\nHTTPS + Auth\nconsole.fatih-altiok.com"] --> CU["Canvas UI / Mobile Console\nChat · Status · Dateien · Voice"]
+    CU --> D["main_dispatcher.py\nQuery-Sanitizing · Intent-LLM\nPolicy Gate · Lane+Session\nFollow-up Resolver · Topic-Recall"]
+    D --> CAP["Conversation Capsule\nSession-State · last_agent\nmatched_reply_points\ntopic_recall inject"]
+    CAP -.->|"Kontext"| D
 
-    A --> AR["AgentRegistry"]
-    AR --> ARD["delegate — sequenziell\nasyncio.wait_for 120s"]
-    ARD --> ARDR["Retry expon. Backoff"]
-    ARD --> ARDP["Partial-Erkennung"]
-    ARD --> ARDL["Loop-Prevention MAX_DEPTH 3"]
+    D --> A["AGENT_CLASS_MAP\n13 Agenten"]
+    A --> AR["AgentRegistry\nAgentResult · delegate/parallel\nBlackboard-Auto-Write"]
+    AR --> ARD["delegate — sequenziell\nasyncio.wait_for 120s\nRetry · Partial · MAX_DEPTH 3"]
+    AR --> ARP["delegate_parallel — Fan-Out\nasyncio.gather + Semaphore 10\nFan-In ResultAggregator"]
 
-    AR --> ARP["delegate_parallel — Fan-Out v2.5\nasyncio.gather + Semaphore max 10"]
-    ARP --> ARPM["MemoryAccessGuard\nContextVar — thread-safe"]
-    ARP --> ARPA["ResultAggregator\nFan-In Markdown"]
+    A --> META["MetaAgent R1/R2\norchestration/meta_orchestration.py"]
+    META --> MR["Rezepte + Alternativrezepte\nyoutube_search_then_visual\nweb_research_only u.a."]
+    META --> MH["Strukturierte Handoffs\ngoal · expected_output\nsuccess_signal · constraints"]
+    META --> MS["meta_self_state.py\nBudget · Breaker · Quarantäne\nbekannte schlechte Muster"]
+    META --> ML["Outcome-Lernen\nsite_recipe · task_type\nkonservative Rezeptwahl"]
+    META --> MEG["Evidence Gate\nSelbstdiagnose nur mit\nbelegten Daten\n[BELEGT]/[TEILWEISE]/[NICHT BELEGT]"]
 
     A --> B["agent/base_agent.py\nDynamicToolMixin"]
-    B --> BW["Working Memory inject\nSoul-Prefix NEU v2.8"]
-    B --> BR["Recall Fast-Path"]
-    B --> BL["BugLogger"]
-
+    B --> BW["Working Memory + Soul-Prefix"]
+    B --> BR["Blackboard-Kontext inject"]
     B --> M["MCP Server :5000\nFastAPI + JSON-RPC\n80+ Tools"]
 
     M --> FH["VisualNemotron v4\nFlorence-2 + PaddleOCR\nPlan-then-Execute"]
     M --> VC["Voice REST API\n/voice/status|listen|stop|speak|synthesize"]
-    VC --> VW["Faster-Whisper STT\ninit via Background-Task"]
+    VC --> VW["Faster-Whisper STT"]
     VC --> VT["Inworld.AI TTS\nBase64-MP3 + Browser Playback"]
-    VC --> CV["Canvas UI v4.7\nSSE Voice-Loop + Mobile Console"]
+    AND -.->|"/voice/transcribe\n/voice/synthesize"| VC
     M --> CF["Console File API\n/upload · /files/recent · /files/download"]
     CU --> CF
-    M --> RS["RealSense Toolchain\nrealsense_camera_tool"]
-    RS --> RSS["start_realsense_stream\nOpenCV Background Thread"]
-    RS --> RSC["capture_realsense_snapshot\nrs-save-to-disk"]
-    RS --> RSL["capture_realsense_live_frame\nexport latest frame"]
-    RS --> RSM["utils/realsense_stream.py\nlatest frame + stream status"]
-    RSC --> RSD["data/realsense_captures\nSnapshot-Persistenz"]
-    RSL --> RSLD["data/realsense_stream\nLive-Frame Export"]
+    M --> LOC["Location API\n/location/update · /location/nearby\nReverse-Geocoding\nSerpApi Google Maps"]
+    AND -.->|"GPS lat/lon"| LOC
 
-    M --> SYS["SystemAgent\nread-only Monitoring"]
+    M --> SYS["SystemAgent S.Y.S.\nread-only · Logs · Stats\nAnti-Halluzination Gate"]
     M --> SH["ShellAgent v2\n5-Schicht-Policy\nSystem-Kontext-Injektion"]
-    M --> DR["Deep Research v6.0\nYouTube + Bilder + PDF"]
-    DR --> DRY["YouTubeResearcher\nDataForSEO + qwen3-235b\nNVIDIA Vision"]
-    DR --> DRI["ImageCollector\nWeb-Bild + DALL-E"]
-    DR --> DRP["ResearchPDFBuilder\nWeasyPrint A4-PDF\nJinja2 Template"]
+    M --> DR["Deep Research v8.0\nEvidence Engine"]
+    DR --> DRY["YouTubeResearcher\nDataForSEO live-Mode\nStandard→Live Fallback\nSerpApi YouTube"]
+    DR --> DRI["ImageCollector + PDF\nWeasyPrint A4"]
+    DR --> DRC["Claim→Evidence→Verdict\npartial_research Guardrail"]
     M --> E["Externe Systeme\nPyAutoGUI / Playwright / APIs"]
 
-    M --> MM["memory/memory_system.py\nMemory v2.2 + WAL"]
-    MM --> WAL["SQLite WAL\ncuriosity_sent NEU v2.8"]
-    MM --> MAG["MemoryAccessGuard\nContextVar"]
-    MM --> IE["interaction_events\ndeterministisches Logging"]
-    MM --> UR["unified_recall\n200-Scan"]
-    MM --> CHR["ChromaDB Direktverbindung"]
-    MM --> CUR["Nemotron-Kurator\n4 Kriterien"]
-    MM --> AUS["Auto-Summarize\nalle 20 Nachrichten"]
-    MM --> RFT["Reflection 30s Timeout\n→ soul_engine.apply_drift NEU v2.8"]
+    M --> SME["Self-Modification\nSM1–SM7\nself_modifier_engine.py"]
+    SME --> SM1["SM1 Change Policy\nZonen · Typen · Testpflicht"]
+    SME --> SM2["SM2 Risk Classifier\nRisikostufe + Begründung"]
+    SME --> SM3["SM3 Patch-Pipeline\nisolierter Workspace"]
+    SME --> SM4["SM4 Verification Gate\npy_compile · Tests · Syntax"]
+    SME --> SM5["SM5 Canary + Rollback\nautomatisches Revert"]
+    SME --> SM6["SM6 Change Memory\nSQLite-Ledger\nOutcome · Regression"]
+    SME --> SM7["SM7 Autonomous Apply\nController\nPolicy+Risk+Verify+Canary"]
 
-    MM --> SE["SoulEngine NEU v2.8\nmemory/soul_engine.py"]
-    SE --> SEA["5 Achsen\nconfidence formality humor\nverbosity risk_appetite"]
-    SE --> SED["apply_drift\n7 Signale · ×0.1 Dämpfung\nClamp 5–95"]
-    SE --> SET["get_tone_config\nvorsichtig neutral direkt"]
+    M --> MM["memory/memory_system.py\nMemory + WAL"]
+    MM --> QDR["Qdrant\nsemanischer Chat-Recall\nHit Rate@k · wrong recall\nproduktiver Default"]
+    MM --> WAL["SQLite WAL\ninteraction_events\nGoals · Incidents · Analytics"]
+    MM --> MAG["MemoryAccessGuard\nContextVar thread-safe"]
+    MM --> CUR["Nemotron-Kurator\nAuto-Summarize alle 20"]
+    MM --> RFT["Reflection → soul_engine.apply_drift"]
+
+    MM --> SE["SoulEngine\nmemory/soul_engine.py"]
+    SE --> SEA["5 Achsen: confidence\nformality humor\nverbosity risk_appetite"]
+    SE --> SED["apply_drift · Decay täglich"]
     SE --> SEP["get_system_prompt_prefix\ndynamisches Prompt-Fragment"]
 
-    MM --> CE["CuriosityEngine NEU v2.8\norchestration/curiosity_engine.py"]
-    CE --> CEL["Fuzzy Sleep\n3–14h zufällig"]
-    CE --> CET["Topic-Extraktion\nSession + SQLite 72h"]
-    CE --> CEQ["LLM Query-Gen\nEdge-Suchanfrage 2026"]
-    CE --> CES["DataForSEO\nTop-3 Ergebnisse"]
-    CE --> CEG["Gatekeeper-LLM\nScore 0-10 · ≥7 = senden"]
-    CE --> CED["Duplikat-Check\n14 Tage · 2/Tag Limit"]
-    CE --> CEP["Telegram Push\nSoul-Ton als Einstieg"]
+    MM --> CE["CuriosityEngine\norchestration/curiosity_engine.py"]
+    CE --> CEQ["LLM Query-Gen + DataForSEO"]
+    CE --> CEG["Gatekeeper ≥7 → Telegram Push"]
+    CE --> CEF["FeedbackEngine M16\n👍/👎/🤷 → Soul-Hook-Gewichtung"]
 
-    SET -.->|"Ton für Push"| CEP
     SEP -.->|"Injiziert in"| BW
     SED -.->|"nach Reflexion"| RFT
     ARP -.->|"read-only"| MAG
-    WAL -.->|"ermöglicht"| ARP
+    QDR -.->|"semantischer Recall"| CAP
 
-    D --> RUN["autonomous_runner.py\nAutonomie-Loop v4.0"]
-    RUN --> G1["GoalGenerator M1\nMemory+Curiosity+Events"]
-    RUN --> G2["LongTermPlanner M2\n3-Horizont-Planung"]
-    RUN --> G3["ReplanningEngine M2\nCommitment-Überwachung"]
-    RUN --> SG["Self-Stabilization Gate\nS1-S6"]
-    SG --> SD["Incident-Dedupe + Cooldown"]
-    SG --> SL["Recovery-Leiter\nok · degraded · recovering · blocked"]
-    SG --> SQ["Quarantine + Circuit Breaker"]
-    SG --> SR["Resource-Guard"]
-    SG --> SM["Incident Memory"]
-    RUN --> G4["SelfHealingEngine M3\nCircuit-Breaker+Incidents"]
-    RUN --> G5["AutonomyScorecard M5\nScore 0–100·Control-Loop"]
-    RUN --> G6["SessionReflection M8\nIdle-Erkennung + LLM-Reflexion\nPattern-Akkumulation"]
-    RUN --> G7["AgentBlackboard M9\nTTL Shared Memory\nwrite/read/search"]
-    RUN --> G8["ProactiveTriggers M10\n±14-Min-Fenster\nMorgen + Abend-Routinen"]
-    RUN --> G9["GoalQueueManager M11\nHierarchische Ziele\nMeilenstein-Rollup"]
-    RUN --> G10["SelfImprovementEngine M12\nTool-/Routing-Analytics\nwöchentliche Analyse"]
-    RUN --> G11["FeedbackEngine M16\n👍/👎/🤷 → Soul-Hooks\nDecay täglich"]
-    RUN --> G12["EmailAutonomyEngine M14\nWhitelist+Confidence\nSMTP-Backend"]
-    RUN --> G13["ToolGeneratorEngine M13\nAST-Check+Review\nimportlib-Aktivierung"]
-    G1 -.->|"Goals in"| WAL
-    G4 -.->|"Incidents in"| WAL
-    G5 -.->|"Snapshots in"| WAL
-    G6 -.->|"Reflexionen in"| WAL
+    D --> RUN["autonomous_runner.py\nAutonomie-Loop v4.12"]
+    RUN --> SG["Self-Stabilization Gate S1–S6\nDedupe · Recovery-Leiter\nQuarantäne · Resource-Guard\nIncident-Memory · Stability-Gate"]
+    RUN --> G1["GoalGenerator M1 + LongTermPlanner M2"]
+    RUN --> G4["SelfHealingEngine M3\nCircuit-Breaker + Incidents"]
+    RUN --> G5["AutonomyScorecard M5\nScore 0–100 · Control-Loop"]
+    RUN --> G6["SessionReflection M8\nIdle · LLM-Reflexion · Pattern"]
+    RUN --> G7["AgentBlackboard M9\nTTL Shared Memory"]
+    RUN --> G8["ProactiveTriggers M10\nMorgen + Abend-Routinen"]
+    RUN --> G9["GoalQueueManager M11\nHierarchische Ziele"]
+    RUN --> G10["SelfImprovementEngine M12\nTool-/Routing-Analytics"]
+    RUN --> G12["EmailAutonomyEngine M14\nWhitelist+Confidence+SMTP"]
+    RUN --> G13["ToolGeneratorEngine M13\nAST-Check+Review+importlib"]
+    RUN --> AMBC["AmbientContextEngine M15\nSignalScorer · Policy-Layer\nAudit-Log"]
+
+    G1 -.->|"Goals"| WAL
+    G4 -.->|"Incidents"| WAL
+    G6 -.->|"Reflexionen"| WAL
     G7 -.->|"Shared Context"| B
-    G8 -.->|"Trigger in"| WAL
-    G9 -.->|"Ziele in"| WAL
-    G10 -.->|"Analytics in"| WAL
+    G10 -.->|"Analytics"| WAL
 ```
 
 ---
