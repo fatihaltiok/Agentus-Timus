@@ -66,7 +66,7 @@ class MultiProviderClient:
     # Abweichende Basis-URLs für OpenAI-SDK-Compat-Calls (wenn nötig).
     # BASE_URLS bleibt der kanonische native Endpunkt (z.B. für den Dispatcher).
     OPENAI_COMPAT_URLS = {
-        ModelProvider.GOOGLE: "https://generativelanguage.googleapis.com/v1beta/openai",
+        ModelProvider.GOOGLE: "https://generativelanguage.googleapis.com/v1beta/openai/",
     }
 
     def __init__(self):

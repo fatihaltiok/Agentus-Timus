@@ -159,12 +159,12 @@ class TestGoogleProviderOpenAICompat:
             f"Nativer GOOGLE-Endpunkt muss .../v1beta sein, ist: {url}"
         )
 
-    def test_google_openai_compat_url_ends_with_openai(self):
-        """get_openai_compat_base_url(GOOGLE) endet auf /openai — für OpenAI SDK."""
+    def test_google_openai_compat_url_matches_official_example(self):
+        """get_openai_compat_base_url(GOOGLE) entspricht der offiziellen Google-Doku inkl. trailing slash."""
         client = MultiProviderClient()
         url = client.get_openai_compat_base_url(ModelProvider.GOOGLE)
-        assert url.endswith("/openai"), (
-            f"OpenAI-Compat-URL muss auf /openai enden, ist: {url}"
+        assert url == "https://generativelanguage.googleapis.com/v1beta/openai/", (
+            f"OpenAI-Compat-URL stimmt nicht mit Google-Beispiel überein: {url}"
         )
 
     def test_google_dispatcher_url_not_broken_by_openai_compat(self):
