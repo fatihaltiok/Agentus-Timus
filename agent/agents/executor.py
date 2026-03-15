@@ -96,17 +96,33 @@ _YOUTUBE_GENERIC_PATTERNS = (
     r"^timus[, ]*",
     r"\bauf youtube\b",
     r"\bbei youtube\b",
+    r"\bin youtube\b",
+    r"\byoutube\s+rein\b",
     r"\bmal\b",
+    r"\bkurz\b",
+    r"\brein\b",
     r"\bso\b",
     r"\bgibt'?s\b",
     r"\bgibt es\b",
     r"\bwas gibt'?s neues\b",
     r"\bwas gibt es neues\b",
+    r"\bwas es so\b",
     r"\bschau mal\b",
     r"\bzeig mir\b",
     r"\bfinde mir\b",
     r"\bfuer mich\b",
+    r"\bfür mich\b",
     r"\bbitte\b",
+    r"\bnur dinge die\b",
+    r"\bnur videos die\b",
+    r"\bnur inhalte die\b",
+    r"\bgeben kann\b",
+    r"\binteressant(?:es|e)?\b",
+    r"\brelavant(?:e)?\s+sind\b",
+    r"\brelevant(?:e)?\s+sind\b",
+    r"\bauch\s+englisch(?:[- ]?sprachige?)?\b",
+    r"\benglisch[- ]?sprachige?\b",
+    r"\bauf englisch\b",
 )
 
 _YOUTUBE_EDGE_FILLER_TOKENS = {
@@ -129,7 +145,71 @@ _YOUTUBE_EDGE_FILLER_TOKENS = {
     "gibt's",
     "videos",
     "video",
+    "kurz",
+    "rein",
+    "nur",
+    "mich",
+    "mir",
+    "dinge",
+    "inhalte",
+    "beitraege",
+    "beiträge",
+    "relavant",
+    "relevant",
+    "sprachige",
 }
+
+_YOUTUBE_DE_TO_EN_TERMS: dict[str, str] = {
+    "ki": "AI",
+    "künstliche intelligenz": "artificial intelligence",
+    "agenten": "agents",
+    "agent": "agent",
+    "entwicklungen": "developments",
+    "entwicklung": "development",
+    "neuigkeiten": "news",
+    "nachrichten": "news",
+    "modelle": "models",
+    "modell": "model",
+    "sprachmodell": "language model",
+    "sprachmodelle": "language models",
+    "selbstlernend": "self-learning",
+    "autonomie": "autonomy",
+}
+
+
+_YOUTUBE_EN_FILLER_TOKENS = {
+    "schau", "was", "es", "gibt", "neues", "neu", "neue", "aktuell",
+    "aktuelles", "bereich", "zum", "thema", "selbst", "und",
+    "die", "der", "das", "auch", "im", "in", "an", "auf",
+    "mit", "von", "für", "fuer", "zu",
+}
+
+
+def _youtube_translate_query(query: str) -> str:
+    """Einfache DE→EN Übersetzung für KI-Kernbegriffe + Bereinigung verbliebener Filler."""
+    result = query.lower()
+    for de, en in sorted(_YOUTUBE_DE_TO_EN_TERMS.items(), key=lambda x: -len(x[0])):
+        result = re.sub(r"\b" + re.escape(de) + r"\b", en, result, flags=re.IGNORECASE)
+    # Verbliebene deutsche Filler-Tokens entfernen die nicht übersetzt wurden
+    tokens = result.split()
+    cleaned = [t for t in tokens if t not in _YOUTUBE_EN_FILLER_TOKENS]
+    # Edge-Filler an Wortgrenzen trimmen
+    while cleaned and cleaned[0] in _YOUTUBE_EN_FILLER_TOKENS:
+        cleaned.pop(0)
+    while cleaned and cleaned[-1] in _YOUTUBE_EN_FILLER_TOKENS:
+        cleaned.pop()
+    return " ".join(cleaned).strip()
+
+
+def _detect_youtube_language_preference(text: str) -> list[str]:
+    """Erkennt ob der Nutzer explizit englische Inhalte möchte."""
+    normalized = str(text or "").lower()
+    wants_english = any(m in normalized for m in (
+        "englisch", "englischsprachig", "english", "auf englisch", "in english",
+    ))
+    if wants_english:
+        return ["de", "en"]
+    return ["de"]
 
 
 class ExecutorAgent(BaseAgent):
@@ -636,12 +716,20 @@ class ExecutorAgent(BaseAgent):
             query = re.sub(pattern, " ", query, flags=re.IGNORECASE)
         query = re.sub(r"\s+", " ", query).strip(" ,.!?:;")
 
-        for separator in (" zu ", " ueber ", " über ", " fuer ", " für "):
-            if separator in f" {query} ":
-                tail = query.split(separator, 1)[1].strip(" ,.!?:;")
-                if tail:
+        # Separator-Extraktion: Inhalt nach typischen Einleitungsphrasen
+        for separator in (" zu ", " ueber ", " über ", " fuer ", " für ", " sind ", " über das thema ", " zum thema "):
+            padded = f" {query} "
+            if separator in padded:
+                tail = query.split(separator.strip(), 1)[1].strip(" ,.!?:;")
+                # Tail nur nehmen wenn er mehr Inhalt hat als das was davor war
+                if tail and len(tail.split()) >= 2:
                     query = tail
                     break
+
+        # Zweite Bereinigungsrunde nach Separator-Split
+        for pattern in _YOUTUBE_GENERIC_PATTERNS:
+            query = re.sub(pattern, " ", query, flags=re.IGNORECASE)
+        query = re.sub(r"\s+", " ", query).strip(" ,.!?:;")
 
         tokens = [token for token in query.split() if token]
         while tokens and tokens[0] in _YOUTUBE_EDGE_FILLER_TOKENS:
@@ -817,14 +905,13 @@ class ExecutorAgent(BaseAgent):
         )
 
     async def _run_youtube_light_research(self, handoff: DelegationHandoff) -> str:
-        user_task = self._recover_user_query(
-            (
+        raw_task = (
             handoff.handoff_data.get("original_user_task")
             or handoff.handoff_data.get("query")
             or handoff.goal
             or ""
-            )
         )
+        user_task = self._recover_user_query(raw_task)
         preferred_search_tool = str(handoff.handoff_data.get("preferred_search_tool") or "search_youtube").strip()
         max_results = handoff.handoff_data.get("max_results") or 5
         try:
@@ -833,27 +920,72 @@ class ExecutorAgent(BaseAgent):
             max_results_int = 5
         search_mode = str(handoff.handoff_data.get("search_mode") or "live").strip() or "live"
         search_query = self._infer_youtube_search_query(user_task)
+        lang_prefs = _detect_youtube_language_preference(user_task)
 
-        search_result = await self._call_tool(
-            preferred_search_tool,
-            {
-                "query": search_query,
-                "max_results": max_results_int,
-                "language_code": "de",
-                "mode": search_mode,
-            },
-        )
-        if isinstance(search_result, dict) and search_result.get("error"):
+        # P2: Referenz-Fortsetzung — kurze Query + topic_recall im vollen Task-Text
+        # Beispiel: "mach damit eine youtube suche" → user_task ist kurz, kein verwertbares Thema
+        if search_query == "trending deutschland" or len(search_query.split()) <= 2:
+            topic_recall = self._recover_topic_recall(raw_task)
+            if topic_recall:
+                # Ersten Recall-Eintrag als Query-Basis nehmen
+                recall_text = topic_recall[0]
+                recall_query = self._infer_youtube_search_query(recall_text)
+                if recall_query and recall_query != "trending deutschland":
+                    search_query = recall_query
+                    lang_prefs = _detect_youtube_language_preference(recall_text)
+
+        seen_ids: set[str] = set()
+        combined_results: list[dict] = []
+
+        async def _fetch(query: str, lang: str) -> list[dict]:
+            res = await self._call_tool(
+                preferred_search_tool,
+                {
+                    "query": query,
+                    "max_results": max_results_int,
+                    "language_code": lang,
+                    "mode": search_mode,
+                },
+            )
+            if isinstance(res, dict) and res.get("error"):
+                return []
+            return self._tool_list_payload(res)
+
+        def _dedup_add(items: list[dict]) -> None:
+            for item in items:
+                vid = str(item.get("video_id") or "").strip()
+                if vid:
+                    if vid not in seen_ids:
+                        seen_ids.add(vid)
+                        combined_results.append(item)
+                else:
+                    # Kein video_id (z.B. Mock-Daten) → anhand Titel deduplizieren
+                    title_key = str(item.get("title") or "").strip().lower()
+                    if title_key and title_key not in seen_ids:
+                        seen_ids.add(title_key)
+                        combined_results.append(item)
+                    elif not title_key:
+                        combined_results.append(item)
+
+        # DE-Suche immer
+        _dedup_add(await _fetch(search_query, "de"))
+
+        # EN-Suche wenn Nutzer englische Inhalte wollte
+        if "en" in lang_prefs:
+            en_query = _youtube_translate_query(search_query)
+            if en_query and en_query != search_query:
+                _dedup_add(await _fetch(en_query, "en"))
+
+        if not combined_results:
             return (
-                f"Die YouTube-Suche ist gerade fehlgeschlagen: {search_result['error']}. "
+                f"Die YouTube-Suche ist gerade fehlgeschlagen oder lieferte keine Treffer fuer '{search_query}'. "
                 "Wenn du willst, versuche ich es gleich mit einer praeziseren Suchanfrage nochmal."
             )
 
-        results = self._tool_list_payload(search_result)
         return self._format_youtube_light_response(
             user_task=user_task,
             search_query=search_query,
-            results=results,
+            results=combined_results,
         )
 
     async def _run_self_status_probe(self) -> str:
@@ -883,6 +1015,23 @@ class ExecutorAgent(BaseAgent):
         payload = self._tool_payload(ops_result)
         return self._format_ops_priority(payload)
 
+    @staticmethod
+    def _recover_resolved_proposal(task_text: str) -> dict | None:
+        """P4: Parst RESOLVED_PROPOSAL-Block aus dem Task-Text."""
+        text = str(task_text or "")
+        if "# RESOLVED_PROPOSAL" not in text:
+            return None
+        kind_match = re.search(r"^kind:\s*(\S+)", text, re.MULTILINE)
+        query_match = re.search(r"^suggested_query:\s*(.+)$", text, re.MULTILINE)
+        raw_match = re.search(r"^raw_proposal:\s*(.+)$", text, re.MULTILINE)
+        if not kind_match or not query_match:
+            return None
+        return {
+            "kind": kind_match.group(1).strip(),
+            "suggested_query": query_match.group(1).strip(),
+            "raw_proposal": raw_match.group(1).strip() if raw_match else "",
+        }
+
     async def run(self, task: str) -> str:
         handoff = parse_delegation_handoff(task)
         plain_task = self._recover_user_query(task)
@@ -891,6 +1040,27 @@ class ExecutorAgent(BaseAgent):
         topic_recall = self._recover_topic_recall(task)
         session_summary = self._recover_session_summary(task)
         followup_session_id = self._recover_followup_session_id(task)
+
+        # P4: RESOLVED_PROPOSAL — Angebot direkt ausführen ohne LLM-Runde
+        resolved_proposal = self._recover_resolved_proposal(task)
+        if resolved_proposal:
+            kind = resolved_proposal.get("kind", "generic_action")
+            suggested_query = resolved_proposal.get("suggested_query", "")
+            if kind == "youtube_search" and suggested_query:
+                from agent.shared.delegation_handoff import DelegationHandoff
+                synthetic_handoff = DelegationHandoff(
+                    goal=suggested_query,
+                    expected_output="YouTube-Videos zu dem angefragten Thema",
+                    handoff_data={
+                        "task_type": "youtube_light_research",
+                        "query": suggested_query,
+                        "original_user_task": suggested_query,
+                        "search_mode": "live",
+                        "max_results": 5,
+                    },
+                )
+                return await self._run_youtube_light_research(synthetic_handoff)
+
         if handoff and handoff.handoff_data.get("task_type") == "location_local_search":
             return await self._run_location_local_search(handoff)
         if handoff and handoff.handoff_data.get("task_type") == "youtube_light_research":

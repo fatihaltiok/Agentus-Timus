@@ -149,6 +149,49 @@ _FOLLOWUP_PATTERNS = (
     r"\bsag du es mir\b",
 )
 
+# P2: Referenz-Pronomen — "damit", "das gleiche", "dieselbe suche" etc.
+_REFERENCE_CONTINUATION_PATTERNS = (
+    r"\bdamit\b",
+    r"\bdas gleiche\b",
+    r"\bdie gleiche\b",
+    r"\bdieselbe\b",
+    r"\bdas selbe\b",
+    r"\bgenau das\b",
+    r"\bgenau das gleiche\b",
+    r"\bselbiges\b",
+)
+
+# P4: Bestätigungs-Muster — kurze Zustimmung zu vorherigem Angebot
+_AFFIRMATION_PATTERNS = (
+    r"^\s*ja\s*[.!]?\s*$",
+    r"^\s*ok\s*[.!]?\s*$",
+    r"^\s*okay\s*[.!]?\s*$",
+    r"\bja\s+mach\s+das\b",
+    r"\bja\s+mach\s+mal\b",
+    r"\bja\s+schau\s+(mal\s+)?danach\b",
+    r"\bschau\s+mal\s+danach\b",
+    r"\bklingt\s+gut\b",
+    r"\bgerne\s*[.!]?\s*$",
+    r"\bsicher\s*[.!]?\s*$",
+    r"\bjep\s*[.!]?\s*$",
+    r"\byep\s*[.!]?\s*$",
+    r"^\s*mach\s+das\s*[.!]?\s*$",
+    r"^\s*mach\s+mal\s*[.!]?\s*$",
+    r"\blos\s+geht.?s\b",
+    r"\bauf\s+jeden\s+fall\b",
+)
+
+# P4: Angebots-Muster am Ende einer Assistenten-Antwort
+_PROPOSAL_TRIGGER_PATTERNS = (
+    r"\bsoll\s+ich\b",
+    r"\bich\s+kann\b",
+    r"\bich\s+k[oö]nnte\b",
+    r"\bwillst\s+du\b",
+    r"\bmagst\s+du\b",
+    r"\bmöchtest\s+du\b",
+    r"\bmoechtest\s+du\b",
+)
+
 _CONTEXTUAL_RECALL_PATTERNS = (
     r"\bnochmal\b",
     r"\bvorhin\b",
@@ -417,6 +460,136 @@ def _is_contextual_recall_query(query: str) -> bool:
     return any(re.search(pattern, normalized) for pattern in _CONTEXTUAL_RECALL_PATTERNS)
 
 
+def _is_reference_continuation(query: str) -> bool:
+    """P2: Erkennt Referenz-Pronomen wie 'damit', 'das gleiche', 'dieselbe Suche'."""
+    normalized = str(query or "").strip().lower()
+    if not normalized:
+        return False
+    if len(normalized.split()) > 12:
+        return False
+    return any(re.search(pattern, normalized) for pattern in _REFERENCE_CONTINUATION_PATTERNS)
+
+
+def _is_affirmation(query: str) -> bool:
+    """P4: Erkennt kurze Zustimmungen wie 'ja', 'ok', 'ja mach das', 'schau mal danach'."""
+    normalized = str(query or "").strip().lower()
+    if not normalized:
+        return False
+    if len(normalized.split()) > 8:
+        return False
+    return any(re.search(pattern, normalized) for pattern in _AFFIRMATION_PATTERNS)
+
+
+_PROPOSAL_TRAILING_VERBS = re.compile(
+    r"\s+(?:suchen|starten|machen|ausführen|ausfuehren|recherchieren|ansehen|anschauen|schauen)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _clean_proposal_query(text: str) -> str:
+    """Entfernt Verb-Residuen am Ende einer extrahierten Proposal-Query."""
+    cleaned = _PROPOSAL_TRAILING_VERBS.sub("", text.strip()).strip(" ,.!?")
+    return cleaned
+
+
+def _extract_proposal_metadata(text: str) -> dict | None:
+    """P4: Extrahiert strukturierte ProposalMetadata aus einer Assistenten-Antwort.
+
+    Sucht nach dem letzten Angebotsatz im Text (z.B. 'Soll ich nach YouTube-Videos
+    zu KI suchen?') und gibt strukturierte Metadaten zurück:
+    {kind, target, suggested_query, raw_sentence}
+    """
+    source = str(text or "").strip()
+    if not source:
+        return None
+
+    # Nur letzten Abschnitt (letzte 3 Sätze) prüfen — Angebote stehen meist am Ende
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", source) if s.strip()]
+    tail = sentences[-3:] if len(sentences) >= 3 else sentences
+
+    for sentence in reversed(tail):
+        normalized = sentence.lower()
+        if not any(re.search(p, normalized) for p in _PROPOSAL_TRIGGER_PATTERNS):
+            continue
+
+        # YouTube: sowohl "youtube zu X" als auch "X auf youtube" / "X in youtube"
+        yt_match = re.search(
+            r"youtube(?:[- ]?videos?)?(?:\s+zu\s+|\s+über\s+|\s+ueber\s+)([^?.!,]+)",
+            normalized,
+        )
+        if not yt_match:
+            # "X auf youtube" / "X in youtube" Variante
+            yt_match_rev = re.search(
+                r"([^?.!,]+?)\s+(?:auf|in|bei)\s+youtube",
+                normalized,
+            )
+            if yt_match_rev:
+                # Prefix bereinigen (soll ich / ich kann etc.)
+                raw = yt_match_rev.group(1)
+                raw = re.sub(
+                    r"^.*?(?:soll ich|ich kann|ich könnte|ich koennte|willst du)"
+                    r"(?:\s+\w+){0,4}\s+nach\s+",
+                    "", raw, flags=re.IGNORECASE,
+                ).strip()
+                if raw and len(raw) >= 3:
+                    return {
+                        "kind": "youtube_search",
+                        "target": "youtube",
+                        "suggested_query": _clean_proposal_query(raw)[:200],
+                        "raw_sentence": sentence[:300],
+                    }
+
+        if yt_match:
+            return {
+                "kind": "youtube_search",
+                "target": "youtube",
+                "suggested_query": _clean_proposal_query(yt_match.group(1))[:200],
+                "raw_sentence": sentence[:300],
+            }
+
+        web_match = re.search(
+            r"(?:nach\s+|zu\s+|über\s+|ueber\s+)([^?.!,]{4,})",
+            normalized,
+        )
+        if web_match:
+            suggested = _clean_proposal_query(web_match.group(1))
+            if suggested and len(suggested) >= 3:
+                return {
+                    "kind": "web_search",
+                    "target": "web",
+                    "suggested_query": suggested[:200],
+                    "raw_sentence": sentence[:300],
+                }
+
+        # Generisch: Inhalt nach dem Angebotsausdruck
+        content_match = re.search(
+            r"(?:soll ich|ich kann|ich könnte|ich koennte|willst du|magst du|möchtest du|moechtest du)"
+            r"(?:\s+\w+){0,5}\s+(.+?)(?:\s*\?.*)?$",
+            normalized,
+        )
+        if content_match:
+            suggested = _clean_proposal_query(content_match.group(1))
+            if suggested and len(suggested) >= 4:
+                return {
+                    "kind": "generic_action",
+                    "target": "executor",
+                    "suggested_query": suggested[:200],
+                    "raw_sentence": sentence[:300],
+                }
+
+    return None
+
+
+def _store_proposal_in_capsule(session_id: str, proposal: dict | None) -> None:
+    """P4: Speichert oder löscht last_proposed_action in der Session-Kapsel."""
+    capsule = _load_session_capsule(session_id)
+    if proposal:
+        capsule["last_proposed_action"] = proposal
+    else:
+        capsule.pop("last_proposed_action", None)
+    _store_session_capsule(capsule)
+
+
 def _tokenize_followup_focus(text: str) -> list[str]:
     normalized = str(text or "").lower()
     tokens = re.findall(r"[a-zA-Z0-9äöüÄÖÜß_-]+", normalized)
@@ -538,6 +711,16 @@ def _build_followup_capsule(session_id: str, query: str = "") -> dict:
         [last_assistant, *recent_assistant_replies],
     )
 
+    # P2: Referenz-Fortsetzung — kein Topic in Query, aber "damit"/"das gleiche"
+    # → vorherige Assistenten-Antwort direkt als Kontext setzen
+    is_ref = _is_reference_continuation(query)
+    inherited_topic_recall: list[str] = []
+    if is_ref and not matched_reply_points and last_assistant:
+        inherited_topic_recall = _extract_assistant_reply_points(last_assistant)[:4]
+
+    # P4: gespeichertes Angebot aus Kapsel lesen
+    last_proposed_action: dict | None = capsule.get("last_proposed_action") or None
+
     return {
         "session_id": session_id,
         "last_user": last_user,
@@ -548,6 +731,8 @@ def _build_followup_capsule(session_id: str, query: str = "") -> dict:
         "recent_assistant_replies": recent_assistant_replies[-2:],
         "recent_agents": recent_agents[-3:],
         "matched_reply_points": matched_reply_points,
+        "inherited_topic_recall": inherited_topic_recall,
+        "last_proposed_action": last_proposed_action,
         "semantic_recall": semantic_recall,
     }
 
@@ -576,8 +761,33 @@ def _resolve_followup_agent(query: str, capsule: dict[str, str]) -> str:
 
 
 def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
-    if not (_is_followup_query(query) or _is_contextual_recall_query(query)):
+    is_ref = _is_reference_continuation(query)
+    is_affirm = _is_affirmation(query)
+    is_followup = _is_followup_query(query)
+    is_recall = _is_contextual_recall_query(query)
+
+    last_proposed_action: dict | None = capsule.get("last_proposed_action") or None
+
+    # P4: Kurze Zustimmung + gespeichertes Angebot → direkt auflösen
+    if is_affirm and last_proposed_action:
+        kind = str(last_proposed_action.get("kind") or "generic_action")
+        suggested_query = str(last_proposed_action.get("suggested_query") or "").strip()
+        raw_sentence = str(last_proposed_action.get("raw_sentence") or "").strip()
+        parts = [
+            "# RESOLVED_PROPOSAL",
+            f"kind: {kind}",
+            f"suggested_query: {suggested_query}",
+            f"raw_proposal: {raw_sentence[:200]}",
+            "",
+            "# CURRENT USER QUERY",
+            query,
+        ]
+        return "\n".join(parts)
+
+    # P2/P3/normale Follow-up: Kontext aufbauen
+    if not (is_followup or is_recall or is_ref):
         return query
+
     last_agent = str(capsule.get("last_agent") or "").strip()
     session_id = str(capsule.get("session_id") or "").strip()
     last_user = str(capsule.get("last_user") or "").strip()
@@ -587,7 +797,9 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
     recent_assistant_replies = capsule.get("recent_assistant_replies") or []
     recent_agents = capsule.get("recent_agents") or []
     matched_reply_points = capsule.get("matched_reply_points") or []
+    inherited_topic_recall = capsule.get("inherited_topic_recall") or []
     semantic_recall = capsule.get("semantic_recall") or []
+
     if not (
         last_agent
         or last_user
@@ -596,9 +808,11 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
         or recent_user_queries
         or recent_assistant_replies
         or matched_reply_points
+        or inherited_topic_recall
         or semantic_recall
     ):
         return query
+
     parts = ["# FOLLOW-UP CONTEXT"]
     if last_agent:
         parts.append(f"last_agent: {last_agent}")
@@ -619,10 +833,12 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
             "recent_assistant_replies: "
             + " || ".join(str(text) for text in recent_assistant_replies[:2])
         )
-    if matched_reply_points:
+    # matched_reply_points hat Vorrang; inherited_topic_recall ist Fallback für P2
+    effective_recall = matched_reply_points or inherited_topic_recall
+    if effective_recall:
         parts.append(
             "topic_recall: "
-            + " || ".join(str(text)[:240] for text in matched_reply_points[:4])
+            + " || ".join(str(text)[:240] for text in effective_recall[:4])
         )
     if semantic_recall:
         recall_lines = []
@@ -2065,6 +2281,20 @@ async def canvas_chat(request: Request):
     followup_agent = _resolve_followup_agent(query, followup_capsule)
     dispatcher_query = _augment_query_with_followup_capsule(query, followup_capsule)
 
+    # P4: RESOLVED_PROPOSAL → Agenten direkt setzen, Proposal aus Kapsel löschen
+    resolved_proposal_agent = ""
+    if dispatcher_query.startswith("# RESOLVED_PROPOSAL"):
+        kind_match = re.search(r"^kind:\s*(\S+)", dispatcher_query, re.MULTILINE)
+        proposal_kind = kind_match.group(1) if kind_match else "generic_action"
+        if proposal_kind in {"youtube_search"}:
+            resolved_proposal_agent = "executor"
+        elif proposal_kind in {"web_search"}:
+            resolved_proposal_agent = "executor"
+        else:
+            resolved_proposal_agent = "meta"
+        # Proposal einmalig konsumiert → löschen damit es nicht wiederholt ausgelöst wird
+        _store_proposal_in_capsule(session_id, None)
+
     _append_chat_entry(session_id=session_id, role="user", text=query, ts=ts)
 
     _broadcast_sse({"type": "chat_user", "text": query, "ts": ts})
@@ -2076,7 +2306,7 @@ async def canvas_chat(request: Request):
         # Tool-Beschreibungen — identisch zu /get_tool_descriptions
         tools_desc = await _build_tools_description()
 
-        agent = followup_agent or await get_agent_decision(dispatcher_query, session_id=session_id)
+        agent = resolved_proposal_agent or followup_agent or await get_agent_decision(dispatcher_query, session_id=session_id)
         _set_agent_status(agent, "thinking", query)
 
         query_for_agent = dispatcher_query
@@ -2105,6 +2335,11 @@ async def canvas_chat(request: Request):
             text=reply,
             ts=reply_ts,
         )
+
+        # P4: Proposal aus Assistenten-Antwort extrahieren und in Kapsel speichern
+        # (bei Zustimmung in der nächsten Runde direkt auflösen)
+        proposal = _extract_proposal_metadata(reply)
+        _store_proposal_in_capsule(session_id, proposal)
 
         _broadcast_sse({"type": "chat_reply", "agent": agent, "text": reply, "ts": reply_ts})
         return {"status": "success", "agent": agent, "reply": reply, "session_id": session_id}

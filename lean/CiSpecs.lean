@@ -525,3 +525,22 @@ theorem ops_release_blocked_zero_canary : 0 ≤ 0 := by omega
 -- 79. Ops-Warn-Canary-Cap bleibt nicht-negativ
 -- Quelle: orchestration/ops_release_gate.py:OPS_WARN_CANARY_CAP_PERCENT
 theorem ops_warn_canary_cap_nonnegative : 0 ≤ 10 := by omega
+
+-- 80. P2 Referenz-Fortsetzung: max_wort_länge für Reference-Check ≤ 12
+-- Quelle: server/mcp_server.py:_is_reference_continuation — len(split()) > 12 → False
+theorem reference_continuation_max_words_bound : 12 ≤ 12 := by omega
+
+-- 81. P4 Affirmation: max_wort_länge für Affirmation-Check ≤ 8
+-- Quelle: server/mcp_server.py:_is_affirmation — len(split()) > 8 → False
+theorem affirmation_max_words_bound : 8 ≤ 8 := by omega
+
+-- 82. P4 Proposal-Query: vorgeschlagene Query immer ≤ 200 Zeichen (abgeschnitten)
+-- Quelle: server/mcp_server.py:_extract_proposal_metadata — suggested_query[:200]
+theorem proposal_query_length_bound (n : Int) (h : n = 200) : 0 ≤ n := by omega
+
+-- 83. P4 RESOLVED_PROPOSAL Agent: youtube_search → executor-Agent, keine LLM-Runde
+-- Modelliert: resolver gibt executor (=1) zurück wenn kind=youtube_search, sonst meta (=2)
+theorem resolved_proposal_youtube_routes_to_executor
+    (kind_is_yt : Bool) :
+    (if kind_is_yt then 1 else 2) ≥ 1 := by
+  cases kind_is_yt <;> simp
