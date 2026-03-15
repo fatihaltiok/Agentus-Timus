@@ -18,3 +18,4 @@ pip-audit==2.10.0
 crosshair-tool==0.0.102
 deal==4.24.6
 hypothesis==6.151.9
+python-telegram-bot==21.9
