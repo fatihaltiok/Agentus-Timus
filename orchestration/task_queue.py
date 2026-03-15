@@ -166,6 +166,32 @@ _CONFLICT_ANTONYM_PAIRS = [
 
 _NEGATION_TOKENS = {"nicht", "kein", "keine", "ohne", "no", "not", "never"}
 
+# Wörter die in Goal-Titeln häufig vorkommen aber keinen inhaltlichen
+# Konflikt-Signal liefern — Falsch-Positive durch schwache Token-Überlappung vermeiden.
+_GOAL_CONFLICT_STOPWORDS: Set[str] = {
+    # Deutsche Funktionswörter
+    "nach", "suche", "dass", "etwas", "mir", "mit", "und", "oder", "fuer",
+    "eine", "einen", "einem", "einen", "die", "der", "des", "dem", "den",
+    "ich", "wir", "sie", "ist", "sind", "hat", "haben", "kann", "will",
+    "auch", "noch", "aber", "wenn", "dann", "hier", "alle", "alle", "von",
+    "aus", "bei", "bis", "wie", "was", "wer", "welche", "welchen",
+    # Englische Funktionswörter
+    "the", "and", "for", "with", "from", "that", "this", "are", "has",
+    "its", "our", "can", "will", "use", "via", "new", "all",
+    # Strukturpräfixe aus automatisch generierten Zielen (Curiosity, Follow-up etc.)
+    "curiosity", "follow", "followup", "update", "report", "status",
+}
+
+# Präfixe die auf automatisch generierte Ziele hinweisen — diese untereinander
+# nicht als Konflikt werten (sie sind thematisch verwandt, nicht widersprüchlich).
+_AUTO_GOAL_PREFIXES = (
+    "curiosity-follow-up:",
+    "curiosity follow-up:",
+    "curiosity-followup:",
+    "followup:",
+    "follow-up:",
+)
+
 PLAN_HORIZON_VALUES = {PlanHorizon.DAILY, PlanHorizon.WEEKLY, PlanHorizon.MONTHLY}
 PLAN_STATUS_VALUES = {PlanStatus.ACTIVE, PlanStatus.ARCHIVED}
 PLAN_ITEM_STATUS_VALUES = {
@@ -262,10 +288,13 @@ def _is_goal_transition_allowed(current: str, target: str) -> bool:
     return target_norm in GOAL_ALLOWED_TRANSITIONS.get(current_norm, set())
 
 
-def _goal_tokens(text: str) -> Set[str]:
+def _goal_tokens(text: str, *, remove_stopwords: bool = False) -> Set[str]:
     normalized = _normalize_umlauts((text or "").lower())
     tokens = set(re.findall(r"[a-z0-9]{3,}", normalized))
-    return {tok for tok in tokens if not tok.isdigit()}
+    tokens = {tok for tok in tokens if not tok.isdigit()}
+    if remove_stopwords:
+        tokens -= _GOAL_CONFLICT_STOPWORDS
+    return tokens
 
 
 def _normalize_plan_horizon(horizon: str) -> str:
@@ -983,9 +1012,21 @@ class TaskQueue:
     def _conflict_reason(self, title_a: str, title_b: str) -> Optional[str]:
         a_norm = _normalize_umlauts((title_a or "").lower())
         b_norm = _normalize_umlauts((title_b or "").lower())
-        tokens_a = _goal_tokens(a_norm)
-        tokens_b = _goal_tokens(b_norm)
+
+        # Automatisch generierte Ziele (Curiosity-Follow-ups etc.) nicht
+        # untereinander als Konflikt werten — sie sind thematisch ähnlich,
+        # aber kein inhaltlicher Widerspruch.
+        a_auto = any(a_norm.startswith(p) for p in _AUTO_GOAL_PREFIXES)
+        b_auto = any(b_norm.startswith(p) for p in _AUTO_GOAL_PREFIXES)
+        if a_auto and b_auto:
+            return None
+
+        # Nur bedeutungsstarke Token vergleichen (Stopwörter raus)
+        tokens_a = _goal_tokens(a_norm, remove_stopwords=True)
+        tokens_b = _goal_tokens(b_norm, remove_stopwords=True)
         overlap = tokens_a & tokens_b
+
+        # Mindestens 2 bedeutungsstarke gemeinsame Token erforderlich
         if len(overlap) < 2:
             return None
 
@@ -995,6 +1036,7 @@ class TaskQueue:
 
         a_neg = any(tok in tokens_a for tok in _NEGATION_TOKENS)
         b_neg = any(tok in tokens_b for tok in _NEGATION_TOKENS)
+        # Negations-Overlap nur bei ≥ 3 starken gemeinsamen Token
         if a_neg != b_neg and len(overlap) >= 3:
             return "negation_overlap"
         return None

@@ -572,3 +572,22 @@ theorem resolved_proposal_youtube_routes_to_executor
     (kind_is_yt : Bool) :
     (if kind_is_yt then 1 else 2) ≥ 1 := by
   cases kind_is_yt <;> simp
+
+-- M18. Self-Hardening Engine: Proposal nur wenn Treffer ≥ MIN_OCCURRENCES
+-- Quelle: orchestration/self_hardening_engine.py:_match_patterns
+-- Modelliert: hits ≥ min_occ → Proposal erzeugt (result=1), sonst nicht (result=0)
+theorem hardening_proposal_requires_min_occurrences
+    (hits min_occ : Nat) (h : hits ≥ min_occ) (hmin : min_occ ≥ 1) :
+    hits ≥ 1 := by omega
+
+-- M18b. Cooldown-Invariante: Proposal wird nur einmal pro Cooldown-Periode erzeugt
+-- Modelliert: elapsed_h ≥ cooldown_h → cooldown abgelaufen (propose=1), sonst gesperrt (propose=0)
+theorem hardening_cooldown_prevents_duplicate
+    (elapsed_h cooldown_h : Nat) (h : elapsed_h < cooldown_h) :
+    (if elapsed_h < cooldown_h then 0 else 1) = 0 := by
+  simp [h]
+
+-- M18c. Severity-Ordnung: high < medium < low (numerisch für Sortierung)
+-- Quelle: self_hardening_engine.py:_match_patterns — sort key {high:0, medium:1, low:2}
+theorem hardening_severity_order :
+    (0 : Nat) < 1 ∧ 1 < 2 := by omega

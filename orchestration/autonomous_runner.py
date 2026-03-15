@@ -218,6 +218,10 @@ def _m13_feature_enabled() -> bool:
     return _env_bool("AUTONOMY_M13_ENABLED", False)
 
 
+def _self_hardening_feature_enabled() -> bool:
+    return _env_bool("AUTONOMY_SELF_HARDENING_ENABLED", False)
+
+
 class AutonomousRunner:
     """
     Führt pending Tasks autonom aus, ausgelöst durch den Scheduler-Heartbeat.
@@ -913,6 +917,20 @@ class AutonomousRunner:
                     log.debug("M14: %d E-Mail-Approvals ausstehend", count)
             except Exception as e:
                 log.debug("EmailAutonomyEngine.process_pending fehlgeschlagen: %s", e)
+
+        # M18: Self-Hardening Engine — alle 5 Heartbeats Log + Blackboard analysieren
+        if _self_hardening_feature_enabled() and self._heartbeat_count % 5 == 0:
+            try:
+                from orchestration.self_hardening_engine import get_self_hardening_engine
+                hardening_summary = get_self_hardening_engine().run_cycle()
+                if hardening_summary.get("proposals", 0) > 0:
+                    log.info(
+                        "🔧 M18 Self-Hardening: %d neue Vorschläge, %d übersprungen",
+                        hardening_summary["proposals"],
+                        hardening_summary.get("skipped", 0),
+                    )
+            except Exception as e:
+                log.debug("SelfHardeningEngine fehlgeschlagen: %s", e)
 
         pending = queue.get_pending()
         if not pending:
