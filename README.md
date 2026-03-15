@@ -4,64 +4,82 @@
   <img src="assets/branding/timus-logo-glow.png" alt="Timus Logo" width="760">
 </p>
 
-**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen). Seit **v2.9** sind die Autonomie-Schichten M1–M5 live: Zielgenerierung, Langzeitplanung, Self-Healing und Autonomie-Scorecard laufen aktiv im Produktivbetrieb. Seit **v3.0 (2026-02-28)** läuft im Canvas ein nativer Voice-Loop (Faster-Whisper STT + Inworld.AI TTS) über `/voice/*` Endpoints. Seit **v3.1 (2026-03-01)** sendet und empfängt Timus eigenständig E-Mails über Microsoft Graph OAuth2 — alle 13 Agenten sind vollständig per Delegation erreichbar. Seit **v3.2 (2026-03-02)** visualisiert der Canvas jede Agent-Delegation mit einem goldenen Lichtstrahl-Animation in Echtzeit — und beide Routing-Pfade (direkt + delegiert) nutzen einheitlich `DeveloperAgentV2`. Seit **v3.3 (2026-03-03)** überwacht Timus sich selbst mit LLMs: Jeder neue Incident wird sofort von `qwen3.5-plus` diagnostiziert (Schicht 2), alle 60 Minuten analysiert `deepseek-v3.2` Trends und strukturelle Schwächen im Autonomie-Zustand (Schicht 3). Außerdem können alle Agenten ab v3.3 eigenständig URLs öffnen — Hybrid-Fetch mit automatischem Playwright-Fallback für JavaScript-Seiten. Seit **v3.4 (2026-03-03)** erzeugt Deep Research v6.0 vollautomatisch drei Ausgabedateien: einen analytischen Markdown-Bericht, einen narrativen Lesebericht mit 2500–5000 Wörtern (gpt-5.2) und ein professionelles A4-PDF mit eingebetteten Abbildungen (WeasyPrint). Seit **v3.5 (2026-03-04)** durchsucht Deep Research parallel ArXiv, GitHub und HuggingFace nach aktuellen wissenschaftlichen Trends — und der Edison-Toggle im Canvas UI erlaubt es, PaperQA3 (Edison Scientific) per Klick ohne Server-Neustart zu aktivieren. Seit **v4.0 (2026-03-04)** denkt Timus mit: **M8–M12** bringen Session-Reflexion, ein geteiltes Agent-Blackboard, zeitgesteuerte Trigger, hierarchische Ziel-Verwaltung und eine Self-Improvement Engine — 14 neue MCP-Tools und 5 neue Canvas-Cards. Seit **v3.6 (2026-03-05)** liefert Deep Research echte Ergebnisse für englische KI-Themen: Language-Detection, US-Suchlocation, Domain-aware Embedding-Threshold (0.72 für Tech), automatischer moderate-Modus und ein Qualitäts-Gate mit light-Fallback beheben alle 5 strukturellen Root Causes systematisch. Seit **v4.1 (2026-03-06)** lernt Timus aus Interaktionen (**M16 aktiviert**: 👍/👎/🤷 Feedback → Soul-Hook-Gewichtung), sendet eigenständig E-Mails nach Policy-Check (**M14** Whitelist + Confidence-Guard + SMTP-Backend), und generiert bei Bedarf neue Tools zur Laufzeit (**M13** AST-Validierung + Telegram-Review-Gate + importlib-Aktivierung). Seit **v4.3 (2026-03-07)** kommuniziert der Meta-Agent bidirektional über strukturierte `AgentResult`-Objekte mit `metadata`-Dict (**M17**), schreibt automatisch ins Blackboard und folgt einem formalen Replan-Protokoll — inklusive absolutem Verbot von `search_web` als Research-Fallback. `RESEARCH_TIMEOUT` wurde von 180s auf 600s korrigiert (Deep Research braucht 300–600s), sowohl sequenziell als auch parallel. Seit **v4.4 (2026-03-07)** ist der Agent-Kommunikationsvertrag systemweit gehärtet: `AgentResult` trägt typisierte `artifacts`-Listen, der gesamte Kernpfad (Dispatcher → Agent → Tool → Meta-Fan-In) normalisiert Ergebnisse zentral über `tool_registry_v2`, alle Regex-/Textpfade sind auf sichtbare Fallbacks reduziert — 73 Lean 4 Theoreme, CrossHair-Contracts und Hypothesis Property-Tests sichern die Invarianten ab. Seit **v4.5 (2026-03-07)** läuft **Timus Deep Research v8.0 - Evidence Engine** produktiv: allgemeiner `ResearchContract v2`, `Claim -> Evidence -> Verdict`, profilgesteuerte Beweismaßstäbe, sichtbare `Conflicts & Unknowns`, Guardrail-Status `partial_research` statt falscher Sicherheit und PDFs/Reports direkt aus strukturierten Claims. Seit **v4.6 (2026-03-09)** ist Timus deutlich näher an Produktionsreife: Production Gates sind grün, Runtime-Gates greifen live, Dispatcher und Visual lernen aus echten Outcomes, und der Canvas zeigt jetzt eine sichtbare API- und Kostenkontrolle. Seit **v4.7 (2026-03-10)** läuft Timus zusätzlich mit **Self-Stabilization S1–S6**, hartem **Headless-Service-Schutz** und einer **mobilen, HTTPS-geschützten Console** auf `console.fatih-altiok.com`: Datei-Upload/Download, Dokumenten-Workflow, browserseitiges Voice-Playback und Live-Status sind jetzt auf Smartphone-Nutzung ausgelegt.
+**Timus** ist ein autonomes Multi-Agenten-System für Desktop-Automatisierung, Web-Recherche, Code-Generierung, Daten-Analyse und kreative Aufgaben. Es koordiniert **13 spezialisierte KI-Agenten** über **80+ Tools** via zentralen MCP-Server — und seit Version 2.5 führt es mehrere Agenten **gleichzeitig parallel** aus. Seit v2.8 besitzt Timus eine **Curiosity Engine** (proaktive Wissensdurchsuchung) und eine **Soul Engine** (dynamische Persönlichkeitsentwicklung über 5 Achsen). Seit **v2.9** sind die Autonomie-Schichten M1–M5 live: Zielgenerierung, Langzeitplanung, Self-Healing und Autonomie-Scorecard laufen aktiv im Produktivbetrieb. Seit **v3.0 (2026-02-28)** läuft im Canvas ein nativer Voice-Loop (Faster-Whisper STT + Inworld.AI TTS) über `/voice/*` Endpoints. Seit **v3.1 (2026-03-01)** sendet und empfängt Timus eigenständig E-Mails über Microsoft Graph OAuth2 — alle 13 Agenten sind vollständig per Delegation erreichbar. Seit **v3.2 (2026-03-02)** visualisiert der Canvas jede Agent-Delegation mit einem goldenen Lichtstrahl-Animation in Echtzeit — und beide Routing-Pfade (direkt + delegiert) nutzen einheitlich `DeveloperAgentV2`. Seit **v3.3 (2026-03-03)** überwacht Timus sich selbst mit LLMs: Jeder neue Incident wird sofort von `qwen3.5-plus` diagnostiziert (Schicht 2), alle 60 Minuten analysiert `deepseek-v3.2` Trends und strukturelle Schwächen im Autonomie-Zustand (Schicht 3). Außerdem können alle Agenten ab v3.3 eigenständig URLs öffnen — Hybrid-Fetch mit automatischem Playwright-Fallback für JavaScript-Seiten. Seit **v3.4 (2026-03-03)** erzeugt Deep Research v6.0 vollautomatisch drei Ausgabedateien: einen analytischen Markdown-Bericht, einen narrativen Lesebericht mit 2500–5000 Wörtern (gpt-5.2) und ein professionelles A4-PDF mit eingebetteten Abbildungen (WeasyPrint). Seit **v3.5 (2026-03-04)** durchsucht Deep Research parallel ArXiv, GitHub und HuggingFace nach aktuellen wissenschaftlichen Trends — und der Edison-Toggle im Canvas UI erlaubt es, PaperQA3 (Edison Scientific) per Klick ohne Server-Neustart zu aktivieren. Seit **v4.0 (2026-03-04)** denkt Timus mit: **M8–M12** bringen Session-Reflexion, ein geteiltes Agent-Blackboard, zeitgesteuerte Trigger, hierarchische Ziel-Verwaltung und eine Self-Improvement Engine — 14 neue MCP-Tools und 5 neue Canvas-Cards. Seit **v3.6 (2026-03-05)** liefert Deep Research echte Ergebnisse für englische KI-Themen: Language-Detection, US-Suchlocation, Domain-aware Embedding-Threshold (0.72 für Tech), automatischer moderate-Modus und ein Qualitäts-Gate mit light-Fallback beheben alle 5 strukturellen Root Causes systematisch. Seit **v4.1 (2026-03-06)** lernt Timus aus Interaktionen (**M16 aktiviert**: 👍/👎/🤷 Feedback → Soul-Hook-Gewichtung), sendet eigenständig E-Mails nach Policy-Check (**M14** Whitelist + Confidence-Guard + SMTP-Backend), und generiert bei Bedarf neue Tools zur Laufzeit (**M13** AST-Validierung + Telegram-Review-Gate + importlib-Aktivierung). Seit **v4.3 (2026-03-07)** kommuniziert der Meta-Agent bidirektional über strukturierte `AgentResult`-Objekte mit `metadata`-Dict (**M17**), schreibt automatisch ins Blackboard und folgt einem formalen Replan-Protokoll — inklusive absolutem Verbot von `search_web` als Research-Fallback. `RESEARCH_TIMEOUT` wurde von 180s auf 600s korrigiert (Deep Research braucht 300–600s), sowohl sequenziell als auch parallel. Seit **v4.4 (2026-03-07)** ist der Agent-Kommunikationsvertrag systemweit gehärtet: `AgentResult` trägt typisierte `artifacts`-Listen, der gesamte Kernpfad (Dispatcher → Agent → Tool → Meta-Fan-In) normalisiert Ergebnisse zentral über `tool_registry_v2`, alle Regex-/Textpfade sind auf sichtbare Fallbacks reduziert — 73 Lean 4 Theoreme, CrossHair-Contracts und Hypothesis Property-Tests sichern die Invarianten ab. Seit **v4.5 (2026-03-07)** läuft **Timus Deep Research v8.0 - Evidence Engine** produktiv: allgemeiner `ResearchContract v2`, `Claim -> Evidence -> Verdict`, profilgesteuerte Beweismaßstäbe, sichtbare `Conflicts & Unknowns`, Guardrail-Status `partial_research` statt falscher Sicherheit und PDFs/Reports direkt aus strukturierten Claims. Seit **v4.6 (2026-03-09)** ist Timus deutlich näher an Produktionsreife: Production Gates sind grün, Runtime-Gates greifen live, Dispatcher und Visual lernen aus echten Outcomes, und der Canvas zeigt jetzt eine sichtbare API- und Kostenkontrolle. Seit **v4.7 (2026-03-10)** läuft Timus zusätzlich mit **Self-Stabilization S1–S6**, hartem **Headless-Service-Schutz** und einer **mobilen, HTTPS-geschützten Console** auf `console.fatih-altiok.com`: Datei-Upload/Download, Dokumenten-Workflow, browserseitiges Voice-Playback und Live-Status sind jetzt auf Smartphone-Nutzung ausgelegt. Seit **v4.8 (2026-03-11)** läuft Timus auf dem Smartphone: die native **Android-App** (Kotlin, Jetpack Compose) bietet Auto-Login, Chat, Voice-Screen (Mikrofon → Transkription → Timus → TTS-Playback, Auto-Zuhören), GPS-Standortabruf mit Server-Sync und eine **AccessibilityService-Grundlage** für Android-Operator-Zugriff. Seit **v4.9 (2026-03-12)** ist Meta ein echter Orchestrator: **Meta Orchestration R1/R2** bringt Rezepte und Alternativrezepte je Aufgabenklasse, strukturierte Handoffs für 6 Agenten (`visual`, `research`, `document`, `system`, `shell`, `communication`), session-übergreifendes Outcome-Lernen, `meta_self_state.py` (Meta kennt eigene Laufzeitsignale, Breaker, Budget), selbstgewählte Tool-Strategien (lightweight-first) und fehlergesteuerte Strategieanpassung. Seit **v4.10 (2026-03-13)** kann Timus sich kontrolliert selbst verändern: **Self-Modification SM1–SM7** implementiert die vollständige Pipeline — SM1 Change Policy, SM2 Risk Classifier, SM3 isolierte Patch-Pipeline, SM4 Hard Verification Gate, SM5 Canary + Rollback, SM6 Change Memory (SQLite-Ledger mit Outcome/Regression-Tracking), SM7 Autonomous Apply Controller. Kein freies Dateischreiben, sondern technisch abgesicherte Governance. Seit **v4.11 (2026-03-14/15)** sind semantischer Chat-Recall (Qdrant als produktiver Default, kein stiller Chroma-Fallback), persistente Conversation Capsules, Recall-Telemetrie (Hit Rate@k, wrong recall) und themenbasiertes Follow-up-Matching (`topic_recall` aus vorheriger Antwort extrahiert und in Capsule injiziert) aktiv. Seit **v4.12 (2026-03-15)** haben alle drei zentralen Agenten (meta, executor, reasoning) einen **Evidence-Gate für Selbstdiagnose**: Fragen über eigene Fehler, aktive Provider, Config-Zustand oder vergangene Ereignisse dürfen nicht mehr aus Plausibilität beantwortet werden — erst Delegation an system/shell, dann Antwort mit Pflicht-Kennzeichnung `[BELEGT]` / `[TEILWEISE BELEGT]` / `[NICHT BELEGT]`.
 
-> **Neu und sichtbar:** `Timus Deep Research v8.0 - Evidence Engine`
+> **Neu in v4.12:** `Evidence-Gate für Selbstdiagnose`
 >
-> - allgemeine evidenzbasierte Research-Engine statt Quellensynthese
-> - `Claim -> Evidence -> Verdict` im echten Laufzeitpfad
-> - harte Research-Profile für `news`, `scientific`, `policy`, `vendor_comparison`, `market_intelligence`
-> - Executive Verdict Table, Domain Scorecards, Claim Register, Conflicts & Unknowns im Bericht
-> - `partial_research`-Guardrail statt glatter Scheinsicherheit
-> - abgesichert mit Lean 4, CrossHair und Hypothesis
+> - meta, executor und reasoning dürfen Fragen über eigene Fehler, Provider, Config oder vergangene Ereignisse nicht mehr aus Plausibilität beantworten
+> - Pflicht: erst Delegation an system/shell für echte Daten, dann Antwort
+> - Provider-/Config-Fragen erfordern ≥ 2 Quellen (`agent/providers.py` + `main_dispatcher.py`)
+> - Antwort-Kennzeichnung: `[BELEGT — Quelle: ...]` / `[TEILWEISE BELEGT]` / `[NICHT BELEGT]`
+> - Fallback: "Ich kann das gerade nicht sicher belegen."
+> - abgesichert mit 6 Prompt-Gate-Tests (deal-Contracts + strukturelle Assertions)
 
-> **Neu und sichtbar:** `Production Program v4.6`
+> **Neu in v4.11:** `Semantischer Recall + Conversation Capsules + Topic Follow-up`
 >
-> - grüne Production Gates: `py_compile`, `bandit`, `pip_audit`, Smoke-Suite
-> - E2E-, Release-, Canary- und Ops-Gates mit Runtime-Anbindung
-> - implizites Runtime-Feedback für Dispatcher und Visual-Agent
-> - Browser-Workflow-Planung für komplexe Webseiten
-> - Canvas-Karte `API & Kostenkontrolle` mit Provider-, API-Env-, Budget- und Kosten-Sicht
-> - vollständige Änderungsübersicht: [RELEASE_NOTES_2026-03-09_PRODUCTION_PROGRAM.md](/home/fatih-ubuntu/dev/timus/docs/RELEASE_NOTES_2026-03-09_PRODUCTION_PROGRAM.md)
+> - Qdrant als produktiver Default für semantischen Chat-Recall (kein stiller Chroma-Fallback)
+> - persistente Conversation Capsules pro Session mit Follow-up-Resolver
+> - Recall-Telemetrie: Hit Rate@k, wrong recall rate, useful rate messbar
+> - themenbasiertes Follow-up-Matching: `topic_recall` aus letzter Antwort extrahiert und in Capsule injiziert
+> - Executor erkennt `nochmal erklaer`-Muster und nutzt `_recover_topic_recall` für präzises Anschluss-Routing
 
-> **Neu und sichtbar:** `Self-Stabilization + Mobile Console v4.7`
+> **Neu in v4.10:** `Self-Modification SM1–SM7`
 >
-> - Self-Stabilization `S1-S6`: Incident-Dedupe, Recovery-Leiter, Quarantine, Resource-Guard, Incident-Memory, Stability-Gate
-> - Headless-Service-Guard blockiert lokale Browser-/Editor-/Desktop-Opens im Service-Kontext
-> - `console.fatih-altiok.com` läuft mit Reverse Proxy, HTTPS und vorgeschalteter Auth
-> - mobile Console nutzt die bestehende Canvas-Architektur weiter: Chat, Status, Dateien, Voice-Orb, Browser-TTS
-> - Dokumente koennen direkt hochgeladen, wieder geoeffnet, heruntergeladen und im Chat weiterverarbeitet werden
-> - Session-Bericht: [BERICHT_2026-03-10_CONSOLE_UND_STABILIZATION.md](/home/fatih-ubuntu/dev/timus/docs/BERICHT_2026-03-10_CONSOLE_UND_STABILIZATION.md)
+> - SM1 Change Policy: Zonen (allow/restricted/blocked), erlaubte Änderungstypen, Testpflichten
+> - SM2 Risk Classifier: Risikostufe + Begründung pro Änderung
+> - SM3 isolierte Patch-Pipeline: Änderungen nur im isolierten Workspace
+> - SM4 Hard Verification Gate: `py_compile`, Tests, Syntax-Check — Fehler = kein Apply
+> - SM5 Canary + Rollback: kurzer Rauchertest, bei Regression automatisches Revert
+> - SM6 Change Memory: SQLite-Ledger mit Outcome, Rollback, Regression pro Änderung
+> - SM7 Autonomous Apply Controller: verbindet Policy/Risk/Verification/Canary/Memory in einen kontrollierten Änderungszyklus
+> - Bericht: [BERICHT_2026-03-13_SELF_MODIFICATION_SM6.md](docs/BERICHT_2026-03-13_SELF_MODIFICATION_SM6.md)
+
+> **Neu in v4.9:** `Meta Orchestration R1/R2`
+>
+> - Rezepte + Alternativrezepte je Aufgabenklasse (`youtube_search_then_visual`, `web_research_only`, `system_shell_probe_first` u.a.)
+> - strukturierte Handoffs für 6 Agenten: `goal`, `expected_output`, `success_signal`, `constraints`, `handoff_data`
+> - `meta_self_state.py`: Meta kennt eigene Laufzeitsignale (Budget, Stability-Gate, Breaker, Quarantäne, bekannte schlechte Muster)
+> - session-übergreifendes Outcome-Lernen für konservative Rezeptwahl
+> - lightweight-first: leichte Strategien zuerst, Deep Research / Browser nur wenn nötig
+> - fehlergesteuerte Strategieanpassung: Browser-Fehler → non-browser, fehlendes Transcript → anderen Quellpfad
+> - Bericht: [BERICHT_2026-03-12_META_ORCHESTRATION_R1_R2_M6.md](docs/BERICHT_2026-03-12_META_ORCHESTRATION_R1_R2_M6.md)
+
+> **Neu in v4.8:** `Android-App Phase A+B`
+>
+> - native Kotlin/Jetpack-Compose-App: Auto-Login, Chat, Voice-Screen, GPS, Operator-Grundlage
+> - Voice-Screen: Mikrofon → Faster-Whisper-Transkription → Timus → TTS-Playback, Auto-Zuhören beim Öffnen
+> - `synthesizing`-State trennt TTS-Generierung von aktiver Wiedergabe
+> - GPS-Standortabruf über Android Location Services + Server-Sync für lokale Suche
+> - AccessibilityService als Operator-Zugriffskern (UI-Zustand, Fensterwechsel, Fokus)
+> - Bericht: [ANDROID_PHASE_B_2026-03-11.md](docs/ANDROID_PHASE_B_2026-03-11.md)
 
 ---
 
 ## Aktueller Stand
 
-Timus ist jetzt ein **produktionsnahes agentisches System mit Governance, Budgetierung, Observability und Runtime-Gates**.
+Timus ist ein **produktionsnahes agentisches System mit Governance, kontrollierter Selbstmodifikation, mobilem Zugriff und Evidence-gated Self-Diagnosis**.
 
-Stand vom **10. März 2026**:
+Stand vom **15. März 2026**:
 
-- `P0` Security-, Dependency- und Production-Gates: grün
-- `P1` Kostenkontrolle und Ops-Observability: aktiv
-- `P2` Orchestrierungs-Policy und Browser-Workflow-Planung: aktiv
-- `P3` E2E-, Release- und Canary-Gates: aktiv
-- `P4` Telemetrie-Bereinigung, Feedback-Wirksamkeit und E2E-Härtung: aktiv
-- `P5` Runtime-Lernen, Visual-Härtung und Ops-/Kosten-Eskalation: aktiv
+- `P0–P5` Production-Gates, Observability, Runtime-Lernen: aktiv
 - `S1-S6` Self-Stabilization: aktiv
 - `Console` Mobile HTTPS-Konsole mit Dateien und Voice: aktiv
+- `Android` native App mit Chat, Voice, GPS, Operator-Zugriff: aktiv
+- `Meta R1/R2` Rezepte, Handoffs, Outcome-Lernen, Self-State: aktiv
+- `SM1–SM7` kontrollierte Self-Modification-Pipeline: aktiv
+- `Recall` Qdrant semantischer Chat-Recall + Conversation Capsules: aktiv
+- `Evidence Gate` Selbstdiagnose nur mit belegten Daten: aktiv
 
 Wichtige Dokumente:
 
-- Neuer Gesamtbericht: [BERICHT_2026-03-14_TIMUS_SYSTEMSTATUS_UND_ARCHITEKTUR.md](/home/fatih-ubuntu/dev/timus/docs/BERICHT_2026-03-14_TIMUS_SYSTEMSTATUS_UND_ARCHITEKTUR.md)
-- Neue Langdokumentation: [TIMUS_AUSFUEHRLICHE_SYSTEMDOKUMENTATION_2026-03-14.md](/home/fatih-ubuntu/dev/timus/docs/TIMUS_AUSFUEHRLICHE_SYSTEMDOKUMENTATION_2026-03-14.md)
-
-- Architektur-Gesamtdokumentation: [TIMUS_ARCHITEKTUR_UND_SYSTEMDOKUMENTATION_2026-03-13.md](/home/fatih-ubuntu/dev/timus/docs/TIMUS_ARCHITEKTUR_UND_SYSTEMDOKUMENTATION_2026-03-13.md)
-- Gesamtänderungen: [RELEASE_NOTES_2026-03-09_PRODUCTION_PROGRAM.md](/home/fatih-ubuntu/dev/timus/docs/RELEASE_NOTES_2026-03-09_PRODUCTION_PROGRAM.md)
-- P0-Härtung: [PRODUCTION_READINESS_P0.md](/home/fatih-ubuntu/dev/timus/docs/PRODUCTION_READINESS_P0.md)
-- P4-Bericht: [BERICHT_2026-03-09_P4_TELEMETRIE_FEEDBACK_E2E.md](/home/fatih-ubuntu/dev/timus/docs/BERICHT_2026-03-09_P4_TELEMETRIE_FEEDBACK_E2E.md)
-- P5-Bericht: [BERICHT_2026-03-09_P5_RUNTIME_LEARNING_VISUAL_OPS.md](/home/fatih-ubuntu/dev/timus/docs/BERICHT_2026-03-09_P5_RUNTIME_LEARNING_VISUAL_OPS.md)
-- Self-Stabilization: [BERICHT_2026-03-10_SELF_STABILIZATION_S1_S6.md](/home/fatih-ubuntu/dev/timus/docs/BERICHT_2026-03-10_SELF_STABILIZATION_S1_S6.md)
-- Console + Mobile + Voice: [BERICHT_2026-03-10_CONSOLE_UND_STABILIZATION.md](/home/fatih-ubuntu/dev/timus/docs/BERICHT_2026-03-10_CONSOLE_UND_STABILIZATION.md)
+- Systemstatus (15.03): [BERICHT_2026-03-14_TIMUS_SYSTEMSTATUS_UND_ARCHITEKTUR.md](docs/BERICHT_2026-03-14_TIMUS_SYSTEMSTATUS_UND_ARCHITEKTUR.md)
+- Langdokumentation: [TIMUS_AUSFUEHRLICHE_SYSTEMDOKUMENTATION_2026-03-14.md](docs/TIMUS_AUSFUEHRLICHE_SYSTEMDOKUMENTATION_2026-03-14.md)
+- Architektur: [TIMUS_ARCHITEKTUR_UND_SYSTEMDOKUMENTATION_2026-03-13.md](docs/TIMUS_ARCHITEKTUR_UND_SYSTEMDOKUMENTATION_2026-03-13.md)
+- Self-Modification SM6: [BERICHT_2026-03-13_SELF_MODIFICATION_SM6.md](docs/BERICHT_2026-03-13_SELF_MODIFICATION_SM6.md)
+- Meta Orchestration R1/R2: [BERICHT_2026-03-12_META_ORCHESTRATION_R1_R2_M6.md](docs/BERICHT_2026-03-12_META_ORCHESTRATION_R1_R2_M6.md)
+- Android Phase B: [ANDROID_PHASE_B_2026-03-11.md](docs/ANDROID_PHASE_B_2026-03-11.md)
+- Self-Stabilization: [BERICHT_2026-03-10_SELF_STABILIZATION_S1_S6.md](docs/BERICHT_2026-03-10_SELF_STABILIZATION_S1_S6.md)
+- Production Program: [RELEASE_NOTES_2026-03-09_PRODUCTION_PROGRAM.md](docs/RELEASE_NOTES_2026-03-09_PRODUCTION_PROGRAM.md)
 
 ---
 
