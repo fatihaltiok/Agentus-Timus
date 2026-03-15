@@ -214,3 +214,64 @@ def test_followup_capsule_includes_semantic_recall(tmp_path, monkeypatch):
     )
     assert "semantic_recall:" in augmented
     assert "executor =>" in augmented
+
+
+async def test_canvas_chat_routes_topic_followup_to_executor(monkeypatch, tmp_path):
+    captured = {"decision_queries": [], "run_queries": []}
+    mcp_server._chat_history.clear()
+    monkeypatch.setenv("TIMUS_SESSION_STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setattr(mcp_server, "_semantic_store_chat_turn", lambda **kwargs: None)
+    monkeypatch.setattr(mcp_server, "_semantic_recall_chat_turns", lambda **kwargs: [])
+
+    async def fake_build_tools_description():
+        return "tools"
+
+    async def fake_get_agent_decision(query, session_id=None):
+        captured["decision_queries"].append((query, session_id))
+        return "meta"
+
+    async def fake_run_agent(agent_name, query, tools_description, session_id=None):
+        captured["run_queries"].append((agent_name, query, session_id, tools_description))
+        if "tag gestern" in query.lower():
+            return (
+                "Mein Tag gestern? Ein Chaos.\n"
+                "- Kamera-Start fehlgeschlagen — keine /dev/video* Geräte.\n"
+                "- Telegram-Versand gescheitert — DNS-Auflösung kaputt."
+            )
+        return "Mit Telegram war gemeint: Telegram-Versand gescheitert — DNS-Auflösung kaputt."
+
+    fake_dispatcher = SimpleNamespace(
+        get_agent_decision=fake_get_agent_decision,
+        run_agent=fake_run_agent,
+    )
+
+    monkeypatch.setattr(mcp_server, "_build_tools_description", fake_build_tools_description)
+    monkeypatch.setitem(sys.modules, "main_dispatcher", fake_dispatcher)
+
+    first = await mcp_server.canvas_chat(
+        _FakeRequest(
+            {
+                "query": "erzähl mir wie war dein tag gestern",
+                "session_id": "topic_lane",
+            }
+        )
+    )
+    second = await mcp_server.canvas_chat(
+        _FakeRequest(
+            {
+                "query": "was war nochmal mit telegram ?",
+                "session_id": "topic_lane",
+            }
+        )
+    )
+
+    assert first["status"] == "success"
+    assert second["status"] == "success"
+    assert second["agent"] == "executor"
+    assert len(captured["decision_queries"]) == 1
+    followup_agent, followup_query, followup_session_id, _ = captured["run_queries"][-1]
+    assert followup_agent == "executor"
+    assert followup_session_id == "topic_lane"
+    assert "topic_recall:" in followup_query
+    assert "Telegram-Versand gescheitert" in followup_query
+    assert "Kamera-Start fehlgeschlagen" not in followup_query.split("topic_recall:", 1)[1]

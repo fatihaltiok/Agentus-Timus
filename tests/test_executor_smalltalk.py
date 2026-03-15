@@ -265,3 +265,57 @@ async def test_executor_uses_recent_assistant_replies_for_recall_without_llm(mon
     assert "Visual strenger" in result
     assert recorded["source"] == "recent_assistant"
     assert recorded["session_id"] == "recall_recent"
+
+
+@pytest.mark.asyncio
+async def test_executor_answers_topic_recall_without_llm(monkeypatch):
+    from agent.agents.executor import ExecutorAgent
+    from agent.base_agent import BaseAgent
+
+    async def _unexpected_run(self, task: str):
+        raise AssertionError("BaseAgent.run darf fuer Topic-Recall nicht aufgerufen werden")
+
+    recorded = {}
+
+    monkeypatch.setattr(BaseAgent, "run", _unexpected_run)
+    monkeypatch.setattr(
+        ExecutorAgent,
+        "_record_conversation_recall",
+        staticmethod(lambda **kwargs: recorded.update(kwargs)),
+    )
+
+    agent = ExecutorAgent.__new__(ExecutorAgent)
+    result = await ExecutorAgent.run(
+        agent,
+        "# FOLLOW-UP CONTEXT\nlast_agent: meta\nsession_id: recall_topic\n"
+        "topic_recall: Telegram-Versand gescheitert — DNS-Auflösung kaputt.\n\n"
+        "# CURRENT USER QUERY\nwas war nochmal mit telegram ?",
+    )
+
+    assert "telegram" in result.lower()
+    assert "DNS-Auflösung kaputt" in result
+    assert recorded["source"] == "topic_recall"
+    assert recorded["session_id"] == "recall_topic"
+
+
+@pytest.mark.asyncio
+async def test_executor_explains_topic_recall_without_llm(monkeypatch):
+    from agent.agents.executor import ExecutorAgent
+    from agent.base_agent import BaseAgent
+
+    async def _unexpected_run(self, task: str):
+        raise AssertionError("BaseAgent.run darf fuer Topic-Erklaerung nicht aufgerufen werden")
+
+    monkeypatch.setattr(BaseAgent, "run", _unexpected_run)
+
+    agent = ExecutorAgent.__new__(ExecutorAgent)
+    result = await ExecutorAgent.run(
+        agent,
+        "# FOLLOW-UP CONTEXT\nlast_agent: meta\n"
+        "topic_recall: Kamera-Start fehlgeschlagen — keine /dev/video* Geräte.\n\n"
+        "# CURRENT USER QUERY\nkannst du das mit der kamera nochmal erklären",
+    )
+
+    assert "Klar." in result
+    assert "kamera" in result.lower()
+    assert "/dev/video" in result

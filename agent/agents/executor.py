@@ -85,6 +85,8 @@ _SELF_RECALL_PATTERNS = (
     r"\berinner\b",
     r"\bwie hattest du\b",
     r"\bwas hattest du\b",
+    r"\bnochmal erklaer\b",
+    r"\bnochmal erklär\b",
 )
 
 _YOUTUBE_GENERIC_PATTERNS = (
@@ -236,6 +238,21 @@ class ExecutorAgent(BaseAgent):
         if not match:
             return ""
         return match.group(1).strip()
+
+    @staticmethod
+    def _recover_topic_recall(task_text: str) -> list[str]:
+        text = str(task_text or "")
+        match = re.search(
+            r"topic_recall:\s*(.+?)(?:\n[#a-z_]+:|\n#\s*current user query|\Z)",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not match:
+            return []
+        raw = match.group(1).strip()
+        if not raw:
+            return []
+        return [part.strip() for part in raw.split("||") if part.strip()]
 
     @staticmethod
     def _recover_followup_session_id(task_text: str) -> str:
@@ -422,6 +439,21 @@ class ExecutorAgent(BaseAgent):
             return False
         return any(re.search(pattern, normalized) for pattern in _SELF_RECALL_PATTERNS)
 
+    @staticmethod
+    def _is_topic_followup_query(task: str) -> bool:
+        normalized = str(task or "").strip().lower()
+        if not normalized:
+            return False
+        if len(normalized.split()) > 24:
+            return False
+        if any(re.search(pattern, normalized) for pattern in _SELF_RECALL_PATTERNS):
+            return True
+        if "nochmal" in normalized and "mit " in normalized:
+            return True
+        if ("erklaer" in normalized or "erklär" in normalized) and "mit " in normalized:
+            return True
+        return False
+
     @classmethod
     def _format_ops_self_status(cls, ops: dict[str, Any]) -> str:
         state = str(ops.get("state") or "unknown").strip().lower()
@@ -557,6 +589,41 @@ class ExecutorAgent(BaseAgent):
                 f"- {primary}",
             ]
         )
+
+    @staticmethod
+    def _infer_topic_focus_label(user_task: str) -> str:
+        normalized = str(user_task or "").strip().lower()
+        match = re.search(
+            r"\bmit\s+(?:dem|der|den|des|die|das)?\s*([a-zA-Z0-9äöüÄÖÜß_-]+)",
+            normalized,
+        )
+        if match:
+            token = match.group(1).strip(" -_")
+            if token:
+                return token
+        return ""
+
+    @classmethod
+    def _format_topic_recall_response(cls, user_task: str, topic_lines: list[str]) -> str:
+        if not topic_lines:
+            return ""
+
+        primary = str(topic_lines[0]).strip()
+        if not primary:
+            return ""
+
+        normalized = str(user_task or "").strip().lower()
+        focus = cls._infer_topic_focus_label(user_task)
+
+        if "erklaer" in normalized or "erklär" in normalized:
+            if focus:
+                return f"Klar. Mit {focus} meinte ich: {primary}"
+            return f"Klar. Damit meinte ich: {primary}"
+
+        if focus:
+            return f"Mit {focus} war gemeint: {primary}"
+
+        return f"Damit war gemeint: {primary}"
 
     @staticmethod
     def _infer_youtube_search_query(user_task: str) -> str:
@@ -821,6 +888,7 @@ class ExecutorAgent(BaseAgent):
         plain_task = self._recover_user_query(task)
         semantic_recall = self._recover_semantic_recall(task)
         recent_assistant_replies = self._recover_recent_assistant_replies(task)
+        topic_recall = self._recover_topic_recall(task)
         session_summary = self._recover_session_summary(task)
         followup_session_id = self._recover_followup_session_id(task)
         if handoff and handoff.handoff_data.get("task_type") == "location_local_search":
@@ -859,6 +927,18 @@ class ExecutorAgent(BaseAgent):
             )
             if formatted_recall:
                 return formatted_recall
+        if not handoff and topic_recall and self._is_topic_followup_query(plain_task):
+            self._record_conversation_recall(
+                session_id=followup_session_id,
+                query=plain_task,
+                source="topic_recall",
+                semantic_recall=[],
+                recent_assistant_replies=topic_recall,
+                session_summary=session_summary,
+            )
+            formatted_topic_recall = self._format_topic_recall_response(plain_task, topic_recall)
+            if formatted_topic_recall:
+                return formatted_topic_recall
         if not handoff and self._is_smalltalk_query(plain_task):
             return self._smalltalk_response(plain_task)
         effective_task = handoff.goal if handoff and handoff.goal else task

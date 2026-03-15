@@ -158,6 +158,8 @@ _CONTEXTUAL_RECALL_PATTERNS = (
     r"\bwie war\b",
     r"\bwas war\b",
     r"\bdaran\b",
+    r"\berklaer\b",
+    r"\berklär\b",
 )
 
 _VISUAL_INTENT_TOKENS = (
@@ -173,6 +175,82 @@ _VISUAL_INTENT_TOKENS = (
     "seite",
     "fenster",
 )
+
+_FOLLOWUP_TOPIC_STOPWORDS = {
+    "aber",
+    "als",
+    "am",
+    "an",
+    "auch",
+    "auf",
+    "aus",
+    "bei",
+    "bin",
+    "bitte",
+    "da",
+    "das",
+    "dass",
+    "dein",
+    "deine",
+    "dem",
+    "den",
+    "der",
+    "des",
+    "die",
+    "dir",
+    "doch",
+    "du",
+    "ein",
+    "eine",
+    "einer",
+    "einem",
+    "einen",
+    "er",
+    "erklaer",
+    "erklär",
+    "es",
+    "etwas",
+    "fuer",
+    "für",
+    "ganz",
+    "hatte",
+    "hattest",
+    "hinter",
+    "ich",
+    "ihr",
+    "ihre",
+    "im",
+    "in",
+    "ist",
+    "ja",
+    "kannst",
+    "koenntest",
+    "könntest",
+    "mal",
+    "mein",
+    "meine",
+    "mir",
+    "mit",
+    "nicht",
+    "nochmal",
+    "nein",
+    "oder",
+    "seine",
+    "so",
+    "und",
+    "uns",
+    "vom",
+    "von",
+    "vorhin",
+    "war",
+    "was",
+    "wegen",
+    "wie",
+    "wieder",
+    "wir",
+    "wo",
+    "zu",
+}
 
 
 def _session_storage_root() -> Path:
@@ -339,6 +417,80 @@ def _is_contextual_recall_query(query: str) -> bool:
     return any(re.search(pattern, normalized) for pattern in _CONTEXTUAL_RECALL_PATTERNS)
 
 
+def _tokenize_followup_focus(text: str) -> list[str]:
+    normalized = str(text or "").lower()
+    tokens = re.findall(r"[a-zA-Z0-9äöüÄÖÜß_-]+", normalized)
+    cleaned: list[str] = []
+    for token in tokens:
+        stripped = token.strip("_-")
+        if len(stripped) < 3:
+            continue
+        if stripped in _FOLLOWUP_TOPIC_STOPWORDS:
+            continue
+        cleaned.append(stripped)
+    return cleaned
+
+
+def _extract_assistant_reply_points(text: str) -> list[str]:
+    source = str(text or "").strip()
+    if not source:
+        return []
+
+    candidates: list[str] = []
+    for raw_line in source.splitlines():
+        line = re.sub(r"^\s*(?:[-*•]\s*|\d+\.\s*)", "", raw_line).strip()
+        if not line:
+            continue
+        if line.endswith(":"):
+            continue
+        if len(line) >= 18:
+            candidates.append(line)
+
+    if not candidates:
+        for sentence in re.split(r"(?<=[.!?])\s+", source):
+            sentence = sentence.strip(" -\t\r\n")
+            if len(sentence) >= 18:
+                candidates.append(sentence)
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = candidate.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(candidate)
+    return unique[:10]
+
+
+def _match_assistant_reply_points(query: str, replies: list[str]) -> list[str]:
+    focus_tokens = _tokenize_followup_focus(query)
+    if not focus_tokens:
+        return []
+
+    scored: list[tuple[int, int, str]] = []
+    for reply in replies:
+        for point in _extract_assistant_reply_points(reply):
+            lowered = point.lower()
+            match_count = sum(1 for token in focus_tokens if token in lowered)
+            if match_count <= 0:
+                continue
+            scored.append((match_count, len(point), point))
+
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    matched: list[str] = []
+    seen_points: set[str] = set()
+    for _, _, point in scored:
+        key = point.lower()
+        if key in seen_points:
+            continue
+        seen_points.add(key)
+        matched.append(point)
+        if len(matched) >= 4:
+            break
+    return matched
+
+
 def _build_followup_capsule(session_id: str, query: str = "") -> dict:
     capsule = _load_session_capsule(session_id)
     entries = _get_session_chat_entries(session_id, limit=12)
@@ -381,6 +533,10 @@ def _build_followup_capsule(session_id: str, query: str = "") -> dict:
             *recent_assistant_replies,
         ],
     )
+    matched_reply_points = _match_assistant_reply_points(
+        query,
+        [last_assistant, *recent_assistant_replies],
+    )
 
     return {
         "session_id": session_id,
@@ -391,17 +547,23 @@ def _build_followup_capsule(session_id: str, query: str = "") -> dict:
         "recent_user_queries": recent_user_queries[-3:],
         "recent_assistant_replies": recent_assistant_replies[-2:],
         "recent_agents": recent_agents[-3:],
+        "matched_reply_points": matched_reply_points,
         "semantic_recall": semantic_recall,
     }
 
 
 def _resolve_followup_agent(query: str, capsule: dict[str, str]) -> str:
     normalized = str(query or "").strip().lower()
-    if not _is_followup_query(normalized):
+    is_followup = _is_followup_query(normalized)
+    is_contextual_recall = _is_contextual_recall_query(normalized)
+    if not (is_followup or is_contextual_recall):
         return ""
+    matched_reply_points = capsule.get("matched_reply_points") or []
     last_agent = str(capsule.get("last_agent") or "").strip().lower()
     if not last_agent:
         return ""
+    if is_contextual_recall and matched_reply_points:
+        return "executor"
     if last_agent == "executor":
         return "executor"
     if last_agent in {"system", "research", "communication", "document", "data"}:
@@ -424,6 +586,7 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
     recent_user_queries = capsule.get("recent_user_queries") or []
     recent_assistant_replies = capsule.get("recent_assistant_replies") or []
     recent_agents = capsule.get("recent_agents") or []
+    matched_reply_points = capsule.get("matched_reply_points") or []
     semantic_recall = capsule.get("semantic_recall") or []
     if not (
         last_agent
@@ -432,6 +595,7 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
         or session_summary
         or recent_user_queries
         or recent_assistant_replies
+        or matched_reply_points
         or semantic_recall
     ):
         return query
@@ -454,6 +618,11 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
         parts.append(
             "recent_assistant_replies: "
             + " || ".join(str(text) for text in recent_assistant_replies[:2])
+        )
+    if matched_reply_points:
+        parts.append(
+            "topic_recall: "
+            + " || ".join(str(text)[:240] for text in matched_reply_points[:4])
         )
     if semantic_recall:
         recall_lines = []
