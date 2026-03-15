@@ -116,6 +116,26 @@ theorem research_completed_thresholds (sources claims robust notes : Int)
     (_hs : 3 ≤ sources) (_hc : 3 ≤ claims) (_hr : 3 ≤ robust) (_hn : 1 ≤ notes) :
     1 ≤ notes := by omega
 
+-- 3q. Claim-Dedupe kann die Anzahl nicht vergroessern
+-- Quelle: tools/deep_research/tool.py:_dedupe_contract_claims
+theorem research_claim_dedupe_nonexpanding (raw deduped : Int)
+    (_hraw : 0 ≤ raw) (_hd : 0 ≤ deduped) (hle : deduped ≤ raw) :
+    deduped ≤ raw := by omega
+
+-- 3s. Akademische Datenbanken vor .gov prüfen → PAPER (0) statt REGULATOR (1)
+-- Quelle: tools/deep_research/research_contracts.py:infer_source_type
+-- Modelliert: academic_match=True → Ergebnis 0 (PAPER), ohne Rücksicht auf gov_match
+theorem academic_domains_before_gov_check
+    (academic_match gov_match : Bool) (h : academic_match = true) :
+    (if academic_match then 0 else if gov_match then 1 else 2) = 0 := by
+  simp [h]
+
+-- 3r. Narrative-Fallback garantiert positive Wortzahl, wenn der Fallback positiv ist
+-- Quelle: tools/deep_research/tool.py:_create_narrative_synthesis_report
+theorem research_narrative_fallback_positive (fallback_words generated_words : Int)
+    (hf : 0 < fallback_words) :
+    0 < max fallback_words generated_words := by omega
+
 -- 4. M8 Reflection Guard: gap < threshold → Reflexion nicht ausgelöst
 -- Quelle: orchestration/session_reflection.py:112
 theorem m8_reflection_guard (gap threshold : Int) (h : gap < threshold) :

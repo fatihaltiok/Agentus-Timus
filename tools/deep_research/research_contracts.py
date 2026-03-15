@@ -191,6 +191,32 @@ _VENDOR_DOMAINS = (
     "moonshot.cn",
 )
 
+# Akademische Publikations-Datenbanken die auf .gov enden oder ähnliche Domains haben.
+# Müssen VOR dem generischen .gov-Check als PAPER klassifiziert werden — sonst landen
+# z.B. pmc.ncbi.nlm.nih.gov fälschlicherweise als REGULATOR.
+_ACADEMIC_PUBLICATION_DOMAINS = (
+    "ncbi.nlm.nih.gov",
+    "pubmed.ncbi.nlm.nih.gov",
+    "pmc.ncbi.nlm.nih.gov",
+    "europepmc.org",
+    "jamanetwork.com",
+    "nejm.org",
+    "bmj.com",
+    "thelancet.com",
+    "sciencedirect.com",
+    "springer.com",
+    "wiley.com",
+    "tandfonline.com",
+    "oup.com",
+    "cell.com",
+    "plos.org",
+    "biorxiv.org",
+    "medrxiv.org",
+    "ssrn.com",
+    "semanticscholar.org",
+    "paperswithcode.com",
+)
+
 _CLAIM_QUERY_STOPWORDS = {
     "the", "and", "for", "with", "from", "into", "about", "than", "that", "this",
     "und", "oder", "der", "die", "das", "mit", "von", "über", "ueber", "fuer",
@@ -220,6 +246,24 @@ _TECH_RELEVANCE_TERMS = {
     "rl", "sft", "grpo", "paper", "research", "release", "released",
     "modell", "modelle", "faehigkeit", "faehigkeiten", "benchmarks", "vergleich",
     "qwen", "deepseek", "claude", "gpt", "gemini", "yi", "baichuan", "minimax",
+}
+
+_AGENTIC_QUERY_TERMS = {
+    "agent", "agents", "agentic", "tool", "tools", "function", "functions",
+    "calling", "multi", "multiagent", "workflow", "workflows", "planner",
+    "planning", "orchestration", "computer", "use", "gaia", "toolbench",
+    "agentbench", "framework", "frameworks", "coordination",
+}
+
+_STRICT_AGENTIC_FOCUS_TERMS = {
+    "tool", "tools", "function", "functions", "calling", "multi", "multiagent",
+    "workflow", "workflows", "planner", "planning", "orchestration", "coordination",
+    "computer", "use", "toolbench", "agentbench", "gaia",
+}
+
+_SPECIFIC_MODEL_TERMS = {
+    "deepseek", "qwen", "yi", "baichuan", "ernie", "doubao", "kimi",
+    "moonshot", "minimax", "hunyuan",
 }
 
 
@@ -259,6 +303,9 @@ def claim_is_on_topic(query: str, claim_text: str) -> bool:
 
     anchor_hits = query_anchors & claim_tokens
     relevance_hits = claim_tokens & _TECH_RELEVANCE_TERMS
+    query_agentic_focus = bool(query_tokens & _STRICT_AGENTIC_FOCUS_TERMS)
+    claim_agentic_hits = claim_tokens & _AGENTIC_QUERY_TERMS
+    query_model_focus = bool(query_anchors & _SPECIFIC_MODEL_TERMS)
     broad_query = bool(query_tokens & {
         "modell",
         "model",
@@ -280,11 +327,14 @@ def claim_is_on_topic(query: str, claim_text: str) -> bool:
         "vergleiche",
     })
 
+    if query_agentic_focus and not claim_agentic_hits:
+        return False
+
     if len(anchor_hits) >= 2:
         return True
     if len(anchor_hits) >= 1 and len(relevance_hits) >= 1:
         return True
-    if broad_query and len(relevance_hits) >= 2:
+    if broad_query and not query_model_focus and not query_agentic_focus and len(relevance_hits) >= 2:
         return True
     if not query_anchors and len(relevance_hits) >= 2:
         return True
@@ -336,6 +386,10 @@ def infer_source_type(url: str, declared_type: str = "", metadata: Optional[Dict
         return SourceType.PAPER
     if "github.com" in domain or "huggingface.co" in domain:
         return SourceType.REPOSITORY
+    # Akademische Datenbanken vor dem .gov-Check prüfen — sonst landen z.B.
+    # pmc.ncbi.nlm.nih.gov fälschlicherweise als REGULATOR statt PAPER.
+    if any(acad_domain in domain for acad_domain in _ACADEMIC_PUBLICATION_DOMAINS):
+        return SourceType.PAPER
     if domain.endswith(".gov") or domain.endswith(".eu"):
         return SourceType.REGULATOR
     if any(vendor_domain in domain for vendor_domain in _VENDOR_DOMAINS):
