@@ -1,6 +1,6 @@
 # tools/deep_research/tool.py (VERSION 8.0 - EVIDENCE ENGINE)
 """
-Timus Deep Research v8.0 - Evidence Engine
+Timus Deep Research v8.1 - Evidence Engine
 
 NEUE FEATURES:
 - These-Antithese-Synthese Framework für dialektische Analyse
@@ -165,6 +165,194 @@ def _build_report_artifacts(*paths: Optional[str]) -> List[Dict[str, Any]]:
             "origin": "tool",
         })
     return artifacts
+
+
+def _normalize_claim_text(text: str) -> str:
+    normalized = re.sub(r"\s+", " ", str(text or "").strip().lower())
+    normalized = re.sub(r"[\"'`“”‘’]", "", normalized)
+    return normalized
+
+
+def _merge_claim_notes(left: str, right: str) -> str:
+    parts: List[str] = []
+    seen: set[str] = set()
+    for raw in (left, right):
+        for part in str(raw or "").split(";"):
+            token = part.strip()
+            if not token or token in seen:
+                continue
+            seen.add(token)
+            parts.append(token)
+    return "; ".join(parts)
+
+
+def _prefer_claim_record(current: "ClaimRecord", candidate: "ClaimRecord") -> "ClaimRecord":
+    current_supports = len(set(current.supports))
+    candidate_supports = len(set(candidate.supports))
+    current_unknowns = len(current.unknowns)
+    candidate_unknowns = len(candidate.unknowns)
+    current_legacy = "legacy_status=" in str(current.notes or "")
+    candidate_legacy = "legacy_status=" in str(candidate.notes or "")
+
+    if candidate.claim_type == "verified_fact" and current.claim_type != "verified_fact":
+        return candidate
+    if current.claim_type == "verified_fact" and candidate.claim_type != "verified_fact":
+        return current
+    if candidate_supports > current_supports:
+        return candidate
+    if current_supports > candidate_supports:
+        return current
+    if candidate_unknowns < current_unknowns:
+        return candidate
+    if current_unknowns < candidate_unknowns:
+        return current
+    if current_legacy and not candidate_legacy:
+        return candidate
+    return current
+
+
+def _dedupe_contract_claims(claims: List["ClaimRecord"]) -> List["ClaimRecord"]:
+    deduped: Dict[str, "ClaimRecord"] = {}
+    order: List[str] = []
+
+    for claim in claims:
+        key = _normalize_claim_text(claim.claim_text)
+        if not key:
+            continue
+        existing = deduped.get(key)
+        if existing is None:
+            deduped[key] = claim
+            order.append(key)
+            continue
+
+        preferred = _prefer_claim_record(existing, claim)
+        other = claim if preferred is existing else existing
+        preferred.supports = list(dict.fromkeys([*preferred.supports, *other.supports]))
+        preferred.contradicts = list(dict.fromkeys([*preferred.contradicts, *other.contradicts]))
+        preferred.unknowns = list(dict.fromkeys([*preferred.unknowns, *other.unknowns]))
+        preferred.notes = _merge_claim_notes(preferred.notes, other.notes)
+        deduped[key] = preferred
+
+    return [deduped[key] for key in order]
+
+
+def _build_narrative_fallback_report(session: "DeepResearchSession") -> str:
+    query = str(session.query or "Recherchethema").strip()
+    verified = list(session.verified_facts or [])
+    unverified = list(session.unverified_claims or [])
+    syntheses = [analysis for analysis in (session.thesis_analyses or []) if analysis.synthesis]
+
+    lines: List[str] = [
+        "## Einordnung",
+        f"Diese Recherche behandelt das Thema **{query}**.",
+        (
+            "Der folgende Bericht ist ein deterministischer Fallback, weil die freie Narrative-Synthese "
+            "leer oder unvollständig geblieben ist. Er fasst die belastbarsten Punkte aus den "
+            "gesammelten Quellen in lesbarer Form zusammen."
+        ),
+        (
+            f"In der aktuellen Session wurden {len(session.research_tree)} Web-Quellen, "
+            f"{len(verified)} verifizierte Fakten und {len(unverified)} weitere Hinweise verarbeitet."
+        ),
+        "",
+        "## Belastbare Beobachtungen",
+    ]
+
+    if verified:
+        for idx, fact in enumerate(verified[:8], start=1):
+            fact_text = str(fact.get("fact") or "").strip()
+            if not fact_text:
+                continue
+            source_count = int(fact.get("source_count") or 0)
+            source_hint = f" (beobachtet in {source_count} Quelle{'n' if source_count != 1 else ''})" if source_count else ""
+            lines.append(f"{idx}. {fact_text}{source_hint}.")
+    else:
+        lines.append(
+            "Es liegen derzeit keine mehrfach bestätigten Fakten vor. Die Recherche liefert daher vor allem "
+            "vorsichtige Hinweise statt harter, breit abgesicherter Aussagen."
+        )
+
+    lines.extend([
+        "",
+        "## Hinweise und offene Punkte",
+    ])
+    if unverified:
+        for idx, claim in enumerate(unverified[:8], start=1):
+            claim_text = str(claim.get("fact") or "").strip()
+            if not claim_text:
+                continue
+            source_type = str(claim.get("source_type") or "web")
+            lines.append(f"{idx}. {claim_text} Diese Aussage stammt aktuell aus dem Typ `{source_type}` und ist noch nicht breit bestätigt.")
+    else:
+        lines.append("Neben den verifizierten Fakten liegen derzeit keine zusätzlichen unbestätigten Hinweise vor.")
+
+    lines.extend([
+        "",
+        "## Analytische Verdichtung",
+    ])
+    if syntheses:
+        for analysis in syntheses[:4]:
+            topic = str(analysis.topic or "Thema").strip()
+            synthesis = str(analysis.synthesis or "").strip()
+            if synthesis:
+                lines.append(f"### {topic}")
+                lines.append(synthesis)
+                if analysis.limitations:
+                    lines.append(
+                        "Grenzen: " + "; ".join(str(item).strip() for item in analysis.limitations if str(item).strip())
+                    )
+                lines.append("")
+    else:
+        lines.append(
+            "Die Quellensynthese liefert noch kein stabiles, mehrperspektivisches Bild fuer alle Teilaspekte. "
+            "Das ist typisch, wenn das Thema breit formuliert ist oder die Quellenlage je Teilfrage stark schwankt."
+        )
+        lines.append(
+            "Besonders bei Modellfähigkeiten, Tool-Use und Multi-Agent-Support sollte deshalb zwischen "
+            "Produktankündigungen, Paper-Ergebnissen und unabhängigen Benchmarks getrennt werden."
+        )
+
+    lines.extend([
+        "## Fazit",
+        (
+            "Als lesbarer Gesamtstand zeigt diese Recherche, welche Punkte bereits greifbar belegt sind "
+            "und an welchen Stellen noch Verdichtung oder Nachverifikation fehlt."
+        ),
+        (
+            "Für Entscheidungen oder externe Weitergabe sollte man primär die bestätigten Fakten und die "
+            "klar benannten Unsicherheiten verwenden, statt unbestätigte Einzelclaims zu überziehen."
+        ),
+        "",
+        "## Quellenhinweise",
+    ])
+    if session.research_tree:
+        for idx, node in enumerate(session.research_tree[:12], start=1):
+            title = str(node.title or node.url or f"Quelle {idx}").strip()
+            url = str(node.url or "").strip()
+            lines.append(f"{idx}. {title} — {url}")
+    else:
+        lines.append("1. Keine strukturierten Web-Quellen in der Session vorhanden.")
+
+    return "\n".join(lines).strip()
+
+
+def _compose_pdf_markdown(narrative_content: str, academic_content: str) -> str:
+    narrative = str(narrative_content or "").strip()
+    academic = str(academic_content or "").strip()
+    narrative_is_readable = bool(narrative) and "0 Wörter" not in narrative and len(narrative.split()) >= 120
+
+    if narrative_is_readable and academic:
+        trimmed_academic = re.sub(r"^# .+?\n", "", academic, count=1).strip()
+        return (
+            f"{narrative}\n\n"
+            "## Analytischer Anhang\n\n"
+            "Die folgenden Abschnitte enthalten den strukturierten, analytischen Tiefenbericht "
+            "mit Claim-Register, Methodik und Scorecards.\n\n"
+            f"{trimmed_academic}"
+        ).strip()
+    if narrative:
+        return narrative
+    return academic
 
 
 def _build_research_pdf(
@@ -643,7 +831,7 @@ class DeepResearchSession:
             if _filter_session_claims(self, [claim_record]):
                 claims.append(claim_record)
 
-        return claims
+        return _dedupe_contract_claims(claims)
 
     def _build_contract_evidences_v2(
         self,
@@ -2101,7 +2289,7 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
         "---",
         "",
         f"**Datum:** {now}",
-        "**Research Engine:** Timus Deep Research v8.0 - Evidence Engine",
+        "**Research Engine:** Timus Deep Research v8.1 - Evidence Engine",
         f"**Analysierte Quellen:** {meta['total_sources_processed']}",
         (
             f"**Claim-Status:** {confirmed_claims} confirmed, {likely_claims} likely, "
@@ -2485,7 +2673,7 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
         "",
         "### Ueber diesen Bericht",
         "",
-        "Dieser Bericht wurde automatisiert von **Timus Deep Research v8.0 - Evidence Engine** erstellt.",
+        "Dieser Bericht wurde automatisiert von **Timus Deep Research v8.1 - Evidence Engine** erstellt.",
         "",
         "**Features:**",
         "- Claim -> Evidence -> Verdict",
@@ -2631,6 +2819,14 @@ Wichtig: Schreibe NUR den Berichtstext. Kein Meta-Kommentar über den Schreibpro
         logger.warning(f"Narrative-Synthese LLM-Call fehlgeschlagen: {e}")
         narrative = "_Narrative Synthese konnte nicht erstellt werden._"
 
+    if not str(narrative or "").strip():
+        logger.warning("Narrative-Synthese blieb leer; nutze deterministischen Fallback.")
+        narrative = _build_narrative_fallback_report(session)
+    elif len(str(narrative).split()) < 120:
+        logger.warning("Narrative-Synthese zu kurz (%s Woerter); erweitere per Fallback.", len(str(narrative).split()))
+        fallback = _build_narrative_fallback_report(session)
+        narrative = f"{str(narrative).strip()}\n\n{fallback}".strip()
+
     now = datetime.now().strftime("%d.%m.%Y %H:%M")
     source_count = len(session.research_tree)
     yt_count = len([c for c in session.unverified_claims if c.get("source_type") == "youtube"])
@@ -2653,7 +2849,7 @@ Wichtig: Schreibe NUR den Berichtstext. Kein Meta-Kommentar über den Schreibpro
     header = (
         f"# Recherche-Bericht\n"
         f"## {session.query}\n\n"
-        f"*Erstellt am {now} | Timus Deep Research v8.0 - Evidence Engine | Basierend auf {source_count} Web-Quellen{extras_info} | {word_count:,} Wörter*\n\n"
+        f"*Erstellt am {now} | Timus Deep Research v8.1 - Evidence Engine | Basierend auf {source_count} Web-Quellen{extras_info} | {word_count:,} Wörter*\n\n"
         f"---\n\n"
     )
     return header + narrative
@@ -2790,7 +2986,7 @@ async def _run_research_pipeline(
 
 @tool(
     name="start_deep_research",
-    description="Startet Timus Deep Research v8.0 - Evidence Engine mit Claim->Evidence->Verdict, profilgesteuerter Verifikation und Runtime-Guardrails.",
+    description="Startet Timus Deep Research v8.1 - Evidence Engine mit Claim->Evidence->Verdict, profilgesteuerter Verifikation und Runtime-Guardrails.",
     parameters=[
         P("query", "string", "Die Hauptsuchanfrage"),
         P("focus_areas", "array", "Optionale Liste von Fokusthemen", required=False),
@@ -2807,9 +3003,9 @@ async def start_deep_research(
     verification_mode: str = "strict"
 ) -> dict:
     """
-    Startet Timus Deep Research v8.0 - Evidence Engine.
+    Startet Timus Deep Research v8.1 - Evidence Engine.
 
-    Kernmerkmale in v8.0:
+    Kernmerkmale in v8.1:
     - Language-Detection → US-Location für englische Queries
     - Domain-aware Embedding-Threshold (Tech: 0.72)
     - Auto-Mode: strict + Tech → moderate
@@ -2835,7 +3031,7 @@ async def start_deep_research(
     current_session = DeepResearchSession(query, focus_areas)
     research_sessions[session_id] = current_session
 
-    # v8.0: Diagnostics initialisieren
+    # v8.1: Diagnostics initialisieren
     try:
         from tools.deep_research.diagnostics import reset as diag_reset
         diag = diag_reset()
@@ -2848,13 +3044,13 @@ async def start_deep_research(
     current_session.research_metadata = {
         "verification_mode": verification_mode,
         "max_depth": max_depth,
-        "version": "8.0"
+        "version": "8.1"
     }
 
     try:
-        logger.info(f"🔬 Starte Timus Deep Research v8.0 - Evidence Engine Session {session_id}: '{query}'")
+        logger.info(f"🔬 Starte Timus Deep Research v8.1 - Evidence Engine Session {session_id}: '{query}'")
 
-        # v8.0: Pipeline ausführen
+        # v8.1: Pipeline ausführen
         pipe = await _run_research_pipeline(
             query=query,
             session_id=session_id,
@@ -2874,7 +3070,7 @@ async def start_deep_research(
         analysis = pipe["analysis"]
         fallback_triggered = False
 
-        # v8.0: Qualitäts-Gate + automatischer light-Fallback
+        # v8.1: Qualitäts-Gate + automatischer light-Fallback
         quality_ok = verified_count >= 3
         if not quality_ok and verification_mode != "light":
             logger.warning(
@@ -2987,7 +3183,7 @@ async def start_deep_research(
         return {
             "session_id": session_id,
             "status": research_state,
-            "version": "8.0",
+            "version": "8.1",
             "facts_extracted": len(current_session.all_extracted_facts_raw),
             "verified_count": len(current_session.verified_facts),
             "unverified_count": len(current_session.unverified_claims),
@@ -3049,7 +3245,7 @@ async def get_research_status(session_id: str) -> dict:
 
 @tool(
     name="generate_research_report",
-    description="Erstellt einen druckreifen Bericht aus Timus Deep Research v8.0 - Evidence Engine mit Verdict-Table, Scorecards, Claim-Register und Quellenanhang.",
+    description="Erstellt einen druckreifen Bericht aus Timus Deep Research v8.1 - Evidence Engine mit Verdict-Table, Scorecards, Claim-Register und Quellenanhang.",
     parameters=[
         P("session_id", "string", "Die Session-ID der Recherche", required=False),
         P("session_id_to_report", "string", "Alternative Session-ID (Alias)", required=False),
@@ -3076,9 +3272,9 @@ async def generate_research_report(
     require_pdf: bool = True,
 ) -> dict:
     """
-    Erstellt einen druckreifen Bericht für Timus Deep Research v8.0 - Evidence Engine.
+    Erstellt einen druckreifen Bericht für Timus Deep Research v8.1 - Evidence Engine.
 
-    In v8.0:
+    In v8.1:
     - Executive Verdict Table
     - Domain Scorecards
     - Claim Register
@@ -3200,8 +3396,9 @@ async def generate_research_report(
         str(_Path(filepath).parent) if filepath
         else "/home/fatih-ubuntu/dev/timus/results"
     )
+    pdf_markdown = _compose_pdf_markdown(narrative_content, content)
     pdf_filepath = _build_research_pdf(
-        content=content,
+        content=pdf_markdown,
         images=images,
         session=session,
         output_dir=base_dir_pdf,
@@ -3230,7 +3427,7 @@ async def generate_research_report(
                 f"PDF: {pdf_filepath or 'nicht verfügbar'}."
             ),
             "summary": _get_research_metadata_summary(session),
-            "version": "8.0"
+            "version": "8.1"
         }
     else:
         # Fallback: Content im Response
@@ -3246,5 +3443,5 @@ async def generate_research_report(
             "images_in_pdf": len(images),
             "message": "Bericht erstellt, aber Speichern fehlgeschlagen. Content im Response.",
             "summary": _get_research_metadata_summary(session),
-            "version": "8.0"
+            "version": "8.1"
         }

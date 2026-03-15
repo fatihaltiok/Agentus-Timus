@@ -16,6 +16,7 @@ def _contract_meta_prompt_has_multisource_provider_gate() -> bool:
         and "agent/providers.py" in META_SYSTEM_PROMPT
         and "main_dispatcher.py" in META_SYSTEM_PROMPT
         and "IMMER mindestens 2 Quellen" in META_SYSTEM_PROMPT
+        and "Datei-/Artifact-/PDF-Fragen" in META_SYSTEM_PROMPT
     )
 
 
@@ -26,6 +27,7 @@ def _contract_executor_prompt_has_multisource_provider_gate() -> bool:
         and "agent/providers.py" in EXECUTOR_PROMPT_TEMPLATE
         and "main_dispatcher.py" in EXECUTOR_PROMPT_TEMPLATE
         and "mindestens 2 Quellen" in EXECUTOR_PROMPT_TEMPLATE
+        and "Datei-/Artifact-/PDF-Fragen" in EXECUTOR_PROMPT_TEMPLATE
     )
 
 
@@ -36,6 +38,7 @@ def _contract_reasoning_prompt_has_self_diagnosis_gate() -> bool:
         and "[BELEGT" in REASONING_PROMPT_TEMPLATE
         and "agent/providers.py" in REASONING_PROMPT_TEMPLATE
         and "main_dispatcher.py" in REASONING_PROMPT_TEMPLATE
+        and "Datei-/Artifact-/PDF-Fragen" in REASONING_PROMPT_TEMPLATE
     )
 
 

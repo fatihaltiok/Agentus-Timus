@@ -1,6 +1,6 @@
 # tools/deep_research/diagnostics.py
 """
-DrDiagnostics — Diagnoseschicht für Timus Deep Research v8.0 - Evidence Engine.
+DrDiagnostics — Diagnoseschicht für Timus Deep Research v8.1 - Evidence Engine.
 
 Wraps jede Phase mit Metriken ohne Produktions-Logik zu verändern.
 Alle Felder sind direkt messbar; keine Schätzwerte.
@@ -120,7 +120,7 @@ class DrDiagnostics:
         def ok(v: bool) -> str:
             return f"{GREEN}✓{RESET}" if v else f"{RED}✗{RESET}"
 
-        print(f"\n{BOLD}=== Timus Deep Research v8.0 - Evidence Engine — Diagnose ==={RESET}")
+        print(f"\n{BOLD}=== Timus Deep Research v8.1 - Evidence Engine — Diagnose ==={RESET}")
         print(f"Query         : {self.query}")
         print(f"Dauer         : {self.duration_seconds:.1f}s")
         print()
