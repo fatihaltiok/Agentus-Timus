@@ -19,6 +19,24 @@ sys.path.insert(0, str(project_root))
 # ── Reine Konstanten / Funktionen aus mcp_server.py direkt testen ─────────────
 # (ohne schwere FastAPI-Imports — wir extrahieren nur was wir brauchen)
 
+def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
+    """Minimale Kopie für E2E-Test — nur P4-Pfad (RESOLVED_PROPOSAL)."""
+    last_proposed_action = capsule.get("last_proposed_action") or None
+    if _is_affirmation(query) and last_proposed_action:
+        kind = str(last_proposed_action.get("kind") or "generic_action")
+        suggested_query = str(last_proposed_action.get("suggested_query") or "").strip()
+        raw_sentence = str(last_proposed_action.get("raw_sentence") or "").strip()
+        return "\n".join([
+            "# RESOLVED_PROPOSAL",
+            f"kind: {kind}",
+            f"suggested_query: {suggested_query}",
+            f"raw_proposal: {raw_sentence[:200]}",
+            "",
+            "# CURRENT USER QUERY",
+            query,
+        ])
+    return query
+
 _REFERENCE_CONTINUATION_PATTERNS = (
     r"\bdamit\b",
     r"\bdas gleiche\b",
@@ -40,7 +58,6 @@ _AFFIRMATION_PATTERNS = (
     r"\bschau\s+mal\s+danach\b",
     r"\bklingt\s+gut\b",
     r"\bgerne\s*[.!]?\s*$",
-    r"\bsicher\s*[.!]?\s*$",
     r"\bjep\s*[.!]?\s*$",
     r"\byep\s*[.!]?\s*$",
     r"^\s*mach\s+das\s*[.!]?\s*$",
@@ -208,6 +225,19 @@ class TestIsAffirmation:
     def test_empty(self):
         assert _is_affirmation("") is False
 
+    # Fehltrigger-Absicherung: "sicher" allein darf NICHT triggern
+    def test_sicher_standalone_not_affirm(self):
+        assert _is_affirmation("sicher") is False
+
+    def test_nicht_sicher_not_affirm(self):
+        assert _is_affirmation("ich bin nicht sicher") is False
+
+    def test_bist_du_sicher_not_affirm(self):
+        assert _is_affirmation("bist du dir sicher") is False
+
+    def test_das_ist_nicht_sicher_not_affirm(self):
+        assert _is_affirmation("das ist nicht sicher") is False
+
 
 # ── P4: Proposal Extraction ───────────────────────────────────────────────────
 
@@ -321,3 +351,147 @@ class TestYoutubeTranslateQuery:
     def test_empty(self):
         from agent.agents.executor import _youtube_translate_query
         assert _youtube_translate_query("") == ""
+
+
+# ── P4: End-to-End — Proposal → Affirmation → YouTube-Suche ──────────────────
+
+class TestP4EndToEnd:
+    """
+    Vollständiger P4-Durchlauf ohne echten HTTP-Call:
+    1. Assistenten-Antwort mit Angebot → _extract_proposal_metadata extrahiert Proposal
+    2. Proposal wird in Capsule-Dict gespeichert (simuliert _store_proposal_in_capsule)
+    3. Nutzer schickt Affirmation → _augment_query_with_followup_capsule erzeugt RESOLVED_PROPOSAL
+    4. ExecutorAgent._recover_resolved_proposal parst den Block
+    5. ExecutorAgent.run() startet YouTube-Suche mit dem extrahierten Query
+    """
+
+    # Simulierte Assistenten-Antwort die ein Angebot enthält
+    _ASSISTANT_REPLY = (
+        "Ich habe folgende KI-News gefunden: OpenAI stellt GPT-5 vor. "
+        "Soll ich auch nach aktuellen YouTube-Videos zu KI Agenten suchen?"
+    )
+    _EXPECTED_QUERY = "ki agenten"
+
+    def test_step1_proposal_extracted(self):
+        """Proposal aus Assistenten-Antwort korrekt extrahiert."""
+        p = _extract_proposal_metadata(self._ASSISTANT_REPLY)
+        assert p is not None
+        assert p["kind"] == "youtube_search"
+        assert self._EXPECTED_QUERY in p["suggested_query"]
+
+    def test_step2_affirmation_detected(self):
+        """Nutzer-Antwort als Zustimmung erkannt."""
+        assert _is_affirmation("ja schau mal danach") is True
+        assert _is_affirmation("ja") is True
+        assert _is_affirmation("schau mal danach") is True
+
+    def test_step3_resolved_proposal_block_generated(self):
+        """RESOLVED_PROPOSAL-Block korrekt erzeugt wenn Affirmation + Proposal vorhanden."""
+        proposal = _extract_proposal_metadata(self._ASSISTANT_REPLY)
+        assert proposal is not None
+
+        # Simuliertes Capsule-Dict (wie _build_followup_capsule es liefern würde)
+        capsule = {
+            "session_id": "test_e2e",
+            "last_agent": "executor",
+            "last_user": "was gibt es neues zu KI",
+            "last_assistant": self._ASSISTANT_REPLY,
+            "last_agent": "executor",
+            "session_summary": "",
+            "recent_user_queries": [],
+            "recent_assistant_replies": [],
+            "recent_agents": [],
+            "matched_reply_points": [],
+            "inherited_topic_recall": [],
+            "last_proposed_action": proposal,
+            "semantic_recall": [],
+        }
+
+        result = _augment_query_with_followup_capsule("ja schau mal danach", capsule)
+
+        assert "# RESOLVED_PROPOSAL" in result
+        assert "kind: youtube_search" in result
+        assert self._EXPECTED_QUERY in result
+
+    def test_step4_executor_parses_resolved_proposal(self):
+        """ExecutorAgent._recover_resolved_proposal parst den Block korrekt."""
+        from agent.agents.executor import ExecutorAgent
+
+        proposal = _extract_proposal_metadata(self._ASSISTANT_REPLY)
+        capsule = {
+            "session_id": "test_e2e",
+            "last_agent": "executor",
+            "last_assistant": self._ASSISTANT_REPLY,
+            "session_summary": "",
+            "recent_user_queries": [],
+            "recent_assistant_replies": [],
+            "recent_agents": [],
+            "matched_reply_points": [],
+            "inherited_topic_recall": [],
+            "last_proposed_action": proposal,
+            "semantic_recall": [],
+        }
+
+        dispatcher_input = _augment_query_with_followup_capsule("ja schau mal danach", capsule)
+        parsed = ExecutorAgent._recover_resolved_proposal(dispatcher_input)
+
+        assert parsed is not None
+        assert parsed["kind"] == "youtube_search"
+        assert self._EXPECTED_QUERY in parsed["suggested_query"]
+
+    @pytest.mark.asyncio
+    async def test_step5_executor_runs_youtube_search(self):
+        """ExecutorAgent.run() führt YouTube-Suche mit Proposal-Query aus (kein LLM)."""
+        from agent.agents.executor import ExecutorAgent
+        from agent.base_agent import BaseAgent
+
+        seen_calls: list[dict] = []
+
+        async def _fake_call_tool(self, method: str, params: dict):
+            seen_calls.append({"method": method, "params": params})
+            return [
+                {
+                    "title": "KI Agenten 2026 — Was kommt als nächstes?",
+                    "channel_name": "AI Weekly",
+                    "views_count": 42000,
+                    "url": "https://www.youtube.com/watch?v=test1",
+                    "video_id": "test1",
+                },
+            ]
+
+        async def _unexpected_llm(self, task: str):
+            raise AssertionError("LLM darf für RESOLVED_PROPOSAL nicht aufgerufen werden")
+
+        proposal = _extract_proposal_metadata(self._ASSISTANT_REPLY)
+        capsule = {
+            "session_id": "test_e2e",
+            "last_agent": "executor",
+            "last_assistant": self._ASSISTANT_REPLY,
+            "session_summary": "",
+            "recent_user_queries": [],
+            "recent_assistant_replies": [],
+            "recent_agents": [],
+            "matched_reply_points": [],
+            "inherited_topic_recall": [],
+            "last_proposed_action": proposal,
+            "semantic_recall": [],
+        }
+
+        task_for_executor = _augment_query_with_followup_capsule("ja schau mal danach", capsule)
+
+        import unittest.mock as mock
+        with mock.patch.object(BaseAgent, "_call_tool", _fake_call_tool):
+            with mock.patch.object(BaseAgent, "run", _unexpected_llm):
+                agent = ExecutorAgent.__new__(ExecutorAgent)
+                result = await ExecutorAgent.run(agent, task_for_executor)
+
+        # Korrekte Tool-Calls geprüft
+        assert len(seen_calls) >= 1
+        yt_calls = [c for c in seen_calls if c["method"] == "search_youtube"]
+        assert len(yt_calls) >= 1, f"Kein search_youtube-Call: {seen_calls}"
+        assert self._EXPECTED_QUERY in yt_calls[0]["params"]["query"], (
+            f"Falscher Query: {yt_calls[0]['params']['query']!r}"
+        )
+
+        # Ergebnis enthält Video-Titel
+        assert "KI Agenten" in result, f"Video nicht in Antwort: {result!r}"

@@ -172,7 +172,6 @@ _AFFIRMATION_PATTERNS = (
     r"\bschau\s+mal\s+danach\b",
     r"\bklingt\s+gut\b",
     r"\bgerne\s*[.!]?\s*$",
-    r"\bsicher\s*[.!]?\s*$",
     r"\bjep\s*[.!]?\s*$",
     r"\byep\s*[.!]?\s*$",
     r"^\s*mach\s+das\s*[.!]?\s*$",
