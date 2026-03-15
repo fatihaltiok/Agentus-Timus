@@ -58,8 +58,8 @@ class AppSessionViewModel(
                 .onSuccess { history ->
                     _uiState.value = _uiState.value.copy(messages = history, error = null)
                 }
-                .onFailure { error ->
-                    _uiState.value = _uiState.value.copy(error = error.message)
+                .onFailure {
+                    // Verlauf-Refresh ist Hintergrundarbeit und soll keine globale Fehlerkarte im Chat ausloesen.
                 }
         }
     }
@@ -100,7 +100,7 @@ class AppSessionViewModel(
                         agent = reply.agent,
                     ),
                     voice = _uiState.value.voice.copy(
-                        state = if (fromVoice) "speaking" else "idle",
+                        state = if (fromVoice) "synthesizing" else "idle",
                         lastReply = reply.reply,
                         statusMessage = "Antwort von ${reply.agent}",
                     ),
@@ -145,7 +145,6 @@ class AppSessionViewModel(
                 }
                 .onFailure { error ->
                     _uiState.value = _uiState.value.copy(
-                        error = error.message,
                         voice = _uiState.value.voice.copy(state = "error"),
                     )
                 }
@@ -225,7 +224,6 @@ class AppSessionViewModel(
                 }
                 .onFailure { error ->
                     _uiState.value = _uiState.value.copy(
-                        error = error.message,
                         location = _uiState.value.location.copy(
                             state = "error",
                             statusMessage = "Standortstatus konnte nicht geladen werden",
@@ -273,7 +271,6 @@ class AppSessionViewModel(
                         }
                         .onFailure { error ->
                             _uiState.value = _uiState.value.copy(
-                                error = error.message,
                                 location = _uiState.value.location.copy(
                                     state = "warning",
                                     permissionState = "granted",
@@ -285,7 +282,6 @@ class AppSessionViewModel(
                 }
                 .onFailure { error ->
                     _uiState.value = _uiState.value.copy(
-                        error = error.message,
                         location = _uiState.value.location.copy(
                             state = "error",
                             statusMessage = "Standort konnte nicht ermittelt werden",
@@ -350,7 +346,7 @@ class AppSessionViewModel(
         if (!state.authenticated || text.isBlank()) return
         _uiState.value = state.copy(
             voice = state.voice.copy(
-                state = "speaking",
+                state = "synthesizing",
                 statusMessage = "Erzeuge Audio…",
             ),
             error = null,
@@ -360,7 +356,7 @@ class AppSessionViewModel(
                 .onSuccess { audio ->
                     _uiState.value = _uiState.value.copy(
                         voice = _uiState.value.voice.copy(
-                            state = "speaking",
+                            state = "synthesizing",
                             lastSynthesizedAudio = audio,
                             statusMessage = "Audio bereit",
                             playbackNonce = _uiState.value.voice.playbackNonce + 1,

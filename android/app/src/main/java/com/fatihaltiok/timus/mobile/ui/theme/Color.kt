@@ -36,7 +36,7 @@ fun statusColorFor(state: String): Color =
         "ok", "healthy", "completed", "success", "speaking" -> TimusOk
         "warning", "warn", "degraded", "transcribing" -> TimusWarn
         "error", "failed", "blocked" -> TimusError
-        "thinking" -> TimusThinking
+        "thinking", "synthesizing" -> TimusThinking
         "listening" -> TimusPrimary
         else -> TimusIdle
     }

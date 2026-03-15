@@ -244,7 +244,7 @@ fun VoiceScreen(
     }
 
     LaunchedEffect(permissionGranted, autoStartPending, voiceState.state) {
-        val busyStates = setOf("listening", "transcribing", "thinking", "speaking")
+        val busyStates = setOf("listening", "transcribing", "thinking", "synthesizing", "speaking")
         if (!autoStartPending) return@LaunchedEffect
         if (!permissionGranted) {
             autoStartPending = false
@@ -361,7 +361,7 @@ fun VoiceScreen(
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
-                enabled = voiceState.state !in setOf("transcribing", "thinking", "speaking"),
+                enabled = voiceState.state !in setOf("transcribing", "thinking", "synthesizing", "speaking"),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = TimusPrimary,
                     contentColor = Night0,
@@ -370,7 +370,7 @@ fun VoiceScreen(
                 Text(
                     when (voiceState.state) {
                         "listening" -> "Antworte"
-                        "transcribing", "thinking", "speaking" -> "Verarbeite…"
+                        "transcribing", "thinking", "synthesizing", "speaking" -> "Verarbeite…"
                         else -> "Erneut zuhören"
                     },
                 )
