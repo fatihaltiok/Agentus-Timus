@@ -45,7 +45,7 @@ class MultiProviderClient:
         ModelProvider.INCEPTION: "https://api.inceptionlabs.ai/v1",
         ModelProvider.NVIDIA: "https://integrate.api.nvidia.com/v1",
         ModelProvider.OPENROUTER: "https://openrouter.ai/api/v1",
-        ModelProvider.GOOGLE: "https://generativelanguage.googleapis.com/v1beta/openai",
+        ModelProvider.GOOGLE: "https://generativelanguage.googleapis.com/v1beta",
     }
 
     API_KEY_ENV = {
@@ -61,6 +61,12 @@ class MultiProviderClient:
 
     API_KEY_ALIASES = {
         ModelProvider.GOOGLE: ("GEMINI_API_KEY",),
+    }
+
+    # Abweichende Basis-URLs für OpenAI-SDK-Compat-Calls (wenn nötig).
+    # BASE_URLS bleibt der kanonische native Endpunkt (z.B. für den Dispatcher).
+    OPENAI_COMPAT_URLS = {
+        ModelProvider.GOOGLE: "https://generativelanguage.googleapis.com/v1beta/openai",
     }
 
     def __init__(self):
@@ -88,8 +94,16 @@ class MultiProviderClient:
         return self._api_keys.get(provider)
 
     def get_base_url(self, provider: ModelProvider) -> str:
+        """Nativer Endpunkt des Providers (z.B. für direkten httpx-Call im Dispatcher)."""
         env_override = os.getenv(f"{provider.value.upper()}_API_BASE")
         return env_override or self.BASE_URLS.get(provider, "")
+
+    def get_openai_compat_base_url(self, provider: ModelProvider) -> str:
+        """OpenAI-SDK-kompatibler Endpunkt. Fallback auf get_base_url() wenn kein Compat-URL hinterlegt."""
+        env_override = os.getenv(f"{provider.value.upper()}_API_BASE")
+        if env_override:
+            return env_override
+        return self.OPENAI_COMPAT_URLS.get(provider) or self.BASE_URLS.get(provider, "")
 
     def has_provider(self, provider: ModelProvider) -> bool:
         return provider in self._api_keys
@@ -211,7 +225,7 @@ class MultiProviderClient:
         from openai import OpenAI
         return OpenAI(
             api_key=self.get_api_key(provider),
-            base_url=self.get_base_url(provider),
+            base_url=self.get_openai_compat_base_url(provider),
         )
 
     def _init_anthropic(self):

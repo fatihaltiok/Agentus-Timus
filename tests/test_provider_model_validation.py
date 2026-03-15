@@ -151,12 +151,33 @@ def test_multi_provider_client_accepts_gemini_api_key_alias(monkeypatch):
 class TestGoogleProviderOpenAICompat:
     """GP1-Fix: ModelProvider.GOOGLE muss über OpenAI-kompatible Branch laufen."""
 
-    def test_google_base_url_is_openai_compat(self):
-        """BASE_URL für GOOGLE endet auf /openai — OpenAI SDK funktioniert damit."""
+    def test_google_native_base_url_is_v1beta(self):
+        """get_base_url(GOOGLE) zeigt auf den nativen v1beta-Endpunkt — für den Dispatcher."""
         client = MultiProviderClient()
         url = client.get_base_url(ModelProvider.GOOGLE)
+        assert url == "https://generativelanguage.googleapis.com/v1beta", (
+            f"Nativer GOOGLE-Endpunkt muss .../v1beta sein, ist: {url}"
+        )
+
+    def test_google_openai_compat_url_ends_with_openai(self):
+        """get_openai_compat_base_url(GOOGLE) endet auf /openai — für OpenAI SDK."""
+        client = MultiProviderClient()
+        url = client.get_openai_compat_base_url(ModelProvider.GOOGLE)
         assert url.endswith("/openai"), (
-            f"GOOGLE base URL muss auf /openai enden, ist: {url}"
+            f"OpenAI-Compat-URL muss auf /openai enden, ist: {url}"
+        )
+
+    def test_google_dispatcher_url_not_broken_by_openai_compat(self):
+        """Dispatcher baut .../v1beta/models/{model}:generateContent — nicht .../openai/models/..."""
+        client = MultiProviderClient()
+        native_url = client.get_base_url(ModelProvider.GOOGLE).rstrip("/")
+        model = "gemini-3-flash-preview"
+        dispatcher_url = f"{native_url}/models/{model}:generateContent"
+        assert "/openai/" not in dispatcher_url, (
+            f"Dispatcher-URL darf kein /openai/ enthalten: {dispatcher_url}"
+        )
+        assert dispatcher_url == (
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         )
 
     def test_google_get_client_returns_openai_client(self, monkeypatch):
