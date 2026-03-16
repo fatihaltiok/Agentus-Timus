@@ -5,6 +5,7 @@ import android.content.Context
 import android.location.Geocoder
 import android.location.Location
 import android.os.Build
+import android.provider.Settings
 import com.fatihaltiok.timus.mobile.model.DeviceLocationSnapshot
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
@@ -48,6 +49,9 @@ class AndroidLocationClient(
                     accuracyMeters = location.accuracy.takeIf { it > 0f },
                     source = if (location.hasAccuracy()) "android_fused" else "android_last_known",
                     capturedAt = Instant.ofEpochMilli(location.time.takeIf { it > 0L } ?: System.currentTimeMillis()).toString(),
+                    deviceId = Settings.Secure.getString(appContext.contentResolver, Settings.Secure.ANDROID_ID)
+                        ?.takeIf { it.isNotBlank() },
+                    userScope = "primary",
                     displayName = address?.getAddressLine(0),
                     locality = address?.locality,
                     adminArea = address?.adminArea,

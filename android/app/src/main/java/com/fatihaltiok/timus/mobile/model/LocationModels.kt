@@ -6,6 +6,8 @@ data class DeviceLocationSnapshot(
     val accuracyMeters: Float? = null,
     val source: String = "android_fused",
     val capturedAt: String,
+    val deviceId: String? = null,
+    val userScope: String? = null,
     val displayName: String? = null,
     val locality: String? = null,
     val adminArea: String? = null,
@@ -19,6 +21,7 @@ data class LocationServerSnapshot(
     val accuracyMeters: Float? = null,
     val source: String = "android_fused",
     val capturedAt: String,
+    val receivedAt: String = "",
     val displayName: String = "",
     val locality: String = "",
     val adminArea: String = "",
@@ -26,6 +29,10 @@ data class LocationServerSnapshot(
     val countryCode: String = "",
     val geocodeProvider: String = "",
     val mapsUrl: String = "",
+    val deviceId: String = "",
+    val userScope: String = "",
+    val presenceStatus: String = "unknown",
+    val usableForContext: Boolean = false,
 )
 
 data class LocationUiState(

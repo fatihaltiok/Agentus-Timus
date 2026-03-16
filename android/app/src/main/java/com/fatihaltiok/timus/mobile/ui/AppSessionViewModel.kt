@@ -10,6 +10,7 @@ import com.fatihaltiok.timus.mobile.model.LocationServerSnapshot
 import com.fatihaltiok.timus.mobile.model.LocationUiState
 import com.fatihaltiok.timus.mobile.model.VoiceUiState
 import com.fatihaltiok.timus.mobile.location.TimusLocationClient
+import com.fatihaltiok.timus.mobile.location.evaluateForegroundLocationAutoSync
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -34,6 +35,8 @@ class AppSessionViewModel(
 
     private val _uiState = MutableStateFlow(AppSessionUiState())
     val uiState: StateFlow<AppSessionUiState> = _uiState.asStateFlow()
+    private var lastLocationAutoSyncAttemptMs: Long? = null
+    private var locationAutoSyncInFlight: Boolean = false
 
     fun login(config: TimusConfig) {
         _uiState.value = _uiState.value.copy(
@@ -235,28 +238,60 @@ class AppSessionViewModel(
     }
 
     fun refreshLocation(locationClient: TimusLocationClient) {
+        refreshLocationInternal(locationClient, silent = false)
+    }
+
+    fun autoSyncLocationIfDue(
+        locationClient: TimusLocationClient,
+        permissionGranted: Boolean,
+        nowEpochMs: Long = System.currentTimeMillis(),
+    ) {
         val state = _uiState.value
-        if (!state.authenticated) return
-        _uiState.value = state.copy(
-            location = state.location.copy(
-                state = "fetching",
-                statusMessage = "Standort wird vom Gerät abgerufen…",
-                error = null,
-            ),
-            error = null,
+        val decision = evaluateForegroundLocationAutoSync(
+            authenticated = state.authenticated,
+            permissionGranted = permissionGranted,
+            currentState = state.location.state,
+            presenceStatus = state.location.lastResolvedLocation?.presenceStatus,
+            lastAttemptEpochMs = lastLocationAutoSyncAttemptMs,
+            nowEpochMs = nowEpochMs,
         )
+        if (!decision.shouldSync) return
+        refreshLocationInternal(locationClient, silent = true, nowEpochMs = nowEpochMs)
+    }
+
+    private fun refreshLocationInternal(
+        locationClient: TimusLocationClient,
+        silent: Boolean,
+        nowEpochMs: Long = System.currentTimeMillis(),
+    ) {
+        val state = _uiState.value
+        if (!state.authenticated || locationAutoSyncInFlight) return
+        locationAutoSyncInFlight = true
+        lastLocationAutoSyncAttemptMs = nowEpochMs
+        if (!silent) {
+            _uiState.value = state.copy(
+                location = state.location.copy(
+                    state = "fetching",
+                    statusMessage = "Standort wird vom Gerät abgerufen…",
+                    error = null,
+                ),
+                error = null,
+            )
+        }
         viewModelScope.launch {
             locationClient.captureCurrentLocation()
                 .onSuccess { snapshot ->
-                    _uiState.value = _uiState.value.copy(
-                        location = _uiState.value.location.copy(
-                            state = "syncing",
-                            permissionState = "granted",
-                            lastDeviceLocation = snapshot,
-                            statusMessage = "Standort erkannt — normalisiere…",
-                            error = null,
-                        ),
-                    )
+                    if (!silent) {
+                        _uiState.value = _uiState.value.copy(
+                            location = _uiState.value.location.copy(
+                                state = "syncing",
+                                permissionState = "granted",
+                                lastDeviceLocation = snapshot,
+                                statusMessage = "Standort erkannt — normalisiere…",
+                                error = null,
+                            ),
+                        )
+                    }
                     repository.resolveLocation(state.config, snapshot)
                         .onSuccess { resolved ->
                             _uiState.value = _uiState.value.copy(
@@ -270,25 +305,30 @@ class AppSessionViewModel(
                             )
                         }
                         .onFailure { error ->
-                            _uiState.value = _uiState.value.copy(
-                                location = _uiState.value.location.copy(
-                                    state = "warning",
-                                    permissionState = "granted",
-                                    statusMessage = "Standort lokal erfasst, Server-Normalisierung fehlgeschlagen",
-                                    error = error.message,
-                                ),
-                            )
+                            if (!silent) {
+                                _uiState.value = _uiState.value.copy(
+                                    location = _uiState.value.location.copy(
+                                        state = "warning",
+                                        permissionState = "granted",
+                                        statusMessage = "Standort lokal erfasst, Server-Normalisierung fehlgeschlagen",
+                                        error = error.message,
+                                    ),
+                                )
+                            }
                         }
                 }
                 .onFailure { error ->
-                    _uiState.value = _uiState.value.copy(
-                        location = _uiState.value.location.copy(
-                            state = "error",
-                            statusMessage = "Standort konnte nicht ermittelt werden",
-                            error = error.message,
-                        ),
-                    )
+                    if (!silent) {
+                        _uiState.value = _uiState.value.copy(
+                            location = _uiState.value.location.copy(
+                                state = "error",
+                                statusMessage = "Standort konnte nicht ermittelt werden",
+                                error = error.message,
+                            ),
+                        )
+                    }
                 }
+            locationAutoSyncInFlight = false
         }
     }
 

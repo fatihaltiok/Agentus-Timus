@@ -35,6 +35,7 @@ import com.fatihaltiok.timus.mobile.ui.screens.FilesScreen
 import com.fatihaltiok.timus.mobile.ui.screens.HomeScreen
 import com.fatihaltiok.timus.mobile.ui.screens.LoginScreen
 import com.fatihaltiok.timus.mobile.ui.screens.VoiceScreen
+import kotlinx.coroutines.delay
 
 @Composable
 fun TimusMobileApp() {
@@ -95,6 +96,19 @@ fun TimusMobileApp() {
 
     LaunchedEffect(hasLocationPermission) {
         sessionViewModel.syncLocationPermission(hasLocationPermission)
+    }
+
+    LaunchedEffect(uiState.authenticated, hasLocationPermission) {
+        if (!uiState.authenticated || !hasLocationPermission) {
+            return@LaunchedEffect
+        }
+        while (true) {
+            sessionViewModel.autoSyncLocationIfDue(
+                locationClient = locationClient,
+                permissionGranted = hasLocationPermission,
+            )
+            delay(60_000L)
+        }
     }
 
     val navController = rememberNavController()

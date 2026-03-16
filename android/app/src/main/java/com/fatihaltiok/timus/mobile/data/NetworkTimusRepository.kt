@@ -144,6 +144,8 @@ class NetworkTimusRepository : TimusRepository {
                 .put("captured_at", location.capturedAt)
                 .put("source", location.source)
             location.accuracyMeters?.let { body.put("accuracy_meters", it.toDouble()) }
+            if (!location.deviceId.isNullOrBlank()) body.put("device_id", location.deviceId)
+            if (!location.userScope.isNullOrBlank()) body.put("user_scope", location.userScope)
             if (!location.displayName.isNullOrBlank()) body.put("display_name", location.displayName)
             if (!location.locality.isNullOrBlank()) body.put("locality", location.locality)
             if (!location.adminArea.isNullOrBlank()) body.put("admin_area", location.adminArea)
@@ -282,6 +284,7 @@ class NetworkTimusRepository : TimusRepository {
             },
             source = payload.optString("source", "android_fused"),
             capturedAt = payload.optString("captured_at", ""),
+            receivedAt = payload.optString("received_at", ""),
             displayName = payload.optString("display_name", ""),
             locality = payload.optString("locality", ""),
             adminArea = payload.optString("admin_area", ""),
@@ -289,5 +292,9 @@ class NetworkTimusRepository : TimusRepository {
             countryCode = payload.optString("country_code", ""),
             geocodeProvider = payload.optString("geocode_provider", ""),
             mapsUrl = payload.optString("maps_url", ""),
+            deviceId = payload.optString("device_id", ""),
+            userScope = payload.optString("user_scope", ""),
+            presenceStatus = payload.optString("presence_status", "unknown"),
+            usableForContext = payload.optBoolean("usable_for_context", false),
         )
 }
