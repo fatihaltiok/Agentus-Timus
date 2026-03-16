@@ -190,6 +190,24 @@ class MetaAgent(BaseAgent):
             return text
         return text[:limit].rstrip() + "..."
 
+    @staticmethod
+    def _strip_location_context_block(text: str) -> str:
+        """Entfernt den # LIVE LOCATION CONTEXT Block aus einer Nutzeranfrage.
+
+        Der Block ist mehrzeilig und würde den zeilenbasierten Handoff-Parser
+        (delegation_handoff.py) korrumpieren. Der Executor holt die Location
+        sowieso selbst per get_current_location_context().
+        """
+        cleaned = re.sub(
+            r"^\s*#\s*live location context\b.*?"
+            r"(?:use this location only for nearby, routing, navigation,"
+            r" or explicit place-context tasks\.?\s*)",
+            "",
+            str(text or ""),
+            flags=re.IGNORECASE | re.DOTALL | re.MULTILINE,
+        ).strip()
+        return cleaned if cleaned else str(text or "").strip()
+
     @classmethod
     def _build_specialist_delegation_task(cls, method: str, params: Dict[str, Any]) -> str:
         if method == "search_web":
@@ -1433,7 +1451,9 @@ class MetaAgent(BaseAgent):
         attempted = set(attempted_recipe_ids or set())
         attempted.add(recipe_id)
 
-        original_user_task = str(handoff.get("original_user_task") or task).strip()
+        original_user_task = cls._strip_location_context_block(
+            str(handoff.get("original_user_task") or task)
+        )
         handoff_for_recipe = dict(handoff)
         handoff_for_recipe["recommended_recipe_id"] = recipe_id
         handoff_for_recipe["recipe_stages"] = stages
