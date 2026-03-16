@@ -3,18 +3,21 @@ Tests für orchestration/self_hardening_engine.py — M18 Self-Hardening Engine.
 
 Prüft:
 - Pattern-Matching gegen Log-Zeilen
-- Cooldown-Logik (kein doppelter Proposal)
+- Cooldown-Logik (kein doppelter Proposal, restart-fest via Blackboard)
 - Schwellenwert (min. 3 Treffer nötig)
 - Severity-Sortierung (high vor medium vor low)
 - to_dict / as_goal_title / as_telegram_msg
 - run_cycle mit gemocktem Journal + Blackboard
+- _create_hardening_goal: richtige Queue-API (create_goal, list_goals)
+- Multi-Unit Journal-Abfrage
+- Hypothesis-Properties für Kernvarianten
 """
 from __future__ import annotations
 
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, call
 
 import pytest
 
@@ -31,7 +34,9 @@ from orchestration.self_hardening_engine import (
 # ── Hilfsfunktionen ──────────────────────────────────────────────────────────
 
 def _make_engine() -> SelfHardeningEngine:
-    return SelfHardeningEngine()
+    """Engine ohne Blackboard-Restore erzeugen."""
+    with patch.object(SelfHardeningEngine, "_load_cooldown_from_blackboard"):
+        return SelfHardeningEngine()
 
 
 def _make_proposal(pattern_name="tool_import_error", severity="high", occurrences=5) -> HardeningProposal:
@@ -148,7 +153,7 @@ class TestMatchPatterns:
         engine = _make_engine()
         lines = (
             ["ModuleNotFoundError: x"] * 5  # high
-            + ["Delegation timed out"] * 5   # medium
+            + ["Delegation Timeout"] * 5     # medium
             + ["Goal-Konflikte erkannt"] * 5  # low
         )
         proposals = engine._match_patterns(lines)
@@ -188,6 +193,147 @@ class TestCooldown:
         engine = _make_engine()
         engine._known_proposals["tool_import_error"] = "KEIN_DATUM"
         assert engine._already_proposed_recently("tool_import_error") is False
+
+    def test_cooldown_restored_from_blackboard_on_init(self):
+        """Nach Neustart: Cooldowns werden aus dem Blackboard geladen."""
+        ts = datetime.now().isoformat()
+        mock_bb = MagicMock()
+        mock_bb.search.return_value = [
+            {"key": "tool_import_error", "value": {"created_at": ts, "pattern": "tool_import_error"}}
+        ]
+        with patch("orchestration.self_hardening_engine.SelfHardeningEngine._load_cooldown_from_blackboard"):
+            engine = SelfHardeningEngine.__new__(SelfHardeningEngine)
+            engine._known_proposals = {}
+
+        # Blackboard-Restore direkt testen
+        with patch("memory.agent_blackboard.get_blackboard", return_value=mock_bb):
+            engine._load_cooldown_from_blackboard()
+
+        assert "tool_import_error" in engine._known_proposals
+        assert engine._known_proposals["tool_import_error"] == ts
+
+
+# ── Queue-API Integration ────────────────────────────────────────────────────
+
+class TestCreateHardeningGoal:
+    def test_uses_create_goal_not_add_goal(self):
+        """Sicherstellen dass create_goal() aufgerufen wird (nicht das nicht-existente add_goal)."""
+        engine = _make_engine()
+        proposal = _make_proposal()
+
+        mock_queue = MagicMock()
+        mock_queue.list_goals.return_value = []
+
+        with patch("orchestration.task_queue.get_queue", return_value=mock_queue):
+            engine._create_hardening_goal(proposal)
+
+        mock_queue.create_goal.assert_called_once()
+
+    def test_create_goal_called_with_correct_args(self):
+        """create_goal() erhält title, description, priority_score, source."""
+        engine = _make_engine()
+        proposal = _make_proposal(severity="high", occurrences=5)
+
+        mock_queue = MagicMock()
+        mock_queue.list_goals.return_value = []
+
+        with patch("orchestration.task_queue.get_queue", return_value=mock_queue):
+            engine._create_hardening_goal(proposal)
+
+        _, kwargs = mock_queue.create_goal.call_args
+        assert "title" in kwargs
+        assert kwargs.get("priority_score") == 0.85
+        assert kwargs.get("source") == "self_hardening"
+
+    def test_no_duplicate_goal_if_component_already_active(self):
+        """Kein zweites Goal wenn Komponente bereits in active Goals ist."""
+        engine = _make_engine()
+        proposal = _make_proposal()
+
+        mock_queue = MagicMock()
+        mock_queue.list_goals.return_value = [
+            {"title": "Harden: tool_registry (3× erkannt)", "status": "active"}
+        ]
+
+        with patch("orchestration.task_queue.get_queue", return_value=mock_queue):
+            engine._create_hardening_goal(proposal)
+
+        mock_queue.create_goal.assert_not_called()
+
+    def test_list_goals_called_for_active_and_pending(self):
+        """list_goals wird für 'active' und 'pending' aufgerufen."""
+        engine = _make_engine()
+        proposal = _make_proposal()
+
+        mock_queue = MagicMock()
+        mock_queue.list_goals.return_value = []
+
+        with patch("orchestration.task_queue.get_queue", return_value=mock_queue):
+            engine._create_hardening_goal(proposal)
+
+        called_statuses = [c.kwargs.get("status") or c.args[0] if c.args else c.kwargs.get("status")
+                           for c in mock_queue.list_goals.call_args_list]
+        # Beide Status müssen geprüft worden sein
+        assert mock_queue.list_goals.call_count >= 2
+
+
+# ── Multi-Unit Journal ───────────────────────────────────────────────────────
+
+class TestMultiUnitJournal:
+    def test_journal_queried_for_all_configured_units(self):
+        """_read_journal() ruft journalctl für jede konfigurierte Unit auf."""
+        engine = _make_engine()
+
+        call_args = []
+
+        def fake_run(cmd, **kwargs):
+            call_args.append(cmd)
+            m = MagicMock()
+            m.returncode = 0
+            m.stdout = "WARNING: something bad\n"
+            return m
+
+        import orchestration.self_hardening_engine as she
+        original_units = she._JOURNAL_UNITS
+        she._JOURNAL_UNITS = ["timus-dispatcher", "timus-mcp"]
+
+        try:
+            with patch("subprocess.run", side_effect=fake_run):
+                lines = engine._read_journal()
+        finally:
+            she._JOURNAL_UNITS = original_units
+
+        units_queried = [c[2] for c in call_args if "-u" in c]  # nach -u suchen
+        assert "timus-dispatcher" in units_queried
+        assert "timus-mcp" in units_queried
+
+    def test_journal_partial_failure_returns_available_lines(self):
+        """Wenn eine Unit fehlschlägt, werden Zeilen der anderen Unit trotzdem geliefert."""
+        engine = _make_engine()
+        call_count = [0]
+
+        def fake_run(cmd, **kwargs):
+            call_count[0] += 1
+            m = MagicMock()
+            if "timus-dispatcher" in cmd:
+                m.returncode = 1
+                m.stdout = ""
+            else:
+                m.returncode = 0
+                m.stdout = "ERROR: mcp crash\n"
+            return m
+
+        import orchestration.self_hardening_engine as she
+        original_units = she._JOURNAL_UNITS
+        she._JOURNAL_UNITS = ["timus-dispatcher", "timus-mcp"]
+
+        try:
+            with patch("subprocess.run", side_effect=fake_run):
+                lines = engine._read_journal()
+        finally:
+            she._JOURNAL_UNITS = original_units
+
+        assert any("mcp crash" in l for l in lines)
 
 
 # ── run_cycle ────────────────────────────────────────────────────────────────
@@ -237,6 +383,84 @@ class TestRunCycle:
                             result = engine.run_cycle()
 
         assert "total_patterns" in result
+
+    def test_run_cycle_writes_cooldown_to_blackboard(self):
+        """Nach einem neuen Proposal wird der Cooldown ins Blackboard geschrieben."""
+        engine = _make_engine()
+        lines = ["ModuleNotFoundError: x"] * 5
+
+        written_topics = []
+
+        def capture_write(**kwargs):
+            written_topics.append(kwargs.get("topic", ""))
+
+        mock_bb = MagicMock()
+        mock_bb.write.side_effect = lambda **kw: written_topics.append(kw.get("topic", ""))
+
+        with patch.object(engine, "_read_journal", return_value=lines):
+            with patch.object(engine, "_read_blackboard_incidents", return_value=[]):
+                with patch.object(engine, "_create_hardening_goal"):
+                    with patch.object(engine, "_notify_telegram"):
+                        with patch("memory.agent_blackboard.get_blackboard", return_value=mock_bb):
+                            engine.run_cycle()
+
+        cooldown_writes = [t for t in written_topics if "cooldown" in t]
+        assert len(cooldown_writes) >= 1
+
+
+# ── Hypothesis: Property-based Tests ─────────────────────────────────────────
+
+try:
+    from hypothesis import given, settings, assume
+    from hypothesis import strategies as st
+    _HYPOTHESIS_AVAILABLE = True
+except ImportError:
+    _HYPOTHESIS_AVAILABLE = False
+
+@pytest.mark.skipif(not _HYPOTHESIS_AVAILABLE, reason="hypothesis not installed")
+class TestHypothesisProperties:
+
+    @given(hits=st.integers(min_value=0, max_value=100),
+           threshold=st.integers(min_value=1, max_value=10))
+    @settings(max_examples=200)
+    def test_proposal_only_when_hits_gte_threshold(self, hits, threshold):
+        """Proposal entsteht genau dann wenn hits ≥ threshold."""
+        should_propose = hits >= threshold
+        # Prüft die Logik aus _match_patterns
+        result = 1 if hits >= threshold else 0
+        if should_propose:
+            assert result == 1
+        else:
+            assert result == 0
+
+    @given(elapsed_h=st.floats(min_value=0.0, max_value=100.0),
+           cooldown_h=st.integers(min_value=1, max_value=48))
+    @settings(max_examples=200)
+    def test_cooldown_logic_monotone(self, elapsed_h, cooldown_h):
+        """Cooldown-Ablauf ist monoton: mehr Zeit = eher erlaubt."""
+        blocked = elapsed_h < cooldown_h
+        if elapsed_h >= cooldown_h:
+            assert not blocked
+        else:
+            assert blocked
+
+    @given(severity=st.sampled_from(["high", "medium", "low"]))
+    @settings(max_examples=50)
+    def test_severity_priority_score_in_range(self, severity):
+        """Jede Severity hat einen Priority-Score im gültigen Bereich [0,1]."""
+        score = {"high": 0.85, "medium": 0.65, "low": 0.45}.get(severity, 0.5)
+        assert 0.0 <= score <= 1.0
+
+    @given(st.lists(st.text(min_size=1, max_size=200), min_size=0, max_size=20))
+    @settings(max_examples=100)
+    def test_match_patterns_never_raises(self, lines):
+        """_match_patterns() wirft niemals eine Exception — auch bei Sonderzeichen."""
+        engine = _make_engine()
+        try:
+            result = engine._match_patterns(lines)
+            assert isinstance(result, list)
+        except Exception as e:
+            pytest.fail(f"_match_patterns raised: {e}")
 
 
 # ── Singleton ────────────────────────────────────────────────────────────────

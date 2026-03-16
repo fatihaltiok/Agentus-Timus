@@ -33,6 +33,13 @@ _MIN_OCCURRENCES = int(os.getenv("HARDENING_MIN_OCCURRENCES", "3"))
 _BLACKBOARD_TTL = int(os.getenv("HARDENING_BLACKBOARD_TTL", "7200"))  # 2h
 _GOAL_COOLDOWN_H = int(os.getenv("HARDENING_GOAL_COOLDOWN_HOURS", "24"))
 
+# Alle produktiven systemd-Units die Timus-Fehler erzeugen können
+_JOURNAL_UNITS = [
+    u.strip()
+    for u in os.getenv("HARDENING_JOURNAL_UNITS", "timus-dispatcher,timus-mcp").split(",")
+    if u.strip()
+]
+
 # ── Bekannte Fehler-Pattern → Härtungs-Empfehlung ─────────────────────────────
 
 @dataclass
@@ -145,26 +152,46 @@ class SelfHardeningEngine:
 
     def __init__(self) -> None:
         self._known_proposals: Dict[str, str] = {}  # pattern_name → created_at
+        self._load_cooldown_from_blackboard()
+
+    def _load_cooldown_from_blackboard(self) -> None:
+        """Lädt persistierte Cooldown-Timestamps aus dem Blackboard (restart-fest)."""
+        try:
+            from memory.agent_blackboard import get_blackboard
+            bb = get_blackboard()
+            entries = bb.search(topic_prefix="hardening:cooldown") or []
+            for entry in entries:
+                pattern_name = entry.get("key", "")
+                val = entry.get("value") or {}
+                ts = val.get("created_at") if isinstance(val, dict) else None
+                if pattern_name and ts:
+                    self._known_proposals[pattern_name] = ts
+            if self._known_proposals:
+                log.debug("SelfHardening: %d Cooldowns aus Blackboard geladen", len(self._known_proposals))
+        except Exception as e:
+            log.debug("Cooldown-Restore fehlgeschlagen: %s", e)
 
     def _read_journal(self) -> List[str]:
-        """Liest letzte N WARNING/ERROR Zeilen aus dem systemd-Journal."""
-        try:
-            result = subprocess.run(
-                [
-                    "journalctl", "-u", "timus-dispatcher",
-                    "--no-pager", "-n", str(_JOURNAL_LINES),
-                    "--output=short",
-                ],
-                capture_output=True, text=True, timeout=10,
-            )
-            if result.returncode == 0:
-                return [
-                    l for l in result.stdout.splitlines()
-                    if "WARNING" in l or "ERROR" in l or "CRITICAL" in l
-                ]
-        except Exception as e:
-            log.debug("Journal lesen fehlgeschlagen: %s", e)
-        return []
+        """Liest letzte N WARNING/ERROR Zeilen aus allen konfigurierten systemd-Units."""
+        lines: List[str] = []
+        for unit in _JOURNAL_UNITS:
+            try:
+                result = subprocess.run(
+                    [
+                        "journalctl", "-u", unit,
+                        "--no-pager", "-n", str(_JOURNAL_LINES),
+                        "--output=short",
+                    ],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if result.returncode == 0:
+                    lines.extend(
+                        l for l in result.stdout.splitlines()
+                        if "WARNING" in l or "ERROR" in l or "CRITICAL" in l
+                    )
+            except Exception as e:
+                log.debug("Journal lesen fehlgeschlagen (%s): %s", unit, e)
+        return lines
 
     def _read_blackboard_incidents(self) -> List[str]:
         """Liest incident:* und error:* Einträge aus dem Blackboard."""
@@ -223,12 +250,23 @@ class SelfHardeningEngine:
     def _write_to_blackboard(self, proposal: HardeningProposal) -> None:
         try:
             from memory.agent_blackboard import get_blackboard
-            get_blackboard().write(
+            bb = get_blackboard()
+            # Proposal-Daten
+            bb.write(
                 agent="self_hardening",
                 topic=f"hardening:{proposal.pattern_name}",
                 key=proposal.pattern_name,
                 value=proposal.to_dict(),
                 ttl=_BLACKBOARD_TTL,
+            )
+            # Cooldown persistieren (TTL = Cooldown + 1h Puffer)
+            cooldown_ttl = _GOAL_COOLDOWN_H * 3600 + 3600
+            bb.write(
+                agent="self_hardening",
+                topic=f"hardening:cooldown:{proposal.pattern_name}",
+                key=proposal.pattern_name,
+                value={"created_at": proposal.created_at, "pattern": proposal.pattern_name},
+                ttl=cooldown_ttl,
             )
         except Exception as e:
             log.debug("Blackboard write fehlgeschlagen: %s", e)
@@ -239,21 +277,23 @@ class SelfHardeningEngine:
             queue = get_queue()
             title = proposal.as_goal_title()
             # Kein Duplikat anlegen wenn ähnliches Ziel bereits offen ist
-            existing = queue.list_goals(status_filter=["pending", "in_progress"])
-            for g in existing:
+            # list_goals() akzeptiert nur status (singular, ein Wert) — beide Status prüfen
+            active = queue.list_goals(status="active") or []
+            pending = queue.list_goals(status="pending") or []
+            for g in active + pending:
                 if proposal.component in (g.get("title") or ""):
                     log.debug("Härtungs-Ziel bereits vorhanden: %s", title)
                     return
-            queue.add_goal(
+            queue.create_goal(
                 title=title,
                 description=f"Härtungs-Vorschlag (automatisch erkannt):\n{proposal.suggestion}\n\n"
                             f"Muster: {proposal.pattern_name} — {proposal.occurrences}× aufgetreten",
-                priority={"high": 0.85, "medium": 0.65, "low": 0.45}.get(proposal.severity, 0.5),
+                priority_score={"high": 0.85, "medium": 0.65, "low": 0.45}.get(proposal.severity, 0.5),
                 source="self_hardening",
             )
             log.info("Härtungs-Ziel angelegt: %s", title)
         except Exception as e:
-            log.debug("Härtungs-Ziel erstellen fehlgeschlagen: %s", e)
+            log.warning("Härtungs-Ziel erstellen fehlgeschlagen: %s", e)
 
     def _notify_telegram(self, proposal: HardeningProposal) -> None:
         try:
