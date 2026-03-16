@@ -94,3 +94,26 @@ def test_classify_self_hardening_runtime_state_maps_failures_to_critical() -> No
     assert classify_self_hardening_runtime_state(last_status="rolled_back", last_stage="self_modify_finished") == "critical"
     assert classify_self_hardening_runtime_state(last_status="success", last_stage="self_modify_finished") == "ok"
     assert classify_self_hardening_runtime_state(last_status="", last_stage="idle_no_signals") == "idle"
+
+
+def test_classify_self_hardening_runtime_state_warns_on_verification_error() -> None:
+    assert (
+        classify_self_hardening_runtime_state(
+            last_status="success",
+            last_stage="self_modify_finished",
+            verification_status="error",
+        )
+        == "warn"
+    )
+
+
+def test_classify_self_hardening_runtime_state_warns_on_human_freeze() -> None:
+    assert (
+        classify_self_hardening_runtime_state(
+            last_status="success",
+            last_stage="self_modify_finished",
+            effective_fix_mode="human_only",
+            freeze_active=True,
+        )
+        == "warn"
+    )

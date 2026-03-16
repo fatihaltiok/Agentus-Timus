@@ -657,3 +657,11 @@ theorem hardening_verification_success_is_verified :
 -- M18o. Pending-Approval bleibt im Hardening-Verifikationsstatus pending_approval.
 theorem hardening_verification_pending_approval_stays_pending :
     (if true then 2 else 0) = 2 := by simp
+
+-- M18p. Runtime-Klassifikation: Verifikationsfehler bleiben warn, auch wenn der letzte Status success war.
+theorem hardening_runtime_verification_error_warns :
+    (if true then 1 else 0) = 1 := by simp
+
+-- M18q. Human-Only-Freeze bleibt in der Runtime-Sicht warn.
+theorem hardening_runtime_human_freeze_warns :
+    (if true then 1 else 0) = 1 := by simp

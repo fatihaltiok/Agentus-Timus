@@ -13,6 +13,7 @@ from orchestration.self_hardening_escalation import (
     lambda r: isinstance(r, SelfHardeningEscalationDecision)
     and r.effective_fix_mode in {"observe_only", "developer_task", "self_modify_safe", "human_only"}
 )
+@deal.ensure(lambda requested_fix_mode, self_modify_failures, developer_task_count, recurrence_count, result: (not (str(requested_fix_mode or "").strip().lower() == "self_modify_safe" and self_modify_failures >= 2)) or result.effective_fix_mode == "human_only")
 def _contract_classify_self_hardening_effective_fix_mode(
     requested_fix_mode: str,
     self_modify_failures: int,

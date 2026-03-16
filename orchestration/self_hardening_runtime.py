@@ -44,11 +44,24 @@ def _to_int(value: Any) -> int:
         return 0
 
 
-def classify_self_hardening_runtime_state(*, last_status: str, last_stage: str) -> str:
+def classify_self_hardening_runtime_state(
+    *,
+    last_status: str,
+    last_stage: str,
+    verification_status: str = "",
+    effective_fix_mode: str = "",
+    freeze_active: bool = False,
+) -> str:
     normalized_status = str(last_status or "").strip().lower()
     normalized_stage = str(last_stage or "").strip().lower()
+    normalized_verification = str(verification_status or "").strip().lower()
+    normalized_effective_fix_mode = str(effective_fix_mode or "").strip().lower()
     if normalized_status in {"error", "rolled_back"}:
         return "critical"
+    if normalized_verification == "error":
+        return "warn"
+    if bool(freeze_active) or normalized_effective_fix_mode == "human_only":
+        return "warn"
     if normalized_status in {"blocked", "pending_approval", "skipped"}:
         return "warn"
     if normalized_status in {"success", "created", "reused"}:
@@ -244,8 +257,17 @@ def get_self_hardening_runtime_summary(queue) -> Dict[str, Any]:
     metrics = {key: _to_int(metrics_meta.get(key)) for key in _METRIC_KEYS}
     last_stage = str(last_event.get("state_value") or "").strip()
     last_status = str(event_meta.get("status") or "").strip()
+    last_verification_status = str(event_meta.get("verification_status") or "").strip()
+    last_effective_fix_mode = str(event_meta.get("pattern_effective_fix_mode") or "").strip()
+    last_freeze_active = bool(event_meta.get("pattern_freeze_active"))
     return {
-        "state": classify_self_hardening_runtime_state(last_status=last_status, last_stage=last_stage),
+        "state": classify_self_hardening_runtime_state(
+            last_status=last_status,
+            last_stage=last_stage,
+            verification_status=last_verification_status,
+            effective_fix_mode=last_effective_fix_mode,
+            freeze_active=last_freeze_active,
+        ),
         "last_event": last_stage,
         "last_status": last_status,
         "last_pattern_name": str(event_meta.get("pattern_name") or "").strip(),
@@ -258,12 +280,12 @@ def get_self_hardening_runtime_summary(queue) -> Dict[str, Any]:
         "last_goal_id": str(event_meta.get("goal_id") or "").strip(),
         "last_target_file_path": str(event_meta.get("target_file_path") or "").strip(),
         "last_change_type": str(event_meta.get("change_type") or "").strip(),
-        "last_pattern_effective_fix_mode": str(event_meta.get("pattern_effective_fix_mode") or "").strip(),
+        "last_pattern_effective_fix_mode": last_effective_fix_mode,
         "last_pattern_effective_reason": str(event_meta.get("pattern_effective_reason") or "").strip(),
         "last_pattern_freeze_until": str(event_meta.get("pattern_freeze_until") or "").strip(),
-        "last_pattern_freeze_active": bool(event_meta.get("pattern_freeze_active")),
+        "last_pattern_freeze_active": last_freeze_active,
         "last_pattern_recurrence_count": _to_int(event_meta.get("pattern_recurrence_count")),
-        "last_verification_status": str(event_meta.get("verification_status") or "").strip(),
+        "last_verification_status": last_verification_status,
         "last_verification_summary": str(event_meta.get("verification_summary") or "").strip(),
         "last_verification_required": bool(event_meta.get("verification_required")),
         "last_required_checks": list(event_meta.get("required_checks") or []),
