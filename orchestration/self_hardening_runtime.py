@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 from orchestration.self_hardening_escalation import record_self_hardening_pattern_event
+from orchestration.self_hardening_verification import classify_self_hardening_verification_status
 
 
 _METRIC_KEYS = (
@@ -24,6 +25,12 @@ _METRIC_KEYS = (
     "repeat_failure_escalations_total",
     "human_only_escalations_total",
     "freeze_activations_total",
+    "verification_planned_total",
+    "verification_verified_total",
+    "verification_pending_approval_total",
+    "verification_blocked_total",
+    "verification_rolled_back_total",
+    "verification_error_total",
 )
 
 _LAST_EVENT_KEY = "m18_hardening_last_event"
@@ -67,6 +74,14 @@ def record_self_hardening_event(
     target_file_path: str = "",
     change_type: str = "",
     sample_lines: Optional[list[str]] = None,
+    required_checks: Optional[list[str] | tuple[str, ...]] = None,
+    required_test_targets: Optional[list[str] | tuple[str, ...]] = None,
+    verification_status: str = "",
+    verification_summary: str = "",
+    test_result: str = "",
+    canary_state: str = "",
+    canary_summary: str = "",
+    audit_id: str = "",
     increment_metrics: Optional[Dict[str, int]] = None,
     observed_at: str = "",
 ) -> Dict[str, Any]:
@@ -94,6 +109,26 @@ def record_self_hardening_event(
         if isinstance(pattern_runtime.get("state"), dict)
         else {}
     )
+    safe_required_checks = tuple(str(item or "").strip() for item in (required_checks or []) if str(item or "").strip())
+    safe_required_test_targets = tuple(
+        str(item or "").strip() for item in (required_test_targets or []) if str(item or "").strip()
+    )
+    has_verification_context = bool(
+        verification_status
+        or safe_required_checks
+        or safe_required_test_targets
+        or test_result
+        or canary_state
+        or canary_summary
+        or stage in {"task_created", "task_deduped", "task_not_created", "self_modify_started", "self_modify_finished"}
+    )
+    verification_decision = classify_self_hardening_verification_status(
+        result_status=verification_status or (status if has_verification_context else "not_run"),
+        test_result=test_result,
+        canary_state=canary_state,
+        required_checks=safe_required_checks,
+        required_test_targets=safe_required_test_targets,
+    )
     event_payload = {
         "status": str(status or "").strip(),
         "pattern_name": str(pattern_name or "").strip(),
@@ -112,6 +147,19 @@ def record_self_hardening_event(
         "pattern_freeze_until": str(pattern_state.get("freeze_until") or "").strip(),
         "pattern_freeze_active": bool(pattern_state.get("freeze_active")),
         "pattern_recurrence_count": _to_int(pattern_state.get("recurrence_count")),
+        "verification_status": str(
+            verification_status or verification_decision.verification_status or ""
+        ).strip(),
+        "verification_summary": str(
+            verification_summary or verification_decision.summary or ""
+        ).strip(),
+        "verification_required": bool(verification_decision.verification_required),
+        "required_checks": list(safe_required_checks),
+        "required_test_targets": list(safe_required_test_targets),
+        "test_result": str(test_result or "").strip(),
+        "canary_state": str(canary_state or "").strip(),
+        "canary_summary": str(canary_summary or "").strip(),
+        "audit_id": str(audit_id or "").strip(),
     }
     queue.set_policy_runtime_state(
         _LAST_EVENT_KEY,
@@ -127,6 +175,16 @@ def record_self_hardening_event(
     merged_metric_updates = dict(increment_metrics or {})
     for key, delta in transition_metrics.items():
         merged_metric_updates[key] = _to_int(merged_metric_updates.get(key)) + _to_int(delta)
+    verification_metric_key = {
+        "planned": "verification_planned_total",
+        "verified": "verification_verified_total",
+        "pending_approval": "verification_pending_approval_total",
+        "blocked": "verification_blocked_total",
+        "rolled_back": "verification_rolled_back_total",
+        "error": "verification_error_total",
+    }.get(str(event_payload.get("verification_status") or "").strip())
+    if verification_metric_key and verification_metric_key not in merged_metric_updates:
+        merged_metric_updates[verification_metric_key] = 1
     for key, delta in merged_metric_updates.items():
         if key not in _METRIC_KEYS:
             continue
@@ -168,6 +226,15 @@ def get_self_hardening_runtime_summary(queue) -> Dict[str, Any]:
             "last_pattern_freeze_until": "",
             "last_pattern_freeze_active": False,
             "last_pattern_recurrence_count": 0,
+            "last_verification_status": "",
+            "last_verification_summary": "",
+            "last_verification_required": False,
+            "last_required_checks": [],
+            "last_required_test_targets": [],
+            "last_test_result": "",
+            "last_canary_state": "",
+            "last_canary_summary": "",
+            "last_audit_id": "",
             "metrics": {key: 0 for key in _METRIC_KEYS},
             "updated_at": "",
         }
@@ -196,6 +263,15 @@ def get_self_hardening_runtime_summary(queue) -> Dict[str, Any]:
         "last_pattern_freeze_until": str(event_meta.get("pattern_freeze_until") or "").strip(),
         "last_pattern_freeze_active": bool(event_meta.get("pattern_freeze_active")),
         "last_pattern_recurrence_count": _to_int(event_meta.get("pattern_recurrence_count")),
+        "last_verification_status": str(event_meta.get("verification_status") or "").strip(),
+        "last_verification_summary": str(event_meta.get("verification_summary") or "").strip(),
+        "last_verification_required": bool(event_meta.get("verification_required")),
+        "last_required_checks": list(event_meta.get("required_checks") or []),
+        "last_required_test_targets": list(event_meta.get("required_test_targets") or []),
+        "last_test_result": str(event_meta.get("test_result") or "").strip(),
+        "last_canary_state": str(event_meta.get("canary_state") or "").strip(),
+        "last_canary_summary": str(event_meta.get("canary_summary") or "").strip(),
+        "last_audit_id": str(event_meta.get("audit_id") or "").strip(),
         "sample_lines": list(event_meta.get("sample_lines") or [])[:3],
         "metrics": metrics,
         "updated_at": str(last_event.get("updated_at") or metrics_state.get("updated_at") or ""),

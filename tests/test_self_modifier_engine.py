@@ -6,7 +6,9 @@ import deal
 import pytest
 from hypothesis import given, strategies as st
 
+from orchestration.self_hardening_runtime import get_self_hardening_runtime_summary
 from orchestration.self_modifier_engine import SelfModifierEngine, SelfModifyResult
+from orchestration.task_queue import TaskQueue
 from tools.code_editor_tool import tool as editor
 
 
@@ -538,6 +540,7 @@ def test_hypothesis_result_status_contract(status: str):
 
 def test_execute_self_hardening_fix_records_source_state(tmp_path, monkeypatch):
     engine = SelfModifierEngine(tmp_path / "memory.db")
+    queue = TaskQueue(db_path=tmp_path / "task_queue.db")
     states: list[tuple[str, str, str]] = []
 
     def _fake_set_state(source_kind: str, source_id: str, *, status: str, **kwargs):
@@ -545,6 +548,7 @@ def test_execute_self_hardening_fix_records_source_state(tmp_path, monkeypatch):
         states.append((source_kind, source_id, status))
 
     monkeypatch.setattr(engine, "_set_autonomous_source_state", _fake_set_state)
+    monkeypatch.setattr("orchestration.task_queue.get_queue", lambda: queue)
 
     def _fake_run_async_sync(coro):
         coro.close()
@@ -569,6 +573,11 @@ def test_execute_self_hardening_fix_records_source_state(tmp_path, monkeypatch):
         file_path="tools/deep_research/tool.py",
         change_description="Harden report fallback",
         change_type="report_quality_guardrails",
+        pattern_name="narrative_synthesis_empty",
+        component="deep_research.tool._create_narrative",
+        requested_fix_mode="self_modify_safe",
+        required_checks=("py_compile", "pytest_targeted"),
+        required_test_targets=("tests/test_deep_research_report_quality.py",),
         session_id="m18:test",
     )
 
@@ -577,3 +586,7 @@ def test_execute_self_hardening_fix_records_source_state(tmp_path, monkeypatch):
         ("self_hardening", "self_hardening:narrative", "claimed"),
         ("self_hardening", "self_hardening:narrative", "success"),
     ]
+    summary = get_self_hardening_runtime_summary(queue)
+    assert summary["last_pattern_name"] == "narrative_synthesis_empty"
+    assert summary["last_verification_status"] == "verified"
+    assert summary["last_required_checks"] == ["py_compile", "pytest_targeted"]

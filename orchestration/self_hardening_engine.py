@@ -508,6 +508,9 @@ class SelfHardeningEngine:
                 route_target=decision.route_target,
                 reason=combined_reason,
                 goal_id=str(goal_id or ""),
+                required_checks=list(decision.required_checks),
+                required_test_targets=list(decision.required_test_targets),
+                verification_status="not_run",
             )
             return None
         dedup_key = proposal.dedup_key()
@@ -524,6 +527,9 @@ class SelfHardeningEngine:
                 route_target=decision.route_target,
                 reason="open_task_exists",
                 goal_id=str(goal_id or ""),
+                required_checks=list(decision.required_checks),
+                required_test_targets=list(decision.required_test_targets),
+                verification_status="not_run",
                 increment_metrics={"tasks_deduped_total": 1},
             )
             return None
@@ -586,6 +592,9 @@ class SelfHardeningEngine:
                 target_file_path=decision.target_file_path,
                 change_type=decision.change_type,
                 sample_lines=proposal.sample_lines,
+                required_checks=list(decision.required_checks),
+                required_test_targets=list(decision.required_test_targets),
+                verification_status="planned",
                 increment_metrics=increment_metrics,
             )
             return task_id

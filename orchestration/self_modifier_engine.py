@@ -792,6 +792,8 @@ class SelfModifierEngine:
         pattern_name: str = "",
         component: str = "",
         requested_fix_mode: str = "",
+        required_checks: tuple[str, ...] | list[str] = (),
+        required_test_targets: tuple[str, ...] | list[str] = (),
         session_id: str = "",
     ) -> SelfModifyResult:
         safe_source_id = str(source_id or "").strip() or uuid.uuid4().hex
@@ -801,6 +803,10 @@ class SelfModifierEngine:
         safe_pattern_name = str(pattern_name or "").strip()
         safe_component = str(component or "").strip()
         safe_requested_fix_mode = str(requested_fix_mode or "").strip()
+        safe_required_checks = tuple(str(item or "").strip() for item in required_checks if str(item or "").strip())
+        safe_required_test_targets = tuple(
+            str(item or "").strip() for item in required_test_targets if str(item or "").strip()
+        )
         safe_session_id = str(session_id or "").strip() or f"m18:{safe_source_id[:12]}"
         try:
             from orchestration.task_queue import get_queue
@@ -816,6 +822,9 @@ class SelfModifierEngine:
                 task_id=safe_source_id,
                 target_file_path=safe_file_path,
                 change_type=safe_change_type,
+                required_checks=list(safe_required_checks),
+                required_test_targets=list(safe_required_test_targets),
+                verification_status="running",
                 increment_metrics={"self_modify_attempts_total": 1},
             )
         except Exception:
@@ -859,6 +868,13 @@ class SelfModifierEngine:
                 task_id=safe_source_id,
                 target_file_path=result.file_path or safe_file_path,
                 change_type=safe_change_type,
+                required_checks=list(safe_required_checks),
+                required_test_targets=list(safe_required_test_targets),
+                test_result=result.test_result,
+                canary_state=result.canary_state,
+                canary_summary=result.canary_summary,
+                verification_summary=result.verification_summary,
+                audit_id=result.audit_id,
                 increment_metrics={
                     "self_modify_successes_total": 1 if result.status == "success" else 0,
                     "self_modify_pending_approval_total": 1 if result.status == "pending_approval" else 0,

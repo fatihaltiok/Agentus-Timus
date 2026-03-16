@@ -459,6 +459,15 @@ def _build_self_hardening_summary() -> Dict[str, Any]:
             "last_pattern_freeze_until": "",
             "last_pattern_freeze_active": False,
             "last_pattern_recurrence_count": 0,
+            "last_verification_status": "",
+            "last_verification_summary": "",
+            "last_verification_required": False,
+            "last_required_checks": [],
+            "last_required_test_targets": [],
+            "last_test_result": "",
+            "last_canary_state": "",
+            "last_canary_summary": "",
+            "last_audit_id": "",
             "sample_lines": [],
             "metrics": {},
             "updated_at": "",
@@ -708,6 +717,11 @@ def format_status_message(snapshot: Dict[str, Any], summary_lines: List[str]) ->
         f"Route {self_hardening.get('last_route_target', 'n/a') or 'n/a'} | "
         f"Exec {self_hardening.get('last_execution_mode', 'n/a') or 'n/a'} | "
         f"Effective {self_hardening.get('last_pattern_effective_fix_mode', 'n/a') or 'n/a'}"
+    )
+    hardening_lines.append(
+        f"• Verify {self_hardening.get('last_verification_status', 'n/a') or 'n/a'} | "
+        f"Tests {self_hardening.get('last_test_result', 'n/a') or 'n/a'} | "
+        f"Canary {self_hardening.get('last_canary_state', 'n/a') or 'n/a'}"
     )
     if bool(self_hardening.get("last_pattern_freeze_active")):
         hardening_lines.append(

@@ -1823,6 +1823,16 @@ class AutonomousRunner:
         requested_fix_mode = str((metadata or {}).get("requested_fix_mode") or "").strip()
         target_file_path = str((metadata or {}).get("target_file_path") or "").strip()
         change_type = str((metadata or {}).get("change_type") or "auto").strip() or "auto"
+        required_checks = tuple(
+            str(item or "").strip()
+            for item in ((metadata or {}).get("required_checks") or [])
+            if str(item or "").strip()
+        )
+        required_test_targets = tuple(
+            str(item or "").strip()
+            for item in ((metadata or {}).get("required_test_targets") or [])
+            if str(item or "").strip()
+        )
         dedup_key = str((metadata or {}).get("hardening_dedup_key") or "").strip() or f"task:{task_id}"
         if not target_file_path:
             try:
@@ -1856,6 +1866,8 @@ class AutonomousRunner:
                 pattern_name=pattern_name,
                 component=component,
                 requested_fix_mode=requested_fix_mode,
+                required_checks=required_checks,
+                required_test_targets=required_test_targets,
                 session_id=f"m18:{task_id[:8]}",
             )
             summary = (

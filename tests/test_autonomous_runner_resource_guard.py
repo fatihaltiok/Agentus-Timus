@@ -129,6 +129,11 @@ async def test_self_hardening_self_modify_task_uses_self_modifier_engine(monkeyp
         "execution_mode": "self_modify_safe",
         "target_file_path": "tools/deep_research/tool.py",
         "change_type": "report_quality_guardrails",
+        "required_checks": ["py_compile", "pytest_targeted", "production_gates"],
+        "required_test_targets": [
+            "tests/test_deep_research_report_quality.py",
+            "tests/test_deep_research_pdf_requirements.py",
+        ],
         "hardening_dedup_key": "self_hardening:narrative_synthesis_empty:tools.deepr",
     }
     task_id = queue.add(
@@ -171,3 +176,4 @@ async def test_self_hardening_self_modify_task_uses_self_modifier_engine(monkeyp
     assert updated["status"] == "completed"
     assert called["file_path"] == "tools/deep_research/tool.py"
     assert called["change_type"] == "report_quality_guardrails"
+    assert called["required_checks"] == "('py_compile', 'pytest_targeted', 'production_gates')"
