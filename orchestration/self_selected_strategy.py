@@ -189,6 +189,15 @@ _AFFORDANCE_CATALOG: Dict[str, ToolAffordance] = {
         good_for=("place_details", "opening_hours", "contact_lookup"),
         avoid_when=("broad_discovery_without_place",),
     ),
+    "get_google_maps_route": ToolAffordance(
+        name="get_google_maps_route",
+        kind="tool",
+        cost="low",
+        latency="low",
+        reliability="high",
+        good_for=("route_planning", "eta_lookup", "navigation_setup"),
+        avoid_when=("non_location_tasks",),
+    ),
     "start_deep_research": ToolAffordance(
         name="start_deep_research",
         kind="tool",
@@ -297,6 +306,18 @@ def build_task_profile(query: str, classification: Dict[str, Any]) -> Dict[str, 
             output_mode="location_summary",
             error_recovery_bias="switch_tool_then_degrade",
         )
+    elif task_type == "location_route":
+        profile = TaskProfile(
+            intent="route_planning",
+            desired_depth="light",
+            effort_level="light",
+            risk_level="low",
+            browser_need="none",
+            latency_expectation="fast",
+            cost_sensitivity="high",
+            output_mode="route_summary",
+            error_recovery_bias="switch_tool_then_degrade",
+        )
     else:
         profile = TaskProfile(
             intent="general_task",
@@ -338,6 +359,13 @@ def select_tool_affordances(classification: Dict[str, Any], task_profile: Dict[s
             "get_current_location_context",
             "search_google_maps_places",
             "get_google_maps_place",
+            "search_web",
+        ]
+    elif task_type == "location_route":
+        names = [
+            "executor",
+            "get_current_location_context",
+            "get_google_maps_route",
             "search_web",
         ]
     elif task_type == "multi_stage_web_task":
@@ -423,6 +451,18 @@ def select_strategy(
             avoid_tools=("start_deep_research",),
             error_strategy="switch_tool_then_degrade",
             rationale="Lokale Anfragen zuerst aus aktuellem Geraetestandort und leichter Maps-Suche beantworten.",
+        )
+    elif task_type == "location_route":
+        strategy = SelectedStrategy(
+            strategy_id="location_context_then_route",
+            strategy_mode="lightweight_first",
+            primary_recipe_id=recommended_recipe_id or "location_route",
+            fallback_recipe_id="",
+            preferred_tools=("get_current_location_context", "get_google_maps_route"),
+            fallback_tools=("search_web",),
+            avoid_tools=("start_deep_research",),
+            error_strategy="switch_tool_then_degrade",
+            rationale="Routenanfragen zuerst direkt aus aktuellem Geraetestandort und echter Directions-Berechnung beantworten.",
         )
     elif task_type == "multi_stage_web_task":
         strategy = SelectedStrategy(

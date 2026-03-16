@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from utils.location_route import normalize_route_travel_mode
+
 
 _LOCATION_ONLY_PATTERNS = (
     r"\bwo bin ich\b",
@@ -41,8 +43,24 @@ _LOCAL_ACTION_PATTERNS = (
     r"\bich brauche\b",
     r"\bich br[aä]uchte\b",
     r"\bbrauch(?:e)?\b",
-    r"\bnavigier mich\b",
-    r"\bf[uü]hre mich\b",
+)
+
+_ROUTE_REQUEST_PATTERNS = (
+    r"\berstell(?:e)?\s+(?:mir\s+)?(?:bitte\s+)?(?:eine\s+)?route\b",
+    r"\bmach\s+(?:mir\s+)?(?:bitte\s+)?(?:eine\s+)?route\b",
+    r"\broute\s+(?:nach|zu|zum|zur)\b",
+    r"\bnavigier(?:e)?\s+(?:mich\s+)?(?:bitte\s+)?(?:nach|zu|zum|zur)\b",
+    r"\bf[uü]hr(?:e)?\s+mich\s+(?:bitte\s+)?(?:nach|zu|zum|zur)\b",
+    r"\bbring\s+mich\s+(?:bitte\s+)?(?:nach|zu|zum|zur)\b",
+    r"\bwie komme ich\s+(?:am besten\s+)?(?:nach|zu|zum|zur)\b",
+    r"\bweg\s+(?:nach|zu|zum|zur)\b",
+)
+
+_ROUTE_MODE_PATTERN_MAP = (
+    (r"\b(?:zu\s+fuss|zu\s+fuß|fussweg|fußweg|laufen|laufend|walking|walk)\b", "walking"),
+    (r"\b(?:fahrrad|rad|bike|bicycle|cycling)\b", "bicycling"),
+    (r"\b(?:oepnv|öpnv|bus|bahn|zug|tram|ubahn|u-bahn|s-bahn|transit)\b", "transit"),
+    (r"\b(?:auto|wagen|mit\s+dem\s+auto|driving|drive|car)\b", "driving"),
 )
 
 _OPEN_NOW_PATTERNS = (
@@ -103,6 +121,16 @@ _EDGE_FILLER_TOKENS = {
     "jetzt",
 }
 
+_ROUTE_EDGE_FILLER_TOKENS = _EDGE_FILLER_TOKENS | {
+    "route",
+    "weg",
+    "nach",
+    "zu",
+    "bitte",
+    "mich",
+    "mal",
+}
+
 _CATEGORY_PATTERNS = (
     (r"\bitalien(?:isch(?:e|en|er|es)?)?\s+restaurant\b", "italienisches Restaurant"),
     (r"\bvegan(?:e|en|er|es)?\s+caf[eé]\b", "veganes Cafe"),
@@ -136,6 +164,14 @@ class LocationLocalIntent:
     is_location_only: bool
     maps_query: str
     wants_open_now: bool
+    reason: str
+
+
+@dataclass(frozen=True)
+class LocationRouteIntent:
+    is_route_request: bool
+    destination_query: str
+    travel_mode: str
     reason: str
 
 
@@ -196,6 +232,67 @@ def _extract_maps_query(normalized_query: str) -> str:
     return query[0].upper() + query[1:]
 
 
+def _detect_route_travel_mode(text: str) -> str:
+    normalized = _normalize_text(text)
+    for pattern, value in _ROUTE_MODE_PATTERN_MAP:
+        if re.search(pattern, normalized):
+            return normalize_route_travel_mode(value)
+    return "driving"
+
+
+def _clean_route_destination(text: str) -> str:
+    cleaned = _normalize_text(text)
+    if not cleaned:
+        return ""
+
+    for pattern in _ROUTE_REQUEST_PATTERNS:
+        cleaned = re.sub(pattern, " ", cleaned, count=1)
+    cleaned = re.sub(r"\b(?:mit|per)\s+(?:dem\s+)?(?:auto|fahrrad|bus|bahn|zug)\b", " ", cleaned)
+    for pattern, _value in _ROUTE_MODE_PATTERN_MAP:
+        cleaned = re.sub(pattern, " ", cleaned)
+    cleaned = re.sub(r"[?!,.;:]+", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
+    for separator in (" nach ", " zu ", " zum ", " zur "):
+        padded = f" {cleaned} "
+        if separator in padded:
+            cleaned = padded.split(separator, 1)[1].strip()
+            break
+
+    tokens = [token for token in cleaned.split() if token]
+    while tokens and tokens[0] in _ROUTE_EDGE_FILLER_TOKENS:
+        tokens.pop(0)
+    while tokens and tokens[-1] in _ROUTE_EDGE_FILLER_TOKENS:
+        tokens.pop()
+    return " ".join(tokens).strip()
+
+
+def analyze_location_route_intent(query: str) -> LocationRouteIntent:
+    normalized = _normalize_text(query)
+    if not normalized:
+        return LocationRouteIntent(
+            is_route_request=False,
+            destination_query="",
+            travel_mode="driving",
+            reason="empty_query",
+        )
+
+    if not _has_any_pattern(normalized, _ROUTE_REQUEST_PATTERNS):
+        return LocationRouteIntent(
+            is_route_request=False,
+            destination_query="",
+            travel_mode="driving",
+            reason="not_route_request",
+        )
+
+    return LocationRouteIntent(
+        is_route_request=True,
+        destination_query=_clean_route_destination(normalized),
+        travel_mode=_detect_route_travel_mode(normalized),
+        reason="route_request",
+    )
+
+
 def analyze_location_local_intent(query: str) -> LocationLocalIntent:
     normalized = _normalize_text(query)
     if not normalized:
@@ -205,6 +302,16 @@ def analyze_location_local_intent(query: str) -> LocationLocalIntent:
             maps_query="",
             wants_open_now=False,
             reason="empty_query",
+        )
+
+    route_intent = analyze_location_route_intent(normalized)
+    if route_intent.is_route_request:
+        return LocationLocalIntent(
+            is_location_relevant=False,
+            is_location_only=False,
+            maps_query="",
+            wants_open_now=False,
+            reason="route_request",
         )
 
     if _has_any_pattern(normalized, _LOCATION_ONLY_PATTERNS):
@@ -251,3 +358,7 @@ def analyze_location_local_intent(query: str) -> LocationLocalIntent:
 
 def is_location_local_query(query: str) -> bool:
     return analyze_location_local_intent(query).is_location_relevant
+
+
+def is_location_route_query(query: str) -> bool:
+    return analyze_location_route_intent(query).is_route_request

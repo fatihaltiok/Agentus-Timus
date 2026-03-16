@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Iterable, List, Tuple
 
-from utils.location_local_intent import is_location_local_query
+from utils.location_local_intent import is_location_local_query, is_location_route_query
 
 
 @dataclass(frozen=True)
@@ -137,6 +137,18 @@ _ORCHESTRATION_RECIPES: Dict[str, Tuple[OrchestrationRecipeStage, ...]] = {
                 "lokalen Kontext oder nearby Places ohne schweren Research-Pfad."
             ),
             expected_output="location_context, nearby_places, quick_summary, source_urls",
+            handoff_fields=("goal", "expected_output", "success_signal", "query", "preferred_search_tool"),
+        ),
+    ),
+    "location_route": (
+        OrchestrationRecipeStage(
+            stage_id="location_route_plan",
+            agent="executor",
+            goal=(
+                "Nutze den aktuellen Mobil-Standort als Startpunkt, erstelle eine echte Google-Maps-Route "
+                "zum Ziel und liefere ETA, Distanz, Schritte und Route-URL ohne freie Schaetzwerte."
+            ),
+            expected_output="route_summary, eta, distance, steps, route_url",
             handoff_fields=("goal", "expected_output", "success_signal", "query", "preferred_search_tool"),
         ),
     ),
@@ -339,6 +351,7 @@ _ORCHESTRATION_RECIPE_RECOVERIES: Dict[str, Tuple[OrchestrationRecipeRecovery, .
 _ORCHESTRATION_RECIPE_AGENT_CHAINS: Dict[str, Tuple[str, ...]] = {
     "youtube_light_research": ("meta", "executor"),
     "location_local_search": ("meta", "executor"),
+    "location_route": ("meta", "executor"),
     "youtube_content_extraction": ("meta", "visual", "research", "document"),
     "youtube_search_then_visual": ("meta", "research", "visual", "research", "document"),
     "youtube_research_only": ("meta", "research", "document"),
@@ -488,6 +501,8 @@ def _resolve_primary_recipe_id(task_type: str, site_kind: str | None = None) -> 
         return "youtube_light_research"
     if task_type == "location_local_search":
         return "location_local_search"
+    if task_type == "location_route":
+        return "location_route"
     if task_type == "youtube_content_extraction":
         return "youtube_content_extraction"
     if task_type == "web_content_extraction":
@@ -531,6 +546,8 @@ def resolve_orchestration_alternative_recipes(
         candidates.extend([])
     elif task_type == "location_local_search":
         candidates.extend([])
+    elif task_type == "location_route":
+        candidates.extend([])
     elif task_type == "web_content_extraction":
         candidates.append("web_research_only")
     elif task_type == "system_diagnosis":
@@ -553,7 +570,13 @@ def _has_any(text: str, hints: Iterable[str]) -> bool:
 def _site_kind(text: str) -> str | None:
     if "youtube" in text or "youtu.be" in text:
         return "youtube"
-    if "google maps" in text or "landkarte" in text or _has_any(text, _LOCAL_SEARCH_HINTS) or is_location_local_query(text):
+    if (
+        "google maps" in text
+        or "landkarte" in text
+        or _has_any(text, _LOCAL_SEARCH_HINTS)
+        or is_location_local_query(text)
+        or is_location_route_query(text)
+    ):
         return "maps"
     if "booking.com" in text:
         return "booking"
@@ -571,13 +594,14 @@ def _site_kind(text: str) -> str | None:
 def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
     normalized = (query or "").strip().lower()
     site_kind = _site_kind(normalized)
+    has_route_request = site_kind == "maps" and is_location_route_query(normalized)
     has_browser = _has_any(normalized, _BROWSER_HINTS)
     has_summary_request = ("fasse" in normalized and "zusammen" in normalized) or "wichtigsten punkte" in normalized
     has_extraction = _has_any(normalized, _EXTRACTION_HINTS) or has_summary_request
     has_youtube_light = site_kind == "youtube" and _has_any(normalized, _YOUTUBE_LIGHT_HINTS)
     has_local_search = site_kind == "maps" and (
         _has_any(normalized, _LOCAL_SEARCH_HINTS) or is_location_local_query(normalized)
-    )
+    ) and not has_route_request
     has_document = _has_any(normalized, _DOCUMENT_HINTS)
     has_delivery = _has_any(normalized, _DELIVERY_HINTS)
     has_system = _has_any(normalized, _SYSTEM_HINTS)
@@ -601,6 +625,11 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
         if "systemctl" in normalized or "journalctl" in normalized or "sudo" in normalized:
             required_capabilities.append("terminal_execution")
             recommended_chain.append("shell")
+    elif has_route_request:
+        required_capabilities.extend(["location_context", "route_planning"])
+        recommended_chain = ["meta", "executor"]
+        task_type = "location_route"
+        reason = "device_location_route"
     elif has_local_search:
         required_capabilities.extend(["location_context", "local_maps_search"])
         recommended_chain = ["meta", "executor"]

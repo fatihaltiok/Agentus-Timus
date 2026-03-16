@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from utils.location_local_intent import analyze_location_local_intent, is_location_local_query
+from utils.location_local_intent import (
+    analyze_location_local_intent,
+    analyze_location_route_intent,
+    is_location_local_query,
+    is_location_route_query,
+)
 
 
 def test_location_local_intent_detects_location_only_query() -> None:
@@ -30,3 +35,19 @@ def test_location_local_intent_preserves_qualified_restaurant_query() -> None:
 
 def test_is_location_local_query_rejects_non_local_request() -> None:
     assert is_location_local_query("Erzaehl mir etwas ueber italienische Restaurants") is False
+
+
+def test_location_route_intent_extracts_destination_and_mode() -> None:
+    intent = analyze_location_route_intent("Erstelle mir eine Route zur Zeil in Frankfurt mit dem Auto")
+
+    assert intent.is_route_request is True
+    assert intent.destination_query == "zeil in frankfurt"
+    assert intent.travel_mode == "driving"
+
+
+def test_location_local_intent_rejects_route_request() -> None:
+    intent = analyze_location_local_intent("Navigier mich bitte nach Berlin")
+
+    assert intent.is_location_relevant is False
+    assert intent.reason == "route_request"
+    assert is_location_route_query("Navigier mich bitte nach Berlin") is True

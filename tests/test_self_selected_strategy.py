@@ -117,6 +117,33 @@ def test_self_selected_strategy_prefers_location_context_then_maps():
     assert "search_google_maps_places" in strategy["preferred_tools"]
 
 
+def test_self_selected_strategy_prefers_location_context_then_route():
+    classification = {
+        "task_type": "location_route",
+        "recommended_recipe_id": "location_route",
+        "recommended_agent_chain": ["meta", "executor"],
+    }
+
+    task_profile = build_task_profile(
+        "Erstelle mir eine Route zur Zeil in Frankfurt",
+        classification,
+    )
+    affordances = select_tool_affordances(classification, task_profile)
+    strategy = select_strategy(
+        "Erstelle mir eine Route zur Zeil in Frankfurt",
+        classification,
+        task_profile,
+        affordances,
+    )
+
+    assert task_profile["intent"] == "route_planning"
+    assert task_profile["output_mode"] == "route_summary"
+    assert any(item["name"] == "get_google_maps_route" for item in affordances)
+    assert strategy["strategy_id"] == "location_context_then_route"
+    assert "get_current_location_context" in strategy["preferred_tools"]
+    assert "get_google_maps_route" in strategy["preferred_tools"]
+
+
 def test_self_selected_strategy_classifies_missing_device_location():
     handoff = {
         "task_type": "location_local_search",

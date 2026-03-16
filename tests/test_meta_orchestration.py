@@ -94,6 +94,20 @@ def test_classify_meta_task_routes_local_action_plus_place_queries_to_meta_execu
     assert result["recommended_agent_chain"] == ["meta", "executor"]
 
 
+def test_classify_meta_task_routes_route_queries_to_meta_executor():
+    result = classify_meta_task(
+        "Erstelle mir eine Route zur Zeil in Frankfurt",
+        action_count=0,
+    )
+
+    assert result["task_type"] == "location_route"
+    assert result["site_kind"] == "maps"
+    assert result["recommended_entry_agent"] == "meta"
+    assert result["recommended_agent_chain"] == ["meta", "executor"]
+    assert result["recommended_recipe_id"] == "location_route"
+    assert [stage["stage_id"] for stage in result["recipe_stages"]] == ["location_route_plan"]
+
+
 def test_classify_meta_task_exposes_booking_recipe_for_multistage_workflow():
     result = classify_meta_task(
         "Öffne booking.com, gib Berlin ein, wähle Daten und starte die Suche",

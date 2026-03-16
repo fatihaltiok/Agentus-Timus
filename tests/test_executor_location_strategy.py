@@ -29,6 +29,27 @@ def _build_executor_location_task(original_task: str) -> str:
     )
 
 
+def _build_executor_route_task(original_task: str) -> str:
+    return "\n".join(
+        [
+            "# DELEGATION HANDOFF",
+            "target_agent: executor",
+            "goal: Nutze den aktuellen Mobil-Standort und Google Maps fuer eine Route.",
+            "expected_output: route_summary, eta, distance, steps, route_url",
+            "success_signal: Stage 'location_route_plan' erfolgreich abgeschlossen",
+            "constraints: folge_dem_rezept_und_erfinde_keine_neuen_stages",
+            "handoff_data:",
+            "- task_type: location_route",
+            "- recipe_id: location_route",
+            "- stage_id: location_route_plan",
+            f"- original_user_task: {original_task}",
+            "",
+            "# TASK",
+            "Nutze den aktuellen Mobil-Standort und Google Maps fuer eine Route.",
+        ]
+    )
+
+
 @pytest.mark.asyncio
 async def test_executor_location_strategy_returns_location_only(monkeypatch):
     from agent.agents.executor import ExecutorAgent
@@ -220,3 +241,107 @@ async def test_executor_location_strategy_handles_stale_location(monkeypatch):
 
     assert "letzter bekannter Standort" in result
     assert "nicht frisch genug" in result
+
+
+@pytest.mark.asyncio
+async def test_executor_location_route_returns_real_route_and_activates_snapshot(monkeypatch):
+    from agent.agents.executor import ExecutorAgent
+    from agent.base_agent import BaseAgent
+
+    calls: list[str] = []
+    activated: dict[str, object] = {}
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        calls.append(method)
+        if method == "get_current_location_context":
+            return {
+                "status": "success",
+                "data": {
+                    "has_location": True,
+                    "presence_status": "live",
+                    "location": {
+                        "display_name": "Flutstraße 33, 63071 Offenbach am Main",
+                        "latitude": 50.1002804,
+                        "longitude": 8.7786475,
+                        "usable_for_context": True,
+                        "presence_status": "live",
+                    },
+                },
+            }
+        assert method == "get_google_maps_route"
+        assert params["destination_query"] == "frankfurt in die zeil"
+        return {
+            "status": "success",
+            "data": {
+                "destination_query": "frankfurt in die zeil",
+                "destination_label": "Zeil, 60313 Frankfurt am Main",
+                "travel_mode": "driving",
+                "distance_text": "12.4 km",
+                "duration_text": "24 min",
+                "start_address": "Flutstraße 33, 63071 Offenbach am Main",
+                "end_address": "Zeil, 60313 Frankfurt am Main",
+                "route_url": "https://www.google.com/maps/dir/?api=1&origin=50.1002804,8.7786475&destination=frankfurt+in+die+zeil&travelmode=driving",
+                "steps": [
+                    {"instruction": "Starte auf der Flutstraße", "distance_text": "150 m", "duration_text": "1 min"},
+                    {"instruction": "Fahre auf die A661", "distance_text": "8.0 km", "duration_text": "10 min"},
+                ],
+            },
+        }
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+    monkeypatch.setattr(
+        ExecutorAgent,
+        "_activate_route_snapshot",
+        staticmethod(lambda payload: activated.update({"route": payload})),
+    )
+
+    agent = ExecutorAgent.__new__(ExecutorAgent)
+    result = await ExecutorAgent.run(
+        agent,
+        _build_executor_route_task("Erstelle mir eine Route nach Frankfurt in die Zeil"),
+    )
+
+    assert calls == ["get_current_location_context", "get_google_maps_route"]
+    assert "Route nach Zeil, 60313 Frankfurt am Main ist erstellt." in result
+    assert "24 min" in result
+    assert "12.4 km" in result
+    assert "Google Maps:" in result
+    assert activated["route"]["destination_label"] == "Zeil, 60313 Frankfurt am Main"
+
+
+@pytest.mark.asyncio
+async def test_executor_location_route_degrades_without_fake_distance(monkeypatch):
+    from agent.agents.executor import ExecutorAgent
+    from agent.base_agent import BaseAgent
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        if method == "get_current_location_context":
+            return {
+                "status": "success",
+                "data": {
+                    "has_location": True,
+                    "presence_status": "live",
+                    "location": {
+                        "display_name": "Flutstraße 33, 63071 Offenbach am Main",
+                        "latitude": 50.1002804,
+                        "longitude": 8.7786475,
+                        "usable_for_context": True,
+                        "presence_status": "live",
+                    },
+                },
+            }
+        assert method == "get_google_maps_route"
+        return {"status": "error", "error": "Directions API Fehler"}
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = ExecutorAgent.__new__(ExecutorAgent)
+    result = await ExecutorAgent.run(
+        agent,
+        _build_executor_route_task("Erstelle mir eine Route nach Frankfurt in die Zeil"),
+    )
+
+    assert "keine aktive Route" in result
+    assert "Directions API Fehler" in result
+    assert "travelmode=driving" in result
+    assert "12-15 km" not in result

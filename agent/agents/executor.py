@@ -8,7 +8,8 @@ from typing import Any
 from agent.base_agent import BaseAgent
 from agent.prompts import EXECUTOR_PROMPT_TEMPLATE
 from agent.shared.delegation_handoff import DelegationHandoff, parse_delegation_handoff
-from utils.location_local_intent import analyze_location_local_intent
+from utils.location_local_intent import analyze_location_local_intent, analyze_location_route_intent
+from utils.location_route import build_google_maps_directions_url, normalize_route_travel_mode
 
 _SMALLTALK_PATTERNS = (
     r"\bhey\b",
@@ -424,6 +425,36 @@ class ExecutorAgent(BaseAgent):
         return intent.maps_query
 
     @staticmethod
+    def _infer_location_route(user_task: str) -> tuple[str, str]:
+        intent = analyze_location_route_intent(user_task)
+        return intent.destination_query, normalize_route_travel_mode(intent.travel_mode)
+
+    @staticmethod
+    def _location_coordinates(location: dict[str, Any]) -> tuple[float | None, float | None]:
+        try:
+            latitude = float(location.get("latitude"))
+        except (TypeError, ValueError):
+            latitude = None
+        try:
+            longitude = float(location.get("longitude"))
+        except (TypeError, ValueError):
+            longitude = None
+        return latitude, longitude
+
+    @staticmethod
+    def _activate_route_snapshot(route_payload: dict[str, Any]) -> None:
+        try:
+            from server import mcp_server as mcp_server_module
+            from utils.location_route import prepare_route_snapshot
+
+            setter = getattr(mcp_server_module, "_set_route_snapshot", None)
+            if callable(setter):
+                setter(prepare_route_snapshot(route_payload))
+        except Exception:
+            return
+
+
+    @staticmethod
     def _is_smalltalk_query(task: str) -> bool:
         normalized = str(task or "").strip().lower()
         if not normalized:
@@ -829,6 +860,87 @@ class ExecutorAgent(BaseAgent):
             lines.append(f"Letzte Kartenposition: {maps_url}")
         return " ".join(lines)
 
+    @classmethod
+    def _format_route_response(
+        cls,
+        *,
+        route: dict[str, Any],
+    ) -> str:
+        destination_label = str(route.get("destination_label") or route.get("destination_query") or "dem Ziel").strip()
+        start_address = str(route.get("start_address") or "").strip()
+        end_address = str(route.get("end_address") or destination_label).strip()
+        distance_text = str(route.get("distance_text") or "").strip()
+        duration_text = str(route.get("duration_text") or "").strip()
+        travel_mode = normalize_route_travel_mode(route.get("travel_mode"))
+        route_url = str(route.get("route_url") or route.get("maps_url") or "").strip()
+        steps = route.get("steps")
+        if not isinstance(steps, list):
+            steps = []
+
+        mode_labels = {
+            "driving": "Auto",
+            "walking": "Zu Fuss",
+            "bicycling": "Fahrrad",
+            "transit": "OePNV",
+        }
+        lines = [f"Route nach {destination_label} ist erstellt."]
+        detail_parts = [part for part in (duration_text, distance_text) if part]
+        if detail_parts:
+            lines.append(f"{mode_labels.get(travel_mode, 'Route')}: " + " | ".join(detail_parts))
+        if start_address:
+            lines.append(f"Von: {start_address}")
+        if end_address:
+            lines.append(f"Nach: {end_address}")
+        if route_url:
+            lines.append(f"Google Maps: {route_url}")
+
+        step_lines: list[str] = []
+        for step in steps[:3]:
+            if not isinstance(step, dict):
+                continue
+            instruction = str(step.get("instruction") or "").strip()
+            if not instruction:
+                continue
+            parts = [instruction]
+            step_distance = str(step.get("distance_text") or "").strip()
+            step_duration = str(step.get("duration_text") or "").strip()
+            if step_distance:
+                parts.append(step_distance)
+            if step_duration:
+                parts.append(step_duration)
+            step_lines.append("- " + " | ".join(parts))
+        if step_lines:
+            lines.append("Naechste Schritte:")
+            lines.extend(step_lines)
+        return "\n".join(lines)
+
+    @classmethod
+    def _format_route_error_response(
+        cls,
+        *,
+        location: dict[str, Any],
+        destination_query: str,
+        travel_mode: str,
+        error: str,
+    ) -> str:
+        latitude, longitude = cls._location_coordinates(location)
+        route_url = ""
+        if latitude is not None and longitude is not None and destination_query:
+            route_url = build_google_maps_directions_url(
+                origin_latitude=latitude,
+                origin_longitude=longitude,
+                destination_query=destination_query,
+                travel_mode=travel_mode,
+            )
+
+        lines = [
+            f"Ich konnte gerade keine aktive Route nach {destination_query or 'dem Ziel'} erzeugen: {error}",
+        ]
+        if route_url:
+            lines.append(f"Direkter Google-Maps-Link: {route_url}")
+        return " ".join(lines)
+
+
     async def _run_location_local_search(self, handoff: DelegationHandoff) -> str:
         user_task = self._recover_user_query(
             (
@@ -891,6 +1003,74 @@ class ExecutorAgent(BaseAgent):
             maps_results=maps_results,
             maps_query=maps_query,
         )
+
+    async def _run_location_route(self, handoff: DelegationHandoff) -> str:
+        user_task = self._recover_user_query(
+            (
+                handoff.handoff_data.get("original_user_task")
+                or handoff.handoff_data.get("query")
+                or handoff.goal
+                or ""
+            )
+        )
+        destination_query = str(handoff.handoff_data.get("destination_query") or "").strip()
+        travel_mode = normalize_route_travel_mode(str(handoff.handoff_data.get("travel_mode") or "driving"))
+        if not destination_query:
+            inferred_destination, inferred_mode = self._infer_location_route(user_task)
+            destination_query = inferred_destination
+            travel_mode = inferred_mode or travel_mode
+        if not destination_query:
+            return (
+                "Ich habe die Route erkannt, aber noch kein klares Ziel extrahiert. "
+                "Nenne mir das Ziel bitte direkt, zum Beispiel: 'Route zur Zeil in Frankfurt'."
+            )
+
+        location_result = await self._call_tool("get_current_location_context", {})
+        if isinstance(location_result, dict) and location_result.get("error"):
+            return f"Ich konnte den aktuellen Standort nicht laden: {location_result['error']}"
+
+        location_payload = self._tool_payload(location_result)
+        has_location = bool(location_payload.get("has_location"))
+        location = location_payload.get("location")
+        if not has_location or not isinstance(location, dict):
+            return (
+                "Ich habe aktuell keinen synchronisierten Handy-Standort. "
+                "Oeffne in der App Home > Standort und aktualisiere ihn, dann kann ich eine Route berechnen."
+            )
+        presence_status = self._normalize_location_presence_status(
+            location_payload.get("presence_status") or location.get("presence_status") or "live"
+        )
+        usable_for_context = bool(location.get("usable_for_context", True))
+        if presence_status not in {"live", "recent"} or not usable_for_context:
+            return self._format_stale_location_response(location)
+
+        route_result = await self._call_tool(
+            "get_google_maps_route",
+            {
+                "destination_query": destination_query,
+                "travel_mode": travel_mode,
+                "language_code": "de",
+            },
+        )
+        if isinstance(route_result, dict) and route_result.get("error"):
+            return self._format_route_error_response(
+                location=location,
+                destination_query=destination_query,
+                travel_mode=travel_mode,
+                error=str(route_result["error"]),
+            )
+
+        route_payload = self._tool_payload(route_result)
+        if not isinstance(route_payload, dict) or not str(route_payload.get("route_url") or "").strip():
+            return self._format_route_error_response(
+                location=location,
+                destination_query=destination_query,
+                travel_mode=travel_mode,
+                error="Die Directions-Antwort war unvollstaendig.",
+            )
+        self._activate_route_snapshot(route_payload)
+        return self._format_route_response(route=route_payload)
+
 
     async def _run_youtube_light_research(self, handoff: DelegationHandoff) -> str:
         raw_task = (
@@ -1051,6 +1231,8 @@ class ExecutorAgent(BaseAgent):
 
         if handoff and handoff.handoff_data.get("task_type") == "location_local_search":
             return await self._run_location_local_search(handoff)
+        if handoff and handoff.handoff_data.get("task_type") == "location_route":
+            return await self._run_location_route(handoff)
         if handoff and handoff.handoff_data.get("task_type") == "youtube_light_research":
             return await self._run_youtube_light_research(handoff)
         if not handoff and self._is_self_status_query(plain_task):
