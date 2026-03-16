@@ -8,36 +8,7 @@ from typing import Any
 from agent.base_agent import BaseAgent
 from agent.prompts import EXECUTOR_PROMPT_TEMPLATE
 from agent.shared.delegation_handoff import DelegationHandoff, parse_delegation_handoff
-
-
-_LOCATION_ONLY_HINTS = (
-    "wo bin ich",
-    "mein standort",
-    "welcher ort ist das",
-    "wo befinde ich mich",
-)
-
-_NEARBY_QUERY_HINTS = (
-    ("apothek", "Apotheke"),
-    ("drogerie", "Drogerie"),
-    ("supermarkt", "Supermarkt"),
-    ("lebensmittel", "Supermarkt"),
-    ("restaurant", "Restaurant"),
-    ("cafe", "Cafe"),
-    ("kaffee", "Cafe"),
-    ("baeck", "Baeckerei"),
-    ("bäck", "Baeckerei"),
-    ("bar", "Bar"),
-    ("tankstelle", "Tankstelle"),
-    ("bank", "Bank"),
-    ("hotel", "Hotel"),
-    ("arzt", "Arzt"),
-    ("krankenhaus", "Krankenhaus"),
-    ("geschaeft", "Geschaefte"),
-    ("geschäft", "Geschaefte"),
-    ("laden", "Geschaefte"),
-    ("shop", "Geschaefte"),
-)
+from utils.location_local_intent import analyze_location_local_intent
 
 _SMALLTALK_PATTERNS = (
     r"\bhey\b",
@@ -438,27 +409,19 @@ class ExecutorAgent(BaseAgent):
         parts = [part for part in (locality, admin_area, country_name) if part]
         return ", ".join(parts)
 
+    @staticmethod
+    def _normalize_location_presence_status(value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"live", "recent", "stale", "unknown"}:
+            return normalized
+        return "unknown"
+
     @classmethod
     def _infer_location_nearby_query(cls, user_task: str) -> str:
-        normalized = str(user_task or "").strip().lower()
-        if not normalized:
+        intent = analyze_location_local_intent(user_task)
+        if intent.is_location_only:
             return ""
-
-        if any(hint in normalized for hint in _LOCATION_ONLY_HINTS):
-            return ""
-
-        for token, mapped in _NEARBY_QUERY_HINTS:
-            if token in normalized:
-                return mapped
-
-        if "offen" in normalized:
-            return "Geschaefte"
-        if any(
-            hint in normalized
-            for hint in ("in meiner naehe", "in meiner nähe", "um mich herum", "um mich", "hier")
-        ):
-            return "Orte"
-        return ""
+        return intent.maps_query
 
     @staticmethod
     def _is_smalltalk_query(task: str) -> bool:
@@ -808,8 +771,13 @@ class ExecutorAgent(BaseAgent):
         location_summary = cls._location_summary(location)
         if not location_summary:
             location_summary = "deinem aktuellen Mobil-Standort"
-
-        lines = [f"Du bist gerade bei {location_summary}."]
+        presence_status = cls._normalize_location_presence_status(
+            location.get("presence_status") or location.get("status")
+        )
+        if presence_status == "recent":
+            lines = [f"Dein letzter frischer Standort war bei {location_summary}."]
+        else:
+            lines = [f"Du bist gerade bei {location_summary}."]
 
         if not maps_query:
             maps_url = str(location.get("maps_url") or "").strip()
@@ -847,6 +815,20 @@ class ExecutorAgent(BaseAgent):
             lines.append("Oeffnungszeiten sind, sofern vorhanden, direkt aus Google Maps uebernommen.")
         return "\n".join(lines)
 
+    @classmethod
+    def _format_stale_location_response(cls, location: dict[str, Any]) -> str:
+        location_summary = cls._location_summary(location)
+        if not location_summary:
+            location_summary = "deinem letzten bekannten Standort"
+        maps_url = str(location.get("maps_url") or "").strip()
+        lines = [
+            f"Dein letzter bekannter Standort war bei {location_summary}, aber dieser Standort ist gerade nicht frisch genug fuer verlaessliche Nearby-Antworten.",
+            "Aktualisiere den Standort kurz in der App, dann kann ich Orte in deiner unmittelbaren Naehe wieder sauber einordnen.",
+        ]
+        if maps_url:
+            lines.append(f"Letzte Kartenposition: {maps_url}")
+        return " ".join(lines)
+
     async def _run_location_local_search(self, handoff: DelegationHandoff) -> str:
         user_task = self._recover_user_query(
             (
@@ -868,6 +850,12 @@ class ExecutorAgent(BaseAgent):
                 "Ich habe aktuell keinen synchronisierten Handy-Standort. "
                 "Oeffne in der App Home > Standort und aktualisiere ihn, dann kann ich lokale Orte ueber Google Maps finden."
             )
+        presence_status = self._normalize_location_presence_status(
+            location_payload.get("presence_status") or location.get("presence_status") or "live"
+        )
+        usable_for_context = bool(location.get("usable_for_context", True))
+        if presence_status not in {"live", "recent"} or not usable_for_context:
+            return self._format_stale_location_response(location)
 
         maps_query = self._infer_location_nearby_query(user_task)
         if not maps_query:

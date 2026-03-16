@@ -11,6 +11,7 @@ def test_is_location_context_query_detects_nearby_and_route_queries() -> None:
     assert is_location_context_query("Wo bin ich gerade?")
     assert is_location_context_query("Finde mir Apotheken in meiner Nähe")
     assert is_location_context_query("Navigier mich zur nächsten Tankstelle")
+    assert is_location_context_query("Wo bekomme ich gerade Kaffee?")
 
 
 def test_evaluate_location_chat_context_requires_fresh_usable_snapshot() -> None:

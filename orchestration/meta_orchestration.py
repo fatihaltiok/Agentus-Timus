@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Iterable, List, Tuple
 
+from utils.location_local_intent import is_location_local_query
+
 
 @dataclass(frozen=True)
 class AgentCapabilityProfile:
@@ -551,7 +553,7 @@ def _has_any(text: str, hints: Iterable[str]) -> bool:
 def _site_kind(text: str) -> str | None:
     if "youtube" in text or "youtu.be" in text:
         return "youtube"
-    if "google maps" in text or "landkarte" in text or _has_any(text, _LOCAL_SEARCH_HINTS):
+    if "google maps" in text or "landkarte" in text or _has_any(text, _LOCAL_SEARCH_HINTS) or is_location_local_query(text):
         return "maps"
     if "booking.com" in text:
         return "booking"
@@ -573,7 +575,9 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
     has_summary_request = ("fasse" in normalized and "zusammen" in normalized) or "wichtigsten punkte" in normalized
     has_extraction = _has_any(normalized, _EXTRACTION_HINTS) or has_summary_request
     has_youtube_light = site_kind == "youtube" and _has_any(normalized, _YOUTUBE_LIGHT_HINTS)
-    has_local_search = site_kind == "maps" and _has_any(normalized, _LOCAL_SEARCH_HINTS)
+    has_local_search = site_kind == "maps" and (
+        _has_any(normalized, _LOCAL_SEARCH_HINTS) or is_location_local_query(normalized)
+    )
     has_document = _has_any(normalized, _DOCUMENT_HINTS)
     has_delivery = _has_any(normalized, _DELIVERY_HINTS)
     has_system = _has_any(normalized, _SYSTEM_HINTS)

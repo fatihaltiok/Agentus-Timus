@@ -122,6 +122,57 @@ async def test_executor_location_strategy_returns_nearby_places(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_executor_location_strategy_preserves_specific_place_query(monkeypatch):
+    from agent.agents.executor import ExecutorAgent
+    from agent.base_agent import BaseAgent
+
+    captured = {}
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        if method == "get_current_location_context":
+            return {
+                "status": "success",
+                "data": {
+                    "has_location": True,
+                    "presence_status": "live",
+                    "location": {
+                        "display_name": "Offenbach am Main",
+                        "usable_for_context": True,
+                        "presence_status": "live",
+                    },
+                },
+            }
+        assert method == "search_google_maps_places"
+        captured["query"] = params["query"]
+        return {
+            "status": "success",
+            "data": {
+                "results": [
+                    {
+                        "title": "Trattoria Roma",
+                        "distance_meters": 220,
+                        "hours_summary": "Geoeffnet bis 23:00",
+                        "rating": 4.6,
+                        "reviews": 144,
+                        "address": "Marktplatz 1, Offenbach",
+                    }
+                ],
+            },
+        }
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = ExecutorAgent.__new__(ExecutorAgent)
+    result = await ExecutorAgent.run(
+        agent,
+        _build_executor_location_task("Finde mir ein italienisches Restaurant in meiner Nähe"),
+    )
+
+    assert captured["query"] == "italienisches Restaurant"
+    assert "Trattoria Roma" in result
+
+
+@pytest.mark.asyncio
 async def test_executor_location_strategy_handles_missing_location(monkeypatch):
     from agent.agents.executor import ExecutorAgent
     from agent.base_agent import BaseAgent
@@ -136,3 +187,36 @@ async def test_executor_location_strategy_handles_missing_location(monkeypatch):
     result = await ExecutorAgent.run(agent, _build_executor_location_task("Wo bin ich?"))
 
     assert "keinen synchronisierten Handy-Standort" in result
+
+
+@pytest.mark.asyncio
+async def test_executor_location_strategy_handles_stale_location(monkeypatch):
+    from agent.agents.executor import ExecutorAgent
+    from agent.base_agent import BaseAgent
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        assert method == "get_current_location_context"
+        return {
+            "status": "success",
+            "data": {
+                "has_location": True,
+                "presence_status": "stale",
+                "location": {
+                    "display_name": "Berlin",
+                    "presence_status": "stale",
+                    "usable_for_context": False,
+                    "maps_url": "https://www.google.com/maps/search/?api=1&query=52.52,13.40",
+                },
+            },
+        }
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = ExecutorAgent.__new__(ExecutorAgent)
+    result = await ExecutorAgent.run(
+        agent,
+        _build_executor_location_task("Welche Apotheke hat hier noch offen?"),
+    )
+
+    assert "letzter bekannter Standort" in result
+    assert "nicht frisch genug" in result

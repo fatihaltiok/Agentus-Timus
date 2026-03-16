@@ -184,6 +184,61 @@ async def test_canvas_chat_injects_live_location_context_for_location_queries(mo
     assert "display_name: Alexanderplatz, Berlin, Deutschland" in captured["run_query"]
 
 
+async def test_canvas_chat_injects_live_location_context_for_local_place_requests(monkeypatch, tmp_path):
+    captured = {}
+    mcp_server._chat_history.clear()
+    monkeypatch.setenv("TIMUS_SESSION_STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setattr(mcp_server, "_semantic_store_chat_turn", lambda **kwargs: None)
+    monkeypatch.setattr(mcp_server, "_semantic_recall_chat_turns", lambda **kwargs: [])
+    monkeypatch.setattr(
+        mcp_server,
+        "_get_location_snapshot",
+        lambda: {
+            "presence_status": "live",
+            "usable_for_context": True,
+            "has_coordinates": True,
+            "display_name": "Alexanderplatz, Berlin, Deutschland",
+            "locality": "Berlin",
+            "accuracy_meters": 12.4,
+            "captured_at": "2026-03-16T12:00:00Z",
+            "received_at": "2026-03-16T12:00:02Z",
+            "maps_url": "https://www.google.com/maps/search/?api=1&query=52.52,13.40",
+        },
+    )
+
+    async def fake_build_tools_description():
+        return "tools"
+
+    async def fake_get_agent_decision(query, session_id=None):
+        captured["decision_query"] = query
+        return "executor"
+
+    async def fake_run_agent(agent_name, query, tools_description, session_id=None):
+        captured["run_query"] = query
+        return "Ich suche dir gleich Kaffee in der Naehe."
+
+    fake_dispatcher = SimpleNamespace(
+        get_agent_decision=fake_get_agent_decision,
+        run_agent=fake_run_agent,
+    )
+
+    monkeypatch.setattr(mcp_server, "_build_tools_description", fake_build_tools_description)
+    monkeypatch.setitem(sys.modules, "main_dispatcher", fake_dispatcher)
+
+    response = await mcp_server.canvas_chat(
+        _FakeRequest(
+            {
+                "query": "Wo bekomme ich gerade Kaffee?",
+                "session_id": "loc_ctx_coffee",
+            }
+        )
+    )
+
+    assert response["status"] == "success"
+    assert captured["decision_query"] == "Wo bekomme ich gerade Kaffee?"
+    assert "# LIVE LOCATION CONTEXT" in captured["run_query"]
+
+
 async def test_canvas_chat_does_not_inject_stale_location_context(monkeypatch, tmp_path):
     captured = {}
     mcp_server._chat_history.clear()

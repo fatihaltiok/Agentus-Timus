@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from utils.location_local_intent import is_location_local_query
+
 
 _LOCATION_CONTEXT_QUERY_PATTERNS = (
     r"\bwo bin ich\b",
@@ -42,7 +44,9 @@ def is_location_context_query(query: str) -> bool:
         return False
     if len(normalized.split()) > 40:
         return False
-    return any(re.search(pattern, normalized) for pattern in _LOCATION_CONTEXT_QUERY_PATTERNS)
+    return is_location_local_query(normalized) or any(
+        re.search(pattern, normalized) for pattern in _LOCATION_CONTEXT_QUERY_PATTERNS
+    )
 
 
 @dataclass(frozen=True)

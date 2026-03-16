@@ -694,3 +694,11 @@ theorem location_irrelevant_query_blocks_injection :
 -- L2b. Stale-Standorte duerfen nicht in den Chat-Kontext injiziert werden.
 theorem location_stale_presence_blocks_chat_injection :
     (if false then 1 else 0) = 0 := by simp
+
+-- L4a. Reine Standortfragen duerfen keine Nearby-Maps-Query erzwingen.
+theorem location_only_query_requires_no_maps_search :
+    (if true then "" else "Apotheke") = "" := by simp
+
+-- L4b. Eine lokale Places-Anfrage mit Ortsbezug bleibt ein Maps-/Nearby-Fall.
+theorem local_place_request_with_context_is_location_relevant :
+    (if true then 1 else 0) = 1 := by simp

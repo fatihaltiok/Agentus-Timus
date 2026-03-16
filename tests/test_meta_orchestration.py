@@ -83,6 +83,17 @@ def test_classify_meta_task_routes_local_nearby_queries_to_meta_executor():
     assert [stage["stage_id"] for stage in result["recipe_stages"]] == ["location_context_scan"]
 
 
+def test_classify_meta_task_routes_local_action_plus_place_queries_to_meta_executor():
+    result = classify_meta_task(
+        "Wo bekomme ich gerade Kaffee?",
+        action_count=0,
+    )
+
+    assert result["task_type"] == "location_local_search"
+    assert result["site_kind"] == "maps"
+    assert result["recommended_agent_chain"] == ["meta", "executor"]
+
+
 def test_classify_meta_task_exposes_booking_recipe_for_multistage_workflow():
     result = classify_meta_task(
         "Öffne booking.com, gib Berlin ein, wähle Daten und starte die Suche",

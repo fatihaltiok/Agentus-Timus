@@ -112,6 +112,15 @@ def test_evaluate_query_orchestration_routes_local_maps_queries_to_meta_executor
     assert any(item["name"] == "get_current_location_context" for item in decision["tool_affordances"])
 
 
+def test_evaluate_query_orchestration_routes_local_place_request_without_explicit_nearby_phrase():
+    decision = evaluate_query_orchestration("Wo bekomme ich gerade Kaffee?")
+
+    assert decision["route_to_meta"] is True
+    assert decision["task_type"] == "location_local_search"
+    assert decision["site_kind"] == "maps"
+    assert decision["recommended_agent_chain"] == ["meta", "executor"]
+
+
 def test_evaluate_parallel_tasks_blocks_explicit_dependencies():
     decision = evaluate_parallel_tasks(
         [
