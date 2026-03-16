@@ -772,12 +772,14 @@ async def get_google_maps_route(
         "hl": str(language_code or "de").strip() or "de",
     }
     data = await asyncio.to_thread(_call_serpapi_json, params)
-    return parse_serpapi_google_maps_directions(
+    result = parse_serpapi_google_maps_directions(
         data,
         origin=origin,
         destination_query=safe_destination,
         travel_mode=normalized_mode,
     )
+    result["language_code"] = str(language_code or "de").strip() or "de"
+    return result
 
 
 def _call_dataforseo_youtube(endpoint: str, payload: list) -> dict:

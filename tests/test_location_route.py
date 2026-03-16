@@ -88,5 +88,8 @@ def test_prepare_route_snapshot_marks_complete_route() -> None:
 
     assert snapshot["has_route"] is True
     assert snapshot["travel_mode"] == "walking"
+    assert snapshot["language_code"] == "de"
+    assert snapshot["route_status"] == "active"
+    assert snapshot["reroute_count"] == 0
     assert snapshot["overview_polyline"] == ""
     assert snapshot["saved_at"] == "2026-03-16T12:30:00Z"

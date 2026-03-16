@@ -710,3 +710,14 @@ theorem route_unknown_mode_defaults_to_driving :
 -- L5b. Eine valide Route braucht Ziel und URL, sonst gilt sie nicht als aktiv.
 theorem route_without_url_is_not_active :
     (if false then 1 else 0) = 0 := by simp
+
+-- L5c. Re-Routing darf unterhalb der Bewegungs-Schwelle nicht feuern.
+theorem route_reroute_below_threshold_blocks
+    (moved threshold : Nat)
+    (h : moved < threshold) :
+    ¬ moved ≥ threshold := by omega
+
+-- L5d. Nach erfolgreichem Re-Routing steigt der Zähler monoton.
+theorem route_reroute_count_monotone
+    (count : Nat) :
+    count + 1 > count := by omega

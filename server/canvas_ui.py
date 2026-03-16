@@ -3130,7 +3130,11 @@ function renderRouteStatus(route) {
   if (originEl) originEl.textContent = route.start_address || ((route.origin || {}).display_name) || "–";
   if (savedAtEl) savedAtEl.textContent = _formatRouteTimestamp(route.saved_at);
   if (captionEl) {
-    captionEl.textContent = `${route.source_provider || "provider"} · ${route.engine || "route"} · ${route.step_count || stepPreview.length || 0} Schritte`;
+    const rerouteInfo = Number(route.reroute_count || 0) > 0
+      ? ` · reroutes ${Number(route.reroute_count || 0)}`
+      : "";
+    const errorInfo = route.last_reroute_error ? " · letzter Reroute-Fehler gespeichert" : "";
+    captionEl.textContent = `${route.source_provider || "provider"} · ${route.engine || "route"} · ${route.step_count || stepPreview.length || 0} Schritte${rerouteInfo}${errorInfo}`;
   }
   if (stepListEl) {
     stepListEl.innerHTML = stepPreview.length

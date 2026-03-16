@@ -64,6 +64,8 @@ async def test_location_resolve_endpoint_uses_device_geocoder_when_google_unavai
     assert location["device_id"] == "primary_mobile"
     assert location["user_scope"] == "primary"
     assert location["maps_url"].startswith("https://www.google.com/maps/search/?api=1&query=52.520008,13.404954")
+    assert response["route_update"]["reroute_triggered"] is False
+    assert response["route_update"]["reason"] == "no_active_route"
     assert snapshot_path.exists()
 
 
@@ -260,3 +262,84 @@ async def test_location_route_endpoint_returns_400_for_invalid_route(monkeypatch
     response = await mcp_server.location_route_endpoint("Checkpoint Charlie Berlin")
 
     assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_location_resolve_endpoint_triggers_live_reroute_for_active_route(monkeypatch, tmp_path):
+    captured_at = "2026-03-16T15:05:00Z"
+    snapshot_path = tmp_path / "runtime_location_snapshot.json"
+    route_path = tmp_path / "runtime_route_snapshot.json"
+    monkeypatch.setattr(mcp_server, "_RUNTIME_LOCATION_SNAPSHOT_PATH", snapshot_path)
+    monkeypatch.setattr(mcp_server, "_RUNTIME_ROUTE_SNAPSHOT_PATH", route_path)
+    monkeypatch.setattr(mcp_server, "_location_snapshot", None)
+    monkeypatch.setattr(mcp_server, "_route_snapshot", None)
+    monkeypatch.setattr(mcp_server, "_reverse_geocode_with_google", lambda latitude, longitude: None)
+    monkeypatch.setenv("TIMUS_LOCATION_ROUTE_LIVE_REROUTE_ENABLED", "true")
+    monkeypatch.setenv("TIMUS_LOCATION_ROUTE_REROUTE_MIN_DISTANCE_METERS", "150")
+    monkeypatch.setenv("TIMUS_LOCATION_ROUTE_REROUTE_MIN_INTERVAL_SECONDS", "0")
+
+    mcp_server._set_route_snapshot(
+        {
+            "has_route": True,
+            "destination_query": "Checkpoint Charlie Berlin",
+            "destination_label": "Checkpoint Charlie, Berlin",
+            "travel_mode": "walking",
+            "language_code": "de",
+            "saved_at": "2026-03-16T14:30:00Z",
+            "route_started_at": "2026-03-16T14:30:00Z",
+            "start_coordinates": {"latitude": 52.520008, "longitude": 13.404954},
+            "origin": {"latitude": 52.520008, "longitude": 13.404954},
+        }
+    )
+
+    async def fake_get_google_maps_route(destination_query: str, travel_mode: str = "driving", language_code: str = "de"):
+        assert destination_query == "Checkpoint Charlie Berlin"
+        assert travel_mode == "walking"
+        assert language_code == "de"
+        return {
+            "origin": {"display_name": "Nahe Potsdamer Platz, Berlin", "latitude": 52.5096, "longitude": 13.3760},
+            "destination_query": destination_query,
+            "destination_label": "Checkpoint Charlie, Berlin",
+            "travel_mode": "walking",
+            "language_code": "de",
+            "summary": "Aktualisierte Route",
+            "distance_text": "1,0 km",
+            "duration_text": "13 Min.",
+            "steps": [{"instruction": "Nach Osten gehen", "distance_text": "150 m", "duration_text": "2 Min."}],
+            "step_count": 1,
+            "route_url": "https://www.google.com/maps/dir/?api=1&origin=52.5096,13.3760&destination=Checkpoint+Charlie+Berlin&travelmode=walking",
+            "maps_url": "https://www.google.com/maps/dir/?api=1&origin=52.5096,13.3760&destination=Checkpoint+Charlie+Berlin&travelmode=walking",
+            "start_coordinates": {"latitude": 52.5096, "longitude": 13.3760},
+            "end_coordinates": {"latitude": 52.507507, "longitude": 13.390373},
+            "source_provider": "serpapi",
+            "engine": "google_maps_directions",
+        }
+
+    from tools.search_tool import tool as search_tool_module
+
+    monkeypatch.setattr(search_tool_module, "get_google_maps_route", fake_get_google_maps_route)
+
+    response = await mcp_server.location_resolve_endpoint(
+        _FakeRequest(
+            {
+                "latitude": 52.5096,
+                "longitude": 13.3760,
+                "accuracy_meters": 8.0,
+                "source": "android_fused",
+                "captured_at": captured_at,
+                "display_name": "Potsdamer Platz, Berlin, Deutschland",
+                "locality": "Berlin",
+                "admin_area": "Berlin",
+                "country_name": "Deutschland",
+                "country_code": "DE",
+            }
+        )
+    )
+
+    assert response["status"] == "success"
+    assert response["route_update"]["reroute_triggered"] is True
+    assert response["route_update"]["reason"] == "movement_threshold_exceeded"
+    route_snapshot = mcp_server._get_route_snapshot()
+    assert route_snapshot["reroute_count"] == 1
+    assert route_snapshot["destination_query"] == "Checkpoint Charlie Berlin"
+    assert route_snapshot["travel_mode"] == "walking"

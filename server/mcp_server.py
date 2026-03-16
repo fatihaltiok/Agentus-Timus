@@ -117,6 +117,7 @@ from utils.location_presence import (
     prepare_location_presence_snapshot,
 )
 from utils.location_route import prepare_route_snapshot
+from utils.location_reroute import assess_live_reroute, apply_live_reroute_metadata
 from utils.location_chat_context import (
     build_location_chat_context_block,
     evaluate_location_chat_context,
@@ -661,8 +662,28 @@ def _env_bool(name: str, default: bool) -> bool:
     return default
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = str(os.getenv(name, str(default))).strip()
+    try:
+        return int(raw)
+    except Exception:
+        return default
+
+
 def _chat_location_context_enabled() -> bool:
     return _env_bool("TIMUS_CHAT_LOCATION_CONTEXT_ENABLED", True)
+
+
+def _location_live_reroute_enabled() -> bool:
+    return _env_bool("TIMUS_LOCATION_ROUTE_LIVE_REROUTE_ENABLED", True)
+
+
+def _location_route_reroute_min_distance_meters() -> int:
+    return max(25, _env_int("TIMUS_LOCATION_ROUTE_REROUTE_MIN_DISTANCE_METERS", 150))
+
+
+def _location_route_reroute_min_interval_seconds() -> int:
+    return max(0, _env_int("TIMUS_LOCATION_ROUTE_REROUTE_MIN_INTERVAL_SECONDS", 120))
 
 
 def _extract_assistant_reply_points(text: str) -> list[str]:
@@ -1100,6 +1121,76 @@ def _get_route_snapshot() -> dict | None:
     _load_route_snapshot_from_disk()
     with _route_snapshot_lock:
         return _copy_route_snapshot(_route_snapshot)
+
+
+def _annotate_route_reroute_error(route_snapshot: dict | None, error: str, attempted_at: str) -> dict | None:
+    if not isinstance(route_snapshot, dict):
+        return None
+    annotated = dict(route_snapshot)
+    annotated["route_status"] = "warning"
+    annotated["last_reroute_at"] = str(attempted_at or "").strip()
+    annotated["last_reroute_error"] = str(error or "").strip()
+    return annotated
+
+
+async def _maybe_live_reroute_active_route(location_snapshot: dict) -> dict:
+    if not _location_live_reroute_enabled():
+        return {"reroute_triggered": False, "reason": "disabled"}
+
+    enriched_location = enrich_location_presence_snapshot(location_snapshot) or {}
+    route_snapshot = _get_route_snapshot()
+    decision = assess_live_reroute(
+        route_snapshot,
+        enriched_location,
+        min_distance_meters=_location_route_reroute_min_distance_meters(),
+        min_interval_seconds=_location_route_reroute_min_interval_seconds(),
+    )
+    if not decision.get("should_reroute"):
+        return {
+            "reroute_triggered": False,
+            "reason": str(decision.get("reason") or "skipped"),
+            "moved_distance_meters": decision.get("moved_distance_meters"),
+            "seconds_since_last_update": decision.get("seconds_since_last_update"),
+        }
+
+    attempted_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    try:
+        from tools.search_tool.tool import get_google_maps_route
+
+        rerouted = await get_google_maps_route(
+            destination_query=str(route_snapshot.get("destination_query") or "").strip(),
+            travel_mode=str(route_snapshot.get("travel_mode") or "driving").strip() or "driving",
+            language_code=str(route_snapshot.get("language_code") or "de").strip() or "de",
+        )
+        rerouted_snapshot = prepare_route_snapshot(rerouted)
+        rerouted_snapshot = apply_live_reroute_metadata(
+            rerouted_snapshot,
+            route_snapshot,
+            enriched_location,
+            moved_distance_meters=decision.get("moved_distance_meters"),
+            reroute_reason=str(decision.get("reason") or "movement_threshold_exceeded"),
+            rerouted_at=attempted_at,
+        )
+        _set_route_snapshot(rerouted_snapshot)
+        return {
+            "reroute_triggered": True,
+            "reason": str(decision.get("reason") or "movement_threshold_exceeded"),
+            "moved_distance_meters": decision.get("moved_distance_meters"),
+            "seconds_since_last_update": decision.get("seconds_since_last_update"),
+            "route": rerouted_snapshot,
+        }
+    except Exception as exc:
+        log.warning(f"⚠️ Live-Re-Routing fehlgeschlagen: {exc}")
+        annotated = _annotate_route_reroute_error(route_snapshot, str(exc), attempted_at)
+        if annotated:
+            _set_route_snapshot(annotated)
+        return {
+            "reroute_triggered": False,
+            "reason": "reroute_error",
+            "error": str(exc),
+            "moved_distance_meters": decision.get("moved_distance_meters"),
+            "seconds_since_last_update": decision.get("seconds_since_last_update"),
+        }
 
 
 def _route_map_placeholder_svg(title: str, detail: str = "") -> str:
@@ -2865,7 +2956,12 @@ async def location_resolve_endpoint(request: Request):
     try:
         snapshot = _normalize_location_snapshot(payload or {})
         _set_location_snapshot(snapshot)
-        return {"status": "success", "location": enrich_location_presence_snapshot(snapshot)}
+        route_update = await _maybe_live_reroute_active_route(snapshot)
+        return {
+            "status": "success",
+            "location": enrich_location_presence_snapshot(snapshot),
+            "route_update": route_update,
+        }
     except Exception as e:
         return JSONResponse(status_code=400, content={"status": "error", "error": f"invalid_location_payload: {e}"})
 

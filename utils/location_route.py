@@ -60,6 +60,15 @@ def _as_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _as_int(value: Any, default: int = 0) -> int:
+    try:
+        if value in (None, ""):
+            return default
+        return int(value)
+    except Exception:
+        return default
+
+
 def _extract_coordinates(value: Any) -> dict[str, float]:
     if not isinstance(value, dict):
         return {}
@@ -242,6 +251,9 @@ def prepare_route_snapshot(payload: dict[str, Any], *, saved_at: str | None = No
     route_url = str(safe.get("route_url") or safe.get("maps_url") or "").strip()
     destination_query = str(safe.get("destination_query") or "").strip()
     normalized_mode = normalize_route_travel_mode(str(safe.get("travel_mode") or "driving"))
+    effective_saved_at = str(
+        saved_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    )
     normalized_steps = []
     raw_steps = safe.get("steps") or []
     if isinstance(raw_steps, list):
@@ -254,6 +266,7 @@ def prepare_route_snapshot(payload: dict[str, Any], *, saved_at: str | None = No
         "destination_query": destination_query,
         "destination_label": str(safe.get("destination_label") or destination_query).strip(),
         "travel_mode": normalized_mode,
+        "language_code": str(safe.get("language_code") or "de").strip() or "de",
         "summary": str(safe.get("summary") or destination_query).strip(),
         "distance_text": str(safe.get("distance_text") or "").strip(),
         "duration_text": str(safe.get("duration_text") or "").strip(),
@@ -267,7 +280,19 @@ def prepare_route_snapshot(payload: dict[str, Any], *, saved_at: str | None = No
         "overview_polyline": str(safe.get("overview_polyline") or "").strip(),
         "route_url": route_url,
         "maps_url": route_url,
-        "saved_at": str(saved_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")),
+        "saved_at": effective_saved_at,
+        "route_started_at": str(safe.get("route_started_at") or effective_saved_at),
+        "last_reroute_at": str(safe.get("last_reroute_at") or "").strip(),
+        "reroute_count": max(0, _as_int(safe.get("reroute_count"), 0)),
+        "reroute_reason": str(safe.get("reroute_reason") or "").strip(),
+        "reroute_trigger_distance_meters": (
+            None
+            if safe.get("reroute_trigger_distance_meters") in (None, "")
+            else max(0, _as_int(safe.get("reroute_trigger_distance_meters"), 0))
+        ),
+        "reroute_trigger_captured_at": str(safe.get("reroute_trigger_captured_at") or "").strip(),
+        "route_status": str(safe.get("route_status") or "active").strip() or "active",
+        "last_reroute_error": str(safe.get("last_reroute_error") or "").strip(),
         "source_provider": str(safe.get("source_provider") or "serpapi").strip(),
         "engine": str(safe.get("engine") or "google_maps_directions").strip(),
     }

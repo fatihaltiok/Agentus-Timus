@@ -43,6 +43,7 @@ def _contract_parse_serpapi_google_maps_directions(data: dict, origin: dict, des
 
 @deal.post(lambda r: isinstance(r["has_route"], bool))
 @deal.post(lambda r: r["travel_mode"] in {"driving", "walking", "bicycling", "transit"})
+@deal.post(lambda r: r["route_status"] in {"active", "warning"})
 def _contract_prepare_route_snapshot(payload: dict):
     return prepare_route_snapshot(payload)
 
