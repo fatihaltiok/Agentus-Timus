@@ -27,6 +27,7 @@ import androidx.compose.material.icons.outlined.SettingsSuggest
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -86,6 +87,11 @@ fun HomeScreen(
     voiceState: String,
     locationState: LocationUiState,
     onRefreshLocation: () -> Unit,
+    onRefreshLocationControls: () -> Unit,
+    onToggleLocationSharing: (Boolean) -> Unit,
+    onToggleLocationContext: (Boolean) -> Unit,
+    onToggleLocationBackgroundSync: (Boolean) -> Unit,
+    onPreferCurrentDevice: () -> Unit,
 ) {
     val scoreText = String.format("%.1f", summary.autonomyScore * 10)
     Column(
@@ -153,6 +159,15 @@ fun HomeScreen(
                     )
                 }
             },
+        )
+
+        LocationControlCard(
+            locationState = locationState,
+            onRefreshLocationControls = onRefreshLocationControls,
+            onToggleLocationSharing = onToggleLocationSharing,
+            onToggleLocationContext = onToggleLocationContext,
+            onToggleLocationBackgroundSync = onToggleLocationBackgroundSync,
+            onPreferCurrentDevice = onPreferCurrentDevice,
         )
     }
 }
@@ -364,9 +379,182 @@ private fun TimusMiniStatCard(
     }
 }
 
+@Composable
+private fun LocationControlCard(
+    locationState: LocationUiState,
+    onRefreshLocationControls: () -> Unit,
+    onToggleLocationSharing: (Boolean) -> Unit,
+    onToggleLocationContext: (Boolean) -> Unit,
+    onToggleLocationBackgroundSync: (Boolean) -> Unit,
+    onPreferCurrentDevice: () -> Unit,
+) {
+    val controls = locationState.controls
+    val currentDeviceId = locationState.lastDeviceLocation?.deviceId
+        ?: locationState.lastResolvedLocation?.deviceId
+    val controlsBusy = controls.state.equals("saving", ignoreCase = true)
+    val preferCurrentEnabled = !controlsBusy &&
+        !currentDeviceId.isNullOrBlank() &&
+        currentDeviceId != controls.preferredDeviceId
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(
+                Brush.linearGradient(
+                    colors = listOf(PanelStrong, Panel),
+                ),
+            )
+            .border(
+                1.dp,
+                statusColorFor(locationControlStatus(locationState)).copy(alpha = 0.55f),
+                RoundedCornerShape(24.dp),
+            )
+            .padding(18.dp),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .clip(CircleShape)
+                                .background(statusColorFor(locationControlStatus(locationState))),
+                        )
+                        Text(
+                            text = "Standort-Kontrolle",
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(start = 10.dp),
+                        )
+                    }
+                    Text(
+                        text = controls.statusMessage,
+                        color = TextMuted,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+                TextButton(onClick = onRefreshLocationControls, enabled = !controlsBusy) {
+                    Text(
+                        text = "Neu laden",
+                        color = TimusPrimary,
+                    )
+                }
+            }
+
+            Text(
+                text = buildLocationControlSummary(locationState),
+                color = TextSoft,
+                fontSize = 12.sp,
+                lineHeight = 18.sp,
+            )
+
+            LocationControlToggleRow(
+                title = "Sharing",
+                subtitle = "Standortdaten im Timus-Status und auf dem Server halten",
+                checked = controls.sharingEnabled,
+                enabled = !controlsBusy,
+                onCheckedChange = onToggleLocationSharing,
+            )
+            LocationControlToggleRow(
+                title = "Kontext",
+                subtitle = "Frischen Standort fuer ortsrelevante Anfragen automatisch nutzen",
+                checked = controls.contextEnabled,
+                enabled = !controlsBusy,
+                onCheckedChange = onToggleLocationContext,
+            )
+            LocationControlToggleRow(
+                title = "Background-Sync",
+                subtitle = "Erlaubt spaeteren Hintergrund-Upload vom Handy; Foreground-Sync bleibt moeglich",
+                checked = controls.backgroundSyncAllowed,
+                enabled = !controlsBusy,
+                onCheckedChange = onToggleLocationBackgroundSync,
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Dieses Gerät: ${compactDeviceId(currentDeviceId)}",
+                    color = TextMuted,
+                    fontSize = 12.sp,
+                )
+                TextButton(
+                    onClick = onPreferCurrentDevice,
+                    enabled = preferCurrentEnabled,
+                ) {
+                    Text(
+                        text = if (preferCurrentEnabled) "Als bevorzugt setzen" else "Bereits bevorzugt",
+                        color = if (preferCurrentEnabled) TimusAccent else TextMuted,
+                    )
+                }
+            }
+
+            if (!controls.error.isNullOrBlank()) {
+                Text(
+                    text = "Fehler: ${controls.error}",
+                    color = statusColorFor("error"),
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LocationControlToggleRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    enabled: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(Panel.copy(alpha = 0.85f))
+            .border(1.dp, PanelBorder.copy(alpha = 0.60f), RoundedCornerShape(18.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                color = TextStrong,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = subtitle,
+                color = TextMuted,
+                fontSize = 12.sp,
+                lineHeight = 18.sp,
+                modifier = Modifier.padding(top = 4.dp, end = 12.dp),
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            enabled = enabled,
+        )
+    }
+}
+
 private fun buildLocationSubtitle(locationState: LocationUiState): String {
     val resolved = locationState.lastResolvedLocation
     val accuracy = resolved?.accuracyMeters?.let { "Genauigkeit ±${it.toInt()} m" }
+    val presence = resolved?.presenceStatus?.takeIf { it.isNotBlank() }?.let { "Presence: $it" }
+    val privacy = resolved?.privacyState?.takeIf { it.isNotBlank() }?.let { "Privacy: $it" }
+    val device = resolved?.deviceId?.takeIf { it.isNotBlank() }?.let { "Gerät: ${compactDeviceId(it)}" }
     val capturedAt = resolved?.capturedAt
         ?.replace("T", " ")
         ?.removeSuffix("Z")
@@ -376,9 +564,24 @@ private fun buildLocationSubtitle(locationState: LocationUiState): String {
     return buildList {
         add(locationState.statusMessage)
         if (!accuracy.isNullOrBlank()) add(accuracy)
+        if (!presence.isNullOrBlank()) add(presence)
+        if (!privacy.isNullOrBlank()) add(privacy)
+        if (!device.isNullOrBlank()) add(device)
         if (!capturedAt.isNullOrBlank()) add(capturedAt)
         if (!resolved?.mapsUrl.isNullOrBlank()) add("Google Maps bereit")
         if (!locationState.error.isNullOrBlank()) add("Fehler: ${locationState.error}")
+    }.joinToString("\n")
+}
+
+private fun buildLocationControlSummary(locationState: LocationUiState): String {
+    val controls = locationState.controls
+    val activeDevice = compactDeviceId(controls.activeDeviceId)
+    val preferredDevice = compactDeviceId(controls.preferredDeviceId)
+    val selectionReason = humanizeSelectionReason(controls.selectionReason)
+    val scope = controls.activeUserScope.ifBlank { "primary" }
+    return buildList {
+        add("Aktiv: $activeDevice · Scope $scope · Auswahl $selectionReason")
+        add("Preferred: $preferredDevice · Geräte: ${controls.deviceCount} · Allowed: ${controls.allowedUserScopes.joinToString(", ")}")
     }.joinToString("\n")
 }
 
@@ -388,4 +591,31 @@ private fun locationStatus(locationState: LocationUiState): String =
         "warning", "requesting_permission", "fetching", "syncing" -> "warning"
         "error", "denied" -> "error"
         else -> "idle"
+    }
+
+private fun locationControlStatus(locationState: LocationUiState): String {
+    val controls = locationState.controls
+    return when {
+        controls.state.equals("error", ignoreCase = true) -> "error"
+        controls.state.equals("saving", ignoreCase = true) -> "warning"
+        !controls.sharingEnabled || !controls.contextEnabled -> "warning"
+        else -> "ok"
+    }
+}
+
+private fun compactDeviceId(value: String?): String {
+    val normalized = value.orEmpty().trim()
+    if (normalized.isBlank()) return "–"
+    if (normalized.length <= 12) return normalized
+    return normalized.take(10)
+}
+
+private fun humanizeSelectionReason(value: String): String =
+    when (value.lowercase()) {
+        "preferred_device" -> "bevorzugtes Gerät"
+        "freshest_usable_device" -> "frischstes nutzbares Gerät"
+        "freshest_device_fallback" -> "frischster Fallback"
+        "latest_device_fallback" -> "letzter Snapshot"
+        "missing_location_snapshot" -> "kein Snapshot"
+        else -> value.ifBlank { "auto" }
     }

@@ -3,6 +3,7 @@ package com.fatihaltiok.timus.mobile.data
 import com.fatihaltiok.timus.mobile.model.ChatMessage
 import com.fatihaltiok.timus.mobile.model.ChatReply
 import com.fatihaltiok.timus.mobile.model.DeviceLocationSnapshot
+import com.fatihaltiok.timus.mobile.model.LocationControlState
 import com.fatihaltiok.timus.mobile.model.LocationServerSnapshot
 import com.fatihaltiok.timus.mobile.model.VoiceStatus
 
@@ -31,6 +32,13 @@ interface TimusRepository {
     ): Result<ByteArray>
 
     suspend fun fetchLocationStatus(config: TimusConfig): Result<LocationServerSnapshot?>
+
+    suspend fun fetchLocationControlStatus(config: TimusConfig): Result<LocationControlState>
+
+    suspend fun updateLocationControl(
+        config: TimusConfig,
+        controls: LocationControlState,
+    ): Result<LocationControlState>
 
     suspend fun resolveLocation(
         config: TimusConfig,

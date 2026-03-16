@@ -33,6 +33,24 @@ data class LocationServerSnapshot(
     val userScope: String = "",
     val presenceStatus: String = "unknown",
     val usableForContext: Boolean = false,
+    val privacyState: String = "enabled",
+    val controlBlockedReason: String = "",
+)
+
+data class LocationControlState(
+    val state: String = "idle",
+    val statusMessage: String = "Standort-Kontrolle noch nicht geladen",
+    val sharingEnabled: Boolean = true,
+    val contextEnabled: Boolean = true,
+    val backgroundSyncAllowed: Boolean = true,
+    val preferredDeviceId: String = "",
+    val allowedUserScopes: List<String> = listOf("primary"),
+    val maxDeviceEntries: Int = 8,
+    val activeDeviceId: String = "",
+    val activeUserScope: String = "",
+    val selectionReason: String = "",
+    val deviceCount: Int = 0,
+    val error: String? = null,
 )
 
 data class LocationUiState(
@@ -41,5 +59,6 @@ data class LocationUiState(
     val statusMessage: String = "Standort noch nicht abgerufen",
     val lastDeviceLocation: DeviceLocationSnapshot? = null,
     val lastResolvedLocation: LocationServerSnapshot? = null,
+    val controls: LocationControlState = LocationControlState(),
     val error: String? = null,
 )

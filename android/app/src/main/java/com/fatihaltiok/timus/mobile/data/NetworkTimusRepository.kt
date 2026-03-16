@@ -3,6 +3,7 @@ package com.fatihaltiok.timus.mobile.data
 import com.fatihaltiok.timus.mobile.model.ChatMessage
 import com.fatihaltiok.timus.mobile.model.ChatReply
 import com.fatihaltiok.timus.mobile.model.DeviceLocationSnapshot
+import com.fatihaltiok.timus.mobile.model.LocationControlState
 import com.fatihaltiok.timus.mobile.model.LocationServerSnapshot
 import com.fatihaltiok.timus.mobile.model.VoiceStatus
 import kotlinx.coroutines.Dispatchers
@@ -132,6 +133,29 @@ class NetworkTimusRepository : TimusRepository {
                 parseLocationSnapshot(location)
             }
         }
+
+    override suspend fun fetchLocationControlStatus(config: TimusConfig): Result<LocationControlState> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val response = jsonRequest(config = config, path = "/location/control")
+                parseLocationControlState(response)
+            }
+        }
+
+    override suspend fun updateLocationControl(
+        config: TimusConfig,
+        controls: LocationControlState,
+    ): Result<LocationControlState> = withContext(Dispatchers.IO) {
+        runCatching {
+            val response = jsonRequest(
+                config = config,
+                path = "/location/control",
+                method = "POST",
+                body = buildLocationControlRequestBody(controls),
+            )
+            parseLocationControlState(response)
+        }
+    }
 
     override suspend fun resolveLocation(
         config: TimusConfig,
@@ -296,5 +320,91 @@ class NetworkTimusRepository : TimusRepository {
             userScope = payload.optString("user_scope", ""),
             presenceStatus = payload.optString("presence_status", "unknown"),
             usableForContext = payload.optBoolean("usable_for_context", false),
+            privacyState = payload.optString("privacy_state", "enabled"),
+            controlBlockedReason = payload.optString("control_blocked_reason", ""),
         )
 }
+
+internal fun parseLocationControlState(payload: JSONObject): LocationControlState {
+    val controls = payload.optJSONObject("controls") ?: JSONObject()
+    val allowedUserScopesArray = controls.optJSONArray("allowed_user_scopes") ?: JSONArray()
+    val allowedUserScopes = buildList {
+        for (index in 0 until allowedUserScopesArray.length()) {
+            val value = allowedUserScopesArray.optString(index).trim()
+            if (value.isNotBlank()) add(value)
+        }
+    }.ifEmpty { listOf("primary") }
+    return buildLocationControlState(
+        sharingEnabled = controls.optBoolean("sharing_enabled", true),
+        contextEnabled = controls.optBoolean("context_enabled", true),
+        backgroundSyncAllowed = controls.optBoolean("background_sync_allowed", true),
+        preferredDeviceId = controls.optString("preferred_device_id", ""),
+        allowedUserScopes = allowedUserScopes,
+        maxDeviceEntries = controls.optInt("max_device_entries", 8).coerceAtLeast(1),
+        activeDeviceId = payload.optString("active_device_id", ""),
+        activeUserScope = payload.optString("active_user_scope", ""),
+        selectionReason = payload.optString("selection_reason", ""),
+        deviceCount = payload.optInt("device_count", 0),
+    )
+}
+
+internal fun buildLocationControlState(
+    sharingEnabled: Boolean,
+    contextEnabled: Boolean,
+    backgroundSyncAllowed: Boolean,
+    preferredDeviceId: String,
+    allowedUserScopes: List<String>,
+    maxDeviceEntries: Int,
+    activeDeviceId: String,
+    activeUserScope: String,
+    selectionReason: String,
+    deviceCount: Int,
+): LocationControlState {
+    val statusMessage = buildString {
+        append(
+            if (activeDeviceId.isBlank()) {
+                "Noch kein aktives Gerät"
+            } else {
+                "Aktiv: $activeDeviceId"
+            },
+        )
+        if (deviceCount > 0) append(" · Geräte: $deviceCount")
+        if (selectionReason.isNotBlank()) append(" · Auswahl: $selectionReason")
+        if (preferredDeviceId.isNotBlank()) append(" · Preferred: $preferredDeviceId")
+    }
+    return LocationControlState(
+        state = "ready",
+        statusMessage = statusMessage,
+        sharingEnabled = sharingEnabled,
+        contextEnabled = contextEnabled,
+        backgroundSyncAllowed = backgroundSyncAllowed,
+        preferredDeviceId = preferredDeviceId,
+        allowedUserScopes = allowedUserScopes.ifEmpty { listOf("primary") },
+        maxDeviceEntries = maxDeviceEntries.coerceAtLeast(1),
+        activeDeviceId = activeDeviceId,
+        activeUserScope = activeUserScope,
+        selectionReason = selectionReason,
+        deviceCount = deviceCount,
+        error = null,
+    )
+}
+
+internal fun buildLocationControlRequestFields(controls: LocationControlState): Map<String, Any> =
+    linkedMapOf(
+        "sharing_enabled" to controls.sharingEnabled,
+        "context_enabled" to controls.contextEnabled,
+        "background_sync_allowed" to controls.backgroundSyncAllowed,
+        "preferred_device_id" to controls.preferredDeviceId,
+        "allowed_user_scopes" to controls.allowedUserScopes,
+        "max_device_entries" to controls.maxDeviceEntries,
+    )
+
+internal fun buildLocationControlRequestBody(controls: LocationControlState): JSONObject =
+    JSONObject().apply {
+        buildLocationControlRequestFields(controls).forEach { (key, value) ->
+            when (value) {
+                is List<*> -> put(key, JSONArray(value))
+                else -> put(key, value)
+            }
+        }
+    }

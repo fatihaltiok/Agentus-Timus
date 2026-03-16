@@ -145,6 +145,11 @@ fun TimusMobileApp() {
                             )
                         }
                     },
+                    onRefreshLocationControls = sessionViewModel::loadLocationControlStatus,
+                    onToggleLocationSharing = sessionViewModel::setLocationSharingEnabled,
+                    onToggleLocationContext = sessionViewModel::setLocationContextEnabled,
+                    onToggleLocationBackgroundSync = sessionViewModel::setLocationBackgroundSyncAllowed,
+                    onPreferCurrentDevice = sessionViewModel::preferCurrentLocationDevice,
                 )
             }
             composable(AppDestination.Chat.route) {

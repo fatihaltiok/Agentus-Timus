@@ -6,6 +6,7 @@ import com.fatihaltiok.timus.mobile.data.NetworkTimusRepository
 import com.fatihaltiok.timus.mobile.data.TimusConfig
 import com.fatihaltiok.timus.mobile.data.TimusRepository
 import com.fatihaltiok.timus.mobile.model.ChatMessage
+import com.fatihaltiok.timus.mobile.model.LocationControlState
 import com.fatihaltiok.timus.mobile.model.LocationServerSnapshot
 import com.fatihaltiok.timus.mobile.model.LocationUiState
 import com.fatihaltiok.timus.mobile.model.VoiceUiState
@@ -47,6 +48,7 @@ class AppSessionViewModel(
         refreshVoiceStatus()
         loadChatHistory()
         loadLocationStatus()
+        loadLocationControlStatus()
     }
 
     fun updateDraft(value: String) {
@@ -237,6 +239,59 @@ class AppSessionViewModel(
         }
     }
 
+    fun loadLocationControlStatus() {
+        val state = _uiState.value
+        if (!state.authenticated) return
+        viewModelScope.launch {
+            repository.fetchLocationControlStatus(state.config)
+                .onSuccess { controls ->
+                    _uiState.value = _uiState.value.copy(
+                        location = _uiState.value.location.copy(
+                            controls = controls,
+                        ),
+                    )
+                }
+                .onFailure { error ->
+                    _uiState.value = _uiState.value.copy(
+                        location = _uiState.value.location.copy(
+                            controls = _uiState.value.location.controls.copy(
+                                state = "error",
+                                statusMessage = "Standort-Kontrolle konnte nicht geladen werden",
+                                error = error.message,
+                            ),
+                        ),
+                    )
+                }
+        }
+    }
+
+    fun setLocationSharingEnabled(enabled: Boolean) {
+        updateLocationControl(
+            pendingMessage = if (enabled) "Standortfreigabe wird aktiviert…" else "Standortfreigabe wird deaktiviert…",
+        ) { it.copy(sharingEnabled = enabled) }
+    }
+
+    fun setLocationContextEnabled(enabled: Boolean) {
+        updateLocationControl(
+            pendingMessage = if (enabled) "Standort-Kontext wird aktiviert…" else "Standort-Kontext wird deaktiviert…",
+        ) { it.copy(contextEnabled = enabled) }
+    }
+
+    fun setLocationBackgroundSyncAllowed(enabled: Boolean) {
+        updateLocationControl(
+            pendingMessage = if (enabled) "Background-Sync wird erlaubt…" else "Background-Sync wird blockiert…",
+        ) { it.copy(backgroundSyncAllowed = enabled) }
+    }
+
+    fun preferCurrentLocationDevice() {
+        val currentDeviceId = _uiState.value.location.lastDeviceLocation?.deviceId
+            ?: _uiState.value.location.lastResolvedLocation?.deviceId
+        if (currentDeviceId.isNullOrBlank()) return
+        updateLocationControl(
+            pendingMessage = "Dieses Gerät wird bevorzugt…",
+        ) { it.copy(preferredDeviceId = currentDeviceId) }
+    }
+
     fun refreshLocation(locationClient: TimusLocationClient) {
         refreshLocationInternal(locationClient, silent = false)
     }
@@ -303,6 +358,7 @@ class AppSessionViewModel(
                                     error = null,
                                 ),
                             )
+                            loadLocationControlStatus()
                         }
                         .onFailure { error ->
                             if (!silent) {
@@ -329,6 +385,50 @@ class AppSessionViewModel(
                     }
                 }
             locationAutoSyncInFlight = false
+        }
+    }
+
+    private fun updateLocationControl(
+        pendingMessage: String,
+        transform: (LocationControlState) -> LocationControlState,
+    ) {
+        val state = _uiState.value
+        if (!state.authenticated) return
+        val currentControls = state.location.controls
+        val requestedControls = transform(currentControls).copy(
+            allowedUserScopes = currentControls.allowedUserScopes.ifEmpty { listOf("primary") },
+            maxDeviceEntries = currentControls.maxDeviceEntries.coerceAtLeast(1),
+        )
+        _uiState.value = state.copy(
+            location = state.location.copy(
+                controls = currentControls.copy(
+                    state = "saving",
+                    statusMessage = pendingMessage,
+                    error = null,
+                ),
+            ),
+        )
+        viewModelScope.launch {
+            repository.updateLocationControl(state.config, requestedControls)
+                .onSuccess { controls ->
+                    _uiState.value = _uiState.value.copy(
+                        location = _uiState.value.location.copy(
+                            controls = controls,
+                        ),
+                    )
+                    loadLocationStatus()
+                }
+                .onFailure { error ->
+                    _uiState.value = _uiState.value.copy(
+                        location = _uiState.value.location.copy(
+                            controls = currentControls.copy(
+                                state = "error",
+                                statusMessage = "Standort-Kontrolle konnte nicht gespeichert werden",
+                                error = error.message,
+                            ),
+                        ),
+                    )
+                }
         }
     }
 
@@ -427,6 +527,8 @@ class AppSessionViewModel(
             "${location.latitude}, ${location.longitude}"
         }
         val accuracy = location.accuracyMeters?.let { " ±${it.toInt()} m" } ?: ""
-        return "$headline$accuracy"
+        val presence = location.presenceStatus.ifBlank { "unknown" }
+        val privacy = location.privacyState.ifBlank { "enabled" }
+        return "$headline$accuracy · $presence · privacy $privacy"
     }
 }
