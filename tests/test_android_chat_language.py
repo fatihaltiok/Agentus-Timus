@@ -59,6 +59,64 @@ async def test_canvas_chat_honors_response_language_german(monkeypatch, tmp_path
     assert "Sag hallo" in captured["run_query"]
 
 
+async def test_canvas_chat_preserves_live_location_context_when_response_language_is_german(monkeypatch, tmp_path):
+    captured = {}
+    mcp_server._chat_history.clear()
+    monkeypatch.setenv("TIMUS_SESSION_STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setattr(mcp_server, "_semantic_store_chat_turn", lambda **kwargs: None)
+    monkeypatch.setattr(mcp_server, "_semantic_recall_chat_turns", lambda **kwargs: [])
+    monkeypatch.setattr(
+        mcp_server,
+        "_get_location_snapshot",
+        lambda: {
+            "presence_status": "live",
+            "usable_for_context": True,
+            "has_coordinates": True,
+            "display_name": "Alexanderplatz, Berlin, Deutschland",
+            "locality": "Berlin",
+            "latitude": 52.52,
+            "longitude": 13.40,
+            "captured_at": "2026-03-16T12:00:00Z",
+            "received_at": "2026-03-16T12:00:02Z",
+            "maps_url": "https://www.google.com/maps/search/?api=1&query=52.52,13.40",
+        },
+    )
+
+    async def fake_build_tools_description():
+        return "tools"
+
+    async def fake_get_agent_decision(query, session_id=None):
+        return "executor"
+
+    async def fake_run_agent(agent_name, query, tools_description, session_id=None):
+        captured["run_query"] = query
+        return "Route wird vorbereitet."
+
+    fake_dispatcher = SimpleNamespace(
+        get_agent_decision=fake_get_agent_decision,
+        run_agent=fake_run_agent,
+    )
+
+    monkeypatch.setattr(mcp_server, "_build_tools_description", fake_build_tools_description)
+    monkeypatch.setitem(sys.modules, "main_dispatcher", fake_dispatcher)
+
+    response = await mcp_server.canvas_chat(
+        _FakeRequest(
+            {
+                "query": "Zeig mir den Weg zum Hauptbahnhof",
+                "session_id": "android_loc_lang",
+                "response_language": "de",
+            }
+        )
+    )
+
+    assert response["status"] == "success"
+    assert "Antworte ausschließlich auf Deutsch" in captured["run_query"]
+    assert "# LIVE LOCATION CONTEXT" in captured["run_query"]
+    assert "latitude: 52.52" in captured["run_query"]
+    assert "Zeig mir den Weg zum Hauptbahnhof" in captured["run_query"]
+
+
 async def test_canvas_chat_routes_followup_to_same_executor_lane(monkeypatch, tmp_path):
     captured = {"decision_queries": [], "run_queries": []}
     mcp_server._chat_history.clear()

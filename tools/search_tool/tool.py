@@ -14,6 +14,7 @@ import logging
 import asyncio
 import base64
 import math
+import re
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -744,6 +745,8 @@ async def get_google_maps_place(
         P("destination_query", "string", "Zieladresse oder Ortsname, z.B. 'Alexanderplatz Berlin'"),
         P("travel_mode", "string", "Route-Modus: driving, walking, bicycling, transit", required=False, default="driving"),
         P("language_code", "string", "Sprachcode fuer lokalisierte Routentexte", required=False, default="de"),
+        P("latitude", "number", "Explizite Start-Breite; wenn leer, wird der aktuelle Handy-Standort genutzt", required=False, default=None),
+        P("longitude", "number", "Explizite Start-Laenge; wenn leer, wird der aktuelle Handy-Standort genutzt", required=False, default=None),
     ],
     capabilities=["search", "maps", "location", "route"],
     category=C.SEARCH,
@@ -752,6 +755,8 @@ async def get_google_maps_route(
     destination_query: str,
     travel_mode: str = "driving",
     language_code: str = "de",
+    latitude: float | None = None,
+    longitude: float | None = None,
 ) -> dict:
     if not SERPAPI_API_KEY:
         raise Exception("SERPAPI_API_KEY nicht konfiguriert.")
@@ -759,7 +764,10 @@ async def get_google_maps_route(
     if not safe_destination:
         raise ValueError("Google-Maps-Route erfordert ein Ziel.")
 
-    origin, origin_latitude, origin_longitude = _resolve_maps_origin()
+    origin, origin_latitude, origin_longitude = _resolve_maps_origin(
+        latitude=latitude,
+        longitude=longitude,
+    )
     origin_presence = str(origin.get("presence_status") or "unknown").strip().lower()
     if origin_presence not in {"live", "recent"} or not bool(origin.get("usable_for_context")):
         raise ValueError("Der aktuelle Mobil-Standort ist nicht frisch genug fuer verlaessliches Routing.")
@@ -767,19 +775,29 @@ async def get_google_maps_route(
     params = {
         "engine": "google_maps_directions",
         "start_addr": f"{origin_latitude},{origin_longitude}",
-        "end_addr": safe_destination,
         "travel_mode": normalized_mode,
         "hl": str(language_code or "de").strip() or "de",
     }
-    data = await asyncio.to_thread(_call_serpapi_json, params)
-    result = parse_serpapi_google_maps_directions(
-        data,
-        origin=origin,
-        destination_query=safe_destination,
-        travel_mode=normalized_mode,
-    )
-    result["language_code"] = str(language_code or "de").strip() or "de"
-    return result
+    last_error: Exception | None = None
+    for destination_variant in _route_destination_variants(safe_destination):
+        try:
+            params["end_addr"] = destination_variant
+            data = await asyncio.to_thread(_call_serpapi_json, params)
+            result = parse_serpapi_google_maps_directions(
+                data,
+                origin=origin,
+                destination_query=destination_variant,
+                travel_mode=normalized_mode,
+            )
+            result["language_code"] = str(language_code or "de").strip() or "de"
+            result["requested_destination_query"] = safe_destination
+            return result
+        except Exception as exc:
+            last_error = exc
+            continue
+    if last_error is not None:
+        raise last_error
+    raise ValueError("Google-Maps-Route erfordert ein Ziel.")
 
 
 def _call_dataforseo_youtube(endpoint: str, payload: list) -> dict:
@@ -849,6 +867,7 @@ def _resolve_maps_origin(
     snapshot = _load_runtime_location_snapshot()
     resolved_latitude = _as_float(latitude)
     resolved_longitude = _as_float(longitude)
+    has_explicit_origin = resolved_latitude is not None and resolved_longitude is not None
 
     if resolved_latitude is None or resolved_longitude is None:
         if not snapshot:
@@ -870,12 +889,59 @@ def _resolve_maps_origin(
         "accuracy_meters": _as_float((snapshot or {}).get("accuracy_meters")),
         "captured_at": str((snapshot or {}).get("captured_at") or ""),
         "received_at": str((snapshot or {}).get("received_at") or ""),
-        "source": str((snapshot or {}).get("source") or "runtime_snapshot"),
-        "presence_status": str((snapshot or {}).get("presence_status") or "unknown"),
-        "usable_for_context": bool((snapshot or {}).get("usable_for_context")),
+        "source": str((snapshot or {}).get("source") or ("explicit_origin" if has_explicit_origin else "runtime_snapshot")),
+        "presence_status": (
+            "live"
+            if has_explicit_origin
+            else str((snapshot or {}).get("presence_status") or "unknown")
+        ),
+        "usable_for_context": (
+            True
+            if has_explicit_origin
+            else bool((snapshot or {}).get("usable_for_context"))
+        ),
         "maps_url": str((snapshot or {}).get("maps_url") or f"https://www.google.com/maps/search/?api=1&query={resolved_latitude},{resolved_longitude}"),
     }
     return origin, resolved_latitude, resolved_longitude
+
+
+def _route_destination_variants(destination_query: str) -> list[str]:
+    safe_destination = str(destination_query or "").strip()
+    if not safe_destination:
+        return []
+
+    variants: list[str] = []
+    seen: set[str] = set()
+
+    def _add(value: str) -> None:
+        normalized = re.sub(r"\s+", " ", str(value or "").strip())
+        if not normalized:
+            return
+        key = normalized.casefold()
+        if key in seen:
+            return
+        seen.add(key)
+        variants.append(normalized)
+
+    _add(safe_destination)
+
+    tokens = safe_destination.split()
+    for index, token in enumerate(tokens):
+        lower = token.casefold().strip(",")
+        if index == 0:
+            continue
+        if re.fullmatch(r"in[a-zäöüß-]{4,}", lower):
+            remainder = token[2:]
+            if remainder:
+                split_tokens = list(tokens)
+                split_tokens[index:index + 1] = ["in", remainder]
+                _add(" ".join(split_tokens))
+
+                compact_tokens = list(tokens)
+                compact_tokens[index] = remainder
+                _add(" ".join(compact_tokens))
+
+    return variants
 
 
 def _serpapi_maps_ll(latitude: float, longitude: float, zoom: int) -> str:

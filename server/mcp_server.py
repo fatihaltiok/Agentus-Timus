@@ -2726,7 +2726,7 @@ async def canvas_chat(request: Request):
             query_for_agent = (
                 "Antworte ausschließlich auf Deutsch. "
                 "Nutze nur dann englische Fachbegriffe, wenn sie technisch nötig sind.\n\n"
-                f"Nutzeranfrage:\n{dispatcher_query}"
+                f"Nutzeranfrage:\n{query_for_agent}"
             )
 
         result = await run_agent(

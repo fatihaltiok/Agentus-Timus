@@ -50,6 +50,24 @@ def _build_executor_route_task(original_task: str) -> str:
     )
 
 
+def _build_live_location_context_block() -> str:
+    return "\n".join(
+        [
+            "# LIVE LOCATION CONTEXT",
+            "presence_status: live",
+            "usable_for_context: True",
+            "display_name: Flutstraße 37, 63071 Offenbach am Main, Deutschland",
+            "locality: Offenbach am Main",
+            "latitude: 50.1002421",
+            "longitude: 8.778806",
+            "captured_at: 2026-03-16T18:47:26Z",
+            "received_at: 2026-03-16T18:47:27Z",
+            "maps_url: https://www.google.com/maps/search/?api=1&query=50.1002421,8.778806",
+            "Use this location only for nearby, routing, navigation, or explicit place-context tasks.",
+        ]
+    )
+
+
 @pytest.mark.asyncio
 async def test_executor_location_strategy_returns_location_only(monkeypatch):
     from agent.agents.executor import ExecutorAgent
@@ -345,3 +363,50 @@ async def test_executor_location_route_degrades_without_fake_distance(monkeypatc
     assert "Directions API Fehler" in result
     assert "travelmode=driving" in result
     assert "12-15 km" not in result
+
+
+@pytest.mark.asyncio
+async def test_executor_location_route_uses_injected_live_location_context_when_runtime_snapshot_is_missing(monkeypatch):
+    from agent.agents.executor import ExecutorAgent
+    from agent.base_agent import BaseAgent
+
+    calls: list[tuple[str, dict]] = []
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        calls.append((method, dict(params)))
+        if method == "get_current_location_context":
+            return {"status": "success", "data": {"has_location": False, "location": None}}
+        assert method == "get_google_maps_route"
+        assert params["latitude"] == pytest.approx(50.1002421)
+        assert params["longitude"] == pytest.approx(8.778806)
+        return {
+            "status": "success",
+            "data": {
+                "destination_query": "hanau",
+                "destination_label": "Hanau, Deutschland",
+                "travel_mode": "driving",
+                "distance_text": "18.1 km",
+                "duration_text": "26 min",
+                "start_address": "Flutstraße 37, 63071 Offenbach am Main, Deutschland",
+                "end_address": "Hanau, Deutschland",
+                "route_url": "https://www.google.com/maps/dir/?api=1&origin=50.1002421,8.778806&destination=hanau&travelmode=driving",
+                "steps": [
+                    {"instruction": "Starte auf der Flutstraße", "distance_text": "120 m", "duration_text": "1 min"},
+                ],
+            },
+        }
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = ExecutorAgent.__new__(ExecutorAgent)
+    result = await ExecutorAgent.run(
+        agent,
+        _build_executor_route_task("Zeig mir den Weg nach Hanau")
+        + "\n\n"
+        + _build_live_location_context_block(),
+    )
+
+    assert calls[0][0] == "get_current_location_context"
+    assert calls[1][0] == "get_google_maps_route"
+    assert "Route nach Hanau, Deutschland ist erstellt." in result
+    assert "26 min" in result

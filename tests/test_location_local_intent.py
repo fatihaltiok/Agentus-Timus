@@ -51,3 +51,10 @@ def test_location_local_intent_rejects_route_request() -> None:
     assert intent.is_location_relevant is False
     assert intent.reason == "route_request"
     assert is_location_route_query("Navigier mich bitte nach Berlin") is True
+
+
+def test_location_route_intent_strips_show_me_wrapper() -> None:
+    intent = analyze_location_route_intent("Zeig mir den Weg nach Eschborn in Frankfurt")
+
+    assert intent.is_route_request is True
+    assert intent.destination_query == "eschborn in frankfurt"

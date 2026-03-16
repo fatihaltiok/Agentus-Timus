@@ -441,6 +441,84 @@ class ExecutorAgent(BaseAgent):
             longitude = None
         return latitude, longitude
 
+    @classmethod
+    def _recover_live_location_context(cls, task_text: str) -> dict[str, Any] | None:
+        text = str(task_text or "")
+        match = re.search(
+            r"# LIVE LOCATION CONTEXT\s*(.+?)(?:\n\s*\n|\Z)",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not match:
+            return None
+
+        parsed: dict[str, Any] = {}
+        for raw_line in match.group(1).splitlines():
+            line = raw_line.strip()
+            if not line or line.lower().startswith("use this location only"):
+                continue
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            parsed[key.strip().lower()] = value.strip()
+
+        if not parsed:
+            return None
+
+        recovered: dict[str, Any] = {
+            "display_name": str(parsed.get("display_name") or "").strip(),
+            "locality": str(parsed.get("locality") or "").strip(),
+            "admin_area": str(parsed.get("admin_area") or "").strip(),
+            "country_name": str(parsed.get("country_name") or "").strip(),
+            "captured_at": str(parsed.get("captured_at") or "").strip(),
+            "received_at": str(parsed.get("received_at") or "").strip(),
+            "maps_url": str(parsed.get("maps_url") or "").strip(),
+            "presence_status": cls._normalize_location_presence_status(parsed.get("presence_status") or "unknown"),
+            "usable_for_context": str(parsed.get("usable_for_context") or "").strip().lower() == "true",
+        }
+
+        latitude = cls._as_float(parsed.get("latitude"))
+        longitude = cls._as_float(parsed.get("longitude"))
+        if latitude is None or longitude is None:
+            maps_url = recovered["maps_url"]
+            coords_match = re.search(r"query=([-0-9.]+),([-0-9.]+)", maps_url)
+            if coords_match:
+                latitude = cls._as_float(coords_match.group(1))
+                longitude = cls._as_float(coords_match.group(2))
+        if latitude is not None:
+            recovered["latitude"] = latitude
+        if longitude is not None:
+            recovered["longitude"] = longitude
+        return recovered
+
+    @staticmethod
+    def _as_float(value: Any) -> float | None:
+        try:
+            if value in (None, ""):
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _resolve_effective_location(
+        cls,
+        *,
+        location_payload: dict[str, Any],
+        task_text: str,
+    ) -> tuple[bool, dict[str, Any] | None, str]:
+        has_location = bool(location_payload.get("has_location"))
+        location = location_payload.get("location")
+        if has_location and isinstance(location, dict):
+            return True, location, cls._normalize_location_presence_status(
+                location_payload.get("presence_status") or location.get("presence_status") or "live"
+            )
+
+        recovered = cls._recover_live_location_context(task_text)
+        if isinstance(recovered, dict):
+            return True, recovered, cls._normalize_location_presence_status(recovered.get("presence_status") or "unknown")
+        return False, None, "unknown"
+
     @staticmethod
     def _activate_route_snapshot(route_payload: dict[str, Any]) -> None:
         try:
@@ -940,31 +1018,32 @@ class ExecutorAgent(BaseAgent):
             lines.append(f"Direkter Google-Maps-Link: {route_url}")
         return " ".join(lines)
 
-
-    async def _run_location_local_search(self, handoff: DelegationHandoff) -> str:
-        user_task = self._recover_user_query(
-            (
+    async def _run_location_local_search(
+        self,
+        handoff: DelegationHandoff,
+        task_text: str = "",
+    ) -> str:
+        source_task = (
             handoff.handoff_data.get("original_user_task")
             or handoff.handoff_data.get("query")
             or handoff.goal
             or ""
-            )
         )
+        user_task = self._recover_user_query(source_task)
         location_result = await self._call_tool("get_current_location_context", {})
         if isinstance(location_result, dict) and location_result.get("error"):
             return f"Ich konnte den aktuellen Standort nicht laden: {location_result['error']}"
 
         location_payload = self._tool_payload(location_result)
-        has_location = bool(location_payload.get("has_location"))
-        location = location_payload.get("location")
+        has_location, location, presence_status = self._resolve_effective_location(
+            location_payload=location_payload,
+            task_text=task_text or source_task,
+        )
         if not has_location or not isinstance(location, dict):
             return (
                 "Ich habe aktuell keinen synchronisierten Handy-Standort. "
                 "Oeffne in der App Home > Standort und aktualisiere ihn, dann kann ich lokale Orte ueber Google Maps finden."
             )
-        presence_status = self._normalize_location_presence_status(
-            location_payload.get("presence_status") or location.get("presence_status") or "live"
-        )
         usable_for_context = bool(location.get("usable_for_context", True))
         if presence_status not in {"live", "recent"} or not usable_for_context:
             return self._format_stale_location_response(location)
@@ -978,10 +1057,12 @@ class ExecutorAgent(BaseAgent):
                 maps_query="",
             )
 
-        maps_result = await self._call_tool(
-            "search_google_maps_places",
-            {"query": maps_query, "max_results": 5, "language_code": "de"},
-        )
+        latitude, longitude = self._location_coordinates(location)
+        maps_params: dict[str, Any] = {"query": maps_query, "max_results": 5, "language_code": "de"}
+        if latitude is not None and longitude is not None:
+            maps_params["latitude"] = latitude
+            maps_params["longitude"] = longitude
+        maps_result = await self._call_tool("search_google_maps_places", maps_params)
         if isinstance(maps_result, dict) and maps_result.get("error"):
             return (
                 self._format_location_response(
@@ -1004,15 +1085,18 @@ class ExecutorAgent(BaseAgent):
             maps_query=maps_query,
         )
 
-    async def _run_location_route(self, handoff: DelegationHandoff) -> str:
-        user_task = self._recover_user_query(
-            (
-                handoff.handoff_data.get("original_user_task")
-                or handoff.handoff_data.get("query")
-                or handoff.goal
-                or ""
-            )
+    async def _run_location_route(
+        self,
+        handoff: DelegationHandoff,
+        task_text: str = "",
+    ) -> str:
+        source_task = (
+            handoff.handoff_data.get("original_user_task")
+            or handoff.handoff_data.get("query")
+            or handoff.goal
+            or ""
         )
+        user_task = self._recover_user_query(source_task)
         destination_query = str(handoff.handoff_data.get("destination_query") or "").strip()
         travel_mode = normalize_route_travel_mode(str(handoff.handoff_data.get("travel_mode") or "driving"))
         if not destination_query:
@@ -1030,27 +1114,31 @@ class ExecutorAgent(BaseAgent):
             return f"Ich konnte den aktuellen Standort nicht laden: {location_result['error']}"
 
         location_payload = self._tool_payload(location_result)
-        has_location = bool(location_payload.get("has_location"))
-        location = location_payload.get("location")
+        has_location, location, presence_status = self._resolve_effective_location(
+            location_payload=location_payload,
+            task_text=task_text or source_task,
+        )
         if not has_location or not isinstance(location, dict):
             return (
                 "Ich habe aktuell keinen synchronisierten Handy-Standort. "
                 "Oeffne in der App Home > Standort und aktualisiere ihn, dann kann ich eine Route berechnen."
             )
-        presence_status = self._normalize_location_presence_status(
-            location_payload.get("presence_status") or location.get("presence_status") or "live"
-        )
         usable_for_context = bool(location.get("usable_for_context", True))
         if presence_status not in {"live", "recent"} or not usable_for_context:
             return self._format_stale_location_response(location)
 
+        latitude, longitude = self._location_coordinates(location)
+        route_params: dict[str, Any] = {
+            "destination_query": destination_query,
+            "travel_mode": travel_mode,
+            "language_code": "de",
+        }
+        if latitude is not None and longitude is not None:
+            route_params["latitude"] = latitude
+            route_params["longitude"] = longitude
         route_result = await self._call_tool(
             "get_google_maps_route",
-            {
-                "destination_query": destination_query,
-                "travel_mode": travel_mode,
-                "language_code": "de",
-            },
+            route_params,
         )
         if isinstance(route_result, dict) and route_result.get("error"):
             return self._format_route_error_response(
@@ -1230,9 +1318,9 @@ class ExecutorAgent(BaseAgent):
                 return await self._run_youtube_light_research(synthetic_handoff)
 
         if handoff and handoff.handoff_data.get("task_type") == "location_local_search":
-            return await self._run_location_local_search(handoff)
+            return await self._run_location_local_search(handoff, task)
         if handoff and handoff.handoff_data.get("task_type") == "location_route":
-            return await self._run_location_route(handoff)
+            return await self._run_location_route(handoff, task)
         if handoff and handoff.handoff_data.get("task_type") == "youtube_light_research":
             return await self._run_youtube_light_research(handoff)
         if not handoff and self._is_self_status_query(plain_task):

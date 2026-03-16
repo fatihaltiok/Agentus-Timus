@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from utils.location_local_intent import is_location_local_query
+from utils.location_local_intent import is_location_local_query, is_location_route_query
 
 
 _LOCATION_CONTEXT_QUERY_PATTERNS = (
@@ -44,7 +44,7 @@ def is_location_context_query(query: str) -> bool:
         return False
     if len(normalized.split()) > 40:
         return False
-    return is_location_local_query(normalized) or any(
+    return is_location_local_query(normalized) or is_location_route_query(normalized) or any(
         re.search(pattern, normalized) for pattern in _LOCATION_CONTEXT_QUERY_PATTERNS
     )
 
@@ -122,6 +122,7 @@ def build_location_chat_context_block(snapshot: dict[str, Any]) -> str:
     safe = dict(snapshot or {})
     parts = ["# LIVE LOCATION CONTEXT"]
     parts.append(f"presence_status: {normalize_location_presence_status(safe.get('presence_status') or 'unknown')}")
+    parts.append(f"usable_for_context: {bool(safe.get('usable_for_context'))}")
     if safe.get("display_name"):
         parts.append(f"display_name: {str(safe.get('display_name'))[:220]}")
     if safe.get("locality"):
@@ -130,6 +131,10 @@ def build_location_chat_context_block(snapshot: dict[str, Any]) -> str:
         parts.append(f"admin_area: {str(safe.get('admin_area'))[:120]}")
     if safe.get("country_name"):
         parts.append(f"country_name: {str(safe.get('country_name'))[:120]}")
+    if safe.get("latitude") not in (None, ""):
+        parts.append(f"latitude: {safe.get('latitude')}")
+    if safe.get("longitude") not in (None, ""):
+        parts.append(f"longitude: {safe.get('longitude')}")
     if safe.get("accuracy_meters") not in (None, ""):
         parts.append(f"accuracy_meters: {safe.get('accuracy_meters')}")
     if safe.get("captured_at"):

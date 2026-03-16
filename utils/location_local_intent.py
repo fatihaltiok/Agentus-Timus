@@ -63,6 +63,11 @@ _ROUTE_MODE_PATTERN_MAP = (
     (r"\b(?:auto|wagen|mit\s+dem\s+auto|driving|drive|car)\b", "driving"),
 )
 
+_ROUTE_LEADING_REQUEST_PATTERNS = (
+    r"^(?:zeige?|zeig)\s+(?:mir\s+)?(?:bitte\s+)?",
+    r"^(?:gib|gibst)\s+(?:mir\s+)?(?:bitte\s+)?(?:den\s+)?weg\b",
+)
+
 _OPEN_NOW_PATTERNS = (
     r"\boffen\b",
     r"\b24/?7\b",
@@ -246,6 +251,8 @@ def _clean_route_destination(text: str) -> str:
         return ""
 
     for pattern in _ROUTE_REQUEST_PATTERNS:
+        cleaned = re.sub(pattern, " ", cleaned, count=1)
+    for pattern in _ROUTE_LEADING_REQUEST_PATTERNS:
         cleaned = re.sub(pattern, " ", cleaned, count=1)
     cleaned = re.sub(r"\b(?:mit|per)\s+(?:dem\s+)?(?:auto|fahrrad|bus|bahn|zug)\b", " ", cleaned)
     for pattern, _value in _ROUTE_MODE_PATTERN_MAP:
