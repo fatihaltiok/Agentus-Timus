@@ -43,7 +43,6 @@ import com.fatihaltiok.timus.mobile.data.SessionSummary
 import com.fatihaltiok.timus.mobile.model.LocationUiState
 import com.fatihaltiok.timus.mobile.ui.components.TimusCard
 import com.fatihaltiok.timus.mobile.ui.components.VoiceOrb
-import com.fatihaltiok.timus.mobile.ui.theme.GlowAccent
 import com.fatihaltiok.timus.mobile.ui.theme.GlowPrimary
 import com.fatihaltiok.timus.mobile.ui.theme.Night1
 import com.fatihaltiok.timus.mobile.ui.theme.Panel
@@ -54,11 +53,11 @@ import com.fatihaltiok.timus.mobile.ui.theme.TextMuted
 import com.fatihaltiok.timus.mobile.ui.theme.TextSoft
 import com.fatihaltiok.timus.mobile.ui.theme.TextStrong
 import com.fatihaltiok.timus.mobile.ui.theme.TimusAccent
-import com.fatihaltiok.timus.mobile.ui.theme.TimusIdle
 import com.fatihaltiok.timus.mobile.ui.theme.TimusOk
 import com.fatihaltiok.timus.mobile.ui.theme.TimusPrimary
 import com.fatihaltiok.timus.mobile.ui.theme.TimusPrimarySoft
 import com.fatihaltiok.timus.mobile.ui.theme.statusColorFor
+import java.util.Locale
 
 private data class AgentOrbitNode(
     val label: String,
@@ -93,7 +92,7 @@ fun HomeScreen(
     onToggleLocationBackgroundSync: (Boolean) -> Unit,
     onPreferCurrentDevice: () -> Unit,
 ) {
-    val scoreText = String.format("%.1f", summary.autonomyScore * 10)
+    val scoreText = String.format(Locale.getDefault(), "%.1f", summary.autonomyScore * 10)
     Column(
         modifier = Modifier
             .verticalScroll(rememberScrollState())

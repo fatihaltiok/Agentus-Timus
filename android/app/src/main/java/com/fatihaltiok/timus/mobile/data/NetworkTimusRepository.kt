@@ -137,8 +137,14 @@ class NetworkTimusRepository : TimusRepository {
     override suspend fun fetchLocationControlStatus(config: TimusConfig): Result<LocationControlState> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val response = jsonRequest(config = config, path = "/location/control")
-                parseLocationControlState(response)
+                try {
+                    val response = jsonRequest(config = config, path = "/location/control")
+                    parseLocationControlState(response)
+                } catch (error: IllegalStateException) {
+                    if (!isHttpNotFound(error)) throw error
+                    val legacyStatus = jsonRequest(config = config, path = "/location/status")
+                    parseLocationControlState(legacyStatus)
+                }
             }
         }
 
@@ -147,13 +153,20 @@ class NetworkTimusRepository : TimusRepository {
         controls: LocationControlState,
     ): Result<LocationControlState> = withContext(Dispatchers.IO) {
         runCatching {
-            val response = jsonRequest(
-                config = config,
-                path = "/location/control",
-                method = "POST",
-                body = buildLocationControlRequestBody(controls),
-            )
-            parseLocationControlState(response)
+            try {
+                val response = jsonRequest(
+                    config = config,
+                    path = "/location/control",
+                    method = "POST",
+                    body = buildLocationControlRequestBody(controls),
+                )
+                parseLocationControlState(response)
+            } catch (error: IllegalStateException) {
+                if (isHttpNotFound(error)) {
+                    throw IllegalStateException("Server unterstützt Standort-Kontrolle noch nicht.")
+                }
+                throw error
+            }
         }
     }
 
@@ -408,3 +421,6 @@ internal fun buildLocationControlRequestBody(controls: LocationControlState): JS
             }
         }
     }
+
+internal fun isHttpNotFound(error: IllegalStateException): Boolean =
+    error.message?.contains("HTTP 404", ignoreCase = true) == true

@@ -2,6 +2,7 @@ package com.fatihaltiok.timus.mobile.location
 
 import com.fatihaltiok.timus.mobile.data.buildLocationControlRequestFields
 import com.fatihaltiok.timus.mobile.data.buildLocationControlState
+import com.fatihaltiok.timus.mobile.data.isHttpNotFound
 import com.fatihaltiok.timus.mobile.model.LocationControlState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -57,5 +58,11 @@ class LocationControlParserTest {
         assertEquals("tablet7", fields["preferred_device_id"])
         assertEquals(listOf("primary", "travel"), fields["allowed_user_scopes"])
         assertEquals(9, fields["max_device_entries"])
+    }
+
+    @Test
+    fun isHttpNotFound_recognizes_404_message() {
+        assertTrue(isHttpNotFound(IllegalStateException("HTTP 404: {\"detail\":\"Not Found\"}")))
+        assertFalse(isHttpNotFound(IllegalStateException("HTTP 500: boom")))
     }
 }
