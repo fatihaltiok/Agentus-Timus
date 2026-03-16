@@ -129,3 +129,95 @@ async def test_get_google_maps_place_uses_place_id_and_normalizes(monkeypatch):
     assert result["type"] == "Apotheke"
     assert result["place_id"] == "place-xyz"
     assert result["maps_url"].startswith("https://www.google.com/maps/search/?api=1&query=Apotheke+Test")
+
+
+@pytest.mark.asyncio
+async def test_get_google_maps_route_uses_runtime_location_and_normalizes(monkeypatch, tmp_path):
+    captured_at = (datetime.now(timezone.utc) - timedelta(minutes=2)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    snapshot_path = tmp_path / "runtime_location_snapshot.json"
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "latitude": 52.520008,
+                "longitude": 13.404954,
+                "display_name": "Alexanderplatz, Berlin, Deutschland",
+                "locality": "Berlin",
+                "country_name": "Deutschland",
+                "captured_at": captured_at,
+                "maps_url": "https://www.google.com/maps/search/?api=1&query=52.520008,13.404954",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(search_tool_module, "_RUNTIME_LOCATION_SNAPSHOT_PATH", snapshot_path)
+    monkeypatch.setattr(search_tool_module, "SERPAPI_API_KEY", "serp-test-key")
+
+    captured = {}
+
+    def fake_serpapi(params, timeout=45):
+        captured["params"] = dict(params)
+        return {
+            "directions": [
+                {
+                    "summary": "Schnellste Route",
+                    "distance": {"text": "1,2 km"},
+                    "duration": {"text": "16 Min."},
+                    "legs": [
+                        {
+                            "start_address": "Alexanderplatz, Berlin",
+                            "end_address": "Checkpoint Charlie, Berlin",
+                            "distance": {"text": "1,2 km"},
+                            "duration": {"text": "16 Min."},
+                            "steps": [
+                                {
+                                    "html_instructions": "Nach <b>Süden</b> gehen",
+                                    "distance": {"text": "200 m"},
+                                    "duration": {"text": "3 Min."},
+                                    "maneuver": "straight",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+
+    monkeypatch.setattr(search_tool_module, "_call_serpapi_json", fake_serpapi)
+
+    result = await search_tool_module.get_google_maps_route(
+        destination_query="Checkpoint Charlie Berlin",
+        travel_mode="walking",
+        language_code="de",
+    )
+
+    assert captured["params"]["engine"] == "google_maps_directions"
+    assert captured["params"]["start_addr"] == "52.520008,13.404954"
+    assert captured["params"]["end_addr"] == "Checkpoint Charlie Berlin"
+    assert captured["params"]["travel_mode"] == "walking"
+    assert result["origin"]["locality"] == "Berlin"
+    assert result["travel_mode"] == "walking"
+    assert result["duration_text"] == "16 Min."
+    assert result["steps"][0]["instruction"] == "Nach Süden gehen"
+    assert result["route_url"].startswith("https://www.google.com/maps/dir/?api=1")
+
+
+@pytest.mark.asyncio
+async def test_get_google_maps_route_rejects_stale_origin(monkeypatch, tmp_path):
+    captured_at = (datetime.now(timezone.utc) - timedelta(hours=2)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    snapshot_path = tmp_path / "runtime_location_snapshot.json"
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "latitude": 52.520008,
+                "longitude": 13.404954,
+                "display_name": "Alexanderplatz, Berlin, Deutschland",
+                "captured_at": captured_at,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(search_tool_module, "_RUNTIME_LOCATION_SNAPSHOT_PATH", snapshot_path)
+    monkeypatch.setattr(search_tool_module, "SERPAPI_API_KEY", "serp-test-key")
+
+    with pytest.raises(ValueError, match="nicht frisch genug"):
+        await search_tool_module.get_google_maps_route("Checkpoint Charlie Berlin")

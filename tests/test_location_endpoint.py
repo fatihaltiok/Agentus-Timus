@@ -24,6 +24,8 @@ def test_location_routes_registered():
     assert "/location/status" in paths
     assert "/location/resolve" in paths
     assert "/location/nearby" in paths
+    assert "/location/route" in paths
+    assert "/location/route/status" in paths
 
 
 @pytest.mark.asyncio
@@ -120,3 +122,89 @@ async def test_location_nearby_endpoint_delegates_to_maps_search(monkeypatch):
     assert response["query"] == "Cafe"
     assert response["origin"]["locality"] == "Berlin"
     assert response["results"][0]["title"] == "Cafe Test"
+
+
+@pytest.mark.asyncio
+async def test_location_route_endpoint_delegates_to_directions_and_persists(monkeypatch, tmp_path):
+    route_path = tmp_path / "runtime_route_snapshot.json"
+    monkeypatch.setattr(mcp_server, "_RUNTIME_ROUTE_SNAPSHOT_PATH", route_path)
+    monkeypatch.setattr(mcp_server, "_route_snapshot", None)
+
+    async def fake_get_google_maps_route(destination_query: str, travel_mode: str = "driving", language_code: str = "de"):
+        assert destination_query == "Alexanderplatz Berlin"
+        assert travel_mode == "walking"
+        return {
+            "origin": {"display_name": "Marienplatz, München", "latitude": 48.137154, "longitude": 11.576124},
+            "destination_query": destination_query,
+            "destination_label": "Alexanderplatz, Berlin",
+            "travel_mode": "walking",
+            "summary": "Route ueber den Platz",
+            "distance_text": "1,2 km",
+            "duration_text": "16 Min.",
+            "steps": [{"instruction": "Nach Norden gehen", "distance_text": "200 m", "duration_text": "3 Min."}],
+            "step_count": 1,
+            "route_url": "https://www.google.com/maps/dir/?api=1&origin=48.137154,11.576124&destination=Alexanderplatz+Berlin&travelmode=walking",
+            "maps_url": "https://www.google.com/maps/dir/?api=1&origin=48.137154,11.576124&destination=Alexanderplatz+Berlin&travelmode=walking",
+            "source_provider": "serpapi",
+            "engine": "google_maps_directions",
+        }
+
+    from tools.search_tool import tool as search_tool_module
+
+    monkeypatch.setattr(search_tool_module, "get_google_maps_route", fake_get_google_maps_route)
+
+    response = await mcp_server.location_route_endpoint("Alexanderplatz Berlin", travel_mode="walking")
+
+    assert response["status"] == "success"
+    assert response["travel_mode"] == "walking"
+    assert response["duration_text"] == "16 Min."
+    assert response["has_route"] is True
+    assert route_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_location_route_status_endpoint_reads_persisted_snapshot(monkeypatch, tmp_path):
+    route_path = tmp_path / "runtime_route_snapshot.json"
+    route_path.write_text(
+        """
+        {
+          "has_route": true,
+          "destination_query": "Alexanderplatz Berlin",
+          "destination_label": "Alexanderplatz, Berlin",
+          "travel_mode": "walking",
+          "summary": "Route ueber den Platz",
+          "distance_text": "1,2 km",
+          "duration_text": "16 Min.",
+          "steps": [{"position": 1, "instruction": "Nach Norden gehen"}],
+          "step_count": 1,
+          "route_url": "https://www.google.com/maps/dir/?api=1&origin=48.137154,11.576124&destination=Alexanderplatz+Berlin&travelmode=walking",
+          "maps_url": "https://www.google.com/maps/dir/?api=1&origin=48.137154,11.576124&destination=Alexanderplatz+Berlin&travelmode=walking",
+          "saved_at": "2026-03-16T12:30:00Z",
+          "source_provider": "serpapi",
+          "engine": "google_maps_directions"
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mcp_server, "_RUNTIME_ROUTE_SNAPSHOT_PATH", route_path)
+    monkeypatch.setattr(mcp_server, "_route_snapshot", None)
+
+    response = await mcp_server.location_route_status_endpoint()
+
+    assert response["status"] == "success"
+    assert response["route"]["destination_query"] == "Alexanderplatz Berlin"
+    assert response["route"]["travel_mode"] == "walking"
+
+
+@pytest.mark.asyncio
+async def test_location_route_endpoint_returns_400_for_invalid_route(monkeypatch):
+    async def fake_get_google_maps_route(*_args, **_kwargs):
+        raise ValueError("Der aktuelle Mobil-Standort ist nicht frisch genug fuer verlaessliches Routing.")
+
+    from tools.search_tool import tool as search_tool_module
+
+    monkeypatch.setattr(search_tool_module, "get_google_maps_route", fake_get_google_maps_route)
+
+    response = await mcp_server.location_route_endpoint("Checkpoint Charlie Berlin")
+
+    assert response.status_code == 400

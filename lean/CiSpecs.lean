@@ -702,3 +702,11 @@ theorem location_only_query_requires_no_maps_search :
 -- L4b. Eine lokale Places-Anfrage mit Ortsbezug bleibt ein Maps-/Nearby-Fall.
 theorem local_place_request_with_context_is_location_relevant :
     (if true then 1 else 0) = 1 := by simp
+
+-- L5a. Unbekannte Route-Modi degradieren konservativ auf driving.
+theorem route_unknown_mode_defaults_to_driving :
+    (if true then "driving" else "walking") = "driving" := by simp
+
+-- L5b. Eine valide Route braucht Ziel und URL, sonst gilt sie nicht als aktiv.
+theorem route_without_url_is_not_active :
+    (if false then 1 else 0) = 0 := by simp

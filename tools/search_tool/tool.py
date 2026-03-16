@@ -25,6 +25,10 @@ import requests
 from dotenv import load_dotenv
 from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 from utils.location_presence import enrich_location_presence_snapshot
+from utils.location_route import (
+    normalize_route_travel_mode,
+    parse_serpapi_google_maps_directions,
+)
 
 # --- Logging Setup ---
 logger = logging.getLogger("search_tool")
@@ -728,6 +732,52 @@ async def get_google_maps_place(
 
     data = await asyncio.to_thread(_call_serpapi_json, params)
     return _serpapi_maps_place_result(data)
+
+
+@tool(
+    name="get_google_maps_route",
+    description=(
+        "Berechnet eine Route vom zuletzt synchronisierten Handy-Standort zu einem Ziel "
+        "via Google Maps Directions / SerpApi und liefert ETA, Distanz und Schrittfolge."
+    ),
+    parameters=[
+        P("destination_query", "string", "Zieladresse oder Ortsname, z.B. 'Alexanderplatz Berlin'"),
+        P("travel_mode", "string", "Route-Modus: driving, walking, bicycling, transit", required=False, default="driving"),
+        P("language_code", "string", "Sprachcode fuer lokalisierte Routentexte", required=False, default="de"),
+    ],
+    capabilities=["search", "maps", "location", "route"],
+    category=C.SEARCH,
+)
+async def get_google_maps_route(
+    destination_query: str,
+    travel_mode: str = "driving",
+    language_code: str = "de",
+) -> dict:
+    if not SERPAPI_API_KEY:
+        raise Exception("SERPAPI_API_KEY nicht konfiguriert.")
+    safe_destination = str(destination_query or "").strip()
+    if not safe_destination:
+        raise ValueError("Google-Maps-Route erfordert ein Ziel.")
+
+    origin, origin_latitude, origin_longitude = _resolve_maps_origin()
+    origin_presence = str(origin.get("presence_status") or "unknown").strip().lower()
+    if origin_presence not in {"live", "recent"} or not bool(origin.get("usable_for_context")):
+        raise ValueError("Der aktuelle Mobil-Standort ist nicht frisch genug fuer verlaessliches Routing.")
+    normalized_mode = normalize_route_travel_mode(travel_mode)
+    params = {
+        "engine": "google_maps_directions",
+        "start_addr": f"{origin_latitude},{origin_longitude}",
+        "end_addr": safe_destination,
+        "travel_mode": normalized_mode,
+        "hl": str(language_code or "de").strip() or "de",
+    }
+    data = await asyncio.to_thread(_call_serpapi_json, params)
+    return parse_serpapi_google_maps_directions(
+        data,
+        origin=origin,
+        destination_query=safe_destination,
+        travel_mode=normalized_mode,
+    )
 
 
 def _call_dataforseo_youtube(endpoint: str, payload: list) -> dict:

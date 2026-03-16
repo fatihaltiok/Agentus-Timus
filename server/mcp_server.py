@@ -95,6 +95,7 @@ configure_chroma_runtime()
 # Runtime-Settings: Persistenz ohne Server-Neustart (wird in lifespan geladen)
 _RUNTIME_SETTINGS_PATH = project_root / "data" / "runtime_settings.json"
 _RUNTIME_LOCATION_SNAPSHOT_PATH = project_root / "data" / "runtime_location_snapshot.json"
+_RUNTIME_ROUTE_SNAPSHOT_PATH = project_root / "data" / "runtime_route_snapshot.json"
 
 # --- Lokale Module und Kontext importieren ---
 import tools.shared_context as shared_context
@@ -114,6 +115,7 @@ from utils.location_presence import (
     enrich_location_presence_snapshot,
     prepare_location_presence_snapshot,
 )
+from utils.location_route import prepare_route_snapshot
 from utils.location_chat_context import (
     build_location_chat_context_block,
     evaluate_location_chat_context,
@@ -141,6 +143,8 @@ _chat_history: list = []
 _chat_lock = threading.Lock()
 _location_snapshot: dict | None = None
 _location_snapshot_lock = threading.Lock()
+_route_snapshot: dict | None = None
+_route_snapshot_lock = threading.Lock()
 _SHUTDOWN_STEP_TIMEOUT_S = float(os.getenv("TIMUS_SHUTDOWN_STEP_TIMEOUT", "6"))
 _CONSOLE_FILE_DIRS = ("results", "data/uploads")
 _CHAT_HISTORY_LIMIT = int(os.getenv("TIMUS_CHAT_HISTORY_LIMIT", "200"))
@@ -1019,6 +1023,10 @@ def _copy_location_snapshot(snapshot: dict | None) -> dict | None:
     return copy.deepcopy(snapshot) if snapshot else None
 
 
+def _copy_route_snapshot(snapshot: dict | None) -> dict | None:
+    return copy.deepcopy(snapshot) if snapshot else None
+
+
 def _load_location_snapshot_from_disk() -> None:
     global _location_snapshot
     if not _RUNTIME_LOCATION_SNAPSHOT_PATH.exists():
@@ -1034,9 +1042,30 @@ def _load_location_snapshot_from_disk() -> None:
         log.warning(f"⚠️ Runtime-Standort konnte nicht geladen werden: {exc}")
 
 
+def _load_route_snapshot_from_disk() -> None:
+    global _route_snapshot
+    if not _RUNTIME_ROUTE_SNAPSHOT_PATH.exists():
+        return
+    try:
+        with open(_RUNTIME_ROUTE_SNAPSHOT_PATH) as handle:
+            payload = _json.load(handle)
+        if isinstance(payload, dict):
+            with _route_snapshot_lock:
+                _route_snapshot = payload
+            log.info(f"✅ Runtime-Route geladen: {_RUNTIME_ROUTE_SNAPSHOT_PATH}")
+    except Exception as exc:
+        log.warning(f"⚠️ Runtime-Route konnte nicht geladen werden: {exc}")
+
+
 def _persist_location_snapshot(snapshot: dict) -> None:
     _RUNTIME_LOCATION_SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(_RUNTIME_LOCATION_SNAPSHOT_PATH, "w") as handle:
+        _json.dump(snapshot, handle, indent=2, ensure_ascii=False)
+
+
+def _persist_route_snapshot(snapshot: dict) -> None:
+    _RUNTIME_ROUTE_SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(_RUNTIME_ROUTE_SNAPSHOT_PATH, "w") as handle:
         _json.dump(snapshot, handle, indent=2, ensure_ascii=False)
 
 
@@ -1054,6 +1083,22 @@ def _get_location_snapshot() -> dict | None:
     _load_location_snapshot_from_disk()
     with _location_snapshot_lock:
         return enrich_location_presence_snapshot(_copy_location_snapshot(_location_snapshot))
+
+
+def _set_route_snapshot(snapshot: dict) -> None:
+    global _route_snapshot
+    with _route_snapshot_lock:
+        _route_snapshot = _copy_route_snapshot(snapshot)
+    _persist_route_snapshot(snapshot)
+
+
+def _get_route_snapshot() -> dict | None:
+    with _route_snapshot_lock:
+        if _route_snapshot is not None:
+            return _copy_route_snapshot(_route_snapshot)
+    _load_route_snapshot_from_disk()
+    with _route_snapshot_lock:
+        return _copy_route_snapshot(_route_snapshot)
 
 
 def _address_component(components: list[dict], type_name: str, short: bool = False) -> str:
@@ -2773,6 +2818,40 @@ async def location_nearby_endpoint(q: str, max_results: int = 5):
             max_results=max_results,
         )
         return {"status": "success", **result}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.get("/location/route", summary="Route vom aktuellen Mobil-Standort zu einem Ziel berechnen")
+async def location_route_endpoint(
+    destination: str,
+    travel_mode: str = "driving",
+    language_code: str = "de",
+):
+    safe_destination = str(destination or "").strip()
+    if not safe_destination:
+        return JSONResponse(status_code=400, content={"status": "error", "error": "missing_destination"})
+    try:
+        from tools.search_tool.tool import get_google_maps_route
+
+        result = await get_google_maps_route(
+            destination_query=safe_destination,
+            travel_mode=travel_mode,
+            language_code=language_code,
+        )
+        snapshot = prepare_route_snapshot(result)
+        _set_route_snapshot(snapshot)
+        return {"status": "success", **snapshot}
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"status": "error", "error": str(e)})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.get("/location/route/status", summary="Aktive Route abrufen")
+async def location_route_status_endpoint():
+    try:
+        return {"status": "success", "route": _get_route_snapshot()}
     except Exception as e:
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
