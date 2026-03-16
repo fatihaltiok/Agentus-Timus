@@ -114,6 +114,10 @@ from utils.location_presence import (
     enrich_location_presence_snapshot,
     prepare_location_presence_snapshot,
 )
+from utils.location_chat_context import (
+    build_location_chat_context_block,
+    evaluate_location_chat_context,
+)
 
 log = logging.getLogger("mcp_server")
 
@@ -641,6 +645,19 @@ def _tokenize_followup_focus(text: str) -> list[str]:
             continue
         cleaned.append(stripped)
     return cleaned
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = str(os.getenv(name, "1" if default else "0")).strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _chat_location_context_enabled() -> bool:
+    return _env_bool("TIMUS_CHAT_LOCATION_CONTEXT_ENABLED", True)
 
 
 def _extract_assistant_reply_points(text: str) -> list[str]:
@@ -2337,6 +2354,12 @@ async def canvas_chat(request: Request):
     followup_capsule = _build_followup_capsule(session_id, query=query)
     followup_agent = _resolve_followup_agent(query, followup_capsule)
     dispatcher_query = _augment_query_with_followup_capsule(query, followup_capsule)
+    location_snapshot = _get_location_snapshot()
+    location_decision = evaluate_location_chat_context(
+        query=query,
+        snapshot=location_snapshot,
+        enabled=_chat_location_context_enabled(),
+    )
 
     # P4: RESOLVED_PROPOSAL → Agenten direkt setzen, Proposal aus Kapsel löschen
     resolved_proposal_agent = ""
@@ -2367,6 +2390,12 @@ async def canvas_chat(request: Request):
         _set_agent_status(agent, "thinking", query)
 
         query_for_agent = dispatcher_query
+        if location_decision.should_inject and isinstance(location_snapshot, dict):
+            query_for_agent = (
+                build_location_chat_context_block(location_snapshot)
+                + "\n\n"
+                + query_for_agent
+            )
         if response_language in {"de", "deutsch", "german"} and agent not in {"visual", "visual_nemotron"}:
             query_for_agent = (
                 "Antworte ausschließlich auf Deutsch. "

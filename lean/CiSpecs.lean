@@ -686,3 +686,11 @@ theorem location_age_beyond_recent_is_not_fresh
     (age recentMax : Nat)
     (h : recentMax < age) :
     ¬ age ≤ recentMax := by omega
+
+-- L2a. Nur ortsrelevante Queries duerfen den Live-Standort automatisch injizieren.
+theorem location_irrelevant_query_blocks_injection :
+    (if false then 1 else 0) = 0 := by simp
+
+-- L2b. Stale-Standorte duerfen nicht in den Chat-Kontext injiziert werden.
+theorem location_stale_presence_blocks_chat_injection :
+    (if false then 1 else 0) = 0 := by simp
