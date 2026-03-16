@@ -67,6 +67,44 @@ async def test_collect_status_snapshot_builds_agent_rows(monkeypatch):
                 "data": {"status": "healthy", "total_rpc_methods": 123},
                 "error": "",
             }
+        if url.endswith("/location/status"):
+            return {
+                "ok": True,
+                "status_code": 200,
+                "latency_ms": 14,
+                "data": {
+                    "location": {
+                        "display_name": "Alexanderplatz, Berlin, Deutschland",
+                        "locality": "Berlin",
+                        "device_id": "pixel8",
+                        "user_scope": "primary",
+                        "presence_status": "live",
+                        "privacy_state": "enabled",
+                        "usable_for_context": True,
+                    },
+                    "controls": {
+                        "sharing_enabled": True,
+                        "context_enabled": True,
+                        "background_sync_allowed": True,
+                        "preferred_device_id": "pixel8",
+                        "allowed_user_scopes": ["primary"],
+                        "max_device_entries": 8,
+                    },
+                    "devices": [
+                        {
+                            "device_id": "pixel8",
+                            "user_scope": "primary",
+                            "presence_status": "live",
+                            "selected": True,
+                        }
+                    ],
+                    "device_count": 1,
+                    "selection_reason": "preferred_device",
+                    "active_device_id": "pixel8",
+                    "active_user_scope": "primary",
+                },
+                "error": "",
+            }
         if url.endswith("/readyz"):
             return {
                 "ok": True,
@@ -290,6 +328,9 @@ async def test_collect_status_snapshot_builds_agent_rows(monkeypatch):
     assert snapshot["self_healing"]["open_incidents"] == 1
     assert snapshot["self_hardening"]["last_event"] == "self_modify_finished"
     assert snapshot["self_hardening"]["metrics"]["self_modify_successes_total"] == 1
+    assert snapshot["location"]["active_device_id"] == "pixel8"
+    assert snapshot["location"]["location"]["presence_status"] == "live"
+    assert snapshot["location"]["controls"]["sharing_enabled"] is True
     assert snapshot["self_healing"]["circuit_breakers_open"] == 1
     assert snapshot["self_healing"]["open_breakers"][0]["component"] == "mcp"
     assert snapshot["self_healing"]["incidents"][0]["notification_state"] == "cooldown_active"

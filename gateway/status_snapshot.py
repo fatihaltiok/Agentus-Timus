@@ -488,6 +488,7 @@ async def collect_status_snapshot(mcp_base_url: str | None = None) -> Dict[str, 
             "mcp_health": asyncio.create_task(_fetch_local_json(client, f"{base_url}/health")),
             "agent_status": asyncio.create_task(_fetch_local_json(client, f"{base_url}/agent_status")),
             "autonomy_health": asyncio.create_task(_fetch_local_json(client, f"{base_url}/autonomy/health")),
+            "location_status": asyncio.create_task(_fetch_local_json(client, f"{base_url}/location/status")),
         }
         if qdrant_server_mode:
             local_tasks["qdrant_ready"] = asyncio.create_task(
@@ -578,6 +579,7 @@ async def collect_status_snapshot(mcp_base_url: str | None = None) -> Dict[str, 
         "services": services,
         "restart": _read_restart_status(),
         "local": local_results,
+        "location": (local_results.get("location_status", {}).get("data", {}) or {}),
         "providers": provider_results,
         "agents": _build_agent_rows(runtime_agents, provider_results),
         "usage": usage_summary,

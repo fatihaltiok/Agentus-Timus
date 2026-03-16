@@ -96,6 +96,8 @@ configure_chroma_runtime()
 # Runtime-Settings: Persistenz ohne Server-Neustart (wird in lifespan geladen)
 _RUNTIME_SETTINGS_PATH = project_root / "data" / "runtime_settings.json"
 _RUNTIME_LOCATION_SNAPSHOT_PATH = project_root / "data" / "runtime_location_snapshot.json"
+_RUNTIME_LOCATION_REGISTRY_PATH = project_root / "data" / "runtime_location_registry.json"
+_RUNTIME_LOCATION_CONTROLS_PATH = project_root / "data" / "runtime_location_controls.json"
 _RUNTIME_ROUTE_SNAPSHOT_PATH = project_root / "data" / "runtime_route_snapshot.json"
 
 # --- Lokale Module und Kontext importieren ---
@@ -115,6 +117,14 @@ from memory.semantic_backend_policy import normalize_semantic_memory_backend
 from utils.location_presence import (
     enrich_location_presence_snapshot,
     prepare_location_presence_snapshot,
+)
+from utils.location_registry import (
+    apply_location_controls_to_snapshot,
+    build_location_status_payload,
+    normalize_location_controls,
+    normalize_location_registry,
+    sync_mode_allowed,
+    update_location_registry,
 )
 from utils.location_route import prepare_route_snapshot
 from utils.location_reroute import assess_live_reroute, apply_live_reroute_metadata
@@ -145,6 +155,10 @@ _chat_history: list = []
 _chat_lock = threading.Lock()
 _location_snapshot: dict | None = None
 _location_snapshot_lock = threading.Lock()
+_location_registry: dict | None = None
+_location_registry_lock = threading.Lock()
+_location_controls: dict | None = None
+_location_controls_lock = threading.Lock()
 _route_snapshot: dict | None = None
 _route_snapshot_lock = threading.Lock()
 _SHUTDOWN_STEP_TIMEOUT_S = float(os.getenv("TIMUS_SHUTDOWN_STEP_TIMEOUT", "6"))
@@ -1045,6 +1059,14 @@ def _copy_location_snapshot(snapshot: dict | None) -> dict | None:
     return copy.deepcopy(snapshot) if snapshot else None
 
 
+def _copy_location_registry(payload: dict | None) -> dict | None:
+    return copy.deepcopy(payload) if payload else None
+
+
+def _copy_location_controls(payload: dict | None) -> dict | None:
+    return copy.deepcopy(payload) if payload else None
+
+
 def _copy_route_snapshot(snapshot: dict | None) -> dict | None:
     return copy.deepcopy(snapshot) if snapshot else None
 
@@ -1062,6 +1084,36 @@ def _load_location_snapshot_from_disk() -> None:
             log.info(f"✅ Runtime-Standort geladen: {_RUNTIME_LOCATION_SNAPSHOT_PATH}")
     except Exception as exc:
         log.warning(f"⚠️ Runtime-Standort konnte nicht geladen werden: {exc}")
+
+
+def _load_location_registry_from_disk() -> None:
+    global _location_registry
+    if not _RUNTIME_LOCATION_REGISTRY_PATH.exists():
+        return
+    try:
+        with open(_RUNTIME_LOCATION_REGISTRY_PATH) as handle:
+            payload = _json.load(handle)
+        normalized = normalize_location_registry(payload if isinstance(payload, dict) else {})
+        with _location_registry_lock:
+            _location_registry = normalized
+        log.info(f"✅ Runtime-Location-Registry geladen: {_RUNTIME_LOCATION_REGISTRY_PATH}")
+    except Exception as exc:
+        log.warning(f"⚠️ Runtime-Location-Registry konnte nicht geladen werden: {exc}")
+
+
+def _load_location_controls_from_disk() -> None:
+    global _location_controls
+    if not _RUNTIME_LOCATION_CONTROLS_PATH.exists():
+        return
+    try:
+        with open(_RUNTIME_LOCATION_CONTROLS_PATH) as handle:
+            payload = _json.load(handle)
+        normalized = normalize_location_controls(payload if isinstance(payload, dict) else {})
+        with _location_controls_lock:
+            _location_controls = normalized
+        log.info(f"✅ Runtime-Location-Controls geladen: {_RUNTIME_LOCATION_CONTROLS_PATH}")
+    except Exception as exc:
+        log.warning(f"⚠️ Runtime-Location-Controls konnten nicht geladen werden: {exc}")
 
 
 def _load_route_snapshot_from_disk() -> None:
@@ -1085,6 +1137,18 @@ def _persist_location_snapshot(snapshot: dict) -> None:
         _json.dump(snapshot, handle, indent=2, ensure_ascii=False)
 
 
+def _persist_location_registry(payload: dict) -> None:
+    _RUNTIME_LOCATION_REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(_RUNTIME_LOCATION_REGISTRY_PATH, "w") as handle:
+        _json.dump(payload, handle, indent=2, ensure_ascii=False)
+
+
+def _persist_location_controls(payload: dict) -> None:
+    _RUNTIME_LOCATION_CONTROLS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(_RUNTIME_LOCATION_CONTROLS_PATH, "w") as handle:
+        _json.dump(payload, handle, indent=2, ensure_ascii=False)
+
+
 def _persist_route_snapshot(snapshot: dict) -> None:
     _RUNTIME_ROUTE_SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(_RUNTIME_ROUTE_SNAPSHOT_PATH, "w") as handle:
@@ -1092,19 +1156,77 @@ def _persist_route_snapshot(snapshot: dict) -> None:
 
 
 def _set_location_snapshot(snapshot: dict) -> None:
-    global _location_snapshot
+    global _location_snapshot, _location_registry
+    controls = _get_location_controls()
+    max_entries = int((controls or {}).get("max_device_entries", 8) or 8)
+    registry = _get_location_registry()
+    updated_registry = update_location_registry(registry, snapshot, max_entries=max_entries)
+    status_payload = build_location_status_payload(
+        updated_registry,
+        controls,
+        fallback_snapshot=snapshot,
+    )
     with _location_snapshot_lock:
-        _location_snapshot = _copy_location_snapshot(snapshot)
-    _persist_location_snapshot(snapshot)
+        _location_snapshot = _copy_location_snapshot(status_payload.get("location") or snapshot)
+    with _location_registry_lock:
+        _location_registry = _copy_location_registry(updated_registry)
+    _persist_location_snapshot(status_payload.get("location") or snapshot)
+    _persist_location_registry(updated_registry)
+
+
+def _get_location_registry() -> dict:
+    with _location_registry_lock:
+        if _location_registry is not None:
+            return _copy_location_registry(_location_registry) or {"devices": [], "updated_at": ""}
+    _load_location_registry_from_disk()
+    with _location_registry_lock:
+        return _copy_location_registry(_location_registry) or {"devices": [], "updated_at": ""}
+
+
+def _set_location_controls(payload: dict) -> dict:
+    global _location_controls, _location_snapshot
+    normalized = normalize_location_controls(payload or {})
+    with _location_controls_lock:
+        _location_controls = _copy_location_controls(normalized)
+    _persist_location_controls(normalized)
+    status_payload = _build_location_status_payload()
+    with _location_snapshot_lock:
+        _location_snapshot = _copy_location_snapshot(status_payload.get("location"))
+    if status_payload.get("location"):
+        _persist_location_snapshot(status_payload["location"])
+    return normalized
+
+
+def _get_location_controls() -> dict:
+    with _location_controls_lock:
+        if _location_controls is not None:
+            return _copy_location_controls(_location_controls) or normalize_location_controls({})
+    _load_location_controls_from_disk()
+    with _location_controls_lock:
+        return _copy_location_controls(_location_controls) or normalize_location_controls({})
+
+
+def _build_location_status_payload() -> dict:
+    registry = _get_location_registry()
+    controls = _get_location_controls()
+    fallback_snapshot = None
+    with _location_snapshot_lock:
+        if _location_snapshot is not None:
+            fallback_snapshot = _copy_location_snapshot(_location_snapshot)
+    if not fallback_snapshot:
+        _load_location_snapshot_from_disk()
+        with _location_snapshot_lock:
+            fallback_snapshot = _copy_location_snapshot(_location_snapshot)
+    return build_location_status_payload(
+        registry,
+        controls,
+        fallback_snapshot=fallback_snapshot,
+    )
 
 
 def _get_location_snapshot() -> dict | None:
-    with _location_snapshot_lock:
-        if _location_snapshot is not None:
-            return enrich_location_presence_snapshot(_copy_location_snapshot(_location_snapshot))
-    _load_location_snapshot_from_disk()
-    with _location_snapshot_lock:
-        return enrich_location_presence_snapshot(_copy_location_snapshot(_location_snapshot))
+    payload = _build_location_status_payload()
+    return apply_location_controls_to_snapshot(payload.get("location"), payload.get("controls"))
 
 
 def _set_route_snapshot(snapshot: dict) -> None:
@@ -1137,7 +1259,7 @@ async def _maybe_live_reroute_active_route(location_snapshot: dict) -> dict:
     if not _location_live_reroute_enabled():
         return {"reroute_triggered": False, "reason": "disabled"}
 
-    enriched_location = enrich_location_presence_snapshot(location_snapshot) or {}
+    enriched_location = apply_location_controls_to_snapshot(location_snapshot, _get_location_controls()) or {}
     route_snapshot = _get_route_snapshot()
     decision = assess_live_reroute(
         route_snapshot,
@@ -1876,6 +1998,8 @@ async def lifespan(app: FastAPI):
         except Exception as _e:
             log.warning(f"⚠️ Runtime-Settings konnten nicht geladen werden: {_e}")
 
+    _load_location_controls_from_disk()
+    _load_location_registry_from_disk()
     _load_location_snapshot_from_disk()
 
     # Canvas-MVP Bootstrap (best effort)
@@ -2940,9 +3064,55 @@ async def update_setting(request: Request):
 async def location_status_endpoint():
     """Liefert den zuletzt normalisierten Standort-Snapshot, falls vorhanden."""
     try:
-        return {"status": "success", "location": _get_location_snapshot()}
+        payload = _build_location_status_payload()
+        return {"status": "success", **payload}
     except Exception as e:
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.get("/location/control", summary="Standort-Kontrolle und Privacy-Status abrufen")
+async def location_control_status_endpoint():
+    try:
+        payload = _build_location_status_payload()
+        return {
+            "status": "success",
+            "controls": payload.get("controls"),
+            "device_count": payload.get("device_count", 0),
+            "active_device_id": payload.get("active_device_id", ""),
+            "active_user_scope": payload.get("active_user_scope", ""),
+            "selection_reason": payload.get("selection_reason", ""),
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.post("/location/control", summary="Standort-Kontrolle und Privacy-Flags setzen")
+async def location_control_update_endpoint(request: Request):
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"status": "error", "error": "invalid_json"})
+
+    allowed = {
+        "sharing_enabled",
+        "context_enabled",
+        "background_sync_allowed",
+        "preferred_device_id",
+        "allowed_user_scopes",
+        "max_device_entries",
+    }
+    unexpected = [key for key in dict(payload or {}).keys() if key not in allowed]
+    if unexpected:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "error": f"unexpected_keys: {', '.join(unexpected)}"},
+        )
+    try:
+        controls = _set_location_controls(payload or {})
+        payload = _build_location_status_payload()
+        return {"status": "success", "controls": controls, "location": payload.get("location"), "device_count": payload.get("device_count", 0)}
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"status": "error", "error": str(e)})
 
 
 @app.post("/location/resolve", summary="Mobil-Standort normalisieren und speichern")
@@ -2955,12 +3125,25 @@ async def location_resolve_endpoint(request: Request):
 
     try:
         snapshot = _normalize_location_snapshot(payload or {})
+        controls = _get_location_controls()
+        sync_mode = str((payload or {}).get("sync_mode") or "foreground").strip().lower() or "foreground"
+        if not sync_mode_allowed(sync_mode, controls):
+            status_payload = _build_location_status_payload()
+            return {
+                "status": "success",
+                "stored": False,
+                "location": status_payload.get("location"),
+                "route_update": {"reroute_triggered": False, "reason": "background_sync_blocked"},
+                "controls": controls,
+            }
         _set_location_snapshot(snapshot)
         route_update = await _maybe_live_reroute_active_route(snapshot)
         return {
             "status": "success",
-            "location": enrich_location_presence_snapshot(snapshot),
+            "stored": True,
+            "location": _get_location_snapshot(),
             "route_update": route_update,
+            "controls": controls,
         }
     except Exception as e:
         return JSONResponse(status_code=400, content={"status": "error", "error": f"invalid_location_payload: {e}"})

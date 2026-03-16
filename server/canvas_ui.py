@@ -1509,6 +1509,20 @@ _TEMPLATE = r"""<!doctype html>
     .mobile-pill.warn  { border-color: rgba(251,191,36,0.26); box-shadow: inset 0 0 0 1px rgba(251,191,36,0.06); }
     .mobile-pill.error { border-color: rgba(244,63,94,0.26); box-shadow: inset 0 0 0 1px rgba(244,63,94,0.06); }
     .mobile-pill.info  { border-color: rgba(0,212,240,0.24); box-shadow: inset 0 0 0 1px rgba(0,212,240,0.05); }
+    .mobile-location-strip {
+      margin-top: 10px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      border: 1px solid rgba(0,212,240,0.12);
+      background: rgba(0,212,240,0.05);
+      font-size: 11px;
+      line-height: 1.5;
+      color: var(--text2);
+    }
+    .mobile-location-strip strong {
+      color: var(--text);
+      font-weight: 600;
+    }
     .mobile-status-shell {
       display: none;
     }
@@ -2387,6 +2401,9 @@ _TEMPLATE = r"""<!doctype html>
             <button class="mobile-hero-action" id="mobileHeroFilesBtn" onclick="setMobileSection('files')">
               Dateien
             </button>
+          </div>
+          <div class="mobile-location-strip" id="mobileLocationStrip">
+            <strong>Standort:</strong> Lade aktives Gerät und Privacy-Status…
           </div>
         </div>
         <div class="route-stage" id="routeStage">
@@ -3338,6 +3355,9 @@ function applyMobileCanvasSummary(items) {
 function applyMobileSnapshot(snapshot) {
   lastStatusSnapshot = snapshot || {};
   const services = lastStatusSnapshot.services || {};
+  const locationSummary = lastStatusSnapshot.location || {};
+  const activeLocation = locationSummary.location || {};
+  const locationControls = locationSummary.controls || {};
   const opsGate = lastStatusSnapshot.ops_gate || {};
   const budget = lastStatusSnapshot.budget || {};
   const selfHealing = lastStatusSnapshot.self_healing || {};
@@ -3443,6 +3463,17 @@ function applyMobileSnapshot(snapshot) {
 
   const chatSessionEl = document.getElementById("mobileChatSession");
   if (chatSessionEl) chatSessionEl.textContent = chatSessionId;
+
+  const locationStripEl = document.getElementById("mobileLocationStrip");
+  if (locationStripEl) {
+    const locality = activeLocation.locality || activeLocation.display_name || "unbekannt";
+    const deviceId = activeLocation.device_id || locationSummary.active_device_id || "–";
+    const presence = activeLocation.presence_status || "unknown";
+    const accuracy = activeLocation.accuracy_meters != null ? `${activeLocation.accuracy_meters} m` : "–";
+    const sharing = locationControls.sharing_enabled === false ? "off" : "on";
+    const context = locationControls.context_enabled === false ? "off" : "on";
+    locationStripEl.innerHTML = `<strong>Standort:</strong> ${esc(locality)} · ${esc(deviceId)} · ${esc(presence)} · Genauigkeit ${esc(accuracy)} · Sharing ${esc(sharing)} · Kontext ${esc(context)}`;
+  }
 }
 
 async function loadMobileSnapshot() {

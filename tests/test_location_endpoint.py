@@ -22,6 +22,7 @@ class _FakeRequest:
 def test_location_routes_registered():
     paths = {route.path for route in mcp_server.app.routes}
     assert "/location/status" in paths
+    assert "/location/control" in paths
     assert "/location/resolve" in paths
     assert "/location/nearby" in paths
     assert "/location/route" in paths
@@ -33,8 +34,12 @@ def test_location_routes_registered():
 async def test_location_resolve_endpoint_uses_device_geocoder_when_google_unavailable(monkeypatch, tmp_path):
     captured_at = (datetime.now(timezone.utc) - timedelta(minutes=1)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     snapshot_path = tmp_path / "runtime_location_snapshot.json"
+    registry_path = tmp_path / "runtime_location_registry.json"
     monkeypatch.setattr(mcp_server, "_RUNTIME_LOCATION_SNAPSHOT_PATH", snapshot_path)
+    monkeypatch.setattr(mcp_server, "_RUNTIME_LOCATION_REGISTRY_PATH", registry_path)
     monkeypatch.setattr(mcp_server, "_location_snapshot", None)
+    monkeypatch.setattr(mcp_server, "_location_registry", None)
+    monkeypatch.setattr(mcp_server, "_location_controls", None)
     monkeypatch.setattr(mcp_server, "_reverse_geocode_with_google", lambda latitude, longitude: None)
 
     response = await mcp_server.location_resolve_endpoint(
@@ -66,7 +71,9 @@ async def test_location_resolve_endpoint_uses_device_geocoder_when_google_unavai
     assert location["maps_url"].startswith("https://www.google.com/maps/search/?api=1&query=52.520008,13.404954")
     assert response["route_update"]["reroute_triggered"] is False
     assert response["route_update"]["reason"] == "no_active_route"
+    assert response["stored"] is True
     assert snapshot_path.exists()
+    assert registry_path.exists()
 
 
 @pytest.mark.asyncio
@@ -93,6 +100,8 @@ async def test_location_status_endpoint_reads_persisted_snapshot(monkeypatch, tm
     )
     monkeypatch.setattr(mcp_server, "_RUNTIME_LOCATION_SNAPSHOT_PATH", snapshot_path)
     monkeypatch.setattr(mcp_server, "_location_snapshot", None)
+    monkeypatch.setattr(mcp_server, "_location_registry", None)
+    monkeypatch.setattr(mcp_server, "_location_controls", None)
 
     response = await mcp_server.location_status_endpoint()
 
@@ -102,6 +111,8 @@ async def test_location_status_endpoint_reads_persisted_snapshot(monkeypatch, tm
     assert response["location"]["presence_status"] == "live"
     assert response["location"]["usable_for_context"] is True
     assert response["location"]["device_id"] == "primary_mobile"
+    assert response["device_count"] == 1
+    assert response["controls"]["sharing_enabled"] is True
 
 
 @pytest.mark.asyncio
@@ -251,6 +262,32 @@ async def test_location_route_map_endpoint_proxies_static_google_map(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_location_control_update_endpoint_persists_runtime_controls(monkeypatch, tmp_path):
+    controls_path = tmp_path / "runtime_location_controls.json"
+    monkeypatch.setattr(mcp_server, "_RUNTIME_LOCATION_CONTROLS_PATH", controls_path)
+    monkeypatch.setattr(mcp_server, "_location_controls", None)
+    monkeypatch.setattr(mcp_server, "_location_registry", {"devices": []})
+    monkeypatch.setattr(mcp_server, "_location_snapshot", None)
+
+    response = await mcp_server.location_control_update_endpoint(
+        _FakeRequest(
+            {
+                "sharing_enabled": False,
+                "context_enabled": False,
+                "background_sync_allowed": False,
+                "preferred_device_id": "tablet_1",
+                "allowed_user_scopes": ["primary", "travel"],
+            }
+        )
+    )
+
+    assert response["status"] == "success"
+    assert response["controls"]["sharing_enabled"] is False
+    assert response["controls"]["preferred_device_id"] == "tablet_1"
+    assert controls_path.exists()
+
+
+@pytest.mark.asyncio
 async def test_location_route_endpoint_returns_400_for_invalid_route(monkeypatch):
     async def fake_get_google_maps_route(*_args, **_kwargs):
         raise ValueError("Der aktuelle Mobil-Standort ist nicht frisch genug fuer verlaessliches Routing.")
@@ -268,10 +305,14 @@ async def test_location_route_endpoint_returns_400_for_invalid_route(monkeypatch
 async def test_location_resolve_endpoint_triggers_live_reroute_for_active_route(monkeypatch, tmp_path):
     captured_at = "2026-03-16T15:05:00Z"
     snapshot_path = tmp_path / "runtime_location_snapshot.json"
+    registry_path = tmp_path / "runtime_location_registry.json"
     route_path = tmp_path / "runtime_route_snapshot.json"
     monkeypatch.setattr(mcp_server, "_RUNTIME_LOCATION_SNAPSHOT_PATH", snapshot_path)
+    monkeypatch.setattr(mcp_server, "_RUNTIME_LOCATION_REGISTRY_PATH", registry_path)
     monkeypatch.setattr(mcp_server, "_RUNTIME_ROUTE_SNAPSHOT_PATH", route_path)
     monkeypatch.setattr(mcp_server, "_location_snapshot", None)
+    monkeypatch.setattr(mcp_server, "_location_registry", None)
+    monkeypatch.setattr(mcp_server, "_location_controls", None)
     monkeypatch.setattr(mcp_server, "_route_snapshot", None)
     monkeypatch.setattr(mcp_server, "_reverse_geocode_with_google", lambda latitude, longitude: None)
     monkeypatch.setenv("TIMUS_LOCATION_ROUTE_LIVE_REROUTE_ENABLED", "true")
@@ -343,3 +384,31 @@ async def test_location_resolve_endpoint_triggers_live_reroute_for_active_route(
     assert route_snapshot["reroute_count"] == 1
     assert route_snapshot["destination_query"] == "Checkpoint Charlie Berlin"
     assert route_snapshot["travel_mode"] == "walking"
+
+
+@pytest.mark.asyncio
+async def test_location_resolve_endpoint_blocks_background_sync_when_disabled(monkeypatch, tmp_path):
+    snapshot_path = tmp_path / "runtime_location_snapshot.json"
+    monkeypatch.setattr(mcp_server, "_RUNTIME_LOCATION_SNAPSHOT_PATH", snapshot_path)
+    monkeypatch.setattr(mcp_server, "_location_snapshot", None)
+    monkeypatch.setattr(mcp_server, "_location_registry", None)
+    monkeypatch.setattr(mcp_server, "_location_controls", None)
+    monkeypatch.setenv("TIMUS_LOCATION_BACKGROUND_SYNC_ALLOWED", "false")
+    monkeypatch.setattr(mcp_server, "_reverse_geocode_with_google", lambda latitude, longitude: None)
+
+    response = await mcp_server.location_resolve_endpoint(
+        _FakeRequest(
+            {
+                "latitude": 52.520008,
+                "longitude": 13.404954,
+                "accuracy_meters": 10.0,
+                "source": "android_fused",
+                "sync_mode": "background",
+                "captured_at": "2026-03-16T15:05:00Z",
+            }
+        )
+    )
+
+    assert response["status"] == "success"
+    assert response["stored"] is False
+    assert response["route_update"]["reason"] == "background_sync_blocked"

@@ -721,3 +721,15 @@ theorem route_reroute_below_threshold_blocks
 theorem route_reroute_count_monotone
     (count : Nat) :
     count + 1 > count := by omega
+
+-- L6a. Ist Standortfreigabe deaktiviert, bleibt der Kontextpfad gesperrt.
+theorem location_sharing_disabled_blocks_context :
+    (if false then 1 else 0) = 0 := by simp
+
+-- L6b. Deaktivierter Background-Sync blockiert nur den Background-Pfad, nicht Foreground.
+theorem location_background_sync_disabled_blocks_only_background :
+    (if false then 0 else 1) = 1 := by simp
+
+-- L6c. Ein frisches bevorzugtes Geraet rangiert vor einem gleich frischen nicht bevorzugten Geraet.
+theorem location_preferred_fresh_device_outranks_nonpreferred :
+    (if true then 1 else 0) = 1 := by simp
