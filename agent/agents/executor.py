@@ -61,6 +61,17 @@ _SELF_RECALL_PATTERNS = (
     r"\bnochmal erklär\b",
 )
 
+_CAPABILITY_LEARNING_PATTERNS = (
+    r"\bk[oö]nntest du dir das beibringen\b",
+    r"\bk[oö]nntest du das lernen\b",
+    r"\bwie k[oö]nntest du das lernen\b",
+    r"\bwie k[oö]nntest du dir das beibringen\b",
+    r"\bwas br[aä]uchtest du daf[uü]r\b",
+    r"\bwas m[uü]sstest du daf[uü]r haben\b",
+    r"\bwie w[uü]rde das gehen\b",
+    r"\bkannst du dir das aneignen\b",
+)
+
 _YOUTUBE_GENERIC_PATTERNS = (
     r"^hey\s+timus[, ]*",
     r"^herr\s+thimus[, ]*",
@@ -228,6 +239,15 @@ class ExecutorAgent(BaseAgent):
         text = str(task_text or "").strip()
         if not text:
             return ""
+        original_user_match = re.search(
+            r"^\s*-\s*original_user_task:\s*(.+?)(?=^\s*-\s*[a-z_]+:|\n\s*#\s*task\b|\Z)",
+            text,
+            flags=re.IGNORECASE | re.DOTALL | re.MULTILINE,
+        )
+        if original_user_match:
+            recovered = original_user_match.group(1).strip()
+            if recovered:
+                text = recovered
         current_query_match = re.search(
             r"#\s*current user query\s*(.+)$",
             text,
@@ -241,7 +261,18 @@ class ExecutorAgent(BaseAgent):
         if match:
             recovered = match.group(1).strip()
             if recovered:
-                return recovered
+                text = recovered
+        text = re.sub(
+            (
+                r"^\s*#\s*live location context\b.*?"
+                r"(?:use this location only for nearby, routing, navigation, or explicit place-context tasks\.?\s*|(?=\n\s*\n)|\Z)"
+            ),
+            "",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        ).strip()
+        if text:
+            return text
         lowered = text.lower()
         if lowered.startswith("antworte ausschliesslich auf deutsch") or lowered.startswith(
             "antworte ausschließlich auf deutsch"
@@ -531,7 +562,6 @@ class ExecutorAgent(BaseAgent):
         except Exception:
             return
 
-
     @staticmethod
     def _is_smalltalk_query(task: str) -> bool:
         normalized = str(task or "").strip().lower()
@@ -605,6 +635,15 @@ class ExecutorAgent(BaseAgent):
         if ("erklaer" in normalized or "erklär" in normalized) and "mit " in normalized:
             return True
         return False
+
+    @staticmethod
+    def _is_capability_learning_query(task: str) -> bool:
+        normalized = str(task or "").strip().lower()
+        if not normalized:
+            return False
+        if len(normalized.split()) > 20:
+            return False
+        return any(re.search(pattern, normalized) for pattern in _CAPABILITY_LEARNING_PATTERNS)
 
     @classmethod
     def _format_ops_self_status(cls, ops: dict[str, Any]) -> str:
@@ -776,6 +815,55 @@ class ExecutorAgent(BaseAgent):
             return f"Mit {focus} war gemeint: {primary}"
 
         return f"Damit war gemeint: {primary}"
+
+    @classmethod
+    def _format_capability_learning_response(
+        cls,
+        user_task: str,
+        recall_lines: list[str],
+        session_summary: str = "",
+    ) -> str:
+        basis = " ".join(str(line or "").strip() for line in recall_lines if str(line or "").strip())
+        if not basis and session_summary:
+            basis = str(session_summary or "").strip()
+        lowered = basis.lower()
+
+        requirements: list[str] = []
+        if any(token in lowered for token in ("lieferplattform", "lieferservice", "pizza", "bestellen")):
+            requirements.append("eine echte Integration zu Lieferplattformen oder einen freigegebenen Browser-Bestellworkflow")
+        if "zugang" in lowered:
+            requirements.append("autorisierten Zugriff auf die benoetigten Bestellplattformen")
+        if "zahlungsdaten" in lowered or "zahlung" in lowered:
+            requirements.append("eine sichere Zahlungsfreigabe oder hinterlegte Zahlungsdaten")
+        if "lieferadresse" in lowered or ("adresse" in lowered and "mail" not in lowered):
+            requirements.append("eine bestaetigte Lieferadresse")
+
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for item in requirements:
+            key = item.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+
+        if not deduped:
+            deduped = [
+                "die passende externe Integration oder API",
+                "die dafuer noetigen Freigaben und Nutzerdaten",
+                "einen kontrollierten Ausfuehrungsweg fuer echte Bestellungen",
+            ]
+
+        lines = [
+            "Ja, theoretisch schon, aber nicht einfach spontan aus mir selbst heraus.",
+            "Dafuer bräuchte ich mindestens:",
+        ]
+        for item in deduped[:4]:
+            lines.append(f"- {item}")
+        lines.append(
+            "Kurz: Ich koennte so eine Faehigkeit nur ueber neue Integrationen, Freigaben und einen sicheren Bestellpfad bekommen, nicht durch blosses 'Selbstlernen' im laufenden Chat."
+        )
+        return "\n".join(lines)
 
     @staticmethod
     def _infer_youtube_search_query(user_task: str) -> str:
@@ -1030,6 +1118,10 @@ class ExecutorAgent(BaseAgent):
             or ""
         )
         user_task = self._recover_user_query(source_task)
+        if not analyze_location_local_intent(user_task).is_location_relevant and task_text:
+            recovered_from_task = self._recover_user_query(task_text)
+            if analyze_location_local_intent(recovered_from_task).is_location_relevant:
+                user_task = recovered_from_task
         location_result = await self._call_tool("get_current_location_context", {})
         if isinstance(location_result, dict) and location_result.get("error"):
             return f"Ich konnte den aktuellen Standort nicht laden: {location_result['error']}"
@@ -1097,6 +1189,10 @@ class ExecutorAgent(BaseAgent):
             or ""
         )
         user_task = self._recover_user_query(source_task)
+        if not analyze_location_route_intent(user_task).is_route_request and task_text:
+            recovered_from_task = self._recover_user_query(task_text)
+            if analyze_location_route_intent(recovered_from_task).is_route_request:
+                user_task = recovered_from_task
         destination_query = str(handoff.handoff_data.get("destination_query") or "").strip()
         travel_mode = normalize_route_travel_mode(str(handoff.handoff_data.get("travel_mode") or "driving"))
         if not destination_query:
@@ -1158,7 +1254,6 @@ class ExecutorAgent(BaseAgent):
             )
         self._activate_route_snapshot(route_payload)
         return self._format_route_response(route=route_payload)
-
 
     async def _run_youtube_light_research(self, handoff: DelegationHandoff) -> str:
         raw_task = (
@@ -1355,6 +1450,15 @@ class ExecutorAgent(BaseAgent):
             )
             if formatted_recall:
                 return formatted_recall
+        if not handoff and self._is_capability_learning_query(plain_task):
+            capability_basis = topic_recall or recent_assistant_replies or semantic_recall
+            formatted_capability = self._format_capability_learning_response(
+                plain_task,
+                capability_basis,
+                session_summary=session_summary,
+            )
+            if formatted_capability:
+                return formatted_capability
         if not handoff and topic_recall and self._is_topic_followup_query(plain_task):
             self._record_conversation_recall(
                 session_id=followup_session_id,

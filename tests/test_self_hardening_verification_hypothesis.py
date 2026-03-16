@@ -30,3 +30,24 @@ def test_hypothesis_classify_self_hardening_verification_status_is_bounded(
         "error",
         "not_run",
     }
+
+
+@given(
+    st.text(max_size=20),
+    st.lists(st.text(min_size=1, max_size=20), max_size=3),
+    st.lists(st.text(min_size=1, max_size=40), max_size=3),
+)
+@settings(max_examples=80)
+def test_hypothesis_classify_self_hardening_verification_required_matches_inputs(
+    result_status: str,
+    required_checks: list[str],
+    required_test_targets: list[str],
+) -> None:
+    decision = _contract_classify_self_hardening_verification_status(
+        result_status,
+        "",
+        "",
+        tuple(required_checks),
+        tuple(required_test_targets),
+    )
+    assert decision.verification_required == bool(required_checks or required_test_targets)

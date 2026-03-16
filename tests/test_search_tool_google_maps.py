@@ -221,3 +221,69 @@ async def test_get_google_maps_route_rejects_stale_origin(monkeypatch, tmp_path)
 
     with pytest.raises(ValueError, match="nicht frisch genug"):
         await search_tool_module.get_google_maps_route("Checkpoint Charlie Berlin")
+
+
+@pytest.mark.asyncio
+async def test_get_google_maps_route_retries_with_split_in_prefix_variant(monkeypatch, tmp_path):
+    captured_at = (datetime.now(timezone.utc) - timedelta(minutes=2)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    snapshot_path = tmp_path / "runtime_location_snapshot.json"
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "latitude": 50.1002853,
+                "longitude": 8.7787283,
+                "display_name": "Flutstraße 33, 63071 Offenbach am Main, Deutschland",
+                "locality": "Offenbach am Main",
+                "country_name": "Deutschland",
+                "captured_at": captured_at,
+                "maps_url": "https://www.google.com/maps/search/?api=1&query=50.1002853,8.7787283",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(search_tool_module, "_RUNTIME_LOCATION_SNAPSHOT_PATH", snapshot_path)
+    monkeypatch.setattr(search_tool_module, "SERPAPI_API_KEY", "serp-test-key")
+
+    attempted: list[str] = []
+
+    def fake_serpapi(params, timeout=45):
+        attempted.append(params["end_addr"])
+        if params["end_addr"] == "praunheim infrankfurt":
+            raise requests.HTTPError("400 Client Error: Bad Request for url: test")
+        return {
+            "directions": [
+                {
+                    "summary": "Schnellste Route",
+                    "distance": {"text": "18,2 km"},
+                    "duration": {"text": "22 Min."},
+                    "legs": [
+                        {
+                            "start_address": "Offenbach am Main",
+                            "end_address": "Praunheim, Frankfurt am Main",
+                            "distance": {"text": "18,2 km"},
+                            "duration": {"text": "22 Min."},
+                            "steps": [
+                                {
+                                    "html_instructions": "Auf die A66 fahren",
+                                    "distance": {"text": "4,0 km"},
+                                    "duration": {"text": "5 Min."},
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+
+    monkeypatch.setattr(search_tool_module, "_call_serpapi_json", fake_serpapi)
+
+    result = await search_tool_module.get_google_maps_route(
+        destination_query="praunheim infrankfurt",
+        travel_mode="driving",
+        language_code="de",
+    )
+
+    assert attempted == ["praunheim infrankfurt", "praunheim in frankfurt", "praunheim frankfurt"][: len(attempted)]
+    assert result["requested_destination_query"] == "praunheim infrankfurt"
+    assert result["destination_query"] in {"praunheim in frankfurt", "praunheim frankfurt"}
+    assert result["duration_text"] == "22 Min."

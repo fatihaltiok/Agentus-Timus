@@ -31,6 +31,11 @@ def test_build_canvas_ui_html_contains_core_sections():
     assert "refreshMobileOperationalData" in html
     assert "mobileHeroRefreshBtn" in html
     assert "mobile-bottom-nav" in html
+    assert "Conversation Capsule" in html
+    assert "Location API" in html
+    assert "Self-Modification" in html
+    assert "Qdrant" in html
+    assert "Evidence Gate" in html
 
 
 def test_canvas_ui_route_registered():

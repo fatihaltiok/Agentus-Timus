@@ -68,6 +68,29 @@ def _build_live_location_context_block() -> str:
     )
 
 
+def _build_executor_route_task_with_multiline_original_task(original_task: str) -> str:
+    return "\n".join(
+        [
+            "# DELEGATION HANDOFF",
+            "target_agent: executor",
+            "goal: Nutze den aktuellen Mobil-Standort und Google Maps fuer eine Route.",
+            "expected_output: route_summary, eta, distance, steps, route_url",
+            "success_signal: Stage 'location_route_plan' erfolgreich abgeschlossen",
+            "constraints: folge_dem_rezept_und_erfinde_keine_neuen_stages",
+            "handoff_data:",
+            "- task_type: location_route",
+            "- recipe_id: location_route",
+            "- stage_id: location_route_plan",
+            f"- original_user_task: {_build_live_location_context_block()}",
+            "",
+            original_task,
+            "",
+            "# TASK",
+            "Nutze den aktuellen Mobil-Standort und Google Maps fuer eine Route.",
+        ]
+    )
+
+
 @pytest.mark.asyncio
 async def test_executor_location_strategy_returns_location_only(monkeypatch):
     from agent.agents.executor import ExecutorAgent
@@ -410,3 +433,46 @@ async def test_executor_location_route_uses_injected_live_location_context_when_
     assert calls[1][0] == "get_google_maps_route"
     assert "Route nach Hanau, Deutschland ist erstellt." in result
     assert "26 min" in result
+
+
+@pytest.mark.asyncio
+async def test_executor_location_route_recovers_multiline_original_user_task_with_live_context(monkeypatch):
+    from agent.agents.executor import ExecutorAgent
+    from agent.base_agent import BaseAgent
+
+    calls: list[tuple[str, dict]] = []
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        calls.append((method, dict(params)))
+        if method == "get_current_location_context":
+            return {"status": "success", "data": {"has_location": False, "location": None}}
+        assert method == "get_google_maps_route"
+        assert params["destination_query"] == "hanau"
+        assert params["latitude"] == pytest.approx(50.1002421)
+        assert params["longitude"] == pytest.approx(8.778806)
+        return {
+            "status": "success",
+            "data": {
+                "destination_query": "hanau",
+                "destination_label": "Hanau, Deutschland",
+                "travel_mode": "driving",
+                "distance_text": "18.1 km",
+                "duration_text": "26 min",
+                "start_address": "Flutstraße 37, 63071 Offenbach am Main, Deutschland",
+                "end_address": "Hanau, Deutschland",
+                "route_url": "https://www.google.com/maps/dir/?api=1&origin=50.1002421,8.778806&destination=hanau&travelmode=driving",
+                "steps": [],
+            },
+        }
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = ExecutorAgent.__new__(ExecutorAgent)
+    result = await ExecutorAgent.run(
+        agent,
+        _build_executor_route_task_with_multiline_original_task("zeig mir den weg nach hanau"),
+    )
+
+    assert calls[0][0] == "get_current_location_context"
+    assert calls[1][1]["destination_query"] == "hanau"
+    assert "Route nach Hanau, Deutschland ist erstellt." in result

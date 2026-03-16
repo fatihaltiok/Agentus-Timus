@@ -319,3 +319,27 @@ async def test_executor_explains_topic_recall_without_llm(monkeypatch):
     assert "Klar." in result
     assert "kamera" in result.lower()
     assert "/dev/video" in result
+
+
+@pytest.mark.asyncio
+async def test_executor_answers_capability_followup_without_llm(monkeypatch):
+    from agent.agents.executor import ExecutorAgent
+    from agent.base_agent import BaseAgent
+
+    async def _unexpected_run(self, task: str):
+        raise AssertionError("BaseAgent.run darf fuer Capability-Follow-up nicht aufgerufen werden")
+
+    monkeypatch.setattr(BaseAgent, "run", _unexpected_run)
+
+    agent = ExecutorAgent.__new__(ExecutorAgent)
+    result = await ExecutorAgent.run(
+        agent,
+        "# FOLLOW-UP CONTEXT\nlast_agent: meta\nsession_id: pizza_lane\n"
+        "recent_assistant_replies: Nein, ich kann keine Pizza bestellen. Ich habe keinen Zugang zu Lieferplattformen, keine Zahlungsdaten und keine Lieferadresse.\n\n"
+        "# CURRENT USER QUERY\nkönntest du dir das beibringen irgendwie",
+    )
+
+    assert "theoretisch" in result.lower()
+    assert "lieferplattformen" in result.lower() or "lieferplattformen" in result
+    assert "zahlungs" in result.lower()
+    assert "lieferadresse" in result.lower()
