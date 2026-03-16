@@ -33,6 +33,8 @@ def test_record_self_hardening_event_updates_metrics_and_summary(tmp_path: Path)
         requested_fix_mode="developer_task",
         execution_mode="developer_task",
         route_target="development",
+        rollout_stage="developer_only",
+        rollout_reason="rollout_developer_only",
         task_id="task-1",
         required_checks=["py_compile"],
         required_test_targets=["tests/test_demo.py"],
@@ -48,6 +50,8 @@ def test_record_self_hardening_event_updates_metrics_and_summary(tmp_path: Path)
     assert summary["last_route_target"] == "development"
     assert summary["last_pattern_effective_fix_mode"] == "developer_task"
     assert summary["last_pattern_freeze_active"] is False
+    assert summary["last_rollout_stage"] == "developer_only"
+    assert summary["last_rollout_reason"] == "rollout_developer_only"
     assert summary["last_verification_status"] == "planned"
     assert summary["last_required_checks"] == ["py_compile"]
     assert summary["last_required_test_targets"] == ["tests/test_demo.py"]

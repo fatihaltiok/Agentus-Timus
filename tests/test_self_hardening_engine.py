@@ -402,6 +402,19 @@ class TestCreateHardeningTask:
         assert task_id is None
         mock_queue.add.assert_not_called()
 
+    def test_create_hardening_task_rollout_observe_only_blocks_task_bridge(self, monkeypatch):
+        monkeypatch.setenv("AUTONOMY_SELF_HARDENING_ROLLOUT_STAGE", "observe_only")
+        engine = _make_engine()
+        proposal = _make_proposal()
+
+        mock_queue = MagicMock()
+
+        with patch("orchestration.task_queue.get_queue", return_value=mock_queue):
+            task_id = engine._create_hardening_task(proposal, goal_id="goal-1")
+
+        assert task_id is None
+        mock_queue.add.assert_not_called()
+
     def test_create_hardening_task_dedupes_open_pending_task(self):
         engine = _make_engine()
         proposal = _make_proposal()
@@ -420,6 +433,26 @@ class TestCreateHardeningTask:
 
         assert task_id is None
         mock_queue.add.assert_not_called()
+
+    def test_create_hardening_task_rollout_developer_only_downgrades_self_modify_route(self, monkeypatch):
+        monkeypatch.setenv("AUTONOMY_SELF_HARDENING_ROLLOUT_STAGE", "developer_only")
+        engine = _make_engine()
+        proposal = _make_proposal(pattern_name="narrative_synthesis_empty", severity="medium")
+        proposal.fix_mode = "self_modify_safe"
+        proposal.target_file_path = "tools/deep_research/tool.py"
+        proposal.change_type = "report_quality_guardrails"
+
+        mock_queue = MagicMock()
+        mock_queue.get_all.return_value = []
+        mock_queue.add.return_value = "task-dev-rollout"
+
+        with patch("orchestration.task_queue.get_queue", return_value=mock_queue):
+            task_id = engine._create_hardening_task(proposal, goal_id="goal-rollout")
+
+        assert task_id == "task-dev-rollout"
+        _, kwargs = mock_queue.add.call_args
+        assert kwargs["target_agent"] == "development"
+        assert "\"rollout_stage\": \"developer_only\"" in kwargs["metadata"]
 
 
 # ── Multi-Unit Journal ───────────────────────────────────────────────────────

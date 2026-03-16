@@ -26,6 +26,7 @@ def test_hypothesis_self_hardening_execution_bounds(
         recommended_agent,
         target_file_path,
         change_type,
+        "",
     )
     assert result.route_target in {"", "development", "self_modify"}
     assert result.effective_fix_mode in {"observe_only", "developer_task", "self_modify_safe", "human_only"}

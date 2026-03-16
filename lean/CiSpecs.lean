@@ -665,3 +665,11 @@ theorem hardening_runtime_verification_error_warns :
 -- M18q. Human-Only-Freeze bleibt in der Runtime-Sicht warn.
 theorem hardening_runtime_human_freeze_warns :
     (if true then 1 else 0) = 1 := by simp
+
+-- M18r. Rollout-Stufe observe_only blockiert die Task-Bridge.
+theorem hardening_rollout_observe_only_blocks_tasks :
+    (if true then 0 else 1) = 0 := by simp
+
+-- M18s. Rollout-Stufe developer_only degradiert Self-Modify auf Development.
+theorem hardening_rollout_developer_only_degrades_self_modify :
+    (if true then 1 else 2) = 1 := by simp

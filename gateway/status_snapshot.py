@@ -450,6 +450,8 @@ def _build_self_hardening_summary() -> Dict[str, Any]:
             "last_execution_mode": "",
             "last_route_target": "",
             "last_reason": "",
+            "last_rollout_stage": "self_modify_safe",
+            "last_rollout_reason": "",
             "last_task_id": "",
             "last_goal_id": "",
             "last_target_file_path": "",
@@ -470,6 +472,7 @@ def _build_self_hardening_summary() -> Dict[str, Any]:
             "last_audit_id": "",
             "sample_lines": [],
             "metrics": {},
+            "current_rollout_stage": "self_modify_safe",
             "updated_at": "",
         }
 
@@ -722,6 +725,10 @@ def format_status_message(snapshot: Dict[str, Any], summary_lines: List[str]) ->
         f"• Verify {self_hardening.get('last_verification_status', 'n/a') or 'n/a'} | "
         f"Tests {self_hardening.get('last_test_result', 'n/a') or 'n/a'} | "
         f"Canary {self_hardening.get('last_canary_state', 'n/a') or 'n/a'}"
+    )
+    hardening_lines.append(
+        f"• Rollout {self_hardening.get('current_rollout_stage', 'n/a') or 'n/a'} | "
+        f"Applied {self_hardening.get('last_rollout_stage', 'n/a') or 'n/a'}"
     )
     if bool(self_hardening.get("last_pattern_freeze_active")):
         hardening_lines.append(

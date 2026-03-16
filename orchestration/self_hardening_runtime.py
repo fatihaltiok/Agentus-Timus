@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 from orchestration.self_hardening_escalation import record_self_hardening_pattern_event
+from orchestration.self_hardening_rollout import get_self_hardening_rollout_stage
 from orchestration.self_hardening_verification import classify_self_hardening_verification_status
 
 
@@ -82,6 +83,8 @@ def record_self_hardening_event(
     execution_mode: str = "",
     route_target: str = "",
     reason: str = "",
+    rollout_stage: str = "",
+    rollout_reason: str = "",
     task_id: str = "",
     goal_id: str = "",
     target_file_path: str = "",
@@ -150,6 +153,8 @@ def record_self_hardening_event(
         "execution_mode": str(execution_mode or "").strip(),
         "route_target": str(route_target or "").strip(),
         "reason": str(reason or "").strip(),
+        "rollout_stage": str(rollout_stage or "").strip(),
+        "rollout_reason": str(rollout_reason or "").strip(),
         "task_id": str(task_id or "").strip(),
         "goal_id": str(goal_id or "").strip(),
         "target_file_path": str(target_file_path or "").strip(),
@@ -230,6 +235,8 @@ def get_self_hardening_runtime_summary(queue) -> Dict[str, Any]:
             "last_execution_mode": "",
             "last_route_target": "",
             "last_reason": "",
+            "last_rollout_stage": get_self_hardening_rollout_stage(),
+            "last_rollout_reason": "",
             "last_task_id": "",
             "last_goal_id": "",
             "last_target_file_path": "",
@@ -260,6 +267,7 @@ def get_self_hardening_runtime_summary(queue) -> Dict[str, Any]:
     last_verification_status = str(event_meta.get("verification_status") or "").strip()
     last_effective_fix_mode = str(event_meta.get("pattern_effective_fix_mode") or "").strip()
     last_freeze_active = bool(event_meta.get("pattern_freeze_active"))
+    current_rollout_stage = get_self_hardening_rollout_stage()
     return {
         "state": classify_self_hardening_runtime_state(
             last_status=last_status,
@@ -276,6 +284,8 @@ def get_self_hardening_runtime_summary(queue) -> Dict[str, Any]:
         "last_execution_mode": str(event_meta.get("execution_mode") or "").strip(),
         "last_route_target": str(event_meta.get("route_target") or "").strip(),
         "last_reason": str(event_meta.get("reason") or "").strip(),
+        "last_rollout_stage": str(event_meta.get("rollout_stage") or current_rollout_stage).strip(),
+        "last_rollout_reason": str(event_meta.get("rollout_reason") or "").strip(),
         "last_task_id": str(event_meta.get("task_id") or "").strip(),
         "last_goal_id": str(event_meta.get("goal_id") or "").strip(),
         "last_target_file_path": str(event_meta.get("target_file_path") or "").strip(),
@@ -296,5 +306,6 @@ def get_self_hardening_runtime_summary(queue) -> Dict[str, Any]:
         "last_audit_id": str(event_meta.get("audit_id") or "").strip(),
         "sample_lines": list(event_meta.get("sample_lines") or [])[:3],
         "metrics": metrics,
+        "current_rollout_stage": current_rollout_stage,
         "updated_at": str(last_event.get("updated_at") or metrics_state.get("updated_at") or ""),
     }

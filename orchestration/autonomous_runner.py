@@ -1821,6 +1821,8 @@ class AutonomousRunner:
         pattern_name = str((metadata or {}).get("pattern_name") or "").strip()
         component = str((metadata or {}).get("component") or "").strip()
         requested_fix_mode = str((metadata or {}).get("requested_fix_mode") or "").strip()
+        rollout_stage = str((metadata or {}).get("rollout_stage") or "").strip()
+        rollout_reason = str((metadata or {}).get("rollout_reason") or "").strip()
         target_file_path = str((metadata or {}).get("target_file_path") or "").strip()
         change_type = str((metadata or {}).get("change_type") or "auto").strip() or "auto"
         required_checks = tuple(
@@ -1866,6 +1868,8 @@ class AutonomousRunner:
                 pattern_name=pattern_name,
                 component=component,
                 requested_fix_mode=requested_fix_mode,
+                rollout_stage=rollout_stage,
+                rollout_reason=rollout_reason,
                 required_checks=required_checks,
                 required_test_targets=required_test_targets,
                 session_id=f"m18:{task_id[:8]}",

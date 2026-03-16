@@ -792,6 +792,8 @@ class SelfModifierEngine:
         pattern_name: str = "",
         component: str = "",
         requested_fix_mode: str = "",
+        rollout_stage: str = "",
+        rollout_reason: str = "",
         required_checks: tuple[str, ...] | list[str] = (),
         required_test_targets: tuple[str, ...] | list[str] = (),
         session_id: str = "",
@@ -803,6 +805,8 @@ class SelfModifierEngine:
         safe_pattern_name = str(pattern_name or "").strip()
         safe_component = str(component or "").strip()
         safe_requested_fix_mode = str(requested_fix_mode or "").strip()
+        safe_rollout_stage = str(rollout_stage or "").strip()
+        safe_rollout_reason = str(rollout_reason or "").strip()
         safe_required_checks = tuple(str(item or "").strip() for item in required_checks if str(item or "").strip())
         safe_required_test_targets = tuple(
             str(item or "").strip() for item in required_test_targets if str(item or "").strip()
@@ -819,6 +823,8 @@ class SelfModifierEngine:
                 component=safe_component,
                 requested_fix_mode=safe_requested_fix_mode,
                 reason="runner_autofix",
+                rollout_stage=safe_rollout_stage,
+                rollout_reason=safe_rollout_reason,
                 task_id=safe_source_id,
                 target_file_path=safe_file_path,
                 change_type=safe_change_type,
@@ -865,6 +871,8 @@ class SelfModifierEngine:
                 component=safe_component,
                 requested_fix_mode=safe_requested_fix_mode,
                 reason=result.risk_reason or result.verification_summary or result.canary_summary,
+                rollout_stage=safe_rollout_stage,
+                rollout_reason=safe_rollout_reason,
                 task_id=safe_source_id,
                 target_file_path=result.file_path or safe_file_path,
                 change_type=safe_change_type,
