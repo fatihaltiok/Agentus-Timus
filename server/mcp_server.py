@@ -110,6 +110,10 @@ from server.conversation_qdrant import recall_chat_turns as _semantic_recall_cha
 from server.conversation_qdrant import store_chat_turn as _semantic_store_chat_turn
 from gateway.status_snapshot import collect_status_snapshot
 from memory.semantic_backend_policy import normalize_semantic_memory_backend
+from utils.location_presence import (
+    enrich_location_presence_snapshot,
+    prepare_location_presence_snapshot,
+)
 
 log = logging.getLogger("mcp_server")
 
@@ -202,6 +206,17 @@ _CONTEXTUAL_RECALL_PATTERNS = (
     r"\bdaran\b",
     r"\berklaer\b",
     r"\berklär\b",
+)
+
+_CAPABILITY_FOLLOWUP_PATTERNS = (
+    r"\bk[oö]nntest du dir das beibringen\b",
+    r"\bk[oö]nntest du das lernen\b",
+    r"\bwie k[oö]nntest du das lernen\b",
+    r"\bwie k[oö]nntest du dir das beibringen\b",
+    r"\bwas br[aä]uchtest du daf[uü]r\b",
+    r"\bwas m[uü]sstest du daf[uü]r haben\b",
+    r"\bwie w[uü]rde das gehen\b",
+    r"\bkannst du dir das aneignen\b",
 )
 
 _VISUAL_INTENT_TOKENS = (
@@ -479,6 +494,31 @@ def _is_affirmation(query: str) -> bool:
     return any(re.search(pattern, normalized) for pattern in _AFFIRMATION_PATTERNS)
 
 
+def _is_capability_followup_query(query: str, last_assistant: str = "") -> bool:
+    """Erkennt kurze Anschlussfragen zur Erweiterung fehlender Faehigkeiten."""
+    normalized = str(query or "").strip().lower()
+    if not normalized:
+        return False
+    if len(normalized.split()) > 18:
+        return False
+    if not any(re.search(pattern, normalized) for pattern in _CAPABILITY_FOLLOWUP_PATTERNS):
+        return False
+    previous = str(last_assistant or "").strip().lower()
+    if not previous:
+        return True
+    blocker_markers = (
+        "ich kann keine",
+        "ich kann nicht",
+        "kein zugang",
+        "keine zahlungsdaten",
+        "keine lieferadresse",
+        "keine adresse",
+        "nicht verf",
+        "nicht verfügbar",
+    )
+    return any(marker in previous for marker in blocker_markers)
+
+
 _PROPOSAL_TRAILING_VERBS = re.compile(
     r"\s+(?:suchen|starten|machen|ausführen|ausfuehren|recherchieren|ansehen|anschauen|schauen)\s*$",
     re.IGNORECASE,
@@ -740,12 +780,18 @@ def _resolve_followup_agent(query: str, capsule: dict[str, str]) -> str:
     normalized = str(query or "").strip().lower()
     is_followup = _is_followup_query(normalized)
     is_contextual_recall = _is_contextual_recall_query(normalized)
-    if not (is_followup or is_contextual_recall):
+    is_capability_followup = _is_capability_followup_query(
+        normalized,
+        str(capsule.get("last_assistant") or ""),
+    )
+    if not (is_followup or is_contextual_recall or is_capability_followup):
         return ""
     matched_reply_points = capsule.get("matched_reply_points") or []
     last_agent = str(capsule.get("last_agent") or "").strip().lower()
     if not last_agent:
         return ""
+    if is_capability_followup:
+        return "executor"
     if is_contextual_recall and matched_reply_points:
         return "executor"
     if last_agent == "executor":
@@ -764,6 +810,10 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
     is_affirm = _is_affirmation(query)
     is_followup = _is_followup_query(query)
     is_recall = _is_contextual_recall_query(query)
+    is_capability_followup = _is_capability_followup_query(
+        query,
+        str(capsule.get("last_assistant") or ""),
+    )
 
     last_proposed_action: dict | None = capsule.get("last_proposed_action") or None
 
@@ -784,7 +834,7 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
         return "\n".join(parts)
 
     # P2/P3/normale Follow-up: Kontext aufbauen
-    if not (is_followup or is_recall or is_ref):
+    if not (is_followup or is_recall or is_ref or is_capability_followup):
         return query
 
     last_agent = str(capsule.get("last_agent") or "").strip()
@@ -983,10 +1033,10 @@ def _set_location_snapshot(snapshot: dict) -> None:
 def _get_location_snapshot() -> dict | None:
     with _location_snapshot_lock:
         if _location_snapshot is not None:
-            return _copy_location_snapshot(_location_snapshot)
+            return enrich_location_presence_snapshot(_copy_location_snapshot(_location_snapshot))
     _load_location_snapshot_from_disk()
     with _location_snapshot_lock:
-        return _copy_location_snapshot(_location_snapshot)
+        return enrich_location_presence_snapshot(_copy_location_snapshot(_location_snapshot))
 
 
 def _address_component(components: list[dict], type_name: str, short: bool = False) -> str:
@@ -1056,7 +1106,7 @@ def _normalize_location_snapshot(payload: dict) -> dict:
         [part for part in [chosen_fields.get("locality"), chosen_fields.get("admin_area"), chosen_fields.get("country_name")] if part]
     )
     geocode_provider = chosen_fields.get("geocode_provider") or ("device_geocoder" if any(device_fields.values()) else "coordinates_only")
-    return {
+    normalized = {
         "latitude": latitude,
         "longitude": longitude,
         "accuracy_meters": accuracy_value,
@@ -1070,6 +1120,14 @@ def _normalize_location_snapshot(payload: dict) -> dict:
         "geocode_provider": geocode_provider,
         "maps_url": _build_google_maps_url(latitude, longitude),
     }
+    if payload.get("device_id") not in (None, ""):
+        normalized["device_id"] = str(payload.get("device_id") or "").strip()
+    if payload.get("user_scope") not in (None, ""):
+        normalized["user_scope"] = str(payload.get("user_scope") or "").strip()
+    return prepare_location_presence_snapshot(
+        normalized,
+        received_at=str(payload.get("received_at") or "").strip(),
+    )
 
 
 try:
@@ -2667,7 +2725,7 @@ async def location_resolve_endpoint(request: Request):
     try:
         snapshot = _normalize_location_snapshot(payload or {})
         _set_location_snapshot(snapshot)
-        return {"status": "success", "location": snapshot}
+        return {"status": "success", "location": enrich_location_presence_snapshot(snapshot)}
     except Exception as e:
         return JSONResponse(status_code=400, content={"status": "error", "error": f"invalid_location_payload: {e}"})
 

@@ -673,3 +673,16 @@ theorem hardening_rollout_observe_only_blocks_tasks :
 -- M18s. Rollout-Stufe developer_only degradiert Self-Modify auf Development.
 theorem hardening_rollout_developer_only_degrades_self_modify :
     (if true then 1 else 2) = 1 := by simp
+
+-- L1a. Standort-Freshness: Alles innerhalb des Live-Fensters ist auch innerhalb des Recent-Fensters.
+theorem location_live_window_implies_recent_window
+    (age liveMax recentMax : Nat)
+    (h1 : age ≤ liveMax)
+    (h2 : liveMax ≤ recentMax) :
+    age ≤ recentMax := by omega
+
+-- L1b. Standort-Freshness: Jenseits des Recent-Fensters ist Kontext nicht mehr fresh nutzbar.
+theorem location_age_beyond_recent_is_not_fresh
+    (age recentMax : Nat)
+    (h : recentMax < age) :
+    ¬ age ≤ recentMax := by omega

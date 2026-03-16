@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -9,6 +10,7 @@ from tools.search_tool import tool as search_tool_module
 
 @pytest.mark.asyncio
 async def test_get_current_location_context_reads_runtime_snapshot(monkeypatch, tmp_path):
+    captured_at = (datetime.now(timezone.utc) - timedelta(minutes=1)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     snapshot_path = tmp_path / "runtime_location_snapshot.json"
     snapshot_path.write_text(
         json.dumps(
@@ -18,6 +20,7 @@ async def test_get_current_location_context_reads_runtime_snapshot(monkeypatch, 
                 "display_name": "Alexanderplatz, Berlin, Deutschland",
                 "locality": "Berlin",
                 "country_name": "Deutschland",
+                "captured_at": captured_at,
             }
         ),
         encoding="utf-8",
@@ -27,11 +30,15 @@ async def test_get_current_location_context_reads_runtime_snapshot(monkeypatch, 
     result = await search_tool_module.get_current_location_context()
 
     assert result["has_location"] is True
+    assert result["presence_status"] == "live"
     assert result["location"]["locality"] == "Berlin"
+    assert result["location"]["presence_status"] == "live"
+    assert result["location"]["usable_for_context"] is True
 
 
 @pytest.mark.asyncio
 async def test_search_google_maps_places_uses_runtime_location_and_normalizes(monkeypatch, tmp_path):
+    captured_at = (datetime.now(timezone.utc) - timedelta(minutes=3)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     snapshot_path = tmp_path / "runtime_location_snapshot.json"
     snapshot_path.write_text(
         json.dumps(
@@ -41,6 +48,7 @@ async def test_search_google_maps_places_uses_runtime_location_and_normalizes(mo
                 "display_name": "Alexanderplatz, Berlin, Deutschland",
                 "locality": "Berlin",
                 "country_name": "Deutschland",
+                "captured_at": captured_at,
                 "maps_url": "https://www.google.com/maps/search/?api=1&query=52.520008,13.404954",
             }
         ),
@@ -81,6 +89,8 @@ async def test_search_google_maps_places_uses_runtime_location_and_normalizes(mo
     assert captured["params"]["q"] == "Cafe"
     assert captured["params"]["ll"].startswith("@52.520008,13.404954,")
     assert result["origin"]["locality"] == "Berlin"
+    assert result["origin"]["presence_status"] == "live"
+    assert result["origin"]["usable_for_context"] is True
     assert result["results"][0]["title"] == "Cafe Test"
     assert result["results"][0]["distance_meters"] is not None
     assert result["results"][0]["maps_url"].startswith("https://www.google.com/maps/search/?api=1&query=Cafe+Test")

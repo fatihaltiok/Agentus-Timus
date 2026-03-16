@@ -24,6 +24,7 @@ from urllib.parse import quote_plus
 import requests
 from dotenv import load_dotenv
 from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
+from utils.location_presence import enrich_location_presence_snapshot
 
 # --- Logging Setup ---
 logger = logging.getLogger("search_tool")
@@ -618,11 +619,13 @@ async def get_current_location_context() -> dict:
         return {
             "has_location": False,
             "location": None,
+            "presence_status": "unknown",
             "source_provider": "runtime_snapshot",
         }
     return {
         "has_location": True,
         "location": snapshot,
+        "presence_status": str(snapshot.get("presence_status") or "unknown"),
         "source_provider": "runtime_snapshot",
     }
 
@@ -753,7 +756,9 @@ def _load_runtime_location_snapshot() -> dict[str, Any] | None:
     try:
         with open(_RUNTIME_LOCATION_SNAPSHOT_PATH, encoding="utf-8") as handle:
             payload = json.load(handle)
-        return payload if isinstance(payload, dict) else None
+        if not isinstance(payload, dict):
+            return None
+        return enrich_location_presence_snapshot(payload)
     except Exception as exc:
         logger.warning("Runtime-Standort konnte nicht geladen werden: %s", exc)
         return None
@@ -812,7 +817,10 @@ def _resolve_maps_origin(
         "country_code": str((snapshot or {}).get("country_code") or ""),
         "accuracy_meters": _as_float((snapshot or {}).get("accuracy_meters")),
         "captured_at": str((snapshot or {}).get("captured_at") or ""),
+        "received_at": str((snapshot or {}).get("received_at") or ""),
         "source": str((snapshot or {}).get("source") or "runtime_snapshot"),
+        "presence_status": str((snapshot or {}).get("presence_status") or "unknown"),
+        "usable_for_context": bool((snapshot or {}).get("usable_for_context")),
         "maps_url": str((snapshot or {}).get("maps_url") or f"https://www.google.com/maps/search/?api=1&query={resolved_latitude},{resolved_longitude}"),
     }
     return origin, resolved_latitude, resolved_longitude
