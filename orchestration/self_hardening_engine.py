@@ -25,6 +25,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from orchestration.self_hardening_execution_policy import evaluate_self_hardening_execution
+
 log = logging.getLogger("SelfHardeningEngine")
 
 # ── Konfiguration ─────────────────────────────────────────────────────────────
@@ -76,6 +78,8 @@ class ErrorPattern:
     fix_mode: str = "observe_only"     # observe_only / developer_task / self_modify_safe / human_only
     recommended_agent: str = ""        # z.B. development
     verification_hint: str = ""        # Welche Checks/Tests verpflichtend sind
+    target_file_path: str = ""         # Ziel-Datei für sicheren Self-Modify-Pfad
+    change_type: str = "auto"          # Self-Modification change_type
 
 
 _PATTERNS: List[ErrorPattern] = [
@@ -88,6 +92,8 @@ _PATTERNS: List[ErrorPattern] = [
         fix_mode="self_modify_safe",
         recommended_agent="development",
         verification_hint="py_compile + pytest tests/test_m1_goal_lifecycle_kpi.py tests/test_m2_replanning_engine.py",
+        target_file_path="orchestration/task_queue.py",
+        change_type="orchestration_policy",
     ),
     ErrorPattern(
         name="delegation_timeout",
@@ -98,6 +104,8 @@ _PATTERNS: List[ErrorPattern] = [
         fix_mode="developer_task",
         recommended_agent="development",
         verification_hint="py_compile + pytest tests/test_m3_delegate_parallel.py tests/test_m5_parallel_delegation_integration.py",
+        target_file_path="orchestration/autonomous_runner.py",
+        change_type="orchestration_policy",
     ),
     ErrorPattern(
         name="llm_provider_error",
@@ -108,6 +116,8 @@ _PATTERNS: List[ErrorPattern] = [
         fix_mode="developer_task",
         recommended_agent="development",
         verification_hint="py_compile + pytest tests/test_provider_model_validation.py tests/test_dispatcher_provider_selection.py",
+        target_file_path="agent/base_agent.py",
+        change_type="orchestration_policy",
     ),
     ErrorPattern(
         name="blackboard_key_expired",
@@ -118,6 +128,8 @@ _PATTERNS: List[ErrorPattern] = [
         fix_mode="developer_task",
         recommended_agent="development",
         verification_hint="py_compile + pytest tests/test_agent_registry_blackboard_contracts.py",
+        target_file_path="memory/agent_blackboard.py",
+        change_type="orchestration_policy",
     ),
     ErrorPattern(
         name="smtp_connection_failed",
@@ -148,6 +160,8 @@ _PATTERNS: List[ErrorPattern] = [
         fix_mode="self_modify_safe",
         recommended_agent="development",
         verification_hint="py_compile + pytest tests/test_deep_research_report_quality.py tests/test_deep_research_pdf_requirements.py",
+        target_file_path="tools/deep_research/tool.py",
+        change_type="report_quality_guardrails",
     ),
     ErrorPattern(
         name="executor_fallback_triggered",
@@ -158,6 +172,8 @@ _PATTERNS: List[ErrorPattern] = [
         fix_mode="self_modify_safe",
         recommended_agent="development",
         verification_hint="py_compile + pytest tests/test_executor_smalltalk.py tests/test_android_chat_language.py",
+        target_file_path="agent/agents/executor.py",
+        change_type="orchestration_policy",
     ),
 ]
 
@@ -173,6 +189,8 @@ class HardeningProposal:
     fix_mode: str
     recommended_agent: str
     verification_hint: str
+    target_file_path: str
+    change_type: str
     occurrences: int
     sample_lines: List[str] = field(default_factory=list)
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
@@ -195,6 +213,10 @@ class HardeningProposal:
             f"Empfohlene Härtung: {self.suggestion}",
             f"Pflicht-Verifikation: {self.verification_hint or 'py_compile + passende zielgerichtete Tests'}",
         ]
+        if self.target_file_path:
+            lines.append(f"Ziel-Datei: {self.target_file_path}")
+        if self.change_type:
+            lines.append(f"Change-Type: {self.change_type}")
         if self.sample_lines:
             lines.append("Beispiel-Logs:")
             for line in self.sample_lines[:3]:
@@ -306,6 +328,8 @@ class SelfHardeningEngine:
                 fix_mode=_normalize_fix_mode(pattern.fix_mode),
                 recommended_agent=str(pattern.recommended_agent or "").strip(),
                 verification_hint=str(pattern.verification_hint or "").strip(),
+                target_file_path=str(pattern.target_file_path or "").strip(),
+                change_type=str(pattern.change_type or "auto").strip() or "auto",
                 occurrences=len(hits),
                 sample_lines=hits[:3],
             ))
@@ -395,6 +419,8 @@ class SelfHardeningEngine:
             "fix_mode": proposal.fix_mode,
             "recommended_agent": proposal.recommended_agent,
             "verification_hint": proposal.verification_hint,
+            "target_file_path": proposal.target_file_path,
+            "change_type": proposal.change_type,
             "occurrences": int(proposal.occurrences),
             "goal_id": str(goal_id or ""),
             "hardening_dedup_key": proposal.dedup_key(),
@@ -419,30 +445,48 @@ class SelfHardeningEngine:
         return False
 
     def _create_hardening_task(self, proposal: HardeningProposal, goal_id: str | None = None) -> str | None:
-        if not _should_bridge_fix_mode(proposal.fix_mode):
-            return None
-        target_agent = str(proposal.recommended_agent or "").strip().lower()
-        if not target_agent:
+        decision = evaluate_self_hardening_execution(
+            requested_fix_mode=proposal.fix_mode,
+            recommended_agent=proposal.recommended_agent,
+            target_file_path=proposal.target_file_path,
+            change_type=proposal.change_type,
+        )
+        if not decision.allow_task:
             return None
         dedup_key = proposal.dedup_key()
         if self._has_open_hardening_task(dedup_key):
             log.debug("Härtungs-Task bereits offen: %s", dedup_key)
             return None
         try:
-            from orchestration.task_queue import Priority, TaskType, get_queue
+            from orchestration.task_queue import TaskType, get_queue
             queue = get_queue()
+            metadata = self._build_hardening_task_metadata(proposal, goal_id)
+            metadata.update(
+                {
+                    "requested_fix_mode": decision.requested_fix_mode,
+                    "execution_mode": decision.effective_fix_mode,
+                    "execution_reason": decision.reason,
+                    "self_modify_allowed": bool(decision.allow_self_modify),
+                    "target_file_path": decision.target_file_path,
+                    "change_type": decision.change_type,
+                    "required_test_targets": list(decision.required_test_targets),
+                    "required_checks": list(decision.required_checks),
+                }
+            )
             task_id = queue.add(
                 description=proposal.as_task_description(),
                 priority=_priority_for_hardening_severity(proposal.severity),
                 task_type=TaskType.TRIGGERED,
-                target_agent=target_agent,
+                target_agent=decision.route_target,
                 goal_id=goal_id,
-                metadata=json.dumps(
-                    self._build_hardening_task_metadata(proposal, goal_id),
-                    ensure_ascii=True,
-                ),
+                metadata=json.dumps(metadata, ensure_ascii=True),
             )
-            log.info("Härtungs-Task angelegt [%s] → %s", task_id[:8], target_agent)
+            log.info(
+                "Härtungs-Task angelegt [%s] → %s (%s)",
+                task_id[:8],
+                decision.route_target,
+                decision.effective_fix_mode,
+            )
             return task_id
         except Exception as e:
             log.warning("Härtungs-Task erstellen fehlgeschlagen: %s", e)

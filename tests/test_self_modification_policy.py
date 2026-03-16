@@ -23,6 +23,16 @@ def test_policy_blocks_unlisted_low_risk_zone():
     assert "keiner freigegebenen" in decision.reason
 
 
+def test_policy_allows_deep_research_reporting_zone():
+    decision = evaluate_self_modification_policy(
+        "tools/deep_research/tool.py",
+        change_type="report_quality_guardrails",
+    )
+    assert decision.allowed is True
+    assert decision.zone_id == "deep_research_reporting"
+    assert "tests/test_deep_research_pdf_requirements.py" in decision.required_test_targets
+
+
 def test_policy_rejects_wrong_change_type_for_docs():
     decision = evaluate_self_modification_policy("docs/report.md", change_type="orchestration_policy")
     assert decision.allowed is False

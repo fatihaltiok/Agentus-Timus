@@ -335,7 +335,7 @@ class AutonomousRunner:
 
     def _is_resource_heavy_task(self, description: str, target_agent: Optional[str], metadata: dict) -> bool:
         agent = str(target_agent or "").strip().lower()
-        if agent in {"research", "visual", "creative", "development", "data", "document"}:
+        if agent in {"research", "visual", "creative", "development", "data", "document", "self_modify"}:
             return True
 
         text = f"{description} {json.dumps(metadata or {}, ensure_ascii=True)}".lower()
@@ -1721,6 +1721,27 @@ class AutonomousRunner:
             except Exception as e:
                 log.debug("Policy-Gate fuer autonomen Task fehlgeschlagen: %s", e)
 
+        hardening_result = await self._try_execute_self_hardening_autofix(
+            queue=queue,
+            task_id=task_id,
+            description=description,
+            goal_id=goal_id,
+            metadata=metadata,
+        )
+        if hardening_result is not None:
+            status, result_text = hardening_result
+            if status in {"success", "pending_approval"}:
+                queue.complete(task_id, result_text[:2000])
+                if goal_id and _goals_feature_enabled():
+                    queue.refresh_goal_progress(goal_id, last_task_id=task_id, last_event="task_completed")
+                log.info("✅ Self-Hardening-Task [%s] abgeschlossen (%s)", task_id[:8], status)
+            else:
+                queue.fail(task_id, result_text[:500])
+                if goal_id and _goals_feature_enabled():
+                    queue.refresh_goal_progress(goal_id, last_task_id=task_id, last_event="task_failed")
+                log.warning("❌ Self-Hardening-Task [%s] fehlgeschlagen (%s)", task_id[:8], status)
+            return
+
         try:
             from main_dispatcher import get_agent_decision
             from utils.model_failover import failover_run_agent
@@ -1780,6 +1801,47 @@ class AutonomousRunner:
             queue.fail(task_id, str(e))
             if goal_id and _goals_feature_enabled():
                 queue.refresh_goal_progress(goal_id, last_task_id=task_id, last_event="task_failed")
+
+    async def _try_execute_self_hardening_autofix(
+        self,
+        *,
+        queue,
+        task_id: str,
+        description: str,
+        goal_id: Optional[str],
+        metadata: dict,
+    ) -> Optional[tuple[str, str]]:
+        del queue, goal_id
+        if str((metadata or {}).get("source") or "").strip() != "self_hardening":
+            return None
+        if str((metadata or {}).get("execution_mode") or "").strip() != "self_modify_safe":
+            return None
+
+        target_file_path = str((metadata or {}).get("target_file_path") or "").strip()
+        change_type = str((metadata or {}).get("change_type") or "auto").strip() or "auto"
+        dedup_key = str((metadata or {}).get("hardening_dedup_key") or "").strip() or f"task:{task_id}"
+        if not target_file_path:
+            return ("error", "self_hardening:self_modify_missing_target_file")
+
+        try:
+            from orchestration.self_modifier_engine import get_self_modifier_engine
+
+            engine = get_self_modifier_engine()
+            result = engine.execute_self_hardening_fix(
+                source_id=dedup_key,
+                file_path=target_file_path,
+                change_description=description,
+                change_type=change_type,
+                session_id=f"m18:{task_id[:8]}",
+            )
+            summary = (
+                f"Self-hardening {result.status}: {result.file_path} | "
+                f"verification={result.verification_summary or result.test_result or 'n/a'}"
+            )
+            return (result.status, summary)
+        except Exception as exc:
+            log.error("Self-Hardening-Autofix [%s] fehlgeschlagen: %s", task_id[:8], exc, exc_info=True)
+            return ("error", f"self_hardening:self_modify_exception:{exc}")
 
     async def _send_failure_alert(
         self,

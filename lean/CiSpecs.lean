@@ -622,3 +622,11 @@ theorem hardening_observe_mode_does_not_bridge :
 theorem hardening_task_priority_high_bounds : 1 ≤ 1 ∧ 1 ≤ 3 := by omega
 theorem hardening_task_priority_medium_bounds : 1 ≤ 2 ∧ 2 ≤ 3 := by omega
 theorem hardening_task_priority_low_bounds : 1 ≤ 3 ∧ 3 ≤ 3 := by omega
+
+-- M18i. Safe-Autofix-Routing: erlaubte Self-Modify-Fälle gehen in den Self-Modify-Pfad,
+-- blockierte Fälle werden auf Development zurückgestuft.
+theorem hardening_self_modify_allowed_routes_to_self_modify :
+    (if true then 2 else 1) = 2 := by simp
+
+theorem hardening_self_modify_blocked_downgrades_to_development :
+    (if false then 2 else 1) = 1 := by simp

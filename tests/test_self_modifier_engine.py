@@ -534,3 +534,46 @@ def test_hypothesis_core_gate_returns_bool(path: str):
 def test_hypothesis_result_status_contract(status: str):
     result = SelfModifyResult(status, "tools/x.py", "change", "backup", "skipped", "aid")
     assert _result_status_value(result) == status
+
+
+def test_execute_self_hardening_fix_records_source_state(tmp_path, monkeypatch):
+    engine = SelfModifierEngine(tmp_path / "memory.db")
+    states: list[tuple[str, str, str]] = []
+
+    def _fake_set_state(source_kind: str, source_id: str, *, status: str, **kwargs):
+        del kwargs
+        states.append((source_kind, source_id, status))
+
+    monkeypatch.setattr(engine, "_set_autonomous_source_state", _fake_set_state)
+
+    def _fake_run_async_sync(coro):
+        coro.close()
+        return SelfModifyResult(
+            "success",
+            "tools/deep_research/tool.py",
+            "Harden report fallback",
+            "",
+            "passed",
+            "audit-hardening",
+            verification_summary="pytest_targeted:passed",
+        )
+
+    monkeypatch.setattr(
+        engine,
+        "_run_async_sync",
+        _fake_run_async_sync,
+    )
+
+    result = engine.execute_self_hardening_fix(
+        source_id="self_hardening:narrative",
+        file_path="tools/deep_research/tool.py",
+        change_description="Harden report fallback",
+        change_type="report_quality_guardrails",
+        session_id="m18:test",
+    )
+
+    assert result.status == "success"
+    assert states == [
+        ("self_hardening", "self_hardening:narrative", "claimed"),
+        ("self_hardening", "self_hardening:narrative", "success"),
+    ]

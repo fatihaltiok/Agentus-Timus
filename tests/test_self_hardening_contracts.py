@@ -43,6 +43,8 @@ def _contract_build_hardening_task_metadata(goal_id: str) -> dict:
         fix_mode="self_modify_safe",
         recommended_agent="development",
         verification_hint="py_compile + pytest tests/test_executor_smalltalk.py",
+        target_file_path="agent/agents/executor.py",
+        change_type="orchestration_policy",
         occurrences=4,
         sample_lines=["executor fallback"],
     )

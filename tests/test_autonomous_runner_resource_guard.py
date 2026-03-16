@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -117,3 +119,55 @@ async def test_resource_guard_does_not_block_high_priority_task(monkeypatch, tmp
     assert updated is not None
     assert updated["status"] == "completed"
     assert called["executed"] is True
+
+
+@pytest.mark.asyncio
+async def test_self_hardening_self_modify_task_uses_self_modifier_engine(monkeypatch, tmp_path: Path) -> None:
+    queue = TaskQueue(db_path=tmp_path / "task_queue.db")
+    metadata = {
+        "source": "self_hardening",
+        "execution_mode": "self_modify_safe",
+        "target_file_path": "tools/deep_research/tool.py",
+        "change_type": "report_quality_guardrails",
+        "hardening_dedup_key": "self_hardening:narrative_synthesis_empty:tools.deepr",
+    }
+    task_id = queue.add(
+        description="Haerte Narrative-Synthese gegen leere Berichte",
+        target_agent="self_modify",
+        priority=Priority.NORMAL,
+        max_retries=1,
+        metadata=json.dumps(metadata, ensure_ascii=True),
+    )
+    task = queue.claim_next()
+    assert task is not None and task["id"] == task_id
+
+    runner = AutonomousRunner(interval_minutes=15)
+    monkeypatch.setattr("orchestration.autonomous_runner.get_queue", lambda: queue)
+
+    called: dict[str, str] = {}
+
+    class _FakeSelfModifier:
+        def execute_self_hardening_fix(self, **kwargs):
+            called.update({k: str(v) for k, v in kwargs.items()})
+            return SimpleNamespace(
+                status="success",
+                file_path=str(kwargs["file_path"]),
+                verification_summary="pytest_targeted:passed",
+                test_result="passed",
+                audit_id="audit-123",
+                risk_reason="",
+                canary_summary="",
+            )
+
+    monkeypatch.setattr(
+        "orchestration.self_modifier_engine.get_self_modifier_engine",
+        lambda: _FakeSelfModifier(),
+    )
+
+    await runner._execute_task(task)
+
+    updated = queue.get_by_id(task_id)
+    assert updated is not None
+    assert updated["status"] == "completed"
+    assert called["file_path"] == "tools/deep_research/tool.py"
+    assert called["change_type"] == "report_quality_guardrails"

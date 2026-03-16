@@ -51,6 +51,8 @@ def _make_proposal(pattern_name="tool_import_error", severity="high", occurrence
         fix_mode="developer_task",
         recommended_agent="development",
         verification_hint="py_compile + pytest tests/test_tool_imports.py",
+        target_file_path="tools/demo.py",
+        change_type="evaluation_tests",
         occurrences=occurrences,
         sample_lines=["ModuleNotFoundError: No module named 'xyz'"],
     )
@@ -75,6 +77,9 @@ class TestPatternDefinitions:
             if _should_bridge_fix_mode(p.fix_mode):
                 assert p.recommended_agent, f"Bridgebares Pattern ohne Agent: {p.name}"
                 assert p.verification_hint, f"Bridgebares Pattern ohne Verification-Hint: {p.name}"
+            if p.fix_mode == "self_modify_safe":
+                assert p.target_file_path, f"Self-Modify-Pattern ohne target_file_path: {p.name}"
+                assert p.change_type, f"Self-Modify-Pattern ohne change_type: {p.name}"
 
     def test_pattern_names_unique(self):
         names = [p.name for p in _PATTERNS]
@@ -106,6 +111,8 @@ class TestHardeningProposal:
         assert "fix_mode" in d
         assert "recommended_agent" in d
         assert "verification_hint" in d
+        assert "target_file_path" in d
+        assert "change_type" in d
         assert "occurrences" in d
         assert "sample_lines" in d
         assert "created_at" in d
@@ -129,6 +136,7 @@ class TestHardeningProposal:
         assert "Fix-Modus" in description
         assert "development" in description
         assert "py_compile" in description
+        assert "tools/demo.py" in description
 
     def test_as_telegram_msg_high_severity_has_red_emoji(self):
         p = _make_proposal(severity="high")
@@ -317,6 +325,8 @@ class TestCreateHardeningTask:
         assert metadata["component"] == "tool_registry"
         assert metadata["fix_mode"] == "developer_task"
         assert metadata["recommended_agent"] == "development"
+        assert metadata["target_file_path"] == "tools/demo.py"
+        assert metadata["change_type"] == "evaluation_tests"
         assert metadata["goal_id"] == "goal-1"
         assert metadata["hardening_dedup_key"]
 
@@ -337,6 +347,47 @@ class TestCreateHardeningTask:
         assert kwargs["task_type"] == "triggered"
         assert kwargs["goal_id"] == "goal-1"
         assert kwargs["priority"] == 1
+        metadata = kwargs["metadata"]
+        assert "\"execution_mode\": \"developer_task\"" in metadata
+
+    def test_create_hardening_task_routes_allowed_self_modify_safe_to_self_modify(self):
+        engine = _make_engine()
+        proposal = _make_proposal(pattern_name="narrative_synthesis_empty", severity="medium")
+        proposal.fix_mode = "self_modify_safe"
+        proposal.target_file_path = "tools/deep_research/tool.py"
+        proposal.change_type = "report_quality_guardrails"
+
+        mock_queue = MagicMock()
+        mock_queue.get_all.return_value = []
+        mock_queue.add.return_value = "task-sm"
+
+        with patch("orchestration.task_queue.get_queue", return_value=mock_queue):
+            task_id = engine._create_hardening_task(proposal, goal_id="goal-sm")
+
+        assert task_id == "task-sm"
+        _, kwargs = mock_queue.add.call_args
+        assert kwargs["target_agent"] == "self_modify"
+        assert "\"execution_mode\": \"self_modify_safe\"" in kwargs["metadata"]
+
+    def test_create_hardening_task_downgrades_blocked_self_modify_safe_to_development(self):
+        engine = _make_engine()
+        proposal = _make_proposal(pattern_name="executor_fallback_triggered", severity="medium")
+        proposal.fix_mode = "self_modify_safe"
+        proposal.target_file_path = "agent/agents/executor.py"
+        proposal.change_type = "orchestration_policy"
+
+        mock_queue = MagicMock()
+        mock_queue.get_all.return_value = []
+        mock_queue.add.return_value = "task-dev"
+
+        with patch("orchestration.task_queue.get_queue", return_value=mock_queue):
+            task_id = engine._create_hardening_task(proposal, goal_id="goal-dev")
+
+        assert task_id == "task-dev"
+        _, kwargs = mock_queue.add.call_args
+        assert kwargs["target_agent"] == "development"
+        assert "\"execution_mode\": \"developer_task\"" in kwargs["metadata"]
+        assert "\"self_modify_allowed\": false" in kwargs["metadata"]
 
     def test_create_hardening_task_skips_non_bridgeable_modes(self):
         engine = _make_engine()

@@ -781,6 +781,47 @@ class SelfModifierEngine:
         )
         return SelfModifyResult("blocked", rel_path, change_description, backup_ref, "skipped", audit_id)
 
+    def execute_self_hardening_fix(
+        self,
+        *,
+        source_id: str,
+        file_path: str,
+        change_description: str,
+        change_type: str = "auto",
+        session_id: str = "",
+    ) -> SelfModifyResult:
+        safe_source_id = str(source_id or "").strip() or uuid.uuid4().hex
+        safe_file_path = str(file_path or "").strip()
+        safe_description = str(change_description or "").strip()
+        safe_change_type = str(change_type or "auto").strip() or "auto"
+        safe_session_id = str(session_id or "").strip() or f"m18:{safe_source_id[:12]}"
+
+        self._set_autonomous_source_state(
+            "self_hardening",
+            safe_source_id,
+            status="claimed",
+            file_path=safe_file_path,
+            note=safe_description[:240],
+        )
+        result = self._run_async_sync(
+            self.modify_file(
+                safe_file_path,
+                safe_description,
+                change_type=safe_change_type,
+                require_tests=True,
+                session_id=safe_session_id,
+            )
+        )
+        self._set_autonomous_source_state(
+            "self_hardening",
+            safe_source_id,
+            status=result.status,
+            file_path=result.file_path or safe_file_path,
+            audit_id=result.audit_id,
+            note=result.risk_reason or result.verification_summary or result.canary_summary,
+        )
+        return result
+
     def run_cycle(self) -> Dict[str, Any]:
         if not _env_bool("AUTONOMY_SELF_MODIFY_ENABLED", False):
             return {"status": "disabled", "applied": 0, "pending": self.pending_count()}

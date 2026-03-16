@@ -106,6 +106,16 @@ ALLOWED_ZONES: tuple[SelfModificationZone, ...] = (
         required_checks=("py_compile", "pytest_targeted", "lean", "production_gates"),
     ),
     SelfModificationZone(
+        zone_id="deep_research_reporting",
+        path_patterns=("tools/deep_research/tool.py",),
+        allowed_change_types=("report_quality_guardrails",),
+        required_test_targets=(
+            "tests/test_deep_research_report_quality.py",
+            "tests/test_deep_research_pdf_requirements.py",
+        ),
+        required_checks=("py_compile", "pytest_targeted", "production_gates"),
+    ),
+    SelfModificationZone(
         zone_id="tests",
         path_patterns=("tests/test_*.py",),
         allowed_change_types=("evaluation_tests",),
