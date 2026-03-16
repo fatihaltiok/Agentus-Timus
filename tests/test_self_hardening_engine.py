@@ -27,6 +27,9 @@ from orchestration.self_hardening_engine import (
     HardeningProposal,
     SelfHardeningEngine,
     _PATTERNS,
+    _normalize_fix_mode,
+    _priority_for_hardening_severity,
+    _should_bridge_fix_mode,
     get_self_hardening_engine,
 )
 
@@ -45,6 +48,9 @@ def _make_proposal(pattern_name="tool_import_error", severity="high", occurrence
         component="tool_registry",
         suggestion="Fehlende Dependency ergänzen",
         severity=severity,
+        fix_mode="developer_task",
+        recommended_agent="development",
+        verification_hint="py_compile + pytest tests/test_tool_imports.py",
         occurrences=occurrences,
         sample_lines=["ModuleNotFoundError: No module named 'xyz'"],
     )
@@ -63,6 +69,12 @@ class TestPatternDefinitions:
             assert p.component, f"Pattern ohne component: {p}"
             assert p.suggestion, f"Pattern ohne suggestion: {p}"
             assert p.severity in ("low", "medium", "high"), f"Ungültige severity: {p.severity}"
+            assert _normalize_fix_mode(p.fix_mode) in {
+                "observe_only", "developer_task", "self_modify_safe", "human_only"
+            }
+            if _should_bridge_fix_mode(p.fix_mode):
+                assert p.recommended_agent, f"Bridgebares Pattern ohne Agent: {p.name}"
+                assert p.verification_hint, f"Bridgebares Pattern ohne Verification-Hint: {p.name}"
 
     def test_pattern_names_unique(self):
         names = [p.name for p in _PATTERNS]
@@ -91,6 +103,9 @@ class TestHardeningProposal:
         assert "component" in d
         assert "suggestion" in d
         assert "severity" in d
+        assert "fix_mode" in d
+        assert "recommended_agent" in d
+        assert "verification_hint" in d
         assert "occurrences" in d
         assert "sample_lines" in d
         assert "created_at" in d
@@ -100,6 +115,20 @@ class TestHardeningProposal:
         title = p.as_goal_title()
         assert "tool_registry" in title
         assert "7" in title
+
+    def test_dedup_key_contains_pattern_component_and_mode(self):
+        p = _make_proposal()
+        key = p.dedup_key()
+        assert "tool_import_error" in key
+        assert "tool_registry" in key
+        assert "developer_task" in key
+
+    def test_as_task_description_contains_verification_hint(self):
+        p = _make_proposal()
+        description = p.as_task_description()
+        assert "Fix-Modus" in description
+        assert "development" in description
+        assert "py_compile" in description
 
     def test_as_telegram_msg_high_severity_has_red_emoji(self):
         p = _make_proposal(severity="high")
@@ -277,6 +306,71 @@ class TestCreateHardeningGoal:
         assert "blocked" in called_statuses
 
 
+# ── Task-Bridge Integration ──────────────────────────────────────────────────
+
+class TestCreateHardeningTask:
+    def test_build_hardening_task_metadata_contains_structured_fields(self):
+        proposal = _make_proposal()
+        metadata = SelfHardeningEngine._build_hardening_task_metadata(proposal, goal_id="goal-1")
+        assert metadata["source"] == "self_hardening"
+        assert metadata["pattern_name"] == "tool_import_error"
+        assert metadata["component"] == "tool_registry"
+        assert metadata["fix_mode"] == "developer_task"
+        assert metadata["recommended_agent"] == "development"
+        assert metadata["goal_id"] == "goal-1"
+        assert metadata["hardening_dedup_key"]
+
+    def test_create_hardening_task_enqueues_triggered_development_task(self):
+        engine = _make_engine()
+        proposal = _make_proposal()
+
+        mock_queue = MagicMock()
+        mock_queue.get_all.return_value = []
+        mock_queue.add.return_value = "task-123"
+
+        with patch("orchestration.task_queue.get_queue", return_value=mock_queue):
+            task_id = engine._create_hardening_task(proposal, goal_id="goal-1")
+
+        assert task_id == "task-123"
+        _, kwargs = mock_queue.add.call_args
+        assert kwargs["target_agent"] == "development"
+        assert kwargs["task_type"] == "triggered"
+        assert kwargs["goal_id"] == "goal-1"
+        assert kwargs["priority"] == 1
+
+    def test_create_hardening_task_skips_non_bridgeable_modes(self):
+        engine = _make_engine()
+        proposal = _make_proposal()
+        proposal.fix_mode = "observe_only"
+
+        mock_queue = MagicMock()
+
+        with patch("orchestration.task_queue.get_queue", return_value=mock_queue):
+            task_id = engine._create_hardening_task(proposal, goal_id="goal-1")
+
+        assert task_id is None
+        mock_queue.add.assert_not_called()
+
+    def test_create_hardening_task_dedupes_open_pending_task(self):
+        engine = _make_engine()
+        proposal = _make_proposal()
+
+        existing_metadata = {
+            "hardening_dedup_key": proposal.dedup_key(),
+            "source": "self_hardening",
+        }
+        mock_queue = MagicMock()
+        mock_queue.get_all.return_value = [
+            {"status": "pending", "metadata": str(existing_metadata).replace("'", '"')}
+        ]
+
+        with patch("orchestration.task_queue.get_queue", return_value=mock_queue):
+            task_id = engine._create_hardening_task(proposal, goal_id="goal-1")
+
+        assert task_id is None
+        mock_queue.add.assert_not_called()
+
+
 # ── Multi-Unit Journal ───────────────────────────────────────────────────────
 
 class TestMultiUnitJournal:
@@ -450,6 +544,19 @@ class TestHypothesisProperties:
         """Jede Severity hat einen Priority-Score im gültigen Bereich [0,1]."""
         score = {"high": 0.85, "medium": 0.65, "low": 0.45}.get(severity, 0.5)
         assert 0.0 <= score <= 1.0
+
+    @given(mode=st.text(min_size=0, max_size=40))
+    @settings(max_examples=120)
+    def test_fix_mode_normalization_bounded(self, mode):
+        assert _normalize_fix_mode(mode) in {
+            "observe_only", "developer_task", "self_modify_safe", "human_only"
+        }
+
+    @given(severity=st.sampled_from(["high", "medium", "low", "unknown"]))
+    @settings(max_examples=50)
+    def test_task_priority_mapping_stays_in_queue_bounds(self, severity):
+        priority = _priority_for_hardening_severity(severity)
+        assert priority in {1, 2, 3}
 
     @given(st.lists(st.text(min_size=1, max_size=200), min_size=0, max_size=20))
     @settings(max_examples=100)
