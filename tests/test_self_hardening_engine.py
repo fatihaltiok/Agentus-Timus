@@ -260,8 +260,8 @@ class TestCreateHardeningGoal:
 
         mock_queue.create_goal.assert_not_called()
 
-    def test_list_goals_called_for_active_and_pending(self):
-        """list_goals wird für 'active' und 'pending' aufgerufen."""
+    def test_list_goals_called_for_active_and_blocked(self):
+        """list_goals wird für die echten offenen Goal-Status active und blocked aufgerufen."""
         engine = _make_engine()
         proposal = _make_proposal()
 
@@ -273,8 +273,8 @@ class TestCreateHardeningGoal:
 
         called_statuses = [c.kwargs.get("status") or c.args[0] if c.args else c.kwargs.get("status")
                            for c in mock_queue.list_goals.call_args_list]
-        # Beide Status müssen geprüft worden sein
-        assert mock_queue.list_goals.call_count >= 2
+        assert "active" in called_statuses
+        assert "blocked" in called_statuses
 
 
 # ── Multi-Unit Journal ───────────────────────────────────────────────────────

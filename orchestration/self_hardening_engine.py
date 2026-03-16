@@ -276,11 +276,11 @@ class SelfHardeningEngine:
             from orchestration.task_queue import get_queue
             queue = get_queue()
             title = proposal.as_goal_title()
-            # Kein Duplikat anlegen wenn ähnliches Ziel bereits offen ist
-            # list_goals() akzeptiert nur status (singular, ein Wert) — beide Status prüfen
+            # Kein Duplikat anlegen wenn ähnliches Ziel bereits offen ist.
+            # Goals kennen ACTIVE/BLOCKED/COMPLETED/CANCELLED — kein pending/in_progress.
             active = queue.list_goals(status="active") or []
-            pending = queue.list_goals(status="pending") or []
-            for g in active + pending:
+            blocked = queue.list_goals(status="blocked") or []
+            for g in active + blocked:
                 if proposal.component in (g.get("title") or ""):
                     log.debug("Härtungs-Ziel bereits vorhanden: %s", title)
                     return
