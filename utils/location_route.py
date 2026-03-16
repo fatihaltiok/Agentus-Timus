@@ -60,6 +60,33 @@ def _as_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _extract_coordinates(value: Any) -> dict[str, float]:
+    if not isinstance(value, dict):
+        return {}
+    latitude = _as_float(
+        value.get("latitude", value.get("lat", value.get("y"))),
+        default=0.0,
+    )
+    longitude = _as_float(
+        value.get("longitude", value.get("lng", value.get("lon", value.get("x")))),
+        default=0.0,
+    )
+    if latitude == 0.0 and longitude == 0.0:
+        return {}
+    return {"latitude": latitude, "longitude": longitude}
+
+
+def _extract_polyline(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        for key in ("points", "encoded_polyline", "polyline"):
+            item = value.get(key)
+            if isinstance(item, str) and item.strip():
+                return item.strip()
+    return ""
+
+
 def strip_route_instruction_html(value: str) -> str:
     text = html.unescape(str(value or ""))
     text = re.sub(r"<[^>]+>", " ", text)
@@ -134,6 +161,26 @@ def parse_serpapi_google_maps_directions(
     normalized_mode = normalize_route_travel_mode(travel_mode)
     origin_latitude = _as_float(origin.get("latitude"))
     origin_longitude = _as_float(origin.get("longitude"))
+    start_coordinates = (
+        _extract_coordinates(leg.get("start_location"))
+        or _extract_coordinates(route.get("start_location"))
+        or (
+            {"latitude": origin_latitude, "longitude": origin_longitude}
+            if origin_latitude or origin_longitude
+            else {}
+        )
+    )
+    end_coordinates = (
+        _extract_coordinates(leg.get("end_location"))
+        or _extract_coordinates(route.get("end_location"))
+        or _extract_coordinates(route.get("destination"))
+    )
+    overview_polyline = (
+        _extract_polyline(route.get("overview_polyline"))
+        or _extract_polyline(route.get("polyline"))
+        or _extract_polyline(route.get("route_overview_polyline"))
+        or _extract_polyline(safe_data.get("overview_polyline"))
+    )
     route_url = build_google_maps_directions_url(
         origin_latitude=origin_latitude,
         origin_longitude=origin_longitude,
@@ -180,6 +227,9 @@ def parse_serpapi_google_maps_directions(
         "end_address": end_address,
         "steps": steps[:12],
         "step_count": len(steps),
+        "start_coordinates": start_coordinates,
+        "end_coordinates": end_coordinates,
+        "overview_polyline": overview_polyline,
         "route_url": route_url,
         "maps_url": route_url,
         "source_provider": "serpapi",
@@ -212,6 +262,9 @@ def prepare_route_snapshot(payload: dict[str, Any], *, saved_at: str | None = No
         "steps": normalized_steps[:12],
         "step_count": len(normalized_steps),
         "origin": safe.get("origin") if isinstance(safe.get("origin"), dict) else {},
+        "start_coordinates": safe.get("start_coordinates") if isinstance(safe.get("start_coordinates"), dict) else {},
+        "end_coordinates": safe.get("end_coordinates") if isinstance(safe.get("end_coordinates"), dict) else {},
+        "overview_polyline": str(safe.get("overview_polyline") or "").strip(),
         "route_url": route_url,
         "maps_url": route_url,
         "saved_at": str(saved_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")),

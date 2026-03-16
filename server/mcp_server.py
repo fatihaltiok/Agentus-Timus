@@ -8,6 +8,7 @@ import importlib
 import logging
 import inspect
 import json as _json
+import html as _html
 import threading
 import re
 import uuid
@@ -1099,6 +1100,71 @@ def _get_route_snapshot() -> dict | None:
     _load_route_snapshot_from_disk()
     with _route_snapshot_lock:
         return _copy_route_snapshot(_route_snapshot)
+
+
+def _route_map_placeholder_svg(title: str, detail: str = "") -> str:
+    safe_title = _html.escape(str(title or "Keine aktive Route"))
+    safe_detail = _html.escape(str(detail or "").strip())
+    detail_line = f'<text x="50%" y="66%" text-anchor="middle" fill="#7db599" font-size="15">{safe_detail}</text>' if safe_detail else ""
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540">'
+        '<defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">'
+        '<stop offset="0%" stop-color="#09111c"/><stop offset="100%" stop-color="#051019"/></linearGradient></defs>'
+        '<rect width="960" height="540" rx="24" fill="url(#g)"/>'
+        '<rect x="26" y="26" width="908" height="488" rx="20" fill="none" stroke="rgba(0,224,154,0.18)"/>'
+        '<circle cx="220" cy="170" r="11" fill="#00e09a"/><circle cx="734" cy="350" r="11" fill="#00d4f0"/>'
+        '<path d="M220 170 C360 120 520 180 640 250 S760 330 734 350" fill="none" stroke="rgba(0,224,154,0.55)" stroke-width="8" stroke-linecap="round"/>'
+        f'<text x="50%" y="56%" text-anchor="middle" fill="#cce8db" font-size="28" font-weight="600">{safe_title}</text>'
+        f"{detail_line}"
+        "</svg>"
+    )
+
+
+def _route_point_from_dict(value: dict | None) -> tuple[float, float] | None:
+    if not isinstance(value, dict):
+        return None
+    try:
+        latitude = float(value.get("latitude"))
+        longitude = float(value.get("longitude"))
+    except Exception:
+        return None
+    if latitude == 0.0 and longitude == 0.0:
+        return None
+    return latitude, longitude
+
+
+def _build_google_static_route_map_url(snapshot: dict, width: int = 960, height: int = 540) -> str | None:
+    api_key = _google_maps_api_key()
+    if not api_key:
+        return None
+    origin = _route_point_from_dict(snapshot.get("start_coordinates")) or _route_point_from_dict(snapshot.get("origin"))
+    destination = _route_point_from_dict(snapshot.get("end_coordinates"))
+    destination_query = str(
+        snapshot.get("destination_label") or snapshot.get("end_address") or snapshot.get("destination_query") or ""
+    ).strip()
+    if not origin or not (destination or destination_query):
+        return None
+
+    params: list[tuple[str, str]] = [
+        ("size", f"{max(320, int(width))}x{max(240, int(height))}"),
+        ("scale", "2"),
+        ("maptype", "roadmap"),
+        ("language", "de"),
+        ("key", api_key),
+        ("markers", f"color:0x00e09a|label:S|{origin[0]},{origin[1]}"),
+    ]
+    if destination:
+        params.append(("markers", f"color:0x00d4f0|label:Z|{destination[0]},{destination[1]}"))
+    else:
+        params.append(("markers", f"color:0x00d4f0|label:Z|{destination_query}"))
+
+    overview_polyline = str(snapshot.get("overview_polyline") or "").strip()
+    if overview_polyline:
+        params.append(("path", f"color:0x00e09aCC|weight:6|enc:{overview_polyline}"))
+    elif destination:
+        params.append(("path", f"color:0x00e09a99|weight:5|{origin[0]},{origin[1]}|{destination[0]},{destination[1]}"))
+
+    return "https://maps.googleapis.com/maps/api/staticmap?" + urlencode(params, doseq=True)
 
 
 def _address_component(components: list[dict], type_name: str, short: bool = False) -> str:
@@ -2854,6 +2920,36 @@ async def location_route_status_endpoint():
         return {"status": "success", "route": _get_route_snapshot()}
     except Exception as e:
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.get("/location/route/map", summary="Aktive Route als statische Kartenansicht abrufen")
+async def location_route_map_endpoint():
+    snapshot = _get_route_snapshot()
+    if not snapshot or not bool(snapshot.get("has_route")):
+        return Response(
+            content=_route_map_placeholder_svg("Keine aktive Route", "Lege zuerst eine Route an."),
+            media_type="image/svg+xml",
+        )
+
+    static_map_url = _build_google_static_route_map_url(snapshot)
+    if not static_map_url:
+        return Response(
+            content=_route_map_placeholder_svg("Karte nicht verfuegbar", "Google Maps Static API nicht konfiguriert."),
+            media_type="image/svg+xml",
+        )
+    try:
+        response = requests.get(static_map_url, timeout=15)
+        response.raise_for_status()
+        return Response(content=response.content, media_type=response.headers.get("content-type", "image/png"))
+    except Exception as exc:
+        log.warning(f"⚠️ Route-Map konnte nicht geladen werden: {exc}")
+        return Response(
+            content=_route_map_placeholder_svg(
+                str(snapshot.get("destination_label") or "Route aktiv"),
+                "Kartenvorschau momentan nicht erreichbar.",
+            ),
+            media_type="image/svg+xml",
+        )
 
 
 @app.get("/voice/status", summary="Voice-System Status")

@@ -26,6 +26,7 @@ def test_location_routes_registered():
     assert "/location/nearby" in paths
     assert "/location/route" in paths
     assert "/location/route/status" in paths
+    assert "/location/route/map" in paths
 
 
 @pytest.mark.asyncio
@@ -194,6 +195,57 @@ async def test_location_route_status_endpoint_reads_persisted_snapshot(monkeypat
     assert response["status"] == "success"
     assert response["route"]["destination_query"] == "Alexanderplatz Berlin"
     assert response["route"]["travel_mode"] == "walking"
+
+
+@pytest.mark.asyncio
+async def test_location_route_map_endpoint_returns_placeholder_without_route(monkeypatch, tmp_path):
+    monkeypatch.setattr(mcp_server, "_RUNTIME_ROUTE_SNAPSHOT_PATH", tmp_path / "runtime_route_snapshot.json")
+    monkeypatch.setattr(mcp_server, "_route_snapshot", None)
+
+    response = await mcp_server.location_route_map_endpoint()
+
+    assert response.media_type == "image/svg+xml"
+    assert b"Keine aktive Route" in response.body
+
+
+@pytest.mark.asyncio
+async def test_location_route_map_endpoint_proxies_static_google_map(monkeypatch):
+    monkeypatch.setattr(
+        mcp_server,
+        "_route_snapshot",
+        {
+            "has_route": True,
+            "destination_query": "Checkpoint Charlie Berlin",
+            "destination_label": "Checkpoint Charlie, Berlin",
+            "origin": {"latitude": 52.520008, "longitude": 13.404954},
+            "start_coordinates": {"latitude": 52.520008, "longitude": 13.404954},
+            "end_coordinates": {"latitude": 52.507507, "longitude": 13.390373},
+            "saved_at": "2026-03-16T12:30:00Z",
+        },
+    )
+    monkeypatch.setattr(mcp_server, "_google_maps_api_key", lambda: "maps-test-key")
+    captured = {}
+
+    class _FakeResponse:
+        headers = {"content-type": "image/png"}
+        content = b"png-bytes"
+
+        def raise_for_status(self):
+            return None
+
+    def fake_requests_get(url: str, timeout: int = 15):
+        captured["url"] = url
+        captured["timeout"] = timeout
+        return _FakeResponse()
+
+    monkeypatch.setattr(mcp_server.requests, "get", fake_requests_get)
+
+    response = await mcp_server.location_route_map_endpoint()
+
+    assert response.media_type == "image/png"
+    assert response.body == b"png-bytes"
+    assert "maps.googleapis.com/maps/api/staticmap" in captured["url"]
+    assert "markers=" in captured["url"]
 
 
 @pytest.mark.asyncio

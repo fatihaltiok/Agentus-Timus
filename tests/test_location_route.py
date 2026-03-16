@@ -39,10 +39,13 @@ def test_parse_serpapi_google_maps_directions_normalizes_route() -> None:
             "directions": [
                 {
                     "summary": "Schnellste Route",
+                    "overview_polyline": {"points": "abc123"},
                     "legs": [
                         {
                             "start_address": "Alexanderplatz, Berlin",
                             "end_address": "Checkpoint Charlie, Berlin",
+                            "start_location": {"latitude": 52.520008, "longitude": 13.404954},
+                            "end_location": {"latitude": 52.507507, "longitude": 13.390373},
                             "distance": {"text": "1,2 km"},
                             "duration": {"text": "16 Min."},
                             "steps": [
@@ -65,6 +68,9 @@ def test_parse_serpapi_google_maps_directions_normalizes_route() -> None:
     assert result["travel_mode"] == "walking"
     assert result["distance_text"] == "1,2 km"
     assert result["steps"][0]["instruction"] == "Nach Süden gehen"
+    assert result["start_coordinates"]["latitude"] == 52.520008
+    assert result["end_coordinates"]["longitude"] == 13.390373
+    assert result["overview_polyline"] == "abc123"
     assert result["route_url"].startswith("https://www.google.com/maps/dir/?api=1")
 
 
@@ -82,4 +88,5 @@ def test_prepare_route_snapshot_marks_complete_route() -> None:
 
     assert snapshot["has_route"] is True
     assert snapshot["travel_mode"] == "walking"
+    assert snapshot["overview_polyline"] == ""
     assert snapshot["saved_at"] == "2026-03-16T12:30:00Z"

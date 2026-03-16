@@ -1798,6 +1798,191 @@ _TEMPLATE = r"""<!doctype html>
       border-color: rgba(0,224,154,0.20);
       background: rgba(0,224,154,0.08);
     }
+    .route-stage {
+      display: grid;
+      grid-template-columns: minmax(300px, 1.05fr) minmax(360px, 1.25fr);
+      gap: 12px;
+      padding: 12px 12px 0;
+    }
+    .route-card,
+    .route-map-card {
+      border-radius: 18px;
+      border: 1px solid rgba(0,224,154,0.12);
+      background: linear-gradient(145deg, rgba(9,17,28,0.95) 0%, rgba(5,10,18,0.985) 100%);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.02),
+        0 14px 30px rgba(0,0,0,0.34);
+      padding: 14px;
+      min-height: 0;
+    }
+    .route-card {
+      display: grid;
+      gap: 12px;
+    }
+    .route-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .route-kicker {
+      font-size: 9px;
+      letter-spacing: 1.7px;
+      text-transform: uppercase;
+      color: var(--text3);
+    }
+    .route-title {
+      font-size: 16px;
+      color: var(--text);
+      font-weight: 600;
+      line-height: 1.25;
+      margin-top: 3px;
+    }
+    .route-summary {
+      font-size: 12px;
+      color: var(--text2);
+      line-height: 1.5;
+    }
+    .route-meta-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .route-meta {
+      padding: 10px 11px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.04);
+      background: rgba(255,255,255,0.02);
+    }
+    .route-meta .k {
+      display: block;
+      font-size: 9px;
+      color: var(--text3);
+      letter-spacing: 1.1px;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .route-meta .v {
+      display: block;
+      font-size: 12px;
+      color: var(--text);
+      line-height: 1.4;
+      font-weight: 600;
+      word-break: break-word;
+    }
+    .route-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .route-actions a,
+    .route-actions button {
+      min-height: 36px;
+      padding: 8px 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.06);
+      background: rgba(255,255,255,0.02);
+      color: var(--text2);
+      font-size: 11px;
+      letter-spacing: 0.4px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      text-decoration: none;
+      box-shadow: none;
+      transform: none;
+    }
+    .route-actions a:hover,
+    .route-actions button:hover {
+      color: var(--brand);
+      border-color: rgba(0,224,154,0.20);
+      background: rgba(0,224,154,0.08);
+    }
+    .route-actions a[aria-disabled="true"] {
+      pointer-events: none;
+      opacity: 0.55;
+    }
+    .route-steps {
+      display: grid;
+      gap: 8px;
+    }
+    .route-step {
+      display: flex;
+      gap: 10px;
+      padding: 9px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+    }
+    .route-step:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+    .route-step-index {
+      flex-shrink: 0;
+      width: 24px;
+      height: 24px;
+      border-radius: 999px;
+      border: 1px solid rgba(0,224,154,0.16);
+      background: rgba(0,224,154,0.08);
+      color: var(--brand);
+      font-size: 10px;
+      font-weight: 700;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .route-step-body {
+      min-width: 0;
+    }
+    .route-step-text {
+      font-size: 12px;
+      color: var(--text);
+      line-height: 1.45;
+    }
+    .route-step-meta {
+      margin-top: 3px;
+      font-size: 10px;
+      color: var(--text3);
+      line-height: 1.4;
+    }
+    .route-map-wrap {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      overflow: hidden;
+      border-radius: 16px;
+      border: 1px solid rgba(255,255,255,0.05);
+      background:
+        radial-gradient(circle at top left, rgba(0,224,154,0.12), transparent 38%),
+        linear-gradient(145deg, rgba(8,15,25,0.96) 0%, rgba(4,9,16,0.99) 100%);
+    }
+    .route-map-image {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: none;
+    }
+    .route-map-image.visible {
+      display: block;
+    }
+    .route-map-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 18px;
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--text2);
+      background: linear-gradient(180deg, rgba(4,8,14,0.06) 0%, rgba(4,8,14,0.42) 100%);
+    }
+    .route-map-caption {
+      margin-top: 10px;
+      font-size: 11px;
+      color: var(--text3);
+      line-height: 1.45;
+    }
 
     .mobile-bottom-nav {
       position: fixed;
@@ -1979,6 +2164,10 @@ _TEMPLATE = r"""<!doctype html>
       }
       .mobile-chat-summary {
         display: flex;
+      }
+      .route-stage {
+        grid-template-columns: 1fr;
+        padding: 12px 12px 0;
       }
       .chat-header {
         height: 52px;
@@ -2199,6 +2388,58 @@ _TEMPLATE = r"""<!doctype html>
               Dateien
             </button>
           </div>
+        </div>
+        <div class="route-stage" id="routeStage">
+          <section class="route-card">
+            <div class="route-head">
+              <div>
+                <div class="route-kicker">Navigation</div>
+                <div class="route-title" id="routeTitle">Aktive Route</div>
+              </div>
+              <span class="mobile-status-badge" id="routeStatusBadge">idle</span>
+            </div>
+            <div class="route-summary" id="routeSummary">Noch keine aktive Route. Timus zeigt hier ETA, Ziel, Schritte und die Kartenansicht der letzten Route.</div>
+            <div class="route-meta-grid">
+              <div class="route-meta">
+                <span class="k">Ziel</span>
+                <span class="v" id="routeDestination">–</span>
+              </div>
+              <div class="route-meta">
+                <span class="k">Modus</span>
+                <span class="v" id="routeMode">–</span>
+              </div>
+              <div class="route-meta">
+                <span class="k">Distanz</span>
+                <span class="v" id="routeDistance">–</span>
+              </div>
+              <div class="route-meta">
+                <span class="k">ETA</span>
+                <span class="v" id="routeDuration">–</span>
+              </div>
+              <div class="route-meta">
+                <span class="k">Start</span>
+                <span class="v" id="routeOrigin">–</span>
+              </div>
+              <div class="route-meta">
+                <span class="k">Stand</span>
+                <span class="v" id="routeSavedAt">–</span>
+              </div>
+            </div>
+            <div class="route-actions">
+              <a id="routeOpenMapsLink" href="#" target="_blank" rel="noopener noreferrer" aria-disabled="true">In Google Maps öffnen</a>
+              <button class="sec" onclick="loadRouteStatus(true)">Route aktualisieren</button>
+            </div>
+            <div class="route-steps" id="routeStepList">
+              <div class="empty">Noch keine Route gespeichert.</div>
+            </div>
+          </section>
+          <section class="route-map-card">
+            <div class="route-map-wrap">
+              <img id="routeMapImage" class="route-map-image" alt="Aktive Route Kartenansicht" loading="lazy" />
+              <div class="route-map-overlay" id="routeMapOverlay">Sobald eine Route aktiv ist, erscheint hier die Kartenansicht im Canvas.</div>
+            </div>
+            <div class="route-map-caption" id="routeMapCaption">Die Kartenansicht wird serverseitig geladen, damit API-Keys nicht im Canvas offengelegt werden.</div>
+          </section>
         </div>
         <div class="cy-toolbar">
           <span style="color:var(--text3);font-size:10px;letter-spacing:1px;text-transform:uppercase;">Layout</span>
@@ -2750,6 +2991,7 @@ let cy               = null;
 let mobileSection    = "home";
 let lastStatusSnapshot = null;
 let lastCanvasItems    = [];
+let lastRouteSnapshot  = null;
 let mobileVoiceState   = "idle";
 let lastRecentFiles    = [];
 let voiceAutoReply     = true;
@@ -2799,6 +3041,115 @@ function setMobileBadge(id, text, state) {
   const cls = _mobileStateClass(state);
   el.className = "mobile-status-badge" + (cls ? " " + cls : "");
   el.textContent = text || "unknown";
+}
+
+function _formatRouteMode(value) {
+  const normalized = String(value || "").toLowerCase();
+  if (normalized === "walking") return "Zu Fuß";
+  if (normalized === "bicycling") return "Fahrrad";
+  if (normalized === "transit") return "ÖPNV";
+  if (normalized === "driving") return "Auto";
+  return value || "–";
+}
+
+function _formatRouteTimestamp(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "–";
+  return raw.replace("T", " ").replace("Z", " UTC").slice(0, 20);
+}
+
+function _setRouteMapImage(route, forceRefresh) {
+  const imageEl = document.getElementById("routeMapImage");
+  const overlayEl = document.getElementById("routeMapOverlay");
+  if (!imageEl || !overlayEl) return;
+  if (!route || !route.has_route) {
+    imageEl.classList.remove("visible");
+    imageEl.removeAttribute("src");
+    overlayEl.textContent = "Sobald eine Route aktiv ist, erscheint hier die Kartenansicht im Canvas.";
+    overlayEl.style.display = "flex";
+    return;
+  }
+  imageEl.classList.add("visible");
+  overlayEl.textContent = "Kartenvorschau wird geladen…";
+  overlayEl.style.display = "flex";
+  const cacheBust = forceRefresh ? Date.now() : (route.saved_at || Date.now());
+  imageEl.src = "/location/route/map?ts=" + encodeURIComponent(String(cacheBust));
+}
+
+function renderRouteStatus(route) {
+  lastRouteSnapshot = route || null;
+  const titleEl = document.getElementById("routeTitle");
+  const summaryEl = document.getElementById("routeSummary");
+  const destinationEl = document.getElementById("routeDestination");
+  const modeEl = document.getElementById("routeMode");
+  const distanceEl = document.getElementById("routeDistance");
+  const durationEl = document.getElementById("routeDuration");
+  const originEl = document.getElementById("routeOrigin");
+  const savedAtEl = document.getElementById("routeSavedAt");
+  const stepListEl = document.getElementById("routeStepList");
+  const captionEl = document.getElementById("routeMapCaption");
+  const openLinkEl = document.getElementById("routeOpenMapsLink");
+
+  if (!route || !route.has_route) {
+    setMobileBadge("routeStatusBadge", "idle", "unknown");
+    if (titleEl) titleEl.textContent = "Aktive Route";
+    if (summaryEl) summaryEl.textContent = "Noch keine aktive Route. Timus zeigt hier ETA, Ziel, Schritte und die Kartenansicht der letzten Route.";
+    if (destinationEl) destinationEl.textContent = "–";
+    if (modeEl) modeEl.textContent = "–";
+    if (distanceEl) distanceEl.textContent = "–";
+    if (durationEl) durationEl.textContent = "–";
+    if (originEl) originEl.textContent = "–";
+    if (savedAtEl) savedAtEl.textContent = "–";
+    if (captionEl) captionEl.textContent = "Die Kartenansicht wird serverseitig geladen, damit API-Keys nicht im Canvas offengelegt werden.";
+    if (stepListEl) stepListEl.innerHTML = '<div class="empty">Noch keine Route gespeichert.</div>';
+    if (openLinkEl) {
+      openLinkEl.setAttribute("aria-disabled", "true");
+      openLinkEl.removeAttribute("href");
+    }
+    _setRouteMapImage(null, false);
+    return;
+  }
+
+  const originPresence = String(((route.origin || {}).presence_status) || "unknown").toLowerCase();
+  const routeBadgeState = ["live", "recent"].includes(originPresence) ? "ok" : "warn";
+  const routeBadgeLabel = routeBadgeState === "ok" ? originPresence : "cached";
+  const destinationLabel = route.destination_label || route.end_address || route.destination_query || "Route";
+  const stepPreview = Array.isArray(route.steps) ? route.steps.slice(0, 5) : [];
+
+  setMobileBadge("routeStatusBadge", routeBadgeLabel, routeBadgeState);
+  if (titleEl) titleEl.textContent = route.summary || "Aktive Route";
+  if (summaryEl) {
+    summaryEl.textContent = route.end_address
+      ? `${route.start_address || "Start"} → ${route.end_address}`
+      : "Aktive Route aus dem letzten mobilen Standort.";
+  }
+  if (destinationEl) destinationEl.textContent = destinationLabel;
+  if (modeEl) modeEl.textContent = _formatRouteMode(route.travel_mode);
+  if (distanceEl) distanceEl.textContent = route.distance_text || "–";
+  if (durationEl) durationEl.textContent = route.duration_text || "–";
+  if (originEl) originEl.textContent = route.start_address || ((route.origin || {}).display_name) || "–";
+  if (savedAtEl) savedAtEl.textContent = _formatRouteTimestamp(route.saved_at);
+  if (captionEl) {
+    captionEl.textContent = `${route.source_provider || "provider"} · ${route.engine || "route"} · ${route.step_count || stepPreview.length || 0} Schritte`;
+  }
+  if (stepListEl) {
+    stepListEl.innerHTML = stepPreview.length
+      ? stepPreview.map(step => `
+          <div class="route-step">
+            <span class="route-step-index">${esc(step.position || "•")}</span>
+            <div class="route-step-body">
+              <div class="route-step-text">${esc(step.instruction || "Weiter")}</div>
+              <div class="route-step-meta">${esc(step.distance_text || "")}${step.duration_text ? ` · ${esc(step.duration_text)}` : ""}</div>
+            </div>
+          </div>
+        `).join("")
+      : '<div class="empty">Keine Schrittfolge verfügbar.</div>';
+  }
+  if (openLinkEl) {
+    openLinkEl.href = route.maps_url || route.route_url || "#";
+    openLinkEl.setAttribute("aria-disabled", route.maps_url || route.route_url ? "false" : "true");
+  }
+  _setRouteMapImage(route, false);
 }
 
 function updateMobileScore(score, level) {
@@ -2867,6 +3218,7 @@ async function refreshMobileOperationalData() {
   try {
     await Promise.all([
       loadMobileSnapshot(),
+      loadRouteStatus(true),
       loadRecentFiles(),
       loadVoiceStatus(),
       loadCanvasList(),
@@ -3095,6 +3447,19 @@ async function loadMobileSnapshot() {
     applyMobileSnapshot(data.snapshot || {});
   } catch (e) {
     setMobilePill("mobilePillMcp", "MCP", `Fehler: ${e.message}`, "error");
+  }
+}
+
+async function loadRouteStatus(forceMapRefresh) {
+  try {
+    const data = await api("/location/route/status");
+    const route = data.route || null;
+    renderRouteStatus(route);
+    if (forceMapRefresh && route && route.has_route) _setRouteMapImage(route, true);
+  } catch (e) {
+    setMobileBadge("routeStatusBadge", "error", "error");
+    const summaryEl = document.getElementById("routeSummary");
+    if (summaryEl) summaryEl.textContent = "Route konnte nicht geladen werden: " + e.message;
   }
 }
 
@@ -5624,6 +5989,7 @@ function setPolling(on) {
       if (_pollTick % Math.ceil(30000/POLL_MS) === 0) {
         loadScorecard().catch(() => {});
         loadMobileSnapshot().catch(() => {});
+        loadRouteStatus(true).catch(() => {});
       }
     }, POLL_MS);
   }
@@ -5638,6 +6004,21 @@ async function init() {
   renderToolActivity();
   initCytoscape();
   initAgentCircle();
+  const routeMapImage = document.getElementById("routeMapImage");
+  if (routeMapImage) {
+    routeMapImage.addEventListener("load", () => {
+      const overlay = document.getElementById("routeMapOverlay");
+      if (overlay && routeMapImage.classList.contains("visible")) overlay.style.display = "none";
+    });
+    routeMapImage.addEventListener("error", () => {
+      const overlay = document.getElementById("routeMapOverlay");
+      if (overlay) {
+        overlay.textContent = "Kartenvorschau konnte nicht geladen werden.";
+        overlay.style.display = "flex";
+      }
+      routeMapImage.classList.remove("visible");
+    });
+  }
 
   try { const s = await api("/agent_status"); renderAgentLeds(s.agents||{}); setThinking(!!s.thinking); } catch {}
   try { const m = await api("/agent_models"); if (m.models) { agentModels = m.models; renderAgentLeds({}); } } catch {}
@@ -5650,6 +6031,7 @@ async function init() {
   } catch {}
   try { await loadScorecard(); } catch {}
   try { await loadMobileSnapshot(); } catch {}
+  try { await loadRouteStatus(true); } catch {}
   try { await loadRecentFiles(); } catch {}
   try { await loadVoiceStatus(); } catch {}
 
