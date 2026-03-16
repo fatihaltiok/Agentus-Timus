@@ -99,3 +99,28 @@ def test_build_ops_observability_summary_collects_alerts():
 
     gate = evaluate_ops_release_gate(summary, current_canary_percent=30)
     assert gate["state"] == "blocked"
+
+
+def test_build_ops_observability_summary_warns_on_human_only_hardening_escalation():
+    summary = build_ops_observability_summary(
+        services={"mcp": {"ok": True, "active": "active"}},
+        providers={"openai": {"state": "ok"}},
+        tool_stats=[],
+        routing_stats={},
+        llm_usage={"total_requests": 0, "success_rate": 1.0, "avg_latency_ms": 0.0},
+        budget={},
+        hardening={
+            "state": "warn",
+            "last_event": "proposal_skipped_cooldown",
+            "last_status": "skipped",
+            "last_pattern_name": "narrative_synthesis_empty",
+            "last_pattern_effective_fix_mode": "human_only",
+            "last_pattern_freeze_active": True,
+            "last_reason": "human_freeze_active",
+            "metrics": {},
+        },
+        limit=5,
+    )
+
+    messages = [item["message"] for item in summary["alerts"]]
+    assert any("human_only" in msg for msg in messages)

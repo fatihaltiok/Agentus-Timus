@@ -789,12 +789,18 @@ class SelfModifierEngine:
         file_path: str,
         change_description: str,
         change_type: str = "auto",
+        pattern_name: str = "",
+        component: str = "",
+        requested_fix_mode: str = "",
         session_id: str = "",
     ) -> SelfModifyResult:
         safe_source_id = str(source_id or "").strip() or uuid.uuid4().hex
         safe_file_path = str(file_path or "").strip()
         safe_description = str(change_description or "").strip()
         safe_change_type = str(change_type or "auto").strip() or "auto"
+        safe_pattern_name = str(pattern_name or "").strip()
+        safe_component = str(component or "").strip()
+        safe_requested_fix_mode = str(requested_fix_mode or "").strip()
         safe_session_id = str(session_id or "").strip() or f"m18:{safe_source_id[:12]}"
         try:
             from orchestration.task_queue import get_queue
@@ -803,6 +809,9 @@ class SelfModifierEngine:
                 queue=get_queue(),
                 stage="self_modify_started",
                 status="active",
+                pattern_name=safe_pattern_name,
+                component=safe_component,
+                requested_fix_mode=safe_requested_fix_mode,
                 reason="runner_autofix",
                 task_id=safe_source_id,
                 target_file_path=safe_file_path,
@@ -843,6 +852,9 @@ class SelfModifierEngine:
                 queue=get_queue(),
                 stage="self_modify_finished",
                 status=result.status,
+                pattern_name=safe_pattern_name,
+                component=safe_component,
+                requested_fix_mode=safe_requested_fix_mode,
                 reason=result.risk_reason or result.verification_summary or result.canary_summary,
                 task_id=safe_source_id,
                 target_file_path=result.file_path or safe_file_path,

@@ -469,6 +469,8 @@ def build_ops_observability_summary(
     hardening_last_event = str((hardening or {}).get("last_event", "") or "")
     hardening_last_pattern = str((hardening or {}).get("last_pattern_name", "") or "")
     hardening_last_reason = str((hardening or {}).get("last_reason", "") or "")
+    hardening_effective_mode = str((hardening or {}).get("last_pattern_effective_fix_mode", "") or "")
+    hardening_freeze_active = bool((hardening or {}).get("last_pattern_freeze_active"))
     if hardening_last_status in {"error", "rolled_back"}:
         hardening_alerts.append(
             _make_alert(
@@ -479,6 +481,21 @@ def build_ops_observability_summary(
                 message=(
                     f"M18 {hardening_last_event or 'event'}: "
                     f"{hardening_last_status} @ {hardening_last_pattern or 'unknown'}"
+                    + (f" | {hardening_last_reason}" if hardening_last_reason else "")
+                ),
+                slo="hardening_runtime",
+                value=1,
+            )
+        )
+    elif hardening_effective_mode == "human_only" or hardening_freeze_active:
+        hardening_alerts.append(
+            _make_alert(
+                kind="self_hardening",
+                severity="warn",
+                error_class="orchestration",
+                target="m18_hardening",
+                message=(
+                    f"M18 escalated to human_only @ {hardening_last_pattern or 'unknown'}"
                     + (f" | {hardening_last_reason}" if hardening_last_reason else "")
                 ),
                 slo="hardening_runtime",

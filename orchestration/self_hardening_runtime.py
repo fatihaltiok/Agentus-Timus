@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+from orchestration.self_hardening_escalation import record_self_hardening_pattern_event
+
 
 _METRIC_KEYS = (
     "proposals_total",
@@ -19,6 +21,9 @@ _METRIC_KEYS = (
     "self_modify_rolled_back_total",
     "self_modify_errors_total",
     "downgraded_to_development_total",
+    "repeat_failure_escalations_total",
+    "human_only_escalations_total",
+    "freeze_activations_total",
 )
 
 _LAST_EVENT_KEY = "m18_hardening_last_event"
@@ -65,6 +70,30 @@ def record_self_hardening_event(
     increment_metrics: Optional[Dict[str, int]] = None,
     observed_at: str = "",
 ) -> Dict[str, Any]:
+    pattern_runtime: Dict[str, Any] = {}
+    transition_metrics: Dict[str, int] = {}
+    if str(pattern_name or "").strip():
+        try:
+            pattern_runtime = record_self_hardening_pattern_event(
+                queue,
+                pattern_name=pattern_name,
+                requested_fix_mode=requested_fix_mode,
+                stage=stage,
+                status=status,
+                execution_mode=execution_mode,
+                route_target=route_target,
+                reason=reason,
+                observed_at=observed_at,
+            )
+            transition_metrics = dict(pattern_runtime.get("transition_metrics") or {})
+        except Exception:
+            pattern_runtime = {}
+            transition_metrics = {}
+    pattern_state = (
+        pattern_runtime.get("state", {})
+        if isinstance(pattern_runtime.get("state"), dict)
+        else {}
+    )
     event_payload = {
         "status": str(status or "").strip(),
         "pattern_name": str(pattern_name or "").strip(),
@@ -78,6 +107,11 @@ def record_self_hardening_event(
         "target_file_path": str(target_file_path or "").strip(),
         "change_type": str(change_type or "").strip(),
         "sample_lines": list(sample_lines or [])[:3],
+        "pattern_effective_fix_mode": str(pattern_state.get("effective_fix_mode") or "").strip(),
+        "pattern_effective_reason": str(pattern_state.get("effective_reason") or "").strip(),
+        "pattern_freeze_until": str(pattern_state.get("freeze_until") or "").strip(),
+        "pattern_freeze_active": bool(pattern_state.get("freeze_active")),
+        "pattern_recurrence_count": _to_int(pattern_state.get("recurrence_count")),
     }
     queue.set_policy_runtime_state(
         _LAST_EVENT_KEY,
@@ -90,7 +124,10 @@ def record_self_hardening_event(
     metadata = metrics_state.get("metadata", {}) if isinstance(metrics_state.get("metadata"), dict) else {}
     for key in _METRIC_KEYS:
         metadata[key] = _to_int(metadata.get(key))
-    for key, delta in (increment_metrics or {}).items():
+    merged_metric_updates = dict(increment_metrics or {})
+    for key, delta in transition_metrics.items():
+        merged_metric_updates[key] = _to_int(merged_metric_updates.get(key)) + _to_int(delta)
+    for key, delta in merged_metric_updates.items():
         if key not in _METRIC_KEYS:
             continue
         metadata[key] = _to_int(metadata.get(key)) + max(0, int(delta or 0))
@@ -126,6 +163,11 @@ def get_self_hardening_runtime_summary(queue) -> Dict[str, Any]:
             "last_goal_id": "",
             "last_target_file_path": "",
             "last_change_type": "",
+            "last_pattern_effective_fix_mode": "",
+            "last_pattern_effective_reason": "",
+            "last_pattern_freeze_until": "",
+            "last_pattern_freeze_active": False,
+            "last_pattern_recurrence_count": 0,
             "metrics": {key: 0 for key in _METRIC_KEYS},
             "updated_at": "",
         }
@@ -149,6 +191,11 @@ def get_self_hardening_runtime_summary(queue) -> Dict[str, Any]:
         "last_goal_id": str(event_meta.get("goal_id") or "").strip(),
         "last_target_file_path": str(event_meta.get("target_file_path") or "").strip(),
         "last_change_type": str(event_meta.get("change_type") or "").strip(),
+        "last_pattern_effective_fix_mode": str(event_meta.get("pattern_effective_fix_mode") or "").strip(),
+        "last_pattern_effective_reason": str(event_meta.get("pattern_effective_reason") or "").strip(),
+        "last_pattern_freeze_until": str(event_meta.get("pattern_freeze_until") or "").strip(),
+        "last_pattern_freeze_active": bool(event_meta.get("pattern_freeze_active")),
+        "last_pattern_recurrence_count": _to_int(event_meta.get("pattern_recurrence_count")),
         "sample_lines": list(event_meta.get("sample_lines") or [])[:3],
         "metrics": metrics,
         "updated_at": str(last_event.get("updated_at") or metrics_state.get("updated_at") or ""),

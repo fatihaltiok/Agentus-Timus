@@ -25,6 +25,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from orchestration.self_hardening_escalation import get_self_hardening_pattern_state
 from orchestration.self_hardening_execution_policy import evaluate_self_hardening_execution
 from orchestration.self_hardening_runtime import record_self_hardening_event
 
@@ -66,6 +67,16 @@ def _should_bridge_fix_mode(fix_mode: str) -> bool:
 def _priority_for_hardening_severity(severity: str) -> int:
     normalized = str(severity or "").strip().lower()
     return {"high": 1, "medium": 2, "low": 3}.get(normalized, 2)
+
+
+def _combine_escalation_reason(*, escalation_reason: str, execution_reason: str) -> str:
+    safe_escalation_reason = str(escalation_reason or "").strip()
+    safe_execution_reason = str(execution_reason or "").strip()
+    if not safe_escalation_reason or safe_escalation_reason == "requested_fix_mode":
+        return safe_execution_reason
+    if not safe_execution_reason or safe_execution_reason == safe_escalation_reason:
+        return safe_escalation_reason
+    return f"{safe_escalation_reason}|{safe_execution_reason}"
 
 # ── Bekannte Fehler-Pattern → Härtungs-Empfehlung ─────────────────────────────
 
@@ -467,14 +478,24 @@ class SelfHardeningEngine:
         return False
 
     def _create_hardening_task(self, proposal: HardeningProposal, goal_id: str | None = None) -> str | None:
-        decision = evaluate_self_hardening_execution(
+        from orchestration.task_queue import get_queue
+
+        queue = get_queue()
+        escalation_state = get_self_hardening_pattern_state(
+            queue,
+            pattern_name=proposal.pattern_name,
             requested_fix_mode=proposal.fix_mode,
+        )
+        decision = evaluate_self_hardening_execution(
+            requested_fix_mode=str(escalation_state.get("effective_fix_mode") or proposal.fix_mode),
             recommended_agent=proposal.recommended_agent,
             target_file_path=proposal.target_file_path,
             change_type=proposal.change_type,
         )
-        from orchestration.task_queue import get_queue
-        queue = get_queue()
+        combined_reason = _combine_escalation_reason(
+            escalation_reason=str(escalation_state.get("effective_reason") or ""),
+            execution_reason=decision.reason,
+        )
         if not decision.allow_task:
             record_self_hardening_event(
                 queue=queue,
@@ -485,7 +506,7 @@ class SelfHardeningEngine:
                 requested_fix_mode=proposal.fix_mode,
                 execution_mode=decision.effective_fix_mode,
                 route_target=decision.route_target,
-                reason=decision.reason,
+                reason=combined_reason,
                 goal_id=str(goal_id or ""),
             )
             return None
@@ -514,6 +535,13 @@ class SelfHardeningEngine:
                     "requested_fix_mode": decision.requested_fix_mode,
                     "execution_mode": decision.effective_fix_mode,
                     "execution_reason": decision.reason,
+                    "escalated_fix_mode": str(escalation_state.get("effective_fix_mode") or proposal.fix_mode),
+                    "escalation_reason": str(escalation_state.get("effective_reason") or ""),
+                    "pattern_freeze_until": str(escalation_state.get("freeze_until") or ""),
+                    "pattern_freeze_active": bool(escalation_state.get("freeze_active")),
+                    "pattern_recurrence_count": int(escalation_state.get("recurrence_count") or 0),
+                    "pattern_self_modify_failures": int(escalation_state.get("self_modify_failure_count") or 0),
+                    "pattern_developer_task_count": int(escalation_state.get("developer_task_count") or 0),
                     "self_modify_allowed": bool(decision.allow_self_modify),
                     "target_file_path": decision.target_file_path,
                     "change_type": decision.change_type,
@@ -552,7 +580,7 @@ class SelfHardeningEngine:
                 requested_fix_mode=proposal.fix_mode,
                 execution_mode=decision.effective_fix_mode,
                 route_target=decision.route_target,
-                reason=decision.reason,
+                reason=combined_reason,
                 task_id=str(task_id or ""),
                 goal_id=str(goal_id or ""),
                 target_file_path=decision.target_file_path,

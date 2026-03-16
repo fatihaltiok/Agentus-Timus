@@ -41,6 +41,8 @@ def test_record_self_hardening_event_updates_metrics_and_summary(tmp_path: Path)
     assert summary["last_event"] == "task_created"
     assert summary["last_pattern_name"] == "tool_import_error"
     assert summary["last_route_target"] == "development"
+    assert summary["last_pattern_effective_fix_mode"] == "developer_task"
+    assert summary["last_pattern_freeze_active"] is False
     assert summary["metrics"]["proposals_total"] == 1
     assert summary["metrics"]["tasks_created_total"] == 1
     assert summary["metrics"]["developer_tasks_total"] == 1

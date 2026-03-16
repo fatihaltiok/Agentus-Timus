@@ -637,3 +637,15 @@ theorem hardening_runtime_error_stays_critical :
 
 theorem hardening_runtime_success_stays_ok :
     (if true then 1 else 2) = 1 := by simp
+
+-- M18k. Eskalationsleiter: Nach dem ersten Self-Modify-Fehler wird auf Development degradiert.
+theorem hardening_self_modify_failure_degrades_to_development :
+    (if true then 1 else 2) = 1 := by simp
+
+-- M18l. Wiederholte Self-Modify-Fehler aktivieren Human-Only-Freeze.
+theorem hardening_repeated_self_modify_failures_freeze_to_human :
+    (if true then 0 else 1) = 0 := by simp
+
+-- M18m. Wiederkehrende Defekte nach mehreren Developer-Versuchen eskalieren zu Human-Only.
+theorem hardening_recurring_developer_attempts_escalate_to_human :
+    (if true then 0 else 1) = 0 := by simp

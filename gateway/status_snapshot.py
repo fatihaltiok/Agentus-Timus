@@ -454,6 +454,11 @@ def _build_self_hardening_summary() -> Dict[str, Any]:
             "last_goal_id": "",
             "last_target_file_path": "",
             "last_change_type": "",
+            "last_pattern_effective_fix_mode": "",
+            "last_pattern_effective_reason": "",
+            "last_pattern_freeze_until": "",
+            "last_pattern_freeze_active": False,
+            "last_pattern_recurrence_count": 0,
             "sample_lines": [],
             "metrics": {},
             "updated_at": "",
@@ -701,14 +706,20 @@ def format_status_message(snapshot: Dict[str, Any], summary_lines: List[str]) ->
     hardening_lines.append(
         f"• Pattern {self_hardening.get('last_pattern_name', 'n/a') or 'n/a'} | "
         f"Route {self_hardening.get('last_route_target', 'n/a') or 'n/a'} | "
-        f"Exec {self_hardening.get('last_execution_mode', 'n/a') or 'n/a'}"
+        f"Exec {self_hardening.get('last_execution_mode', 'n/a') or 'n/a'} | "
+        f"Effective {self_hardening.get('last_pattern_effective_fix_mode', 'n/a') or 'n/a'}"
     )
+    if bool(self_hardening.get("last_pattern_freeze_active")):
+        hardening_lines.append(
+            f"• Freeze bis {self_hardening.get('last_pattern_freeze_until', 'n/a') or 'n/a'}"
+        )
     hardening_metrics = self_hardening.get("metrics", {}) or {}
     hardening_lines.append(
         f"• Proposals {hardening_metrics.get('proposals_total', 0)} | "
         f"Tasks {hardening_metrics.get('tasks_created_total', 0)} | "
         f"SM Attempts {hardening_metrics.get('self_modify_attempts_total', 0)} | "
-        f"SM Success {hardening_metrics.get('self_modify_successes_total', 0)}"
+        f"SM Success {hardening_metrics.get('self_modify_successes_total', 0)} | "
+        f"Human Esc {hardening_metrics.get('human_only_escalations_total', 0)}"
     )
 
     provider_lines = ["", "LLM/API Health"]

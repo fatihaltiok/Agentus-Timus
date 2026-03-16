@@ -1853,6 +1853,9 @@ class AutonomousRunner:
                 file_path=target_file_path,
                 change_description=description,
                 change_type=change_type,
+                pattern_name=pattern_name,
+                component=component,
+                requested_fix_mode=requested_fix_mode,
                 session_id=f"m18:{task_id[:8]}",
             )
             summary = (
