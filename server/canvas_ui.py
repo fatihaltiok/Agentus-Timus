@@ -1523,6 +1523,87 @@ _TEMPLATE = r"""<!doctype html>
       color: var(--text);
       font-weight: 600;
     }
+    .location-control-shell {
+      padding: 0 12px;
+    }
+    .location-control-card {
+      margin-top: 12px;
+      border-radius: 18px;
+      border: 1px solid rgba(0,212,240,0.12);
+      background: linear-gradient(145deg, rgba(9,17,28,0.95) 0%, rgba(5,10,18,0.985) 100%);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.02),
+        0 14px 30px rgba(0,0,0,0.34);
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+    }
+    .location-control-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .location-control-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 11px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.04);
+      background: rgba(255,255,255,0.02);
+    }
+    .location-control-toggle strong {
+      display: block;
+      font-size: 12px;
+      color: var(--text);
+      line-height: 1.3;
+      margin-bottom: 3px;
+    }
+    .location-control-toggle span {
+      display: block;
+      font-size: 10px;
+      color: var(--text3);
+      line-height: 1.45;
+    }
+    .location-control-field {
+      display: grid;
+      gap: 6px;
+      padding: 10px 11px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.04);
+      background: rgba(255,255,255,0.02);
+    }
+    .location-control-field span {
+      font-size: 9px;
+      color: var(--text3);
+      letter-spacing: 1.1px;
+      text-transform: uppercase;
+    }
+    .location-control-field input,
+    .location-control-field select {
+      width: 100%;
+      min-height: 38px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.06);
+      background: rgba(6, 11, 18, 0.82);
+      color: var(--text);
+      padding: 8px 10px;
+      font-size: 12px;
+    }
+    .location-control-field select:focus {
+      outline: none;
+      border-color: rgba(0,224,154,0.22);
+    }
+    .location-control-note {
+      font-size: 11px;
+      color: var(--text2);
+      line-height: 1.5;
+      padding: 10px 11px;
+      border-radius: 12px;
+      border: 1px dashed rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.015);
+    }
     .mobile-status-shell {
       display: none;
     }
@@ -2405,6 +2486,68 @@ _TEMPLATE = r"""<!doctype html>
           <div class="mobile-location-strip" id="mobileLocationStrip">
             <strong>Standort:</strong> Lade aktives Gerät und Privacy-Status…
           </div>
+        </div>
+        <div class="location-control-shell">
+          <section class="location-control-card" id="locationControlCard">
+            <div class="route-head">
+              <div>
+                <div class="route-kicker">Standort-Kontrolle</div>
+                <div class="route-title">Privacy & Geräte</div>
+              </div>
+              <span class="mobile-status-badge" id="locationControlBadge">idle</span>
+            </div>
+            <div class="location-control-grid">
+              <div class="location-control-toggle">
+                <div>
+                  <strong>Sharing</strong>
+                  <span>Standortdaten am Server halten und in Status/Snapshot sichtbar machen.</span>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="locationSharingToggle">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="location-control-toggle">
+                <div>
+                  <strong>Kontext</strong>
+                  <span>Frischen Standort automatisch fuer ortsrelevante Chat-Anfragen nutzen.</span>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="locationContextToggle">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="location-control-toggle">
+                <div>
+                  <strong>Background-Sync</strong>
+                  <span>Erlaubt Hintergrund-Uploads, falls die Android-App spaeter darauf umgestellt wird.</span>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="locationBackgroundSyncToggle">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <label class="location-control-field">
+                <span>Bevorzugtes Gerät</span>
+                <select id="locationPreferredDeviceSelect">
+                  <option value="">Automatisch waehlen</option>
+                </select>
+              </label>
+              <label class="location-control-field">
+                <span>Erlaubte Scopes</span>
+                <input id="locationAllowedScopesInput" placeholder="primary,travel" />
+              </label>
+              <label class="location-control-field">
+                <span>Max. Geräte</span>
+                <input id="locationMaxDeviceEntriesInput" type="number" min="1" max="32" step="1" />
+              </label>
+            </div>
+            <div class="location-control-note" id="locationControlMeta">Lade aktive Geraete und Privacy-Status…</div>
+            <div class="route-actions">
+              <button class="sec" id="locationControlSaveBtn" onclick="saveLocationControls()">Kontrolle speichern</button>
+              <button class="sec" onclick="refreshLocationControlPanel()">Neu laden</button>
+            </div>
+          </section>
         </div>
         <div class="route-stage" id="routeStage">
           <section class="route-card">
@@ -3472,7 +3615,121 @@ function applyMobileSnapshot(snapshot) {
     const accuracy = activeLocation.accuracy_meters != null ? `${activeLocation.accuracy_meters} m` : "–";
     const sharing = locationControls.sharing_enabled === false ? "off" : "on";
     const context = locationControls.context_enabled === false ? "off" : "on";
-    locationStripEl.innerHTML = `<strong>Standort:</strong> ${esc(locality)} · ${esc(deviceId)} · ${esc(presence)} · Genauigkeit ${esc(accuracy)} · Sharing ${esc(sharing)} · Kontext ${esc(context)}`;
+    const privacy = activeLocation.privacy_state || (sharing === "off" ? "blocked" : "enabled");
+    locationStripEl.innerHTML = `<strong>Standort:</strong> ${esc(locality)} · ${esc(deviceId)} · ${esc(presence)} · Privacy ${esc(privacy)} · Genauigkeit ${esc(accuracy)} · Sharing ${esc(sharing)} · Kontext ${esc(context)}`;
+  }
+  renderLocationControlPanel(locationSummary);
+}
+
+function renderLocationControlPanel(locationSummary) {
+  const summary = locationSummary || {};
+  const controls = summary.controls || {};
+  const devices = Array.isArray(summary.devices) ? summary.devices : [];
+  const activeLocation = summary.location || {};
+
+  const sharingToggle = document.getElementById("locationSharingToggle");
+  const contextToggle = document.getElementById("locationContextToggle");
+  const backgroundToggle = document.getElementById("locationBackgroundSyncToggle");
+  const preferredSelect = document.getElementById("locationPreferredDeviceSelect");
+  const scopesInput = document.getElementById("locationAllowedScopesInput");
+  const maxEntriesInput = document.getElementById("locationMaxDeviceEntriesInput");
+  const metaEl = document.getElementById("locationControlMeta");
+
+  if (sharingToggle) sharingToggle.checked = controls.sharing_enabled !== false;
+  if (contextToggle) contextToggle.checked = controls.context_enabled !== false;
+  if (backgroundToggle) backgroundToggle.checked = controls.background_sync_allowed !== false;
+  if (scopesInput) scopesInput.value = Array.isArray(controls.allowed_user_scopes) ? controls.allowed_user_scopes.join(",") : "primary";
+  if (maxEntriesInput) maxEntriesInput.value = String(controls.max_device_entries || 8);
+
+  if (preferredSelect) {
+    const previousValue = String(controls.preferred_device_id || "");
+    preferredSelect.innerHTML = '<option value="">Automatisch waehlen</option>';
+    devices.forEach(device => {
+      const deviceId = String(device.device_id || "").trim();
+      if (!deviceId) return;
+      const locality = device.locality || device.display_name || device.user_scope || "unbekannt";
+      const presence = device.presence_status || "unknown";
+      const option = document.createElement("option");
+      option.value = deviceId;
+      option.textContent = `${deviceId} · ${locality} · ${presence}`;
+      preferredSelect.appendChild(option);
+    });
+    preferredSelect.value = previousValue;
+  }
+
+  let controlState = "ok";
+  let controlLabel = "bereit";
+  if (!devices.length) {
+    controlState = "warn";
+    controlLabel = "leer";
+  } else if (controls.sharing_enabled === false) {
+    controlState = "warn";
+    controlLabel = "sharing off";
+  } else if (controls.context_enabled === false) {
+    controlState = "warn";
+    controlLabel = "kontext off";
+  } else if (String(activeLocation.presence_status || "unknown").toLowerCase() === "stale") {
+    controlState = "warn";
+    controlLabel = "stale";
+  }
+  setMobileBadge("locationControlBadge", controlLabel, controlState);
+
+  if (metaEl) {
+    const activeDeviceId = activeLocation.device_id || summary.active_device_id || "–";
+    const activeScope = activeLocation.user_scope || summary.active_user_scope || "–";
+    const selectionReason = summary.selection_reason || "auto";
+    const privacyState = activeLocation.privacy_state || "enabled";
+    metaEl.textContent =
+      `Aktiv: ${activeDeviceId} · Scope ${activeScope} · Auswahl ${selectionReason} · Geräte ${summary.device_count || devices.length || 0} · Privacy ${privacyState}`;
+  }
+}
+
+async function refreshLocationControlPanel() {
+  await loadMobileSnapshot();
+}
+
+async function saveLocationControls() {
+  const saveBtn = document.getElementById("locationControlSaveBtn");
+  const sharingToggle = document.getElementById("locationSharingToggle");
+  const contextToggle = document.getElementById("locationContextToggle");
+  const backgroundToggle = document.getElementById("locationBackgroundSyncToggle");
+  const preferredSelect = document.getElementById("locationPreferredDeviceSelect");
+  const scopesInput = document.getElementById("locationAllowedScopesInput");
+  const maxEntriesInput = document.getElementById("locationMaxDeviceEntriesInput");
+
+  const payload = {
+    sharing_enabled: !!(sharingToggle && sharingToggle.checked),
+    context_enabled: !!(contextToggle && contextToggle.checked),
+    background_sync_allowed: !!(backgroundToggle && backgroundToggle.checked),
+    preferred_device_id: preferredSelect ? String(preferredSelect.value || "").trim() : "",
+    allowed_user_scopes: String(scopesInput?.value || "primary")
+      .split(",")
+      .map(part => part.trim())
+      .filter(Boolean),
+    max_device_entries: Math.max(1, Number.parseInt(String(maxEntriesInput?.value || "8"), 10) || 8),
+  };
+
+  if (!payload.allowed_user_scopes.length) payload.allowed_user_scopes = ["primary"];
+
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.textContent = "Speichert…";
+  }
+  try {
+    await api("/location/control", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    await loadMobileSnapshot();
+    showToast("Standort-Kontrolle gespeichert");
+  } catch (e) {
+    showToast("Fehler: " + e.message, "error");
+  } finally {
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = "Kontrolle speichern";
+    }
   }
 }
 

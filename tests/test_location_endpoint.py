@@ -288,6 +288,49 @@ async def test_location_control_update_endpoint_persists_runtime_controls(monkey
 
 
 @pytest.mark.asyncio
+async def test_location_control_status_endpoint_reports_active_device(monkeypatch):
+    current = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    monkeypatch.setattr(
+        mcp_server,
+        "_location_registry",
+        {
+            "devices": [
+                {
+                    "device_id": "pixel8",
+                    "user_scope": "primary",
+                    "latitude": 52.520008,
+                    "longitude": 13.404954,
+                    "captured_at": current,
+                    "received_at": current,
+                    "locality": "Berlin",
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        mcp_server,
+        "_location_controls",
+        {
+            "sharing_enabled": True,
+            "context_enabled": True,
+            "background_sync_allowed": False,
+            "preferred_device_id": "pixel8",
+            "allowed_user_scopes": ["primary"],
+            "max_device_entries": 8,
+            "updated_at": current,
+        },
+    )
+    monkeypatch.setattr(mcp_server, "_location_snapshot", None)
+
+    response = await mcp_server.location_control_status_endpoint()
+
+    assert response["status"] == "success"
+    assert response["controls"]["background_sync_allowed"] is False
+    assert response["active_device_id"] == "pixel8"
+    assert response["selection_reason"] == "preferred_device"
+
+
+@pytest.mark.asyncio
 async def test_location_route_endpoint_returns_400_for_invalid_route(monkeypatch):
     async def fake_get_google_maps_route(*_args, **_kwargs):
         raise ValueError("Der aktuelle Mobil-Standort ist nicht frisch genug fuer verlaessliches Routing.")
@@ -303,7 +346,9 @@ async def test_location_route_endpoint_returns_400_for_invalid_route(monkeypatch
 
 @pytest.mark.asyncio
 async def test_location_resolve_endpoint_triggers_live_reroute_for_active_route(monkeypatch, tmp_path):
-    captured_at = "2026-03-16T15:05:00Z"
+    current_time = datetime.now(timezone.utc).replace(microsecond=0)
+    captured_at = current_time.isoformat().replace("+00:00", "Z")
+    route_started_at = (current_time - timedelta(minutes=35)).isoformat().replace("+00:00", "Z")
     snapshot_path = tmp_path / "runtime_location_snapshot.json"
     registry_path = tmp_path / "runtime_location_registry.json"
     route_path = tmp_path / "runtime_route_snapshot.json"
@@ -326,8 +371,8 @@ async def test_location_resolve_endpoint_triggers_live_reroute_for_active_route(
             "destination_label": "Checkpoint Charlie, Berlin",
             "travel_mode": "walking",
             "language_code": "de",
-            "saved_at": "2026-03-16T14:30:00Z",
-            "route_started_at": "2026-03-16T14:30:00Z",
+            "saved_at": route_started_at,
+            "route_started_at": route_started_at,
             "start_coordinates": {"latitude": 52.520008, "longitude": 13.404954},
             "origin": {"latitude": 52.520008, "longitude": 13.404954},
         }
