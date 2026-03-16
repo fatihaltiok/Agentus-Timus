@@ -25,6 +25,7 @@ from memory.qdrant_provider import normalize_qdrant_mode, resolve_qdrant_ready_u
 from orchestration.llm_budget_guard import get_public_budget_status
 from orchestration.ops_observability import build_ops_observability_summary
 from orchestration.ops_release_gate import evaluate_ops_release_gate
+from orchestration.self_hardening_runtime import get_self_hardening_runtime_summary
 from orchestration.self_stabilization_gate import evaluate_self_stabilization_gate
 from orchestration.self_improvement_engine import get_improvement_engine
 from orchestration.task_queue import SelfHealingCircuitBreakerState, SelfHealingIncidentStatus, get_queue
@@ -434,6 +435,31 @@ def _build_self_healing_summary() -> Dict[str, Any]:
         }
 
 
+def _build_self_hardening_summary() -> Dict[str, Any]:
+    try:
+        queue = get_queue()
+        return get_self_hardening_runtime_summary(queue)
+    except Exception:
+        return {
+            "state": "unknown",
+            "last_event": "",
+            "last_status": "",
+            "last_pattern_name": "",
+            "last_component": "",
+            "last_requested_fix_mode": "",
+            "last_execution_mode": "",
+            "last_route_target": "",
+            "last_reason": "",
+            "last_task_id": "",
+            "last_goal_id": "",
+            "last_target_file_path": "",
+            "last_change_type": "",
+            "sample_lines": [],
+            "metrics": {},
+            "updated_at": "",
+        }
+
+
 async def collect_status_snapshot(mcp_base_url: str | None = None) -> Dict[str, Any]:
     base_url = (mcp_base_url or _DEFAULT_MCP_BASE_URL).rstrip("/")
     provider_client = get_provider_client()
@@ -498,6 +524,7 @@ async def collect_status_snapshot(mcp_base_url: str | None = None) -> Dict[str, 
     except Exception:
         budget_status = {"state": "unknown", "message": "", "scopes": [], "soft_max_tokens": 0, "window_days": 1}
     self_healing_summary = _build_self_healing_summary()
+    self_hardening_summary = _build_self_hardening_summary()
 
     try:
         improvement_engine = get_improvement_engine()
@@ -514,6 +541,7 @@ async def collect_status_snapshot(mcp_base_url: str | None = None) -> Dict[str, 
             llm_usage=usage_summary,
             budget=budget_status,
             self_healing=self_healing_summary,
+            hardening=self_hardening_summary,
             limit=4,
         )
     except Exception:
@@ -540,6 +568,7 @@ async def collect_status_snapshot(mcp_base_url: str | None = None) -> Dict[str, 
         "ops": ops_summary,
         "ops_gate": evaluate_ops_release_gate(ops_summary),
         "self_healing": self_healing_summary,
+        "self_hardening": self_hardening_summary,
         "stability_gate": evaluate_self_stabilization_gate(self_healing_summary),
         "api_control": _build_api_control_summary(provider_results, usage_summary, budget_status),
         "thinking": bool((local_results["agent_status"].get("data", {}) or {}).get("thinking", False)),
@@ -582,6 +611,7 @@ def format_status_message(snapshot: Dict[str, Any], summary_lines: List[str]) ->
     ops = snapshot.get("ops", {}) or {}
     ops_gate = snapshot.get("ops_gate", {}) or {}
     self_healing = snapshot.get("self_healing", {}) or {}
+    self_hardening = snapshot.get("self_hardening", {}) or {}
     stability_gate = snapshot.get("stability_gate", {}) or {}
     thinking = snapshot.get("thinking", False)
 
@@ -661,6 +691,25 @@ def format_status_message(snapshot: Dict[str, Any], summary_lines: List[str]) ->
                 quarantine_suffix=quarantine_suffix,
             )
         )
+
+    hardening_lines = ["", "M18 Hardening"]
+    hardening_lines.append(
+        f"🛠️ State {self_hardening.get('state', 'unknown')} | "
+        f"Event {self_hardening.get('last_event', 'n/a') or 'n/a'} | "
+        f"Status {self_hardening.get('last_status', 'n/a') or 'n/a'}"
+    )
+    hardening_lines.append(
+        f"• Pattern {self_hardening.get('last_pattern_name', 'n/a') or 'n/a'} | "
+        f"Route {self_hardening.get('last_route_target', 'n/a') or 'n/a'} | "
+        f"Exec {self_hardening.get('last_execution_mode', 'n/a') or 'n/a'}"
+    )
+    hardening_metrics = self_hardening.get("metrics", {}) or {}
+    hardening_lines.append(
+        f"• Proposals {hardening_metrics.get('proposals_total', 0)} | "
+        f"Tasks {hardening_metrics.get('tasks_created_total', 0)} | "
+        f"SM Attempts {hardening_metrics.get('self_modify_attempts_total', 0)} | "
+        f"SM Success {hardening_metrics.get('self_modify_successes_total', 0)}"
+    )
 
     provider_lines = ["", "LLM/API Health"]
     for provider_name, info in providers.items():
@@ -785,6 +834,7 @@ def format_status_message(snapshot: Dict[str, Any], summary_lines: List[str]) ->
     lines.append("")
     lines.extend(summary_lines)
     lines.extend(healing_lines)
+    lines.extend(hardening_lines)
     lines.extend(ops_lines)
     lines.extend(provider_lines)
     lines.extend(usage_lines)

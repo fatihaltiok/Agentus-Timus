@@ -204,6 +204,36 @@ async def test_collect_status_snapshot_builds_agent_rows(monkeypatch):
                     "updated_at": "2026-03-10T15:02:39",
                 }
             ),
+            get_policy_runtime_state=lambda key: (
+                {
+                    "state_key": key,
+                    "state_value": "self_modify_finished",
+                    "metadata": {
+                        "status": "success",
+                        "pattern_name": "narrative_synthesis_empty",
+                        "component": "deep_research.tool._create_narrative",
+                        "requested_fix_mode": "self_modify_safe",
+                        "execution_mode": "self_modify_safe",
+                        "route_target": "self_modify",
+                        "reason": "pytest_targeted:passed",
+                    },
+                    "updated_at": "2026-03-10T15:05:00",
+                }
+                if str(key) == "m18_hardening_last_event"
+                else {
+                    "state_key": key,
+                    "state_value": "active",
+                    "metadata": {
+                        "proposals_total": 2,
+                        "tasks_created_total": 2,
+                        "self_modify_attempts_total": 1,
+                        "self_modify_successes_total": 1,
+                    },
+                    "updated_at": "2026-03-10T15:05:00",
+                }
+                if str(key) == "m18_hardening_metrics"
+                else None
+            ),
         ),
     )
     monkeypatch.setattr(
@@ -258,6 +288,8 @@ async def test_collect_status_snapshot_builds_agent_rows(monkeypatch):
     assert snapshot["budget"]["state"] == "soft_limit"
     assert snapshot["ops"]["state"] == "warn"
     assert snapshot["self_healing"]["open_incidents"] == 1
+    assert snapshot["self_hardening"]["last_event"] == "self_modify_finished"
+    assert snapshot["self_hardening"]["metrics"]["self_modify_successes_total"] == 1
     assert snapshot["self_healing"]["circuit_breakers_open"] == 1
     assert snapshot["self_healing"]["open_breakers"][0]["component"] == "mcp"
     assert snapshot["self_healing"]["incidents"][0]["notification_state"] == "cooldown_active"

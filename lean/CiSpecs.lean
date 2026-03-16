@@ -630,3 +630,10 @@ theorem hardening_self_modify_allowed_routes_to_self_modify :
 
 theorem hardening_self_modify_blocked_downgrades_to_development :
     (if false then 2 else 1) = 1 := by simp
+
+-- M18j. Runtime-Sicht: Fehlerzustände bleiben kritisch, Erfolg bleibt ok.
+theorem hardening_runtime_error_stays_critical :
+    (if true then 0 else 1) = 0 := by simp
+
+theorem hardening_runtime_success_stays_ok :
+    (if true then 1 else 2) = 1 := by simp

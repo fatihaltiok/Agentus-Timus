@@ -20,6 +20,7 @@ from orchestration.self_modification_patch_pipeline import (
     create_isolated_patch_workspace,
     promote_isolated_patch,
 )
+from orchestration.self_hardening_runtime import record_self_hardening_event
 from orchestration.self_modification_canary import run_self_modification_canary
 from orchestration.self_modification_controller import (
     AutonomousSelfModificationCandidate,
@@ -795,6 +796,21 @@ class SelfModifierEngine:
         safe_description = str(change_description or "").strip()
         safe_change_type = str(change_type or "auto").strip() or "auto"
         safe_session_id = str(session_id or "").strip() or f"m18:{safe_source_id[:12]}"
+        try:
+            from orchestration.task_queue import get_queue
+
+            record_self_hardening_event(
+                queue=get_queue(),
+                stage="self_modify_started",
+                status="active",
+                reason="runner_autofix",
+                task_id=safe_source_id,
+                target_file_path=safe_file_path,
+                change_type=safe_change_type,
+                increment_metrics={"self_modify_attempts_total": 1},
+            )
+        except Exception:
+            pass
 
         self._set_autonomous_source_state(
             "self_hardening",
@@ -820,6 +836,27 @@ class SelfModifierEngine:
             audit_id=result.audit_id,
             note=result.risk_reason or result.verification_summary or result.canary_summary,
         )
+        try:
+            from orchestration.task_queue import get_queue
+
+            record_self_hardening_event(
+                queue=get_queue(),
+                stage="self_modify_finished",
+                status=result.status,
+                reason=result.risk_reason or result.verification_summary or result.canary_summary,
+                task_id=safe_source_id,
+                target_file_path=result.file_path or safe_file_path,
+                change_type=safe_change_type,
+                increment_metrics={
+                    "self_modify_successes_total": 1 if result.status == "success" else 0,
+                    "self_modify_pending_approval_total": 1 if result.status == "pending_approval" else 0,
+                    "self_modify_blocked_total": 1 if result.status == "blocked" else 0,
+                    "self_modify_rolled_back_total": 1 if result.status == "rolled_back" else 0,
+                    "self_modify_errors_total": 1 if result.status == "error" else 0,
+                },
+            )
+        except Exception:
+            pass
         return result
 
     def run_cycle(self) -> Dict[str, Any]:

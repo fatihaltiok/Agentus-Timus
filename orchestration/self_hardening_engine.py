@@ -26,6 +26,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from orchestration.self_hardening_execution_policy import evaluate_self_hardening_execution
+from orchestration.self_hardening_runtime import record_self_hardening_event
 
 log = logging.getLogger("SelfHardeningEngine")
 
@@ -383,6 +384,17 @@ class SelfHardeningEngine:
             for g in active + blocked:
                 if proposal.component in (g.get("title") or ""):
                     log.debug("Härtungs-Ziel bereits vorhanden: %s", title)
+                    record_self_hardening_event(
+                        queue=queue,
+                        stage="goal_reused",
+                        status="reused",
+                        pattern_name=proposal.pattern_name,
+                        component=proposal.component,
+                        requested_fix_mode=proposal.fix_mode,
+                        reason="open_goal_exists",
+                        goal_id=str(g.get("id") or ""),
+                        increment_metrics={"goals_reused_total": 1},
+                    )
                     return str(g.get("id") or "") or None
             goal_id = queue.create_goal(
                 title=title,
@@ -392,6 +404,16 @@ class SelfHardeningEngine:
                 source="self_hardening",
             )
             log.info("Härtungs-Ziel angelegt: %s", title)
+            record_self_hardening_event(
+                queue=queue,
+                stage="goal_created",
+                status="created",
+                pattern_name=proposal.pattern_name,
+                component=proposal.component,
+                requested_fix_mode=proposal.fix_mode,
+                goal_id=str(goal_id or ""),
+                increment_metrics={"goals_created_total": 1},
+            )
             return goal_id
         except Exception as e:
             log.warning("Härtungs-Ziel erstellen fehlgeschlagen: %s", e)
@@ -451,15 +473,41 @@ class SelfHardeningEngine:
             target_file_path=proposal.target_file_path,
             change_type=proposal.change_type,
         )
+        from orchestration.task_queue import get_queue
+        queue = get_queue()
         if not decision.allow_task:
+            record_self_hardening_event(
+                queue=queue,
+                stage="task_not_created",
+                status="skipped",
+                pattern_name=proposal.pattern_name,
+                component=proposal.component,
+                requested_fix_mode=proposal.fix_mode,
+                execution_mode=decision.effective_fix_mode,
+                route_target=decision.route_target,
+                reason=decision.reason,
+                goal_id=str(goal_id or ""),
+            )
             return None
         dedup_key = proposal.dedup_key()
         if self._has_open_hardening_task(dedup_key):
             log.debug("Härtungs-Task bereits offen: %s", dedup_key)
+            record_self_hardening_event(
+                queue=queue,
+                stage="task_deduped",
+                status="skipped",
+                pattern_name=proposal.pattern_name,
+                component=proposal.component,
+                requested_fix_mode=proposal.fix_mode,
+                execution_mode=decision.effective_fix_mode,
+                route_target=decision.route_target,
+                reason="open_task_exists",
+                goal_id=str(goal_id or ""),
+                increment_metrics={"tasks_deduped_total": 1},
+            )
             return None
         try:
-            from orchestration.task_queue import TaskType, get_queue
-            queue = get_queue()
+            from orchestration.task_queue import TaskType
             metadata = self._build_hardening_task_metadata(proposal, goal_id)
             metadata.update(
                 {
@@ -486,6 +534,31 @@ class SelfHardeningEngine:
                 task_id[:8],
                 decision.route_target,
                 decision.effective_fix_mode,
+            )
+            increment_metrics = {
+                "tasks_created_total": 1,
+                "developer_tasks_total": 1 if decision.route_target == "development" else 0,
+                "self_modify_tasks_total": 1 if decision.route_target == "self_modify" else 0,
+                "downgraded_to_development_total": 1
+                if proposal.fix_mode == "self_modify_safe" and decision.effective_fix_mode != "self_modify_safe"
+                else 0,
+            }
+            record_self_hardening_event(
+                queue=queue,
+                stage="task_created",
+                status="created",
+                pattern_name=proposal.pattern_name,
+                component=proposal.component,
+                requested_fix_mode=proposal.fix_mode,
+                execution_mode=decision.effective_fix_mode,
+                route_target=decision.route_target,
+                reason=decision.reason,
+                task_id=str(task_id or ""),
+                goal_id=str(goal_id or ""),
+                target_file_path=decision.target_file_path,
+                change_type=decision.change_type,
+                sample_lines=proposal.sample_lines,
+                increment_metrics=increment_metrics,
             )
             return task_id
         except Exception as e:
@@ -515,6 +588,16 @@ class SelfHardeningEngine:
 
         if not all_lines:
             log.debug("SelfHardeningEngine: Keine Log-Daten verfügbar")
+            try:
+                from orchestration.task_queue import get_queue
+
+                record_self_hardening_event(
+                    queue=get_queue(),
+                    stage="idle_no_signals",
+                    status="idle",
+                )
+            except Exception:
+                pass
             return {"proposals": 0, "skipped": 0}
 
         proposals = self._match_patterns(all_lines)
@@ -525,6 +608,21 @@ class SelfHardeningEngine:
             if self._already_proposed_recently(proposal.pattern_name):
                 skipped += 1
                 log.debug("Härtungs-Proposal übersprungen (Cooldown): %s", proposal.pattern_name)
+                try:
+                    from orchestration.task_queue import get_queue
+
+                    record_self_hardening_event(
+                        queue=get_queue(),
+                        stage="proposal_skipped_cooldown",
+                        status="skipped",
+                        pattern_name=proposal.pattern_name,
+                        component=proposal.component,
+                        requested_fix_mode=proposal.fix_mode,
+                        sample_lines=proposal.sample_lines,
+                        increment_metrics={"cooldown_skips_total": 1},
+                    )
+                except Exception:
+                    pass
                 continue
 
             log.warning(
@@ -533,6 +631,21 @@ class SelfHardeningEngine:
                 proposal.occurrences,
                 proposal.suggestion,
             )
+            try:
+                from orchestration.task_queue import get_queue
+
+                record_self_hardening_event(
+                    queue=get_queue(),
+                    stage="proposal_detected",
+                    status="active",
+                    pattern_name=proposal.pattern_name,
+                    component=proposal.component,
+                    requested_fix_mode=proposal.fix_mode,
+                    sample_lines=proposal.sample_lines,
+                    increment_metrics={"proposals_total": 1},
+                )
+            except Exception:
+                pass
             self._write_to_blackboard(proposal)
             goal_id = self._create_hardening_goal(proposal)
             self._create_hardening_task(proposal, goal_id=goal_id)

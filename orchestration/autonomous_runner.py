@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from orchestration.scheduler import ProactiveScheduler, SchedulerEvent, init_scheduler
+from orchestration.self_hardening_runtime import record_self_hardening_event
 from orchestration.task_queue import Priority, TaskType, get_queue
 from utils.stable_hash import stable_text_digest
 
@@ -1817,10 +1818,30 @@ class AutonomousRunner:
         if str((metadata or {}).get("execution_mode") or "").strip() != "self_modify_safe":
             return None
 
+        pattern_name = str((metadata or {}).get("pattern_name") or "").strip()
+        component = str((metadata or {}).get("component") or "").strip()
+        requested_fix_mode = str((metadata or {}).get("requested_fix_mode") or "").strip()
         target_file_path = str((metadata or {}).get("target_file_path") or "").strip()
         change_type = str((metadata or {}).get("change_type") or "auto").strip() or "auto"
         dedup_key = str((metadata or {}).get("hardening_dedup_key") or "").strip() or f"task:{task_id}"
         if not target_file_path:
+            try:
+                record_self_hardening_event(
+                    queue=get_queue(),
+                    stage="self_modify_missing_target_file",
+                    status="error",
+                    pattern_name=pattern_name,
+                    component=component,
+                    requested_fix_mode=requested_fix_mode,
+                    execution_mode="self_modify_safe",
+                    route_target="self_modify",
+                    reason="missing_target_file",
+                    task_id=task_id,
+                    target_file_path=target_file_path,
+                    change_type=change_type,
+                )
+            except Exception:
+                pass
             return ("error", "self_hardening:self_modify_missing_target_file")
 
         try:
@@ -1841,6 +1862,24 @@ class AutonomousRunner:
             return (result.status, summary)
         except Exception as exc:
             log.error("Self-Hardening-Autofix [%s] fehlgeschlagen: %s", task_id[:8], exc, exc_info=True)
+            try:
+                record_self_hardening_event(
+                    queue=get_queue(),
+                    stage="self_modify_exception",
+                    status="error",
+                    pattern_name=pattern_name,
+                    component=component,
+                    requested_fix_mode=requested_fix_mode,
+                    execution_mode="self_modify_safe",
+                    route_target="self_modify",
+                    reason=str(exc),
+                    task_id=task_id,
+                    target_file_path=target_file_path,
+                    change_type=change_type,
+                    increment_metrics={"self_modify_errors_total": 1},
+                )
+            except Exception:
+                pass
             return ("error", f"self_hardening:self_modify_exception:{exc}")
 
     async def _send_failure_alert(

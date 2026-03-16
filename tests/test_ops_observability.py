@@ -55,6 +55,19 @@ def test_build_ops_observability_summary_collects_alerts():
                 }
             ],
         },
+        hardening={
+            "state": "warn",
+            "last_event": "self_modify_finished",
+            "last_status": "rolled_back",
+            "last_pattern_name": "narrative_synthesis_empty",
+            "last_reason": "pytest_targeted:failed",
+            "metrics": {
+                "proposals_total": 2,
+                "tasks_created_total": 2,
+                "self_modify_attempts_total": 1,
+                "self_modify_rolled_back_total": 1,
+            },
+        },
         limit=10,
     )
 
@@ -80,7 +93,9 @@ def test_build_ops_observability_summary_collects_alerts():
     assert any("budget warn" in msg for msg in messages)
     assert any("Recall none_rate" in msg for msg in messages)
     assert any("Self-Healing gate blocked" in msg for msg in messages)
+    assert any("M18 self_modify_finished" in msg for msg in messages)
     assert summary["recall"]["total_queries"] == 5
+    assert summary["hardening"]["last_status"] == "rolled_back"
 
     gate = evaluate_ops_release_gate(summary, current_canary_percent=30)
     assert gate["state"] == "blocked"

@@ -211,6 +211,7 @@ def build_ops_observability_summary(
     budget: Dict[str, Any],
     recall_stats: Dict[str, Any] | None = None,
     self_healing: Dict[str, Any] | None = None,
+    hardening: Dict[str, Any] | None = None,
     limit: int = 5,
 ) -> Dict[str, Any]:
     """Combines service/provider/analytics signals into one ops summary."""
@@ -462,12 +463,51 @@ def build_ops_observability_summary(
             )
         )
 
+    hardening_alerts: List[Dict[str, Any]] = []
+    hardening_state = str((hardening or {}).get("state", "unknown") or "unknown")
+    hardening_last_status = str((hardening or {}).get("last_status", "") or "")
+    hardening_last_event = str((hardening or {}).get("last_event", "") or "")
+    hardening_last_pattern = str((hardening or {}).get("last_pattern_name", "") or "")
+    hardening_last_reason = str((hardening or {}).get("last_reason", "") or "")
+    if hardening_last_status in {"error", "rolled_back"}:
+        hardening_alerts.append(
+            _make_alert(
+                kind="self_hardening",
+                severity="critical" if hardening_last_status == "error" else "warn",
+                error_class="orchestration",
+                target="m18_hardening",
+                message=(
+                    f"M18 {hardening_last_event or 'event'}: "
+                    f"{hardening_last_status} @ {hardening_last_pattern or 'unknown'}"
+                    + (f" | {hardening_last_reason}" if hardening_last_reason else "")
+                ),
+                slo="hardening_runtime",
+                value=1,
+            )
+        )
+    elif hardening_last_status in {"blocked", "pending_approval", "skipped"}:
+        hardening_alerts.append(
+            _make_alert(
+                kind="self_hardening",
+                severity="warn",
+                error_class="orchestration",
+                target="m18_hardening",
+                message=(
+                    f"M18 {hardening_last_event or 'event'}: "
+                    f"{hardening_last_status} @ {hardening_last_pattern or 'unknown'}"
+                ),
+                slo="hardening_runtime",
+                value=1,
+            )
+        )
+
     all_alerts = (
         service_alerts
         + provider_state_alerts
         + provider_latency_alerts
         + budget_alerts
         + self_healing_alerts
+        + hardening_alerts
         + recall_alerts
         + tool_failure_alerts
         + slow_tool_alerts
@@ -533,5 +573,13 @@ def build_ops_observability_summary(
         "llm_success_rate": llm_success_rate,
         "llm_avg_latency_ms": llm_avg_latency_ms,
         "recall": recall_stats or {},
+        "hardening": hardening
+        or {
+            "state": hardening_state,
+            "last_event": hardening_last_event,
+            "last_status": hardening_last_status,
+            "last_pattern_name": hardening_last_pattern,
+            "last_reason": hardening_last_reason,
+        },
         "self_stabilization_gate": stabilization_gate,
     }

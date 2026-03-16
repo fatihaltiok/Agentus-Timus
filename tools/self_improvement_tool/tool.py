@@ -198,6 +198,7 @@ async def get_ops_observability(days: int = 7, limit: int = 5) -> dict:
             days=safe_days,
         ),
         budget=snapshot.get("budget", {}) or {},
+        hardening=snapshot.get("self_hardening", {}) or {},
         limit=safe_limit,
     )
     return {"status": "ok", "days": safe_days, **ops}
