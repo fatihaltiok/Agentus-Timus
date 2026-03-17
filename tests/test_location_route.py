@@ -3,6 +3,7 @@ from __future__ import annotations
 from utils.location_route import (
     build_google_maps_directions_url,
     normalize_route_travel_mode,
+    parse_google_routes_compute_route,
     parse_serpapi_google_maps_directions,
     prepare_route_snapshot,
     strip_route_instruction_html,
@@ -72,6 +73,104 @@ def test_parse_serpapi_google_maps_directions_normalizes_route() -> None:
     assert result["end_coordinates"]["longitude"] == 13.390373
     assert result["overview_polyline"] == "abc123"
     assert result["route_url"].startswith("https://www.google.com/maps/dir/?api=1")
+
+
+def test_parse_serpapi_google_maps_directions_supports_trip_details_format() -> None:
+    result = parse_serpapi_google_maps_directions(
+        {
+            "places_info": [
+                {
+                    "address": "50.1463462, 8.8327686",
+                    "gps_coordinates": {"latitude": 50.1463462, "longitude": 8.8327686},
+                },
+                {
+                    "address": "Hanau, Deutschland",
+                    "gps_coordinates": {"latitude": 50.1264123, "longitude": 8.9283105},
+                },
+            ],
+            "directions": [
+                {
+                    "travel_mode": "Driving",
+                    "distance": 14629,
+                    "duration": 762,
+                    "formatted_distance": "14,6 km",
+                    "formatted_duration": "13 Min.",
+                    "trips": [
+                        {
+                            "title": "Schnellste Route",
+                            "formatted_distance": "14,6 km",
+                            "formatted_duration": "13 Min.",
+                            "details": [
+                                {
+                                    "title": "Richtung Bahnhofstraße starten",
+                                    "action": "straight",
+                                    "distance": 180,
+                                    "duration": 35,
+                                    "formatted_distance": "180 m",
+                                    "formatted_duration": "35 Sek.",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        },
+        origin={"display_name": "Edisonstraße 6, Maintal", "latitude": 50.1463462, "longitude": 8.8327686},
+        destination_query="Hanau",
+        travel_mode="driving",
+    )
+
+    assert result["distance_text"] == "14,6 km"
+    assert result["duration_text"] == "13 Min."
+    assert result["destination_label"] == "Hanau, Deutschland"
+    assert result["steps"][0]["instruction"] == "Richtung Bahnhofstraße starten"
+    assert result["steps"][0]["distance_text"] == "180 m"
+    assert result["start_coordinates"]["latitude"] == 50.1463462
+    assert result["end_coordinates"]["longitude"] == 8.9283105
+
+
+def test_parse_google_routes_compute_route_normalizes_route() -> None:
+    result = parse_google_routes_compute_route(
+        {
+            "routes": [
+                {
+                    "description": "Über die A66",
+                    "distanceMeters": 18600,
+                    "duration": "1149s",
+                    "polyline": {"encodedPolyline": "encoded-route-polyline"},
+                    "legs": [
+                        {
+                            "distanceMeters": 18600,
+                            "duration": "1149s",
+                            "startLocation": {"latLng": {"latitude": 50.100241, "longitude": 8.7787097}},
+                            "endLocation": {"latLng": {"latitude": 50.1264123, "longitude": 8.9283105}},
+                            "steps": [
+                                {
+                                    "distanceMeters": 29,
+                                    "staticDuration": "4s",
+                                    "startLocation": {"latLng": {"latitude": 50.100241, "longitude": 8.7787097}},
+                                    "endLocation": {"latLng": {"latitude": 50.1003921, "longitude": 8.7784912}},
+                                    "navigationInstruction": {"instructions": "Richtung Landgrafenstraße starten"},
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        },
+        origin={"display_name": "Flutstraße 33, Offenbach", "latitude": 50.100241, "longitude": 8.7787097},
+        destination_query="Hanau",
+        travel_mode="driving",
+    )
+
+    assert result["travel_mode"] == "driving"
+    assert result["distance_text"] == "18,6 km"
+    assert result["duration_text"] == "19 min"
+    assert result["overview_polyline"] == "encoded-route-polyline"
+    assert result["steps"][0]["instruction"] == "Richtung Landgrafenstraße starten"
+    assert result["start_coordinates"]["latitude"] == 50.100241
+    assert result["end_coordinates"]["longitude"] == 8.9283105
+    assert result["source_provider"] == "google_routes"
 
 
 def test_prepare_route_snapshot_marks_complete_route() -> None:

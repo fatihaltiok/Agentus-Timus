@@ -89,11 +89,31 @@ def _extract_polyline(value: Any) -> str:
     if isinstance(value, str):
         return value.strip()
     if isinstance(value, dict):
-        for key in ("points", "encoded_polyline", "polyline"):
+        for key in ("points", "encoded_polyline", "encodedPolyline", "polyline"):
             item = value.get(key)
             if isinstance(item, str) and item.strip():
                 return item.strip()
     return ""
+
+
+def _extract_place_info_coordinates(value: Any) -> dict[str, float]:
+    if not isinstance(value, dict):
+        return {}
+    gps = value.get("gps_coordinates")
+    if isinstance(gps, dict):
+        coords = _extract_coordinates(gps)
+        if coords:
+            return coords
+    return _extract_coordinates(value)
+
+
+def _extract_google_latlng(value: Any) -> dict[str, float]:
+    if not isinstance(value, dict):
+        return {}
+    latlng = value.get("latLng")
+    if isinstance(latlng, dict):
+        return _extract_coordinates(latlng)
+    return _extract_coordinates(value)
 
 
 def strip_route_instruction_html(value: str) -> str:
@@ -126,10 +146,11 @@ def _normalize_route_step(raw: dict[str, Any], position: int) -> dict[str, Any]:
         or raw.get("html_instructions")
         or raw.get("instruction")
         or raw.get("narrative")
+        or raw.get("title")
         or ""
     )
-    distance_text = _text_value(raw.get("distance"))
-    duration_text = _text_value(raw.get("duration"))
+    distance_text = _text_value(raw.get("formatted_distance")) or _text_value(raw.get("distance"))
+    duration_text = _text_value(raw.get("formatted_duration")) or _text_value(raw.get("duration"))
     maneuver = _text_value(raw.get("maneuver"))
     return {
         "position": max(1, int(position)),
@@ -138,6 +159,44 @@ def _normalize_route_step(raw: dict[str, Any], position: int) -> dict[str, Any]:
         "duration_text": duration_text,
         "maneuver": maneuver,
     }
+
+
+def _duration_seconds(value: Any) -> int:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized.endswith("s"):
+            try:
+                return max(0, int(round(float(normalized[:-1]))))
+            except Exception:
+                return _as_int(value, 0)
+    return _as_int(value, 0)
+
+
+def _format_distance_text(value: Any) -> str:
+    meters = _as_int(value, 0)
+    if meters <= 0:
+        return ""
+    if meters < 1000:
+        return f"{meters} m"
+    kilometers = meters / 1000.0
+    text = f"{kilometers:.1f}".replace(".", ",")
+    return f"{text} km"
+
+
+def _format_duration_text(value: Any) -> str:
+    seconds = _duration_seconds(value)
+    if seconds <= 0:
+        return ""
+    if seconds < 60:
+        return f"{seconds} Sek."
+    minutes = max(1, round(seconds / 60))
+    if minutes < 60:
+        return f"{minutes} min"
+    hours = minutes // 60
+    remainder_minutes = minutes % 60
+    if remainder_minutes == 0:
+        return f"{hours} h"
+    return f"{hours} h {remainder_minutes} min"
 
 
 def parse_serpapi_google_maps_directions(
@@ -153,12 +212,26 @@ def parse_serpapi_google_maps_directions(
     if not isinstance(route, dict):
         route = {}
 
+    trips = route.get("trips") or []
+    primary_trip = trips[0] if isinstance(trips, list) and trips else {}
+    if not isinstance(primary_trip, dict):
+        primary_trip = {}
+    trip_details = primary_trip.get("details") or []
+    if not isinstance(trip_details, list):
+        trip_details = []
+
+    places_info = safe_data.get("places_info") or []
+    if not isinstance(places_info, list):
+        places_info = []
+    origin_place = places_info[0] if len(places_info) >= 1 and isinstance(places_info[0], dict) else {}
+    destination_place = places_info[1] if len(places_info) >= 2 and isinstance(places_info[1], dict) else {}
+
     legs = route.get("legs") or []
     leg = legs[0] if isinstance(legs, list) and legs else {}
     if not isinstance(leg, dict):
         leg = {}
 
-    steps_raw = leg.get("steps") or route.get("steps") or []
+    steps_raw = leg.get("steps") or route.get("steps") or trip_details
     if not isinstance(steps_raw, list):
         steps_raw = []
     steps = [
@@ -173,6 +246,7 @@ def parse_serpapi_google_maps_directions(
     start_coordinates = (
         _extract_coordinates(leg.get("start_location"))
         or _extract_coordinates(route.get("start_location"))
+        or _extract_place_info_coordinates(origin_place)
         or (
             {"latitude": origin_latitude, "longitude": origin_longitude}
             if origin_latitude or origin_longitude
@@ -183,6 +257,7 @@ def parse_serpapi_google_maps_directions(
         _extract_coordinates(leg.get("end_location"))
         or _extract_coordinates(route.get("end_location"))
         or _extract_coordinates(route.get("destination"))
+        or _extract_place_info_coordinates(destination_place)
     )
     overview_polyline = (
         _extract_polyline(route.get("overview_polyline"))
@@ -198,27 +273,40 @@ def parse_serpapi_google_maps_directions(
     )
 
     distance_text = (
+        _text_value(leg.get("formatted_distance"))
+        or _text_value(route.get("formatted_distance"))
+        or _text_value(primary_trip.get("formatted_distance"))
+        or
         _text_value(leg.get("distance"))
         or _text_value(route.get("distance"))
+        or _text_value(primary_trip.get("distance"))
         or _text_value(safe_data.get("distance"))
     )
     duration_text = (
+        _text_value(leg.get("formatted_duration"))
+        or _text_value(route.get("formatted_duration"))
+        or _text_value(primary_trip.get("formatted_duration"))
+        or
         _text_value(leg.get("duration"))
         or _text_value(route.get("duration"))
+        or _text_value(primary_trip.get("duration"))
         or _text_value(safe_data.get("duration"))
     )
     start_address = (
         _text_value(leg.get("start_address"))
         or _text_value(route.get("start_address"))
+        or _text_value(origin_place.get("address"))
         or str(origin.get("display_name") or "").strip()
     )
     end_address = (
         _text_value(leg.get("end_address"))
         or _text_value(route.get("end_address"))
+        or _text_value(destination_place.get("address"))
         or str(destination_query or "").strip()
     )
     summary = (
         _text_value(route.get("summary"))
+        or _text_value(primary_trip.get("title"))
         or _text_value(route.get("title"))
         or _text_value(route.get("route_summary"))
         or destination_query
@@ -243,6 +331,106 @@ def parse_serpapi_google_maps_directions(
         "maps_url": route_url,
         "source_provider": "serpapi",
         "engine": "google_maps_directions",
+    }
+
+
+def parse_google_routes_compute_route(
+    data: dict[str, Any],
+    *,
+    origin: dict[str, Any],
+    destination_query: str,
+    travel_mode: str,
+) -> dict[str, Any]:
+    safe_data = data if isinstance(data, dict) else {}
+    routes = safe_data.get("routes") or []
+    route = routes[0] if isinstance(routes, list) and routes else {}
+    if not isinstance(route, dict):
+        route = {}
+
+    legs = route.get("legs") or []
+    leg = legs[0] if isinstance(legs, list) and legs else {}
+    if not isinstance(leg, dict):
+        leg = {}
+
+    steps_raw = leg.get("steps") or []
+    if not isinstance(steps_raw, list):
+        steps_raw = []
+    steps = []
+    for idx, item in enumerate(steps_raw, start=1):
+        if not isinstance(item, dict):
+            continue
+        steps.append(
+            {
+                "position": idx,
+                "instruction": strip_route_instruction_html(
+                    _text_value((item.get("navigationInstruction") or {}).get("instructions"))
+                    or _text_value(item.get("instruction"))
+                ),
+                "distance_text": _format_distance_text(item.get("distanceMeters")),
+                "duration_text": _format_duration_text(item.get("staticDuration") or item.get("duration")),
+                "maneuver": _text_value(item.get("maneuver") or item.get("travelMode")),
+            }
+        )
+
+    origin_latitude = _as_float(origin.get("latitude"))
+    origin_longitude = _as_float(origin.get("longitude"))
+    start_coordinates = (
+        _extract_google_latlng(leg.get("startLocation"))
+        or _extract_google_latlng(route.get("startLocation"))
+        or (
+            {"latitude": origin_latitude, "longitude": origin_longitude}
+            if origin_latitude or origin_longitude
+            else {}
+        )
+    )
+    end_coordinates = (
+        _extract_google_latlng(leg.get("endLocation"))
+        or _extract_google_latlng(route.get("endLocation"))
+        or (_extract_google_latlng(steps_raw[-1].get("endLocation")) if steps_raw and isinstance(steps_raw[-1], dict) else {})
+    )
+    overview_polyline = _extract_polyline(route.get("polyline"))
+    route_url = build_google_maps_directions_url(
+        origin_latitude=origin_latitude,
+        origin_longitude=origin_longitude,
+        destination_query=destination_query,
+        travel_mode=travel_mode,
+    )
+
+    distance_text = (
+        _format_distance_text(leg.get("distanceMeters"))
+        or _format_distance_text(route.get("distanceMeters"))
+    )
+    duration_text = (
+        _format_duration_text(leg.get("duration"))
+        or _format_duration_text(route.get("duration"))
+    )
+    start_address = str(origin.get("display_name") or "").strip()
+    end_address = str(destination_query or "").strip()
+    summary = (
+        _text_value(route.get("description"))
+        or _text_value(route.get("routeLabels"))
+        or destination_query
+    )
+
+    return {
+        "origin": origin,
+        "destination_query": str(destination_query or "").strip(),
+        "destination_label": end_address,
+        "travel_mode": normalize_route_travel_mode(travel_mode),
+        "summary": summary,
+        "distance_text": distance_text,
+        "duration_text": duration_text,
+        "start_address": start_address,
+        "end_address": end_address,
+        "steps": steps[:12],
+        "step_count": len(steps),
+        "start_coordinates": start_coordinates,
+        "end_coordinates": end_coordinates,
+        "overview_polyline": overview_polyline,
+        "route_url": route_url,
+        "maps_url": route_url,
+        "source_provider": "google_routes",
+        "engine": "google_routes_computeRoutes",
     }
 
 

@@ -28,6 +28,7 @@ from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 from utils.location_presence import enrich_location_presence_snapshot
 from utils.location_route import (
     normalize_route_travel_mode,
+    parse_google_routes_compute_route,
     parse_serpapi_google_maps_directions,
 )
 
@@ -39,6 +40,8 @@ load_dotenv()
 DATAFORSEO_USER = os.getenv("DATAFORSEO_USER")
 DATAFORSEO_PASS = os.getenv("DATAFORSEO_PASS")
 SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY")
+GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
+GOOGLE_ROUTES_API_KEY = os.getenv("GOOGLE_ROUTES_API_KEY") or GOOGLE_MAPS_API_KEY
 
 if not (DATAFORSEO_USER and DATAFORSEO_PASS):
     logger.warning("⚠️ DATAFORSEO_USER oder DATAFORSEO_PASS fehlt. Websuche wird fehlschlagen.")
@@ -46,6 +49,7 @@ if not (DATAFORSEO_USER and DATAFORSEO_PASS):
 # --- API Konstanten ---
 DATAFORSEO_BASE_URL = "https://api.dataforseo.com"
 SERPAPI_BASE_URL = "https://serpapi.com/search.json"
+GOOGLE_ROUTES_BASE_URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
 DEFAULT_API_TIMEOUT = 45
 DEFAULT_STANDARD_TIMEOUT = 90
 DEFAULT_STANDARD_POLL_INTERVAL = 2.0
@@ -89,6 +93,39 @@ LANGUAGE_TO_LOCATION_CODE = {
     "es": 2724,
     "it": 2380,
 }
+
+SERPAPI_DIRECTIONS_TRAVEL_MODE = {
+    "driving": "0",
+    "transit": "1",
+    "walking": "2",
+    "bicycling": "3",
+}
+
+GOOGLE_ROUTES_TRAVEL_MODE = {
+    "driving": "DRIVE",
+    "transit": "TRANSIT",
+    "walking": "WALK",
+    "bicycling": "BICYCLE",
+}
+
+GOOGLE_ROUTES_FIELD_MASK = ",".join(
+    (
+        "routes.description",
+        "routes.distanceMeters",
+        "routes.duration",
+        "routes.polyline.encodedPolyline",
+        "routes.legs.distanceMeters",
+        "routes.legs.duration",
+        "routes.legs.startLocation",
+        "routes.legs.endLocation",
+        "routes.legs.steps.distanceMeters",
+        "routes.legs.steps.staticDuration",
+        "routes.legs.steps.startLocation",
+        "routes.legs.steps.endLocation",
+        "routes.legs.steps.polyline.encodedPolyline",
+        "routes.legs.steps.navigationInstruction.instructions",
+    )
+)
 
 
 class DataForSEORetrievalMode(str, Enum):
@@ -758,8 +795,8 @@ async def get_google_maps_route(
     latitude: float | None = None,
     longitude: float | None = None,
 ) -> dict:
-    if not SERPAPI_API_KEY:
-        raise Exception("SERPAPI_API_KEY nicht konfiguriert.")
+    if not GOOGLE_ROUTES_API_KEY and not SERPAPI_API_KEY:
+        raise Exception("Weder GOOGLE_ROUTES_API_KEY noch SERPAPI_API_KEY sind konfiguriert.")
     safe_destination = str(destination_query or "").strip()
     if not safe_destination:
         raise ValueError("Google-Maps-Route erfordert ein Ziel.")
@@ -772,32 +809,105 @@ async def get_google_maps_route(
     if origin_presence not in {"live", "recent"} or not bool(origin.get("usable_for_context")):
         raise ValueError("Der aktuelle Mobil-Standort ist nicht frisch genug fuer verlaessliches Routing.")
     normalized_mode = normalize_route_travel_mode(travel_mode)
-    params = {
-        "engine": "google_maps_directions",
-        "start_addr": f"{origin_latitude},{origin_longitude}",
-        "travel_mode": normalized_mode,
-        "hl": str(language_code or "de").strip() or "de",
-    }
     last_error: Exception | None = None
-    for destination_variant in _route_destination_variants(safe_destination):
-        try:
-            params["end_addr"] = destination_variant
-            data = await asyncio.to_thread(_call_serpapi_json, params)
-            result = parse_serpapi_google_maps_directions(
-                data,
-                origin=origin,
-                destination_query=destination_variant,
-                travel_mode=normalized_mode,
-            )
-            result["language_code"] = str(language_code or "de").strip() or "de"
-            result["requested_destination_query"] = safe_destination
-            return result
-        except Exception as exc:
-            last_error = exc
-            continue
+
+    if GOOGLE_ROUTES_API_KEY:
+        for destination_variant in _route_destination_variants(safe_destination):
+            try:
+                google_payload = {
+                    "origin": {
+                        "location": {
+                            "latLng": {
+                                "latitude": origin_latitude,
+                                "longitude": origin_longitude,
+                            }
+                        }
+                    },
+                    "destination": {
+                        "address": destination_variant,
+                    },
+                    "travelMode": GOOGLE_ROUTES_TRAVEL_MODE.get(normalized_mode, "DRIVE"),
+                    "languageCode": str(language_code or "de").strip() or "de",
+                    "units": "METRIC",
+                    "computeAlternativeRoutes": False,
+                    "polylineQuality": "OVERVIEW",
+                    "polylineEncoding": "ENCODED_POLYLINE",
+                }
+                data = await asyncio.to_thread(_call_google_routes_json, google_payload)
+                result = parse_google_routes_compute_route(
+                    data,
+                    origin=origin,
+                    destination_query=destination_variant,
+                    travel_mode=normalized_mode,
+                )
+                result["language_code"] = str(language_code or "de").strip() or "de"
+                result["requested_destination_query"] = safe_destination
+                return result
+            except Exception as exc:
+                last_error = exc
+
+    if SERPAPI_API_KEY:
+        params = {
+            "engine": "google_maps_directions",
+            "start_coords": f"{origin_latitude},{origin_longitude}",
+            "travel_mode": SERPAPI_DIRECTIONS_TRAVEL_MODE.get(normalized_mode, "0"),
+            "hl": str(language_code or "de").strip() or "de",
+        }
+        for destination_variant in _route_destination_variants(safe_destination):
+            try:
+                params["end_addr"] = destination_variant
+                data = await asyncio.to_thread(_call_serpapi_json, params)
+                result = parse_serpapi_google_maps_directions(
+                    data,
+                    origin=origin,
+                    destination_query=destination_variant,
+                    travel_mode=normalized_mode,
+                )
+                result["language_code"] = str(language_code or "de").strip() or "de"
+                result["requested_destination_query"] = safe_destination
+                return result
+            except Exception as exc:
+                last_error = exc
+                continue
     if last_error is not None:
         raise last_error
     raise ValueError("Google-Maps-Route erfordert ein Ziel.")
+
+
+def _call_google_routes_json(payload: dict[str, Any], timeout: float = DEFAULT_API_TIMEOUT) -> dict:
+    """Fuehrt einen Google Routes API computeRoutes-Aufruf aus und gibt JSON zurueck."""
+    if not GOOGLE_ROUTES_API_KEY:
+        raise ValueError("GOOGLE_ROUTES_API_KEY nicht konfiguriert.")
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": GOOGLE_ROUTES_API_KEY,
+        "X-Goog-FieldMask": GOOGLE_ROUTES_FIELD_MASK,
+    }
+    response = requests.post(
+        GOOGLE_ROUTES_BASE_URL,
+        headers=headers,
+        json=payload,
+        timeout=timeout,
+    )
+    try:
+        data = response.json()
+    except Exception:
+        data = {}
+    if response.status_code >= 400:
+        error_message = (
+            data.get("error", {}).get("message")
+            if isinstance(data.get("error"), dict)
+            else data.get("error")
+        )
+        if error_message:
+            raise ValueError(f"Google Routes API Fehler: {error_message}")
+        response.raise_for_status()
+    if isinstance(data.get("error"), dict):
+        raise ValueError(f"Google Routes API Fehler: {data['error'].get('message') or data['error']}")
+    if data.get("error"):
+        raise ValueError(f"Google Routes API Fehler: {data['error']}")
+    return data
 
 
 def _call_dataforseo_youtube(endpoint: str, payload: list) -> dict:
