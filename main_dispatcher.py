@@ -2199,6 +2199,14 @@ Schritte: {steps_executed} ausgeführt{f" von {steps_planned} geplant" if steps_
                 dest_folder=".",  # Standard: aktuelles Verzeichnis
                 max_steps=15,  # Genug Steps für komplexe Tasks
             )
+        elif agent_name == "meta":
+            skip_meta_model_validation = "# META ORCHESTRATION HANDOFF" in agent_query
+            if skip_meta_model_validation:
+                runtime_metadata["meta_skip_model_validation"] = True
+            agent_instance = AgentClass(
+                tools_description_string=tools_description,
+                skip_model_validation=skip_meta_model_validation,
+            )
         else:
             agent_instance = AgentClass(tools_description_string=tools_description)
 

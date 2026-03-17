@@ -146,9 +146,15 @@ class MetaAgent(BaseAgent):
                 filtered.append(line)
         return "".join(filtered)
 
-    def __init__(self, tools_description_string: str):
+    def __init__(self, tools_description_string: str, *, skip_model_validation: bool = False):
         filtered = self._filter_tools_for_meta(tools_description_string)
-        super().__init__(META_SYSTEM_PROMPT, filtered, 30, "meta")
+        super().__init__(
+            META_SYSTEM_PROMPT,
+            filtered,
+            30,
+            "meta",
+            skip_model_validation=skip_model_validation,
+        )
 
         # Meta-Agent ist Orchestrator, kein Visual-Agent.
         # Capability-Map enthält "browser"/"navigation" → würde sonst fälschlich
@@ -1451,7 +1457,7 @@ class MetaAgent(BaseAgent):
         attempted = set(attempted_recipe_ids or set())
         attempted.add(recipe_id)
 
-        original_user_task = cls._strip_location_context_block(
+        original_user_task = self._strip_location_context_block(
             str(handoff.get("original_user_task") or task)
         )
         handoff_for_recipe = dict(handoff)

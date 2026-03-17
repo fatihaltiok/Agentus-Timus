@@ -184,6 +184,18 @@ AGENT_CAPABILITY_MAP = {
 class BaseAgent(DynamicToolMixin):
     """Basisklasse fuer alle Agenten mit Multi-Provider Support und DynamicToolMixin."""
 
+    @staticmethod
+    def _resolve_model_without_validation(agent_type: str) -> Tuple[str, ModelProvider]:
+        if agent_type in AgentModelConfig.AGENT_CONFIGS:
+            model_env, provider_env, fallback_model, fallback_provider = AgentModelConfig.AGENT_CONFIGS[agent_type]
+            return resolve_model_provider_env(
+                model_env=model_env,
+                provider_env=provider_env,
+                fallback_model=fallback_model,
+                fallback_provider=fallback_provider,
+            )
+        return "gpt-4o", ModelProvider.OPENAI
+
     def __init__(
         self,
         system_prompt_template: str,
@@ -191,6 +203,7 @@ class BaseAgent(DynamicToolMixin):
         max_iterations: int = 30,
         agent_type: str = "executor",
         lane_id: Optional[str] = None,
+        skip_model_validation: bool = False,
     ):
         self.max_iterations = max_iterations
         self.agent_type = agent_type
@@ -213,7 +226,16 @@ class BaseAgent(DynamicToolMixin):
 
         # Multi-Provider Setup
         self.provider_client = get_provider_client()
-        self.model, self.provider = AgentModelConfig.get_model_and_provider(agent_type)
+        if skip_model_validation:
+            self.model, self.provider = self._resolve_model_without_validation(agent_type)
+            log.warning(
+                "%s | %s | %s | Modellvalidierung absichtlich uebersprungen",
+                self.__class__.__name__,
+                self.model,
+                self.provider.value,
+            )
+        else:
+            self.model, self.provider = AgentModelConfig.get_model_and_provider(agent_type)
 
         log.info(f"{self.__class__.__name__} | {self.model} | {self.provider.value}")
 

@@ -27,6 +27,20 @@ class _DummyMetaAgent:
         return {"agent_type": "meta_test"}
 
 
+class _CapturingMetaAgent:
+    last_init_kwargs = None
+
+    def __init__(self, tools_description_string: str, **kwargs):
+        self.tools_description_string = tools_description_string
+        type(self).last_init_kwargs = dict(kwargs)
+
+    async def run(self, query: str):
+        return f"captured:{query}"
+
+    def get_runtime_telemetry(self):
+        return {"agent_type": "meta_capture_test"}
+
+
 def _stable_runtime_constraints():
     return {
         "budget_state": "soft_limit",
@@ -158,6 +172,63 @@ async def test_run_agent_meta_handoff_strips_canvas_wrappers_from_original_user_
     assert "# ORIGINAL USER TASK\nzeig mir den weg nach münster mit dem auto" in result
     assert "# LIVE LOCATION CONTEXT" not in result
     assert "Antworte ausschließlich auf Deutsch" not in result
+
+
+@pytest.mark.asyncio
+async def test_run_agent_meta_handoff_skips_model_validation_for_structured_recipe(monkeypatch):
+    import main_dispatcher
+
+    _patch_dispatcher_dependencies(monkeypatch)
+    _CapturingMetaAgent.last_init_kwargs = None
+    monkeypatch.setitem(main_dispatcher.AGENT_CLASS_MAP, "meta", _CapturingMetaAgent)
+
+    result = await main_dispatcher.run_agent(
+        agent_name="meta",
+        query="zeig mir den weg nach münster mit dem auto",
+        tools_description="tools",
+        session_id="sess_meta_skip_validation",
+    )
+
+    assert result.startswith("captured:# META ORCHESTRATION HANDOFF")
+    assert _CapturingMetaAgent.last_init_kwargs == {"skip_model_validation": True}
+
+
+@pytest.mark.asyncio
+async def test_real_meta_agent_can_execute_structured_route_recipe_without_llm_init(monkeypatch):
+    import main_dispatcher
+    from agent.agents.meta import MetaAgent
+    from agent.base_agent import BaseAgent
+
+    async def _fake_call_tool(self, method, params):
+        assert method == "delegate_to_agent"
+        assert params["agent_type"] == "executor"
+        return {
+            "status": "success",
+            "result": "Aktive Route erfolgreich erstellt.",
+            "blackboard_key": "delegation:executor:test",
+            "metadata": {},
+            "artifacts": [],
+        }
+
+    async def _empty_meta_context(self):
+        return ""
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+    monkeypatch.setattr(MetaAgent, "_build_meta_context", _empty_meta_context)
+    monkeypatch.setattr(MetaAgent, "_init_skill_system", lambda self: setattr(self, "skill_registry", None))
+
+    payload = main_dispatcher._build_meta_handoff_payload("zeig mir den weg nach münster mit dem auto")
+    handoff = (
+        main_dispatcher._render_meta_handoff_block(payload)
+        + "\n\n# ORIGINAL USER TASK\nzeig mir den weg nach münster mit dem auto"
+    )
+
+    agent = MetaAgent(tools_description_string="tools", skip_model_validation=True)
+    agent.conversation_session_id = "sess_meta_real_recipe"
+    result = await agent.run(handoff)
+
+    assert "Meta-Rezept 'location_route'" in result
+    assert "Aktive Route erfolgreich erstellt." in result
 
 
 def test_build_meta_handoff_payload_exposes_learning_snapshot(monkeypatch):
