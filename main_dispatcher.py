@@ -67,6 +67,8 @@ from orchestration.self_improvement_engine import LLMUsageRecord, get_improvemen
 from tools.tool_registry_v2 import registry_v2
 from agent.providers import ModelProvider, get_provider_client
 from utils.llm_usage import build_usage_payload
+from utils.location_local_intent import analyze_location_local_intent
+from utils.meta_handoff_wrappers import strip_meta_canvas_wrappers
 
 # Logger frueh definieren, damit Import-Fallbacks sicher loggen koennen.
 log = logging.getLogger("MainDispatcher")
@@ -555,6 +557,10 @@ def _sanitize_user_query(query: str) -> str:
     """Entfernt Steuerzeichen aus User-Input (z.B. ^V / \\x16)."""
     cleaned = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", " ", str(query or ""))
     return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _strip_meta_canvas_wrappers(query: str) -> str:
+    return strip_meta_canvas_wrappers(query)
 
 # --- System-Prompt (AKTUALISIERT v3.1) ---
 DISPATCHER_PROMPT = """
@@ -1374,6 +1380,7 @@ _DATA_EXTENSIONS = re.compile(r"\.(csv|xlsx|xls|parquet)\b", re.IGNORECASE)
 def quick_intent_check(query: str) -> Optional[str]:
     """Schnelle Keyword-basierte Intent-Erkennung."""
     query_lower = query.lower()
+    location_intent = analyze_location_local_intent(query_lower)
     orchestration_policy = evaluate_query_orchestration(query_lower)
 
     if any(keyword in query_lower for keyword in SELF_STATUS_KEYWORDS):
@@ -1383,6 +1390,8 @@ def quick_intent_check(query: str) -> Optional[str]:
     if any(keyword in query_lower for keyword in SELF_PRIORITY_KEYWORDS):
         return "executor"
     if query_lower.strip() == "sag du es mir":
+        return "executor"
+    if location_intent.is_location_only:
         return "executor"
 
     # Browser-Automation muss vor generischen Shell-Phrasen erkannt werden.
@@ -1601,7 +1610,8 @@ def _apply_dispatcher_feedback_bias(user_query: str, decision: str) -> str:
 
 def _build_meta_handoff_payload(query: str) -> dict:
     """Erzeugt ein kompaktes, strukturiertes Handoff fuer Meta."""
-    policy = evaluate_query_orchestration(query)
+    clean_query = _strip_meta_canvas_wrappers(query)
+    policy = evaluate_query_orchestration(clean_query)
     payload = {
         "task_type": policy.get("task_type", "single_lane"),
         "site_kind": policy.get("site_kind"),
@@ -2021,9 +2031,21 @@ async def run_agent(
             pass  # Non-interactive: weitermachen
 
     if agent_name == "meta":
-        meta_handoff = _build_meta_handoff_payload(query)
-        runtime_metadata["meta_orchestration"] = meta_handoff
-        agent_query = _render_meta_handoff_block(meta_handoff) + f"\n\n# ORIGINAL USER TASK\n{query}"
+        if "# META ORCHESTRATION HANDOFF" in query:
+            parsed_handoff = MetaAgent._parse_meta_orchestration_handoff(query)
+            if parsed_handoff:
+                runtime_metadata["meta_orchestration"] = parsed_handoff
+            agent_query = query
+        else:
+            clean_meta_query = _strip_meta_canvas_wrappers(query)
+            meta_handoff = _build_meta_handoff_payload(clean_meta_query)
+            runtime_metadata["meta_orchestration"] = meta_handoff
+            runtime_metadata["meta_original_user_query"] = clean_meta_query
+            runtime_metadata["meta_query_wrapped"] = clean_meta_query != query
+            agent_query = (
+                _render_meta_handoff_block(meta_handoff)
+                + f"\n\n# ORIGINAL USER TASK\n{clean_meta_query}"
+            )
 
     log.info(f"\n🚀 Starte Agent: {agent_name.upper()}")
     _emit_dispatcher_status(agent_name, "start", "Initialisiere Agent")

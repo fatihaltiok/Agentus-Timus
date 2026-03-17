@@ -124,6 +124,42 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert parsed["meta_self_state"]["runtime_constraints"]["budget_state"] == "soft_limit"
 
 
+@pytest.mark.asyncio
+async def test_run_agent_meta_handoff_strips_canvas_wrappers_from_original_user_task(monkeypatch):
+    import main_dispatcher
+
+    _patch_dispatcher_dependencies(monkeypatch)
+    monkeypatch.setitem(main_dispatcher.AGENT_CLASS_MAP, "meta", _DummyMetaAgent)
+
+    wrapped_query = (
+        "Antworte ausschließlich auf Deutsch. "
+        "Nutze nur dann englische Fachbegriffe, wenn sie technisch nötig sind.\n\n"
+        "Nutzeranfrage:\n"
+        "# LIVE LOCATION CONTEXT\n"
+        "presence_status: recent\n"
+        "usable_for_context: True\n"
+        "display_name: Flutstraße 33, 63071 Offenbach am Main, Deutschland\n"
+        "latitude: 50.100241\n"
+        "longitude: 8.7787097\n"
+        "Use this location only for nearby, routing, navigation, or explicit place-context tasks.\n\n"
+        "zeig mir den weg nach münster mit dem auto"
+    )
+
+    result = await main_dispatcher.run_agent(
+        agent_name="meta",
+        query=wrapped_query,
+        tools_description="tools",
+        session_id="sess_meta_wrapped_route",
+    )
+
+    assert result.startswith("dummy:# META ORCHESTRATION HANDOFF")
+    assert "task_type: location_route" in result
+    assert "recommended_recipe_id: location_route" in result
+    assert "# ORIGINAL USER TASK\nzeig mir den weg nach münster mit dem auto" in result
+    assert "# LIVE LOCATION CONTEXT" not in result
+    assert "Antworte ausschließlich auf Deutsch" not in result
+
+
 def test_build_meta_handoff_payload_exposes_learning_snapshot(monkeypatch):
     import main_dispatcher
     from orchestration.meta_self_state import build_meta_self_state as _build_meta_self_state

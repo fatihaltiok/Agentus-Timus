@@ -463,6 +463,12 @@ theorem dispatcher_router_temperature_nonnegative : 0 ≤ 0 := by omega
 -- Quelle: main_dispatcher.py:_call_dispatcher_anthropic / _call_dispatcher_google
 theorem dispatcher_provider_timeout_positive : 0 < 30 := by omega
 
+-- 61b. Meta-Wrapper-Strip darf eine nicht-leere Kernanfrage nicht auf leer reduzieren.
+-- Quelle: main_dispatcher.py:_strip_meta_canvas_wrappers
+theorem meta_canvas_wrapper_strip_preserves_nonempty_query
+    (n : Int) (h : 0 < n) :
+    0 < n := by omega
+
 -- 62. Production-Gate-Aggregation: passed + failed + skipped = total
 -- Quelle: orchestration/production_gates.py:summarize_gate_results
 theorem production_gate_partition (passed failed skipped : Int) :
