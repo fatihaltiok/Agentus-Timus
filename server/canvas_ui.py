@@ -2006,10 +2006,36 @@ _TEMPLATE = r"""<!doctype html>
       gap: 10px;
       padding: 9px 0;
       border-bottom: 1px solid rgba(255,255,255,0.04);
+      border-radius: 12px;
+      transition: background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
     }
     .route-step:last-child {
       border-bottom: none;
       padding-bottom: 0;
+    }
+    .route-step.clickable {
+      cursor: pointer;
+      padding: 9px 10px;
+      border: 1px solid transparent;
+    }
+    .route-step.clickable:hover {
+      background: rgba(0,224,154,0.05);
+      border-color: rgba(0,224,154,0.12);
+    }
+    .route-step.clickable:focus-visible {
+      outline: none;
+      border-color: rgba(0,212,240,0.28);
+      box-shadow: 0 0 0 1px rgba(0,212,240,0.16);
+    }
+    .route-step.active {
+      background: rgba(0,212,240,0.07);
+      border-color: rgba(0,212,240,0.22);
+      box-shadow: inset 0 0 0 1px rgba(0,212,240,0.06);
+    }
+    .route-step.active .route-step-index {
+      border-color: rgba(0,212,240,0.35);
+      background: rgba(0,212,240,0.12);
+      color: var(--cyan);
     }
     .route-step-index {
       flex-shrink: 0;
@@ -2651,6 +2677,7 @@ _TEMPLATE = r"""<!doctype html>
               <div class="route-map-mode">
                 <button class="route-map-mode-btn" id="routeMapModeInteractiveBtn" onclick="setRouteMapMode('interactive')">Interaktiv</button>
                 <button class="route-map-mode-btn" id="routeMapModeStaticBtn" onclick="setRouteMapMode('static')">Statisch</button>
+                <button class="route-map-mode-btn" id="routeMapFollowBtn" onclick="toggleRouteMapFollow()">Follow aus</button>
               </div>
               <div class="route-map-mode-note" id="routeMapModeNote">Kartenmodus wird geladen…</div>
             </div>
@@ -3220,6 +3247,10 @@ let routeMapInstance   = null;
 let routeMapPolyline   = null;
 let routeMapStartMarker = null;
 let routeMapEndMarker   = null;
+let routeMapLiveMarker  = null;
+let routeMapStepHighlight = null;
+let routeMapHighlightedStepIndex = null;
+let routeMapFollowEnabled = false;
 let mobileVoiceState   = "idle";
 let lastRecentFiles    = [];
 let voiceAutoReply     = true;
@@ -3301,6 +3332,46 @@ function _readStoredRouteMapMode() {
   }
 }
 
+function _readStoredRouteMapFollowEnabled() {
+  try {
+    return window.localStorage.getItem("timusRouteMapFollowEnabled") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function _extractRouteMapCoordinates(value) {
+  if (!value || typeof value !== "object") return null;
+  const latitude = Number(value.latitude ?? value.lat);
+  const longitude = Number(value.longitude ?? value.lng ?? value.lon);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  return { lat: latitude, lng: longitude };
+}
+
+function _currentRouteLiveLocation() {
+  const locationSummary = (lastStatusSnapshot || {}).location || {};
+  const activeLocation = locationSummary.location || {};
+  const presenceStatus = String(activeLocation.presence_status || "unknown").toLowerCase();
+  if (!["live", "recent"].includes(presenceStatus)) return null;
+  if (activeLocation.usable_for_context !== true) return null;
+  const position = _extractRouteMapCoordinates(activeLocation);
+  if (!position) return null;
+  return {
+    ...position,
+    presence_status: presenceStatus,
+    display_name: activeLocation.display_name || activeLocation.locality || "Aktueller Standort",
+  };
+}
+
+function _syncRouteMapStepSelection() {
+  document.querySelectorAll("[data-route-step-index]").forEach(el => {
+    const stepIndex = Number(el.getAttribute("data-route-step-index"));
+    const active = Number.isInteger(stepIndex) && routeMapHighlightedStepIndex === stepIndex;
+    el.classList.toggle("active", active);
+    el.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+}
+
 function _setRouteMapModeNote(text) {
   const noteEl = document.getElementById("routeMapModeNote");
   if (noteEl) noteEl.textContent = text || "Kartenmodus";
@@ -3309,8 +3380,10 @@ function _setRouteMapModeNote(text) {
 function _syncRouteMapModeControls() {
   const interactiveBtn = document.getElementById("routeMapModeInteractiveBtn");
   const staticBtn = document.getElementById("routeMapModeStaticBtn");
+  const followBtn = document.getElementById("routeMapFollowBtn");
   const config = routeMapConfig || {};
   const interactiveAvailable = !!config.interactive_available;
+  const liveLocation = _currentRouteLiveLocation();
   if (interactiveBtn) {
     interactiveBtn.classList.toggle("active", routeMapMode === "interactive");
     interactiveBtn.disabled = !interactiveAvailable;
@@ -3319,11 +3392,24 @@ function _syncRouteMapModeControls() {
     staticBtn.classList.toggle("active", routeMapMode === "static");
     staticBtn.disabled = false;
   }
+  if (followBtn) {
+    followBtn.classList.toggle("active", routeMapFollowEnabled);
+    followBtn.disabled = !interactiveAvailable;
+    followBtn.textContent = routeMapFollowEnabled ? "Follow an" : "Follow aus";
+    followBtn.title = liveLocation
+      ? "Live-Standort auf der Karte verfolgen"
+      : "Kein frischer Live-Standort verfuegbar";
+  }
   if (interactiveAvailable) {
+    let noteText = routeMapMode === "interactive"
+      ? "Google Maps JS aktiv"
+      : "Statische Kartenansicht aktiv";
+    if (liveLocation) noteText += " · Live-Marker bereit";
+    if (routeMapFollowEnabled) {
+      noteText += liveLocation ? " · Follow aktiv" : " · Follow wartet auf Live-Standort";
+    }
     _setRouteMapModeNote(
-      routeMapMode === "interactive"
-        ? "Google Maps JS aktiv"
-        : "Statische Kartenansicht aktiv"
+      noteText
     );
   } else {
     _setRouteMapModeNote("Interaktive Karte nicht konfiguriert — Static Fallback aktiv");
@@ -3363,6 +3449,15 @@ function setRouteMapMode(mode) {
   _syncRouteMapModeControls();
   if (lastRouteSnapshot) {
     _renderRouteMap(lastRouteSnapshot, true).catch(() => {});
+  }
+}
+
+function toggleRouteMapFollow() {
+  routeMapFollowEnabled = !routeMapFollowEnabled;
+  try { window.localStorage.setItem("timusRouteMapFollowEnabled", routeMapFollowEnabled ? "1" : "0"); } catch {}
+  _syncRouteMapModeControls();
+  if (lastRouteSnapshot) {
+    _renderRouteMap(lastRouteSnapshot, false).catch(() => {});
   }
 }
 
@@ -3429,6 +3524,117 @@ function _clearInteractiveRouteMap() {
     routeMapEndMarker.setMap(null);
     routeMapEndMarker = null;
   }
+  if (routeMapLiveMarker) {
+    routeMapLiveMarker.setMap(null);
+    routeMapLiveMarker = null;
+  }
+  if (routeMapStepHighlight) {
+    routeMapStepHighlight.setMap(null);
+    routeMapStepHighlight = null;
+  }
+}
+
+function _renderRouteMapLiveMarker(maps, { allowRecenter = false } = {}) {
+  if (!routeMapInstance) return null;
+  const liveLocation = _currentRouteLiveLocation();
+  if (!liveLocation) {
+    if (routeMapLiveMarker) {
+      routeMapLiveMarker.setMap(null);
+      routeMapLiveMarker = null;
+    }
+    _syncRouteMapModeControls();
+    return null;
+  }
+  if (!routeMapLiveMarker) {
+    routeMapLiveMarker = new maps.Marker({
+      position: liveLocation,
+      map: routeMapInstance,
+      title: `${liveLocation.display_name} (${liveLocation.presence_status})`,
+      zIndex: 1200,
+      icon: {
+        path: maps.SymbolPath.CIRCLE,
+        scale: 7,
+        fillColor: "#00d4f0",
+        fillOpacity: 0.94,
+        strokeColor: "#06141d",
+        strokeWeight: 2,
+      },
+    });
+  } else {
+    routeMapLiveMarker.setPosition(liveLocation);
+    routeMapLiveMarker.setTitle(`${liveLocation.display_name} (${liveLocation.presence_status})`);
+    routeMapLiveMarker.setMap(routeMapInstance);
+  }
+  if (allowRecenter && routeMapFollowEnabled) {
+    routeMapInstance.panTo(liveLocation);
+    const currentZoom = Number(routeMapInstance.getZoom() || 0);
+    if (currentZoom < 13) routeMapInstance.setZoom(13);
+  }
+  _syncRouteMapModeControls();
+  return liveLocation;
+}
+
+function _renderRouteStepHighlight(maps) {
+  if (routeMapStepHighlight) {
+    routeMapStepHighlight.setMap(null);
+    routeMapStepHighlight = null;
+  }
+  if (!routeMapInstance || !lastRouteSnapshot) return false;
+  const steps = Array.isArray(lastRouteSnapshot.steps) ? lastRouteSnapshot.steps : [];
+  if (!Number.isInteger(routeMapHighlightedStepIndex)) return false;
+  if (routeMapHighlightedStepIndex < 0 || routeMapHighlightedStepIndex >= steps.length) return false;
+  const step = steps[routeMapHighlightedStepIndex] || {};
+  if (!step.highlight_available) return false;
+  const start = _extractRouteMapCoordinates(step.start_coordinates);
+  const end = _extractRouteMapCoordinates(step.end_coordinates);
+  if (!start || !end) return false;
+  routeMapStepHighlight = new maps.Polyline({
+    path: [start, end],
+    strokeColor: "#00d4f0",
+    strokeOpacity: 0.98,
+    strokeWeight: 8,
+    zIndex: 1100,
+    map: routeMapInstance,
+  });
+  const bounds = new maps.LatLngBounds();
+  bounds.extend(start);
+  bounds.extend(end);
+  if (!bounds.isEmpty()) {
+    routeMapInstance.fitBounds(bounds, 120);
+  }
+  return true;
+}
+
+function clearRouteStepHighlight() {
+  routeMapHighlightedStepIndex = null;
+  if (routeMapStepHighlight) {
+    routeMapStepHighlight.setMap(null);
+    routeMapStepHighlight = null;
+  }
+  _syncRouteMapStepSelection();
+  if (lastRouteSnapshot) {
+    _renderRouteMap(lastRouteSnapshot, false).catch(() => {});
+  }
+}
+
+function highlightRouteStep(index) {
+  const steps = Array.isArray((lastRouteSnapshot || {}).steps) ? lastRouteSnapshot.steps : [];
+  const stepIndex = Number(index);
+  if (!Number.isInteger(stepIndex) || stepIndex < 0 || stepIndex >= steps.length) return;
+  if (!(steps[stepIndex] || {}).highlight_available) return;
+  if (routeMapHighlightedStepIndex === stepIndex) {
+    clearRouteStepHighlight();
+    return;
+  }
+  routeMapHighlightedStepIndex = stepIndex;
+  _syncRouteMapStepSelection();
+  if (routeMapMode !== "interactive" && (routeMapConfig || {}).interactive_available) {
+    setRouteMapMode("interactive");
+    return;
+  }
+  if (lastRouteSnapshot) {
+    _renderRouteMap(lastRouteSnapshot, false).catch(() => {});
+  }
 }
 
 async function _renderInteractiveRouteMap(route) {
@@ -3494,8 +3700,11 @@ async function _renderInteractiveRouteMap(route) {
   if (!bounds.isEmpty()) {
     routeMapInstance.fitBounds(bounds, 52);
   }
+  const highlightedStep = _renderRouteStepHighlight(maps);
+  _renderRouteMapLiveMarker(maps, { allowRecenter: !highlightedStep });
   _toggleRouteMapSurfaces("interactive");
   _hideRouteMapOverlay();
+  _syncRouteMapStepSelection();
   return true;
 }
 
@@ -3554,6 +3763,7 @@ function renderRouteStatus(route) {
 
   if (!route || !route.has_route) {
     setMobileBadge("routeStatusBadge", "idle", "unknown");
+    routeMapHighlightedStepIndex = null;
     if (titleEl) titleEl.textContent = "Aktive Route";
     if (summaryEl) summaryEl.textContent = "Noch keine aktive Route. Timus zeigt hier ETA, Ziel, Schritte und die Kartenansicht der letzten Route.";
     if (destinationEl) destinationEl.textContent = "–";
@@ -3576,7 +3786,16 @@ function renderRouteStatus(route) {
   const routeBadgeState = ["live", "recent"].includes(originPresence) ? "ok" : "warn";
   const routeBadgeLabel = routeBadgeState === "ok" ? originPresence : "cached";
   const destinationLabel = route.destination_label || route.end_address || route.destination_query || "Route";
+  const routeSteps = Array.isArray(route.steps) ? route.steps : [];
   const stepPreview = Array.isArray(route.steps) ? route.steps.slice(0, 5) : [];
+  if (
+    !Number.isInteger(routeMapHighlightedStepIndex)
+    || routeMapHighlightedStepIndex < 0
+    || routeMapHighlightedStepIndex >= routeSteps.length
+    || !(routeSteps[routeMapHighlightedStepIndex] || {}).highlight_available
+  ) {
+    routeMapHighlightedStepIndex = null;
+  }
 
   setMobileBadge("routeStatusBadge", routeBadgeLabel, routeBadgeState);
   if (titleEl) titleEl.textContent = route.summary || "Aktive Route";
@@ -3601,17 +3820,26 @@ function renderRouteStatus(route) {
   }
   if (stepListEl) {
     stepListEl.innerHTML = stepPreview.length
-      ? stepPreview.map(step => `
-          <div class="route-step">
+      ? stepPreview.map((step, stepIndex) => `
+          <div
+            class="route-step${step.highlight_available ? " clickable" : ""}${routeMapHighlightedStepIndex === stepIndex ? " active" : ""}"
+            data-route-step-index="${stepIndex}"
+            role="${step.highlight_available ? "button" : "group"}"
+            tabindex="${step.highlight_available ? "0" : "-1"}"
+            aria-pressed="${routeMapHighlightedStepIndex === stepIndex ? "true" : "false"}"
+            onclick="${step.highlight_available ? `highlightRouteStep(${stepIndex})` : ""}"
+            onkeydown="${step.highlight_available ? `if(event.key==='Enter'||event.key===' '){event.preventDefault();highlightRouteStep(${stepIndex});}` : ""}"
+          >
             <span class="route-step-index">${esc(step.position || "•")}</span>
             <div class="route-step-body">
               <div class="route-step-text">${esc(step.instruction || "Weiter")}</div>
-              <div class="route-step-meta">${esc(step.distance_text || "")}${step.duration_text ? ` · ${esc(step.duration_text)}` : ""}</div>
+              <div class="route-step-meta">${esc(step.distance_text || "")}${step.duration_text ? ` · ${esc(step.duration_text)}` : ""}${step.highlight_available ? " · Segmentfokus" : ""}</div>
             </div>
           </div>
         `).join("")
       : '<div class="empty">Keine Schrittfolge verfügbar.</div>';
   }
+  _syncRouteMapStepSelection();
   if (openLinkEl) {
     openLinkEl.href = route.maps_url || route.route_url || "#";
     openLinkEl.setAttribute("aria-disabled", route.maps_url || route.route_url ? "false" : "true");
@@ -3924,6 +4152,12 @@ function applyMobileSnapshot(snapshot) {
     locationStripEl.innerHTML = `<strong>Standort:</strong> ${esc(locality)} · ${esc(deviceId)} · ${esc(presence)} · Privacy ${esc(privacy)} · Genauigkeit ${esc(accuracy)} · Sharing ${esc(sharing)} · Kontext ${esc(context)}`;
   }
   renderLocationControlPanel(locationSummary);
+  _syncRouteMapModeControls();
+  if (routeMapMode === "interactive" && routeMapInstance && window.google?.maps) {
+    _renderRouteMapLiveMarker(window.google.maps, {
+      allowRecenter: routeMapFollowEnabled && !Number.isInteger(routeMapHighlightedStepIndex),
+    });
+  }
 }
 
 function renderLocationControlPanel(locationSummary) {
@@ -6601,6 +6835,7 @@ async function init() {
   document.getElementById("pollMs").textContent = String(POLL_MS);
   syncMobileLayout();
   routeMapMode = _readStoredRouteMapMode() || routeMapMode;
+  routeMapFollowEnabled = _readStoredRouteMapFollowEnabled();
   updateLiveConnectionState(navigator.onLine ? "warn" : "error", navigator.onLine ? "bereit" : "offline");
   renderAgentLeds({});
   renderToolActivity();

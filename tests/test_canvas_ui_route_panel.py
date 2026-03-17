@@ -16,11 +16,15 @@ def test_canvas_ui_contains_route_panel_and_map_endpoint() -> None:
     assert "routeMapInteractive" in html
     assert "routeMapModeInteractiveBtn" in html
     assert "routeMapModeStaticBtn" in html
+    assert "routeMapFollowBtn" in html
     assert "loadRouteStatus(true)" in html
     assert "/location/route/status" in html
     assert "/location/route/map_config" in html
     assert "/location/route/map" in html
     assert "In Google Maps öffnen" in html
+    assert "highlightRouteStep(" in html
+    assert "clearRouteStepHighlight()" in html
+    assert "_renderRouteMapLiveMarker(" in html
 
 
 def test_canvas_ui_registers_route_map_endpoint() -> None:

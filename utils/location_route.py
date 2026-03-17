@@ -116,6 +116,16 @@ def _extract_google_latlng(value: Any) -> dict[str, float]:
     return _extract_coordinates(value)
 
 
+def route_step_segment_available(
+    start_coordinates: dict[str, Any] | None,
+    end_coordinates: dict[str, Any] | None,
+) -> bool:
+    return bool(
+        _extract_coordinates(start_coordinates or {})
+        and _extract_coordinates(end_coordinates or {})
+    )
+
+
 def strip_route_instruction_html(value: str) -> str:
     text = html.unescape(str(value or ""))
     text = re.sub(r"<[^>]+>", " ", text)
@@ -152,12 +162,26 @@ def _normalize_route_step(raw: dict[str, Any], position: int) -> dict[str, Any]:
     distance_text = _text_value(raw.get("formatted_distance")) or _text_value(raw.get("distance"))
     duration_text = _text_value(raw.get("formatted_duration")) or _text_value(raw.get("duration"))
     maneuver = _text_value(raw.get("maneuver"))
+    start_coordinates = (
+        _extract_coordinates(raw.get("start_coordinates"))
+        or _extract_coordinates(raw.get("start_location"))
+        or _extract_google_latlng(raw.get("startLocation"))
+    )
+    end_coordinates = (
+        _extract_coordinates(raw.get("end_coordinates"))
+        or _extract_coordinates(raw.get("end_location"))
+        or _extract_google_latlng(raw.get("endLocation"))
+        or _extract_coordinates(raw.get("gps_coordinates"))
+    )
     return {
         "position": max(1, int(position)),
         "instruction": instruction,
         "distance_text": distance_text,
         "duration_text": duration_text,
         "maneuver": maneuver,
+        "start_coordinates": start_coordinates,
+        "end_coordinates": end_coordinates,
+        "highlight_available": route_step_segment_available(start_coordinates, end_coordinates),
     }
 
 
@@ -360,16 +384,21 @@ def parse_google_routes_compute_route(
         if not isinstance(item, dict):
             continue
         steps.append(
-            {
-                "position": idx,
-                "instruction": strip_route_instruction_html(
-                    _text_value((item.get("navigationInstruction") or {}).get("instructions"))
-                    or _text_value(item.get("instruction"))
-                ),
-                "distance_text": _format_distance_text(item.get("distanceMeters")),
-                "duration_text": _format_duration_text(item.get("staticDuration") or item.get("duration")),
-                "maneuver": _text_value(item.get("maneuver") or item.get("travelMode")),
-            }
+            _normalize_route_step(
+                {
+                    "position": idx,
+                    "instruction": strip_route_instruction_html(
+                        _text_value((item.get("navigationInstruction") or {}).get("instructions"))
+                        or _text_value(item.get("instruction"))
+                    ),
+                    "distance_text": _format_distance_text(item.get("distanceMeters")),
+                    "duration_text": _format_duration_text(item.get("staticDuration") or item.get("duration")),
+                    "maneuver": _text_value(item.get("maneuver") or item.get("travelMode")),
+                    "startLocation": item.get("startLocation"),
+                    "endLocation": item.get("endLocation"),
+                },
+                idx,
+            )
         )
 
     origin_latitude = _as_float(origin.get("latitude"))

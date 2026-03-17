@@ -8,6 +8,7 @@ from utils.location_route import (
     parse_google_routes_compute_route,
     parse_serpapi_google_maps_directions,
     prepare_route_snapshot,
+    route_step_segment_available,
 )
 
 
@@ -60,6 +61,22 @@ def _contract_parse_google_routes_compute_route(data: dict, origin: dict, destin
 @deal.post(lambda r: r["source_provider"] in {"serpapi", "google_routes"})
 def _contract_prepare_route_snapshot(payload: dict):
     return prepare_route_snapshot(payload)
+
+
+@deal.post(lambda r: isinstance(r, bool))
+@deal.ensure(
+    lambda start_coordinates, end_coordinates, result: (
+        not result
+        or (
+            isinstance(start_coordinates, dict)
+            and isinstance(end_coordinates, dict)
+            and bool(start_coordinates)
+            and bool(end_coordinates)
+        )
+    )
+)
+def _contract_route_step_segment_available(start_coordinates: dict, end_coordinates: dict) -> bool:
+    return route_step_segment_available(start_coordinates, end_coordinates)
 
 
 @deal.pre(lambda has_google, has_serpapi: has_google or has_serpapi)
@@ -119,3 +136,14 @@ def test_contract_choose_route_provider_prefers_google() -> None:
 def test_contract_route_is_active_requires_url_and_destination() -> None:
     assert _contract_route_is_active("https://www.google.com/maps/dir/?api=1", "Hanau") is True
     assert _contract_route_is_active("", "Hanau") is False
+
+
+def test_contract_route_step_segment_available_requires_two_coordinate_maps() -> None:
+    assert (
+        _contract_route_step_segment_available(
+            {"latitude": 50.100241, "longitude": 8.7787097},
+            {"latitude": 50.1003921, "longitude": 8.7784912},
+        )
+        is True
+    )
+    assert _contract_route_step_segment_available({}, {"latitude": 50.1003921, "longitude": 8.7784912}) is False

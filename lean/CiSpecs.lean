@@ -238,6 +238,18 @@ theorem m16_qdrant_limit_positive (limit : Int) (h : 0 < limit) : 0 < limit := b
 -- Quelle: memory/soul_engine.py:WeightedHook.apply_feedback (neutral branch)
 theorem m16_neutral_noop (w : Int) : w = w := by omega
 
+-- 26. Canvas-Route-Step-Fokus setzt Start- und Endpunkt voraus
+-- Modelliert utils/location_route.py:route_step_segment_available
+theorem route_step_highlight_requires_both_points (startOk endOk : Bool) :
+    (if startOk && endOk then 1 else 0) ≤ (if startOk then 1 else 0) := by
+  cases startOk <;> cases endOk <;> decide
+
+-- 27. Follow-Mode ist nur mit nutzbarem Live/Recent-Standort sinnvoll
+-- Modelliert server/canvas_ui.py:_currentRouteLiveLocation + routeMapFollowEnabled
+theorem route_follow_requires_usable_context (usable recentLike : Bool) :
+    (if usable && recentLike then 1 else 0) ≤ (if usable then 1 else 0) := by
+  cases usable <;> cases recentLike <;> decide
+
 -- 26. M14 Whitelist-Guard: kein Eintrag in Whitelist (0) → keine Sendung
 -- in_list=0: nicht in Whitelist, in_list=1: in Whitelist
 -- Quelle: orchestration/email_autonomy_engine.py:_in_whitelist

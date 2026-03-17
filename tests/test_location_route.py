@@ -6,6 +6,7 @@ from utils.location_route import (
     parse_google_routes_compute_route,
     parse_serpapi_google_maps_directions,
     prepare_route_snapshot,
+    route_step_segment_available,
     strip_route_instruction_html,
 )
 
@@ -32,6 +33,17 @@ def test_build_google_maps_directions_url_contains_origin_destination_and_mode()
     assert "origin=52.52,13.4" in url
     assert "destination=Checkpoint+Charlie+Berlin" in url
     assert "travelmode=walking" in url
+
+
+def test_route_step_segment_available_requires_both_endpoints() -> None:
+    assert (
+        route_step_segment_available(
+            {"latitude": 50.100241, "longitude": 8.7787097},
+            {"latitude": 50.1003921, "longitude": 8.7784912},
+        )
+        is True
+    )
+    assert route_step_segment_available({"latitude": 50.100241, "longitude": 8.7787097}, {}) is False
 
 
 def test_parse_serpapi_google_maps_directions_normalizes_route() -> None:
@@ -168,6 +180,9 @@ def test_parse_google_routes_compute_route_normalizes_route() -> None:
     assert result["duration_text"] == "19 min"
     assert result["overview_polyline"] == "encoded-route-polyline"
     assert result["steps"][0]["instruction"] == "Richtung Landgrafenstraße starten"
+    assert result["steps"][0]["start_coordinates"]["latitude"] == 50.100241
+    assert result["steps"][0]["end_coordinates"]["longitude"] == 8.7784912
+    assert result["steps"][0]["highlight_available"] is True
     assert result["start_coordinates"]["latitude"] == 50.100241
     assert result["end_coordinates"]["longitude"] == 8.9283105
     assert result["source_provider"] == "google_routes"
@@ -188,6 +203,9 @@ def test_prepare_route_snapshot_marks_complete_route() -> None:
     assert snapshot["has_route"] is True
     assert snapshot["travel_mode"] == "walking"
     assert snapshot["language_code"] == "de"
+    assert snapshot["steps"][0]["start_coordinates"] == {}
+    assert snapshot["steps"][0]["end_coordinates"] == {}
+    assert snapshot["steps"][0]["highlight_available"] is False
     assert snapshot["route_status"] == "active"
     assert snapshot["reroute_count"] == 0
     assert snapshot["overview_polyline"] == ""

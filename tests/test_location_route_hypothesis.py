@@ -9,6 +9,7 @@ from tests.test_location_route_contracts import (
     _contract_normalize_route_travel_mode,
     _contract_prepare_route_snapshot,
     _contract_route_is_active,
+    _contract_route_step_segment_available,
 )
 
 
@@ -104,3 +105,27 @@ def test_hypothesis_choose_route_provider_prefers_google(has_google: bool, has_s
 def test_hypothesis_route_is_active_matches_inputs(route_url: str, destination_query: str) -> None:
     result = _contract_route_is_active(route_url, destination_query)
     assert result == bool(route_url.strip() and destination_query.strip())
+
+
+@given(
+    start_lat=st.one_of(st.none(), st.floats(min_value=-90, max_value=90, allow_nan=False, allow_infinity=False)),
+    start_lng=st.one_of(st.none(), st.floats(min_value=-180, max_value=180, allow_nan=False, allow_infinity=False)),
+    end_lat=st.one_of(st.none(), st.floats(min_value=-90, max_value=90, allow_nan=False, allow_infinity=False)),
+    end_lng=st.one_of(st.none(), st.floats(min_value=-180, max_value=180, allow_nan=False, allow_infinity=False)),
+)
+def test_hypothesis_route_step_segment_available_requires_both_points(
+    start_lat: float | None,
+    start_lng: float | None,
+    end_lat: float | None,
+    end_lng: float | None,
+) -> None:
+    start = {}
+    end = {}
+    if start_lat is not None and start_lng is not None:
+        start = {"latitude": start_lat, "longitude": start_lng}
+    if end_lat is not None and end_lng is not None:
+        end = {"latitude": end_lat, "longitude": end_lng}
+    result = _contract_route_step_segment_available(start, end)
+    if result:
+        assert bool(start) is True
+        assert bool(end) is True
