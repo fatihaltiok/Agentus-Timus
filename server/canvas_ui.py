@@ -2050,6 +2050,51 @@ _TEMPLATE = r"""<!doctype html>
         radial-gradient(circle at top left, rgba(0,224,154,0.12), transparent 38%),
         linear-gradient(145deg, rgba(8,15,25,0.96) 0%, rgba(4,9,16,0.99) 100%);
     }
+    .route-map-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .route-map-mode {
+      display: inline-flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .route-map-mode-btn {
+      min-height: 30px;
+      padding: 0 12px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: rgba(8,16,26,0.9);
+      color: var(--text3);
+      font: 500 10.5px var(--font);
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+    }
+    .route-map-mode-btn:hover {
+      border-color: var(--border3);
+      color: var(--text2);
+    }
+    .route-map-mode-btn.active {
+      border-color: rgba(0,224,154,0.4);
+      color: var(--brand);
+      background: rgba(0,224,154,0.08);
+      box-shadow: 0 0 16px rgba(0,224,154,0.08);
+    }
+    .route-map-mode-btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+    .route-map-mode-note {
+      color: var(--text3);
+      font-size: 10px;
+      letter-spacing: 0.4px;
+    }
     .route-map-image {
       width: 100%;
       height: 100%;
@@ -2057,6 +2102,14 @@ _TEMPLATE = r"""<!doctype html>
       display: none;
     }
     .route-map-image.visible {
+      display: block;
+    }
+    .route-map-interactive {
+      position: absolute;
+      inset: 0;
+      display: none;
+    }
+    .route-map-interactive.visible {
       display: block;
     }
     .route-map-overlay {
@@ -2594,7 +2647,15 @@ _TEMPLATE = r"""<!doctype html>
             </div>
           </section>
           <section class="route-map-card">
+            <div class="route-map-toolbar">
+              <div class="route-map-mode">
+                <button class="route-map-mode-btn" id="routeMapModeInteractiveBtn" onclick="setRouteMapMode('interactive')">Interaktiv</button>
+                <button class="route-map-mode-btn" id="routeMapModeStaticBtn" onclick="setRouteMapMode('static')">Statisch</button>
+              </div>
+              <div class="route-map-mode-note" id="routeMapModeNote">Kartenmodus wird geladen…</div>
+            </div>
             <div class="route-map-wrap">
+              <div id="routeMapInteractive" class="route-map-interactive" aria-label="Interaktive Kartenansicht der aktiven Route"></div>
               <img id="routeMapImage" class="route-map-image" alt="Aktive Route Kartenansicht" loading="lazy" />
               <div class="route-map-overlay" id="routeMapOverlay">Sobald eine Route aktiv ist, erscheint hier die Kartenansicht im Canvas.</div>
             </div>
@@ -3152,6 +3213,13 @@ let mobileSection    = "home";
 let lastStatusSnapshot = null;
 let lastCanvasItems    = [];
 let lastRouteSnapshot  = null;
+let routeMapConfig     = null;
+let routeMapMode       = "static";
+let routeMapGooglePromise = null;
+let routeMapInstance   = null;
+let routeMapPolyline   = null;
+let routeMapStartMarker = null;
+let routeMapEndMarker   = null;
 let mobileVoiceState   = "idle";
 let lastRecentFiles    = [];
 let voiceAutoReply     = true;
@@ -3218,22 +3286,256 @@ function _formatRouteTimestamp(value) {
   return raw.replace("T", " ").replace("Z", " UTC").slice(0, 20);
 }
 
+function _normalizeRouteMapMode(mode) {
+  const normalized = String(mode || "").toLowerCase().trim();
+  return normalized === "interactive" ? "interactive" : "static";
+}
+
+function _readStoredRouteMapMode() {
+  try {
+    const raw = window.localStorage.getItem("timusRouteMapMode");
+    if (raw == null || String(raw).trim() === "") return "";
+    return _normalizeRouteMapMode(raw);
+  } catch {
+    return "";
+  }
+}
+
+function _setRouteMapModeNote(text) {
+  const noteEl = document.getElementById("routeMapModeNote");
+  if (noteEl) noteEl.textContent = text || "Kartenmodus";
+}
+
+function _syncRouteMapModeControls() {
+  const interactiveBtn = document.getElementById("routeMapModeInteractiveBtn");
+  const staticBtn = document.getElementById("routeMapModeStaticBtn");
+  const config = routeMapConfig || {};
+  const interactiveAvailable = !!config.interactive_available;
+  if (interactiveBtn) {
+    interactiveBtn.classList.toggle("active", routeMapMode === "interactive");
+    interactiveBtn.disabled = !interactiveAvailable;
+  }
+  if (staticBtn) {
+    staticBtn.classList.toggle("active", routeMapMode === "static");
+    staticBtn.disabled = false;
+  }
+  if (interactiveAvailable) {
+    _setRouteMapModeNote(
+      routeMapMode === "interactive"
+        ? "Google Maps JS aktiv"
+        : "Statische Kartenansicht aktiv"
+    );
+  } else {
+    _setRouteMapModeNote("Interaktive Karte nicht konfiguriert — Static Fallback aktiv");
+  }
+}
+
+async function loadRouteMapConfig(forceRefresh) {
+  if (routeMapConfig && !forceRefresh) return routeMapConfig;
+  try {
+    const data = await api("/location/route/map_config");
+    routeMapConfig = data.config || {};
+  } catch {
+    routeMapConfig = {
+      preferred_mode: "static",
+      interactive_available: false,
+      fallback_mode: "static",
+      browser_api_key: "",
+      browser_map_id: "",
+      js_libraries: ["geometry"],
+      language_code: "de",
+    };
+  }
+  const storedMode = _readStoredRouteMapMode();
+  const preferredMode = _normalizeRouteMapMode(routeMapConfig.preferred_mode);
+  routeMapMode = storedMode === "interactive" || storedMode === "static" ? storedMode : preferredMode;
+  if (routeMapMode === "interactive" && !routeMapConfig.interactive_available) routeMapMode = "static";
+  _syncRouteMapModeControls();
+  return routeMapConfig;
+}
+
+function setRouteMapMode(mode) {
+  routeMapMode = _normalizeRouteMapMode(mode);
+  if (routeMapMode === "interactive" && !(routeMapConfig || {}).interactive_available) {
+    routeMapMode = "static";
+  }
+  try { window.localStorage.setItem("timusRouteMapMode", routeMapMode); } catch {}
+  _syncRouteMapModeControls();
+  if (lastRouteSnapshot) {
+    _renderRouteMap(lastRouteSnapshot, true).catch(() => {});
+  }
+}
+
+function _toggleRouteMapSurfaces(mode) {
+  const imageEl = document.getElementById("routeMapImage");
+  const interactiveEl = document.getElementById("routeMapInteractive");
+  if (imageEl) imageEl.classList.toggle("visible", mode === "static");
+  if (interactiveEl) interactiveEl.classList.toggle("visible", mode === "interactive");
+}
+
+function _showRouteMapOverlay(text) {
+  const overlayEl = document.getElementById("routeMapOverlay");
+  if (!overlayEl) return;
+  overlayEl.textContent = text || "";
+  overlayEl.style.display = "flex";
+}
+
+function _hideRouteMapOverlay() {
+  const overlayEl = document.getElementById("routeMapOverlay");
+  if (overlayEl) overlayEl.style.display = "none";
+}
+
+async function _ensureRouteMapGoogleLoaded() {
+  if (window.google && window.google.maps && window.google.maps.geometry) return window.google.maps;
+  if (routeMapGooglePromise) return routeMapGooglePromise;
+  const config = await loadRouteMapConfig(false);
+  if (!config.interactive_available || !config.browser_api_key) return null;
+  routeMapGooglePromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-role="route-map-google-js"]');
+    if (existing) {
+      existing.addEventListener("load", () => resolve(window.google?.maps || null), { once: true });
+      existing.addEventListener("error", () => reject(new Error("google_maps_script_failed")), { once: true });
+      return;
+    }
+    const script = document.createElement("script");
+    const params = new URLSearchParams({
+      key: config.browser_api_key,
+      v: "weekly",
+      libraries: Array.isArray(config.js_libraries) && config.js_libraries.length ? config.js_libraries.join(",") : "geometry",
+      language: config.language_code || "de",
+    });
+    if (config.browser_map_id) params.set("map_ids", config.browser_map_id);
+    script.src = "https://maps.googleapis.com/maps/api/js?" + params.toString();
+    script.async = true;
+    script.defer = true;
+    script.dataset.role = "route-map-google-js";
+    script.onload = () => resolve(window.google?.maps || null);
+    script.onerror = () => reject(new Error("google_maps_script_failed"));
+    document.head.appendChild(script);
+  });
+  return routeMapGooglePromise;
+}
+
+function _clearInteractiveRouteMap() {
+  if (routeMapPolyline) {
+    routeMapPolyline.setMap(null);
+    routeMapPolyline = null;
+  }
+  if (routeMapStartMarker) {
+    routeMapStartMarker.setMap(null);
+    routeMapStartMarker = null;
+  }
+  if (routeMapEndMarker) {
+    routeMapEndMarker.setMap(null);
+    routeMapEndMarker = null;
+  }
+}
+
+async function _renderInteractiveRouteMap(route) {
+  const config = await loadRouteMapConfig(false);
+  if (!config.interactive_available || !route || !route.has_route || !route.overview_polyline) return false;
+  const maps = await _ensureRouteMapGoogleLoaded();
+  if (!maps || !maps.geometry || !maps.geometry.encoding) return false;
+  const container = document.getElementById("routeMapInteractive");
+  if (!container) return false;
+
+  if (!routeMapInstance) {
+    routeMapInstance = new maps.Map(container, {
+      center: { lat: 50.1109, lng: 8.6821 },
+      zoom: 10,
+      mapTypeControl: false,
+      streetViewControl: false,
+      fullscreenControl: false,
+      clickableIcons: false,
+      gestureHandling: "greedy",
+      backgroundColor: "#07111a",
+    });
+  }
+
+  let decodedPath = [];
+  try {
+    decodedPath = maps.geometry.encoding.decodePath(route.overview_polyline) || [];
+  } catch {
+    decodedPath = [];
+  }
+  if (!decodedPath.length) return false;
+
+  _clearInteractiveRouteMap();
+
+  routeMapPolyline = new maps.Polyline({
+    path: decodedPath,
+    strokeColor: "#00e09a",
+    strokeOpacity: 0.88,
+    strokeWeight: 6,
+    map: routeMapInstance,
+  });
+
+  const origin = route.start_coordinates || route.origin || {};
+  const destination = route.end_coordinates || {};
+  if (origin.latitude != null && origin.longitude != null) {
+    routeMapStartMarker = new maps.Marker({
+      position: { lat: Number(origin.latitude), lng: Number(origin.longitude) },
+      map: routeMapInstance,
+      label: "S",
+      title: route.start_address || "Start",
+    });
+  }
+  if (destination.latitude != null && destination.longitude != null) {
+    routeMapEndMarker = new maps.Marker({
+      position: { lat: Number(destination.latitude), lng: Number(destination.longitude) },
+      map: routeMapInstance,
+      label: "Z",
+      title: route.destination_label || route.end_address || route.destination_query || "Ziel",
+    });
+  }
+
+  const bounds = new maps.LatLngBounds();
+  decodedPath.forEach(point => bounds.extend(point));
+  if (!bounds.isEmpty()) {
+    routeMapInstance.fitBounds(bounds, 52);
+  }
+  _toggleRouteMapSurfaces("interactive");
+  _hideRouteMapOverlay();
+  return true;
+}
+
 function _setRouteMapImage(route, forceRefresh) {
   const imageEl = document.getElementById("routeMapImage");
-  const overlayEl = document.getElementById("routeMapOverlay");
-  if (!imageEl || !overlayEl) return;
+  if (!imageEl) return;
   if (!route || !route.has_route) {
-    imageEl.classList.remove("visible");
+    _toggleRouteMapSurfaces("static");
     imageEl.removeAttribute("src");
-    overlayEl.textContent = "Sobald eine Route aktiv ist, erscheint hier die Kartenansicht im Canvas.";
-    overlayEl.style.display = "flex";
+    _showRouteMapOverlay("Sobald eine Route aktiv ist, erscheint hier die Kartenansicht im Canvas.");
     return;
   }
-  imageEl.classList.add("visible");
-  overlayEl.textContent = "Kartenvorschau wird geladen…";
-  overlayEl.style.display = "flex";
+  _toggleRouteMapSurfaces("static");
+  _showRouteMapOverlay("Kartenvorschau wird geladen…");
   const cacheBust = forceRefresh ? Date.now() : (route.saved_at || Date.now());
   imageEl.src = "/location/route/map?ts=" + encodeURIComponent(String(cacheBust));
+}
+
+async function _renderRouteMap(route, forceRefresh) {
+  const config = await loadRouteMapConfig(false);
+  if (!route || !route.has_route) {
+    _clearInteractiveRouteMap();
+    _setRouteMapImage(route, forceRefresh);
+    _syncRouteMapModeControls();
+    return;
+  }
+  const effectiveMode = routeMapMode === "interactive" && config.interactive_available && route.overview_polyline
+    ? "interactive"
+    : "static";
+  if (effectiveMode === "interactive") {
+    const rendered = await _renderInteractiveRouteMap(route);
+    if (rendered) {
+      _syncRouteMapModeControls();
+      return;
+    }
+    _setRouteMapModeNote("Interaktive Karte fehlgeschlagen — Static Fallback aktiv");
+  }
+  _clearInteractiveRouteMap();
+  _setRouteMapImage(route, forceRefresh);
+  _syncRouteMapModeControls();
 }
 
 function renderRouteStatus(route) {
@@ -3260,13 +3562,13 @@ function renderRouteStatus(route) {
     if (durationEl) durationEl.textContent = "–";
     if (originEl) originEl.textContent = "–";
     if (savedAtEl) savedAtEl.textContent = "–";
-    if (captionEl) captionEl.textContent = "Die Kartenansicht wird serverseitig geladen, damit API-Keys nicht im Canvas offengelegt werden.";
+    if (captionEl) captionEl.textContent = "Interaktive Karte nutzt Google Maps JS, faellt aber automatisch auf die serverseitige Kartenansicht zurueck.";
     if (stepListEl) stepListEl.innerHTML = '<div class="empty">Noch keine Route gespeichert.</div>';
     if (openLinkEl) {
       openLinkEl.setAttribute("aria-disabled", "true");
       openLinkEl.removeAttribute("href");
     }
-    _setRouteMapImage(null, false);
+    _renderRouteMap(null, false).catch(() => {});
     return;
   }
 
@@ -3294,7 +3596,8 @@ function renderRouteStatus(route) {
       ? ` · reroutes ${Number(route.reroute_count || 0)}`
       : "";
     const errorInfo = route.last_reroute_error ? " · letzter Reroute-Fehler gespeichert" : "";
-    captionEl.textContent = `${route.source_provider || "provider"} · ${route.engine || "route"} · ${route.step_count || stepPreview.length || 0} Schritte${rerouteInfo}${errorInfo}`;
+    const modeInfo = routeMapMode === "interactive" ? "interactive map" : "static map";
+    captionEl.textContent = `${route.source_provider || "provider"} · ${route.engine || "route"} · ${route.step_count || stepPreview.length || 0} Schritte · ${modeInfo}${rerouteInfo}${errorInfo}`;
   }
   if (stepListEl) {
     stepListEl.innerHTML = stepPreview.length
@@ -3313,7 +3616,9 @@ function renderRouteStatus(route) {
     openLinkEl.href = route.maps_url || route.route_url || "#";
     openLinkEl.setAttribute("aria-disabled", route.maps_url || route.route_url ? "false" : "true");
   }
-  _setRouteMapImage(route, false);
+  _renderRouteMap(route, false).catch(() => {
+    _setRouteMapImage(route, false);
+  });
 }
 
 function updateMobileScore(score, level) {
@@ -3747,7 +4052,11 @@ async function loadRouteStatus(forceMapRefresh) {
     const data = await api("/location/route/status");
     const route = data.route || null;
     renderRouteStatus(route);
-    if (forceMapRefresh && route && route.has_route) _setRouteMapImage(route, true);
+    if (forceMapRefresh && route && route.has_route) {
+      _renderRouteMap(route, true).catch(() => {
+        _setRouteMapImage(route, true);
+      });
+    }
   } catch (e) {
     setMobileBadge("routeStatusBadge", "error", "error");
     const summaryEl = document.getElementById("routeSummary");
@@ -6291,6 +6600,7 @@ function setPolling(on) {
 async function init() {
   document.getElementById("pollMs").textContent = String(POLL_MS);
   syncMobileLayout();
+  routeMapMode = _readStoredRouteMapMode() || routeMapMode;
   updateLiveConnectionState(navigator.onLine ? "warn" : "error", navigator.onLine ? "bereit" : "offline");
   renderAgentLeds({});
   renderToolActivity();
@@ -6311,6 +6621,7 @@ async function init() {
       routeMapImage.classList.remove("visible");
     });
   }
+  try { await loadRouteMapConfig(false); } catch {}
 
   try { const s = await api("/agent_status"); renderAgentLeds(s.agents||{}); setThinking(!!s.thinking); } catch {}
   try { const m = await api("/agent_models"); if (m.models) { agentModels = m.models; renderAgentLeds({}); } } catch {}

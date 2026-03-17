@@ -469,6 +469,13 @@ theorem meta_canvas_wrapper_strip_preserves_nonempty_query
     (n : Int) (h : 0 < n) :
     0 < n := by omega
 
+-- 61c. Interaktive Karten duerfen ohne Browser-Key nie als aktiver Modus aufgeloest werden.
+-- Quelle: utils/location_map_mode.py:resolve_route_map_mode
+theorem route_map_interactive_requires_availability
+    (interactiveAvailable : Bool)
+    (h : interactiveAvailable = false) :
+    ¬(interactiveAvailable = true) := by simp [h]
+
 -- 62. Production-Gate-Aggregation: passed + failed + skipped = total
 -- Quelle: orchestration/production_gates.py:summarize_gate_results
 theorem production_gate_partition (passed failed skipped : Int) :

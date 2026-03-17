@@ -27,6 +27,7 @@ def test_location_routes_registered():
     assert "/location/nearby" in paths
     assert "/location/route" in paths
     assert "/location/route/status" in paths
+    assert "/location/route/map_config" in paths
     assert "/location/route/map" in paths
 
 
@@ -208,6 +209,24 @@ async def test_location_route_status_endpoint_reads_persisted_snapshot(monkeypat
     assert response["status"] == "success"
     assert response["route"]["destination_query"] == "Alexanderplatz Berlin"
     assert response["route"]["travel_mode"] == "walking"
+
+
+@pytest.mark.asyncio
+async def test_location_route_map_config_endpoint_exposes_interactive_browser_settings(monkeypatch):
+    monkeypatch.setenv("GOOGLE_MAPS_BROWSER_API_KEY", "browser-maps-key")
+    monkeypatch.setenv("TIMUS_ROUTE_MAP_INTERACTIVE_ENABLED", "true")
+    monkeypatch.setenv("TIMUS_ROUTE_MAP_DEFAULT_MODE", "interactive")
+    monkeypatch.setenv("GOOGLE_MAPS_BROWSER_MAP_ID", "route-map-id")
+
+    response = await mcp_server.location_route_map_config_endpoint()
+
+    assert response["status"] == "success"
+    config = response["config"]
+    assert config["interactive_available"] is True
+    assert config["preferred_mode"] == "interactive"
+    assert config["browser_api_key"] == "browser-maps-key"
+    assert config["browser_map_id"] == "route-map-id"
+    assert config["fallback_mode"] == "static"
 
 
 @pytest.mark.asyncio

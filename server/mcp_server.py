@@ -128,6 +128,11 @@ from utils.location_registry import (
 )
 from utils.location_route import prepare_route_snapshot
 from utils.location_reroute import assess_live_reroute, apply_live_reroute_metadata
+from utils.location_map_mode import (
+    normalize_route_map_mode,
+    resolve_route_map_mode,
+    route_map_interactive_available,
+)
 from utils.location_chat_context import (
     build_location_chat_context_block,
     evaluate_location_chat_context,
@@ -1049,6 +1054,49 @@ def _set_agent_status(agent: str, status: str, query: str = "") -> None:
 
 def _google_maps_api_key() -> str:
     return os.getenv("GOOGLE_MAPS_API_KEY", "").strip()
+
+
+def _google_maps_browser_api_key() -> str:
+    browser_key = os.getenv("GOOGLE_MAPS_BROWSER_API_KEY", "").strip()
+    if browser_key:
+        return browser_key
+    if os.getenv("TIMUS_ROUTE_MAP_ALLOW_SERVER_KEY_IN_BROWSER", "false").lower() == "true":
+        return _google_maps_api_key()
+    return ""
+
+
+def _google_maps_browser_map_id() -> str:
+    return os.getenv("GOOGLE_MAPS_BROWSER_MAP_ID", "").strip()
+
+
+def _route_map_interactive_enabled() -> bool:
+    return os.getenv("TIMUS_ROUTE_MAP_INTERACTIVE_ENABLED", "true").lower() == "true"
+
+
+def _route_map_default_mode() -> str:
+    return normalize_route_map_mode(os.getenv("TIMUS_ROUTE_MAP_DEFAULT_MODE", "interactive"))
+
+
+def _build_route_map_client_config() -> dict:
+    browser_api_key = _google_maps_browser_api_key()
+    interactive_available = route_map_interactive_available(
+        browser_api_key,
+        enabled=_route_map_interactive_enabled(),
+    )
+    preferred_mode = resolve_route_map_mode(
+        _route_map_default_mode(),
+        interactive_available=interactive_available,
+    )
+    return {
+        "preferred_mode": preferred_mode,
+        "interactive_enabled": _route_map_interactive_enabled(),
+        "interactive_available": interactive_available,
+        "browser_api_key": browser_api_key if interactive_available else "",
+        "browser_map_id": _google_maps_browser_map_id(),
+        "js_libraries": ["geometry"],
+        "language_code": "de",
+        "fallback_mode": "static",
+    }
 
 
 def _build_google_maps_url(latitude: float, longitude: float) -> str:
@@ -3197,6 +3245,14 @@ async def location_route_endpoint(
 async def location_route_status_endpoint():
     try:
         return {"status": "success", "route": _get_route_snapshot()}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.get("/location/route/map_config", summary="Interaktive Kartenkonfiguration fuer aktive Routen")
+async def location_route_map_config_endpoint():
+    try:
+        return {"status": "success", "config": _build_route_map_client_config()}
     except Exception as e:
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
