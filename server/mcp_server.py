@@ -110,6 +110,7 @@ from utils.policy_gate import (
 )
 from orchestration.canvas_store import canvas_store
 from server.canvas_ui import build_canvas_ui_html
+from server.mobile_route_ui import build_mobile_route_ui_html
 from server.conversation_qdrant import recall_chat_turns as _semantic_recall_chat_turns
 from server.conversation_qdrant import store_chat_turn as _semantic_store_chat_turn
 from gateway.status_snapshot import collect_status_snapshot
@@ -3285,6 +3286,11 @@ async def location_route_map_endpoint():
             ),
             media_type="image/svg+xml",
         )
+
+
+@app.get("/location/route/mobile_view", summary="Mobile Live-Routenansicht", response_class=HTMLResponse)
+async def location_route_mobile_view_endpoint():
+    return HTMLResponse(content=build_mobile_route_ui_html())
 
 
 @app.get("/voice/status", summary="Voice-System Status")

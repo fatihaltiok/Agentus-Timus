@@ -45,7 +45,7 @@ class LocationAutoSyncPolicyTest {
             currentState = "ready",
             presenceStatus = "live",
             lastAttemptEpochMs = 0L,
-            nowEpochMs = 120_000L,
+            nowEpochMs = 30_000L,
         )
 
         assertFalse(decision.shouldSync)
@@ -65,5 +65,37 @@ class LocationAutoSyncPolicyTest {
 
         assertFalse(decision.shouldSync)
         assertEquals("sync_in_flight", decision.reason)
+    }
+
+    @Test
+    fun `navigation mode syncs faster than default interval`() {
+        val decision = evaluateForegroundLocationAutoSync(
+            authenticated = true,
+            permissionGranted = true,
+            currentState = "ready",
+            presenceStatus = "live",
+            lastAttemptEpochMs = 0L,
+            nowEpochMs = 25_000L,
+            navigationModeActive = true,
+        )
+
+        assertTrue(decision.shouldSync)
+        assertEquals("navigation_interval_elapsed", decision.reason)
+    }
+
+    @Test
+    fun `navigation mode retries stale presence aggressively`() {
+        val decision = evaluateForegroundLocationAutoSync(
+            authenticated = true,
+            permissionGranted = true,
+            currentState = "ready",
+            presenceStatus = "stale",
+            lastAttemptEpochMs = 0L,
+            nowEpochMs = 12_000L,
+            navigationModeActive = true,
+        )
+
+        assertTrue(decision.shouldSync)
+        assertEquals("navigation_stale_or_unknown_presence", decision.reason)
     }
 }

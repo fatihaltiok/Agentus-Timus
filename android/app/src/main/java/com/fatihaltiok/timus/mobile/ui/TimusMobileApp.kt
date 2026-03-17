@@ -23,6 +23,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.fatihaltiok.timus.mobile.data.TimusConfigStore
 import com.fatihaltiok.timus.mobile.data.TimusMockData
@@ -34,6 +35,7 @@ import com.fatihaltiok.timus.mobile.ui.screens.ChatScreen
 import com.fatihaltiok.timus.mobile.ui.screens.FilesScreen
 import com.fatihaltiok.timus.mobile.ui.screens.HomeScreen
 import com.fatihaltiok.timus.mobile.ui.screens.LoginScreen
+import com.fatihaltiok.timus.mobile.ui.screens.NavigationScreen
 import com.fatihaltiok.timus.mobile.ui.screens.VoiceScreen
 import kotlinx.coroutines.delay
 
@@ -98,7 +100,12 @@ fun TimusMobileApp() {
         sessionViewModel.syncLocationPermission(hasLocationPermission)
     }
 
-    LaunchedEffect(uiState.authenticated, hasLocationPermission) {
+    val navController = rememberNavController()
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = navBackStackEntry?.destination?.route
+    val navigationModeActive = currentRoute == AppDestination.Navigation.route
+
+    LaunchedEffect(uiState.authenticated, hasLocationPermission, navigationModeActive) {
         if (!uiState.authenticated || !hasLocationPermission) {
             return@LaunchedEffect
         }
@@ -106,12 +113,12 @@ fun TimusMobileApp() {
             sessionViewModel.autoSyncLocationIfDue(
                 locationClient = locationClient,
                 permissionGranted = hasLocationPermission,
+                navigationModeActive = navigationModeActive,
             )
-            delay(60_000L)
+            delay(if (navigationModeActive) 15_000L else 30_000L)
         }
     }
 
-    val navController = rememberNavController()
     val summary = remember(uiState.voice.state, uiState.error, uiState.voice.availableVoices) {
         TimusMockData.homeSummary.copy(
             activeAlerts = if (uiState.error.isNullOrBlank()) 0 else 1,
@@ -150,6 +157,12 @@ fun TimusMobileApp() {
                     onToggleLocationContext = sessionViewModel::setLocationContextEnabled,
                     onToggleLocationBackgroundSync = sessionViewModel::setLocationBackgroundSyncAllowed,
                     onPreferCurrentDevice = sessionViewModel::preferCurrentLocationDevice,
+                )
+            }
+            composable(AppDestination.Navigation.route) {
+                NavigationScreen(
+                    baseUrl = uiState.config.baseUrl,
+                    locationState = uiState.location,
                 )
             }
             composable(AppDestination.Chat.route) {

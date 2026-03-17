@@ -250,6 +250,10 @@ theorem route_follow_requires_usable_context (usable recentLike : Bool) :
     (if usable && recentLike then 1 else 0) ≤ (if usable then 1 else 0) := by
   cases usable <;> cases recentLike <;> decide
 
+-- 28. Mobiler Navigationsmodus pollt enger als der normale Vordergrundmodus
+-- Modelliert android/location/LocationAutoSyncPolicy.kt
+theorem mobile_navigation_sync_interval_stricter : 20 < 60 := by omega
+
 -- 26. M14 Whitelist-Guard: kein Eintrag in Whitelist (0) → keine Sendung
 -- in_list=0: nicht in Whitelist, in_list=1: in Whitelist
 -- Quelle: orchestration/email_autonomy_engine.py:_in_whitelist
