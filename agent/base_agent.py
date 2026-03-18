@@ -35,6 +35,7 @@ from agent.shared.screenshot import capture_screenshot_base64
 from agent.shared.action_parser import parse_action
 from agent.shared.vision_formatter import build_openai_vision_message
 from agent.shared.json_utils import extract_json_robust
+from agent.shared.delegation_handoff import parse_delegation_handoff
 
 from utils.openai_compat import prepare_openai_params
 from utils.policy_gate import (
@@ -50,7 +51,7 @@ from orchestration.llm_budget_guard import (
     evaluate_llm_budget,
     resolve_soft_budget_model_override,
 )
-from orchestration.self_improvement_engine import LLMUsageRecord, get_improvement_engine
+from orchestration.self_improvement_engine import LLMUsageRecord, ToolUsageRecord, get_improvement_engine
 from utils.context_guard import ContextGuard, ContextStatus
 from utils.headless_service_guard import desktop_open_block_reason
 from utils.llm_usage import build_usage_payload
@@ -774,13 +775,72 @@ class BaseAgent(DynamicToolMixin):
             "Diagnose- und Log-Leseaufgaben duerfen Timus nicht selbst neu starten."
         )
 
+    def _current_task_type_for_analytics(self) -> str:
+        task_text = str(getattr(self, "_current_task_text", "") or "").strip()
+        if not task_text:
+            return ""
+        handoff = parse_delegation_handoff(task_text)
+        if handoff:
+            task_type = str(
+                handoff.handoff_data.get("task_type")
+                or handoff.handoff_data.get("recipe_id")
+                or ""
+            ).strip()
+            if task_type:
+                return task_type[:120]
+        first_line = task_text.splitlines()[0].strip()
+        return first_line[:120]
+
+    def _record_tool_usage_analytics(
+        self,
+        *,
+        method: str,
+        success: bool,
+        started_at: float,
+        task_type: str = "",
+    ) -> None:
+        if not os.getenv("AUTONOMY_SELF_IMPROVEMENT_ENABLED", "false").lower() in {"true", "1", "yes"}:
+            return
+        try:
+            duration_ms = max(int(round((time.perf_counter() - started_at) * 1000)), 0)
+            get_improvement_engine().record_tool_usage(
+                ToolUsageRecord(
+                    tool_name=str(method or "").strip() or "unknown_tool",
+                    agent=str(getattr(self, "agent_type", "") or "").strip() or "unknown_agent",
+                    task_type=str(task_type or "").strip(),
+                    success=bool(success),
+                    duration_ms=duration_ms,
+                )
+            )
+        except Exception:
+            pass
+
     async def _call_tool(self, method: str, params: dict) -> dict:
         method, params = self._refine_tool_call(method, params)
+        tool_started_at = time.perf_counter()
+        task_type = self._current_task_type_for_analytics()
         self._emit_live_status(
             phase="tool_active",
             detail=str(params)[:120],
             tool_name=method,
         )
+
+        def _finalize(result: dict, *, success_override: Optional[bool] = None) -> dict:
+            success = success_override
+            if success is None:
+                success = not any(
+                    bool(result.get(key))
+                    for key in ("error", "blocked_by_policy", "validation_failed", "skipped")
+                )
+                if str(result.get("status") or "").strip().lower() == "error":
+                    success = False
+            self._record_tool_usage_analytics(
+                method=method,
+                success=bool(success),
+                started_at=tool_started_at,
+                task_type=task_type,
+            )
+            return result
 
         restart_guard_reason = self._check_restart_tool_intent(method, params)
         if restart_guard_reason:
@@ -789,11 +849,11 @@ class BaseAgent(DynamicToolMixin):
                 detail=restart_guard_reason[:120],
                 tool_name=method,
             )
-            return {
+            return _finalize({
                 "error": restart_guard_reason,
                 "blocked_by_policy": True,
                 "blocked_reason": "restart_intent_missing",
-            }
+            }, success_override=False)
 
         policy_decision = evaluate_policy_gate(
             gate="tool",
@@ -821,7 +881,7 @@ class BaseAgent(DynamicToolMixin):
                 error_msg=f"Policy blockiert: {method} — {policy_reason}",
                 context={"method": method, "params": str(params)[:300]},
             )
-            return {"error": policy_reason, "blocked_by_policy": True}
+            return _finalize({"error": policy_reason, "blocked_by_policy": True}, success_override=False)
 
         await self._ensure_remote_tool_names()
 
@@ -834,7 +894,7 @@ class BaseAgent(DynamicToolMixin):
                 detail=f"Validierungsfehler: {e}",
                 tool_name=method,
             )
-            return {"error": f"Validierungsfehler: {e}", "validation_failed": True}
+            return _finalize({"error": f"Validierungsfehler: {e}", "validation_failed": True}, success_override=False)
         except ValueError:
             if method not in self._remote_tool_names:
                 log.warning(f"Tool '{method}' weder lokal noch remote bekannt")
@@ -850,7 +910,10 @@ class BaseAgent(DynamicToolMixin):
                 detail=loop_reason or "Loop detected",
                 tool_name=method,
             )
-            return {"skipped": True, "reason": loop_reason or "Loop detected", "_loop_warning": loop_reason or "Loop detected"}
+            return _finalize(
+                {"skipped": True, "reason": loop_reason or "Loop detected", "_loop_warning": loop_reason or "Loop detected"},
+                success_override=False,
+            )
 
         if loop_reason:
             log.warning(f"Loop-Warnung fuer {method}: {loop_reason}")
@@ -883,7 +946,7 @@ class BaseAgent(DynamicToolMixin):
                     detail="ok",
                     tool_name=method,
                 )
-                return result
+                return _finalize(result, success_override=True)
 
             if "error" in data:
                 error_text = self._format_jsonrpc_error(data["error"])
@@ -892,13 +955,13 @@ class BaseAgent(DynamicToolMixin):
                     detail=error_text[:120],
                     tool_name=method,
                 )
-                return {"error": error_text}
+                return _finalize({"error": error_text}, success_override=False)
             self._emit_live_status(
                 phase="tool_error",
                 detail="Invalid response",
                 tool_name=method,
             )
-            return {"error": "Invalid response"}
+            return _finalize({"error": "Invalid response"}, success_override=False)
         except Exception as e:
             self._emit_live_status(
                 phase="tool_error",
@@ -917,7 +980,7 @@ class BaseAgent(DynamicToolMixin):
                 stack_trace=_tb.format_exc(),
                 context={"method": method, "params": str(params)[:300]},
             )
-            return {"error": str(e)}
+            return _finalize({"error": str(e)}, success_override=False)
 
     # ------------------------------------------------------------------
     # Screen-Change-Gate

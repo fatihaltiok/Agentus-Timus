@@ -695,6 +695,9 @@ CREATE TABLE IF NOT EXISTS routing_analytics (
     chosen_agent TEXT NOT NULL,
     outcome TEXT NOT NULL DEFAULT 'success',
     confidence REAL DEFAULT 0.5,
+    router_confidence REAL,
+    outcome_score REAL DEFAULT 0.5,
+    source TEXT DEFAULT 'runtime',
     timestamp TEXT NOT NULL
 );
 

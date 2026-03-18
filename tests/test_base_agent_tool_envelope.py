@@ -14,6 +14,7 @@ def _minimal_base_agent() -> BaseAgent:
     agent._remote_tools_fetched = True
     agent._remote_tool_names = set()
     agent._bug_logger = None
+    agent._current_task_text = ""
     agent._refine_tool_call = lambda method, params: (method, params)
     agent._emit_live_status = lambda **kwargs: None
     agent.should_skip_action = lambda method, params: (False, None)
@@ -234,6 +235,53 @@ async def test_call_tool_allows_restart_with_explicit_restart_intent(monkeypatch
     payload = result.get("data") if isinstance(result.get("data"), dict) else result
     assert payload["status"] == "pending_restart"
     assert payload["mode"] == "dispatcher"
+
+
+@pytest.mark.asyncio
+async def test_call_tool_records_tool_usage_with_task_type(monkeypatch):
+    import agent.base_agent as base_agent_module
+
+    captured = []
+
+    agent = _minimal_base_agent()
+    agent._current_task_text = "\n".join(
+        [
+            "# DELEGATION HANDOFF",
+            "target_agent: executor",
+            "goal: route bauen",
+            "handoff_data:",
+            "- task_type: location_route",
+        ]
+    )
+    agent.http_client = SimpleNamespace(
+        post=AsyncMock(
+            return_value=SimpleNamespace(
+                json=lambda: {
+                    "jsonrpc": "2.0",
+                    "result": {"status": "success", "message": "ok"},
+                }
+            )
+        )
+    )
+
+    monkeypatch.setenv("AUTONOMY_SELF_IMPROVEMENT_ENABLED", "true")
+    monkeypatch.setattr(base_agent_module, "evaluate_policy_gate", lambda **kwargs: {"allowed": True})
+    monkeypatch.setattr(base_agent_module, "audit_policy_decision", lambda decision: None)
+    monkeypatch.setattr(base_agent_module.registry_v2, "validate_tool_call", lambda *args, **kwargs: kwargs)
+    monkeypatch.setattr(
+        base_agent_module,
+        "get_improvement_engine",
+        lambda: SimpleNamespace(record_tool_usage=lambda record: captured.append(record)),
+    )
+
+    result = await agent._call_tool("delegate_to_agent", {"agent_type": "research", "task": "x"})
+
+    assert result["status"] == "success"
+    assert len(captured) == 1
+    assert captured[0].tool_name == "delegate_to_agent"
+    assert captured[0].task_type == "location_route"
+    assert captured[0].success is True
+    assert captured[0].duration_ms >= 0
 
 
 def test_terminal_restart_tool_finalizes_agent_run():

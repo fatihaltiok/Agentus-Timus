@@ -48,6 +48,9 @@ CREATE TABLE IF NOT EXISTS routing_analytics (
     chosen_agent TEXT NOT NULL,
     outcome TEXT NOT NULL DEFAULT 'success',
     confidence REAL DEFAULT 0.5,
+    router_confidence REAL,
+    outcome_score REAL DEFAULT 0.5,
+    source TEXT DEFAULT 'runtime',
     timestamp TEXT NOT NULL
 );
 
@@ -117,7 +120,35 @@ def _ensure_tables(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(str(db_path)) as conn:
         conn.executescript(_SCHEMA_EXTENSION)
+        _migrate_self_improvement_schema(conn)
         conn.commit()
+
+
+def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {str(row[1]) for row in rows}
+
+
+def _migrate_self_improvement_schema(conn: sqlite3.Connection) -> None:
+    routing_columns = _table_columns(conn, "routing_analytics")
+
+    if "router_confidence" not in routing_columns:
+        conn.execute("ALTER TABLE routing_analytics ADD COLUMN router_confidence REAL")
+    if "outcome_score" not in routing_columns:
+        conn.execute("ALTER TABLE routing_analytics ADD COLUMN outcome_score REAL DEFAULT 0.5")
+    if "source" not in routing_columns:
+        conn.execute("ALTER TABLE routing_analytics ADD COLUMN source TEXT DEFAULT 'runtime'")
+
+    conn.execute(
+        """UPDATE routing_analytics
+           SET outcome_score = COALESCE(outcome_score, confidence, 0.5)
+           WHERE outcome_score IS NULL"""
+    )
+    conn.execute(
+        """UPDATE routing_analytics
+           SET source = COALESCE(NULLIF(source, ''), 'runtime')
+           WHERE source IS NULL OR source = ''"""
+    )
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -140,6 +171,9 @@ class RoutingRecord:
     chosen_agent: str
     outcome: str = "success"   # "success" | "partial" | "error"
     confidence: float = 0.5
+    router_confidence: Optional[float] = None
+    outcome_score: Optional[float] = None
+    source: str = "runtime"
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
 
 
@@ -201,6 +235,14 @@ class SelfImprovementEngine:
     # Aufzeichnung
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _normalize_score(value: Any, default: float = 0.5) -> float:
+        try:
+            score = float(value)
+        except (TypeError, ValueError):
+            score = default
+        return max(0.0, min(1.0, score))
+
     def record_tool_usage(self, record: ToolUsageRecord) -> None:
         """Speichert einen Tool-Nutzungs-Datenpunkt."""
         try:
@@ -225,16 +267,33 @@ class SelfImprovementEngine:
     def record_routing(self, record: RoutingRecord) -> None:
         """Speichert eine Routing-Entscheidung."""
         try:
+            router_confidence = (
+                self._normalize_score(record.router_confidence)
+                if record.router_confidence is not None
+                else None
+            )
+            outcome_score = (
+                self._normalize_score(record.outcome_score)
+                if record.outcome_score is not None
+                else self._normalize_score(record.confidence)
+            )
+            legacy_confidence = (
+                router_confidence if router_confidence is not None else outcome_score
+            )
             with sqlite3.connect(str(self.db_path)) as conn:
                 conn.execute(
                     """INSERT INTO routing_analytics
-                       (task_hash, chosen_agent, outcome, confidence, timestamp)
-                       VALUES (?, ?, ?, ?, ?)""",
+                       (task_hash, chosen_agent, outcome, confidence, router_confidence,
+                        outcome_score, source, timestamp)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         record.task_hash,
                         record.chosen_agent,
                         record.outcome,
-                        record.confidence,
+                        legacy_confidence,
+                        router_confidence,
+                        outcome_score,
+                        str(record.source or "runtime").strip() or "runtime",
                         record.timestamp,
                     ),
                 )
@@ -344,26 +403,43 @@ class SelfImprovementEngine:
                         "severity": "high" if success_rate < 0.50 else "medium",
                     })
 
-            # 2. Routing-Konfidenz < 0.6 für Agent → Suggestion
+            # 2. Routing-Qualitaet schwach → Suggestion
             agent_confidence = routing_stats.get("by_agent", {})
             for agent, stats in agent_confidence.items():
                 total = stats.get("total", 0)
                 if total < MIN_SAMPLES:
                     continue
-                avg_conf = stats.get("avg_confidence", 1.0)
-                if avg_conf < 0.6:
+                success_rate = float(stats.get("success_rate", 1.0) or 0.0)
+                avg_outcome = float(stats.get("avg_outcome_score", stats.get("avg_confidence", 1.0)) or 0.0)
+                if success_rate < 0.60:
                     suggestions.append({
                         "type": "routing",
                         "target": agent,
                         "finding": (
-                            f"Routing zu Agent '{agent}': Ø-Konfidenz nur {avg_conf:.2f} "
-                            f"({total} Entscheidungen)"
+                            f"Routing zu Agent '{agent}': Erfolgsrate nur {success_rate:.2f} "
+                            f"bei {total} Entscheidungen (Ø-Outcome-Score {avg_outcome:.2f})"
                         ),
                         "suggestion": (
                             f"Routing-Regeln für '{agent}' verfeinern. "
-                            "Keyword-Matching oder LLM-Prompt anpassen."
+                            "Keyword-Matching, Agent-Selection-Prompt oder Default-Fallback anpassen."
                         ),
                         "confidence": 0.7,
+                        "severity": "high" if success_rate < 0.45 else "medium",
+                    })
+                avg_router_conf = stats.get("avg_router_confidence")
+                router_samples = int(stats.get("router_confidence_samples", 0) or 0)
+                if avg_router_conf is not None and router_samples >= MIN_SAMPLES and avg_router_conf < 0.55:
+                    suggestions.append({
+                        "type": "routing",
+                        "target": agent,
+                        "finding": (
+                            f"Router ist fuer Agent '{agent}' oft unsicher: "
+                            f"Ø-Router-Konfidenz {avg_router_conf:.2f} ({router_samples} Proben)"
+                        ),
+                        "suggestion": (
+                            "Explizitere Routing-Kriterien oder Rueckfrage-/Fallback-Regeln definieren."
+                        ),
+                        "confidence": 0.62,
                         "severity": "medium",
                     })
 
@@ -523,6 +599,9 @@ class SelfImprovementEngine:
                     """SELECT chosen_agent,
                               COUNT(*) as total,
                               AVG(confidence) as avg_confidence,
+                              AVG(router_confidence) as avg_router_confidence,
+                              AVG(outcome_score) as avg_outcome_score,
+                              SUM(CASE WHEN router_confidence IS NOT NULL THEN 1 ELSE 0 END) as router_confidence_samples,
                               SUM(CASE WHEN outcome = 'success' THEN 1 ELSE 0 END) as successes
                        FROM routing_analytics
                        WHERE timestamp >= ?
@@ -537,10 +616,15 @@ class SelfImprovementEngine:
 
             by_agent = {}
             for r in rows:
+                avg_router_confidence = round(float(r[3]), 3) if r[3] is not None else None
+                avg_outcome_score = round(float(r[4] or r[2] or 0.5), 3)
                 by_agent[r[0]] = {
                     "total": r[1],
-                    "avg_confidence": round(float(r[2] or 0.5), 3),
-                    "success_rate": round(r[3] / r[1], 3) if r[1] > 0 else 0.0,
+                    "avg_confidence": avg_router_confidence if avg_router_confidence is not None else avg_outcome_score,
+                    "avg_router_confidence": avg_router_confidence,
+                    "avg_outcome_score": avg_outcome_score,
+                    "router_confidence_samples": int(r[5] or 0),
+                    "success_rate": round(r[6] / r[1], 3) if r[1] > 0 else 0.0,
                 }
 
             return {

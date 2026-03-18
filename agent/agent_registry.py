@@ -675,13 +675,14 @@ class AgentRegistry:
             import hashlib
             from orchestration.self_improvement_engine import get_improvement_engine, RoutingRecord
             task_hash = hashlib.sha256(task.encode()).hexdigest()[:8]
-            CONFIDENCE_MAP = {"success": 0.8, "partial": 0.4, "error": 0.0}
-            confidence = CONFIDENCE_MAP.get(outcome, 0.4)
+            OUTCOME_SCORE_MAP = {"success": 0.8, "partial": 0.4, "error": 0.0}
+            outcome_score = OUTCOME_SCORE_MAP.get(outcome, 0.4)
             get_improvement_engine().record_routing(RoutingRecord(
                 task_hash=task_hash,
                 chosen_agent=chosen_agent,
                 outcome=outcome,
-                confidence=confidence,
+                outcome_score=outcome_score,
+                source="delegation_runtime",
             ))
         except Exception:
             pass

@@ -519,13 +519,14 @@ Antworte NUR als gültiges JSON:
     async def get_improvement_suggestions(self) -> List[dict]:
         """Gibt offene Verbesserungsvorschläge zurück."""
         try:
+            suggestions: List[dict] = []
             with sqlite3.connect(str(self.db_path)) as conn:
                 rows = conn.execute(
                     """SELECT id, pattern, occurrences, suggestion, applied, created_at
                        FROM improvement_suggestions
                        ORDER BY occurrences DESC, created_at DESC LIMIT 20""",
                 ).fetchall()
-                return [
+                suggestions.extend([
                     {
                         "id": r[0],
                         "pattern": r[1],
@@ -533,9 +534,41 @@ Antworte NUR als gültiges JSON:
                         "suggestion": r[3],
                         "applied": bool(r[4]),
                         "created_at": r[5],
+                        "source": "session_reflection",
                     }
                     for r in rows
-                ]
+                ])
+
+            try:
+                from orchestration.self_improvement_engine import get_improvement_engine
+
+                for suggestion in get_improvement_engine().get_suggestions(applied=False):
+                    suggestions.append(
+                        {
+                            "id": f"m12:{suggestion.get('id')}",
+                            "pattern": suggestion.get("finding", ""),
+                            "occurrences": 0,
+                            "suggestion": suggestion.get("suggestion", ""),
+                            "applied": bool(suggestion.get("applied")),
+                            "created_at": suggestion.get("created_at", ""),
+                            "source": "self_improvement_engine",
+                            "type": suggestion.get("type", ""),
+                            "target": suggestion.get("target", ""),
+                            "confidence": suggestion.get("confidence", 0.0),
+                            "severity": suggestion.get("severity", "medium"),
+                        }
+                    )
+            except Exception as e:
+                log.debug("get_improvement_suggestions.self_improvement_engine: %s", e)
+
+            suggestions.sort(
+                key=lambda item: (
+                    str(item.get("created_at") or ""),
+                    int(item.get("occurrences") or 0),
+                ),
+                reverse=True,
+            )
+            return suggestions[:20]
         except Exception as e:
             log.debug("get_improvement_suggestions: %s", e)
             return []
