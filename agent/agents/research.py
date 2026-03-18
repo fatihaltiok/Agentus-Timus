@@ -46,6 +46,53 @@ class DeepResearchAgent(BaseAgent):
         self.http_client = httpx.AsyncClient(timeout=600.0)
         self.current_session_id: Optional[str] = None
 
+    @staticmethod
+    def _max_retry_attempts() -> int:
+        raw = str(os.getenv("RESEARCH_RUN_MAX_RETRIES", "2")).strip()
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            return 2
+
+    @staticmethod
+    def _retry_backoff_seconds(attempt: int, base_seconds: float | None = None) -> float:
+        base = base_seconds
+        if base is None:
+            raw = str(os.getenv("RESEARCH_RETRY_BACKOFF_BASE_SECONDS", "1.0")).strip()
+            try:
+                base = float(raw)
+            except ValueError:
+                base = 1.0
+        safe_base = max(0.1, float(base))
+        safe_attempt = max(1, int(attempt))
+        return round(safe_base * (2 ** (safe_attempt - 1)), 2)
+
+    @classmethod
+    def _is_retryable_result_text(cls, result: str) -> bool:
+        text = str(result or "").strip()
+        if not text:
+            return True
+        lowered = text.lower()
+        if lowered.startswith("error:"):
+            if cls._is_retryable_provider_error_text(lowered):
+                return True
+            return "empty result" in lowered or "leeres ergebnis" in lowered
+        return "empty result" in lowered or "leeres ergebnis" in lowered
+
+    @classmethod
+    def _is_retryable_run_exception(cls, error: Exception) -> bool:
+        return cls._is_retryable_provider_error(error) or isinstance(error, asyncio.TimeoutError)
+
+    @staticmethod
+    def _retry_hint(reason: str, attempt: int, max_attempts: int) -> str:
+        return (
+            "# RETRY-HINWEIS\n"
+            f"Vorheriger Versuch endete mit einem temporaeren Fehler ({reason}). "
+            f"Retry {attempt}/{max_attempts}. "
+            "Nutze die Research-Tools direkt, vermeide leere Antworten und liefere im Zweifel "
+            "ein ehrliches Partial statt leerem Output."
+        )
+
     # ------------------------------------------------------------------
     # _call_tool-Override: session_id automatisch weiterreichen
     # (Original-Logik unverändert)
@@ -87,7 +134,45 @@ class DeepResearchAgent(BaseAgent):
         if handoff_context:
             parts.append(handoff_context)
         enriched_task = "\n\n".join(part for part in parts if part)
-        return await super().run(enriched_task)
+
+        max_attempts = self._max_retry_attempts()
+        for attempt in range(1, max_attempts + 1):
+            attempt_task = enriched_task
+            if attempt > 1:
+                attempt_task = (
+                    f"{enriched_task}\n\n"
+                    f"{self._retry_hint('transient_failure', attempt, max_attempts)}"
+                )
+            try:
+                result = await super().run(attempt_task)
+            except Exception as exc:
+                if attempt < max_attempts and self._is_retryable_run_exception(exc):
+                    delay = self._retry_backoff_seconds(attempt)
+                    log.warning(
+                        "Research-Retry %s/%s nach Exception: %s | backoff=%ss",
+                        attempt,
+                        max_attempts,
+                        exc,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                raise
+
+            if attempt < max_attempts and self._is_retryable_result_text(result):
+                delay = self._retry_backoff_seconds(attempt)
+                log.warning(
+                    "Research-Retry %s/%s nach retryablem Ergebnis: %s | backoff=%ss",
+                    attempt,
+                    max_attempts,
+                    str(result or "")[:160],
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+            return result
+
+        return ""
 
     # ------------------------------------------------------------------
     # Recherche-Kontext aufbauen (kompakt — Research produziert viele Tokens)
