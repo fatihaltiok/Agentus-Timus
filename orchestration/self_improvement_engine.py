@@ -24,6 +24,23 @@ DB_PATH = Path(__file__).resolve().parents[1] / "data" / "task_queue.db"
 
 MIN_SAMPLES = int(os.getenv("IMPROVEMENT_MIN_SAMPLES", "10"))
 ANALYSIS_DAYS = int(os.getenv("SELF_IMPROVEMENT_ANALYSIS_DAYS", "7"))
+_KNOWN_PRODUCTION_AGENTS = frozenset(
+    {
+        "executor",
+        "research",
+        "reasoning",
+        "creative",
+        "developer",
+        "visual",
+        "meta",
+        "image",
+        "data",
+        "document",
+        "communication",
+        "system",
+        "shell",
+    }
+)
 
 _SCHEMA_EXTENSION = """
 CREATE TABLE IF NOT EXISTS tool_analytics (
@@ -243,6 +260,16 @@ class SelfImprovementEngine:
             score = default
         return max(0.0, min(1.0, score))
 
+    @staticmethod
+    def _is_known_production_agent(agent_name: str) -> bool:
+        return str(agent_name or "").strip().lower() in _KNOWN_PRODUCTION_AGENTS
+
+    @staticmethod
+    def _effective_recall_hits(total: int, none_hits: int) -> int:
+        safe_total = max(0, int(total or 0))
+        safe_none = max(0, min(int(none_hits or 0), safe_total))
+        return max(0, safe_total - safe_none)
+
     def record_tool_usage(self, record: ToolUsageRecord) -> None:
         """Speichert einen Tool-Nutzungs-Datenpunkt."""
         try:
@@ -416,7 +443,7 @@ class SelfImprovementEngine:
                         "type": "routing",
                         "target": agent,
                         "finding": (
-                            f"Routing zu Agent '{agent}': Erfolgsrate nur {success_rate:.2f} "
+                            f"Gemessene Routing-Qualitaet zu Agent '{agent}': Erfolgsrate nur {success_rate:.2f} "
                             f"bei {total} Entscheidungen (Ø-Outcome-Score {avg_outcome:.2f})"
                         ),
                         "suggestion": (
@@ -433,7 +460,7 @@ class SelfImprovementEngine:
                         "type": "routing",
                         "target": agent,
                         "finding": (
-                            f"Router ist fuer Agent '{agent}' oft unsicher: "
+                            f"Gemessene Router-Unsicherheit fuer Agent '{agent}': "
                             f"Ø-Router-Konfidenz {avg_router_conf:.2f} ({router_samples} Proben)"
                         ),
                         "suggestion": (
@@ -465,6 +492,7 @@ class SelfImprovementEngine:
                 none_rate = float(recall_stats.get("none_rate", 0.0) or 0.0)
                 summary_rate = float(recall_stats.get("summary_fallback_rate", 0.0) or 0.0)
                 semantic_rate = float(recall_stats.get("semantic_rate", 0.0) or 0.0)
+                topic_rate = float(recall_stats.get("topic_rate", 0.0) or 0.0)
                 avg_distance = float(recall_stats.get("avg_top_distance", 0.0) or 0.0)
 
                 if none_rate >= 0.20:
@@ -502,8 +530,9 @@ class SelfImprovementEngine:
                         "type": "conversation_recall",
                         "target": "semantic_recall",
                         "finding": (
-                            "Semantischer Recall greift selten oder zu unpraezise: "
-                            f"semantic_rate {semantic_rate:.2f}, avg_top_distance {avg_distance:.2f}"
+                            "Gemessener semantischer Recall ist schwach oder unpraezise: "
+                            f"semantic_rate {semantic_rate:.2f}, topic_rate {topic_rate:.2f}, "
+                            f"avg_top_distance {avg_distance:.2f}"
                         ),
                         "suggestion": (
                             "Embedding-/Ranking-Gewichte und Query-Normalisierung fuer "
@@ -615,10 +644,14 @@ class SelfImprovementEngine:
                 ).fetchone()
 
             by_agent = {}
+            unknown_agents = []
             for r in rows:
+                agent_name = str(r[0] or "").strip().lower()
+                target_bucket = by_agent if self._is_known_production_agent(agent_name) else unknown_agents
                 avg_router_confidence = round(float(r[3]), 3) if r[3] is not None else None
                 avg_outcome_score = round(float(r[4] or r[2] or 0.5), 3)
-                by_agent[r[0]] = {
+                row_payload = {
+                    "agent": agent_name,
                     "total": r[1],
                     "avg_confidence": avg_router_confidence if avg_router_confidence is not None else avg_outcome_score,
                     "avg_router_confidence": avg_router_confidence,
@@ -626,15 +659,32 @@ class SelfImprovementEngine:
                     "router_confidence_samples": int(r[5] or 0),
                     "success_rate": round(r[6] / r[1], 3) if r[1] > 0 else 0.0,
                 }
+                if target_bucket is by_agent:
+                    by_agent[agent_name] = {k: v for k, v in row_payload.items() if k != "agent"}
+                else:
+                    unknown_agents.append(row_payload)
+
+            filtered_total = sum(int(item.get("total", 0) or 0) for item in by_agent.values())
+            ignored_total = sum(int(item.get("total", 0) or 0) for item in unknown_agents)
 
             return {
-                "total_decisions": total_row[0] if total_row else 0,
+                "total_decisions": filtered_total,
+                "raw_total_decisions": total_row[0] if total_row else 0,
+                "ignored_test_decisions": ignored_total,
                 "by_agent": by_agent,
+                "unknown_agents": unknown_agents,
                 "analysis_days": days,
             }
         except Exception as e:
             log.debug("get_routing_stats: %s", e)
-            return {"total_decisions": 0, "by_agent": {}, "analysis_days": days}
+            return {
+                "total_decisions": 0,
+                "raw_total_decisions": 0,
+                "ignored_test_decisions": 0,
+                "by_agent": {},
+                "unknown_agents": [],
+                "analysis_days": days,
+            }
 
     def get_llm_usage_summary(
         self,
@@ -901,6 +951,7 @@ class SelfImprovementEngine:
                 totals = conn.execute(
                     """SELECT COUNT(*) as total_queries,
                               SUM(CASE WHEN source = 'semantic' THEN 1 ELSE 0 END) as semantic_hits,
+                              SUM(CASE WHEN source = 'topic_recall' THEN 1 ELSE 0 END) as topic_hits,
                               SUM(CASE WHEN source = 'recent_assistant' THEN 1 ELSE 0 END) as recent_hits,
                               SUM(CASE WHEN source = 'summary' THEN 1 ELSE 0 END) as summary_hits,
                               SUM(CASE WHEN source = 'none' THEN 1 ELSE 0 END) as none_hits,
@@ -922,24 +973,30 @@ class SelfImprovementEngine:
 
             total = int((totals[0] if totals else 0) or 0)
             semantic_hits = int((totals[1] if totals else 0) or 0)
-            recent_hits = int((totals[2] if totals else 0) or 0)
-            summary_hits = int((totals[3] if totals else 0) or 0)
-            none_hits = int((totals[4] if totals else 0) or 0)
+            topic_hits = int((totals[2] if totals else 0) or 0)
+            recent_hits = int((totals[3] if totals else 0) or 0)
+            summary_hits = int((totals[4] if totals else 0) or 0)
+            none_hits = int((totals[5] if totals else 0) or 0)
+            effective_hits = self._effective_recall_hits(total, none_hits)
 
             return {
                 "analysis_days": safe_days,
                 "total_queries": total,
                 "semantic_hits": semantic_hits,
+                "topic_hits": topic_hits,
                 "recent_hits": recent_hits,
                 "summary_hits": summary_hits,
                 "none_hits": none_hits,
+                "effective_recall_hits": effective_hits,
+                "effective_recall_rate": round(effective_hits / total, 3) if total else 0.0,
                 "semantic_rate": round(semantic_hits / total, 3) if total else 0.0,
+                "topic_rate": round(topic_hits / total, 3) if total else 0.0,
                 "recent_reply_rate": round(recent_hits / total, 3) if total else 0.0,
                 "summary_fallback_rate": round(summary_hits / total, 3) if total else 0.0,
                 "none_rate": round(none_hits / total, 3) if total else 0.0,
-                "avg_semantic_candidates": round(float((totals[5] if totals else 0.0) or 0.0), 3),
-                "avg_recent_reply_candidates": round(float((totals[6] if totals else 0.0) or 0.0), 3),
-                "avg_top_distance": round(float((totals[7] if totals else 0.0) or 0.0), 3),
+                "avg_semantic_candidates": round(float((totals[6] if totals else 0.0) or 0.0), 3),
+                "avg_recent_reply_candidates": round(float((totals[7] if totals else 0.0) or 0.0), 3),
+                "avg_top_distance": round(float((totals[8] if totals else 0.0) or 0.0), 3),
                 "top_sources": [
                     {"source": str(row[0] or ""), "total": int(row[1] or 0)}
                     for row in top_sources_rows
@@ -951,10 +1008,14 @@ class SelfImprovementEngine:
                 "analysis_days": days,
                 "total_queries": 0,
                 "semantic_hits": 0,
+                "topic_hits": 0,
                 "recent_hits": 0,
                 "summary_hits": 0,
                 "none_hits": 0,
+                "effective_recall_hits": 0,
+                "effective_recall_rate": 0.0,
                 "semantic_rate": 0.0,
+                "topic_rate": 0.0,
                 "recent_reply_rate": 0.0,
                 "summary_fallback_rate": 0.0,
                 "none_rate": 0.0,
@@ -988,6 +1049,8 @@ class SelfImprovementEngine:
                     "suggestion": r[4],
                     "confidence": r[5],
                     "severity": r[6],
+                    "evidence_level": "measured",
+                    "evidence_basis": "runtime_analytics",
                     "applied": bool(r[7]),
                     "created_at": r[8],
                 }

@@ -37,6 +37,35 @@ def test_routing_stats_separate_outcome_and_router_confidence(tmp_path):
     assert research["success_rate"] == pytest.approx(0.5, abs=0.001)
 
 
+def test_routing_stats_ignore_unregistered_test_agents(tmp_path):
+    engine = SelfImprovementEngine(db_path=tmp_path / "task_queue.db")
+    engine.record_routing(
+        RoutingRecord(
+            task_hash="t1",
+            chosen_agent="research",
+            outcome="success",
+            outcome_score=0.8,
+        )
+    )
+    engine.record_routing(
+        RoutingRecord(
+            task_hash="t2",
+            chosen_agent="broken",
+            outcome="error",
+            outcome_score=0.0,
+        )
+    )
+
+    stats = engine.get_routing_stats(days=7)
+
+    assert stats["raw_total_decisions"] == 2
+    assert stats["total_decisions"] == 1
+    assert stats["ignored_test_decisions"] == 1
+    assert "research" in stats["by_agent"]
+    assert "broken" not in stats["by_agent"]
+    assert stats["unknown_agents"][0]["agent"] == "broken"
+
+
 @pytest.mark.asyncio
 async def test_run_analysis_cycle_flags_low_routing_success_not_fake_confidence(tmp_path, monkeypatch):
     monkeypatch.setattr("orchestration.self_improvement_engine.MIN_SAMPLES", 2)
@@ -63,3 +92,23 @@ async def test_run_analysis_cycle_flags_low_routing_success_not_fake_confidence(
     findings = [item["finding"] for item in report.suggestions if item.get("type") == "routing"]
     assert findings
     assert any("Erfolgsrate" in finding for finding in findings)
+
+
+def test_get_suggestions_include_measured_evidence_fields(tmp_path):
+    engine = SelfImprovementEngine(db_path=tmp_path / "task_queue.db")
+    engine._save_suggestion(
+        {
+            "type": "routing",
+            "target": "research",
+            "finding": "Gemessene Routing-Qualitaet zu Agent 'research' ist schwach.",
+            "suggestion": "Routing schaerfen.",
+            "confidence": 0.7,
+            "severity": "medium",
+        }
+    )
+
+    suggestions = engine.get_suggestions(applied=False)
+
+    assert suggestions
+    assert suggestions[0]["evidence_level"] == "measured"
+    assert suggestions[0]["evidence_basis"] == "runtime_analytics"

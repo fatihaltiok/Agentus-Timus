@@ -14,6 +14,9 @@ def test_conversation_recall_stats_aggregate_sources(tmp_path):
         ConversationRecallRecord(query="wie war nochmal dein plan", source="semantic", semantic_candidates=3)
     )
     engine.record_conversation_recall(
+        ConversationRecallRecord(query="du meintest eben", source="topic_recall")
+    )
+    engine.record_conversation_recall(
         ConversationRecallRecord(query="woran lag das nochmal", source="summary", used_summary=True)
     )
     engine.record_conversation_recall(
@@ -22,13 +25,17 @@ def test_conversation_recall_stats_aggregate_sources(tmp_path):
 
     stats = engine.get_conversation_recall_stats(days=7)
 
-    assert stats["total_queries"] == 3
+    assert stats["total_queries"] == 4
     assert stats["semantic_hits"] == 1
+    assert stats["topic_hits"] == 1
     assert stats["summary_hits"] == 1
     assert stats["none_hits"] == 1
-    assert stats["semantic_rate"] == pytest.approx(0.333, abs=0.001)
-    assert stats["summary_fallback_rate"] == pytest.approx(0.333, abs=0.001)
-    assert stats["none_rate"] == pytest.approx(0.333, abs=0.001)
+    assert stats["effective_recall_hits"] == 3
+    assert stats["semantic_rate"] == pytest.approx(0.25, abs=0.001)
+    assert stats["topic_rate"] == pytest.approx(0.25, abs=0.001)
+    assert stats["summary_fallback_rate"] == pytest.approx(0.25, abs=0.001)
+    assert stats["none_rate"] == pytest.approx(0.25, abs=0.001)
+    assert stats["effective_recall_rate"] == pytest.approx(0.75, abs=0.001)
 
 
 @pytest.mark.asyncio
