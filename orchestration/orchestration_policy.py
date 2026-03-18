@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List
 
-from orchestration.meta_orchestration import classify_meta_task
+from orchestration.meta_orchestration import classify_meta_task, extract_effective_meta_query
 from orchestration.self_selected_strategy import (
     build_task_profile,
     select_strategy,
@@ -134,7 +134,7 @@ _DEPENDENCY_PATTERNS = (
 
 
 def evaluate_query_orchestration(query: str) -> Dict[str, Any]:
-    normalized = (query or "").strip().lower()
+    normalized = extract_effective_meta_query(query).strip().lower()
     capability_hits = {
         capability: [keyword for keyword in keywords if keyword in normalized]
         for capability, keywords in _CAPABILITY_KEYWORDS.items()

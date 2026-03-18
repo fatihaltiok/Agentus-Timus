@@ -3,6 +3,7 @@ from __future__ import annotations
 from orchestration.meta_orchestration import (
     build_meta_feedback_targets,
     classify_meta_task,
+    extract_effective_meta_query,
     get_agent_capability_map,
 )
 from agent.agents.meta import MetaAgent
@@ -143,6 +144,53 @@ def test_classify_meta_task_exposes_system_diagnosis_recipe():
     assert result["recommended_recipe_id"] == "system_diagnosis"
     assert result["recipe_stages"][0]["agent"] == "system"
     assert result["alternative_recipes"][0]["recipe_id"] == "system_shell_probe_first"
+
+
+def test_extract_effective_meta_query_prefers_current_user_query_from_followup_context():
+    query = (
+        "# FOLLOW-UP CONTEXT\n"
+        "last_agent: meta\n"
+        "last_assistant: System stabil - kein aktiver Incident festgestellt.\n"
+        "semantic_recall: assistant:meta => Status: Das Chunking läuft im Hintergrund\n"
+        "\n"
+        "# CURRENT USER QUERY\n"
+        "hey timus ist das chunking fertig"
+    )
+
+    assert extract_effective_meta_query(query) == "hey timus ist das chunking fertig"
+
+
+def test_classify_meta_task_does_not_route_chunking_followup_to_system_diagnosis():
+    query = (
+        "# FOLLOW-UP CONTEXT\n"
+        "last_agent: meta\n"
+        "last_assistant: System stabil - kein aktiver Incident festgestellt.\n"
+        "semantic_recall: assistant:meta => Status: Das Chunking läuft im Hintergrund\n"
+        "\n"
+        "# CURRENT USER QUERY\n"
+        "hey timus ist das chunking fertig"
+    )
+
+    result = classify_meta_task(query, action_count=0)
+
+    assert result["task_type"] != "system_diagnosis"
+    assert result["recommended_recipe_id"] != "system_diagnosis"
+
+
+def test_classify_meta_task_keeps_real_system_question_inside_followup_context():
+    query = (
+        "# FOLLOW-UP CONTEXT\n"
+        "last_agent: meta\n"
+        "last_assistant: Route nach Münster ist erstellt.\n"
+        "\n"
+        "# CURRENT USER QUERY\n"
+        "prüfe bitte den systemstatus und die logs"
+    )
+
+    result = classify_meta_task(query, action_count=2)
+
+    assert result["task_type"] == "system_diagnosis"
+    assert result["recommended_recipe_id"] == "system_diagnosis"
 
 
 def test_build_meta_feedback_targets_emits_task_recipe_and_chain_targets():

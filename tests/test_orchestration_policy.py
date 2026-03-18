@@ -135,6 +135,21 @@ def test_evaluate_query_orchestration_routes_navigation_request_to_route_strateg
     assert any(item["name"] == "get_google_maps_route" for item in decision["tool_affordances"])
 
 
+def test_evaluate_query_orchestration_ignores_systemish_followup_context_for_chunking_status():
+    decision = evaluate_query_orchestration(
+        "# FOLLOW-UP CONTEXT\n"
+        "last_agent: meta\n"
+        "last_assistant: System stabil - kein aktiver Incident festgestellt.\n"
+        "semantic_recall: assistant:meta => Status: Das Chunking läuft im Hintergrund\n"
+        "\n"
+        "# CURRENT USER QUERY\n"
+        "hey timus ist das chunking fertig"
+    )
+
+    assert decision["task_type"] != "system_diagnosis"
+    assert decision["recommended_recipe_id"] != "system_diagnosis"
+
+
 def test_evaluate_parallel_tasks_blocks_explicit_dependencies():
     decision = evaluate_parallel_tasks(
         [

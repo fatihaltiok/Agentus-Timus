@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Iterable, List, Tuple
 
@@ -591,8 +592,30 @@ def _site_kind(text: str) -> str | None:
     return None
 
 
+def extract_effective_meta_query(query: str) -> str:
+    """Bewertet bei Follow-up-Kapseln nur die eigentliche Nutzerfrage.
+
+    Andernfalls koennen Recall-/Statuszeilen wie "system stabil" oder
+    "health 200 OK" die Task-Klassifikation auf system_diagnosis ziehen.
+    """
+    raw = str(query or "").strip()
+    if not raw:
+        return ""
+
+    marker = "# CURRENT USER QUERY"
+    if marker.lower() not in raw.lower():
+        return raw
+
+    match = re.search(r"^\s*#\s*CURRENT USER QUERY\s*$", raw, flags=re.IGNORECASE | re.MULTILINE)
+    if not match:
+        return raw
+
+    extracted = raw[match.end() :].strip()
+    return extracted or raw
+
+
 def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
-    normalized = (query or "").strip().lower()
+    normalized = extract_effective_meta_query(query).lower()
     site_kind = _site_kind(normalized)
     has_route_request = site_kind == "maps" and is_location_route_query(normalized)
     has_browser = _has_any(normalized, _BROWSER_HINTS)
