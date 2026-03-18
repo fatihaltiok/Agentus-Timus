@@ -118,6 +118,7 @@ class SelfHealingIncidentStatus:
     RECOVERED = "recovered"
     IGNORED = "ignored"
     FAILED = "failed"
+    ARCHIVED = "archived"
 
 
 class SelfHealingCircuitBreakerState:
@@ -231,6 +232,7 @@ SELF_HEALING_INCIDENT_STATUS_VALUES = {
     SelfHealingIncidentStatus.RECOVERED,
     SelfHealingIncidentStatus.IGNORED,
     SelfHealingIncidentStatus.FAILED,
+    SelfHealingIncidentStatus.ARCHIVED,
 }
 SELF_HEALING_CIRCUIT_BREAKER_STATE_VALUES = {
     SelfHealingCircuitBreakerState.CLOSED,
@@ -246,6 +248,20 @@ SELF_HEALING_DEGRADE_MODE_VALUES = {
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name, "true" if default else "false").strip().lower()
     return raw in {"1", "true", "yes", "on"}
+
+
+_SELF_HEALING_MAINTENANCE_INTERVAL_SECONDS = max(
+    60,
+    int(os.getenv("AUTONOMY_SELF_HEALING_MAINTENANCE_INTERVAL_SEC", "900") or 900),
+)
+_SELF_HEALING_ARCHIVE_AFTER_DAYS = max(
+    1,
+    int(os.getenv("AUTONOMY_SELF_HEALING_ARCHIVE_AFTER_DAYS", "7") or 7),
+)
+_SELF_HEALING_DELETE_AFTER_DAYS = max(
+    _SELF_HEALING_ARCHIVE_AFTER_DAYS + 1,
+    int(os.getenv("AUTONOMY_SELF_HEALING_DELETE_AFTER_DAYS", "30") or 30),
+)
 
 
 def _goals_feature_enabled() -> bool:
@@ -730,6 +746,8 @@ class TaskQueue:
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
+        self._last_self_healing_housekeeping: Optional[datetime] = None
+        self.run_self_healing_housekeeping(force=True)
 
     # ------------------------------------------------------------------
     # DB-Verwaltung
@@ -2953,6 +2971,7 @@ class TaskQueue:
         component: Optional[str] = None,
         limit: int = 100,
     ) -> List[dict]:
+        self.run_self_healing_housekeeping()
         clauses: List[str] = []
         params: List[Any] = []
         if statuses:
@@ -2962,6 +2981,9 @@ class TaskQueue:
         if component:
             clauses.append("component=?")
             params.append(component.strip().lower())
+        if not statuses:
+            clauses.append("status != ?")
+            params.append(SelfHealingIncidentStatus.ARCHIVED)
 
         query = "SELECT * FROM self_healing_incidents"
         if clauses:
@@ -2987,13 +3009,32 @@ class TaskQueue:
         return out
 
     def get_self_healing_metrics(self) -> Dict[str, Any]:
+        self.run_self_healing_housekeeping()
         now = datetime.now()
         since_24h = (now - timedelta(hours=24)).isoformat()
         since_7d = (now - timedelta(days=7)).isoformat()
         with self._conn() as conn:
-            total = int((conn.execute("SELECT COUNT(*) FROM self_healing_incidents").fetchone() or [0])[0])
+            total = int(
+                (
+                    conn.execute(
+                        "SELECT COUNT(*) FROM self_healing_incidents WHERE status != ?",
+                        (SelfHealingIncidentStatus.ARCHIVED,),
+                    ).fetchone()
+                    or [0]
+                )[0]
+            )
+            archived_total = int(
+                (
+                    conn.execute(
+                        "SELECT COUNT(*) FROM self_healing_incidents WHERE status = ?",
+                        (SelfHealingIncidentStatus.ARCHIVED,),
+                    ).fetchone()
+                    or [0]
+                )[0]
+            )
             status_rows = conn.execute(
-                "SELECT status, COUNT(*) AS n FROM self_healing_incidents GROUP BY status"
+                "SELECT status, COUNT(*) AS n FROM self_healing_incidents WHERE status != ? GROUP BY status",
+                (SelfHealingIncidentStatus.ARCHIVED,),
             ).fetchall()
             status_counts = {str(r["status"]): int(r["n"]) for r in status_rows}
 
@@ -3107,6 +3148,7 @@ class TaskQueue:
         circuit_metrics = self.get_self_healing_circuit_breaker_metrics()
         return {
             "incidents_total": total,
+            "archived_incidents": archived_total,
             "status_counts": status_counts,
             "open_incidents": open_total,
             "open_by_component": open_by_component,
@@ -3124,6 +3166,84 @@ class TaskQueue:
             "degrade_mode": degrade_mode,
             "degrade_reason": degrade_reason,
             "degrade_updated_at": degrade_updated_at,
+        }
+
+    def run_self_healing_housekeeping(self, *, force: bool = False) -> Dict[str, Any]:
+        """Archives resolved incidents and drops very old archived rows."""
+        now = datetime.now()
+        if (
+            not force
+            and self._last_self_healing_housekeeping is not None
+            and (now - self._last_self_healing_housekeeping).total_seconds()
+            < _SELF_HEALING_MAINTENANCE_INTERVAL_SECONDS
+        ):
+            return {
+                "skipped": True,
+                "archive_after_days": _SELF_HEALING_ARCHIVE_AFTER_DAYS,
+                "delete_after_days": _SELF_HEALING_DELETE_AFTER_DAYS,
+                "archived": 0,
+                "deleted": 0,
+                "deleted_runtime_state": 0,
+            }
+
+        archive_cutoff = (now - timedelta(days=_SELF_HEALING_ARCHIVE_AFTER_DAYS)).isoformat()
+        delete_cutoff = (now - timedelta(days=_SELF_HEALING_DELETE_AFTER_DAYS)).isoformat()
+        archived = 0
+        deleted = 0
+        deleted_runtime_state = 0
+
+        with self._conn() as conn:
+            archived = int(
+                (
+                    conn.execute(
+                        """UPDATE self_healing_incidents
+                           SET status=?, updated_at=?
+                           WHERE status IN (?, ?, ?) AND updated_at < ?""",
+                        (
+                            SelfHealingIncidentStatus.ARCHIVED,
+                            now.isoformat(),
+                            SelfHealingIncidentStatus.RECOVERED,
+                            SelfHealingIncidentStatus.IGNORED,
+                            SelfHealingIncidentStatus.FAILED,
+                            archive_cutoff,
+                        ),
+                    ).rowcount
+                    or 0
+                )
+            )
+            deleted = int(
+                (
+                    conn.execute(
+                        "DELETE FROM self_healing_incidents WHERE status = ? AND updated_at < ?",
+                        (SelfHealingIncidentStatus.ARCHIVED, delete_cutoff),
+                    ).rowcount
+                    or 0
+                )
+            )
+            deleted_runtime_state = int(
+                (
+                    conn.execute(
+                        """DELETE FROM self_healing_runtime_state
+                           WHERE updated_at < ?
+                             AND (
+                                 state_key LIKE 'incident_notify:%'
+                                 OR state_key LIKE 'incident_phase:%'
+                                 OR state_key LIKE 'incident_quarantine:%'
+                             )""",
+                        (delete_cutoff,),
+                    ).rowcount
+                    or 0
+                )
+            )
+
+        self._last_self_healing_housekeeping = now
+        return {
+            "skipped": False,
+            "archive_after_days": _SELF_HEALING_ARCHIVE_AFTER_DAYS,
+            "delete_after_days": _SELF_HEALING_DELETE_AFTER_DAYS,
+            "archived": archived,
+            "deleted": deleted,
+            "deleted_runtime_state": deleted_runtime_state,
         }
 
     def record_policy_decision(

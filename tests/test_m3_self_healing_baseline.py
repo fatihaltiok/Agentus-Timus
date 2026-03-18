@@ -55,6 +55,46 @@ def test_m3_self_healing_incident_lifecycle_and_metrics(tmp_path: Path) -> None:
     assert metrics["status_counts"].get(SelfHealingIncidentStatus.RECOVERED, 0) == 1
 
 
+def test_m3_self_healing_housekeeping_archives_old_resolved_incidents(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("orchestration.task_queue._SELF_HEALING_ARCHIVE_AFTER_DAYS", 7)
+    monkeypatch.setattr("orchestration.task_queue._SELF_HEALING_DELETE_AFTER_DAYS", 30)
+    monkeypatch.setattr("orchestration.task_queue._SELF_HEALING_MAINTENANCE_INTERVAL_SECONDS", 1)
+
+    queue = TaskQueue(db_path=tmp_path / "task_queue.db")
+    queue.upsert_self_healing_incident(
+        incident_key="m3_old_resolved",
+        component="mcp",
+        signal="mcp_health",
+        severity="medium",
+        status=SelfHealingIncidentStatus.RECOVERED,
+        title="Old resolved",
+        details={"resolved": True},
+    )
+
+    old_ts = "2026-01-01T00:00:00"
+    with queue._conn() as conn:
+        conn.execute(
+            """UPDATE self_healing_incidents
+               SET updated_at=?, recovered_at=?, last_seen_at=?
+               WHERE incident_key=?""",
+            (old_ts, old_ts, old_ts, "m3_old_resolved"),
+        )
+
+    result = queue.run_self_healing_housekeeping(force=True)
+    metrics = queue.get_self_healing_metrics()
+    incidents = queue.list_self_healing_incidents(limit=10)
+    archived = queue.list_self_healing_incidents(
+        statuses=[SelfHealingIncidentStatus.ARCHIVED],
+        limit=10,
+    )
+
+    assert result["archived"] == 1
+    assert metrics["incidents_total"] == 0
+    assert metrics["archived_incidents"] == 1
+    assert incidents == []
+    assert archived[0]["incident_key"] == "m3_old_resolved"
+
+
 def test_m3_engine_creates_mcp_incident_and_playbook_task(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("AUTONOMY_SELF_HEALING_ENABLED", "true")
     monkeypatch.setenv("AUTONOMY_COMPAT_MODE", "false")

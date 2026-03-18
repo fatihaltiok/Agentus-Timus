@@ -2,7 +2,16 @@ from __future__ import annotations
 
 import pytest
 
-from orchestration.self_improvement_engine import RoutingRecord, SelfImprovementEngine
+from datetime import datetime, timedelta
+import sqlite3
+
+from orchestration.self_improvement_engine import (
+    ConversationRecallRecord,
+    LLMUsageRecord,
+    RoutingRecord,
+    SelfImprovementEngine,
+    ToolUsageRecord,
+)
 
 
 def test_routing_stats_separate_outcome_and_router_confidence(tmp_path):
@@ -112,3 +121,65 @@ def test_get_suggestions_include_measured_evidence_fields(tmp_path):
     assert suggestions
     assert suggestions[0]["evidence_level"] == "measured"
     assert suggestions[0]["evidence_basis"] == "runtime_analytics"
+
+
+def test_housekeeping_prunes_old_analytics_rows(tmp_path, monkeypatch):
+    monkeypatch.setattr("orchestration.self_improvement_engine._ANALYTICS_RETENTION_DAYS", 30)
+    monkeypatch.setattr("orchestration.self_improvement_engine._SUGGESTION_RETENTION_DAYS", 30)
+    monkeypatch.setattr("orchestration.self_improvement_engine._HOUSEKEEPING_INTERVAL_SECONDS", 1)
+
+    engine = SelfImprovementEngine(db_path=tmp_path / "task_queue.db")
+    recent_ts = datetime.now().isoformat()
+    old_ts = (datetime.now() - timedelta(days=45)).isoformat()
+
+    engine.record_tool_usage(
+        ToolUsageRecord(tool_name="recent_tool", agent="executor", timestamp=recent_ts)
+    )
+    engine.record_tool_usage(
+        ToolUsageRecord(tool_name="old_tool", agent="executor", timestamp=old_ts)
+    )
+    engine.record_routing(
+        RoutingRecord(task_hash="new", chosen_agent="research", outcome_score=0.8, timestamp=recent_ts)
+    )
+    engine.record_routing(
+        RoutingRecord(task_hash="old", chosen_agent="research", outcome_score=0.8, timestamp=old_ts)
+    )
+    engine.record_llm_usage(
+        LLMUsageRecord(trace_id="recent", agent="meta", provider="openai", model="gpt", timestamp=recent_ts)
+    )
+    engine.record_llm_usage(
+        LLMUsageRecord(trace_id="old", agent="meta", provider="openai", model="gpt", timestamp=old_ts)
+    )
+    engine.record_conversation_recall(
+        ConversationRecallRecord(query="recent", source="topic_recall", timestamp=recent_ts)
+    )
+    engine.record_conversation_recall(
+        ConversationRecallRecord(query="old", source="none", timestamp=old_ts)
+    )
+    engine._save_suggestion(
+        {
+            "type": "routing",
+            "target": "research",
+            "finding": "Old suggestion",
+            "suggestion": "cleanup",
+            "confidence": 0.7,
+            "severity": "medium",
+        }
+    )
+    engine.mark_suggestion_applied("1", applied=True)
+    with sqlite3.connect(str(engine.db_path)) as conn:
+        conn.execute(
+            "UPDATE improvement_suggestions_m12 SET created_at = ? WHERE id = 1",
+            (old_ts,),
+        )
+        conn.commit()
+
+    result = engine.run_housekeeping(force=True)
+
+    assert result["deleted"]["tool_analytics"] == 1
+    assert result["deleted"]["routing_analytics"] == 1
+    assert result["deleted"]["llm_usage_analytics"] == 1
+    assert result["deleted"]["conversation_recall_analytics"] == 1
+    assert result["deleted"]["applied_suggestions"] == 1
+    assert engine.get_tool_stats(days=90)[0]["tool_name"] == "recent_tool"
+    assert engine.get_routing_stats(days=90)["total_decisions"] == 1

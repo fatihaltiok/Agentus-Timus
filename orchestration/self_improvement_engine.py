@@ -24,6 +24,18 @@ DB_PATH = Path(__file__).resolve().parents[1] / "data" / "task_queue.db"
 
 MIN_SAMPLES = int(os.getenv("IMPROVEMENT_MIN_SAMPLES", "10"))
 ANALYSIS_DAYS = int(os.getenv("SELF_IMPROVEMENT_ANALYSIS_DAYS", "7"))
+_HOUSEKEEPING_INTERVAL_SECONDS = max(
+    60,
+    int(os.getenv("SELF_IMPROVEMENT_HOUSEKEEPING_INTERVAL_SECONDS", "900") or 900),
+)
+_ANALYTICS_RETENTION_DAYS = max(
+    1,
+    int(os.getenv("SELF_IMPROVEMENT_RETENTION_DAYS", "30") or 30),
+)
+_SUGGESTION_RETENTION_DAYS = max(
+    1,
+    int(os.getenv("SELF_IMPROVEMENT_SUGGESTION_RETENTION_DAYS", "30") or 30),
+)
 _KNOWN_PRODUCTION_AGENTS = frozenset(
     {
         "executor",
@@ -247,6 +259,8 @@ class SelfImprovementEngine:
         self.db_path = db_path
         _ensure_tables(db_path)
         self._last_analysis: Optional[datetime] = None
+        self._last_housekeeping: Optional[datetime] = None
+        self.run_housekeeping(force=True)
 
     # ------------------------------------------------------------------
     # Aufzeichnung
@@ -269,6 +283,73 @@ class SelfImprovementEngine:
         safe_total = max(0, int(total or 0))
         safe_none = max(0, min(int(none_hits or 0), safe_total))
         return max(0, safe_total - safe_none)
+
+    def run_housekeeping(self, *, force: bool = False) -> Dict[str, Any]:
+        """Prunes stale analytics so live diagnostics are not dominated by old data."""
+        now = datetime.now()
+        if (
+            not force
+            and self._last_housekeeping is not None
+            and (now - self._last_housekeeping).total_seconds() < _HOUSEKEEPING_INTERVAL_SECONDS
+        ):
+            return {
+                "skipped": True,
+                "retention_days": _ANALYTICS_RETENTION_DAYS,
+                "suggestion_retention_days": _SUGGESTION_RETENTION_DAYS,
+                "deleted": {},
+            }
+
+        analytics_cutoff = (now - timedelta(days=_ANALYTICS_RETENTION_DAYS)).isoformat()
+        suggestion_cutoff = (now - timedelta(days=_SUGGESTION_RETENTION_DAYS)).isoformat()
+        deleted = {
+            "tool_analytics": 0,
+            "routing_analytics": 0,
+            "llm_usage_analytics": 0,
+            "conversation_recall_analytics": 0,
+            "applied_suggestions": 0,
+        }
+        delete_queries = {
+            "tool_analytics": "DELETE FROM tool_analytics WHERE timestamp < ?",
+            "routing_analytics": "DELETE FROM routing_analytics WHERE timestamp < ?",
+            "llm_usage_analytics": "DELETE FROM llm_usage_analytics WHERE timestamp < ?",
+            "conversation_recall_analytics": (
+                "DELETE FROM conversation_recall_analytics WHERE timestamp < ?"
+            ),
+        }
+
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                for table_name, delete_sql in delete_queries.items():
+                    cursor = conn.execute(
+                        delete_sql,
+                        (analytics_cutoff,),
+                    )
+                    deleted[table_name] = int(cursor.rowcount or 0)
+
+                cursor = conn.execute(
+                    """DELETE FROM improvement_suggestions_m12
+                       WHERE applied = 1 AND created_at < ?""",
+                    (suggestion_cutoff,),
+                )
+                deleted["applied_suggestions"] = int(cursor.rowcount or 0)
+                conn.commit()
+        except Exception as e:
+            log.debug("run_housekeeping: %s", e)
+            return {
+                "skipped": False,
+                "retention_days": _ANALYTICS_RETENTION_DAYS,
+                "suggestion_retention_days": _SUGGESTION_RETENTION_DAYS,
+                "deleted": deleted,
+                "error": str(e),
+            }
+
+        self._last_housekeeping = now
+        return {
+            "skipped": False,
+            "retention_days": _ANALYTICS_RETENTION_DAYS,
+            "suggestion_retention_days": _SUGGESTION_RETENTION_DAYS,
+            "deleted": deleted,
+        }
 
     def record_tool_usage(self, record: ToolUsageRecord) -> None:
         """Speichert einen Tool-Nutzungs-Datenpunkt."""
@@ -578,6 +659,7 @@ class SelfImprovementEngine:
     def get_tool_stats(self, agent: Optional[str] = None, days: int = 7) -> List[dict]:
         """Gibt Tool-Statistiken zurück."""
         try:
+            self.run_housekeeping()
             cutoff = (datetime.now() - timedelta(days=days)).isoformat()
             with sqlite3.connect(str(self.db_path)) as conn:
                 if agent:
@@ -622,6 +704,7 @@ class SelfImprovementEngine:
     def get_routing_stats(self, days: int = 7) -> dict:
         """Gibt Routing-Statistiken zurück."""
         try:
+            self.run_housekeeping()
             cutoff = (datetime.now() - timedelta(days=days)).isoformat()
             with sqlite3.connect(str(self.db_path)) as conn:
                 rows = conn.execute(
@@ -696,6 +779,7 @@ class SelfImprovementEngine:
     ) -> dict:
         """Aggregierte Token-/Kosten-Sicht fuer Status und Budgeting."""
         try:
+            self.run_housekeeping()
             safe_days = max(1, min(90, int(days)))
             safe_limit = max(1, min(20, int(limit)))
             cutoff = (datetime.now() - timedelta(days=safe_days)).isoformat()
@@ -945,6 +1029,7 @@ class SelfImprovementEngine:
     def get_conversation_recall_stats(self, days: int = 7) -> dict:
         """Aggregierte Recall-Telemetrie fuer längere Gespräche."""
         try:
+            self.run_housekeeping()
             safe_days = max(1, min(90, int(days)))
             cutoff = (datetime.now() - timedelta(days=safe_days)).isoformat()
             with sqlite3.connect(str(self.db_path)) as conn:
@@ -1028,6 +1113,7 @@ class SelfImprovementEngine:
     def get_suggestions(self, applied: bool = False) -> List[dict]:
         """Gibt Verbesserungsvorschläge zurück."""
         try:
+            self.run_housekeeping()
             with sqlite3.connect(str(self.db_path)) as conn:
                 rows = conn.execute(
                     """SELECT id, type, target, finding, suggestion,

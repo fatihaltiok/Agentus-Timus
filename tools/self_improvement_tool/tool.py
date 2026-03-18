@@ -13,6 +13,7 @@ tools/self_improvement_tool/tool.py — M12: Self-Improvement MCP-Tools
 """
 
 import logging
+import os
 
 from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 
@@ -143,23 +144,24 @@ async def get_ops_observability(days: int = 7, limit: int = 5) -> dict:
 
     safe_days = max(1, min(90, days))
     safe_limit = max(1, min(20, limit))
+    live_days = max(1, min(safe_days, int(os.getenv("OPS_ANALYTICS_LIVE_DAYS", "1") or 1)))
     snapshot = await collect_status_snapshot()
     engine = get_improvement_engine()
     ops = build_ops_observability_summary(
         services=snapshot.get("services", {}) or {},
         providers=snapshot.get("providers", {}) or {},
-        tool_stats=_safe_engine_stat(engine, "get_tool_stats", default=[], days=safe_days),
+        tool_stats=_safe_engine_stat(engine, "get_tool_stats", default=[], days=live_days),
         routing_stats=_safe_engine_stat(
             engine,
             "get_routing_stats",
-            default={"by_agent": {}, "days": safe_days},
-            days=safe_days,
+            default={"by_agent": {}, "days": live_days},
+            days=live_days,
         ),
         llm_usage=_safe_engine_stat(
             engine,
             "get_llm_usage_summary",
             default={
-                "analysis_days": safe_days,
+                "analysis_days": live_days,
                 "session_id": "",
                 "total_requests": 0,
                 "successful_requests": 0,
@@ -173,14 +175,14 @@ async def get_ops_observability(days: int = 7, limit: int = 5) -> dict:
                 "top_agents": [],
                 "top_models": [],
             },
-            days=safe_days,
+            days=live_days,
             limit=safe_limit,
         ),
         recall_stats=_safe_engine_stat(
             engine,
             "get_conversation_recall_stats",
             default={
-                "analysis_days": safe_days,
+                "analysis_days": live_days,
                 "total_queries": 0,
                 "semantic_hits": 0,
                 "recent_hits": 0,
@@ -195,13 +197,16 @@ async def get_ops_observability(days: int = 7, limit: int = 5) -> dict:
                 "avg_top_distance": 0.0,
                 "top_sources": [],
             },
-            days=safe_days,
+            days=live_days,
         ),
         budget=snapshot.get("budget", {}) or {},
+        self_healing=snapshot.get("self_healing", {}) or {},
         hardening=snapshot.get("self_hardening", {}) or {},
+        live_window_days=live_days,
+        trend_window_days=safe_days,
         limit=safe_limit,
     )
-    return {"status": "ok", "days": safe_days, **ops}
+    return {"status": "ok", "days": safe_days, "live_days": live_days, **ops}
 
 
 @tool(

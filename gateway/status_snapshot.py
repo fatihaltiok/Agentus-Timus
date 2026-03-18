@@ -34,6 +34,11 @@ _DEFAULT_MCP_BASE_URL = os.getenv("MCP_URL", "http://127.0.0.1:5000").rstrip("/"
 _LOCAL_TIMEOUT_S = float(os.getenv("TELEGRAM_STATUS_LOCAL_TIMEOUT", "3"))
 _PROVIDER_TIMEOUT_S = float(os.getenv("TELEGRAM_STATUS_PROVIDER_TIMEOUT", "6"))
 _RESTART_STATUS_PATH = Path(__file__).resolve().parents[1] / "logs" / "timus_restart_status.json"
+_OPS_ANALYTICS_LIVE_DAYS = max(1, int(os.getenv("OPS_ANALYTICS_LIVE_DAYS", "1") or 1))
+_OPS_ANALYTICS_TREND_DAYS = max(
+    _OPS_ANALYTICS_LIVE_DAYS,
+    int(os.getenv("OPS_ANALYTICS_TREND_DAYS", "7") or 7),
+)
 
 _AGENT_STATUS_ORDER: List[Tuple[str, str]] = [
     ("executor", "executor"),
@@ -520,8 +525,11 @@ async def collect_status_snapshot(mcp_base_url: str | None = None) -> Dict[str, 
         services["qdrant"] = qdrant_service
 
     try:
-        usage_summary = get_improvement_engine().get_llm_usage_summary(days=1, limit=3)
+        improvement_engine = get_improvement_engine()
+        _safe_engine_stat(improvement_engine, "run_housekeeping", default={})
+        usage_summary = improvement_engine.get_llm_usage_summary(days=1, limit=3)
     except Exception:
+        improvement_engine = get_improvement_engine()
         usage_summary = {
             "analysis_days": 1,
             "session_id": "",
@@ -541,25 +549,47 @@ async def collect_status_snapshot(mcp_base_url: str | None = None) -> Dict[str, 
         budget_status = get_public_budget_status()
     except Exception:
         budget_status = {"state": "unknown", "message": "", "scopes": [], "soft_max_tokens": 0, "window_days": 1}
+    try:
+        queue = get_queue()
+        housekeeping = getattr(queue, "run_self_healing_housekeeping", None)
+        if callable(housekeeping):
+            housekeeping()
+    except Exception:
+        pass
     self_healing_summary = _build_self_healing_summary()
     self_hardening_summary = _build_self_hardening_summary()
 
     try:
-        improvement_engine = get_improvement_engine()
+        live_tool_stats = _safe_engine_stat(
+            improvement_engine,
+            "get_tool_stats",
+            default=[],
+            days=_OPS_ANALYTICS_LIVE_DAYS,
+        )
+        live_routing_stats = _safe_engine_stat(
+            improvement_engine,
+            "get_routing_stats",
+            default={"by_agent": {}, "days": _OPS_ANALYTICS_LIVE_DAYS},
+            days=_OPS_ANALYTICS_LIVE_DAYS,
+        )
+        live_recall_stats = _safe_engine_stat(
+            improvement_engine,
+            "get_conversation_recall_stats",
+            default={"analysis_days": _OPS_ANALYTICS_LIVE_DAYS, "total_queries": 0},
+            days=_OPS_ANALYTICS_LIVE_DAYS,
+        )
         ops_summary = build_ops_observability_summary(
             services=services,
             providers=provider_results,
-            tool_stats=_safe_engine_stat(improvement_engine, "get_tool_stats", default=[], days=7),
-            routing_stats=_safe_engine_stat(
-                improvement_engine,
-                "get_routing_stats",
-                default={"by_agent": {}, "days": 7},
-                days=7,
-            ),
+            tool_stats=live_tool_stats,
+            routing_stats=live_routing_stats,
             llm_usage=usage_summary,
             budget=budget_status,
+            recall_stats=live_recall_stats,
             self_healing=self_healing_summary,
             hardening=self_hardening_summary,
+            live_window_days=_OPS_ANALYTICS_LIVE_DAYS,
+            trend_window_days=_OPS_ANALYTICS_TREND_DAYS,
             limit=4,
         )
     except Exception:

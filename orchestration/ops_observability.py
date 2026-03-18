@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from typing import Any, Dict, List
 
 from orchestration.self_stabilization_gate import evaluate_self_stabilization_gate
@@ -26,6 +27,16 @@ def _env_int(name: str, default: int) -> int:
         return int(raw)
     except ValueError:
         return default
+
+
+def _hours_since_iso(value: str) -> float | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return max(0.0, (datetime.now() - datetime.fromisoformat(raw)).total_seconds() / 3600.0)
+    except ValueError:
+        return None
 
 
 def classify_ops_state(
@@ -212,6 +223,8 @@ def build_ops_observability_summary(
     recall_stats: Dict[str, Any] | None = None,
     self_healing: Dict[str, Any] | None = None,
     hardening: Dict[str, Any] | None = None,
+    live_window_days: int = 1,
+    trend_window_days: int | None = None,
     limit: int = 5,
 ) -> Dict[str, Any]:
     """Combines service/provider/analytics signals into one ops summary."""
@@ -226,6 +239,7 @@ def build_ops_observability_summary(
     recall_none_threshold = _env_float("OPS_RECALL_NONE_THRESHOLD", 0.20)
     recall_summary_threshold = _env_float("OPS_RECALL_SUMMARY_THRESHOLD", 0.35)
     recall_distance_threshold = _env_float("OPS_RECALL_DISTANCE_THRESHOLD", 0.20)
+    hardening_alert_max_age_hours = _env_int("OPS_HARDENING_ALERT_MAX_AGE_HOURS", 24)
 
     service_alerts: List[Dict[str, Any]] = []
     for service_name, info in (services or {}).items():
@@ -472,7 +486,13 @@ def build_ops_observability_summary(
     hardening_effective_mode = str((hardening or {}).get("last_pattern_effective_fix_mode", "") or "")
     hardening_freeze_active = bool((hardening or {}).get("last_pattern_freeze_active"))
     hardening_verification_status = str((hardening or {}).get("last_verification_status", "") or "")
-    if hardening_last_status in {"error", "rolled_back"}:
+    hardening_updated_at = str((hardening or {}).get("updated_at", "") or "")
+    hardening_age_hours = _hours_since_iso(hardening_updated_at)
+    hardening_is_stale = (
+        hardening_age_hours is not None
+        and hardening_age_hours > float(hardening_alert_max_age_hours)
+    )
+    if not hardening_is_stale and hardening_last_status in {"error", "rolled_back"}:
         hardening_alerts.append(
             _make_alert(
                 kind="self_hardening",
@@ -488,7 +508,7 @@ def build_ops_observability_summary(
                 value=1,
             )
         )
-    elif hardening_verification_status == "error":
+    elif not hardening_is_stale and hardening_verification_status == "error":
         hardening_alerts.append(
             _make_alert(
                 kind="self_hardening",
@@ -503,7 +523,7 @@ def build_ops_observability_summary(
                 value=1,
             )
         )
-    elif hardening_effective_mode == "human_only" or hardening_freeze_active:
+    elif not hardening_is_stale and (hardening_effective_mode == "human_only" or hardening_freeze_active):
         hardening_alerts.append(
             _make_alert(
                 kind="self_hardening",
@@ -518,7 +538,7 @@ def build_ops_observability_summary(
                 value=1,
             )
         )
-    elif hardening_last_status in {"blocked", "pending_approval", "skipped"}:
+    elif not hardening_is_stale and hardening_last_status in {"blocked", "pending_approval", "skipped"}:
         hardening_alerts.append(
             _make_alert(
                 kind="self_hardening",
@@ -589,6 +609,18 @@ def build_ops_observability_summary(
         tool_failure_alerts=tool_failure_alerts,
         budget_state=budget_state,
     )
+    hardening_payload = dict(
+        hardening
+        or {
+            "state": hardening_state,
+            "last_event": hardening_last_event,
+            "last_status": hardening_last_status,
+            "last_pattern_name": hardening_last_pattern,
+            "last_reason": hardening_last_reason,
+        }
+    )
+    hardening_payload["updated_at"] = hardening_updated_at
+    hardening_payload["stale"] = hardening_is_stale
 
     return {
         "state": state,
@@ -605,14 +637,12 @@ def build_ops_observability_summary(
         "slo": slo,
         "llm_success_rate": llm_success_rate,
         "llm_avg_latency_ms": llm_avg_latency_ms,
-        "recall": recall_stats or {},
-        "hardening": hardening
-        or {
-            "state": hardening_state,
-            "last_event": hardening_last_event,
-            "last_status": hardening_last_status,
-            "last_pattern_name": hardening_last_pattern,
-            "last_reason": hardening_last_reason,
+        "analytics_windows": {
+            "live_days": max(1, int(live_window_days or 1)),
+            "trend_days": max(1, int(trend_window_days or live_window_days or 1)),
         },
+        "recall": recall_stats or {},
+        "hardening": hardening_payload,
+        "hardening_is_stale": hardening_is_stale,
         "self_stabilization_gate": stabilization_gate,
     }

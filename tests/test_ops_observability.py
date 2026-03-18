@@ -124,3 +124,29 @@ def test_build_ops_observability_summary_warns_on_human_only_hardening_escalatio
 
     messages = [item["message"] for item in summary["alerts"]]
     assert any("human_only" in msg for msg in messages)
+
+
+def test_build_ops_observability_summary_ignores_stale_hardening_alerts(monkeypatch):
+    monkeypatch.setenv("OPS_HARDENING_ALERT_MAX_AGE_HOURS", "24")
+
+    summary = build_ops_observability_summary(
+        services={"mcp": {"ok": True, "active": "active"}},
+        providers={"openai": {"state": "ok"}},
+        tool_stats=[],
+        routing_stats={},
+        llm_usage={"total_requests": 0, "success_rate": 1.0, "avg_latency_ms": 0.0},
+        budget={},
+        hardening={
+            "state": "warn",
+            "last_event": "self_modify_finished",
+            "last_status": "rolled_back",
+            "last_pattern_name": "narrative_synthesis_empty",
+            "last_reason": "pytest_targeted:failed",
+            "updated_at": "2026-03-01T00:00:00",
+        },
+        limit=5,
+    )
+
+    messages = [item["message"] for item in summary["alerts"]]
+    assert not any("narrative_synthesis_empty" in msg for msg in messages)
+    assert summary["hardening_is_stale"] is True
