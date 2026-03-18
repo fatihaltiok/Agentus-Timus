@@ -117,6 +117,18 @@ _AGENT_PROFILES: Dict[str, AgentCapabilityProfile] = {
 
 
 _ORCHESTRATION_RECIPES: Dict[str, Tuple[OrchestrationRecipeStage, ...]] = {
+    "knowledge_research": (
+        OrchestrationRecipeStage(
+            stage_id="research_discovery",
+            agent="research",
+            goal=(
+                "Recherchiere externe Fakten, Quellen und belastbare Hintergrundinformationen "
+                "ohne UI-Automation und liefere eine verifizierte Zusammenfassung."
+            ),
+            expected_output="summary, sources, extracted_content",
+            handoff_fields=("goal", "source_urls", "captured_context", "expected_output"),
+        ),
+    ),
     "youtube_light_research": (
         OrchestrationRecipeStage(
             stage_id="youtube_search_scan",
@@ -350,6 +362,7 @@ _ORCHESTRATION_RECIPE_RECOVERIES: Dict[str, Tuple[OrchestrationRecipeRecovery, .
 
 
 _ORCHESTRATION_RECIPE_AGENT_CHAINS: Dict[str, Tuple[str, ...]] = {
+    "knowledge_research": ("meta", "research"),
     "youtube_light_research": ("meta", "executor"),
     "location_local_search": ("meta", "executor"),
     "location_route": ("meta", "executor"),
@@ -392,7 +405,47 @@ _EXTRACTION_HINTS = (
     "bericht",
     "analysiere",
     "werte aus",
+)
+
+_BROAD_RESEARCH_HINTS = (
     "recherchiere",
+    "recherche",
+    "recherchier",
+    "finde heraus",
+    "informiere mich über",
+    "sammle informationen",
+    "erkunde das internet",
+    "erkunde das web",
+    "erkunde das netz",
+    "erkunde ",
+    "erforsche",
+    "erkundige",
+    "stöbere im",
+    "stöbern im",
+    "im internet stöbern",
+    "im web stöbern",
+    "im netz stöbern",
+    "internet erkunden",
+    "web erkunden",
+    "netz erkunden",
+)
+
+_STRICT_RESEARCH_HINTS = (
+    "tiefenrecherche",
+    "tiefen recherche",
+    "tiefe recherche",
+    "deep research",
+    "fakten",
+    "quellen",
+    "aktuelle entwicklungen",
+    "neueste erkenntnisse",
+    "was gibt es neues",
+    "news zu",
+    "nachrichten",
+    "studie",
+    "studien",
+    "paper",
+    "papers",
 )
 
 _YOUTUBE_LIGHT_HINTS = (
@@ -498,6 +551,8 @@ def build_meta_feedback_targets(classification: Dict[str, Any]) -> List[Dict[str
 
 
 def _resolve_primary_recipe_id(task_type: str, site_kind: str | None = None) -> str | None:
+    if task_type == "knowledge_research":
+        return "knowledge_research"
     if task_type == "youtube_light_research":
         return "youtube_light_research"
     if task_type == "location_local_search":
@@ -621,6 +676,8 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
     has_browser = _has_any(normalized, _BROWSER_HINTS)
     has_summary_request = ("fasse" in normalized and "zusammen" in normalized) or "wichtigsten punkte" in normalized
     has_extraction = _has_any(normalized, _EXTRACTION_HINTS) or has_summary_request
+    has_broad_research = _has_any(normalized, _BROAD_RESEARCH_HINTS)
+    has_strict_research = _has_any(normalized, _STRICT_RESEARCH_HINTS)
     has_youtube_light = site_kind == "youtube" and _has_any(normalized, _YOUTUBE_LIGHT_HINTS)
     has_local_search = site_kind == "maps" and (
         _has_any(normalized, _LOCAL_SEARCH_HINTS) or is_location_local_query(normalized)
@@ -683,6 +740,15 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
             recommended_chain = ["visual"]
             task_type = "ui_navigation"
             reason = "browser_navigation"
+    elif has_broad_research or has_strict_research:
+        required_capabilities.extend(["content_extraction", "source_research"])
+        task_type = "knowledge_research"
+        if has_broad_research and not has_strict_research:
+            recommended_chain = ["meta", "research"]
+            reason = "broad_research_orchestration"
+        else:
+            recommended_chain = ["research"]
+            reason = "direct_research_request"
     elif has_extraction:
         required_capabilities.append("content_extraction")
         recommended_chain = ["research"]

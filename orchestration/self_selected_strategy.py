@@ -270,6 +270,18 @@ def build_task_profile(query: str, classification: Dict[str, Any]) -> Dict[str, 
             output_mode="summary",
             error_recovery_bias="switch_tool_then_continue",
         )
+    elif task_type == "knowledge_research":
+        profile = TaskProfile(
+            intent="source_research",
+            desired_depth="deep" if any(token in normalized for token in ("quellen", "fakten", "news", "studie", "paper")) else "medium",
+            effort_level="medium",
+            risk_level="low",
+            browser_need="avoid_if_possible",
+            latency_expectation="balanced",
+            cost_sensitivity="medium",
+            output_mode="detailed_summary",
+            error_recovery_bias="switch_tool_then_continue",
+        )
     elif task_type == "multi_stage_web_task":
         profile = TaskProfile(
             intent="interactive_navigation",
@@ -351,6 +363,8 @@ def select_tool_affordances(classification: Dict[str, Any], task_profile: Dict[s
         ]
     elif task_type == "web_content_extraction":
         names = ["visual", "research", "open_url", "search_web"]
+    elif task_type == "knowledge_research":
+        names = ["research", "search_web", "start_deep_research"]
     elif task_type == "system_diagnosis":
         names = ["system", "shell", "run_command"]
     elif task_type == "location_local_search":
@@ -427,6 +441,18 @@ def select_strategy(
             avoid_tools=("start_deep_research",),
             error_strategy="switch_tool_then_continue",
             rationale="Web-Inhalt zuerst direkt lesen oder erreichen, dann verdichten.",
+        )
+    elif task_type == "knowledge_research":
+        strategy = SelectedStrategy(
+            strategy_id="knowledge_research_orchestration",
+            strategy_mode="source_first",
+            primary_recipe_id=recommended_recipe_id or "knowledge_research",
+            fallback_recipe_id="",
+            preferred_tools=("research", "search_web"),
+            fallback_tools=("start_deep_research",),
+            avoid_tools=("visual",),
+            error_strategy="switch_tool_then_continue",
+            rationale="Externe Fakten- und Quellenfragen zuerst ueber den Research-Pfad mit leichter Web-Suche beantworten.",
         )
     elif task_type == "system_diagnosis":
         strategy = SelectedStrategy(

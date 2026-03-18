@@ -121,6 +121,29 @@ def test_evaluate_query_orchestration_routes_local_place_request_without_explici
     assert decision["recommended_agent_chain"] == ["meta", "executor"]
 
 
+def test_evaluate_query_orchestration_routes_broad_research_requests_to_meta():
+    decision = evaluate_query_orchestration("Recherchiere KI-Agenten fuer Unternehmen")
+
+    assert decision["route_to_meta"] is True
+    assert decision["task_type"] == "knowledge_research"
+    assert decision["recommended_entry_agent"] == "meta"
+    assert decision["recommended_agent_chain"] == ["meta", "research"]
+    assert decision["recommended_recipe_id"] == "knowledge_research"
+    assert decision["selected_strategy"]["strategy_id"] == "knowledge_research_orchestration"
+
+
+def test_evaluate_query_orchestration_keeps_strict_source_research_single_lane():
+    decision = evaluate_query_orchestration(
+        "Recherchiere aktuelle Entwicklungen zu KI-Agenten mit Quellen und Studien"
+    )
+
+    assert decision["route_to_meta"] is False
+    assert decision["task_type"] == "knowledge_research"
+    assert decision["recommended_entry_agent"] == "research"
+    assert decision["recommended_agent_chain"] == ["research"]
+    assert decision["recommended_recipe_id"] == "knowledge_research"
+
+
 def test_evaluate_query_orchestration_routes_navigation_request_to_route_strategy():
     decision = evaluate_query_orchestration("Erstelle mir eine Route zur Zeil in Frankfurt")
 

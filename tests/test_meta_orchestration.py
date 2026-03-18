@@ -109,6 +109,31 @@ def test_classify_meta_task_routes_route_queries_to_meta_executor():
     assert [stage["stage_id"] for stage in result["recipe_stages"]] == ["location_route_plan"]
 
 
+def test_classify_meta_task_routes_broad_research_requests_via_meta():
+    result = classify_meta_task(
+        "Recherchiere KI-Agenten fuer Unternehmen",
+        action_count=1,
+    )
+
+    assert result["task_type"] == "knowledge_research"
+    assert result["recommended_entry_agent"] == "meta"
+    assert result["recommended_agent_chain"] == ["meta", "research"]
+    assert result["recommended_recipe_id"] == "knowledge_research"
+    assert [stage["stage_id"] for stage in result["recipe_stages"]] == ["research_discovery"]
+
+
+def test_classify_meta_task_keeps_explicit_source_research_direct():
+    result = classify_meta_task(
+        "Recherchiere aktuelle Entwicklungen zu KI-Agenten mit Quellen und Studien",
+        action_count=1,
+    )
+
+    assert result["task_type"] == "knowledge_research"
+    assert result["recommended_entry_agent"] == "research"
+    assert result["recommended_agent_chain"] == ["research"]
+    assert result["recommended_recipe_id"] == "knowledge_research"
+
+
 def test_classify_meta_task_exposes_booking_recipe_for_multistage_workflow():
     result = classify_meta_task(
         "Öffne booking.com, gib Berlin ein, wähle Daten und starte die Suche",
