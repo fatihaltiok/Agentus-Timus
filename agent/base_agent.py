@@ -196,6 +196,18 @@ class BaseAgent(DynamicToolMixin):
             )
         return "gpt-4o", ModelProvider.OPENAI
 
+    @staticmethod
+    def _resolve_fallback_model_without_validation(agent_type: str) -> Optional[Tuple[str, ModelProvider]]:
+        if agent_type not in AgentModelConfig.AGENT_FALLBACK_CONFIGS:
+            return None
+        model_env, provider_env, fallback_model, fallback_provider = AgentModelConfig.AGENT_FALLBACK_CONFIGS[agent_type]
+        return resolve_model_provider_env(
+            model_env=model_env,
+            provider_env=provider_env,
+            fallback_model=fallback_model,
+            fallback_provider=fallback_provider,
+        )
+
     def __init__(
         self,
         system_prompt_template: str,
@@ -228,6 +240,7 @@ class BaseAgent(DynamicToolMixin):
         self.provider_client = get_provider_client()
         if skip_model_validation:
             self.model, self.provider = self._resolve_model_without_validation(agent_type)
+            fallback = self._resolve_fallback_model_without_validation(agent_type)
             log.warning(
                 "%s | %s | %s | Modellvalidierung absichtlich uebersprungen",
                 self.__class__.__name__,
@@ -236,8 +249,23 @@ class BaseAgent(DynamicToolMixin):
             )
         else:
             self.model, self.provider = AgentModelConfig.get_model_and_provider(agent_type)
+            fallback = AgentModelConfig.get_fallback_model_and_provider(agent_type)
+        self.fallback_model: Optional[str] = None
+        self.fallback_provider: Optional[ModelProvider] = None
+        if fallback:
+            fallback_model, fallback_provider = fallback
+            if (fallback_model, fallback_provider) != (self.model, self.provider):
+                self.fallback_model = fallback_model
+                self.fallback_provider = fallback_provider
 
         log.info(f"{self.__class__.__name__} | {self.model} | {self.provider.value}")
+        if self.fallback_model and self.fallback_provider:
+            log.info(
+                "%s | Fallback %s | %s",
+                self.__class__.__name__,
+                self.fallback_model,
+                self.fallback_provider.value,
+            )
 
         self.system_prompt = system_prompt_template.replace(
             "{current_date}", datetime.now().strftime("%d.%m.%Y")
@@ -1289,6 +1317,78 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
     # LLM Calls
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _is_retryable_provider_error_text(text: str) -> bool:
+        text = str(text or "").strip().lower()
+        if not text:
+            return False
+        return any(
+            needle in text
+            for needle in (
+                "timeout",
+                "timed out",
+                "rate limit",
+                "429",
+                "502",
+                "503",
+                "504",
+                "connection error",
+                "connection reset",
+                "temporary failure",
+                "name resolution",
+                "service unavailable",
+            )
+        )
+
+    @classmethod
+    def _is_retryable_provider_error(cls, error: Exception) -> bool:
+        return cls._is_retryable_provider_error_text(str(error or ""))
+
+    def _runtime_fallback_override(
+        self,
+        current_override: Optional[BudgetModelOverride] = None,
+    ) -> Optional[BudgetModelOverride]:
+        if not self.fallback_model or not self.fallback_provider:
+            return None
+        effective_provider = current_override.provider if current_override else self.provider
+        effective_model = current_override.model if current_override else self.model
+        if (effective_model, effective_provider) == (self.fallback_model, self.fallback_provider):
+            return None
+        return BudgetModelOverride(
+            provider=self.fallback_provider,
+            model=self.fallback_model,
+        )
+
+    async def _execute_llm_call(
+        self,
+        messages: List[Dict],
+        *,
+        budget_decision: Optional[LLMBudgetDecision] = None,
+        model_override: Optional[BudgetModelOverride] = None,
+    ) -> str:
+        effective_provider = model_override.provider if model_override else self.provider
+        if effective_provider in [
+            ModelProvider.OPENAI,
+            ModelProvider.ZAI,
+            ModelProvider.DEEPSEEK,
+            ModelProvider.INCEPTION,
+            ModelProvider.NVIDIA,
+            ModelProvider.OPENROUTER,
+            ModelProvider.GOOGLE,
+        ]:
+            return await self._call_openai_compatible(
+                messages,
+                budget_decision=budget_decision,
+                model_override=model_override,
+            )
+        if effective_provider == ModelProvider.ANTHROPIC:
+            return await self._call_anthropic(
+                messages,
+                budget_decision=budget_decision,
+                model_override=model_override,
+            )
+        return f"Error: Provider {effective_provider} nicht unterstuetzt"
+
     async def _call_llm(self, messages: List[Dict]) -> str:
         try:
             requested_max_tokens = self._get_max_tokens_for_model(self.model)
@@ -1316,28 +1416,30 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                     model_override.model,
                     self.agent_type,
                 )
-            if self.provider in [
-                ModelProvider.OPENAI,
-                ModelProvider.ZAI,
-                ModelProvider.DEEPSEEK,
-                ModelProvider.INCEPTION,
-                ModelProvider.NVIDIA,
-                ModelProvider.OPENROUTER,
-                ModelProvider.GOOGLE,
-            ]:
-                return await self._call_openai_compatible(
+            try:
+                return await self._execute_llm_call(
                     messages,
                     budget_decision=budget,
                     model_override=model_override,
                 )
-            elif self.provider == ModelProvider.ANTHROPIC:
-                return await self._call_anthropic(
-                    messages,
-                    budget_decision=budget,
-                    model_override=model_override,
-                )
-            else:
-                return f"Error: Provider {self.provider} nicht unterstuetzt"
+            except Exception as primary_error:
+                fallback_override = self._runtime_fallback_override(model_override)
+                if fallback_override and self._is_retryable_provider_error(primary_error):
+                    log.warning(
+                        "LLM-Fallback fuer %s: %s/%s -> %s/%s (%s)",
+                        self.agent_type,
+                        self.provider.value,
+                        self.model,
+                        fallback_override.provider.value,
+                        fallback_override.model,
+                        primary_error,
+                    )
+                    return await self._execute_llm_call(
+                        messages,
+                        budget_decision=budget,
+                        model_override=fallback_override,
+                    )
+                raise
         except Exception as e:
             log.error(f"LLM Fehler: {e}")
             return f"Error: {e}"

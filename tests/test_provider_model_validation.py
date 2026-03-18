@@ -139,6 +139,34 @@ def test_resolve_model_provider_env_uses_explicit_provider(monkeypatch):
     assert provider == ModelProvider.ZAI
 
 
+def test_agent_model_config_exposes_deep_research_fallback(monkeypatch):
+    fake_client = MultiProviderClient()
+    fake_client._api_keys[ModelProvider.OPENROUTER] = "test-key"
+    fake_client._clients[ModelProvider.OPENROUTER] = _FakeClient(["deepseek/deepseek-v3.2"])
+    monkeypatch.setattr(providers_mod, "_provider_client", fake_client)
+    monkeypatch.delenv("RESEARCH_FALLBACK_MODEL", raising=False)
+    monkeypatch.delenv("RESEARCH_FALLBACK_PROVIDER", raising=False)
+
+    model, provider = AgentModelConfig.get_fallback_model_and_provider("deep_research")
+
+    assert model == "deepseek/deepseek-v3.2"
+    assert provider == ModelProvider.OPENROUTER
+
+
+def test_agent_model_config_respects_explicit_deep_research_fallback_env(monkeypatch):
+    fake_client = MultiProviderClient()
+    fake_client._api_keys[ModelProvider.OPENAI] = "test-key"
+    fake_client._clients[ModelProvider.OPENAI] = _FakeClient(["gpt-5-mini"])
+    monkeypatch.setattr(providers_mod, "_provider_client", fake_client)
+    monkeypatch.setenv("RESEARCH_FALLBACK_MODEL", "gpt-5-mini")
+    monkeypatch.setenv("RESEARCH_FALLBACK_PROVIDER", "openai")
+
+    model, provider = AgentModelConfig.get_fallback_model_and_provider("deep_research")
+
+    assert model == "gpt-5-mini"
+    assert provider == ModelProvider.OPENAI
+
+
 def test_multi_provider_client_accepts_gemini_api_key_alias(monkeypatch):
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.setenv("GEMINI_API_KEY", "gem-test-key")

@@ -265,6 +265,17 @@ class AgentModelConfig:
         "image": ("IMAGE_MODEL", "IMAGE_MODEL_PROVIDER", "qwen/qwen3.5-plus-02-15", ModelProvider.OPENROUTER),
     }
 
+    AGENT_FALLBACK_CONFIGS = {
+        # Deep Research bevorzugt direkten DeepSeek-Traffic; OpenRouter bleibt
+        # als expliziter Runtime-Fallback verfuegbar.
+        "deep_research": (
+            "RESEARCH_FALLBACK_MODEL",
+            "RESEARCH_FALLBACK_PROVIDER",
+            "deepseek/deepseek-v3.2",
+            ModelProvider.OPENROUTER,
+        ),
+    }
+
     @classmethod
     def get_model_and_provider(cls, agent_type: str) -> Tuple[str, ModelProvider]:
         if agent_type not in cls.AGENT_CONFIGS:
@@ -282,6 +293,22 @@ class AgentModelConfig:
         )
 
         get_provider_client().validate_model_or_raise(provider, model, agent_type=agent_type)
+        return model, provider
+
+    @classmethod
+    def get_fallback_model_and_provider(cls, agent_type: str) -> Optional[Tuple[str, ModelProvider]]:
+        if agent_type not in cls.AGENT_FALLBACK_CONFIGS:
+            return None
+
+        model_env, provider_env, fallback_model, fallback_provider = cls.AGENT_FALLBACK_CONFIGS[agent_type]
+        model, provider = resolve_model_provider_env(
+            model_env=model_env,
+            provider_env=provider_env,
+            fallback_model=fallback_model,
+            fallback_provider=fallback_provider,
+        )
+
+        get_provider_client().validate_model_or_raise(provider, model, agent_type=f"{agent_type}_fallback")
         return model, provider
 
 

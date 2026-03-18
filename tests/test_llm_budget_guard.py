@@ -149,6 +149,75 @@ async def test_base_agent_soft_budget_uses_model_override(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_base_agent_runtime_fallback_switches_provider_on_retryable_error(monkeypatch):
+    calls = []
+
+    class _BrokenClient:
+        def __init__(self):
+            self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+        def _create(self, **kwargs):
+            calls.append((ModelProvider.DEEPSEEK, kwargs["model"]))
+            raise RuntimeError("connection error to deepseek")
+
+    class _FallbackClient:
+        def __init__(self):
+            self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+        def _create(self, **kwargs):
+            calls.append((ModelProvider.OPENROUTER, kwargs["model"]))
+            return SimpleNamespace(
+                usage=SimpleNamespace(prompt_tokens=5, completion_tokens=2, prompt_tokens_details=SimpleNamespace(cached_tokens=0)),
+                choices=[SimpleNamespace(message=SimpleNamespace(content="fallback ok", reasoning_content=""))],
+            )
+
+    class _ProviderClient:
+        def get_client(self, provider):
+            if provider == ModelProvider.DEEPSEEK:
+                return _BrokenClient()
+            if provider == ModelProvider.OPENROUTER:
+                return _FallbackClient()
+            raise AssertionError(f"unexpected provider {provider}")
+
+    monkeypatch.setattr(
+        base_agent_mod,
+        "evaluate_llm_budget",
+        lambda **kwargs: llm_budget_guard.LLMBudgetDecision(
+            blocked=False,
+            warning=False,
+            soft_limited=False,
+            max_tokens_cap=None,
+            state="ok",
+            scopes=[],
+            message="ok",
+        ),
+    )
+    monkeypatch.setattr(
+        base_agent_mod,
+        "resolve_soft_budget_model_override",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(base_agent_mod, "get_improvement_engine", lambda: SimpleNamespace(record_llm_usage=lambda record: None))
+
+    agent = base_agent_mod.BaseAgent.__new__(base_agent_mod.BaseAgent)
+    agent.provider_client = _ProviderClient()
+    agent.provider = base_agent_mod.ModelProvider.DEEPSEEK
+    agent.model = "deepseek-reasoner"
+    agent.fallback_provider = base_agent_mod.ModelProvider.OPENROUTER
+    agent.fallback_model = "deepseek/deepseek-v3.2"
+    agent.agent_type = "deep_research"
+    agent.conversation_session_id = "sess-fallback"
+
+    result = await base_agent_mod.BaseAgent._call_llm(agent, [{"role": "user", "content": "hello"}])
+
+    assert result == "fallback ok"
+    assert calls == [
+        (ModelProvider.DEEPSEEK, "deepseek-reasoner"),
+        (ModelProvider.OPENROUTER, "deepseek/deepseek-v3.2"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_dispatcher_hard_budget_falls_back_to_meta(monkeypatch):
     monkeypatch.setenv("DISPATCHER_MODEL_PROVIDER", "zai")
     monkeypatch.setenv("DISPATCHER_MODEL", "glm-5")
