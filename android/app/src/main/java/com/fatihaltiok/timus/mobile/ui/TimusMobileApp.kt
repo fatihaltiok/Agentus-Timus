@@ -161,7 +161,7 @@ fun TimusMobileApp() {
             }
             composable(AppDestination.Navigation.route) {
                 NavigationScreen(
-                    baseUrl = uiState.config.baseUrl,
+                    config = uiState.config,
                     locationState = uiState.location,
                 )
             }

@@ -104,13 +104,8 @@ fun VoiceScreen(
             recorder?.release()
             mediaPlayer?.runCatching { stop() }
             mediaPlayer?.release()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                audioFocusRequest?.let { request ->
-                    audioManager.abandonAudioFocusRequest(request)
-                }
-            } else {
-                @Suppress("DEPRECATION")
-                audioManager.abandonAudioFocus(null)
+            audioFocusRequest?.let { request ->
+                audioManager.abandonAudioFocusRequest(request)
             }
         }
     }
@@ -166,26 +161,17 @@ fun VoiceScreen(
         mediaPlayer?.release()
         mediaPlayer = null
 
-        val focusGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
-                .setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                        .build(),
-                )
-                .setAcceptsDelayedFocusGain(false)
-                .build()
-            audioFocusRequest = request
-            audioManager.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-        } else {
-            @Suppress("DEPRECATION")
-            audioManager.requestAudioFocus(
-                null,
-                AudioManager.STREAM_MUSIC,
-                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK,
-            ) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-        }
+        val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build(),
+            )
+            .setAcceptsDelayedFocusGain(false)
+            .build()
+        audioFocusRequest = request
+        val focusGranted = audioManager.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         if (!focusGranted) {
             onSetVoiceState("error")
             return
@@ -203,26 +189,16 @@ fun VoiceScreen(
             setDataSource(file.absolutePath)
             setOnCompletionListener {
                 onSetVoiceState("idle")
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    audioFocusRequest?.let { request ->
-                        audioManager.abandonAudioFocusRequest(request)
-                    }
-                } else {
-                    @Suppress("DEPRECATION")
-                    audioManager.abandonAudioFocus(null)
+                audioFocusRequest?.let { request ->
+                    audioManager.abandonAudioFocusRequest(request)
                 }
                 mediaPlayer = null
                 release()
             }
             setOnErrorListener { mp, _, _ ->
                 onSetVoiceState("error")
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    audioFocusRequest?.let { request ->
-                        audioManager.abandonAudioFocusRequest(request)
-                    }
-                } else {
-                    @Suppress("DEPRECATION")
-                    audioManager.abandonAudioFocus(null)
+                audioFocusRequest?.let { request ->
+                    audioManager.abandonAudioFocusRequest(request)
                 }
                 mediaPlayer = null
                 mp.release()
@@ -337,11 +313,7 @@ fun VoiceScreen(
         )
         TimusCard(
             title = "Aktive Stimme",
-            subtitle = if (voiceState.currentVoice.isBlank()) {
-                "Noch nicht geladen"
-            } else {
-                voiceState.currentVoice
-            },
+            subtitle = voiceState.currentVoice.ifBlank { "Noch nicht geladen" },
             status = voiceState.state,
         )
 

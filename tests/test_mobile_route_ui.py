@@ -16,6 +16,10 @@ def test_mobile_route_ui_contains_route_and_location_polling() -> None:
     assert "/location/route/map" in html
     assert "Follow an" in html
     assert "function renderLiveMarker" in html
+    assert "function showInteractiveSurface" in html
+    assert "function routeHasInteractiveGeometry" in html
+    assert "function decodeRoutePath" in html
+    assert 'maps.event.trigger(map, "resize")' in html
 
 
 def test_mobile_route_ui_endpoint_registered() -> None:

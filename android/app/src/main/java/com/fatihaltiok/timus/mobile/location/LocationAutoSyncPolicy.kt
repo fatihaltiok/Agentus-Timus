@@ -2,7 +2,7 @@ package com.fatihaltiok.timus.mobile.location
 
 private const val DEFAULT_FOREGROUND_AUTO_SYNC_INTERVAL_MS = 60 * 1000L
 private const val DEFAULT_STALE_RETRY_INTERVAL_MS = 20 * 1000L
-private const val DEFAULT_NAVIGATION_AUTO_SYNC_INTERVAL_MS = 20 * 1000L
+private const val DEFAULT_NAVIGATION_AUTO_SYNC_INTERVAL_MS = 15 * 1000L
 private const val DEFAULT_NAVIGATION_STALE_RETRY_INTERVAL_MS = 10 * 1000L
 
 data class LocationAutoSyncDecision(

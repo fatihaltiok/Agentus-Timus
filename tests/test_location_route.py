@@ -120,6 +120,7 @@ def test_parse_serpapi_google_maps_directions_supports_trip_details_format() -> 
                                     "duration": 35,
                                     "formatted_distance": "180 m",
                                     "formatted_duration": "35 Sek.",
+                                    "gps_coordinates": {"latitude": 50.1463521, "longitude": 8.8327686},
                                 }
                             ],
                         }
@@ -137,8 +138,13 @@ def test_parse_serpapi_google_maps_directions_supports_trip_details_format() -> 
     assert result["destination_label"] == "Hanau, Deutschland"
     assert result["steps"][0]["instruction"] == "Richtung Bahnhofstraße starten"
     assert result["steps"][0]["distance_text"] == "180 m"
+    assert result["steps"][0]["start_coordinates"]["latitude"] == 50.1463462
+    assert result["steps"][0]["end_coordinates"]["longitude"] == 8.8327686
+    assert result["steps"][0]["highlight_available"] is True
     assert result["start_coordinates"]["latitude"] == 50.1463462
     assert result["end_coordinates"]["longitude"] == 8.9283105
+    assert result["path_coordinates"][0]["latitude"] == 50.1463462
+    assert result["path_coordinates"][-1]["longitude"] == 8.9283105
 
 
 def test_parse_google_routes_compute_route_normalizes_route() -> None:
@@ -185,6 +191,8 @@ def test_parse_google_routes_compute_route_normalizes_route() -> None:
     assert result["steps"][0]["highlight_available"] is True
     assert result["start_coordinates"]["latitude"] == 50.100241
     assert result["end_coordinates"]["longitude"] == 8.9283105
+    assert result["path_coordinates"][0]["latitude"] == 50.100241
+    assert result["path_coordinates"][-1]["longitude"] == 8.9283105
     assert result["source_provider"] == "google_routes"
 
 
@@ -208,5 +216,6 @@ def test_prepare_route_snapshot_marks_complete_route() -> None:
     assert snapshot["steps"][0]["highlight_available"] is False
     assert snapshot["route_status"] == "active"
     assert snapshot["reroute_count"] == 0
+    assert snapshot["path_coordinates"] == []
     assert snapshot["overview_polyline"] == ""
     assert snapshot["saved_at"] == "2026-03-16T12:30:00Z"

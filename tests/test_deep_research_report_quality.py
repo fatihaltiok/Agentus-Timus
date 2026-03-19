@@ -3,6 +3,111 @@ from __future__ import annotations
 import pytest
 
 
+def test_research_plan_contains_query_variants_and_subquestions():
+    from tools.deep_research.tool import DeepResearchSession, _ensure_research_plan
+
+    session = DeepResearchSession(
+        "Chinese LLMs DeepSeek Qwen agent capabilities",
+        focus_areas=["tool use", "benchmarks"],
+    )
+    plan = _ensure_research_plan(session)
+
+    assert plan.query_variants
+    assert any("tool use" in query.lower() for query in plan.query_variants)
+    assert "benchmark" in " ".join(plan.query_variants).lower()
+    assert len(plan.subquestions) >= 2
+
+
+def test_auto_scope_mode_chooses_landscape_for_broad_topic():
+    from tools.deep_research.tool import DeepResearchSession, _ensure_research_plan
+
+    session = DeepResearchSession("Introspective Autonomous Systems AI 2025 2026")
+    plan = _ensure_research_plan(session)
+
+    assert plan.scope_mode == "landscape"
+
+
+def test_landscape_scope_keeps_adjacent_signals_but_rejects_noise():
+    from tools.deep_research.tool import DeepResearchSession, _is_text_on_session_topic
+
+    session = DeepResearchSession(
+        "Introspective Autonomous Systems AI 2025 2026",
+        scope_mode="landscape",
+    )
+
+    assert _is_text_on_session_topic(
+        session,
+        "Multi-Agent-Orchestrierung mit Planer, Arbeiter und Kritiker fuer komplexe Aufgaben.",
+    ) is True
+    assert _is_text_on_session_topic(
+        session,
+        "International AI Safety Report 2026 diskutiert Risiken und Governance fortgeschrittener KI.",
+    ) is True
+    assert _is_text_on_session_topic(
+        session,
+        "Make.com Automatisierung mit Bundle, Iterator, Aggregator und Router.",
+    ) is False
+
+
+def test_strict_scope_rejects_adjacent_but_unspecific_iass_content():
+    from tools.deep_research.tool import DeepResearchSession, _is_text_on_session_topic
+
+    session = DeepResearchSession(
+        "Introspective Autonomous Systems AI 2025 2026",
+        scope_mode="strict",
+    )
+
+    assert _is_text_on_session_topic(
+        session,
+        "Multi-Agent-Orchestrierung mit Planer, Arbeiter und Kritiker fuer komplexe Aufgaben.",
+    ) is False
+
+
+@pytest.mark.asyncio
+async def test_evaluate_relevance_rejects_admin_noise_for_strict_topic_query():
+    from tools.deep_research.tool import DeepResearchSession, _evaluate_relevance
+
+    session = DeepResearchSession(
+        "Chinese LLMs DeepSeek Qwen agent capabilities tool use",
+        focus_areas=["benchmarks", "function calling"],
+    )
+    sources = [
+        {
+            "url": "https://example.com/contact",
+            "title": "DeepSeek contact email and careers",
+            "snippet": "support jobs address customer service",
+            "score": 0.92,
+        },
+        {
+            "url": "https://example.com/agent-benchmark",
+            "title": "DeepSeek and Qwen tool use benchmark 2026",
+            "snippet": "function calling multi agent evaluation",
+            "score": 0.48,
+        },
+    ]
+
+    relevant = await _evaluate_relevance(sources, session, 5)
+
+    assert [item[0]["url"] for item in relevant] == ["https://example.com/agent-benchmark"]
+
+
+def test_research_metadata_summary_exposes_research_plan():
+    from tools.deep_research.tool import DeepResearchSession, _get_research_metadata_summary
+
+    session = DeepResearchSession(
+        "Enterprise RAG systems",
+        focus_areas=["retrieval augmented generation", "evaluation"],
+    )
+
+    summary = _get_research_metadata_summary(session)
+
+    assert "research_plan" in summary
+    assert summary["research_plan"]["scope_mode"] == "strict"
+    assert summary["research_plan"]["query_variants"]
+    assert summary["research_plan"]["subquestions"]
+    assert summary["research_plan"]["must_have_terms"]
+
+
 @pytest.mark.asyncio
 async def test_narrative_synthesis_falls_back_when_llm_returns_empty(monkeypatch):
     from tools.deep_research.tool import DeepResearchSession, ResearchNode, _create_narrative_synthesis_report

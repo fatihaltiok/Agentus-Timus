@@ -280,8 +280,8 @@ async def test_goal_fresh_not_stale(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_goal_stale_creates_signal(monkeypatch: pytest.MonkeyPatch) -> None:
     engine = _fresh_engine()
 
-    # 5 Tage alt → staleness_days=5, score = 5/7 ≈ 0.71 > 0.6 threshold
-    stale_updated = (datetime.now() - timedelta(days=5)).isoformat()
+    # Kurz nach der 48h-Schwelle muss bereits ein Signal entstehen.
+    stale_updated = (datetime.now() - timedelta(hours=49)).isoformat()
     rows = [{"id": "goal-2", "title": "Altes Projekt", "progress": 0.1, "updated_at": stale_updated}]
 
     async def _mock_to_thread(func, *args, **kwargs):
@@ -294,7 +294,7 @@ async def test_goal_stale_creates_signal(monkeypatch: pytest.MonkeyPatch) -> Non
     s = signals[0]
     assert s.source == "goal_stale"
     assert s.target_agent == "meta"
-    assert s.score > 0.6
+    assert s.score >= 0.6
     assert "Altes Projekt" in s.description
     assert s.dedup_key == "goal:goal-2"
 

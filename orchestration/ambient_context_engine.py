@@ -105,6 +105,23 @@ def get_ambient_engine() -> "AmbientContextEngine":
     return _ambient_engine_instance
 
 
+def _goal_staleness_score(staleness_hours: float) -> float:
+    """
+    Converts goal age into an actionable ambient score.
+
+    The signal becomes actionable as soon as GOAL_STALE_HOURS is reached,
+    instead of only after several extra days. From there it ramps up to 1.0
+    over the next stale window.
+    """
+    stale_hours = max(0.0, float(staleness_hours or 0.0))
+    threshold_hours = max(1.0, float(GOAL_STALE_HOURS or 48.0))
+    if stale_hours < threshold_hours:
+        return 0.0
+    overshoot_ratio = min(1.0, (stale_hours - threshold_hours) / threshold_hours)
+    score = SIGNAL_THRESHOLD + overshoot_ratio * (1.0 - SIGNAL_THRESHOLD)
+    return max(0.0, min(1.0, score))
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # AmbientContextEngine
 # ──────────────────────────────────────────────────────────────────────────────
@@ -399,11 +416,12 @@ class AmbientContextEngine:
                 if updated_at >= stale_cutoff:
                     continue  # noch frisch
 
-                staleness_days = (datetime.now() - updated_at).total_seconds() / 86400
-                score = max(0.0, min(1.0, staleness_days / 7.0))
+                staleness_hours = max(0.0, (datetime.now() - updated_at).total_seconds() / 3600.0)
+                staleness_days = staleness_hours / 24.0
+                score = _goal_staleness_score(staleness_hours)
 
-                if score < 0.6:
-                    continue  # < 4.2 Tage → ignorieren
+                if score < SIGNAL_THRESHOLD:
+                    continue
 
                 goal_id = row.get("id", "")
                 title = row.get("title", "Unbekanntes Ziel")

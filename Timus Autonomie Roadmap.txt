@@ -337,9 +337,9 @@ Für den Alltag brauchst du im Grunde nur diese Befehle.
 
   Restart
 
-  sudo systemctl restart qdrant.service
-  sudo systemctl restart timus-mcp.service
-  sudo systemctl restart timus-dispatcher.service
+  sudo systemctl restart qdrant.service && sudo systemctl restart timus-mcp.service sudo && systemctl restart timus-dispatcher.service
+ 
+  
 
   Status prüfen
 
@@ -405,5 +405,6 @@ Für den Alltag brauchst du im Grunde nur diese Befehle.
   - alle drei Services aktuell active (running)
 
 
-
+maps key google 
+RTX 4060RTX 4060
 

@@ -28,7 +28,7 @@ import re
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 from urllib.parse import urljoin, urlparse, urlunparse, parse_qs, urlencode
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 from dotenv import load_dotenv
 import httpx
@@ -49,13 +49,14 @@ from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 from tools.planner.planner_helpers import call_tool_internal
 from tools.deep_research.research_contracts import (
     build_domain_scorecards,
+    claim_is_on_topic,
     ClaimRecord,
     ClaimVerdict,
     EvidenceRecord,
     EvidenceStance,
     build_source_record_from_legacy,
     compute_claim_verdict,
-    filter_claims_for_query,
+    extract_query_anchor_terms,
     infer_domain_from_text,
     initial_research_contract,
     sort_claims_for_report,
@@ -104,6 +105,49 @@ TECH_KEYWORDS = {
     "embedding", "fine-tuning", "inference", "benchmark", "architecture",
     "attention", "gpt", "bert", "claude", "gemini", "llama", "mistral",
     "autonomous", "self-supervised", "generative", "nlp", "computer vision",
+}
+
+_QUERY_TERM_ALIASES: Dict[str, List[str]] = {
+    "introspective": ["self-reflection", "reflection", "introspection"],
+    "autonomous": ["autonomy", "agentic", "planning"],
+    "rag": ["retrieval augmented generation", "vector search"],
+    "llm": ["large language model", "foundation model"],
+    "llms": ["large language models", "foundation models"],
+    "agent": ["agentic", "tool use", "workflow"],
+    "agents": ["agentic", "tool use", "multi agent"],
+    "agenten": ["agentic", "tool use", "multi agent"],
+    "tool": ["tool use", "function calling"],
+    "tools": ["tool use", "function calling"],
+    "benchmark": ["evaluation", "leaderboard"],
+    "benchmarks": ["evaluation", "leaderboard"],
+}
+
+_GENERIC_ADMIN_RESULT_TERMS = {
+    "contact", "contacts", "address", "email", "telefon", "telefonnummer",
+    "kontakt", "impressum", "careers", "career", "jobs", "job", "salary",
+    "gehalt", "pricing", "price", "preise", "signup", "sign up", "register",
+    "registration", "login", "download", "coupon", "discount", "support",
+    "customer service", "faq",
+}
+
+_BROAD_SCOPE_MARKERS = {
+    "latest", "developments", "trends", "trend", "landscape", "ecosystem", "overview",
+    "future", "state", "state-of-the-art", "roadmap", "survey", "report", "developments",
+    "status", "outlook", "entwicklung", "entwicklungen", "ueberblick", "lagebild",
+    "forschung", "research", "future", "2025", "2026",
+}
+
+_SPECIFIC_SCOPE_HINTS = {
+    "deepseek", "qwen", "claude", "gpt", "gemini", "llama", "mistral", "kimi",
+    "rag", "regulation", "policy", "compliance", "benchmark", "benchmarks",
+}
+
+_LANDSCAPE_TECH_TERMS = {
+    "agent", "agents", "agentic", "reasoning", "evaluation", "benchmark", "benchmarks",
+    "architecture", "autonomy", "autonomous", "planning", "planner", "planer", "runtime",
+    "safety", "alignment", "governance", "tool", "tools", "workflow", "model",
+    "models", "retrieval", "generation", "rag", "context", "vector", "embedding",
+    "orchestration", "orchestrierung",
 }
 
 # v7.0: Domain-aware Embedding-Thresholds
@@ -238,6 +282,7 @@ def _dedupe_contract_claims(claims: List["ClaimRecord"]) -> List["ClaimRecord"]:
 
 def _build_narrative_fallback_report(session: "DeepResearchSession") -> str:
     query = str(session.query or "Recherchethema").strip()
+    plan = _ensure_research_plan(session)
     verified = list(session.verified_facts or [])
     unverified = list(session.unverified_claims or [])
     syntheses = [analysis for analysis in (session.thesis_analyses or []) if analysis.synthesis]
@@ -254,6 +299,11 @@ def _build_narrative_fallback_report(session: "DeepResearchSession") -> str:
             f"In der aktuellen Session wurden {len(session.research_tree)} Web-Quellen, "
             f"{len(verified)} verifizierte Fakten und {len(unverified)} weitere Hinweise verarbeitet."
         ),
+        "",
+        "## Rechercheplan",
+        f"Leitfrage: {plan.primary_question}",
+        f"Muss-Begriffe: {', '.join(plan.must_have_terms[:6]) or '-'}",
+        f"Teilfragen: {' | '.join(plan.subquestions[:3])}",
         "",
         "## Belastbare Beobachtungen",
     ]
@@ -518,11 +568,41 @@ class ThesisAnalysis:
     limitations: List[str] = field(default_factory=list)
 
 
+@dataclass
+class ResearchPlan:
+    """Deterministischer Rechercheplan fuer Query-Bildung und Topic-Gating."""
+
+    primary_question: str
+    query_language: str
+    domain: str
+    profile: str
+    scope_mode: str = "strict"
+    query_variants: List[str] = field(default_factory=list)
+    focus_terms: List[str] = field(default_factory=list)
+    anchor_terms: List[str] = field(default_factory=list)
+    include_terms: List[str] = field(default_factory=list)
+    must_have_terms: List[str] = field(default_factory=list)
+    exclude_terms: List[str] = field(default_factory=list)
+    related_terms: List[str] = field(default_factory=list)
+    temporal_terms: List[str] = field(default_factory=list)
+    preferred_source_types: List[str] = field(default_factory=list)
+    subquestions: List[str] = field(default_factory=list)
+    topic_boundaries: List[str] = field(default_factory=list)
+    strict_topic: bool = True
+    created_at: str = ""
+
+
 class DeepResearchSession:
     """Verwaltet den Zustand einer Tiefenrecherche-Session (v5.0 erweitert)."""
-    def __init__(self, query: str, focus_areas: Optional[List[str]] = None):
+    def __init__(
+        self,
+        query: str,
+        focus_areas: Optional[List[str]] = None,
+        scope_mode: Optional[str] = None,
+    ):
         self.query = query
         self.focus_areas = focus_areas if focus_areas is not None else []
+        self.requested_scope_mode = str(scope_mode or "auto").strip().lower() or "auto"
         self.research_tree: List[ResearchNode] = []
         self.visited_urls: set[str] = set()
         self.all_extracted_facts_raw: List[Dict[str, Any]] = []
@@ -538,6 +618,7 @@ class DeepResearchSession:
         self.methodology_notes: List[str] = []
         self.limitations: List[str] = []
         self.research_metadata: Dict[str, Any] = {}
+        self.research_plan: Optional[ResearchPlan] = None
         self.contract_v2 = initial_research_contract(query)
 
     def add_node(self, node: ResearchNode):
@@ -881,7 +962,7 @@ def _filter_session_claims(session: DeepResearchSession, claims: List[ClaimRecor
         if not _claim_requires_topic_filter(claim):
             keep.append(claim)
             continue
-        if filter_claims_for_query([claim], session.query):
+        if _is_text_on_session_topic(session, claim.claim_text):
             keep.append(claim)
     return keep
 
@@ -1519,7 +1600,7 @@ Antworte als JSON:
 def get_adaptive_config(query: str, focus_areas: Optional[List[str]]) -> Dict[str, Any]:
     """Gibt adaptive Konfiguration zurück."""
     return {
-        "max_initial_search_queries": 4,
+        "max_initial_search_queries": 5,
         "max_results_per_search_query": 8,
         "max_sources_to_deep_dive": 8,  # Erhöht für bessere Analyse
         "max_depth_for_links": 2,
@@ -1550,6 +1631,334 @@ def _detect_domain(query: str) -> str:
     return "default"
 
 
+def _normalize_space(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "")).strip()
+
+
+def _unique_texts(values: List[str], lowercase: bool = False) -> List[str]:
+    unique: List[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        value = _normalize_space(raw)
+        if lowercase:
+            value = value.lower()
+        if not value:
+            continue
+        if len(value) < 3 and not re.fullmatch(r"20\d{2}", value):
+            continue
+        if value in seen:
+            continue
+        seen.add(value)
+        unique.append(value)
+    return unique
+
+
+def _tokenize_query_terms(text: str) -> List[str]:
+    return re.findall(r"[a-zA-Z0-9][a-zA-Z0-9\-\+\.]*", str(text or "").lower())
+
+
+def _expand_focus_terms(focus_areas: Optional[List[str]]) -> List[str]:
+    terms: List[str] = []
+    for focus in focus_areas or []:
+        focus_norm = _normalize_space(focus)
+        if not focus_norm:
+            continue
+        terms.append(focus_norm.lower())
+        terms.extend(extract_query_anchor_terms(focus_norm))
+    return _unique_texts(terms, lowercase=True)
+
+
+def _extract_temporal_terms(query: str) -> List[str]:
+    tokens = _tokenize_query_terms(query)
+    terms = [
+        token for token in tokens
+        if re.fullmatch(r"20\d{2}", token)
+        or token in {"aktuell", "neu", "neuste", "neuesten", "latest", "recent", "current", "today"}
+    ]
+    if terms:
+        return _unique_texts(terms, lowercase=True)
+    current_year = datetime.now().year
+    return [str(current_year - 1), str(current_year)]
+
+
+def _profile_query_angles(profile: str, lang: str, domain: str, query_terms: List[str]) -> List[str]:
+    agentic_focus = any(
+        token in {
+            "agent", "agents", "agentic", "agenten", "tool", "tools", "function", "calling",
+            "multiagent", "multi-agent", "workflow", "workflows", "planung", "planning",
+            "orchestration",
+        }
+        for token in query_terms
+    )
+
+    if profile == "policy_regulation":
+        return [
+            "official regulation guidance",
+            "law compliance implementation",
+            "government documentation analysis",
+        ]
+    if profile == "news":
+        return [
+            "official announcement update",
+            "latest developments analysis",
+            "timeline reporting sources",
+        ]
+    if profile == "scientific":
+        return [
+            "peer reviewed paper benchmark",
+            "survey review methodology",
+            "evaluation replication results",
+        ]
+    if profile == "vendor_comparison" or domain == "tech":
+        angles = [
+            "benchmark evaluation architecture",
+            "official documentation release",
+            "survey implementation limitations",
+        ]
+        if agentic_focus:
+            angles.insert(1, "tool use function calling multi agent")
+        return angles
+    if lang == "de":
+        return [
+            "offizielle dokumentation analyse",
+            "studie evidenz methode",
+            "vergleich einordnung",
+        ]
+    return [
+        "official documentation analysis",
+        "evidence methodology review",
+        "comparison context limitations",
+    ]
+
+
+def _count_term_matches(terms: List[str], text: str) -> int:
+    haystack = str(text or "").lower()
+    return sum(1 for term in terms if term and term in haystack)
+
+
+def _resolve_scope_mode(
+    requested_scope_mode: str,
+    query_terms: List[str],
+    focus_terms: List[str],
+    profile: str,
+    domain: str,
+) -> str:
+    requested = str(requested_scope_mode or "auto").strip().lower()
+    if requested in {"strict", "landscape"}:
+        return requested
+
+    broad_hits = sum(1 for term in query_terms if term in _BROAD_SCOPE_MARKERS)
+    specific_hits = sum(1 for term in query_terms if term in _SPECIFIC_SCOPE_HINTS)
+    if profile in {"news", "market_intelligence", "competitive_landscape"}:
+        return "landscape"
+    if broad_hits >= 2 and not focus_terms:
+        return "landscape"
+    if broad_hits >= 1 and domain == "tech" and specific_hits == 0:
+        return "landscape"
+    return "strict"
+
+
+def _related_landscape_terms(
+    anchor_terms: List[str],
+    focus_terms: List[str],
+    alias_terms: List[str],
+    domain: str,
+) -> List[str]:
+    related = list(alias_terms)
+    if domain == "tech":
+        related.extend([
+            "agent", "agentic", "planning", "reasoning", "evaluation",
+            "architecture", "autonomy", "safety", "alignment", "orchestration", "governance",
+        ])
+    for term in anchor_terms + focus_terms:
+        if term == "introspective":
+            related.extend(["self-reflection", "reflection", "introspection"])
+        elif term == "autonomous":
+            related.extend(["autonomy", "agentic", "planning"])
+        elif term == "rag":
+            related.extend(["retrieval", "generation", "vector search", "context"])
+        elif term == "retrieval":
+            related.extend(["retriever", "vector", "embedding"])
+    return _unique_texts(related, lowercase=True)
+
+
+def _build_research_plan(query: str, focus_areas: Optional[List[str]], session: Optional[DeepResearchSession] = None) -> ResearchPlan:
+    query_norm = _normalize_space(query)
+    lang = _detect_language(query_norm)
+    domain = _detect_domain(query_norm)
+    profile_raw = getattr(getattr(getattr(session, "contract_v2", None), "question", None), "profile", "fact_check")
+    profile = getattr(profile_raw, "value", str(profile_raw or "fact_check"))
+
+    raw_query_terms = _tokenize_query_terms(query_norm)
+    anchor_terms = _unique_texts(extract_query_anchor_terms(query_norm), lowercase=True)
+    focus_terms = _expand_focus_terms(focus_areas)
+    temporal_terms = _extract_temporal_terms(query_norm)
+
+    alias_terms: List[str] = []
+    for term in anchor_terms + focus_terms:
+        alias_terms.extend(_QUERY_TERM_ALIASES.get(term, []))
+    alias_terms = _unique_texts(alias_terms, lowercase=True)
+
+    scope_mode = _resolve_scope_mode(
+        requested_scope_mode=getattr(session, "requested_scope_mode", "auto"),
+        query_terms=raw_query_terms,
+        focus_terms=focus_terms,
+        profile=profile,
+        domain=domain,
+    )
+
+    must_have_terms = _unique_texts(focus_terms[:3] or anchor_terms[:3], lowercase=True)
+    include_terms = _unique_texts(anchor_terms + focus_terms + temporal_terms + alias_terms, lowercase=True)
+    if (len(must_have_terms) <= 1 or (scope_mode == "landscape" and not focus_terms)) and alias_terms:
+        must_have_terms = _unique_texts(must_have_terms + alias_terms[:2], lowercase=True)
+    if not must_have_terms:
+        must_have_terms = include_terms[:3]
+    related_terms = _related_landscape_terms(anchor_terms, focus_terms, alias_terms, domain)
+
+    query_lower = query_norm.lower()
+    focus_text = " ".join(focus_areas or []).lower()
+    exclude_terms = _unique_texts(
+        [
+            term for term in _GENERIC_ADMIN_RESULT_TERMS
+            if term not in query_lower and term not in focus_text
+        ],
+        lowercase=True,
+    )
+
+    query_angles = _profile_query_angles(profile, lang, domain, raw_query_terms)
+    focus_fragment = " ".join(_unique_texts(list(focus_areas or []))[:2])
+    temporal_fragment = " ".join(temporal_terms[:2])
+    variants = [query_norm]
+    if focus_fragment:
+        variants.append(f"{query_norm} {focus_fragment}")
+    for angle in query_angles[:3]:
+        suffix = " ".join(part for part in [focus_fragment, angle, temporal_fragment] if part).strip()
+        variants.append(f"{query_norm} {suffix}".strip())
+    if alias_terms:
+        variants.append(f"{query_norm} {' '.join(alias_terms[:3])}")
+
+    subquestions = [
+        f"Welche Primaer- oder belastbaren Sekundaerquellen beantworten '{query_norm}' direkt?",
+    ]
+    for focus in _unique_texts(list(focus_areas or []))[:3]:
+        subquestions.append(f"Welche belastbare Evidenz gibt es speziell zu {focus}?")
+    subquestions.append("Welche Widersprueche, Grenzen oder offenen Fragen bleiben nach der Recherche uebrig?")
+
+    preferred_source_types = ["official", "paper", "benchmark", "analysis"]
+    if profile == "policy_regulation":
+        preferred_source_types = ["regulator", "official", "analysis"]
+    elif profile == "news":
+        preferred_source_types = ["official", "press", "analysis"]
+
+    topic_boundaries = [
+        f"Bleibe beim Kerngegenstand: {query_norm}",
+        "Priorisiere Ergebnisse mit direktem Bezug zu den Muss-Begriffen und Teilfragen.",
+        "Verwirf administrative, Recruiting-, Preis-, Kontakt- und reine Marketingseiten, sofern nicht explizit angefragt.",
+        "Verwirf Seitenthemen ohne klare Ueberschneidung mit den Kernbegriffen der Anfrage.",
+    ]
+
+    return ResearchPlan(
+        primary_question=query_norm,
+        query_language=lang,
+        domain=domain,
+        profile=profile,
+        scope_mode=scope_mode,
+        query_variants=_unique_texts(variants)[:5],
+        focus_terms=focus_terms,
+        anchor_terms=anchor_terms,
+        include_terms=include_terms,
+        must_have_terms=must_have_terms,
+        exclude_terms=exclude_terms,
+        related_terms=related_terms,
+        temporal_terms=temporal_terms,
+        preferred_source_types=preferred_source_types,
+        subquestions=subquestions,
+        topic_boundaries=topic_boundaries,
+        strict_topic=(scope_mode == "strict"),
+        created_at=datetime.now().isoformat(),
+    )
+
+
+def _ensure_research_plan(session: DeepResearchSession) -> ResearchPlan:
+    if session.research_plan is None:
+        session.research_plan = _build_research_plan(session.query, session.focus_areas, session=session)
+        session.research_metadata["research_plan"] = asdict(session.research_plan)
+    return session.research_plan
+
+
+def _is_text_on_session_topic(session: DeepResearchSession, text: str) -> bool:
+    candidate = _normalize_space(text)
+    if not candidate:
+        return False
+    plan = _ensure_research_plan(session)
+    candidate_lower = candidate.lower()
+    anchor_hits = _count_term_matches(plan.anchor_terms, candidate_lower)
+    focus_hits = _count_term_matches(plan.focus_terms, candidate_lower)
+    must_hits = _count_term_matches(plan.must_have_terms, candidate_lower)
+    include_hits = _count_term_matches(plan.include_terms, candidate_lower)
+    exclude_hits = _count_term_matches(plan.exclude_terms, candidate_lower)
+    related_hits = _count_term_matches(plan.related_terms, candidate_lower)
+    landscape_hits = _count_term_matches(list(_LANDSCAPE_TECH_TERMS), candidate_lower)
+    query_gate = claim_is_on_topic(session.query, candidate)
+
+    if exclude_hits >= 2 and anchor_hits == 0 and focus_hits == 0:
+        return False
+    if plan.scope_mode == "landscape":
+        if must_hits >= 1:
+            return True
+        if focus_hits >= 1 and (anchor_hits >= 1 or related_hits >= 1):
+            return True
+        if anchor_hits >= 1 and (related_hits >= 1 or landscape_hits >= 1):
+            return True
+        if related_hits >= 1 and landscape_hits >= 2:
+            return True
+        if related_hits >= 2 and landscape_hits >= 2:
+            return True
+        if landscape_hits >= 3:
+            return True
+        if query_gate and include_hits >= 1:
+            return True
+        return False
+
+    if must_hits >= 1:
+        return True
+    if focus_hits >= 1 and anchor_hits >= 1:
+        return True
+    if anchor_hits >= 2:
+        return True
+    if query_gate and anchor_hits >= 1 and include_hits >= 1:
+        return True
+    return query_gate and include_hits >= 1
+
+
+def _prune_session_findings_to_topic(session: DeepResearchSession) -> Dict[str, int]:
+    verified_before = len(session.verified_facts)
+    unverified_before = len(session.unverified_claims)
+
+    session.verified_facts = [
+        fact for fact in session.verified_facts
+        if _is_text_on_session_topic(session, str(fact.get("fact") or ""))
+    ]
+    session.unverified_claims = [
+        claim for claim in session.unverified_claims
+        if _is_text_on_session_topic(session, str(claim.get("fact") or ""))
+    ]
+
+    removed_verified = verified_before - len(session.verified_facts)
+    removed_unverified = unverified_before - len(session.unverified_claims)
+    removed_total = removed_verified + removed_unverified
+    if removed_total > 0:
+        session.methodology_notes.append(
+            f"Topic-Gate verwarf {removed_total} off-topic Hinweise/Claims "
+            f"({removed_verified} verified, {removed_unverified} unverified)."
+        )
+    return {
+        "removed_verified": removed_verified,
+        "removed_unverified": removed_unverified,
+        "removed_total": removed_total,
+    }
+
+
 async def _perform_initial_search(query: str, session: DeepResearchSession) -> List[Dict[str, Any]]:
     """
     Führt initiale Websuche durch (v7.0).
@@ -1560,8 +1969,8 @@ async def _perform_initial_search(query: str, session: DeepResearchSession) -> L
     """
     logger.info(f"🔎 Initiale Suche: '{query}'")
 
-    # v7.0: Language-Detection
-    lang = _detect_language(query)
+    plan = _ensure_research_plan(session)
+    lang = plan.query_language
     location_code = _LANG_LOCATION_MAP.get(lang, 2276)
     language_code = _LANG_CODE_MAP.get(lang, "de")
 
@@ -1578,22 +1987,7 @@ async def _perform_initial_search(query: str, session: DeepResearchSession) -> L
     except Exception:
         pass
 
-    # v7.0: 5 Query-Varianten
-    queries = [query]
-    if session.focus_areas:
-        queries.append(f"{query} {' '.join(session.focus_areas[:2])}")
-    if lang == "en":
-        queries.extend([
-            f"{query} research paper 2024 2025",
-            f"{query} architecture implementation",
-            f"{query} survey review",
-        ])
-    else:
-        queries.extend([
-            f"{query} Analyse Fakten",
-            f"{query} Forschung Studie",
-            f"{query} Übersicht Methoden",
-        ])
+    queries = plan.query_variants or [query]
 
     all_results: List[Dict[str, Any]] = []
 
@@ -1650,21 +2044,46 @@ async def _perform_initial_search(query: str, session: DeepResearchSession) -> L
 
         unique_urls.add(url)
 
-        # Heuristisches Scoring
-        score = 0.5
         url_lower = url.lower()
+        title = str(r.get("title") or "")
+        snippet = str(r.get("snippet") or "")
+        combined_text = f"{title} {snippet} {url_lower}".lower()
+        anchor_hits = _count_term_matches(plan.anchor_terms, combined_text)
+        focus_hits = _count_term_matches(plan.focus_terms, combined_text)
+        must_hits = _count_term_matches(plan.must_have_terms, combined_text)
+        include_hits = _count_term_matches(plan.include_terms, combined_text)
+        exclude_hits = _count_term_matches(plan.exclude_terms, combined_text)
+        related_hits = _count_term_matches(plan.related_terms, combined_text)
+
+        score = 0.35
 
         if any(domain in url_lower for domain in [".gov", ".edu", ".org"]):
-            score += 0.2
+            score += 0.18
         if "wikipedia" in url_lower:
-            score += 0.15
+            score += 0.12
         if ".pdf" in url_lower:
             score += 0.1
-        if any(social in url_lower for social in ["facebook.com", "twitter.com"]):
-            score -= 0.2
+        if any(social in url_lower for social in ["facebook.com", "twitter.com", "instagram.com", "tiktok.com"]):
+            score -= 0.22
+        if must_hits >= 1:
+            score += 0.18
+        score += min(anchor_hits * 0.08 + focus_hits * 0.08 + include_hits * 0.04 + related_hits * 0.03, 0.46)
+        score -= min(exclude_hits * 0.12, 0.36)
+        if plan.scope_mode == "strict" and must_hits == 0 and anchor_hits == 0 and focus_hits == 0 and include_hits < 2:
+            score -= 0.16
+        elif plan.scope_mode == "landscape" and anchor_hits == 0 and related_hits == 0 and include_hits < 2:
+            score -= 0.08
 
-        r["score"] = min(score, 1.0)
+        r["score"] = max(0.0, min(score, 1.0))
         r["canonical_url"] = session._get_canonical_url(url)
+        r["plan_hits"] = {
+            "anchor": anchor_hits,
+            "focus": focus_hits,
+            "must": must_hits,
+            "include": include_hits,
+            "exclude": exclude_hits,
+            "related": related_hits,
+        }
         final_results.append(r)
 
     final_results.sort(key=lambda x: x.get("score", 0), reverse=True)
@@ -1685,32 +2104,51 @@ async def _perform_initial_search(query: str, session: DeepResearchSession) -> L
 
 async def _evaluate_relevance(
     sources: List[Dict],
-    query: str,
-    focus: List[str],
+    session: DeepResearchSession,
     max_sources_to_return: int
 ) -> List[Tuple[Dict, float]]:
     """Bewertet Relevanz der Quellen."""
     logger.info(f"⚖️ Bewerte Relevanz von {len(sources)} Quellen...")
 
     relevant: List[Tuple[Dict, float]] = []
-
-    query_terms = set(query.lower().split())
-    focus_terms = set(" ".join(focus).lower().split()) if focus else set()
-    all_terms = query_terms | focus_terms
+    plan = _ensure_research_plan(session)
 
     for source in sources:
         base_score = source.get("score", 0.5)
 
         title = source.get("title", "").lower()
         snippet = source.get("snippet", "").lower()
-        combined_text = f"{title} {snippet}"
+        url = str(source.get("canonical_url") or source.get("url") or "").lower()
+        combined_text = f"{title} {snippet} {url}"
 
-        matches = sum(1 for term in all_terms if term in combined_text)
-        keyword_bonus = min(matches * 0.05, 0.3)
+        anchor_hits = _count_term_matches(plan.anchor_terms, combined_text)
+        focus_hits = _count_term_matches(plan.focus_terms, combined_text)
+        must_hits = _count_term_matches(plan.must_have_terms, combined_text)
+        include_hits = _count_term_matches(plan.include_terms, combined_text)
+        exclude_hits = _count_term_matches(plan.exclude_terms, combined_text)
+        related_hits = _count_term_matches(plan.related_terms, combined_text)
 
-        final_score = base_score + keyword_bonus
+        keyword_bonus = min(anchor_hits * 0.08 + focus_hits * 0.08 + include_hits * 0.04 + related_hits * 0.03, 0.48)
+        penalty = min(exclude_hits * 0.12, 0.36)
+        if plan.scope_mode == "strict" and must_hits == 0 and anchor_hits == 0 and focus_hits == 0 and include_hits < 2:
+            penalty += 0.18
+        elif plan.scope_mode == "strict" and plan.must_have_terms and must_hits == 0 and anchor_hits + focus_hits <= 1:
+            penalty += 0.08
+        elif plan.scope_mode == "landscape" and anchor_hits == 0 and related_hits == 0 and include_hits < 2:
+            penalty += 0.08
 
-        if final_score >= MIN_RELEVANCE_SCORE_FOR_SOURCES:
+        final_score = base_score + keyword_bonus - penalty
+        if _is_text_on_session_topic(session, combined_text) and final_score >= MIN_RELEVANCE_SCORE_FOR_SOURCES:
+            source["relevance_breakdown"] = {
+                "anchor_hits": anchor_hits,
+                "focus_hits": focus_hits,
+                "must_hits": must_hits,
+                "include_hits": include_hits,
+                "exclude_hits": exclude_hits,
+                "related_hits": related_hits,
+                "base_score": round(float(base_score), 3),
+                "final_score": round(float(final_score), 3),
+            }
             relevant.append((source, final_score))
 
     relevant.sort(key=lambda x: x[1], reverse=True)
@@ -2027,6 +2465,7 @@ async def _group_similar_facts(
 def _get_research_metadata_summary(session: DeepResearchSession) -> Dict[str, Any]:
     """Erstellt Metadaten-Zusammenfassung."""
     contract_export = session.export_contract_v2()
+    plan = _ensure_research_plan(session)
     claims = contract_export.get("claims", [])
     confirmed_count = sum(1 for claim in claims if claim.get("verdict") == "confirmed")
     likely_count = sum(1 for claim in claims if claim.get("verdict") == "likely")
@@ -2036,6 +2475,17 @@ def _get_research_metadata_summary(session: DeepResearchSession) -> Dict[str, An
     return {
         "original_query": session.query,
         "focus_areas": session.focus_areas,
+        "research_plan": {
+            "primary_question": plan.primary_question,
+            "query_language": plan.query_language,
+            "profile": plan.profile,
+            "scope_mode": plan.scope_mode,
+            "query_variants": plan.query_variants,
+            "subquestions": plan.subquestions,
+            "must_have_terms": plan.must_have_terms,
+            "exclude_terms": plan.exclude_terms[:10],
+            "strict_topic": plan.strict_topic,
+        },
         "start_time": session.start_time,
         "total_sources_processed": len(session.visited_urls),
         "total_facts_extracted": len(session.all_extracted_facts_raw),
@@ -2191,6 +2641,7 @@ def _assess_research_completion(
 async def _synthesize_findings(session: DeepResearchSession, verification_output: Dict) -> Dict:
     """Erstellt KI-Synthese."""
     logger.info("📝 Erstelle Synthese...")
+    plan = _ensure_research_plan(session)
 
     facts = verification_output.get("verified_facts", [])[:30]
 
@@ -2202,11 +2653,26 @@ async def _synthesize_findings(session: DeepResearchSession, verification_output
         }
 
     facts_text = "\n".join([f"- {f.get('fact')}" for f in facts[:20]])
+    plan_text = (
+        f"LEITFRAGE: {plan.primary_question}\n"
+        f"SCOPE-MODUS: {plan.scope_mode}\n"
+        f"TEILFRAGEN: {' | '.join(plan.subquestions[:4])}\n"
+        f"MUSS-BEGRIFFE: {', '.join(plan.must_have_terms[:6])}\n"
+        f"AUSSCHLUESSE: {', '.join(plan.exclude_terms[:8])}\n"
+    )
 
     prompt = f"""Erstelle eine strukturierte Analyse für "{session.query}".
 
+RECHERCHEPLAN:
+{plan_text}
+
 VERIFIZIERTE FAKTEN:
 {facts_text}
+
+WICHTIG:
+- Bleibe strikt innerhalb des Rechercheplans.
+- Verwerfe Randthemen und administrative Details.
+- Hebe offene Fragen nur dann hervor, wenn sie direkt zur Leitfrage gehoeren.
 
 Antworte als JSON:
 {{
@@ -2253,6 +2719,7 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
     """
     now = datetime.now().strftime('%d.%m.%Y %H:%M')
     session.export_contract_v2()
+    plan = _ensure_research_plan(session)
     contract = session.contract_v2
     meta = _get_research_metadata_summary(session)
     claims = sort_claims_for_report(list(contract.claims))
@@ -2494,8 +2961,20 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
             "Diese Tiefenrecherche wurde mit Multi-Query-Websuche, Quellenklassifikation, Claim->Evidence->Verdict-Logik und optionalem Fact-Corroborator durchgefuehrt.",
             "",
             f"- Verifikations-Modus: {'Strikt (≥3 Quellen)' if 'strict' in str(session.research_metadata.get('verification_mode', '')) else 'Moderat (≥2 Quellen)'}",
+            f"- Scope-Modus: {plan.scope_mode}",
+            f"- Query-Plan: {len(plan.query_variants)} Suchvarianten, {len(plan.subquestions)} Teilfragen",
+            f"- Muss-Begriffe: {', '.join(plan.must_have_terms[:6]) or '-'}",
             "- Claim-Verdicts: confirmed, likely, mixed/contested, vendor-only, insufficient",
             "- Profile-aware Beweismassstaebe fuer News, Scientific, Policy, Vendor Comparison usw.",
+            "",
+            "### Rechercheplan",
+            "",
+            f"- Leitfrage: {plan.primary_question}",
+        ])
+        for idx, subquestion in enumerate(plan.subquestions[:4], 1):
+            lines.append(f"- Teilfrage {idx}: {subquestion}")
+        lines.extend([
+            f"- Topic-Boundaries: {' | '.join(plan.topic_boundaries[:3])}",
             "",
             "---",
             "",
@@ -2705,6 +3184,7 @@ async def _create_narrative_synthesis_report(session: DeepResearchSession) -> st
     Anders als der analytische Report: fließender Text, inhaltlich gegliedert,
     wie ein guter Zeitungsartikel oder Wikipedia-Eintrag — direkt lesbar.
     """
+    plan = _ensure_research_plan(session)
     # Material für den LLM zusammenstellen
     facts_text = ""
     if session.verified_facts:
@@ -2774,9 +3254,21 @@ async def _create_narrative_synthesis_report(session: DeepResearchSession) -> st
         for c in hf_items:
             trend_sources_text += f"- [HF: {c.get('source_title', '')}] | {c.get('source', '')}\n"
 
+    plan_text = (
+        f"LEITFRAGE: {plan.primary_question}\n"
+        f"SCOPE-MODUS: {plan.scope_mode}\n"
+        f"TEILFRAGEN: {' | '.join(plan.subquestions[:4])}\n"
+        f"MUSS-BEGRIFFE: {', '.join(plan.must_have_terms[:6])}\n"
+        f"TOPIC-BOUNDARIES: {' | '.join(plan.topic_boundaries[:3])}\n"
+        f"AUSSCHLUESSE: {', '.join(plan.exclude_terms[:8])}\n"
+    )
+
     prompt = f"""Du erhältst Recherche-Ergebnisse zu folgendem Thema und sollst daraus einen ausführlichen, gut lesbaren Bericht schreiben.
 
 THEMA: {session.query}
+
+RECHERCHEPLAN:
+{plan_text}
 
 {facts_text}{syntheses_text}{sources_text}{yt_sources_text}{trend_sources_text}
 
@@ -2794,6 +3286,7 @@ FORMAT-VORGABEN:
 - ArXiv-Paper mit [Paper: Titel] kennzeichnen, wenn du darauf Bezug nimmst
 - GitHub-Projekte mit [GitHub: Name (★)] kennzeichnen, wenn du darauf Bezug nimmst
 - HuggingFace-Modelle/-Paper mit [HF: Name] kennzeichnen, wenn du darauf Bezug nimmst
+- Lasse Hinweise weg, die nicht klar zur Leitfrage und den Muss-Begriffen passen
 - Schreibe in ganzen Sätzen und Absätzen — kein reines Bullet-Point-Staccato
 - Wo sinnvoll dürfen Aufzählungen zur Übersichtlichkeit eingesetzt werden
 - Beende mit einem ausführlichen Fazit (mindestens 3 Absätze)
@@ -2872,6 +3365,13 @@ async def _run_research_pipeline(
     und ggf. mit light-Mode wiederholt (Fallback).
     """
     config = get_adaptive_config(query, current_session.focus_areas)
+    plan = _ensure_research_plan(current_session)
+    current_session.research_metadata["research_plan"] = asdict(plan)
+    if not any(str(note).startswith("Rechercheplan:") for note in current_session.methodology_notes):
+        current_session.methodology_notes.append(
+            f"Rechercheplan: {len(plan.query_variants)} Query-Varianten, "
+            f"{len(plan.subquestions)} Teilfragen, scope_mode={plan.scope_mode}"
+        )
 
     # PHASE 1: INITIALE SUCHE
     logger.info("📡 Phase 1: Initiale Websuche...")
@@ -2888,8 +3388,7 @@ async def _run_research_pipeline(
     logger.info("⚖️ Phase 2: Relevanz-Bewertung...")
     relevant_sources = await _evaluate_relevance(
         initial_sources,
-        query,
-        current_session.focus_areas,
+        current_session,
         config["max_sources_to_deep_dive"]
     )
 
@@ -2917,6 +3416,12 @@ async def _run_research_pipeline(
     # PHASE 4: ERWEITERTE FAKTEN-VERIFIKATION
     logger.info("🔍 Phase 4: Erweiterte Fakten-Verifikation (mit fact_corroborator)...")
     verified_data = await _deep_verify_facts(current_session, verification_mode)
+    _prune_session_findings_to_topic(current_session)
+    verified_data = {
+        "verified_facts": current_session.verified_facts,
+        "unverified_claims": current_session.unverified_claims,
+        "conflicts": current_session.conflicting_info,
+    }
 
     current_session.methodology_notes.append(
         f"Verifikation: {len(current_session.verified_facts)} von {len(current_session.all_extracted_facts_raw)} Fakten verifiziert"
@@ -2970,6 +3475,13 @@ async def _run_research_pipeline(
         except Exception as e:
             logger.warning(f"Trend-Recherche fehlgeschlagen (unkritisch): {e}")
 
+    _prune_session_findings_to_topic(current_session)
+    verified_data = {
+        "verified_facts": current_session.verified_facts,
+        "unverified_claims": current_session.unverified_claims,
+        "conflicts": current_session.conflicting_info,
+    }
+
     # PHASE 8: FINALE SYNTHESE
     logger.info("📝 Phase 8: Finale Synthese...")
     analysis = await _synthesize_findings(current_session, verified_data)
@@ -2990,6 +3502,7 @@ async def _run_research_pipeline(
     parameters=[
         P("query", "string", "Die Hauptsuchanfrage"),
         P("focus_areas", "array", "Optionale Liste von Fokusthemen", required=False),
+        P("scope_mode", "string", "Scope-Modus: auto, strict oder landscape", required=False, default="auto"),
         P("max_depth", "integer", "Maximale Tiefe der Recherche (1-5)", required=False),
         P("verification_mode", "string", "Verifikationsmodus: strict, moderate oder light", required=False, default="strict"),
     ],
@@ -2999,6 +3512,7 @@ async def _run_research_pipeline(
 async def start_deep_research(
     query: str,
     focus_areas: Optional[List[str]] = None,
+    scope_mode: str = "auto",
     max_depth: Optional[int] = None,
     verification_mode: str = "strict"
 ) -> dict:
@@ -3021,6 +3535,7 @@ async def start_deep_research(
     Args:
         query: Die Hauptsuchanfrage
         focus_areas: Optionale Liste von Fokusthemen
+        scope_mode: "auto", "strict" oder "landscape"
         max_depth: Maximale Tiefe der Recherche (1-5)
         verification_mode: "strict", "moderate" oder "light"
 
@@ -3028,7 +3543,8 @@ async def start_deep_research(
         Success mit session_id und umfassenden Analyseergebnissen
     """
     session_id = f"research_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.urandom(4).hex()}"
-    current_session = DeepResearchSession(query, focus_areas)
+    current_session = DeepResearchSession(query, focus_areas, scope_mode=scope_mode)
+    plan = _ensure_research_plan(current_session)
     research_sessions[session_id] = current_session
 
     # v8.1: Diagnostics initialisieren
@@ -3044,7 +3560,9 @@ async def start_deep_research(
     current_session.research_metadata = {
         "verification_mode": verification_mode,
         "max_depth": max_depth,
-        "version": "8.1"
+        "version": "8.1",
+        "scope_mode": plan.scope_mode,
+        "research_plan": asdict(plan),
     }
 
     try:
@@ -3089,7 +3607,14 @@ async def start_deep_research(
             except Exception:
                 pass
 
-            fallback_session = DeepResearchSession(query, focus_areas)
+            fallback_session = DeepResearchSession(query, focus_areas, scope_mode=scope_mode)
+            fallback_session.research_metadata = {
+                "verification_mode": "light",
+                "max_depth": max_depth,
+                "version": "8.1",
+                "scope_mode": _ensure_research_plan(fallback_session).scope_mode,
+                "research_plan": asdict(_ensure_research_plan(fallback_session)),
+            }
             pipe2 = await _run_research_pipeline(
                 query=query,
                 session_id=session_id,
@@ -3198,6 +3723,7 @@ async def start_deep_research(
             "telemetry": telemetry,
             "source_quality_summary": current_session.source_quality_summary,
             "bias_summary": current_session.bias_summary,
+            "research_plan": asdict(_ensure_research_plan(current_session)),
             "analysis": analysis,
             "verified_data": verified_data,
             "report_filepath": filepath,

@@ -13,6 +13,13 @@ def test_quick_intent_routes_self_status_to_executor():
     assert main_dispatcher.quick_intent_check("sag du es mir") == "executor"
     assert main_dispatcher.quick_intent_check("und was kannst du dagegen tun") == "executor"
     assert main_dispatcher.quick_intent_check("und was davon machst du zuerst") == "executor"
+    assert main_dispatcher.quick_intent_check("Hast du etwas zu korrigieren oder fixen?") == "executor"
+
+
+def test_quick_intent_does_not_route_generic_oder_to_reasoning():
+    import main_dispatcher
+
+    assert main_dispatcher.quick_intent_check("soll ich kaffee oder tee trinken") is None
 
 
 def test_quick_intent_routes_location_only_queries_to_executor():

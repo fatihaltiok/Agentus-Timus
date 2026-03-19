@@ -1915,6 +1915,71 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
     # Working-Memory Prompt-Injektion
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _env_int_with_aliases(names: List[str], default: int) -> int:
+        for name in names:
+            raw = str(os.getenv(name, "")).strip()
+            if not raw:
+                continue
+            try:
+                return int(raw)
+            except ValueError:
+                continue
+        return default
+
+    @classmethod
+    def _resolve_working_memory_settings(cls, task: str) -> Dict[str, int | bool]:
+        base_chars = cls._env_int_with_aliases(
+            ["WORKING_MEMORY_CHAR_BUDGET", "WM_MAX_CHARS"],
+            10000,
+        )
+        base_related = cls._env_int_with_aliases(
+            ["WORKING_MEMORY_MAX_RELATED", "WM_MAX_RELATED"],
+            8,
+        )
+        base_recent_events = cls._env_int_with_aliases(
+            ["WORKING_MEMORY_MAX_RECENT_EVENTS", "WM_MAX_EVENTS"],
+            15,
+        )
+
+        followup_context = any(
+            marker in str(task or "")
+            for marker in (
+                "# FOLLOW-UP CONTEXT",
+                "topic_recall:",
+                "session_summary:",
+                "semantic_recall:",
+                "pending_followup_prompt:",
+            )
+        )
+
+        if not followup_context:
+            return {
+                "max_chars": max(600, base_chars),
+                "max_related": max(0, base_related),
+                "max_recent_events": max(0, base_recent_events),
+                "followup_context": False,
+            }
+
+        boosted_chars = cls._env_int_with_aliases(
+            ["WORKING_MEMORY_FOLLOWUP_CHAR_BUDGET"],
+            max(base_chars, min(base_chars + 4000, 18000)),
+        )
+        boosted_related = cls._env_int_with_aliases(
+            ["WORKING_MEMORY_FOLLOWUP_MAX_RELATED"],
+            min(max(base_related + 2, base_related), 12),
+        )
+        boosted_recent = cls._env_int_with_aliases(
+            ["WORKING_MEMORY_FOLLOWUP_MAX_RECENT_EVENTS"],
+            min(max(base_recent_events + 4, base_recent_events), 24),
+        )
+        return {
+            "max_chars": max(600, boosted_chars),
+            "max_related": max(0, boosted_related),
+            "max_recent_events": max(0, boosted_recent),
+            "followup_context": True,
+        }
+
     async def _build_working_memory_context(self, task: str) -> str:
         enabled = os.getenv("WORKING_MEMORY_INJECTION_ENABLED", "true").lower()
         if enabled not in {"1", "true", "yes", "on"}:
@@ -1925,12 +1990,10 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             }
             return ""
 
-        try:
-            max_chars = int(os.getenv("WORKING_MEMORY_CHAR_BUDGET", "3200"))
-            max_related = int(os.getenv("WORKING_MEMORY_MAX_RELATED", "4"))
-            max_recent_events = int(os.getenv("WORKING_MEMORY_MAX_RECENT_EVENTS", "6"))
-        except ValueError:
-            max_chars, max_related, max_recent_events = 3200, 4, 6
+        settings = self._resolve_working_memory_settings(task)
+        max_chars = int(settings["max_chars"])
+        max_related = int(settings["max_related"])
+        max_recent_events = int(settings["max_recent_events"])
 
         try:
             from memory.memory_system import memory_manager
@@ -1963,6 +2026,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                     "max_chars": max_chars,
                     "max_related": max_related,
                     "max_recent_events": max_recent_events,
+                    "followup_context": bool(settings["followup_context"]),
                 },
                 "memory_stats": wm_stats,
                 "memory_snapshot": memory_snapshot,

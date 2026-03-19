@@ -1,6 +1,8 @@
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 from server import mcp_server
 
 
@@ -10,6 +12,11 @@ class _FakeRequest:
 
     async def json(self):
         return self._payload
+
+
+@pytest.fixture(autouse=True)
+def _stub_chat_memory_logging(monkeypatch):
+    monkeypatch.setattr(mcp_server, "_log_chat_interaction", lambda **kwargs: None)
 
 
 async def test_canvas_chat_honors_response_language_german(monkeypatch, tmp_path):
@@ -556,3 +563,115 @@ async def test_canvas_chat_routes_capability_followup_to_executor(monkeypatch, t
     assert "# FOLLOW-UP CONTEXT" in followup_query
     assert "recent_assistant_replies:" in followup_query
     assert "Pizza bestellen" in followup_query or "Pizza bestellen".lower() in followup_query.lower()
+
+
+async def test_canvas_chat_routes_short_contextual_reply_to_same_lane(monkeypatch, tmp_path):
+    captured = {"decision_queries": [], "run_queries": []}
+    mcp_server._chat_history.clear()
+    monkeypatch.setenv("TIMUS_SESSION_STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setattr(mcp_server, "_semantic_store_chat_turn", lambda **kwargs: None)
+    monkeypatch.setattr(mcp_server, "_semantic_recall_chat_turns", lambda **kwargs: [])
+
+    async def fake_build_tools_description():
+        return "tools"
+
+    async def fake_get_agent_decision(query, session_id=None):
+        captured["decision_queries"].append((query, session_id))
+        return "research"
+
+    async def fake_run_agent(agent_name, query, tools_description, session_id=None):
+        captured["run_queries"].append((agent_name, query, session_id, tools_description))
+        if "deepresearch agenten" in query.lower():
+            return (
+                "Ich kann zuerst die Query-Planung schaerfen oder das Relevanz-Gating haerten. "
+                "Welche Option soll ich zuerst angehen?"
+            )
+        return "Ich starte mit der Query-Planung."
+
+    fake_dispatcher = SimpleNamespace(
+        get_agent_decision=fake_get_agent_decision,
+        run_agent=fake_run_agent,
+    )
+
+    monkeypatch.setattr(mcp_server, "_build_tools_description", fake_build_tools_description)
+    monkeypatch.setitem(sys.modules, "main_dispatcher", fake_dispatcher)
+
+    first = await mcp_server.canvas_chat(
+        _FakeRequest(
+            {
+                "query": "pruef den deepresearch agenten",
+                "session_id": "short_reply_lane",
+            }
+        )
+    )
+    second = await mcp_server.canvas_chat(
+        _FakeRequest(
+            {
+                "query": "die erste option",
+                "session_id": "short_reply_lane",
+            }
+        )
+    )
+
+    assert first["status"] == "success"
+    assert second["status"] == "success"
+    assert second["agent"] == "research"
+    assert len(captured["decision_queries"]) == 1
+    assert captured["decision_queries"][0][0] == "pruef den deepresearch agenten"
+    followup_agent, followup_query, followup_session_id, _ = captured["run_queries"][-1]
+    assert followup_agent == "research"
+    assert followup_session_id == "short_reply_lane"
+    assert "# FOLLOW-UP CONTEXT" in followup_query
+    assert "last_agent: research" in followup_query
+    assert "pending_followup_prompt:" in followup_query
+    assert "Welche Option soll ich zuerst angehen?" in followup_query
+    assert "die erste option" in followup_query
+
+
+async def test_canvas_chat_logs_completed_interaction_to_memory(monkeypatch, tmp_path):
+    captured = {"memory_logs": []}
+    mcp_server._chat_history.clear()
+    monkeypatch.setenv("TIMUS_SESSION_STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setattr(mcp_server, "_semantic_store_chat_turn", lambda **kwargs: None)
+    monkeypatch.setattr(mcp_server, "_semantic_recall_chat_turns", lambda **kwargs: [])
+    monkeypatch.setattr(
+        mcp_server,
+        "_log_chat_interaction",
+        lambda **kwargs: captured["memory_logs"].append(kwargs),
+    )
+
+    async def fake_build_tools_description():
+        return "tools"
+
+    async def fake_get_agent_decision(query, session_id=None):
+        return "meta"
+
+    async def fake_run_agent(agent_name, query, tools_description, session_id=None):
+        return "Ich habe den Kontext gespeichert. Was soll ich als Nächstes prüfen?"
+
+    fake_dispatcher = SimpleNamespace(
+        get_agent_decision=fake_get_agent_decision,
+        run_agent=fake_run_agent,
+    )
+
+    monkeypatch.setattr(mcp_server, "_build_tools_description", fake_build_tools_description)
+    monkeypatch.setitem(sys.modules, "main_dispatcher", fake_dispatcher)
+
+    response = await mcp_server.canvas_chat(
+        _FakeRequest(
+            {
+                "query": "merk dir diesen chatkontext",
+                "session_id": "memory_logging_lane",
+            }
+        )
+    )
+
+    assert response["status"] == "success"
+    assert len(captured["memory_logs"]) == 1
+    logged = captured["memory_logs"][0]
+    assert logged["session_id"] == "memory_logging_lane"
+    assert logged["user_input"] == "merk dir diesen chatkontext"
+    assert logged["assistant_response"] == "Ich habe den Kontext gespeichert. Was soll ich als Nächstes prüfen?"
+    assert logged["agent"] == "meta"
+    assert logged["metadata"]["dispatcher_query_kind"] == "plain"
+    assert logged["metadata"]["pending_followup_prompt"] == "Ich habe den Kontext gespeichert. Was soll ich als Nächstes prüfen?"

@@ -120,3 +120,55 @@ def test_research_prompt_updated_iterations():
 def test_research_prompt_has_format_rule():
     from agent.prompts import DEEP_RESEARCH_PROMPT_TEMPLATE
     assert "FORMAT" in DEEP_RESEARCH_PROMPT_TEMPLATE
+
+def test_research_prompt_mentions_research_plan():
+    from agent.prompts import DEEP_RESEARCH_PROMPT_TEMPLATE
+    assert "RECHERCHEPLAN" in DEEP_RESEARCH_PROMPT_TEMPLATE
+
+def test_research_prompt_mentions_scope_mode():
+    from agent.prompts import DEEP_RESEARCH_PROMPT_TEMPLATE
+    assert "scope_mode" in DEEP_RESEARCH_PROMPT_TEMPLATE
+
+
+def test_working_memory_settings_fall_back_to_memory_env(monkeypatch):
+    monkeypatch.delenv("WORKING_MEMORY_CHAR_BUDGET", raising=False)
+    monkeypatch.delenv("WORKING_MEMORY_MAX_RELATED", raising=False)
+    monkeypatch.delenv("WORKING_MEMORY_MAX_RECENT_EVENTS", raising=False)
+    monkeypatch.delenv("WORKING_MEMORY_FOLLOWUP_CHAR_BUDGET", raising=False)
+    monkeypatch.delenv("WORKING_MEMORY_FOLLOWUP_MAX_RELATED", raising=False)
+    monkeypatch.delenv("WORKING_MEMORY_FOLLOWUP_MAX_RECENT_EVENTS", raising=False)
+    monkeypatch.setenv("WM_MAX_CHARS", "12345")
+    monkeypatch.setenv("WM_MAX_RELATED", "9")
+    monkeypatch.setenv("WM_MAX_EVENTS", "17")
+
+    settings = BaseAgent._resolve_working_memory_settings("normale rueckfrage")
+
+    assert settings["max_chars"] == 12345
+    assert settings["max_related"] == 9
+    assert settings["max_recent_events"] == 17
+    assert settings["followup_context"] is False
+
+
+def test_working_memory_settings_boost_followup_context(monkeypatch):
+    monkeypatch.delenv("WORKING_MEMORY_CHAR_BUDGET", raising=False)
+    monkeypatch.delenv("WORKING_MEMORY_MAX_RELATED", raising=False)
+    monkeypatch.delenv("WORKING_MEMORY_MAX_RECENT_EVENTS", raising=False)
+    monkeypatch.delenv("WORKING_MEMORY_FOLLOWUP_CHAR_BUDGET", raising=False)
+    monkeypatch.delenv("WORKING_MEMORY_FOLLOWUP_MAX_RELATED", raising=False)
+    monkeypatch.delenv("WORKING_MEMORY_FOLLOWUP_MAX_RECENT_EVENTS", raising=False)
+    monkeypatch.setenv("WM_MAX_CHARS", "8000")
+    monkeypatch.setenv("WM_MAX_RELATED", "6")
+    monkeypatch.setenv("WM_MAX_EVENTS", "10")
+
+    plain_settings = BaseAgent._resolve_working_memory_settings("kurze statusfrage")
+    followup_settings = BaseAgent._resolve_working_memory_settings(
+        "# FOLLOW-UP CONTEXT\n"
+        "session_summary: Wir waren bei der DeepResearch-Planung.\n"
+        "pending_followup_prompt: Welche Option soll ich zuerst angehen?"
+    )
+
+    assert plain_settings["followup_context"] is False
+    assert followup_settings["followup_context"] is True
+    assert followup_settings["max_chars"] > plain_settings["max_chars"]
+    assert followup_settings["max_related"] > plain_settings["max_related"]
+    assert followup_settings["max_recent_events"] > plain_settings["max_recent_events"]

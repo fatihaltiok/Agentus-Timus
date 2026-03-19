@@ -79,7 +79,7 @@ fun TimusScaffold(
             ) {
                 val navBackStackEntry = navController.currentBackStackEntryAsState().value
                 val destination = navBackStackEntry?.destination
-                AppDestination.bottomBarItems.forEach { item ->
+                AppDestination.bottomBarItems().forEach { item ->
                     val selected = destination?.hierarchy?.any { it.route == item.route } == true
                     NavigationBarItem(
                         selected = selected,

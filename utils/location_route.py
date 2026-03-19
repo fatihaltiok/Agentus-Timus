@@ -116,6 +116,29 @@ def _extract_google_latlng(value: Any) -> dict[str, float]:
     return _extract_coordinates(value)
 
 
+def _append_path_coordinate(path_coordinates: list[dict[str, float]], value: Any) -> None:
+    coords = _extract_coordinates(value)
+    if not coords:
+        return
+    if path_coordinates:
+        previous = path_coordinates[-1]
+        if (
+            abs(previous["latitude"] - coords["latitude"]) < 1e-7
+            and abs(previous["longitude"] - coords["longitude"]) < 1e-7
+        ):
+            return
+    path_coordinates.append(coords)
+
+
+def _normalize_path_coordinates(value: Any) -> list[dict[str, float]]:
+    normalized: list[dict[str, float]] = []
+    if not isinstance(value, list):
+        return normalized
+    for item in value:
+        _append_path_coordinate(normalized, item)
+    return normalized
+
+
 def route_step_segment_available(
     start_coordinates: dict[str, Any] | None,
     end_coordinates: dict[str, Any] | None,
@@ -255,14 +278,21 @@ def parse_serpapi_google_maps_directions(
     if not isinstance(leg, dict):
         leg = {}
 
-    steps_raw = leg.get("steps") or route.get("steps") or trip_details
+    all_trip_details: list[dict[str, Any]] = []
+    for trip in trips:
+        if not isinstance(trip, dict):
+            continue
+        details = trip.get("details") or []
+        if not isinstance(details, list):
+            continue
+        all_trip_details.extend(item for item in details if isinstance(item, dict))
+
+    steps_raw = leg.get("steps") or route.get("steps")
     if not isinstance(steps_raw, list):
         steps_raw = []
-    steps = [
-        _normalize_route_step(item, idx)
-        for idx, item in enumerate(steps_raw, start=1)
-        if isinstance(item, dict)
-    ]
+    use_trip_details = not steps_raw and bool(all_trip_details)
+    if use_trip_details:
+        steps_raw = all_trip_details
 
     normalized_mode = normalize_route_travel_mode(travel_mode)
     origin_latitude = _as_float(origin.get("latitude"))
@@ -283,6 +313,42 @@ def parse_serpapi_google_maps_directions(
         or _extract_coordinates(route.get("destination"))
         or _extract_place_info_coordinates(destination_place)
     )
+    path_coordinates: list[dict[str, float]] = []
+    _append_path_coordinate(path_coordinates, start_coordinates)
+
+    steps: list[dict[str, Any]] = []
+    if use_trip_details:
+        previous_coordinates = start_coordinates
+        for idx, item in enumerate(steps_raw, start=1):
+            if not isinstance(item, dict):
+                continue
+            detail_coordinates = _extract_coordinates(item.get("gps_coordinates"))
+            step = _normalize_route_step(
+                {
+                    "title": item.get("title"),
+                    "instruction": item.get("instruction"),
+                    "maneuver": item.get("action"),
+                    "distance": item.get("formatted_distance") or item.get("distance"),
+                    "duration": item.get("formatted_duration") or item.get("duration"),
+                    "start_coordinates": previous_coordinates,
+                    "end_coordinates": detail_coordinates,
+                },
+                idx,
+            )
+            steps.append(step)
+            if detail_coordinates:
+                _append_path_coordinate(path_coordinates, detail_coordinates)
+                previous_coordinates = detail_coordinates
+    else:
+        for idx, item in enumerate(steps_raw, start=1):
+            if not isinstance(item, dict):
+                continue
+            step = _normalize_route_step(item, idx)
+            steps.append(step)
+            _append_path_coordinate(path_coordinates, step.get("start_coordinates"))
+            _append_path_coordinate(path_coordinates, step.get("end_coordinates"))
+    _append_path_coordinate(path_coordinates, end_coordinates)
+
     overview_polyline = (
         _extract_polyline(route.get("overview_polyline"))
         or _extract_polyline(route.get("polyline"))
@@ -350,6 +416,7 @@ def parse_serpapi_google_maps_directions(
         "step_count": len(steps),
         "start_coordinates": start_coordinates,
         "end_coordinates": end_coordinates,
+        "path_coordinates": path_coordinates,
         "overview_polyline": overview_polyline,
         "route_url": route_url,
         "maps_url": route_url,
@@ -417,6 +484,12 @@ def parse_google_routes_compute_route(
         or _extract_google_latlng(route.get("endLocation"))
         or (_extract_google_latlng(steps_raw[-1].get("endLocation")) if steps_raw and isinstance(steps_raw[-1], dict) else {})
     )
+    path_coordinates: list[dict[str, float]] = []
+    _append_path_coordinate(path_coordinates, start_coordinates)
+    for step in steps:
+        _append_path_coordinate(path_coordinates, step.get("start_coordinates"))
+        _append_path_coordinate(path_coordinates, step.get("end_coordinates"))
+    _append_path_coordinate(path_coordinates, end_coordinates)
     overview_polyline = _extract_polyline(route.get("polyline"))
     route_url = build_google_maps_directions_url(
         origin_latitude=origin_latitude,
@@ -455,6 +528,7 @@ def parse_google_routes_compute_route(
         "step_count": len(steps),
         "start_coordinates": start_coordinates,
         "end_coordinates": end_coordinates,
+        "path_coordinates": path_coordinates,
         "overview_polyline": overview_polyline,
         "route_url": route_url,
         "maps_url": route_url,
@@ -494,6 +568,7 @@ def prepare_route_snapshot(payload: dict[str, Any], *, saved_at: str | None = No
         "origin": safe.get("origin") if isinstance(safe.get("origin"), dict) else {},
         "start_coordinates": safe.get("start_coordinates") if isinstance(safe.get("start_coordinates"), dict) else {},
         "end_coordinates": safe.get("end_coordinates") if isinstance(safe.get("end_coordinates"), dict) else {},
+        "path_coordinates": _normalize_path_coordinates(safe.get("path_coordinates")),
         "overview_polyline": str(safe.get("overview_polyline") or "").strip(),
         "route_url": route_url,
         "maps_url": route_url,

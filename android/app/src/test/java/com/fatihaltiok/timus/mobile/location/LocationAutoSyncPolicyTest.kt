@@ -75,7 +75,7 @@ class LocationAutoSyncPolicyTest {
             currentState = "ready",
             presenceStatus = "live",
             lastAttemptEpochMs = 0L,
-            nowEpochMs = 25_000L,
+            nowEpochMs = 15_000L,
             navigationModeActive = true,
         )
 

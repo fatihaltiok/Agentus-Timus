@@ -34,11 +34,11 @@ _TEMPLATE = r"""<!doctype html>
       overflow: hidden;
     }
     .shell {
-      display: grid;
-      grid-template-rows: auto auto 1fr;
+      display: flex;
+      flex-direction: column;
       height: 100%;
-      gap: 10px;
-      padding: 12px;
+      gap: 8px;
+      padding: 10px;
     }
     .card {
       border-radius: 18px;
@@ -46,12 +46,38 @@ _TEMPLATE = r"""<!doctype html>
       background: rgba(12, 28, 45, 0.94);
       box-shadow: 0 10px 30px rgba(0,0,0,0.28);
     }
+    .map-stage {
+      position: relative;
+      flex: 1 1 auto;
+      min-height: 320px;
+      overflow: hidden;
+    }
+    .map-hud {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      right: auto;
+      width: min(300px, calc(100% - 20px));
+      z-index: 6;
+      display: grid;
+      gap: 6px;
+      pointer-events: none;
+    }
+    .map-hud-card {
+      border-radius: 18px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(12, 28, 45, 0.88);
+      box-shadow: 0 10px 24px rgba(0,0,0,0.22);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      pointer-events: auto;
+    }
     .topbar {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 10px;
-      padding: 12px 14px;
+      gap: 8px;
+      padding: 8px 10px 6px;
     }
     .title {
       display: flex;
@@ -62,22 +88,22 @@ _TEMPLATE = r"""<!doctype html>
       color: var(--brand);
       letter-spacing: 0.06em;
       text-transform: uppercase;
-      font-size: 12px;
+      font-size: 11px;
     }
     .title span {
       color: var(--muted);
-      font-size: 12px;
+      font-size: 11px;
     }
     .toolbar {
       display: flex;
       flex-wrap: wrap;
-      gap: 8px;
-      padding: 0 14px 12px;
+      gap: 6px;
+      padding: 0 10px 8px;
     }
     .chip,
     .btn {
-      min-height: 34px;
-      padding: 0 12px;
+      min-height: 30px;
+      padding: 0 10px;
       border-radius: 999px;
       border: 1px solid rgba(255,255,255,0.08);
       background: rgba(6, 17, 27, 0.72);
@@ -86,7 +112,7 @@ _TEMPLATE = r"""<!doctype html>
       align-items: center;
       justify-content: center;
       gap: 6px;
-      font-size: 12px;
+      font-size: 11px;
     }
     .btn {
       cursor: pointer;
@@ -107,15 +133,17 @@ _TEMPLATE = r"""<!doctype html>
       font-size: 12px;
     }
     .summary {
-      padding: 0 14px 12px;
+      padding: 0 10px 8px;
       display: grid;
-      gap: 6px;
+      gap: 2px;
       color: var(--muted);
-      font-size: 12px;
+      font-size: 10px;
+      line-height: 1.35;
     }
     .map-wrap {
       position: relative;
-      min-height: 280px;
+      min-height: 0;
+      height: 100%;
       overflow: hidden;
       border-radius: 20px;
       border: 1px solid rgba(255,255,255,0.05);
@@ -150,7 +178,8 @@ _TEMPLATE = r"""<!doctype html>
       background: rgba(5, 12, 19, 0.26);
     }
     .footer {
-      padding: 10px 14px 14px;
+      display: none;
+      padding: 6px 12px 10px;
       color: var(--muted);
       font-size: 11px;
     }
@@ -158,25 +187,26 @@ _TEMPLATE = r"""<!doctype html>
 </head>
 <body>
   <div class="shell">
-    <section class="card">
-      <div class="topbar">
-        <div class="title">
-          <strong>Timus Navigation</strong>
-          <span id="headline">Warte auf aktive Route…</span>
+    <section class="card map-wrap map-stage">
+      <div class="map-hud">
+        <div class="map-hud-card">
+          <div class="topbar">
+            <div class="title">
+              <strong>Timus Navigation</strong>
+              <span id="headline">Warte auf aktive Route…</span>
+            </div>
+            <div class="chip" id="presenceChip">Standort unbekannt</div>
+          </div>
+          <div class="toolbar">
+            <button class="btn active" id="followBtn" type="button">Follow an</button>
+            <button class="btn secondary" id="refreshBtn" type="button">Neu laden</button>
+            <a class="btn" id="openMapsLink" href="#" target="_blank" rel="noopener noreferrer">Google Maps</a>
+          </div>
+          <div class="summary" id="summary">
+            <div>Status wird geladen…</div>
+          </div>
         </div>
-        <div class="chip" id="presenceChip">Standort unbekannt</div>
       </div>
-      <div class="toolbar">
-        <button class="btn active" id="followBtn" type="button">Follow an</button>
-        <button class="btn secondary" id="refreshBtn" type="button">Neu laden</button>
-        <a class="btn" id="openMapsLink" href="#" target="_blank" rel="noopener noreferrer">Google Maps</a>
-      </div>
-      <div class="summary" id="summary">
-        <div>Status wird geladen…</div>
-      </div>
-    </section>
-
-    <section class="card map-wrap">
       <div id="map" aria-label="Interaktive Route"></div>
       <img id="mapImage" alt="Statische Route" loading="eager" />
       <div id="overlay">Route wird geladen…</div>
@@ -189,6 +219,8 @@ _TEMPLATE = r"""<!doctype html>
     const POLL_MS = __POLL_MS__;
     let mapConfig = null;
     let googlePromise = null;
+    let directionsService = null;
+    let directionsCache = { key: "", path: [], promise: null };
     let map = null;
     let routePolyline = null;
     let stepPolyline = null;
@@ -198,6 +230,9 @@ _TEMPLATE = r"""<!doctype html>
     let lastRoute = null;
     let lastLocation = null;
     let followEnabled = true;
+    let staticImageObjectUrl = null;
+    const query = new URLSearchParams(window.location.search);
+    const forceStaticSurface = query.get("client") === "android" || query.get("surface") === "static";
 
     function api(path) {
       return fetch(path).then(async (response) => {
@@ -245,14 +280,168 @@ _TEMPLATE = r"""<!doctype html>
       if (overlay) overlay.style.display = "none";
     }
 
-    function showStaticMap(route) {
+    async function showStaticMap(route) {
       const image = document.getElementById("mapImage");
       const mapEl = document.getElementById("map");
       if (!image || !mapEl) return;
       mapEl.classList.remove("visible");
       image.classList.add("visible");
       const stamp = encodeURIComponent(String((route || {}).saved_at || Date.now()));
-      image.src = "/location/route/map?ts=" + stamp;
+      const target = "/location/route/map?ts=" + stamp;
+      try {
+        const response = await fetch(target, { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error("map_http_" + response.status);
+        }
+        const blob = await response.blob();
+        if (staticImageObjectUrl) {
+          URL.revokeObjectURL(staticImageObjectUrl);
+          staticImageObjectUrl = null;
+        }
+        staticImageObjectUrl = URL.createObjectURL(blob);
+        image.src = staticImageObjectUrl;
+      } catch (error) {
+        image.removeAttribute("src");
+        setOverlay("Kartenvorschau konnte nicht geladen werden: " + (error?.message || error));
+      }
+    }
+
+    function showInteractiveSurface() {
+      const image = document.getElementById("mapImage");
+      const mapEl = document.getElementById("map");
+      if (image) image.classList.remove("visible");
+      if (mapEl) mapEl.classList.add("visible");
+    }
+
+    function routePathCoordinates(route) {
+      const rawPoints = Array.isArray((route || {}).path_coordinates) ? route.path_coordinates : [];
+      const points = [];
+      rawPoints.forEach((value) => {
+        const point = coords(value);
+        if (!point) return;
+        const previous = points[points.length - 1];
+        if (
+          previous &&
+          Math.abs(previous.lat - point.lat) < 0.0000001 &&
+          Math.abs(previous.lng - point.lng) < 0.0000001
+        ) {
+          return;
+        }
+        points.push(point);
+      });
+      return points;
+    }
+
+    function routeHasInteractiveGeometry(route) {
+      const origin = coords((route || {}).start_coordinates || (route || {}).origin || {});
+      const destination = coords((route || {}).end_coordinates || {});
+      const destinationLabel = String(
+        (route || {}).destination_label ||
+        (route || {}).end_address ||
+        (route || {}).destination_query ||
+        ""
+      ).trim();
+      return Boolean(
+        String((route || {}).overview_polyline || "").trim() ||
+        routePathCoordinates(route).length > 1 ||
+        (origin && (destination || destinationLabel))
+      );
+    }
+
+    function directionsCacheKey(route) {
+      if (!route || !route.has_route) return "";
+      return JSON.stringify({
+        savedAt: String(route.saved_at || ""),
+        reroutedAt: String(route.last_reroute_at || ""),
+        travelMode: String(route.travel_mode || "driving"),
+        destinationLabel: String(route.destination_label || route.end_address || route.destination_query || ""),
+        origin: coords(route.start_coordinates || route.origin || {}),
+        destination: coords(route.end_coordinates || {}),
+      });
+    }
+
+    function travelModeForRoute(maps, route) {
+      const normalized = String((route || {}).travel_mode || "driving").trim().toLowerCase();
+      const travelMode = maps?.TravelMode || {};
+      if (normalized === "walking") return travelMode.WALKING || "WALKING";
+      if (normalized === "bicycling") return travelMode.BICYCLING || "BICYCLING";
+      if (normalized === "transit") return travelMode.TRANSIT || "TRANSIT";
+      return travelMode.DRIVING || "DRIVING";
+    }
+
+    function normalizeLatLng(value) {
+      if (!value) return null;
+      if (typeof value.lat === "function" && typeof value.lng === "function") {
+        return { lat: value.lat(), lng: value.lng() };
+      }
+      return coords(value);
+    }
+
+    async function computeBrowserRoutePath(maps, route) {
+      const cacheKey = directionsCacheKey(route);
+      if (!cacheKey || !maps?.DirectionsService) return [];
+      if (directionsCache.key === cacheKey) {
+        if (Array.isArray(directionsCache.path) && directionsCache.path.length) return directionsCache.path;
+        if (directionsCache.promise) {
+          try {
+            return await directionsCache.promise;
+          } catch {
+            return [];
+          }
+        }
+      }
+
+      const origin = coords(route.start_coordinates || route.origin || {});
+      const destination = coords(route.end_coordinates || {});
+      const destinationLabel = String(
+        route.destination_label || route.end_address || route.destination_query || ""
+      ).trim();
+      if (!origin || (!destination && !destinationLabel)) return [];
+
+      directionsService = directionsService || new maps.DirectionsService();
+      const request = {
+        origin,
+        destination: destination || destinationLabel,
+        travelMode: travelModeForRoute(maps, route),
+        provideRouteAlternatives: false,
+      };
+      if (maps.UnitSystem?.METRIC) request.unitSystem = maps.UnitSystem.METRIC;
+      if (String(route.language_code || "").trim()) request.region = String(route.language_code).trim();
+
+      const promise = new Promise((resolve) => {
+        directionsService.route(request, (response, status) => {
+          const okStatus = status === "OK" || status === maps.DirectionsStatus?.OK;
+          if (!okStatus) {
+            resolve([]);
+            return;
+          }
+          const overviewPath = Array.isArray((response?.routes || [])[0]?.overview_path)
+            ? response.routes[0].overview_path
+            : [];
+          resolve(
+            overviewPath
+              .map(normalizeLatLng)
+              .filter(Boolean),
+          );
+        });
+      });
+      directionsCache = { key: cacheKey, path: [], promise };
+      const path = await promise;
+      directionsCache = { key: cacheKey, path, promise: null };
+      return path;
+    }
+
+    async function decodeRoutePath(maps, route) {
+      const polyline = String((route || {}).overview_polyline || "").trim();
+      if (polyline && maps?.geometry?.encoding) {
+        try {
+          const decoded = maps.geometry.encoding.decodePath(polyline) || [];
+          if (decoded.length) return decoded;
+        } catch {}
+      }
+      const browserPath = await computeBrowserRoutePath(maps, route);
+      if (browserPath.length) return browserPath;
+      return routePathCoordinates(route);
     }
 
     async function loadMapConfig() {
@@ -326,7 +515,6 @@ _TEMPLATE = r"""<!doctype html>
       if (summary) {
         summary.innerHTML = [
           `<div><strong>Von</strong> ${esc(route.start_address || ((route.origin || {}).display_name) || "Start")}</div>`,
-          `<div><strong>Nach</strong> ${esc(route.end_address || route.destination_query || "Ziel")}</div>`,
           `<div><strong>ETA</strong> ${esc(route.duration_text || "–")} · <strong>Distanz</strong> ${esc(route.distance_text || "–")} · <strong>Modus</strong> ${esc(route.travel_mode || "driving")}</div>`,
         ].join("");
       }
@@ -373,6 +561,35 @@ _TEMPLATE = r"""<!doctype html>
       }
     }
 
+    function settleMapViewport(maps, bounds) {
+      if (!map) return;
+      const applyViewport = () => {
+        if (!map) return;
+        if (followEnabled) {
+          const live = activeLiveLocation();
+          if (live) {
+            map.panTo(live);
+            const zoom = Number(map.getZoom() || 0);
+            if (zoom < 15) map.setZoom(15);
+            return;
+          }
+        }
+        if (bounds && !bounds.isEmpty()) {
+          map.fitBounds(bounds, 36);
+        }
+      };
+      if (maps.event?.trigger) {
+        maps.event.trigger(map, "resize");
+      }
+      applyViewport();
+      window.setTimeout(() => {
+        if (maps.event?.trigger) {
+          maps.event.trigger(map, "resize");
+        }
+        applyViewport();
+      }, 140);
+    }
+
     async function renderRoute() {
       renderSummary();
       const route = lastRoute || {};
@@ -387,39 +604,46 @@ _TEMPLATE = r"""<!doctype html>
       }
 
       const config = await loadMapConfig().catch(() => ({ interactive_available: false }));
-        if (!config.interactive_available || !route.overview_polyline) {
-          showStaticMap(route);
+        if (forceStaticSurface || !config.interactive_available || !routeHasInteractiveGeometry(route)) {
+          await showStaticMap(route);
           hideOverlay();
           const footer = document.getElementById("footerNote");
-          if (footer) footer.textContent = "Static fallback aktiv · interaktive Route nicht verfuegbar.";
+          if (footer) {
+            footer.textContent = forceStaticSurface
+              ? "Android static live view aktiv."
+              : "Static fallback aktiv · interaktive Route nicht verfuegbar.";
+          }
           return;
         }
 
         const maps = await ensureGoogleLoaded().catch(() => null);
-        if (!maps || !maps.geometry || !maps.geometry.encoding) {
-          showStaticMap(route);
+        if (!maps) {
+          await showStaticMap(route);
           hideOverlay();
           const footer = document.getElementById("footerNote");
           if (footer) footer.textContent = "Static fallback aktiv · Google Maps JS derzeit nicht verfuegbar.";
           return;
         }
 
-        const decodedPath = maps.geometry.encoding.decodePath(route.overview_polyline || "");
+        const decodedPath = await decodeRoutePath(maps, route);
         if (!decodedPath.length) {
-          showStaticMap(route);
+          await showStaticMap(route);
           hideOverlay();
           const footer = document.getElementById("footerNote");
           if (footer) footer.textContent = "Static fallback aktiv · Routengeometrie fehlt.";
           return;
         }
 
+      showInteractiveSurface();
+
       if (!map) {
         map = new maps.Map(document.getElementById("map"), {
           center: decodedPath[0],
           zoom: 13,
-          mapTypeControl: false,
+          zoomControl: true,
+          mapTypeControl: true,
           streetViewControl: false,
-          fullscreenControl: false,
+          fullscreenControl: true,
           clickableIcons: false,
           gestureHandling: "greedy",
           backgroundColor: "#07111a",
@@ -448,8 +672,8 @@ _TEMPLATE = r"""<!doctype html>
         map.fitBounds(bounds, 52);
       }
       renderLiveMarker(maps);
-      if (image) image.classList.remove("visible");
-      if (mapEl) mapEl.classList.add("visible");
+      showInteractiveSurface();
+      settleMapViewport(maps, bounds);
       hideOverlay();
       const footer = document.getElementById("footerNote");
       if (footer) {

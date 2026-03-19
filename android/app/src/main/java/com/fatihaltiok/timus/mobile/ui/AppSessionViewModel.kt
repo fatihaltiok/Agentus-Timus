@@ -299,6 +299,7 @@ class AppSessionViewModel(
     fun autoSyncLocationIfDue(
         locationClient: TimusLocationClient,
         permissionGranted: Boolean,
+        navigationModeActive: Boolean,
         nowEpochMs: Long = System.currentTimeMillis(),
     ) {
         val state = _uiState.value
@@ -309,6 +310,7 @@ class AppSessionViewModel(
             presenceStatus = state.location.lastResolvedLocation?.presenceStatus,
             lastAttemptEpochMs = lastLocationAutoSyncAttemptMs,
             nowEpochMs = nowEpochMs,
+            navigationModeActive = navigationModeActive,
         )
         if (!decision.shouldSync) return
         refreshLocationInternal(locationClient, silent = true, nowEpochMs = nowEpochMs)

@@ -323,6 +323,7 @@ class SessionMemory:
         self.last_user_goal: Optional[str] = None
         self.open_threads: List[str] = []
         self.topic_scores: Dict[str, float] = {}
+        self.pending_followup_prompt: str = ""
     
     def add_message(self, role: str, content: str):
         """Fügt eine Nachricht hinzu."""
@@ -433,6 +434,34 @@ class SessionMemory:
             remaining.append(thread)
         self.open_threads = remaining[:5]
 
+    def _extract_pending_followup_prompt(self, assistant_response: str) -> str:
+        source = self._normalize_text(assistant_response)
+        if not source:
+            return ""
+
+        lines = [line.strip() for line in str(assistant_response or "").splitlines() if line.strip()]
+        question_like: List[str] = []
+        for line in lines:
+            cleaned = re.sub(r"^\s*(?:[-*•]\s*|\d+\.\s*)", "", line).strip()
+            if len(cleaned) < 12:
+                continue
+            if "?" in cleaned:
+                question_like.append(cleaned)
+                continue
+            lowered = cleaned.lower()
+            if re.search(r"\b(soll ich|willst du|magst du|möchtest du|moechtest du|welchen schritt|was soll ich)\b", lowered):
+                question_like.append(cleaned)
+
+        if question_like:
+            return question_like[-1][:280]
+
+        sentences = [part.strip(" -\t\r\n") for part in re.split(r"(?<=[.!?])\s+", source) if part.strip()]
+        for sentence in reversed(sentences):
+            lowered = sentence.lower()
+            if "?" in sentence or re.search(r"\b(soll ich|willst du|magst du|möchtest du|moechtest du)\b", lowered):
+                return sentence[:280]
+        return ""
+
     def update_dialog_state(
         self,
         user_input: str,
@@ -442,6 +471,7 @@ class SessionMemory:
         user_text = self._normalize_text(user_input)
         if not user_text:
             return
+        self.pending_followup_prompt = ""
 
         # Vergessen mit weichem Decay: alte Themen verlieren langsam Gewicht.
         decayed: Dict[str, float] = {}
@@ -468,6 +498,10 @@ class SessionMemory:
         elif status.lower() == "completed":
             self._resolve_open_threads(user_text)
 
+        pending_prompt = self._extract_pending_followup_prompt(assistant_response)
+        if pending_prompt:
+            self.pending_followup_prompt = pending_prompt
+
     def get_dynamic_state(self) -> Dict[str, Any]:
         ranked_topics = sorted(
             self.topic_scores.items(), key=lambda item: item[1], reverse=True
@@ -476,6 +510,7 @@ class SessionMemory:
             "current_topic": self.current_topic or "",
             "last_user_goal": self.last_user_goal or "",
             "open_threads": self.open_threads[:5],
+            "pending_followup_prompt": self.pending_followup_prompt or "",
             "top_topics": [topic for topic, _ in ranked_topics[:6]],
         }
 
@@ -486,6 +521,8 @@ class SessionMemory:
             lines.append(f"Aktuelles Thema: {state['current_topic']}")
         if state["open_threads"]:
             lines.append("Offene Anliegen: " + " | ".join(state["open_threads"][:3]))
+        if state["pending_followup_prompt"]:
+            lines.append(f"Offene Rueckfrage: {state['pending_followup_prompt'][:220]}")
         if state["last_user_goal"]:
             lines.append(f"Letztes Ziel: {state['last_user_goal']}")
         if state["top_topics"]:
@@ -500,6 +537,7 @@ class SessionMemory:
         self.last_user_goal = None
         self.open_threads = []
         self.topic_scores = {}
+        self.pending_followup_prompt = ""
         self.session_start = datetime.now()
 
 

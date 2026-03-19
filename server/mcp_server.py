@@ -214,6 +214,23 @@ _AFFIRMATION_PATTERNS = (
     r"\bauf\s+jeden\s+fall\b",
 )
 
+_SHORT_CONTEXTUAL_REPLY_PATTERNS = (
+    r"^\s*die\s+erste(?:\s+option)?\s*$",
+    r"^\s*die\s+zweite(?:\s+option)?\s*$",
+    r"^\s*die\s+dritte(?:\s+option)?\s*$",
+    r"^\s*den\s+ersten\s*$",
+    r"^\s*den\s+zweiten\s*$",
+    r"^\s*den\s+dritten\s*$",
+    r"^\s*das\s+erste\s*$",
+    r"^\s*das\s+zweite\s*$",
+    r"^\s*beide?s?\s*$",
+    r"^\s*weiter(?:\s+damit)?\s*$",
+    r"^\s*mach\s+weiter\s*$",
+    r"^\s*erstmal\s+das\s*$",
+    r"^\s*nimm\s+die\s+erste\s*$",
+    r"^\s*nimm\s+die\s+zweite\s*$",
+)
+
 # P4: Angebots-Muster am Ende einer Assistenten-Antwort
 _PROPOSAL_TRIGGER_PATTERNS = (
     r"\bsoll\s+ich\b",
@@ -659,6 +676,45 @@ def _store_proposal_in_capsule(session_id: str, proposal: dict | None) -> None:
     _store_session_capsule(capsule)
 
 
+def _store_pending_followup_prompt_in_capsule(session_id: str, prompt: str) -> None:
+    """Speichert eine offene Rueckfrage explizit fuer den naechsten Turn."""
+    capsule = _load_session_capsule(session_id)
+    cleaned = str(prompt or "").strip()
+    if cleaned:
+        capsule["pending_followup_prompt"] = cleaned[:280]
+    else:
+        capsule.pop("pending_followup_prompt", None)
+    _store_session_capsule(capsule)
+
+
+def _log_chat_interaction(
+    *,
+    session_id: str,
+    user_input: str,
+    assistant_response: str,
+    agent: str = "",
+    status: str = "completed",
+    metadata: dict | None = None,
+) -> None:
+    try:
+        from memory.memory_system import memory_manager
+
+        memory_manager.log_interaction_event(
+            user_input=user_input,
+            assistant_response=assistant_response,
+            agent_name=agent,
+            status=status,
+            external_session_id=session_id,
+            metadata=metadata or {},
+        )
+    except Exception as exc:
+        log.debug(
+            "Chat interaction memory logging failed for session %s: %s",
+            session_id,
+            exc,
+        )
+
+
 def _tokenize_followup_focus(text: str) -> list[str]:
     normalized = str(text or "").lower()
     tokens = re.findall(r"[a-zA-Z0-9äöüÄÖÜß_-]+", normalized)
@@ -766,9 +822,52 @@ def _match_assistant_reply_points(query: str, replies: list[str]) -> list[str]:
     return matched
 
 
+def _extract_pending_followup_prompt(text: str) -> str:
+    source = str(text or "").strip()
+    if not source:
+        return ""
+
+    lines = [line.strip() for line in source.splitlines() if line.strip()]
+    question_like: list[str] = []
+    for line in lines:
+        cleaned = re.sub(r"^\s*(?:[-*•]\s*|\d+\.\s*)", "", line).strip()
+        if len(cleaned) < 12:
+            continue
+        lowered = cleaned.lower()
+        if "?" in cleaned:
+            question_like.append(cleaned)
+            continue
+        if re.search(r"\b(soll ich|willst du|magst du|möchtest du|moechtest du|welchen schritt|was soll ich)\b", lowered):
+            question_like.append(cleaned)
+
+    if question_like:
+        return question_like[-1][:280]
+
+    sentences = [part.strip(" -\t\r\n") for part in re.split(r"(?<=[.!?])\s+", source) if part.strip()]
+    for sentence in reversed(sentences):
+        lowered = sentence.lower()
+        if "?" in sentence or re.search(r"\b(soll ich|willst du|magst du|möchtest du|moechtest du)\b", lowered):
+            return sentence[:280]
+    return ""
+
+
+def _is_short_contextual_reply(query: str, capsule: dict) -> bool:
+    normalized = str(query or "").strip().lower()
+    if not normalized:
+        return False
+    if len(normalized.split()) > 12:
+        return False
+    pending_prompt = str(capsule.get("pending_followup_prompt") or "").strip()
+    if not pending_prompt and not capsule.get("last_proposed_action"):
+        return False
+    if any(re.search(pattern, normalized) for pattern in _AFFIRMATION_PATTERNS):
+        return True
+    return any(re.search(pattern, normalized) for pattern in _SHORT_CONTEXTUAL_REPLY_PATTERNS)
+
+
 def _build_followup_capsule(session_id: str, query: str = "") -> dict:
     capsule = _load_session_capsule(session_id)
-    entries = _get_session_chat_entries(session_id, limit=12)
+    entries = _get_session_chat_entries(session_id, limit=16)
     last_user = ""
     last_assistant = ""
     last_agent = ""
@@ -822,6 +921,9 @@ def _build_followup_capsule(session_id: str, query: str = "") -> dict:
 
     # P4: gespeichertes Angebot aus Kapsel lesen
     last_proposed_action: dict | None = capsule.get("last_proposed_action") or None
+    pending_followup_prompt = str(capsule.get("pending_followup_prompt") or "").strip()
+    if not pending_followup_prompt and last_assistant:
+        pending_followup_prompt = _extract_pending_followup_prompt(last_assistant)
 
     return {
         "session_id": session_id,
@@ -830,10 +932,11 @@ def _build_followup_capsule(session_id: str, query: str = "") -> dict:
         "last_agent": last_agent,
         "session_summary": str(capsule.get("summary") or "").strip(),
         "recent_user_queries": recent_user_queries[-3:],
-        "recent_assistant_replies": recent_assistant_replies[-2:],
+        "recent_assistant_replies": recent_assistant_replies[-3:],
         "recent_agents": recent_agents[-3:],
         "matched_reply_points": matched_reply_points,
         "inherited_topic_recall": inherited_topic_recall,
+        "pending_followup_prompt": pending_followup_prompt,
         "last_proposed_action": last_proposed_action,
         "semantic_recall": semantic_recall,
     }
@@ -843,11 +946,12 @@ def _resolve_followup_agent(query: str, capsule: dict[str, str]) -> str:
     normalized = str(query or "").strip().lower()
     is_followup = _is_followup_query(normalized)
     is_contextual_recall = _is_contextual_recall_query(normalized)
+    is_short_contextual_reply = _is_short_contextual_reply(normalized, capsule)
     is_capability_followup = _is_capability_followup_query(
         normalized,
         str(capsule.get("last_assistant") or ""),
     )
-    if not (is_followup or is_contextual_recall or is_capability_followup):
+    if not (is_followup or is_contextual_recall or is_short_contextual_reply or is_capability_followup):
         return ""
     matched_reply_points = capsule.get("matched_reply_points") or []
     last_agent = str(capsule.get("last_agent") or "").strip().lower()
@@ -857,6 +961,8 @@ def _resolve_followup_agent(query: str, capsule: dict[str, str]) -> str:
         return "executor"
     if is_contextual_recall and matched_reply_points:
         return "executor"
+    if is_short_contextual_reply and last_agent:
+        return last_agent
     if last_agent == "executor":
         return "executor"
     if last_agent in {"system", "research", "communication", "document", "data"}:
@@ -873,6 +979,7 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
     is_affirm = _is_affirmation(query)
     is_followup = _is_followup_query(query)
     is_recall = _is_contextual_recall_query(query)
+    is_short_contextual_reply = _is_short_contextual_reply(query, capsule)
     is_capability_followup = _is_capability_followup_query(
         query,
         str(capsule.get("last_assistant") or ""),
@@ -897,7 +1004,7 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
         return "\n".join(parts)
 
     # P2/P3/normale Follow-up: Kontext aufbauen
-    if not (is_followup or is_recall or is_ref or is_capability_followup):
+    if not (is_followup or is_recall or is_ref or is_short_contextual_reply or is_capability_followup):
         return query
 
     last_agent = str(capsule.get("last_agent") or "").strip()
@@ -911,6 +1018,7 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
     matched_reply_points = capsule.get("matched_reply_points") or []
     inherited_topic_recall = capsule.get("inherited_topic_recall") or []
     semantic_recall = capsule.get("semantic_recall") or []
+    pending_followup_prompt = str(capsule.get("pending_followup_prompt") or "").strip()
 
     if not (
         last_agent
@@ -922,6 +1030,7 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
         or matched_reply_points
         or inherited_topic_recall
         or semantic_recall
+        or pending_followup_prompt
     ):
         return query
 
@@ -933,9 +1042,9 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
     if last_user:
         parts.append(f"last_user: {last_user[:300]}")
     if last_assistant:
-        parts.append(f"last_assistant: {last_assistant[:500]}")
+        parts.append(f"last_assistant: {last_assistant[:900]}")
     if session_summary:
-        parts.append(f"session_summary: {session_summary[:800]}")
+        parts.append(f"session_summary: {session_summary[:1600]}")
     if recent_agents:
         parts.append("recent_agents: " + " | ".join(str(agent) for agent in recent_agents[:3]))
     if recent_user_queries:
@@ -943,7 +1052,7 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
     if recent_assistant_replies:
         parts.append(
             "recent_assistant_replies: "
-            + " || ".join(str(text) for text in recent_assistant_replies[:2])
+            + " || ".join(str(text) for text in recent_assistant_replies[:3])
         )
     # matched_reply_points hat Vorrang; inherited_topic_recall ist Fallback für P2
     effective_recall = matched_reply_points or inherited_topic_recall
@@ -966,6 +1075,8 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
             recall_lines.append(f"{label} => {text[:220]}")
         if recall_lines:
             parts.append("semantic_recall: " + " || ".join(recall_lines))
+    if pending_followup_prompt:
+        parts.append(f"pending_followup_prompt: {pending_followup_prompt[:320]}")
     parts.extend(["", "# CURRENT USER QUERY", query])
     return "\n".join(parts)
 
@@ -2801,6 +2912,29 @@ async def canvas_chat(request: Request):
         # (bei Zustimmung in der nächsten Runde direkt auflösen)
         proposal = _extract_proposal_metadata(reply)
         _store_proposal_in_capsule(session_id, proposal)
+        pending_followup_prompt = _extract_pending_followup_prompt(reply)
+        _store_pending_followup_prompt_in_capsule(session_id, pending_followup_prompt)
+        _log_chat_interaction(
+            session_id=session_id,
+            user_input=query,
+            assistant_response=reply,
+            agent=agent,
+            metadata={
+                "dispatcher_query_kind": (
+                    "resolved_proposal"
+                    if dispatcher_query.startswith("# RESOLVED_PROPOSAL")
+                    else "followup"
+                    if dispatcher_query.startswith("# FOLLOW-UP CONTEXT")
+                    else "plain"
+                ),
+                "followup_agent": followup_agent,
+                "location_context_injected": bool(
+                    location_decision.should_inject and isinstance(location_snapshot, dict)
+                ),
+                "pending_followup_prompt": pending_followup_prompt,
+                "response_language": response_language,
+            },
+        )
 
         _broadcast_sse({"type": "chat_reply", "agent": agent, "text": reply, "ts": reply_ts})
         return {"status": "success", "agent": agent, "reply": reply, "session_id": session_id}

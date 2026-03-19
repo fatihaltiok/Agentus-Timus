@@ -25,6 +25,8 @@ def test_canvas_ui_contains_route_panel_and_map_endpoint() -> None:
     assert "highlightRouteStep(" in html
     assert "clearRouteStepHighlight()" in html
     assert "_renderRouteMapLiveMarker(" in html
+    assert "function _routeMapHasInteractiveGeometry" in html
+    assert "function _routeMapDecodedPath" in html
 
 
 def test_canvas_ui_registers_route_map_endpoint() -> None:

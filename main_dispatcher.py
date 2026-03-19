@@ -844,7 +844,6 @@ REASONING_KEYWORDS = [
     # Vergleiche
     "vs",
     "versus",
-    "oder",
     "vergleiche",
     "vergleich",
     "unterschied zwischen",
@@ -875,8 +874,6 @@ REASONING_KEYWORDS = [
     "tradeoff",
     "abwägung",
     # Architektur
-    "soll ich",
-    "sollte ich",
     "welche technologie",
     "welches framework",
     "architektur",
@@ -1344,6 +1341,12 @@ SELF_STATUS_KEYWORDS = [
     "welche probleme gibt es",
     "was ist los",
     "wo hakt es",
+    "hast du etwas zu korrigieren",
+    "hast du etwas zu fixen",
+    "hast du etwas zu beheben",
+    "musst du etwas korrigieren",
+    "musst du etwas fixen",
+    "musst du etwas beheben",
 ]
 
 SELF_REMEDIATION_KEYWORDS = [
@@ -1354,6 +1357,15 @@ SELF_REMEDIATION_KEYWORDS = [
     "wie willst du das beheben",
     "und was jetzt",
     "was machst du jetzt dagegen",
+    "was willst du korrigieren",
+    "was willst du fixen",
+    "was willst du beheben",
+    "was kannst du korrigieren",
+    "was kannst du fixen",
+    "was kannst du beheben",
+    "zu korrigieren oder fixen",
+    "zu korrigieren oder beheben",
+    "zu fixen oder beheben",
 ]
 
 SELF_PRIORITY_KEYWORDS = [
