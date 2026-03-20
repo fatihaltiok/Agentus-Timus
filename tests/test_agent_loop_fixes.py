@@ -113,9 +113,10 @@ def test_reasoning_prompt_has_format_rule():
     from agent.prompts import REASONING_PROMPT_TEMPLATE
     assert "FORMAT" in REASONING_PROMPT_TEMPLATE
 
-def test_research_prompt_updated_iterations():
+def test_research_prompt_uses_dynamic_iteration_budget():
     from agent.prompts import DEEP_RESEARCH_PROMPT_TEMPLATE
-    assert "6" in DEEP_RESEARCH_PROMPT_TEMPLATE
+    assert "{deep_research_max_iterations}" in DEEP_RESEARCH_PROMPT_TEMPLATE
+    assert "max 6 Iterationen" not in DEEP_RESEARCH_PROMPT_TEMPLATE
 
 def test_research_prompt_has_format_rule():
     from agent.prompts import DEEP_RESEARCH_PROMPT_TEMPLATE

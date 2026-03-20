@@ -4,7 +4,8 @@ DeepResearchAgent — Tiefenrecherche, Faktenprüfung, strukturierte Reports.
 Erweiterungen gegenüber BaseAgent:
   - Kontext: Aktive Ziele (Recherche fokussieren), Blackboard (Duplikat vermeiden),
     letzte CuriosityEngine-Topics
-  - max_iterations=8 bleibt (Research-Tools übernehmen die Schwerarbeit)
+  - DeepResearch-Loop ist env-konfigurierbar, Default 24 Iterationen
+  - Bounded multi-pass workflow statt starrem 3-Schritt-Schema
   - _call_tool-Override: session_id automatisch weiterreichen (unverändert)
   - Kompakter Kontext — Research produziert selbst viele Tokens
 """
@@ -14,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
@@ -24,6 +26,68 @@ from agent.prompts import DEEP_RESEARCH_PROMPT_TEMPLATE
 from agent.shared.delegation_handoff import DelegationHandoff, parse_delegation_handoff
 
 log = logging.getLogger("DeepResearchAgent")
+
+
+DEFAULT_DEEP_RESEARCH_MAX_ITERATIONS = 24
+MIN_DEEP_RESEARCH_MAX_ITERATIONS = 6
+MAX_DEEP_RESEARCH_MAX_ITERATIONS = 48
+
+
+@dataclass(frozen=True)
+class DeepResearchLoopLimits:
+    max_iterations: int
+    max_research_passes: int
+    max_report_attempts: int
+
+
+def normalize_deep_research_max_iterations(
+    raw_value: str | None,
+    *,
+    default: int = DEFAULT_DEEP_RESEARCH_MAX_ITERATIONS,
+    minimum: int = MIN_DEEP_RESEARCH_MAX_ITERATIONS,
+    maximum: int = MAX_DEEP_RESEARCH_MAX_ITERATIONS,
+) -> int:
+    """Normalisiert das Iterationsbudget auf sichere, begrenzte Integer-Werte."""
+    text = str(raw_value or "").strip()
+    if not text:
+        return default
+    try:
+        parsed = int(text)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, parsed))
+
+
+def resolve_deep_research_loop_limits(raw_value: str | None) -> DeepResearchLoopLimits:
+    """
+    Leitet aus dem Iterationsbudget sichere Workflow-Grenzen ab.
+
+    24 Iterationen erlauben mehrere gezielte Recherche-Paesse, halten aber
+    genug Reserve fuer Parse-Reparaturen, Report-Retries und Finalisierung.
+    """
+    max_iterations = normalize_deep_research_max_iterations(raw_value)
+    max_research_passes = max(1, min(3, max_iterations // 8))
+    max_report_attempts = 2 if max_iterations >= 12 else 1
+    return DeepResearchLoopLimits(
+        max_iterations=max_iterations,
+        max_research_passes=max_research_passes,
+        max_report_attempts=max_report_attempts,
+    )
+
+
+def build_deep_research_system_prompt(loop_limits: DeepResearchLoopLimits) -> str:
+    return (
+        DEEP_RESEARCH_PROMPT_TEMPLATE
+        .replace("{deep_research_max_iterations}", str(loop_limits.max_iterations))
+        .replace(
+            "{deep_research_max_research_passes}",
+            str(loop_limits.max_research_passes),
+        )
+        .replace(
+            "{deep_research_max_report_attempts}",
+            str(loop_limits.max_report_attempts),
+        )
+    )
 
 
 class DeepResearchAgent(BaseAgent):
@@ -37,14 +101,22 @@ class DeepResearchAgent(BaseAgent):
     """
 
     def __init__(self, tools_description_string: str) -> None:
+        loop_limits = self._runtime_loop_limits()
         super().__init__(
-            DEEP_RESEARCH_PROMPT_TEMPLATE,
+            build_deep_research_system_prompt(loop_limits),
             tools_description_string,
-            max_iterations=6,   # 3 Schritte nötig (start → report → final), 6 = sicherer Puffer
+            max_iterations=loop_limits.max_iterations,
             agent_type="deep_research",
         )
         self.http_client = httpx.AsyncClient(timeout=600.0)
         self.current_session_id: Optional[str] = None
+        self.loop_limits = loop_limits
+
+    @classmethod
+    def _runtime_loop_limits(cls) -> DeepResearchLoopLimits:
+        return resolve_deep_research_loop_limits(
+            os.getenv("DEEP_RESEARCH_MAX_ITERATIONS")
+        )
 
     @staticmethod
     def _max_retry_attempts() -> int:

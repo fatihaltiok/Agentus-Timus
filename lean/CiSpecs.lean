@@ -82,6 +82,15 @@ theorem research_timeout_maps_to_partial : 1 = 1 := by omega
 -- Quelle: agent/agent_registry.py:_timeout_status_for_agent
 theorem nonresearch_timeout_maps_to_error : 0 = 0 := by omega
 
+-- 3k2. DeepResearch-Iterationsbudget wird sicher auf [6, 48] geklemmt
+-- Quelle: agent/agents/research.py:normalize_deep_research_max_iterations
+theorem deep_research_iteration_lower (v : Int) : 6 ≤ max 6 (min 48 v) := by omega
+theorem deep_research_iteration_upper (v : Int) : max 6 (min 48 v) ≤ 48 := by omega
+
+-- 3k3. Der Default erlaubt 3 Recherche-Paesse, 2 Report-Versuche und Finalisierung
+-- Quelle: agent/agents/research.py:resolve_deep_research_loop_limits
+theorem deep_research_default_iteration_budget_supports_guardrails : 3 + 2 + 1 ≤ 24 := by omega
+
 -- 3l. Research Contract v2: Confidence bleibt im Bereich [0, 100] als Int-Skala
 -- Quelle: tools/deep_research/research_contracts.py:aggregate_overall_confidence
 theorem research_confidence_lower (v : Int) : 0 ≤ max 0 (min 100 v) := by omega
