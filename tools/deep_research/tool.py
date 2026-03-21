@@ -1600,12 +1600,12 @@ Antworte als JSON:
 def get_adaptive_config(query: str, focus_areas: Optional[List[str]]) -> Dict[str, Any]:
     """Gibt adaptive Konfiguration zurück."""
     return {
-        "max_initial_search_queries": 5,
-        "max_results_per_search_query": 8,
-        "max_sources_to_deep_dive": 8,  # Erhöht für bessere Analyse
+        "max_initial_search_queries": 12,
+        "max_results_per_search_query": 15,
+        "max_sources_to_deep_dive": 20,
         "max_depth_for_links": 2,
         "max_chunks_per_source_for_facts": 3,
-        "parallel_source_analysis_limit": 2
+        "parallel_source_analysis_limit": 4
     }
 
 
@@ -1839,6 +1839,17 @@ def _build_research_plan(query: str, focus_areas: Optional[List[str]], session: 
     if alias_terms:
         variants.append(f"{query_norm} {' '.join(alias_terms[:3])}")
 
+    if lang == "de":
+        variants.append(f"{query_norm} studie analyse evidenz statistik")
+        variants.append(f"{query_norm} marktbericht branchenbericht daten")
+        variants.append(f"{query_norm} wissenschaftliche forschung ergebnisse")
+        variants.append(f"{query_norm} praxiserfahrung anwendung ergebnis")
+    else:
+        variants.append(f"{query_norm} study analysis evidence statistics")
+        variants.append(f"{query_norm} market report industry data whitepaper")
+        variants.append(f"{query_norm} research findings methodology")
+        variants.append(f"{query_norm} practical application results implementation")
+
     subquestions = [
         f"Welche Primaer- oder belastbaren Sekundaerquellen beantworten '{query_norm}' direkt?",
     ]
@@ -1865,7 +1876,7 @@ def _build_research_plan(query: str, focus_areas: Optional[List[str]], session: 
         domain=domain,
         profile=profile,
         scope_mode=scope_mode,
-        query_variants=_unique_texts(variants)[:5],
+        query_variants=_unique_texts(variants)[:12],
         focus_terms=focus_terms,
         anchor_terms=anchor_terms,
         include_terms=include_terms,
@@ -1999,7 +2010,7 @@ async def _perform_initial_search(query: str, session: DeepResearchSession) -> L
                 "search_web",
                 {
                     "query": q,
-                    "max_results": 8,
+                    "max_results": 15,
                     "engine": "google",
                     "vertical": "organic",
                     "location_code": location_code,
@@ -2011,7 +2022,7 @@ async def _perform_initial_search(query: str, session: DeepResearchSession) -> L
             logger.error(f"Suchfehler ({q[:40]}): {e}")
             return None
 
-    search_results = await asyncio.gather(*[_single_search(q) for q in queries[:5]])
+    search_results = await asyncio.gather(*[_single_search(q) for q in queries[:12]])
 
     for result in search_results:
         if result is None:
@@ -2028,7 +2039,7 @@ async def _perform_initial_search(query: str, session: DeepResearchSession) -> L
         from tools.deep_research.diagnostics import get_current
         diag = get_current()
         if diag is not None:
-            diag.n_queries_issued = min(len(queries), 5)
+            diag.n_queries_issued = min(len(queries), 12)
     except Exception:
         pass
 
@@ -2067,6 +2078,16 @@ async def _perform_initial_search(query: str, session: DeepResearchSession) -> L
             score += 0.1
         if any(social in url_lower for social in ["facebook.com", "twitter.com", "instagram.com", "tiktok.com"]):
             score -= 0.22
+        if "arxiv.org" in url_lower:
+            score += 0.22
+        if "github.com" in url_lower:
+            score += 0.12
+        if any(d in url_lower for d in ["nature.com", "sciencedirect.com", "springer.com", "wiley.com"]):
+            score += 0.20
+        if any(d in url_lower for d in ["reuters.com", "bloomberg.com", "ft.com"]):
+            score += 0.12
+        if any(d in url_lower for d in ["statista.com", "gartner.com", "mckinsey.com"]):
+            score += 0.15
         if must_hits >= 1:
             score += 0.18
         score += min(anchor_hits * 0.08 + focus_hits * 0.08 + include_hits * 0.04 + related_hits * 0.03, 0.46)
@@ -2101,7 +2122,137 @@ async def _perform_initial_search(query: str, session: DeepResearchSession) -> L
     except Exception:
         pass
 
-    return final_results[:20]
+    return final_results[:35]
+
+
+async def _run_gap_filling_search(
+    session: "DeepResearchSession",
+    config: Dict[str, Any],
+    semaphore: asyncio.Semaphore,
+) -> None:
+    """
+    Phase 3.5: Gap-Filling-Suche — wird aktiviert wenn < 15 Roh-Fakten ODER < 10 Quellen
+    im Research-Tree. Führt 5 gezielte Zusatzsuchen durch und verarbeitet bis zu 8 neue Quellen.
+    """
+    facts_count = len(session.all_extracted_facts_raw)
+    tree_count = len(session.research_tree)
+
+    if facts_count >= 15 and tree_count >= 10:
+        logger.info(f"✅ Phase 3.5 übersprungen (Fakten={facts_count}, Quellen={tree_count})")
+        return
+
+    logger.info(f"🔎 Phase 3.5: Gap-Filling-Suche startet (Fakten={facts_count}, Quellen={tree_count})")
+
+    plan = _ensure_research_plan(session)
+    lang = plan.query_language
+    location_code = _LANG_LOCATION_MAP.get(lang, 2276)
+    language_code = _LANG_CODE_MAP.get(lang, "de")
+
+    gap_queries: List[str] = [
+        f"{session.query} expert review analysis",
+        f"{session.query} statistics data 2024 2025",
+        f"{session.query} case study application",
+    ]
+    for sq in (plan.subquestions or [])[:2]:
+        gap_queries.append(sq)
+
+    async def _single_gap_search(q: str) -> Optional[Any]:
+        try:
+            return await call_tool_internal(
+                "search_web",
+                {
+                    "query": q,
+                    "max_results": 10,
+                    "engine": "google",
+                    "vertical": "organic",
+                    "location_code": location_code,
+                    "language_code": language_code,
+                },
+                timeout=DEFAULT_TIMEOUT_SEARCH,
+            )
+        except Exception as e:
+            logger.error(f"Gap-Search-Fehler ({q[:40]}): {e}")
+            return None
+
+    raw_results = await asyncio.gather(*[_single_gap_search(q) for q in gap_queries])
+
+    all_gap: List[Dict[str, Any]] = []
+    for result in raw_results:
+        if result is None:
+            continue
+        if isinstance(result, list):
+            all_gap.extend(result)
+        elif isinstance(result, dict):
+            if "error" not in result and "results" in result:
+                all_gap.extend(result.get("results", []))
+            elif "error" not in result:
+                all_gap.append(result)
+
+    new_results: List[Dict[str, Any]] = []
+    for r in all_gap:
+        if not isinstance(r, dict):
+            continue
+        url = r.get("url", "")
+        if not url:
+            continue
+        canonical = session._get_canonical_url(url)
+        if canonical in session.visited_urls:
+            continue
+        url_lower = url.lower()
+        title = str(r.get("title") or "")
+        snippet = str(r.get("snippet") or "")
+        combined_text = f"{title} {snippet} {url_lower}".lower()
+        anchor_hits = _count_term_matches(plan.anchor_terms, combined_text)
+        focus_hits = _count_term_matches(plan.focus_terms, combined_text)
+        must_hits = _count_term_matches(plan.must_have_terms, combined_text)
+        include_hits = _count_term_matches(plan.include_terms, combined_text)
+        exclude_hits = _count_term_matches(plan.exclude_terms, combined_text)
+        related_hits = _count_term_matches(plan.related_terms, combined_text)
+        score = 0.35
+        if any(d in url_lower for d in [".gov", ".edu", ".org"]):
+            score += 0.18
+        if "wikipedia" in url_lower:
+            score += 0.12
+        if ".pdf" in url_lower:
+            score += 0.10
+        if any(s in url_lower for s in ["facebook.com", "twitter.com", "instagram.com", "tiktok.com"]):
+            score -= 0.22
+        if "arxiv.org" in url_lower:
+            score += 0.22
+        if "github.com" in url_lower:
+            score += 0.12
+        if any(d in url_lower for d in ["nature.com", "sciencedirect.com", "springer.com", "wiley.com"]):
+            score += 0.20
+        if any(d in url_lower for d in ["reuters.com", "bloomberg.com", "ft.com"]):
+            score += 0.12
+        if any(d in url_lower for d in ["statista.com", "gartner.com", "mckinsey.com"]):
+            score += 0.15
+        if must_hits >= 1:
+            score += 0.18
+        score += min(anchor_hits * 0.08 + focus_hits * 0.08 + include_hits * 0.04 + related_hits * 0.03, 0.46)
+        score -= min(exclude_hits * 0.12, 0.36)
+        r["score"] = max(0.0, min(score, 1.0))
+        r["canonical_url"] = canonical
+        new_results.append(r)
+
+    new_results.sort(key=lambda x: x.get("score", 0), reverse=True)
+    top_new = new_results[:8]
+
+    if not top_new:
+        logger.info("Phase 3.5: Keine neuen Quellen gefunden.")
+        return
+
+    logger.info(f"Phase 3.5: {len(top_new)} neue Quellen werden verarbeitet...")
+    tasks = [_process_source_safe(r, session, semaphore, config) for r in top_new]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            logger.error(f"Gap-Filling Fehler bei Quelle {i}: {result}")
+
+    session.methodology_notes.append(
+        f"Phase 3.5 Gap-Filling: {len(top_new)} neue Quellen analysiert "
+        f"(vorher: {facts_count} Fakten, {tree_count} Quellen)"
+    )
 
 
 async def _evaluate_relevance(
@@ -3414,6 +3565,11 @@ async def _run_research_pipeline(
     current_session.methodology_notes.append(
         f"Analysierte {len(current_session.research_tree)} Quellen mit Qualitätsbewertung"
     )
+
+    # PHASE 3.5: GAP-FILLING-SUCHE
+    logger.info("🔎 Phase 3.5: Gap-Filling-Suche (bei schwacher Faktenlage)...")
+    _gap_semaphore = asyncio.Semaphore(config.get("parallel_source_analysis_limit", 4))
+    await _run_gap_filling_search(current_session, config, _gap_semaphore)
 
     # PHASE 4: ERWEITERTE FAKTEN-VERIFIKATION
     logger.info("🔍 Phase 4: Erweiterte Fakten-Verifikation (mit fact_corroborator)...")
