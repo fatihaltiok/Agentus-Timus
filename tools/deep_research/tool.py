@@ -1602,7 +1602,7 @@ def get_adaptive_config(query: str, focus_areas: Optional[List[str]]) -> Dict[st
     return {
         "max_initial_search_queries": 12,
         "max_results_per_search_query": 15,
-        "max_sources_to_deep_dive": 20,
+        "max_sources_to_deep_dive": 12,
         "max_depth_for_links": 2,
         "max_chunks_per_source_for_facts": 3,
         "parallel_source_analysis_limit": 4
