@@ -196,7 +196,11 @@ class DeepResearchAgent(BaseAgent):
     async def run(self, task: str) -> str:
         """Reichert den Task mit Zielen und Blackboard-Vorwissen an."""
         handoff = parse_delegation_handoff(task)
-        effective_task = handoff.goal if handoff and handoff.goal else task
+        # original_user_task ist das eigentliche Recherche-Thema (z.B. "KI Industrie Roboter").
+        # handoff.goal ist das generische Delegationsziel ("Recherchiere externe Fakten...").
+        # Das LLM bekommt original_user_task als primären Task damit es weiß WAS zu recherchieren ist.
+        original = (handoff.handoff_data.get("original_user_task") or "") if handoff else ""
+        effective_task = original.strip() or (handoff.goal if handoff and handoff.goal else task)
         context = await self._build_research_context(effective_task)
         handoff_context = self._build_delegation_research_context(handoff)
 
@@ -267,10 +271,10 @@ class DeepResearchAgent(BaseAgent):
             lines.append(f"Aktive Timus-Ziele (Recherche darauf ausrichten): {goals}")
             has_content = True
 
-        # 2. Blackboard — bereits bekannte Infos zum Thema
+        # 2. Blackboard — bereits bekannte Infos zum Thema (mit echtem Thema suchen, nicht Handoff-Boilerplate)
         bb = await asyncio.to_thread(self._get_blackboard_for_task, task)
         if bb:
-            lines.append(f"Bereits bekannt (Blackboard, Duplikat vermeiden): {bb}")
+            lines.append(f"Bereits bekannt zu ANDEREM Thema (NUR nutzen wenn thematisch passend, sonst ignorieren): {bb}")
             has_content = True
 
         # 3. Letzte Curiosity-Topics
@@ -289,6 +293,10 @@ class DeepResearchAgent(BaseAgent):
             return ""
 
         lines: list[str] = ["# STRUKTURIERTER RESEARCH-HANDOFF"]
+        # original_user_task als ERSTES ausgeben — das ist das eigentliche Recherche-Thema
+        original_user_task = handoff.handoff_data.get("original_user_task", "")
+        if original_user_task:
+            lines.append(f"RECHERCHE-THEMA (original_user_task): {original_user_task}")
         if handoff.expected_output:
             lines.append(f"Erwarteter Output: {handoff.expected_output}")
         if handoff.success_signal:
@@ -333,8 +341,8 @@ class DeepResearchAgent(BaseAgent):
         try:
             from memory.agent_blackboard import get_blackboard
 
-            # Erste 60 Zeichen des Tasks als Suchquery
-            query = task[:60].strip()
+            # Echtes Thema als Suchquery (task ist hier bereits effective_task = original_user_task)
+            query = task[:80].strip()
             entries = get_blackboard().search(query, limit=2)
             if not entries:
                 return ""
@@ -451,7 +459,7 @@ class DeepResearchAgent(BaseAgent):
                 return ""
             conn = sqlite3.connect(str(db_path))
             cur = conn.execute(
-                "SELECT query FROM curiosity_sent ORDER BY sent_at DESC LIMIT 3"
+                "SELECT topic FROM curiosity_sent ORDER BY sent_at DESC LIMIT 3"
             )
             topics = [row[0] for row in cur.fetchall() if row[0]]
             conn.close()
