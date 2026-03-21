@@ -200,15 +200,14 @@ class ProactiveTriggerEngine:
     def _enqueue_trigger_task(self, trigger: ProactiveTrigger) -> None:
         """Erstellt Task in der Task-Queue."""
         try:
-            from orchestration.task_queue import TaskType, Priority, get_queue
+            from orchestration.task_queue import get_queue
 
             queue = get_queue()
-            queue.enqueue(
-                description=trigger.action_query,
-                task_type=TaskType.TRIGGERED,
-                priority=Priority.NORMAL,
-                target_agent=trigger.target_agent,
-                metadata={"trigger_id": trigger.id, "trigger_name": trigger.name},
+            queue.create_goal(
+                title=trigger.action_query,
+                description=f"Proaktiver Trigger: {trigger.name}",
+                source="proactive_trigger",
+                priority_score=0.5,
             )
         except Exception as e:
             log.warning("_enqueue_trigger_task: %s", e)
