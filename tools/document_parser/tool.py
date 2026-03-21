@@ -1,9 +1,12 @@
 # tools/document_parser/tool.py
 
 # Standard-Bibliotheken
+import base64
+import json
 import logging
 import io
 import asyncio
+import sys
 from urllib.parse import urlparse
 
 # Drittanbieter-Bibliotheken
@@ -16,6 +19,30 @@ from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 # Holt den zentral konfigurierten Logger. Kein `log`-Import aus `shared_context`
 # notwendig, da `getLogger` auf die globale Konfiguration zugreift.
 logger_doc = logging.getLogger(__name__)
+
+# Subprocess-Script für isolierte PDF-Extraktion (SEGV-safe).
+# pypdfium2 (C-Extension) kann bei bestimmten PDFs SIGSEGV werfen und damit
+# den gesamten Server-Prozess beenden. Indem wir die Extraktion in einem
+# eigenen Subprocess ausführen, isolieren wir den Absturz vollständig.
+_PDF_EXTRACT_SCRIPT = """
+import sys, io, json, base64
+import pypdfium2 as pdfium
+
+pdf_b64 = sys.stdin.buffer.read()
+pdf_bytes = base64.b64decode(pdf_b64)
+pdf_file = io.BytesIO(pdf_bytes)
+pdf_doc = pdfium.PdfDocument(pdf_file)
+text_parts = []
+for i in range(len(pdf_doc)):
+    try:
+        page = pdf_doc.get_page(i)
+        text_parts.append(page.get_textpage().get_text_range())
+        page.close()
+    except Exception:
+        continue
+pdf_doc.close()
+sys.stdout.write(json.dumps({"text": "\\n".join(text_parts)}))
+"""
 
 
 def _download_headers(pdf_url: str) -> dict:
@@ -34,24 +61,33 @@ def _download_headers(pdf_url: str) -> dict:
     }
 
 
-def _extract_text_with_pdfium(pdf_bytes: bytes) -> str:
-    pdf_file = io.BytesIO(pdf_bytes)
-    pdf_doc = pdfium.PdfDocument(pdf_file)
-    text_parts = []
-    page_errors = 0
-    for i in range(len(pdf_doc)):
-        try:
-            page = pdf_doc.get_page(i)
-            text_parts.append(page.get_textpage().get_text_range())
-            page.close()
-        except pdfium.PdfiumError as page_error:
-            page_errors += 1
-            logger_doc.warning("PDF-Seite %s konnte nicht geladen werden: %s", i, page_error)
-            continue
-    pdf_doc.close()
-    if not text_parts and page_errors:
-        raise pdfium.PdfiumError("Keine PDF-Seite konnte erfolgreich verarbeitet werden.")
-    return "\n".join(text_parts)
+async def _extract_text_with_pdfium_safe(pdf_bytes: bytes) -> str:
+    """
+    Extracts text from PDF in an isolated subprocess.
+    pypdfium2 (C-Extension) can SIGSEGV on malformed PDFs, which would kill
+    the entire server process. Running it in a subprocess isolates the crash.
+    """
+    pdf_b64 = base64.b64encode(pdf_bytes)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-c", _PDF_EXTRACT_SCRIPT,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(pdf_b64),
+            timeout=45,
+        )
+    except asyncio.TimeoutError:
+        raise Exception("PDF-Extraktion: Subprocess-Timeout (45s)")
+
+    if proc.returncode != 0:
+        err = stderr.decode(errors="replace")[:300] if stderr else "unknown"
+        raise pdfium.PdfiumError(f"PDF-Subprocess exit {proc.returncode}: {err}")
+
+    data = json.loads(stdout.decode(errors="replace"))
+    return data.get("text", "")
 
 @tool(
     name="extract_text_from_pdf",
@@ -111,8 +147,8 @@ async def extract_text_from_pdf(pdf_url: str) -> dict:
 
         pdf_bytes = await asyncio.to_thread(download_pdf)
 
-        # Die PDF-Verarbeitung selbst ist auch CPU-intensiv und sollte in einem Thread laufen.
-        extracted_text = await asyncio.to_thread(_extract_text_with_pdfium, pdf_bytes)
+        # Subprocess-Isolation: SEGV in pdfium tötet nur den Subprocess, nicht den Server.
+        extracted_text = await _extract_text_with_pdfium_safe(pdf_bytes)
 
         logger_doc.info(f"Text aus PDF {pdf_url} extrahiert (Länge: {len(extracted_text)} Zeichen).")
         return {"text": extracted_text, "source_url": pdf_url}
