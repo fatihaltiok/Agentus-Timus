@@ -1709,25 +1709,27 @@ def _profile_query_angles(profile: str, lang: str, domain: str, query_terms: Lis
             "survey review methodology",
             "evaluation replication results",
         ]
-    if profile == "vendor_comparison" or domain == "tech":
+    if profile == "vendor_comparison":
         angles = [
-            "benchmark evaluation architecture",
+            "benchmark evaluation comparison",
             "official documentation release",
             "survey implementation limitations",
         ]
         if agentic_focus:
             angles.insert(1, "tool use function calling multi agent")
         return angles
+    # domain == "tech" bekommt topic-neutrale Winkel, die das eigentliche Thema
+    # nicht in Richtung Software/AI/Benchmarks verschieben.
     if lang == "de":
         return [
             "offizielle dokumentation analyse",
-            "studie evidenz methode",
-            "vergleich einordnung",
+            "studie evidenz vergleich",
+            "anwendung praxis limitierungen",
         ]
     return [
         "official documentation analysis",
-        "evidence methodology review",
-        "comparison context limitations",
+        "study evidence comparison",
+        "application practice limitations",
     ]
 
 

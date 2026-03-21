@@ -607,6 +607,11 @@ def compute_claim_verdict(
 
     if high_quality_independent or vendor_support:
         return ClaimVerdict.LIKELY
+    # Konvergenz-Fallback: 3+ unabhängige Quellen (Tier C/D) bestätigen → LIKELY.
+    # Gilt für alle Themen bei denen keine Tier-A/B-Quellen existieren
+    # (z.B. Industrieroboter, Nischentechnologien, praxisnahe Berichte).
+    if len(independent_support) >= 3:
+        return ClaimVerdict.LIKELY
     return ClaimVerdict.INSUFFICIENT_EVIDENCE
 
 
