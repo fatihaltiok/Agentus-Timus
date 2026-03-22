@@ -244,7 +244,7 @@ class AgentModelConfig:
     """Konfiguration welches Modell/Provider jeder Agent-Typ nutzt."""
 
     AGENT_CONFIGS = {
-        "executor": ("FAST_MODEL", "FAST_MODEL_PROVIDER", "gemini-3-flash-preview", ModelProvider.GOOGLE),
+        "executor": ("FAST_MODEL", "FAST_MODEL_PROVIDER", "gpt-5.4-mini", ModelProvider.OPENAI),
         "deep_research": ("RESEARCH_MODEL", "RESEARCH_MODEL_PROVIDER", "deepseek/deepseek-v3.2", ModelProvider.OPENROUTER),
         "creative": ("CREATIVE_MODEL", "CREATIVE_MODEL_PROVIDER", "gpt-5.2", ModelProvider.OPENAI),
         "developer": ("CODE_MODEL", "CODE_MODEL_PROVIDER", "mercury-2", ModelProvider.INCEPTION),
@@ -254,9 +254,9 @@ class AgentModelConfig:
         "reasoning": ("REASONING_MODEL", "REASONING_MODEL_PROVIDER", "nvidia/nemotron-3-nano-30b-a3b", ModelProvider.OPENROUTER),
         # M1: neue Agenten
         "data":     ("DATA_MODEL",     "DATA_MODEL_PROVIDER",     "deepseek/deepseek-v3.2",         ModelProvider.OPENROUTER),
-        "document": ("DOCUMENT_MODEL", "DOCUMENT_MODEL_PROVIDER", "amazon/nova-2-lite-v1", ModelProvider.OPENROUTER),
+        "document": ("DOCUMENT_MODEL", "DOCUMENT_MODEL_PROVIDER", "gpt-5.4-mini", ModelProvider.OPENAI),
         # M2: neue Agenten
-        "communication": ("COMMUNICATION_MODEL", "COMMUNICATION_MODEL_PROVIDER", "google/gemini-3.1-flash-lite-preview", ModelProvider.OPENROUTER),
+        "communication": ("COMMUNICATION_MODEL", "COMMUNICATION_MODEL_PROVIDER", "gpt-5.4-mini", ModelProvider.OPENAI),
         # M3: neue Agenten
         "system": ("SYSTEM_MODEL", "SYSTEM_MODEL_PROVIDER", "qwen/qwen3.5-plus-02-15", ModelProvider.OPENROUTER),
         # M4: neue Agenten

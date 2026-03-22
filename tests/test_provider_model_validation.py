@@ -42,13 +42,13 @@ def _reset_provider_singleton(monkeypatch):
 
 def test_validate_model_or_raise_accepts_known_openrouter_model():
     client = MultiProviderClient()
-    client._api_keys[ModelProvider.OPENROUTER] = "test-key"
-    fake = _FakeClient(["google/gemini-3.1-flash-lite-preview"])
-    client._clients[ModelProvider.OPENROUTER] = fake
+    client._api_keys[ModelProvider.OPENAI] = "test-key"
+    fake = _FakeClient(["gpt-5.4-mini"])
+    client._clients[ModelProvider.OPENAI] = fake
 
     client.validate_model_or_raise(
-        ModelProvider.OPENROUTER,
-        "google/gemini-3.1-flash-lite-preview",
+        ModelProvider.OPENAI,
+        "gpt-5.4-mini",
         agent_type="communication",
     )
 
@@ -72,18 +72,18 @@ def test_validate_model_or_raise_accepts_known_zai_model():
 
 def test_validate_model_or_raise_caches_successful_lookup():
     client = MultiProviderClient()
-    client._api_keys[ModelProvider.OPENROUTER] = "test-key"
-    fake = _FakeClient(["amazon/nova-2-lite-v1"])
-    client._clients[ModelProvider.OPENROUTER] = fake
+    client._api_keys[ModelProvider.OPENAI] = "test-key"
+    fake = _FakeClient(["gpt-5.4-mini"])
+    client._clients[ModelProvider.OPENAI] = fake
 
     client.validate_model_or_raise(
-        ModelProvider.OPENROUTER,
-        "amazon/nova-2-lite-v1",
+        ModelProvider.OPENAI,
+        "gpt-5.4-mini",
         agent_type="document",
     )
     client.validate_model_or_raise(
-        ModelProvider.OPENROUTER,
-        "amazon/nova-2-lite-v1",
+        ModelProvider.OPENAI,
+        "gpt-5.4-mini",
         agent_type="document",
     )
 
@@ -92,13 +92,13 @@ def test_validate_model_or_raise_caches_successful_lookup():
 
 def test_validate_model_or_raise_rejects_unknown_model():
     client = MultiProviderClient()
-    client._api_keys[ModelProvider.OPENROUTER] = "test-key"
-    fake = _FakeClient(["google/gemini-3.1-flash-lite-preview"])
-    client._clients[ModelProvider.OPENROUTER] = fake
+    client._api_keys[ModelProvider.OPENAI] = "test-key"
+    fake = _FakeClient(["gpt-5.4-mini"])
+    client._clients[ModelProvider.OPENAI] = fake
 
     with pytest.raises(ModelConfigurationError) as exc:
         client.validate_model_or_raise(
-            ModelProvider.OPENROUTER,
+            ModelProvider.OPENAI,
             "does/not-exist",
             agent_type="communication",
         )
@@ -106,7 +106,7 @@ def test_validate_model_or_raise_rejects_unknown_model():
     msg = str(exc.value)
     assert "does/not-exist" in msg
     assert "communication" in msg
-    assert "google/gemini-3.1-flash-lite-preview" in msg
+    assert "gpt-5.4-mini" in msg
 
 
 def test_agent_model_config_fails_fast_for_invalid_model(monkeypatch):
@@ -164,6 +164,26 @@ def test_agent_model_config_respects_explicit_deep_research_fallback_env(monkeyp
     model, provider = AgentModelConfig.get_fallback_model_and_provider("deep_research")
 
     assert model == "gpt-5-mini"
+    assert provider == ModelProvider.OPENAI
+
+
+@pytest.mark.parametrize("agent_type", ["executor", "document", "communication"])
+def test_agent_model_config_defaults_selected_agents_to_gpt_5_4_mini(monkeypatch, agent_type):
+    fake_client = MultiProviderClient()
+    fake_client._api_keys[ModelProvider.OPENAI] = "test-key"
+    fake_client._clients[ModelProvider.OPENAI] = _FakeClient(["gpt-5.4-mini"])
+    monkeypatch.setattr(providers_mod, "_provider_client", fake_client)
+
+    monkeypatch.delenv("FAST_MODEL", raising=False)
+    monkeypatch.delenv("FAST_MODEL_PROVIDER", raising=False)
+    monkeypatch.delenv("DOCUMENT_MODEL", raising=False)
+    monkeypatch.delenv("DOCUMENT_MODEL_PROVIDER", raising=False)
+    monkeypatch.delenv("COMMUNICATION_MODEL", raising=False)
+    monkeypatch.delenv("COMMUNICATION_MODEL_PROVIDER", raising=False)
+
+    model, provider = AgentModelConfig.get_model_and_provider(agent_type)
+
+    assert model == "gpt-5.4-mini"
     assert provider == ModelProvider.OPENAI
 
 

@@ -250,6 +250,19 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _recover_stale_in_progress_on_startup() -> bool:
+    return _env_bool("TASK_QUEUE_RECOVER_STALE_IN_PROGRESS_ON_STARTUP", True)
+
+
+def _stale_in_progress_minutes() -> int:
+    raw = str(os.getenv("TASK_QUEUE_STALE_IN_PROGRESS_MINUTES", "240") or "240").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 240
+    return max(15, value)
+
+
 _SELF_HEALING_MAINTENANCE_INTERVAL_SECONDS = max(
     60,
     int(os.getenv("AUTONOMY_SELF_HEALING_MAINTENANCE_INTERVAL_SEC", "900") or 900),
@@ -746,6 +759,15 @@ class TaskQueue:
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
+        if _recover_stale_in_progress_on_startup():
+            recovery = self.recover_stale_in_progress()
+            if recovery["requeued"] or recovery["failed"]:
+                log.warning(
+                    "TaskQueue Stale-Recovery: requeued=%d failed=%d threshold=%dmin",
+                    recovery["requeued"],
+                    recovery["failed"],
+                    recovery["threshold_minutes"],
+                )
         self._last_self_healing_housekeeping: Optional[datetime] = None
         self.run_self_healing_housekeeping(force=True)
 
@@ -4489,6 +4511,55 @@ class TaskQueue:
                 (now,),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    def recover_stale_in_progress(self, *, stale_after_minutes: Optional[int] = None) -> Dict[str, int]:
+        """Requeued oder failt verwaiste in_progress-Tasks nach einem Neustart.
+
+        Ein Task kann auf in_progress stehen bleiben, wenn der Prozess nach
+        claim_next() abstürzt, bevor complete()/fail() erreicht wird. Diese
+        Recovery läuft bewusst nur beim Queue-Start und nutzt eine konservative
+        Stale-Schwelle, damit laufende Tasks nicht aggressiv übernommen werden.
+        """
+        threshold_minutes = max(1, int(stale_after_minutes or _stale_in_progress_minutes()))
+        cutoff = (datetime.now() - timedelta(minutes=threshold_minutes)).isoformat()
+        reason = f"stale_in_progress_recovered_after_{threshold_minutes}m"
+        requeued = 0
+        failed = 0
+
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT id, retry_count, max_retries
+                   FROM tasks
+                   WHERE status=? AND started_at IS NOT NULL AND started_at <= ?""",
+                (TaskStatus.IN_PROGRESS, cutoff),
+            ).fetchall()
+            now = datetime.now().isoformat()
+            for row in rows:
+                task_id = str(row["id"])
+                new_count = int(row["retry_count"] or 0) + 1
+                max_retries = max(1, int(row["max_retries"] or 1))
+                if new_count < max_retries:
+                    conn.execute(
+                        """UPDATE tasks
+                           SET status=?, retry_count=?, error=?, started_at=NULL
+                           WHERE id=?""",
+                        (TaskStatus.PENDING, new_count, reason[:500], task_id),
+                    )
+                    requeued += 1
+                else:
+                    conn.execute(
+                        """UPDATE tasks
+                           SET status=?, completed_at=?, error=?, retry_count=?
+                           WHERE id=?""",
+                        (TaskStatus.FAILED, now, reason[:500], new_count, task_id),
+                    )
+                    failed += 1
+
+        return {
+            "threshold_minutes": threshold_minutes,
+            "requeued": requeued,
+            "failed": failed,
+        }
 
     def claim_next(self) -> Optional[dict]:
         """
