@@ -35,6 +35,7 @@ import httpx
 from openai import OpenAI, RateLimitError
 from utils.openai_compat import prepare_openai_params
 from agent.shared.json_utils import extract_json_robust
+from orchestration.ephemeral_workers import WorkerTask, run_worker, run_worker_batch
 
 try:
     from bs4 import BeautifulSoup
@@ -72,7 +73,7 @@ except ImportError:
 
 # --- Setup ---
 logger = logging.getLogger("deep_research_v5")
-load_dotenv()
+load_dotenv(override=True)
 
 # Konstanten
 MIN_RELEVANCE_SCORE_FOR_SOURCES = 0.4
@@ -278,6 +279,205 @@ def _dedupe_contract_claims(claims: List["ClaimRecord"]) -> List["ClaimRecord"]:
         deduped[key] = preferred
 
     return [deduped[key] for key in order]
+
+
+def _claim_token_set(text: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-zA-Z0-9][a-zA-Z0-9\-\+\.]*", _normalize_claim_text(text))
+        if len(token) >= 4 and not re.fullmatch(r"20\d{2}", token)
+    }
+
+
+def _claim_semantic_signature(claims: List["ClaimRecord"]) -> str:
+    return "||".join(sorted(_normalize_claim_text(claim.claim_text) for claim in claims if claim.claim_text))
+
+
+def _semantic_dedupe_confidence_threshold() -> float:
+    raw = os.getenv("DR_WORKER_SEMANTIC_DEDUPE_CONFIDENCE_THRESHOLD", "0.85")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = 0.85
+    return min(max(value, 0.0), 1.0)
+
+
+def _semantic_dedupe_chunk_size() -> int:
+    raw = os.getenv("DR_WORKER_SEMANTIC_DEDUPE_CHUNK_SIZE", "10")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = 10
+    return max(4, min(value, 20))
+
+
+def _semantic_dedupe_chunk_overlap() -> int:
+    raw = os.getenv("DR_WORKER_SEMANTIC_DEDUPE_CHUNK_OVERLAP", "2")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = 2
+    return max(0, min(value, 5))
+
+
+def _worker_semantic_dedupe_enabled() -> bool:
+    return os.getenv("DR_WORKER_SEMANTIC_DEDUPE_ENABLED", "false").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+
+
+def _semantic_protected_term_hits(session: "DeepResearchSession", text: str) -> set[str]:
+    plan = _ensure_research_plan(session)
+    protected = _unique_texts(
+        plan.must_have_terms + plan.anchor_terms + plan.focus_terms,
+        lowercase=True,
+    )
+    text_lower = str(text or "").lower()
+    return {term for term in protected if term in text_lower}
+
+
+def _semantic_claim_overlap_ok(left_text: str, right_text: str) -> bool:
+    left_norm = _normalize_claim_text(left_text)
+    right_norm = _normalize_claim_text(right_text)
+    if not left_norm or not right_norm:
+        return False
+    if left_norm in right_norm or right_norm in left_norm:
+        return True
+    left_tokens = _claim_token_set(left_norm)
+    right_tokens = _claim_token_set(right_norm)
+    if not left_tokens or not right_tokens:
+        return False
+    shared = len(left_tokens & right_tokens)
+    coverage = shared / max(1, min(len(left_tokens), len(right_tokens)))
+    return coverage >= 0.6
+
+
+def _semantic_merge_protected_terms_ok(
+    session: "DeepResearchSession",
+    left_text: str,
+    right_text: str,
+) -> bool:
+    left_hits = _semantic_protected_term_hits(session, left_text)
+    right_hits = _semantic_protected_term_hits(session, right_text)
+    if not left_hits or not right_hits:
+        return True
+    return left_hits.issubset(right_hits) or right_hits.issubset(left_hits)
+
+
+def _filter_semantic_merge_candidates(
+    session: "DeepResearchSession",
+    claims: List["ClaimRecord"],
+    merge_candidates: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    threshold = _semantic_dedupe_confidence_threshold()
+    claims_by_key = {
+        _normalize_claim_text(claim.claim_text): claim for claim in claims if _normalize_claim_text(claim.claim_text)
+    }
+    accepted: List[Dict[str, Any]] = []
+    seen_pairs: set[tuple[str, str]] = set()
+
+    for candidate in merge_candidates:
+        if not isinstance(candidate, dict):
+            continue
+        left_text = str(candidate.get("left_claim_text") or "").strip()
+        right_text = str(candidate.get("right_claim_text") or "").strip()
+        reason = _normalize_space(str(candidate.get("reason") or ""))
+        try:
+            confidence = float(candidate.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+
+        left_key = _normalize_claim_text(left_text)
+        right_key = _normalize_claim_text(right_text)
+        if not left_key or not right_key or left_key == right_key:
+            continue
+        if confidence < threshold:
+            continue
+        if left_key not in claims_by_key or right_key not in claims_by_key:
+            continue
+        if not _semantic_claim_overlap_ok(left_text, right_text):
+            continue
+        if not _semantic_merge_protected_terms_ok(session, left_text, right_text):
+            continue
+        pair = tuple(sorted((left_key, right_key)))
+        if pair in seen_pairs:
+            continue
+        seen_pairs.add(pair)
+        accepted.append(
+            {
+                "left_claim_text": claims_by_key[left_key].claim_text,
+                "right_claim_text": claims_by_key[right_key].claim_text,
+                "confidence": round(confidence, 4),
+                "reason": reason,
+            }
+        )
+    return accepted
+
+
+def _merge_claim_record_group(claims: List["ClaimRecord"]) -> "ClaimRecord":
+    merged = claims[0]
+    for candidate in claims[1:]:
+        preferred = _prefer_claim_record(merged, candidate)
+        other = candidate if preferred is merged else merged
+        preferred.supports = list(dict.fromkeys([*preferred.supports, *other.supports]))
+        preferred.contradicts = list(dict.fromkeys([*preferred.contradicts, *other.contradicts]))
+        preferred.unknowns = list(dict.fromkeys([*preferred.unknowns, *other.unknowns]))
+        preferred.notes = _merge_claim_notes(preferred.notes, other.notes)
+        preferred.confidence = max(float(preferred.confidence or 0.0), float(other.confidence or 0.0))
+        if not preferred.time_scope and other.time_scope:
+            preferred.time_scope = other.time_scope
+        merged = preferred
+    return merged
+
+
+def _apply_semantic_merge_candidates(
+    claims: List["ClaimRecord"],
+    merge_candidates: List[Dict[str, Any]],
+) -> List["ClaimRecord"]:
+    if not claims or not merge_candidates:
+        return claims
+
+    claims_by_key = {
+        _normalize_claim_text(claim.claim_text): claim for claim in claims if _normalize_claim_text(claim.claim_text)
+    }
+    parent = {key: key for key in claims_by_key}
+
+    def _find(key: str) -> str:
+        while parent[key] != key:
+            parent[key] = parent[parent[key]]
+            key = parent[key]
+        return key
+
+    def _union(left: str, right: str) -> None:
+        left_root = _find(left)
+        right_root = _find(right)
+        if left_root != right_root:
+            parent[right_root] = left_root
+
+    for candidate in merge_candidates:
+        left_key = _normalize_claim_text(candidate.get("left_claim_text", ""))
+        right_key = _normalize_claim_text(candidate.get("right_claim_text", ""))
+        if left_key in parent and right_key in parent and left_key != right_key:
+            _union(left_key, right_key)
+
+    grouped: Dict[str, List["ClaimRecord"]] = {}
+    for key, claim in claims_by_key.items():
+        grouped.setdefault(_find(key), []).append(claim)
+
+    ordered_keys = [_normalize_claim_text(claim.claim_text) for claim in claims if _normalize_claim_text(claim.claim_text)]
+    emitted_roots: set[str] = set()
+    result: List["ClaimRecord"] = []
+
+    for key in ordered_keys:
+        root = _find(key)
+        if root in emitted_roots:
+            continue
+        emitted_roots.add(root)
+        cluster = grouped.get(root, [])
+        if not cluster:
+            continue
+        result.append(_merge_claim_record_group(cluster))
+    return result
 
 
 def _build_narrative_fallback_report(session: "DeepResearchSession") -> str:
@@ -701,7 +901,8 @@ class DeepResearchSession:
         }
         for claim in legacy_claims:
             existing_claims_by_id.setdefault(claim.claim_id, claim)
-        self.contract_v2.claims = _filter_session_claims(self, list(existing_claims_by_id.values()))
+        filtered_claims = _filter_session_claims(self, list(existing_claims_by_id.values()))
+        self.contract_v2.claims = self._apply_cached_semantic_claim_dedupe(filtered_claims)
 
         legacy_evidences = self._build_contract_evidences_v2(self.contract_v2.claims, self.contract_v2.sources)
         existing_evidences_by_id = {
@@ -863,7 +1064,7 @@ class DeepResearchSession:
         self.contract_v2.evidences = [evidence for evidence in evidence_records if evidence.claim_id in valid_claim_ids]
         self._refresh_contract_v2_verdicts()
 
-    def _build_contract_claims_v2(self, sources: List[Any]) -> List[ClaimRecord]:
+    def _build_contract_claims_v2_deterministic(self, sources: List[Any]) -> List[ClaimRecord]:
         claims: List[ClaimRecord] = []
 
         for idx, fact in enumerate(self.verified_facts, start=1):
@@ -913,6 +1114,71 @@ class DeepResearchSession:
                 claims.append(claim_record)
 
         return _dedupe_contract_claims(claims)
+
+    def _apply_cached_semantic_claim_dedupe(self, claims: List[ClaimRecord]) -> List[ClaimRecord]:
+        cache = self.research_metadata.get("semantic_claim_dedupe", {})
+        if not isinstance(cache, dict):
+            return claims
+        accepted = cache.get("accepted_merge_candidates")
+        if not isinstance(accepted, list) or not accepted:
+            return claims
+        eligible = [
+            claim for claim in claims
+            if claim.claim_type in {"verified_fact", "legacy_claim"}
+        ]
+        if cache.get("signature") != _claim_semantic_signature(eligible):
+            return claims
+
+        eligible_by_key = {
+            _normalize_claim_text(claim.claim_text): claim
+            for claim in eligible
+            if _normalize_claim_text(claim.claim_text)
+        }
+        parent = {key: key for key in eligible_by_key}
+
+        def _find(key: str) -> str:
+            while parent[key] != key:
+                parent[key] = parent[parent[key]]
+                key = parent[key]
+            return key
+
+        def _union(left: str, right: str) -> None:
+            left_root = _find(left)
+            right_root = _find(right)
+            if left_root != right_root:
+                parent[right_root] = left_root
+
+        for candidate in accepted:
+            left_key = _normalize_claim_text(candidate.get("left_claim_text", ""))
+            right_key = _normalize_claim_text(candidate.get("right_claim_text", ""))
+            if left_key in parent and right_key in parent and left_key != right_key:
+                _union(left_key, right_key)
+
+        grouped: Dict[str, List[ClaimRecord]] = {}
+        for key, claim in eligible_by_key.items():
+            grouped.setdefault(_find(key), []).append(claim)
+        merged_by_root = {
+            root: _merge_claim_record_group(cluster)
+            for root, cluster in grouped.items()
+        }
+
+        emitted_roots: set[str] = set()
+        merged_claims: List[ClaimRecord] = []
+        for claim in claims:
+            key = _normalize_claim_text(claim.claim_text)
+            if claim.claim_type not in {"verified_fact", "legacy_claim"} or key not in parent:
+                merged_claims.append(claim)
+                continue
+            root = _find(key)
+            if root in emitted_roots:
+                continue
+            emitted_roots.add(root)
+            merged_claims.append(merged_by_root[root])
+        return merged_claims
+
+    def _build_contract_claims_v2(self, sources: List[Any]) -> List[ClaimRecord]:
+        deterministic_claims = self._build_contract_claims_v2_deterministic(sources)
+        return self._apply_cached_semantic_claim_dedupe(deterministic_claims)
 
     def _build_contract_evidences_v2(
         self,
@@ -1597,15 +1863,29 @@ Antworte als JSON:
 # HELPER FUNCTIONS (aus v4.0 übernommen + erweitert)
 # ==============================================================================
 
-def get_adaptive_config(query: str, focus_areas: Optional[List[str]]) -> Dict[str, Any]:
-    """Gibt adaptive Konfiguration zurück."""
+def get_adaptive_config(
+    query: str,
+    focus_areas: Optional[List[str]],
+    max_depth: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Gibt adaptive Konfiguration zurück — skaliert mit max_depth."""
+    depth = max(1, min(5, int(max_depth or 3)))
+    # Skalierungstabelle: depth → (max_queries, max_sources, parallel_limit)
+    _DEPTH_SCALE = {
+        1: (6,  8,  3),
+        2: (9,  15, 4),
+        3: (12, 20, 4),
+        4: (15, 35, 6),
+        5: (20, 50, 8),
+    }
+    max_queries, max_sources, parallel = _DEPTH_SCALE[depth]
     return {
-        "max_initial_search_queries": 12,
+        "max_initial_search_queries": max_queries,
         "max_results_per_search_query": 15,
-        "max_sources_to_deep_dive": 12,
-        "max_depth_for_links": 2,
+        "max_sources_to_deep_dive": max_sources,
+        "max_depth_for_links": min(depth, 3),
         "max_chunks_per_source_for_facts": 3,
-        "parallel_source_analysis_limit": 4
+        "parallel_source_analysis_limit": parallel,
     }
 
 
@@ -1890,6 +2170,298 @@ def _build_research_plan(query: str, focus_areas: Optional[List[str]], session: 
         strict_topic=(scope_mode == "strict"),
         created_at=datetime.now().isoformat(),
     )
+
+
+def _worker_query_variants_enabled() -> bool:
+    return os.getenv("DR_WORKER_QUERY_VARIANTS_ENABLED", "false").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+
+
+def _sanitize_worker_query_variants(
+    session: DeepResearchSession,
+    variants: List[Any],
+) -> Tuple[List[str], List[str]]:
+    accepted: List[str] = []
+    rejected: List[str] = []
+    for raw in variants:
+        variant = _normalize_space(str(raw or ""))
+        if not variant:
+            continue
+        if len(variant) < 8 or len(variant) > 240:
+            rejected.append(variant)
+            continue
+        if not _is_text_on_session_topic(session, variant):
+            rejected.append(variant)
+            continue
+        accepted.append(variant)
+    return _unique_texts(accepted), _unique_texts(rejected)
+
+
+async def _augment_query_variants_with_worker(
+    session: DeepResearchSession,
+    *,
+    session_id: str,
+    max_queries: int,
+) -> List[str]:
+    plan = _ensure_research_plan(session)
+    baseline = _unique_texts(list(plan.query_variants))
+    limit = max(1, min(int(max_queries or len(baseline) or 1), 20))
+    metadata: Dict[str, Any] = {
+        "enabled": _worker_query_variants_enabled(),
+        "status": "disabled",
+        "provider": "",
+        "model": "",
+        "accepted_variants": 0,
+        "rejected_variants": 0,
+        "fallback_used": True,
+    }
+
+    if not metadata["enabled"]:
+        session.research_metadata["query_variant_worker"] = metadata
+        return baseline[:limit]
+
+    if len(baseline) >= limit:
+        metadata["status"] = "skipped_no_capacity"
+        metadata["fallback_used"] = False
+        session.research_metadata["query_variant_worker"] = metadata
+        return baseline[:limit]
+
+    available_slots = max(limit - len(baseline), 2)
+    worker_task = WorkerTask(
+        worker_type="query_variants",
+        system_prompt=(
+            "Du bist ein leichter Recherche-Worker fuer Timus Deep Research.\n"
+            "Erzeuge nur thematisch praezise Suchvarianten fuer die bestehende Anfrage.\n"
+            "Erweitere das Thema nicht, fuehre keine Seitenthemen ein und erhalte Muss-Begriffe.\n"
+            "Bevorzuge konkrete Query-Varianten mit Fokusterme, Synonymen, Industrie-/Praxiswinkeln "
+            "oder belastbaren Evidenz-Hinweisen.\n"
+            "Keine Erklaerung ausserhalb des JSON."
+        ),
+        input_payload={
+            "query": plan.primary_question,
+            "scope_mode": plan.scope_mode,
+            "query_language": plan.query_language,
+            "domain": plan.domain,
+            "focus_areas": session.focus_areas,
+            "baseline_query_variants": baseline[:8],
+            "anchor_terms": plan.anchor_terms[:8],
+            "focus_terms": plan.focus_terms[:8],
+            "must_have_terms": plan.must_have_terms[:6],
+            "include_terms": plan.include_terms[:10],
+            "exclude_terms": plan.exclude_terms[:10],
+            "temporal_terms": plan.temporal_terms[:4],
+            "subquestions": plan.subquestions[:4],
+            "max_new_variants": min(available_slots, 6),
+        },
+        response_schema={
+            "query_variants": ["<praezise Suchanfrage>", "<weitere praezise Suchanfrage>"],
+            "notes": ["<kurze Begruendung pro Variante>"],
+        },
+    )
+    result = await run_worker(
+        worker_task,
+        profile_prefix="DR_WORKER_QUERY",
+        agent="deep_research",
+        session_id=session_id,
+    )
+
+    metadata.update(
+        {
+            "status": result.status,
+            "provider": result.provider,
+            "model": result.model,
+            "fallback_used": result.fallback_used,
+            "duration_ms": result.duration_ms,
+            "max_tokens": result.max_tokens,
+        }
+    )
+
+    if result.status != "ok":
+        if result.error:
+            metadata["error"] = result.error
+        session.research_metadata["query_variant_worker"] = metadata
+        session.methodology_notes.append(
+            f"Query-Worker Fallback aktiv: status={result.status}"
+        )
+        return baseline[:limit]
+
+    raw_variants = result.payload.get("query_variants", [])
+    if not isinstance(raw_variants, list):
+        metadata["status"] = "invalid_payload"
+        metadata["fallback_used"] = True
+        metadata["error"] = "query_variants missing or not a list"
+        session.research_metadata["query_variant_worker"] = metadata
+        session.methodology_notes.append("Query-Worker Fallback aktiv: invalid_payload")
+        return baseline[:limit]
+
+    accepted, rejected = _sanitize_worker_query_variants(session, raw_variants)
+    combined = _unique_texts(baseline + accepted)[:limit]
+    added = max(len(combined) - len(baseline[:limit]), 0)
+    metadata["accepted_variants"] = added
+    metadata["rejected_variants"] = len(rejected)
+    metadata["notes"] = result.payload.get("notes", [])
+    metadata["fallback_used"] = False
+    if rejected:
+        metadata["rejected_examples"] = rejected[:3]
+    session.research_metadata["query_variant_worker"] = metadata
+
+    if added > 0:
+        session.methodology_notes.append(
+            f"Query-Worker ergänzte {added} praezise Query-Varianten "
+            f"({result.provider}/{result.model})."
+        )
+    else:
+        session.methodology_notes.append(
+            f"Query-Worker lieferte keine zusaetzlich verwertbaren Varianten "
+            f"({result.provider}/{result.model})."
+        )
+
+    plan.query_variants = combined
+    session.research_metadata["research_plan"] = asdict(plan)
+    return combined
+
+
+async def _populate_semantic_claim_dedupe_cache(
+    session: DeepResearchSession,
+    *,
+    session_id: str,
+) -> None:
+    metadata: Dict[str, Any] = {
+        "enabled": _worker_semantic_dedupe_enabled(),
+        "status": "disabled",
+        "accepted_merge_candidates": [],
+        "fallback_used": True,
+    }
+    if not metadata["enabled"]:
+        session.research_metadata["semantic_claim_dedupe"] = metadata
+        return
+
+    session.export_contract_v2()
+    deterministic_claims = session._build_contract_claims_v2_deterministic(session.contract_v2.sources)
+    signature = _claim_semantic_signature(deterministic_claims)
+    metadata["signature"] = signature
+
+    if len(deterministic_claims) < 2:
+        metadata["status"] = "skipped_too_few_claims"
+        metadata["fallback_used"] = False
+        session.research_metadata["semantic_claim_dedupe"] = metadata
+        return
+
+    cached = session.research_metadata.get("semantic_claim_dedupe", {})
+    if (
+        isinstance(cached, dict)
+        and cached.get("signature") == signature
+        and cached.get("status") == "ok"
+        and isinstance(cached.get("accepted_merge_candidates"), list)
+    ):
+        session.research_metadata["semantic_claim_dedupe"] = cached
+        return
+
+    sorted_claims = sorted(deterministic_claims, key=lambda claim: _normalize_claim_text(claim.claim_text))
+    chunk_size = _semantic_dedupe_chunk_size()
+    overlap = min(_semantic_dedupe_chunk_overlap(), max(chunk_size - 1, 0))
+    step = max(chunk_size - overlap, 1)
+    windows: List[List[ClaimRecord]] = []
+    for start in range(0, len(sorted_claims), step):
+        window = sorted_claims[start:start + chunk_size]
+        if len(window) >= 2:
+            windows.append(window)
+        if start + chunk_size >= len(sorted_claims):
+            break
+
+    tasks: List[WorkerTask] = []
+    for index, window in enumerate(windows, start=1):
+        tasks.append(
+            WorkerTask(
+                worker_type="semantic_claim_dedupe",
+                system_prompt=(
+                    "Du bist ein konservativer semantischer Dedupe-Worker fuer Timus Deep Research.\n"
+                    "Markiere nur Claim-Paare als Merge-Kandidaten, wenn sie inhaltlich nahezu gleich sind.\n"
+                    "Verschiedene technische Begriffe, Sensorarten, Benchmarks, Modelle oder Architekturen "
+                    "duerfen NICHT gemerged werden.\n"
+                    "Wenn du unsicher bist, liefere keinen Kandidaten.\n"
+                    "Antworte ausschliesslich mit JSON."
+                ),
+                input_payload={
+                    "query": session.query,
+                    "focus_areas": session.focus_areas,
+                    "scope_mode": _ensure_research_plan(session).scope_mode,
+                    "must_have_terms": _ensure_research_plan(session).must_have_terms[:6],
+                    "anchor_terms": _ensure_research_plan(session).anchor_terms[:6],
+                    "window_index": index,
+                    "claims": [
+                        {
+                            "claim_text": claim.claim_text,
+                            "claim_type": claim.claim_type,
+                            "supports_count": len(claim.supports),
+                            "unknowns_count": len(claim.unknowns),
+                        }
+                        for claim in window
+                    ],
+                },
+                response_schema={
+                    "merge_candidates": [
+                        {
+                            "left_claim_text": "<claim text>",
+                            "right_claim_text": "<claim text>",
+                            "reason": "<kurze Begruendung>",
+                            "confidence": 0.9,
+                        }
+                    ],
+                    "notes": ["<kurzer Hinweis>"],
+                },
+            )
+        )
+
+    results = await run_worker_batch(
+        tasks,
+        profile_prefix="DR_WORKER_SEMANTIC_DEDUPE",
+        agent="deep_research",
+        session_id=session_id,
+    )
+    raw_candidates: List[Dict[str, Any]] = []
+    ok_results = 0
+    for result in results:
+        if result.status != "ok":
+            continue
+        ok_results += 1
+        candidates = result.payload.get("merge_candidates", [])
+        if isinstance(candidates, list):
+            raw_candidates.extend(candidate for candidate in candidates if isinstance(candidate, dict))
+
+    accepted = _filter_semantic_merge_candidates(session, deterministic_claims, raw_candidates)
+    metadata.update(
+        {
+            "status": "ok" if ok_results else "fallback_no_worker_result",
+            "windows": len(windows),
+            "worker_results_ok": ok_results,
+            "raw_merge_candidates": len(raw_candidates),
+            "accepted_merge_candidates": accepted,
+            "accepted_count": len(accepted),
+            "fallback_used": ok_results == 0,
+        }
+    )
+    if results:
+        metadata["worker_models"] = sorted(
+            {
+                f"{result.provider}/{result.model}"
+                for result in results
+                if result.provider and result.model
+            }
+        )
+    if ok_results == 0:
+        metadata["error"] = "no successful semantic dedupe worker result"
+        session.methodology_notes.append("Semantic-Dedupe-Worker Fallback aktiv: no successful worker result.")
+    elif accepted:
+        session.methodology_notes.append(
+            f"Semantic-Dedupe-Worker schlug {len(accepted)} konservative Merge-Kandidaten vor."
+        )
+    else:
+        session.methodology_notes.append(
+            "Semantic-Dedupe-Worker fand keine konservativ akzeptablen Merge-Kandidaten."
+        )
+    session.research_metadata["semantic_claim_dedupe"] = metadata
 
 
 def _ensure_research_plan(session: DeepResearchSession) -> ResearchPlan:
@@ -2639,6 +3211,8 @@ def _get_research_metadata_summary(session: DeepResearchSession) -> Dict[str, An
             "exclude_terms": plan.exclude_terms[:10],
             "strict_topic": plan.strict_topic,
         },
+        "query_variant_worker": session.research_metadata.get("query_variant_worker", {}),
+        "semantic_claim_dedupe": session.research_metadata.get("semantic_claim_dedupe", {}),
         "start_time": session.start_time,
         "total_sources_processed": len(session.visited_urls),
         "total_facts_extracted": len(session.all_extracted_facts_raw),
@@ -3517,7 +4091,7 @@ async def _run_research_pipeline(
     Interne Pipeline-Funktion — wird von start_deep_research aufgerufen
     und ggf. mit light-Mode wiederholt (Fallback).
     """
-    config = get_adaptive_config(query, current_session.focus_areas)
+    config = get_adaptive_config(query, current_session.focus_areas, max_depth)
     plan = _ensure_research_plan(current_session)
     current_session.research_metadata["research_plan"] = asdict(plan)
     if not any(str(note).startswith("Rechercheplan:") for note in current_session.methodology_notes):
@@ -3525,6 +4099,11 @@ async def _run_research_pipeline(
             f"Rechercheplan: {len(plan.query_variants)} Query-Varianten, "
             f"{len(plan.subquestions)} Teilfragen, scope_mode={plan.scope_mode}"
         )
+    await _augment_query_variants_with_worker(
+        current_session,
+        session_id=session_id,
+        max_queries=config["max_initial_search_queries"],
+    )
 
     # PHASE 1: INITIALE SUCHE
     logger.info("📡 Phase 1: Initiale Websuche...")
@@ -3639,6 +4218,8 @@ async def _run_research_pipeline(
         "unverified_claims": current_session.unverified_claims,
         "conflicts": current_session.conflicting_info,
     }
+    await _populate_semantic_claim_dedupe_cache(current_session, session_id=session_id)
+    current_session.export_contract_v2()
 
     # PHASE 8: FINALE SYNTHESE
     logger.info("📝 Phase 8: Finale Synthese...")
@@ -3716,6 +4297,7 @@ async def start_deep_research(
 
     # Metadaten speichern
     current_session.research_metadata = {
+        "session_id": session_id,
         "verification_mode": verification_mode,
         "max_depth": max_depth,
         "version": "8.1",
@@ -3767,6 +4349,7 @@ async def start_deep_research(
 
             fallback_session = DeepResearchSession(query, focus_areas, scope_mode=scope_mode)
             fallback_session.research_metadata = {
+                "session_id": session_id,
                 "verification_mode": "light",
                 "max_depth": max_depth,
                 "version": "8.1",

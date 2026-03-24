@@ -9,7 +9,11 @@ from hypothesis import strategies as st
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tools.deep_research.research_contracts import claim_is_on_topic
-from tools.deep_research.tool import _compose_pdf_markdown, _dedupe_contract_claims
+from tools.deep_research.tool import (
+    _apply_semantic_merge_candidates,
+    _compose_pdf_markdown,
+    _dedupe_contract_claims,
+)
 from tools.deep_research.research_contracts import ClaimRecord
 
 
@@ -56,3 +60,36 @@ def test_hypothesis_agentic_query_requires_agentic_signal(model: str):
 
     assert claim_is_on_topic(query, medical_claim) is False
     assert claim_is_on_topic(query, agentic_claim) is True
+
+
+@given(
+    left_suffix=st.text(
+        alphabet=st.characters(min_codepoint=97, max_codepoint=122),
+        min_size=1,
+        max_size=8,
+    ),
+    right_suffix=st.text(
+        alphabet=st.characters(min_codepoint=97, max_codepoint=122),
+        min_size=1,
+        max_size=8,
+    ),
+)
+@settings(deadline=None, max_examples=40)
+def test_hypothesis_semantic_merge_candidates_never_expand_count(left_suffix: str, right_suffix: str):
+    claims = [
+        ClaimRecord("c1", "q", "agentic", "Qwen", f"Qwen {left_suffix} unterstuetzt Tool Use.", claim_type="verified_fact"),
+        ClaimRecord("c2", "q", "agentic", "Qwen", f"Qwen {right_suffix} unterstuetzt Tool Use.", claim_type="legacy_claim"),
+    ]
+    merged = _apply_semantic_merge_candidates(
+        claims,
+        [
+            {
+                "left_claim_text": claims[0].claim_text,
+                "right_claim_text": claims[1].claim_text,
+                "confidence": 0.91,
+                "reason": "candidate",
+            }
+        ],
+    )
+
+    assert 0 < len(merged) <= len(claims)

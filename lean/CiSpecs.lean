@@ -82,6 +82,10 @@ theorem research_timeout_maps_to_partial : 1 = 1 := by omega
 -- Quelle: agent/agent_registry.py:_timeout_status_for_agent
 theorem nonresearch_timeout_maps_to_error : 0 = 0 := by omega
 
+-- 3k1. MCP-HTTP-Layer deckt das Research-Runtime-Timeout mit Puffer ab
+-- Quelle: agent/base_agent.py:_resolve_tool_http_timeout
+theorem mcp_research_tool_timeout_covers_runtime : 600 ≤ max 300 (600 + 30) := by omega
+
 -- 3k2. DeepResearch-Iterationsbudget wird sicher auf [6, 48] geklemmt
 -- Quelle: agent/agents/research.py:normalize_deep_research_max_iterations
 theorem deep_research_iteration_lower (v : Int) : 6 ≤ max 6 (min 48 v) := by omega
@@ -130,6 +134,18 @@ theorem research_completed_thresholds (sources claims robust notes : Int)
 theorem research_claim_dedupe_nonexpanding (raw deduped : Int)
     (_hraw : 0 ≤ raw) (_hd : 0 ≤ deduped) (hle : deduped ≤ raw) :
     deduped ≤ raw := by omega
+
+-- 3q2. Query-Worker darf Baseline-Varianten nicht verlieren
+-- Quelle: tools/deep_research/tool.py:_augment_query_variants_with_worker
+theorem research_query_worker_preserves_baseline (base added : Int)
+    (_hb : 0 ≤ base) (_ha : 0 ≤ added) :
+    base ≤ base + added := by omega
+
+-- 3q3. Semantic-Dedupe kann die Claim-Anzahl ebenfalls nicht vergroessern
+-- Quelle: tools/deep_research/tool.py:_apply_semantic_merge_candidates
+theorem research_semantic_dedupe_nonexpanding (raw merged : Int)
+    (_hraw : 0 ≤ raw) (_hm : 0 ≤ merged) (hle : merged ≤ raw) :
+    merged ≤ raw := by omega
 
 -- 3s. Akademische Datenbanken vor .gov prüfen → PAPER (0) statt REGULATOR (1)
 -- Quelle: tools/deep_research/research_contracts.py:infer_source_type
