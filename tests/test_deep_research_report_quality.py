@@ -109,6 +109,7 @@ def test_research_metadata_summary_exposes_research_plan():
     assert "query_variant_worker" in summary
     assert "semantic_claim_dedupe" in summary
     assert "conflict_scan_worker" in summary
+    assert "narrative_report" in summary
 
 
 @pytest.mark.asyncio
@@ -149,6 +150,163 @@ async def test_narrative_synthesis_falls_back_when_llm_returns_empty(monkeypatch
     assert "## Einordnung" in report
     assert "## Fazit" in report
     assert "## Quellenhinweise" in report
+
+
+@pytest.mark.asyncio
+async def test_narrative_synthesis_uses_sectioned_pipeline_before_fallback(monkeypatch):
+    from tools.deep_research.tool import (
+        DeepResearchSession,
+        ResearchNode,
+        ThesisAnalysis,
+        _create_narrative_synthesis_report,
+    )
+
+    class _FakeResponse:
+        def __init__(self, content: str):
+            self.choices = [type("Choice", (), {"message": type("Message", (), {"content": content})()})()]
+
+    def fake_create(**kwargs):
+        prompt = kwargs["messages"][0]["content"]
+        if "ABSCHNITT: Einordnung" in prompt:
+            return _FakeResponse(
+                "## Einordnung\n\n"
+                "Diese Recherche ordnet das Thema predictive maintenance in der industriellen Robotik ein. "
+                "Sie trennt belastbare Beobachtungen von offenen Fragen und bleibt eng am Recherchefokus. "
+                "Die Evidenzlage ist brauchbar, aber nicht gleichmaessig verteilt.\n\n"
+                "Im Zentrum stehen industrielle Roboter, KI-gestuetzte Wartung und praktische Einsatzmuster. "
+                "Die vorliegenden Quellen geben genug Material fuer eine lesbare Einordnung her."
+            )
+        if "ABSCHNITT: Belastbare Beobachtungen" in prompt:
+            return _FakeResponse(
+                "## Belastbare Beobachtungen\n\n"
+                "Mehrere Quellen beschreiben, dass KI-gestuetzte predictive maintenance in der Robotik "
+                "vor allem auf Sensorik, Zustandsueberwachung und Fruehwarnsignalen basiert. "
+                "Typisch sind Anomalieerkennung, Restlebensdauer-Schaetzung und die Verbindung von "
+                "Produktionsdaten mit Wartungsplanung.\n\n"
+                "Die belastbarsten Punkte betreffen Nutzen fuer Verfuegbarkeit, weniger ungeplante Ausfaelle "
+                "und bessere Priorisierung von Serviceeinsätzen. Gleichzeitig schwankt die methodische Tiefe "
+                "zwischen den Quellen sichtbar."
+            )
+        if "ABSCHNITT: Hinweise und offene Punkte" in prompt:
+            return _FakeResponse(
+                "## Hinweise und offene Punkte\n\n"
+                "Offen bleibt oft, wie gut die Modelle von Laborbedingungen in reale Produktionsumgebungen "
+                "uebertragbar sind. Einige Hinweise sind nur einmal belegt oder kommen aus eher dünnen "
+                "Sekundaerquellen.\n\n"
+                "Deshalb sollte man zwischen robusten Einsatzmustern und ambitionierten Versprechen sauber trennen."
+            )
+        if "ABSCHNITT: Analytische Verdichtung" in prompt:
+            return _FakeResponse(
+                "## Analytische Verdichtung\n\n"
+                "Insgesamt verdichtet sich das Bild, dass KI in der Wartung industrieller Roboter vor allem "
+                "dann Mehrwert liefert, wenn Prozessdaten, Sensordaten und Wartungslogik gemeinsam betrachtet werden. "
+                "Der groesste Hebel liegt weniger in spektakulaeren Foundation-Modellen als in sauberer "
+                "Diagnostik, Datenqualitaet und Integration in den Serviceprozess."
+            )
+        if "ABSCHNITT: Fazit" in prompt:
+            return _FakeResponse(
+                "## Fazit\n\n"
+                "Die Recherche ergibt ein nuanciertes, aber nutzbares Bild: predictive maintenance mit KI "
+                "ist fuer industrielle Robotik realistisch, sofern Datenqualitaet und Betriebsintegration stimmen. "
+                "Fuer starke Einzelversprechen bleibt dagegen oft noch Nachverifikation noetig."
+            )
+        raise AssertionError(f"Unexpected prompt: {prompt[:120]}")
+
+    monkeypatch.setattr(
+        "tools.deep_research.tool.client.chat.completions.create",
+        fake_create,
+    )
+
+    session = DeepResearchSession("industrial robot predictive maintenance AI")
+    session.research_tree = [
+        ResearchNode(url="https://example.com/pm1", title="Robot predictive maintenance", content_snippet="robot predictive maintenance"),
+        ResearchNode(url="https://example.com/pm2", title="Industrial robotics diagnostics", content_snippet="industrial robotics diagnostics"),
+    ]
+    session.verified_facts = [
+        {
+            "fact": "KI-gestuetzte predictive maintenance nutzt in der industriellen Robotik Sensor- und Zustandsdaten.",
+            "source_count": 3,
+            "confidence_score_numeric": 0.82,
+            "supporting_quotes": ["Sensor and condition monitoring improve maintenance planning."],
+        }
+    ]
+    session.unverified_claims = [
+        {
+            "fact": "Foundation-Modelle koennten kuenftig Robotikwartung vereinheitlichen.",
+            "source_type": "arxiv",
+            "source": "https://arxiv.org/abs/2603.00001",
+            "source_title": "Future foundation maintenance",
+        }
+    ]
+    session.thesis_analyses = [
+        ThesisAnalysis(
+            topic="Einsatzmuster",
+            thesis="Predictive maintenance senkt Ausfaelle.",
+            thesis_confidence=0.7,
+            synthesis="Der Hauptnutzen liegt in Fruehwarnung und besserer Serviceplanung.",
+            synthesis_confidence=0.75,
+            limitations=["Viele Nachweise bleiben domänenspezifisch."],
+        )
+    ]
+
+    report = await _create_narrative_synthesis_report(session)
+
+    assert "deterministischer Fallback" not in report
+    assert "## Einordnung" in report
+    assert "## Belastbare Beobachtungen" in report
+    assert "## Hinweise und offene Punkte" in report
+    assert "## Analytische Verdichtung" in report
+    assert "## Fazit" in report
+    assert "## Quellenhinweise" in report
+    assert session.research_metadata["narrative_report"]["fallback_used"] is False
+    assert session.research_metadata["narrative_report"]["sections_completed"]
+
+
+@pytest.mark.asyncio
+async def test_narrative_synthesis_uses_compact_retry_when_sections_fail(monkeypatch):
+    from tools.deep_research.tool import DeepResearchSession, ResearchNode, _create_narrative_synthesis_report
+
+    class _FakeResponse:
+        def __init__(self, content: str):
+            self.choices = [type("Choice", (), {"message": type("Message", (), {"content": content})()})()]
+
+    def fake_create(**kwargs):
+        prompt = kwargs["messages"][0]["content"]
+        if "Du erstellst einen lesbaren Deep-Research-Bericht auf Deutsch." in prompt:
+            return _FakeResponse(
+                "## Einordnung\n\nDiese Recherche verdichtet die Lage eng entlang der Leitfrage.\n\n"
+                "## Belastbare Beobachtungen\n\nMehrere Quellen beschreiben den praktischen Nutzen von KI-gestuetzter Wartung "
+                "fuer industrielle Roboter. Der Schwerpunkt liegt auf Zustandsueberwachung, Sensorik und frueher Fehlererkennung.\n\n"
+                "## Hinweise und offene Punkte\n\nEin Teil der Evidenz bleibt duenn oder nur einmal belegt. "
+                "Vor allem bei ambitionierten Wirkungsversprechen ist Vorsicht noetig.\n\n"
+                "## Analytische Verdichtung\n\nDas Muster ist konsistent: der betriebliche Nutzen entsteht "
+                "durch Datenqualitaet, Diagnose und Integration in den Serviceprozess, nicht durch Marketingbegriffe allein.\n\n"
+                "## Fazit\n\nDamit entsteht trotz gemischter Quellenlage ein lesbarer und vorsichtiger Gesamtbefund."
+            )
+        return _FakeResponse("")
+
+    monkeypatch.setattr(
+        "tools.deep_research.tool.client.chat.completions.create",
+        fake_create,
+    )
+
+    session = DeepResearchSession("industrial robot predictive maintenance AI")
+    session.research_tree = [
+        ResearchNode(url="https://example.com/a", title="Industrial maintenance", content_snippet="maintenance")
+    ]
+    session.verified_facts = [
+        {
+            "fact": "Predictive maintenance nutzt Anomalieerkennung fuer Wartungsentscheidungen.",
+            "source_count": 2,
+        }
+    ]
+
+    report = await _create_narrative_synthesis_report(session)
+
+    assert "deterministischer Fallback" not in report
+    assert "## Belastbare Beobachtungen" in report
+    assert session.research_metadata["narrative_report"]["compact_retry_used"] is True
+    assert session.research_metadata["narrative_report"]["fallback_used"] is False
 
 
 def test_compose_pdf_markdown_includes_readable_article_and_appendix():

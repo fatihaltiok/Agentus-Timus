@@ -774,6 +774,339 @@ def _build_narrative_fallback_report(session: "DeepResearchSession") -> str:
     return "\n".join(lines).strip()
 
 
+def _narrative_word_count(text: str) -> int:
+    return len(re.findall(r"\w+", str(text or ""), flags=re.UNICODE))
+
+
+def _trim_narrative_text(value: Any, max_chars: int = 320) -> str:
+    text = _normalize_space(str(value or ""))
+    if len(text) <= max_chars:
+        return text
+    clipped = text[:max_chars].rsplit(" ", 1)[0].strip()
+    return f"{clipped}..." if clipped else text[:max_chars]
+
+
+def _build_narrative_source_entries(session: "DeepResearchSession", limit: int = 16) -> List[Tuple[str, str]]:
+    entries: List[Tuple[str, str]] = []
+    seen_urls: set[str] = set()
+
+    def _add(title: str, url: str) -> None:
+        cleaned_url = str(url or "").strip()
+        if not cleaned_url or cleaned_url in seen_urls:
+            return
+        seen_urls.add(cleaned_url)
+        cleaned_title = _normalize_space(str(title or cleaned_url))
+        entries.append((cleaned_title, cleaned_url))
+
+    for node in list(session.research_tree or []):
+        _add(getattr(node, "title", "") or getattr(node, "url", ""), getattr(node, "url", ""))
+        if len(entries) >= limit:
+            return entries
+
+    supplemental_claims = sorted(
+        list(session.unverified_claims or []),
+        key=lambda claim: (
+            int(claim.get("source_count") or 0),
+            float(claim.get("confidence_score_numeric") or claim.get("confidence_score") or 0.0),
+        ),
+        reverse=True,
+    )
+    for claim in supplemental_claims:
+        _add(claim.get("source_title") or claim.get("fact") or claim.get("source"), claim.get("source"))
+        if len(entries) >= limit:
+            break
+    return entries
+
+
+def _render_narrative_sources_section(session: "DeepResearchSession", limit: int = 16) -> str:
+    lines = ["## Quellenhinweise"]
+    entries = _build_narrative_source_entries(session, limit=limit)
+    if not entries:
+        lines.append("1. Keine strukturierten Quellen in der Session vorhanden.")
+        return "\n".join(lines).strip()
+
+    for idx, (title, url) in enumerate(entries, start=1):
+        lines.append(f"{idx}. {title} — {url}")
+    return "\n".join(lines).strip()
+
+
+def _build_narrative_digest(session: "DeepResearchSession") -> Dict[str, Any]:
+    plan = _ensure_research_plan(session)
+
+    verified_candidates = [
+        fact for fact in list(session.verified_facts or [])
+        if _is_text_on_session_topic(session, str(fact.get("fact") or ""))
+    ] or list(session.verified_facts or [])
+    verified_candidates = sorted(
+        verified_candidates,
+        key=lambda fact: (
+            int(fact.get("source_count") or 0),
+            float(fact.get("confidence_score_numeric") or fact.get("confidence_score") or 0.0),
+        ),
+        reverse=True,
+    )
+
+    verified_lines: List[str] = []
+    for idx, fact in enumerate(verified_candidates[:12], start=1):
+        fact_text = _trim_narrative_text(fact.get("fact", ""), 320)
+        if not fact_text:
+            continue
+        source_count = int(fact.get("source_count") or 0)
+        quote = ""
+        quotes = fact.get("supporting_quotes") or []
+        if quotes:
+            quote = _trim_narrative_text(quotes[0], 160)
+        suffix_bits = []
+        if source_count:
+            suffix_bits.append(f"Quellen={source_count}")
+        confidence = fact.get("confidence_score_numeric") or fact.get("confidence_score")
+        if confidence not in (None, ""):
+            try:
+                suffix_bits.append(f"Confidence={float(confidence):.2f}")
+            except Exception:
+                pass
+        suffix = f" ({', '.join(suffix_bits)})" if suffix_bits else ""
+        quote_suffix = f' | Zitat: "{quote}"' if quote else ""
+        verified_lines.append(f"{idx}. {fact_text}{suffix}{quote_suffix}")
+
+    unverified_candidates = [
+        claim for claim in list(session.unverified_claims or [])
+        if _is_text_on_session_topic(session, str(claim.get("fact") or ""))
+    ] or list(session.unverified_claims or [])
+    unverified_candidates = sorted(
+        unverified_candidates,
+        key=lambda claim: (
+            int(claim.get("source_count") or 0),
+            float(claim.get("confidence_score_numeric") or claim.get("confidence_score") or 0.0),
+        ),
+        reverse=True,
+    )
+
+    unverified_lines: List[str] = []
+    for idx, claim in enumerate(unverified_candidates[:10], start=1):
+        claim_text = _trim_narrative_text(claim.get("fact", ""), 320)
+        if not claim_text:
+            continue
+        source_type = str(claim.get("source_type") or "web").strip()
+        source_count = int(claim.get("source_count") or 0)
+        suffix_bits = [f"Typ={source_type}"]
+        if source_count:
+            suffix_bits.append(f"Quellen={source_count}")
+        unverified_lines.append(f"{idx}. {claim_text} ({', '.join(suffix_bits)})")
+
+    synthesis_lines: List[str] = []
+    for idx, analysis in enumerate(list(session.thesis_analyses or [])[:5], start=1):
+        synthesis = _trim_narrative_text(getattr(analysis, "synthesis", ""), 520)
+        topic = _trim_narrative_text(getattr(analysis, "topic", ""), 120)
+        if not synthesis:
+            continue
+        if topic and _is_text_on_session_topic(session, f"{topic} {synthesis}") is False:
+            continue
+        limitations = [
+            _trim_narrative_text(item, 180)
+            for item in list(getattr(analysis, "limitations", []) or [])[:2]
+            if _trim_narrative_text(item, 180)
+        ]
+        limit_suffix = f" | Grenzen: {'; '.join(limitations)}" if limitations else ""
+        synthesis_lines.append(f"{idx}. {topic or 'Synthese'}: {synthesis}{limit_suffix}")
+
+    source_lines: List[str] = []
+    for idx, (title, url) in enumerate(_build_narrative_source_entries(session, limit=10), start=1):
+        source_lines.append(f"{idx}. {title} | {url}")
+
+    conflict_meta = session.research_metadata.get("conflict_scan_worker", {})
+    conflict_lines: List[str] = []
+    for idx, conflict in enumerate(list(conflict_meta.get("conflicts") or [])[:6], start=1):
+        claim_text = _trim_narrative_text(conflict.get("claim_text", ""), 220)
+        reason = _trim_narrative_text(conflict.get("reason", ""), 200)
+        issue_type = _trim_narrative_text(conflict.get("issue_type", ""), 80)
+        if claim_text:
+            conflict_lines.append(f"{idx}. {claim_text} | issue={issue_type} | {reason}")
+
+    open_questions = [
+        _trim_narrative_text(item, 200)
+        for item in list(conflict_meta.get("open_questions") or [])[:6]
+        if _trim_narrative_text(item, 200)
+    ]
+    report_notes = [
+        _trim_narrative_text(item, 220)
+        for item in list(conflict_meta.get("report_notes") or [])[:6]
+        if _trim_narrative_text(item, 220)
+    ]
+
+    stats_text = (
+        f"Web-Quellen={len(session.research_tree)} | "
+        f"verifizierte Fakten={len(session.verified_facts)} | "
+        f"weitere Hinweise={len(session.unverified_claims)} | "
+        f"These-Antithese-Synthesen={len(session.thesis_analyses)}"
+    )
+    plan_text = (
+        f"Leitfrage: {plan.primary_question}\n"
+        f"Scope-Modus: {plan.scope_mode}\n"
+        f"Muss-Begriffe: {', '.join(plan.must_have_terms[:6]) or '-'}\n"
+        f"Teilfragen: {' | '.join(plan.subquestions[:4]) or '-'}\n"
+        f"Topic-Boundaries: {' | '.join(plan.topic_boundaries[:3]) or '-'}"
+    )
+
+    return {
+        "plan_text": plan_text,
+        "stats_text": stats_text,
+        "verified_lines": verified_lines,
+        "unverified_lines": unverified_lines,
+        "synthesis_lines": synthesis_lines,
+        "source_lines": source_lines,
+        "conflict_lines": conflict_lines,
+        "open_questions": open_questions,
+        "report_notes": report_notes,
+        "sources_section": _render_narrative_sources_section(session),
+    }
+
+
+async def _call_narrative_llm(prompt: str, max_tokens: int, temperature: float = 0.35) -> str:
+    kwargs = {
+        "model": SMART_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    kwargs = prepare_openai_params(kwargs)
+    response = await asyncio.to_thread(client.chat.completions.create, **kwargs)
+    return str(response.choices[0].message.content or "").strip()
+
+
+def _normalize_narrative_section(title: str, text: str) -> str:
+    cleaned = str(text or "").strip()
+    cleaned = re.sub(r"^```(?:markdown)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
+    cleaned = re.sub(r"^\s*#\s+.+?\n+", "", cleaned, count=1)
+    cleaned = re.sub(r"^\s*##\s+.+?\n+", "", cleaned, count=1)
+    cleaned = re.split(r"\n##\s+", cleaned, maxsplit=1)[0].strip()
+    cleaned = re.sub(r"\n##\s+Quellenhinweise[\s\S]*$", "", cleaned).strip()
+    if not cleaned:
+        return ""
+    return f"## {title}\n\n{cleaned}".strip()
+
+
+async def _generate_narrative_section(
+    session: "DeepResearchSession",
+    title: str,
+    digest: Dict[str, Any],
+    material_keys: List[str],
+    guidance: str,
+    target_words: Tuple[int, int],
+    max_tokens: int,
+) -> str:
+    material_blocks: List[str] = []
+    for key in material_keys:
+        value = digest.get(key)
+        if isinstance(value, list) and value:
+            label = key.replace("_", " ").upper()
+            material_blocks.append(f"{label}:\n" + "\n".join(f"- {item}" for item in value))
+        elif isinstance(value, str) and value.strip():
+            label = key.replace("_", " ").upper()
+            material_blocks.append(f"{label}:\n{value.strip()}")
+
+    if not material_blocks:
+        return ""
+
+    prompt = f"""Du schreibst einen einzelnen Abschnitt fuer einen deutschsprachigen Deep-Research-Bericht.
+
+THEMA: {session.query}
+ABSCHNITT: {title}
+
+RECHERCHEPLAN:
+{digest.get("plan_text", "").strip()}
+
+RELEVANTES MATERIAL:
+{chr(10).join(material_blocks)}
+
+ANWEISUNG:
+- Schreibe nur den Abschnitt `## {title}`
+- Umfang: ca. {target_words[0]} bis {target_words[1]} Woerter
+- Nur Material verwenden, das im Input steht
+- Off-Topic-Hinweise weglassen
+- Wenn Evidenz duenn oder widerspruechlich ist, das klar benennen
+- Keine Quellenliste und kein Meta-Kommentar
+- Ganze Saetze und gut lesbare Absaetze, keine Bullet-Listen
+
+FOKUS:
+{guidance}
+"""
+
+    try:
+        section = await _call_narrative_llm(prompt, max_tokens=max_tokens, temperature=0.35)
+    except Exception as exc:
+        logger.warning("Narrative-Abschnitt %s fehlgeschlagen: %s", title, exc)
+        return ""
+    return _normalize_narrative_section(title, section)
+
+
+def _is_narrative_readable(section_texts: List[str]) -> bool:
+    if len(section_texts) < 3:
+        return False
+    combined = "\n\n".join(section_texts).strip()
+    if _narrative_word_count(combined) < 150:
+        return False
+    return "## Einordnung" in combined and "## Fazit" in combined
+
+
+async def _create_compact_narrative_retry(
+    session: "DeepResearchSession",
+    digest: Dict[str, Any],
+    section_drafts: Dict[str, str],
+) -> str:
+    successful_drafts = [text for text in section_drafts.values() if text]
+    draft_block = "\n\n".join(successful_drafts[:4]).strip()
+
+    material_blocks = [
+        f"RECHERCHEPLAN:\n{digest.get('plan_text', '').strip()}",
+        f"STATISTIK:\n{digest.get('stats_text', '').strip()}",
+    ]
+    for key in ("verified_lines", "unverified_lines", "synthesis_lines", "conflict_lines", "open_questions", "report_notes"):
+        items = digest.get(key) or []
+        if items:
+            label = key.replace("_", " ").upper()
+            material_blocks.append(f"{label}:\n" + "\n".join(f"- {item}" for item in items))
+    if draft_block:
+        material_blocks.append(f"BISHERIGE ABSCHNITTSENTWUERFE:\n{draft_block}")
+
+    prompt = f"""Du erstellst einen lesbaren Deep-Research-Bericht auf Deutsch.
+
+THEMA: {session.query}
+
+{chr(10).join(material_blocks)}
+
+AUFGABE:
+Forme daraus einen kompakten, aber zusammenhaengenden Lesebericht mit genau diesen Ueberschriften:
+- ## Einordnung
+- ## Belastbare Beobachtungen
+- ## Hinweise und offene Punkte
+- ## Analytische Verdichtung
+- ## Fazit
+
+VORGABEN:
+- Nutze nur Material aus dem Input
+- Off-Topic-Hinweise weglassen
+- Widersprueche und Unsicherheiten klar benennen
+- Kein Quellenverzeichnis, das wird spaeter deterministisch angehaengt
+- Keine Meta-Hinweise auf den Schreibprozess
+- Ziel: 900 bis 1800 Woerter
+"""
+
+    try:
+        narrative = await _call_narrative_llm(prompt, max_tokens=2600, temperature=0.35)
+    except Exception as exc:
+        logger.warning("Narrative-Kompakt-Retry fehlgeschlagen: %s", exc)
+        return ""
+
+    cleaned = str(narrative or "").strip()
+    cleaned = re.sub(r"^```(?:markdown)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
+    cleaned = re.sub(r"^\s*#\s+.+?\n+", "", cleaned, count=1)
+    cleaned = re.sub(r"\n##\s+Quellenhinweise[\s\S]*$", "", cleaned).strip()
+    return cleaned
+
+
 def _compose_pdf_markdown(narrative_content: str, academic_content: str) -> str:
     narrative = str(narrative_content or "").strip()
     academic = str(academic_content or "").strip()
@@ -3509,6 +3842,7 @@ def _get_research_metadata_summary(session: DeepResearchSession) -> Dict[str, An
         "query_variant_worker": session.research_metadata.get("query_variant_worker", {}),
         "semantic_claim_dedupe": session.research_metadata.get("semantic_claim_dedupe", {}),
         "conflict_scan_worker": session.research_metadata.get("conflict_scan_worker", {}),
+        "narrative_report": session.research_metadata.get("narrative_report", {}),
         "start_time": session.start_time,
         "total_sources_processed": len(session.visited_urls),
         "total_facts_extracted": len(session.all_extracted_facts_raw),
@@ -4276,141 +4610,119 @@ async def _create_narrative_synthesis_report(session: DeepResearchSession) -> st
     Anders als der analytische Report: fließender Text, inhaltlich gegliedert,
     wie ein guter Zeitungsartikel oder Wikipedia-Eintrag — direkt lesbar.
     """
-    plan = _ensure_research_plan(session)
-    # Material für den LLM zusammenstellen
-    facts_text = ""
-    if session.verified_facts:
-        facts_text += "VERIFIZIERTE FAKTEN:\n"
-        for i, f in enumerate(session.verified_facts[:25], 1):
-            quotes = f.get("supporting_quotes", [])
-            quote_str = f' | Zitat: "{quotes[0][:150]}"' if quotes and quotes[0] else ""
-            facts_text += f"{i}. {f.get('fact', '')}{quote_str}\n"
+    digest = _build_narrative_digest(session)
+    narrative_meta = {
+        "strategy": "sectioned",
+        "sections_attempted": [],
+        "sections_completed": [],
+        "compact_retry_used": False,
+        "fallback_used": False,
+    }
 
-    if session.unverified_claims:
-        facts_text += "\nWEITERE HINWEISE (noch nicht durch mehrere Quellen bestätigt):\n"
-        for i, c in enumerate(session.unverified_claims[:20], 1):
-            source_type = c.get("source_type", "web")
-            prefix_map = {
-                "youtube": "[YT] ",
-                "arxiv": "[Paper] ",
-                "github": "[GitHub] ",
-                "huggingface": "[HF] ",
-                "edison": "[Literatur] ",
-            }
-            prefix = prefix_map.get(source_type, "")
-            facts_text += f"{i}. {prefix}{c.get('fact', '')}\n"
+    section_specs = [
+        {
+            "title": "Einordnung",
+            "material_keys": ["plan_text", "stats_text", "verified_lines", "source_lines"],
+            "guidance": (
+                "Ordne das Thema knapp ein, erklaere den Recherchefokus und was die aktuelle Evidenzlage "
+                "ueberhaupt hergibt. Keine Detailflut, sondern Orientierung."
+            ),
+            "target_words": (140, 260),
+            "max_tokens": 850,
+        },
+        {
+            "title": "Belastbare Beobachtungen",
+            "material_keys": ["verified_lines", "source_lines", "synthesis_lines"],
+            "guidance": (
+                "Fokussiere auf die tragfaehigsten, am besten belegten Punkte. Benenne Zusammenhaenge "
+                "zwischen Fakten und halte dich eng an die Leitfrage."
+            ),
+            "target_words": (220, 380),
+            "max_tokens": 1200,
+        },
+        {
+            "title": "Hinweise und offene Punkte",
+            "material_keys": ["unverified_lines", "conflict_lines", "open_questions", "report_notes"],
+            "guidance": (
+                "Erklaere, welche Hinweise noch duenn, widerspruechlich oder offen sind. "
+                "Unsicherheit lieber klar benennen als kuenstlich glätten."
+            ),
+            "target_words": (180, 320),
+            "max_tokens": 950,
+        },
+        {
+            "title": "Analytische Verdichtung",
+            "material_keys": ["synthesis_lines", "verified_lines", "conflict_lines", "report_notes"],
+            "guidance": (
+                "Verdichte die wichtigsten Muster, Grenzen und Spannungen zwischen den Quellen. "
+                "Keine Wiederholung des Rohmaterials, sondern Einordnung."
+            ),
+            "target_words": (220, 380),
+            "max_tokens": 1200,
+        },
+        {
+            "title": "Fazit",
+            "material_keys": ["stats_text", "verified_lines", "open_questions", "report_notes"],
+            "guidance": (
+                "Ziehe ein ehrliches Schlussfazit: Was ist belastbar, was bleibt offen, und wofuer reicht "
+                "die aktuelle Recherche schon aus oder noch nicht."
+            ),
+            "target_words": (140, 260),
+            "max_tokens": 850,
+        },
+    ]
 
-    syntheses_text = ""
-    if session.thesis_analyses:
-        syntheses_text = "\nSYNTHESEN AUS DER QUELLENANALYSE:\n"
-        for a in session.thesis_analyses:
-            if a.synthesis:
-                syntheses_text += f"• {a.topic}: {a.synthesis}\n"
-
-    sources_text = ""
-    if session.research_tree:
-        sources_text = "\nGENUTZTE WEB-QUELLEN:\n"
-        for node in session.research_tree[:20]:
-            sources_text += f"- {node.title} | {node.url}\n"
-
-    yt_sources_text = ""
-    yt_claims = [c for c in session.unverified_claims if c.get("source_type") == "youtube"]
-    if yt_claims:
-        yt_sources_text = "\nYOUTUBE-QUELLEN:\n"
-        for c in yt_claims:
-            title = c.get("source_title", c.get("video_id", ""))
-            channel = c.get("channel", "")
-            url = c.get("source", "")
-            yt_sources_text += f"- [Video: {title}] | Kanal: {channel} | {url}\n"
-
-    # Trend-Quellen-Texte für Prompt aufbereiten
-    arxiv_items = [c for c in session.unverified_claims if c.get("source_type") == "arxiv"]
-    github_items = [c for c in session.unverified_claims if c.get("source_type") == "github"]
-    hf_items = [c for c in session.unverified_claims if c.get("source_type") == "huggingface"]
-
-    trend_sources_text = ""
-    if arxiv_items:
-        trend_sources_text += "\nARXIV-PAPER:\n"
-        for c in arxiv_items:
-            authors = c.get("authors", "")
-            pub = c.get("published_date", "")
-            trend_sources_text += f"- [Paper: {c.get('source_title', '')}] | {authors} ({pub}) | {c.get('source', '')}\n"
-    if github_items:
-        trend_sources_text += "\nGITHUB-PROJEKTE:\n"
-        for c in github_items:
-            stars = c.get("stars", 0)
-            lang = c.get("language", "")
-            trend_sources_text += f"- [GitHub: {c.get('full_name', c.get('source_title', ''))} ({stars:,}★, {lang})] | {c.get('source', '')}\n"
-    if hf_items:
-        trend_sources_text += "\nHUGGINGFACE-MODELLE/PAPER:\n"
-        for c in hf_items:
-            trend_sources_text += f"- [HF: {c.get('source_title', '')}] | {c.get('source', '')}\n"
-
-    plan_text = (
-        f"LEITFRAGE: {plan.primary_question}\n"
-        f"SCOPE-MODUS: {plan.scope_mode}\n"
-        f"TEILFRAGEN: {' | '.join(plan.subquestions[:4])}\n"
-        f"MUSS-BEGRIFFE: {', '.join(plan.must_have_terms[:6])}\n"
-        f"TOPIC-BOUNDARIES: {' | '.join(plan.topic_boundaries[:3])}\n"
-        f"AUSSCHLUESSE: {', '.join(plan.exclude_terms[:8])}\n"
-    )
-
-    prompt = f"""Du erhältst Recherche-Ergebnisse zu folgendem Thema und sollst daraus einen ausführlichen, gut lesbaren Bericht schreiben.
-
-THEMA: {session.query}
-
-RECHERCHEPLAN:
-{plan_text}
-
-{facts_text}{syntheses_text}{sources_text}{yt_sources_text}{trend_sources_text}
-
-AUFGABE:
-Schreibe einen ausführlichen Lesebericht auf Deutsch, der alle wichtigen Informationen zu einem kohärenten, fließenden Text zusammenfasst.
-
-FORMAT-VORGABEN:
-- Beginne mit einer Einleitung, die das Thema und seinen Kontext erklärt (mindestens 2-3 Absätze)
-- Gliedere den Hauptteil nach inhaltlichen Schwerpunkten (nicht nach Quellen-Reihenfolge)
-- Nutze ## Überschriften für die Hauptabschnitte (mindestens 4 Abschnitte)
-- Jeder Hauptabschnitt: mindestens 3-4 vollständige Absätze mit je 3-5 Sätzen
-- Nutze direkte Zitate aus den Quellen in Anführungszeichen
-- Erkläre Zusammenhänge und Widersprüche zwischen verschiedenen Quellen
-- YouTube-Quellen mit [Video: Titel] kennzeichnen, wenn du darauf Bezug nimmst
-- ArXiv-Paper mit [Paper: Titel] kennzeichnen, wenn du darauf Bezug nimmst
-- GitHub-Projekte mit [GitHub: Name (★)] kennzeichnen, wenn du darauf Bezug nimmst
-- HuggingFace-Modelle/-Paper mit [HF: Name] kennzeichnen, wenn du darauf Bezug nimmst
-- Lasse Hinweise weg, die nicht klar zur Leitfrage und den Muss-Begriffen passen
-- Schreibe in ganzen Sätzen und Absätzen — kein reines Bullet-Point-Staccato
-- Wo sinnvoll dürfen Aufzählungen zur Übersichtlichkeit eingesetzt werden
-- Beende mit einem ausführlichen Fazit (mindestens 3 Absätze)
-- Füge am Ende ein Quellenverzeichnis als nummerierte Liste mit Titel und URL ein
-- Länge: 2500–5000 Wörter — lieber zu ausführlich als zu kurz
-- Ton: sachlich, informativ, gut lesbar — wie ein guter Wikipedia-Artikel oder Zeitungsfeature
-
-Wichtig: Schreibe NUR den Berichtstext. Kein Meta-Kommentar über den Schreibprozess."""
-
-    def _call():
-        token_param = _get_token_param_name(SMART_MODEL)
-        response = client.chat.completions.create(
-            model=SMART_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.4,
-            **{token_param: 6000},
+    section_drafts: Dict[str, str] = {}
+    for spec in section_specs:
+        title = spec["title"]
+        narrative_meta["sections_attempted"].append(title)
+        section_text = await _generate_narrative_section(
+            session=session,
+            title=title,
+            digest=digest,
+            material_keys=spec["material_keys"],
+            guidance=spec["guidance"],
+            target_words=spec["target_words"],
+            max_tokens=spec["max_tokens"],
         )
-        return response.choices[0].message.content or ""
+        if section_text and _narrative_word_count(section_text) >= 25:
+            section_drafts[title] = section_text
+            narrative_meta["sections_completed"].append(title)
+        else:
+            section_drafts[title] = ""
 
-    try:
-        narrative = await asyncio.to_thread(_call)
-    except Exception as e:
-        logger.warning(f"Narrative-Synthese LLM-Call fehlgeschlagen: {e}")
-        narrative = "_Narrative Synthese konnte nicht erstellt werden._"
+    section_texts = [section_drafts[spec["title"]] for spec in section_specs if section_drafts.get(spec["title"])]
+    if _is_narrative_readable(section_texts):
+        narrative = "\n\n".join(section_texts + [digest["sources_section"]]).strip()
+    else:
+        narrative_meta["compact_retry_used"] = True
+        retry_narrative = await _create_compact_narrative_retry(session, digest, section_drafts)
+        if (
+            retry_narrative
+            and _narrative_word_count(retry_narrative) >= 80
+            and "## Einordnung" in retry_narrative
+            and "## Fazit" in retry_narrative
+        ):
+            narrative = f"{retry_narrative}\n\n{digest['sources_section']}".strip()
+        else:
+            logger.warning("Narrative-Synthese blieb leer; nutze deterministischen Fallback.")
+            narrative_meta["fallback_used"] = True
+            narrative = _build_narrative_fallback_report(session)
 
     if not str(narrative or "").strip():
         logger.warning("Narrative-Synthese blieb leer; nutze deterministischen Fallback.")
+        narrative_meta["fallback_used"] = True
         narrative = _build_narrative_fallback_report(session)
-    elif len(str(narrative).split()) < 120:
-        logger.warning("Narrative-Synthese zu kurz (%s Woerter); erweitere per Fallback.", len(str(narrative).split()))
+    elif _narrative_word_count(narrative) < 90:
+        logger.warning(
+            "Narrative-Synthese zu kurz (%s Woerter); erweitere per Fallback.",
+            _narrative_word_count(narrative),
+        )
         fallback = _build_narrative_fallback_report(session)
+        narrative_meta["fallback_used"] = True
         narrative = f"{str(narrative).strip()}\n\n{fallback}".strip()
+
+    session.research_metadata["narrative_report"] = narrative_meta
 
     now = datetime.now().strftime("%d.%m.%Y %H:%M")
     source_count = len(session.research_tree)
@@ -4430,7 +4742,7 @@ Wichtig: Schreibe NUR den Berichtstext. Kein Meta-Kommentar über den Schreibpro
         extras.append(f"{hf_count} HuggingFace-Einträge")
 
     extras_info = (", " + ", ".join(extras)) if extras else ""
-    word_count = len(narrative.split())
+    word_count = _narrative_word_count(narrative)
     header = (
         f"# Recherche-Bericht\n"
         f"## {session.query}\n\n"

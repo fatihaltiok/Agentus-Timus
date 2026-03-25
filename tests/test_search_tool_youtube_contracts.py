@@ -160,6 +160,10 @@ def test_parse_dataforseo_mode_rejects_unknown():
         parse_dataforseo_mode("batch")
 
 
+def test_parse_dataforseo_mode_accepts_serpapi_alias():
+    assert parse_dataforseo_mode("serpapi") == DataForSEORetrievalMode.LIVE
+
+
 def test_standard_youtube_call_polls_until_result(monkeypatch):
     calls = []
 

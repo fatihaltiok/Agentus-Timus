@@ -36,7 +36,7 @@ from utils.location_route import (
 logger = logging.getLogger("search_tool")
 
 # --- Umgebungsvariablen ---
-load_dotenv()
+load_dotenv(override=True)
 DATAFORSEO_USER = os.getenv("DATAFORSEO_USER")
 DATAFORSEO_PASS = os.getenv("DATAFORSEO_PASS")
 SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY")
@@ -155,6 +155,8 @@ class YouTubeRequestSpec:
 
 def parse_dataforseo_mode(value: str) -> DataForSEORetrievalMode:
     raw = str(value or "live").strip().lower()
+    if raw == "serpapi":
+        raw = "live"
     try:
         return DataForSEORetrievalMode(raw)
     except ValueError as exc:
@@ -1303,8 +1305,6 @@ def _serpapi_transcript_result(data: dict, video_id: str) -> dict:
         )
 
     full_text = " ".join(item["text"] for item in items)
-    if len(full_text) > 8000:
-        full_text = full_text[:8000]
 
     return {
         "video_id": video_id,
@@ -1600,10 +1600,8 @@ async def get_youtube_subtitles(
     except Exception as e:
         logger.error(f"Fehler beim Parsen der Untertitel: {e}")
 
-    # Zusammengesetzter Text, max 8000 Zeichen
+    # Zusammengesetzter Text — fuer spaetere Chunk-Auswertung nicht mehr hart begrenzen
     full_text = " ".join(i["text"] for i in items)
-    if len(full_text) > 8000:
-        full_text = full_text[:8000]
 
     logger.info(f"📺 get_youtube_subtitles: {len(items)} Segmente, {len(full_text)} Zeichen")
     return {"video_id": video_id, "full_text": full_text, "items": items, "source_provider": "dataforseo"}

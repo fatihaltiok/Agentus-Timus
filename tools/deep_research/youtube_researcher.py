@@ -20,17 +20,18 @@ import json
 import logging
 import os
 import re
-from typing import List, Optional, TYPE_CHECKING
+from typing import Any, List, Optional, TYPE_CHECKING
 
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from agent.shared.json_utils import extract_json_robust
 from tools.planner.planner_helpers import call_tool_internal
 
 if TYPE_CHECKING:
     from tools.deep_research.tool import DeepResearchSession
 
-load_dotenv()
+load_dotenv(override=True)
 logger = logging.getLogger("youtube_researcher")
 
 # --- Modell-Konfiguration ---
@@ -49,6 +50,10 @@ _VISION_MODEL = os.getenv("YOUTUBE_VISION_MODEL", "nvidia/llama-3.2-90b-vision-i
 
 # Maximale Videos pro Recherche (konfigurierbar via ENV)
 _MAX_VIDEOS = int(os.getenv("YOUTUBE_MAX_VIDEOS", "5"))
+_TRANSCRIPT_CHUNK_CHARS = max(1200, int(os.getenv("YOUTUBE_TRANSCRIPT_CHUNK_CHARS", "6000")))
+_TRANSCRIPT_CHUNK_OVERLAP = max(0, int(os.getenv("YOUTUBE_TRANSCRIPT_CHUNK_OVERLAP", "600")))
+_TRANSCRIPT_MAX_CHUNKS = max(1, int(os.getenv("YOUTUBE_TRANSCRIPT_MAX_CHUNKS", "24")))
+_TRANSCRIPT_ANALYSIS_INPUT_MAX = max(1500, int(os.getenv("YOUTUBE_TRANSCRIPT_ANALYSIS_INPUT_MAX", "7000")))
 
 
 def _build_queries(query: str) -> List[str]:
@@ -126,7 +131,7 @@ class YouTubeResearcher:
                             return await self._analyze_thumbnail(thumbnail_url, query)
                         return {}
 
-                    transcript, visual_info, video_context = await asyncio.gather(
+                    transcript_payload, visual_info, video_context = await asyncio.gather(
                         self._get_transcript_with_fallback(video_id),
                         _maybe_thumbnail(),
                         self._get_video_context(video_id),
@@ -143,15 +148,22 @@ class YouTubeResearcher:
                             for item in video_context.get("comments", [])[:3]
                             if isinstance(item, dict) and str(item.get("text", "")).strip()
                         ]
+                    if isinstance(transcript_payload, dict):
+                        visual_info["transcript_segments"] = len(transcript_payload.get("items") or [])
+                        visual_info["transcript_language"] = str(transcript_payload.get("language_code", "")).strip()
 
                     text_facts = {}
-                    analysis_text = transcript if transcript and len(transcript) > 100 else context_text
-                    if analysis_text and len(analysis_text) > 100:
-                        text_facts = await self._analyze_text(analysis_text, query)
+                    transcript_text = ""
+                    if isinstance(transcript_payload, dict):
+                        transcript_text = str(transcript_payload.get("full_text") or "").strip()
+                    if transcript_payload and (len(transcript_text) > 100 or (transcript_payload.get("items") or [])):
+                        text_facts = await self._analyze_transcript_payload(transcript_payload, query)
+                    elif context_text and len(context_text) > 100:
+                        text_facts = await self._analyze_text(context_text, query)
                     logger.info(
                         f"📺 Fallback: '{video.get('title', video_id)}' "
                         f"— {len(text_facts.get('facts', []))} Fakten "
-                        f"({'Transkript' if analysis_text == transcript else 'Video-Kontext'})"
+                        f"({'Transkript' if transcript_payload else 'Video-Kontext'})"
                     )
 
                 self._add_to_session(session, video, text_facts, visual_info)
@@ -198,27 +210,231 @@ class YouTubeResearcher:
         logger.info(f"📺 Bilinguale Suche: {len(all_videos)} einzigartige Videos gefunden")
         return all_videos
 
-    async def _get_transcript_with_fallback(self, video_id: str) -> Optional[str]:
+    @staticmethod
+    def _chunk_transcript_items(
+        items: List[dict[str, Any]],
+        max_chars: int = _TRANSCRIPT_CHUNK_CHARS,
+        overlap_chars: int = _TRANSCRIPT_CHUNK_OVERLAP,
+        max_chunks: int = _TRANSCRIPT_MAX_CHUNKS,
+    ) -> List[str]:
+        """Teilt ein Transkript segmentbasiert in ueberlappende Chunks auf."""
+        texts = [
+            str(item.get("text", "")).strip()
+            for item in items
+            if isinstance(item, dict) and str(item.get("text", "")).strip()
+        ]
+        if not texts:
+            return []
+
+        total_chars = sum(len(text) + 1 for text in texts)
+        effective_max_chars = max(400, int(max_chars or _TRANSCRIPT_CHUNK_CHARS))
+        effective_overlap = max(0, int(overlap_chars or 0))
+        effective_max_chunks = max(1, int(max_chunks or _TRANSCRIPT_MAX_CHUNKS))
+
+        # Wenn das Material sonst zu viele Chunks erzeugen wuerde, vergroessere die Chunk-Groesse
+        # statt spaeter Material still abzuschneiden.
+        if total_chars > effective_max_chars * effective_max_chunks:
+            effective_max_chars = max(
+                effective_max_chars,
+                int(total_chars / effective_max_chunks) + effective_overlap + 200,
+            )
+
+        chunks: List[str] = []
+        current: List[str] = []
+        current_len = 0
+        index = 0
+
+        while index < len(texts):
+            text = texts[index]
+            separator = 1 if current else 0
+            projected = current_len + separator + len(text)
+
+            if current and projected > effective_max_chars:
+                chunk_text = " ".join(current).strip()
+                if chunk_text:
+                    chunks.append(chunk_text)
+
+                overlap: List[str] = []
+                overlap_len = 0
+                if effective_overlap > 0:
+                    for previous in reversed(current):
+                        next_len = overlap_len + len(previous) + (1 if overlap else 0)
+                        if next_len > effective_overlap and overlap:
+                            break
+                        overlap.insert(0, previous)
+                        overlap_len = next_len
+
+                current = overlap
+                current_len = sum(len(item) for item in current) + max(len(current) - 1, 0)
+                continue
+
+            current.append(text)
+            current_len = projected
+            index += 1
+
+        if current:
+            chunk_text = " ".join(current).strip()
+            if chunk_text:
+                chunks.append(chunk_text)
+
+        return chunks
+
+    async def _get_transcript_with_fallback(self, video_id: str) -> Optional[dict]:
         """
         Lädt DE- und EN-Transkript parallel, bevorzugt Deutsch.
         Erfasst so deutsche Beiträge UND englische Podcasts/Interviews.
         """
-        async def _fetch(lang: str) -> Optional[str]:
+        async def _fetch(lang: str) -> Optional[dict]:
             try:
                 result = await call_tool_internal(
                     "get_youtube_subtitles", {"video_id": video_id, "language_code": lang, "mode": "standard"}
                 )
                 if isinstance(result, dict):
-                    text = result.get("full_text") or ""
-                    if len(text) > 100:
-                        logger.debug(f"📺 Transkript ({lang}) für {video_id}: {len(text)} Zeichen")
-                        return text
+                    items = result.get("items") or []
+                    text = str(result.get("full_text") or "").strip()
+                    if len(text) > 100 or items:
+                        payload = dict(result)
+                        payload["language_code"] = lang
+                        logger.debug(
+                            "📺 Transkript (%s) für %s: %s Zeichen, %s Segmente",
+                            lang,
+                            video_id,
+                            len(text),
+                            len(items),
+                        )
+                        return payload
             except Exception as e:
                 logger.warning(f"Transkript ({lang}) für {video_id} fehlgeschlagen: {e}")
             return None
 
-        de_text, en_text = await asyncio.gather(_fetch("de"), _fetch("en"))
-        return de_text or en_text
+        de_payload, en_payload = await asyncio.gather(_fetch("de"), _fetch("en"))
+        return de_payload or en_payload
+
+    @staticmethod
+    def _merge_chunk_analyses(chunk_results: List[dict]) -> dict:
+        """Deterministischer Fallback, falls die Gesamtsynthese fehlschlaegt."""
+        seen_facts: set[str] = set()
+        merged_facts: List[str] = []
+        best_quote = ""
+        best_relevance = 0
+        relevance_values: List[int] = []
+
+        for result in chunk_results:
+            if not isinstance(result, dict):
+                continue
+            for fact in result.get("facts") or []:
+                cleaned = str(fact or "").strip()
+                if not cleaned:
+                    continue
+                key = cleaned.lower()
+                if key in seen_facts:
+                    continue
+                seen_facts.add(key)
+                merged_facts.append(cleaned)
+                if len(merged_facts) >= 10:
+                    break
+            quote = str(result.get("key_quote") or "").strip()
+            relevance = int(result.get("relevance") or 0)
+            if relevance > 0:
+                relevance_values.append(relevance)
+            if quote and (not best_quote or relevance >= best_relevance):
+                best_quote = quote
+                best_relevance = relevance
+
+        average_relevance = int(round(sum(relevance_values) / len(relevance_values))) if relevance_values else 0
+        return {
+            "facts": merged_facts[:8],
+            "key_quote": best_quote,
+            "relevance": max(best_relevance, average_relevance, 0),
+        }
+
+    async def _synthesize_chunk_analyses(self, chunk_results: List[dict], query: str) -> dict:
+        """Verdichtet Chunk-Analysen zu einem Gesamtbild fuer ein langes Video-Transkript."""
+        if not _OPENROUTER_KEY:
+            return self._merge_chunk_analyses(chunk_results)
+
+        chunk_lines: List[str] = []
+        for index, result in enumerate(chunk_results, start=1):
+            if not isinstance(result, dict):
+                continue
+            facts = [str(item).strip() for item in result.get("facts") or [] if str(item).strip()]
+            quote = str(result.get("key_quote") or "").strip()
+            relevance = int(result.get("relevance") or 0)
+            line = f"Chunk {index}: Fakten={facts[:5]} | Relevanz={relevance}"
+            if quote:
+                line += f' | Zitat="{quote[:220]}"'
+            chunk_lines.append(line)
+
+        if not chunk_lines:
+            return {}
+
+        prompt = (
+            f"Thema: {query}\n\n"
+            "Unten stehen Teilauswertungen eines langen YouTube-Transkripts.\n"
+            "Verdichte sie zu einer konsistenten Gesamtsynthese auf DEUTSCH.\n"
+            "Beruecksichtige nur Punkte, die im Material wirklich vorkommen. "
+            "Doppelte oder sehr aehnliche Fakten zusammenfassen.\n\n"
+            f"{chr(10).join(chunk_lines[:_TRANSCRIPT_MAX_CHUNKS])}\n\n"
+            'Antworte NUR als JSON: {"facts": ["Fakt 1", "Fakt 2", ...], "key_quote": "wichtigstes Zitat", "relevance": 8}'
+        )
+
+        def _call():
+            oc = OpenAI(api_key=_OPENROUTER_KEY, base_url=_OPENROUTER_BASE)
+            resp = oc.chat.completions.create(
+                model=_ANALYSIS_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+                max_tokens=700,
+            )
+            return resp.choices[0].message.content or ""
+
+        try:
+            raw = await asyncio.to_thread(_call)
+            parsed = extract_json_robust(raw)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception as e:
+            logger.warning(f"Chunk-Gesamtsynthese fehlgeschlagen: {e}")
+        return self._merge_chunk_analyses(chunk_results)
+
+    async def _analyze_transcript_payload(self, payload: dict, query: str) -> dict:
+        """Analysiert ein komplettes Transkript, bei Bedarf ueber mehrere Chunks."""
+        if not isinstance(payload, dict):
+            return {}
+
+        items = payload.get("items") or []
+        full_text = str(payload.get("full_text") or "").strip()
+        if not full_text and items:
+            full_text = " ".join(
+                str(item.get("text", "")).strip()
+                for item in items
+                if isinstance(item, dict) and str(item.get("text", "")).strip()
+            ).strip()
+        if len(full_text) <= 100:
+            return {}
+
+        chunks = self._chunk_transcript_items(items) if items else []
+        if not chunks:
+            chunks = [full_text]
+
+        if len(chunks) == 1 and len(chunks[0]) <= _TRANSCRIPT_ANALYSIS_INPUT_MAX:
+            return await self._analyze_text(chunks[0], query)
+
+        logger.info("📺 Transkript wird gechunked analysiert: %s Chunks", len(chunks))
+        chunk_results: List[dict] = []
+        total_chunks = len(chunks)
+        for index, chunk in enumerate(chunks, start=1):
+            if len(chunk) <= 100:
+                continue
+            result = await self._analyze_text(chunk, query, chunk_index=index, total_chunks=total_chunks)
+            if isinstance(result, dict) and ((result.get("facts") or []) or result.get("key_quote")):
+                chunk_results.append(result)
+
+        if not chunk_results:
+            return await self._analyze_text(full_text, query)
+        if len(chunk_results) == 1:
+            return chunk_results[0]
+        return await self._synthesize_chunk_analyses(chunk_results, query)
 
     async def _get_video_context(self, video_id: str) -> dict:
         """Lädt Metadaten und optional Kommentare/Chapters für ein Video."""
@@ -319,15 +535,32 @@ class YouTubeResearcher:
             logger.warning(f"📺 Qwen-VL Video-Analyse fehlgeschlagen ({video_id}): {e} — Fallback auf Transkript")
         return {}
 
-    async def _analyze_text(self, text: str, query: str) -> dict:
+    async def _analyze_text(
+        self,
+        text: str,
+        query: str,
+        chunk_index: Optional[int] = None,
+        total_chunks: Optional[int] = None,
+    ) -> dict:
         """Fallback: Extrahiert Fakten aus dem Transkript via Text-LLM (DE + EN Inhalte)."""
         if not _OPENROUTER_KEY:
             logger.warning("OPENROUTER_API_KEY fehlt — Text-Analyse übersprungen")
             return {}
 
+        cleaned_text = str(text or "").strip()
+        if not cleaned_text:
+            return {}
+        excerpt = cleaned_text[:_TRANSCRIPT_ANALYSIS_INPUT_MAX]
+        chunk_hint = (
+            f"Dies ist Transcript-Teil {chunk_index} von {total_chunks}. "
+            "Fokussiere dich nur auf Inhalte aus diesem Teil und erfinde keine Punkte aus anderen Abschnitten.\n"
+            if chunk_index is not None and total_chunks is not None
+            else ""
+        )
         prompt = (
             f"Thema: {query}\n\n"
-            f"YouTube-Transkript (Auszug — kann Deutsch oder Englisch sein):\n{text[:4000]}\n\n"
+            f"{chunk_hint}"
+            f"YouTube-Transkript (kann Deutsch oder Englisch sein):\n{excerpt}\n\n"
             "Extrahiere die wichtigsten Fakten aus diesem Transkript. "
             "Antworte auf DEUTSCH, auch wenn das Transkript auf Englisch ist.\n"
             "Antworte NUR als JSON:\n"
@@ -346,9 +579,9 @@ class YouTubeResearcher:
 
         try:
             raw = await asyncio.to_thread(_call)
-            m = re.search(r"\{.*\}", raw, re.DOTALL)
-            if m:
-                return json.loads(m.group())
+            parsed = extract_json_robust(raw)
+            if isinstance(parsed, dict):
+                return parsed
         except Exception as e:
             logger.warning(f"Text-Analyse fehlgeschlagen: {e}")
         return {}
