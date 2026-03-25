@@ -12,7 +12,7 @@ def test_materialize_verification_claims_marks_conflicts_as_contested():
     from tools.deep_research.research_contracts import ClaimVerdict
     from tools.deep_research.tool import DeepResearchSession
 
-    session = DeepResearchSession("Pruefe Modellfaehigkeiten")
+    session = DeepResearchSession("Modell X Coding Faehigkeiten")
     grouped = [[
         {
             "fact": "Modell X ist stark in Coding.",
@@ -48,18 +48,18 @@ async def test_deep_verify_facts_populates_contract_v2_runtime_claims(monkeypatc
     from tools.deep_research.tool import DeepResearchSession, _deep_verify_facts
 
     async def fake_group(raw_facts, query):
-        assert query == "Teste Research Runtime"
+        assert query == "Qwen Coding Research Runtime"
         return [raw_facts]
 
     async def fake_corroborator(fact_text, query):
         assert fact_text == "Qwen ist stark in Coding."
-        assert query == "Teste Research Runtime"
+        assert query == "Qwen Coding Research Runtime"
         return None
 
     monkeypatch.setattr("tools.deep_research.tool._group_similar_facts", fake_group)
     monkeypatch.setattr("tools.deep_research.tool._verify_fact_with_corroborator", fake_corroborator)
 
-    session = DeepResearchSession("Teste Research Runtime")
+    session = DeepResearchSession("Qwen Coding Research Runtime")
     session.all_extracted_facts_raw = [
         {
             "fact": "Qwen ist stark in Coding.",

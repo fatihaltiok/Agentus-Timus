@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tools.deep_research.research_contracts import claim_is_on_topic
 from tools.deep_research.tool import (
     _apply_semantic_merge_candidates,
+    _normalize_conflict_scan_payload,
     _compose_pdf_markdown,
     _dedupe_contract_claims,
 )
@@ -93,3 +94,39 @@ def test_hypothesis_semantic_merge_candidates_never_expand_count(left_suffix: st
     )
 
     assert 0 < len(merged) <= len(claims)
+
+
+@given(
+    conflict_count=st.integers(min_value=0, max_value=20),
+    question_count=st.integers(min_value=0, max_value=20),
+)
+@settings(deadline=None, max_examples=30)
+def test_hypothesis_conflict_scan_payload_caps_lengths(conflict_count: int, question_count: int):
+    payload = {
+        "conflicts": [
+            {
+                "claim_text": f"Claim {idx}",
+                "issue_type": "scope_gap",
+                "reason": "note",
+                "confidence": 0.9,
+            }
+            for idx in range(conflict_count)
+        ],
+        "open_questions": [f"Question {idx}" for idx in range(question_count)],
+        "weak_evidence_flags": [
+            {
+                "claim_text": f"Weak {idx}",
+                "reason": "note",
+                "confidence": 0.9,
+            }
+            for idx in range(conflict_count)
+        ],
+        "report_notes": [f"Note {idx}" for idx in range(question_count)],
+    }
+
+    normalized = _normalize_conflict_scan_payload(payload)
+
+    assert len(normalized["conflicts"]) <= 6
+    assert len(normalized["open_questions"]) <= 8
+    assert len(normalized["weak_evidence_flags"]) <= 6
+    assert len(normalized["report_notes"]) <= 6

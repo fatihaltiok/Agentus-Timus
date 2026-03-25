@@ -108,6 +108,7 @@ def test_research_metadata_summary_exposes_research_plan():
     assert summary["research_plan"]["must_have_terms"]
     assert "query_variant_worker" in summary
     assert "semantic_claim_dedupe" in summary
+    assert "conflict_scan_worker" in summary
 
 
 @pytest.mark.asyncio

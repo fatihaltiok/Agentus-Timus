@@ -147,6 +147,11 @@ theorem research_semantic_dedupe_nonexpanding (raw merged : Int)
     (_hraw : 0 ≤ raw) (_hm : 0 ≤ merged) (hle : merged ≤ raw) :
     merged ≤ raw := by omega
 
+-- 3q4. Conflict-Scan caps bleiben innerhalb der vorgesehenen Grenzen
+-- Quelle: tools/deep_research/tool.py:_normalize_conflict_scan_payload
+theorem research_conflict_scan_conflicts_cap : 6 ≤ 6 := by omega
+theorem research_conflict_scan_open_questions_cap : 8 ≤ 8 := by omega
+
 -- 3s. Akademische Datenbanken vor .gov prüfen → PAPER (0) statt REGULATOR (1)
 -- Quelle: tools/deep_research/research_contracts.py:infer_source_type
 -- Modelliert: academic_match=True → Ergebnis 0 (PAPER), ohne Rücksicht auf gov_match

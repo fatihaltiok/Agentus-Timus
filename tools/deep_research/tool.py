@@ -326,6 +326,194 @@ def _worker_semantic_dedupe_enabled() -> bool:
     }
 
 
+def _worker_conflict_scan_enabled() -> bool:
+    return os.getenv("DR_WORKER_CONFLICT_SCAN_ENABLED", "false").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+
+
+def _conflict_scan_confidence_threshold() -> float:
+    raw = os.getenv("DR_WORKER_CONFLICT_SCAN_CONFIDENCE_THRESHOLD", "0.83")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = 0.83
+    return min(max(value, 0.0), 1.0)
+
+
+def _claim_report_signal_score(claim: Dict[str, Any]) -> tuple[int, int, int, int, float]:
+    verdict = str(claim.get("verdict") or "")
+    unknowns = claim.get("unknowns") or []
+    contradicts = claim.get("contradicts") or []
+    risk = 0
+    if verdict in {ClaimVerdict.CONTESTED.value, ClaimVerdict.MIXED_EVIDENCE.value}:
+        risk = 3
+    elif unknowns or contradicts:
+        risk = 2
+    elif verdict == ClaimVerdict.LIKELY.value:
+        risk = 1
+    return (
+        risk,
+        len(contradicts),
+        len(unknowns),
+        len(claim.get("supports") or []),
+        float(claim.get("confidence") or 0.0),
+    )
+
+
+def _build_conflict_scan_input(session: "DeepResearchSession") -> Dict[str, Any]:
+    export = session.export_contract_v2()
+    claims = list(export.get("claims") or [])
+    relevant_claims = [
+        claim for claim in claims
+        if str(claim.get("claim_type") or "") in {"verified_fact", "runtime_fact_group"}
+        and (
+            str(claim.get("verdict") or "") in {
+                ClaimVerdict.LIKELY.value,
+                ClaimVerdict.CONTESTED.value,
+                ClaimVerdict.MIXED_EVIDENCE.value,
+            }
+            or bool(claim.get("unknowns"))
+            or bool(claim.get("contradicts"))
+        )
+    ]
+    selected_claims = sorted(
+        relevant_claims,
+        key=_claim_report_signal_score,
+        reverse=True,
+    )[:15]
+    conflicting_info = [
+        {
+            "fact": str(item.get("fact") or "").strip(),
+            "note": str(item.get("note") or "").strip(),
+            "internal_confidence": float(item.get("internal_confidence") or 0.0),
+            "corroborator_confidence": float(item.get("corroborator_confidence") or 0.0),
+        }
+        for item in list(session.conflicting_info or [])[:8]
+        if str(item.get("fact") or "").strip() or str(item.get("note") or "").strip()
+    ]
+    unknown_pool: List[str] = []
+    for claim in selected_claims:
+        for item in claim.get("unknowns") or []:
+            text = _normalize_space(str(item or ""))
+            if text:
+                unknown_pool.append(text)
+    for item in export.get("open_questions") or []:
+        text = _normalize_space(str(item or ""))
+        if text:
+            unknown_pool.append(text)
+    open_questions = _unique_texts(unknown_pool)[:6]
+
+    return {
+        "query": session.query,
+        "focus_areas": list(session.focus_areas or []),
+        "scope_mode": _ensure_research_plan(session).scope_mode,
+        "claims": [
+            {
+                "claim_text": str(claim.get("claim_text") or ""),
+                "verdict": str(claim.get("verdict") or ""),
+                "confidence": float(claim.get("confidence") or 0.0),
+                "supports_count": len(claim.get("supports") or []),
+                "contradicts_count": len(claim.get("contradicts") or []),
+                "unknowns": list(claim.get("unknowns") or [])[:4],
+                "notes": str(claim.get("notes") or "")[:200],
+            }
+            for claim in selected_claims
+        ],
+        "conflicting_info": conflicting_info,
+        "open_questions": open_questions,
+    }
+
+
+def _normalize_conflict_scan_payload(payload: Any) -> Dict[str, Any]:
+    threshold = _conflict_scan_confidence_threshold()
+    data = payload if isinstance(payload, dict) else {}
+
+    conflicts_raw = data.get("conflicts")
+    conflicts: List[Dict[str, Any]] = []
+    if isinstance(conflicts_raw, list):
+        for item in conflicts_raw:
+            if not isinstance(item, dict):
+                continue
+            claim_text = _normalize_space(str(item.get("claim_text") or ""))
+            issue_type = _normalize_space(str(item.get("issue_type") or ""))
+            reason = _normalize_space(str(item.get("reason") or ""))
+            try:
+                confidence = float(item.get("confidence", 0.0))
+            except (TypeError, ValueError):
+                confidence = 0.0
+            if confidence < threshold:
+                continue
+            if not claim_text and not reason:
+                continue
+            conflicts.append(
+                {
+                    "claim_text": claim_text,
+                    "issue_type": issue_type or "conflict",
+                    "reason": reason,
+                    "confidence": round(confidence, 4),
+                }
+            )
+
+    weak_raw = data.get("weak_evidence_flags")
+    weak_evidence_flags: List[Dict[str, Any]] = []
+    if isinstance(weak_raw, list):
+        for item in weak_raw:
+            if not isinstance(item, dict):
+                continue
+            claim_text = _normalize_space(str(item.get("claim_text") or ""))
+            reason = _normalize_space(str(item.get("reason") or ""))
+            try:
+                confidence = float(item.get("confidence", 0.0))
+            except (TypeError, ValueError):
+                confidence = 0.0
+            if confidence < threshold:
+                continue
+            if not claim_text and not reason:
+                continue
+            weak_evidence_flags.append(
+                {
+                    "claim_text": claim_text,
+                    "reason": reason,
+                    "confidence": round(confidence, 4),
+                }
+            )
+
+    questions_raw = data.get("open_questions")
+    open_questions: List[str] = []
+    if isinstance(questions_raw, list):
+        open_questions = _unique_texts([str(item or "") for item in questions_raw])[:8]
+
+    notes_raw = data.get("report_notes")
+    report_notes: List[str] = []
+    if isinstance(notes_raw, list):
+        report_notes = _unique_texts([str(item or "") for item in notes_raw])[:6]
+
+    return {
+        "conflicts": conflicts[:6],
+        "open_questions": open_questions[:8],
+        "weak_evidence_flags": weak_evidence_flags[:6],
+        "report_notes": report_notes[:6],
+    }
+
+
+def _get_conflict_scan_report_context(session: "DeepResearchSession") -> Dict[str, Any]:
+    meta = session.research_metadata.get("conflict_scan_worker", {})
+    if not isinstance(meta, dict) or meta.get("status") != "ok":
+        return {
+            "conflicts": [],
+            "open_questions": [],
+            "weak_evidence_flags": [],
+            "report_notes": [],
+        }
+    return {
+        "conflicts": list(meta.get("conflicts") or []),
+        "open_questions": list(meta.get("open_questions") or []),
+        "weak_evidence_flags": list(meta.get("weak_evidence_flags") or []),
+        "report_notes": list(meta.get("report_notes") or []),
+    }
+
+
 def _semantic_protected_term_hits(session: "DeepResearchSession", text: str) -> set[str]:
     plan = _ensure_research_plan(session)
     protected = _unique_texts(
@@ -2464,6 +2652,113 @@ async def _populate_semantic_claim_dedupe_cache(
     session.research_metadata["semantic_claim_dedupe"] = metadata
 
 
+async def _populate_conflict_scan_cache(
+    session: DeepResearchSession,
+    *,
+    session_id: str,
+) -> None:
+    metadata: Dict[str, Any] = {
+        "enabled": _worker_conflict_scan_enabled(),
+        "status": "disabled",
+        "conflicts": [],
+        "open_questions": [],
+        "weak_evidence_flags": [],
+        "report_notes": [],
+        "fallback_used": True,
+    }
+    if not metadata["enabled"]:
+        session.research_metadata["conflict_scan_worker"] = metadata
+        return
+
+    worker_input = _build_conflict_scan_input(session)
+    metadata["input_counts"] = {
+        "claims": len(worker_input.get("claims") or []),
+        "conflicting_info": len(worker_input.get("conflicting_info") or []),
+        "open_questions": len(worker_input.get("open_questions") or []),
+    }
+
+    if not (
+        worker_input.get("claims")
+        or worker_input.get("conflicting_info")
+        or worker_input.get("open_questions")
+    ):
+        metadata["status"] = "skipped_no_material"
+        metadata["fallback_used"] = False
+        session.research_metadata["conflict_scan_worker"] = metadata
+        return
+
+    worker_task = WorkerTask(
+        worker_type="conflict_scan",
+        system_prompt=(
+            "Du bist ein konservativer Conflict-Scan-Worker fuer Timus Deep Research.\n"
+            "Analysiere nur offensichtliche Konflikte, Evidenzluecken und offene Fragen zur Leitfrage.\n"
+            "Erfinde keine neuen Claims und klassifiziere nur dann einen Konflikt, wenn die Hinweise stark sind.\n"
+            "Wenn du unsicher bist, liefere lieber weniger Eintraege.\n"
+            "Antworte ausschliesslich mit JSON."
+        ),
+        input_payload=worker_input,
+        response_schema={
+            "conflicts": [
+                {
+                    "claim_text": "<claim text>",
+                    "issue_type": "evidence_conflict|method_disagreement|scope_gap|uncertain_transfer",
+                    "reason": "<kurze Begruendung>",
+                    "confidence": 0.84,
+                }
+            ],
+            "open_questions": ["<offene Frage>"],
+            "weak_evidence_flags": [
+                {
+                    "claim_text": "<claim text>",
+                    "reason": "<warum schwach>",
+                    "confidence": 0.84,
+                }
+            ],
+            "report_notes": ["<kurzer Report-Hinweis>"],
+        },
+    )
+    result = await run_worker(
+        worker_task,
+        profile_prefix="DR_WORKER_CONFLICT_SCAN",
+        agent="deep_research",
+        session_id=session_id,
+    )
+    metadata.update(
+        {
+            "status": result.status,
+            "provider": result.provider,
+            "model": result.model,
+            "duration_ms": result.duration_ms,
+            "max_tokens": result.max_tokens,
+            "fallback_used": result.fallback_used,
+        }
+    )
+
+    if result.status != "ok":
+        if result.error:
+            metadata["error"] = result.error
+        session.research_metadata["conflict_scan_worker"] = metadata
+        session.methodology_notes.append(
+            f"Conflict-Scan-Worker Fallback aktiv: status={result.status}."
+        )
+        return
+
+    normalized = _normalize_conflict_scan_payload(result.payload)
+    metadata.update(normalized)
+    metadata["status"] = "ok"
+    metadata["fallback_used"] = False
+    session.research_metadata["conflict_scan_worker"] = metadata
+
+    if normalized["conflicts"] or normalized["open_questions"] or normalized["weak_evidence_flags"]:
+        session.methodology_notes.append(
+            "Conflict-Scan-Worker identifizierte zusaetzliche Konflikt-/Unknown-Hinweise fuer den Report."
+        )
+    else:
+        session.methodology_notes.append(
+            "Conflict-Scan-Worker lieferte keine zusaetzlichen belastbaren Konflikt-Hinweise."
+        )
+
+
 def _ensure_research_plan(session: DeepResearchSession) -> ResearchPlan:
     if session.research_plan is None:
         session.research_plan = _build_research_plan(session.query, session.focus_areas, session=session)
@@ -3213,6 +3508,7 @@ def _get_research_metadata_summary(session: DeepResearchSession) -> Dict[str, An
         },
         "query_variant_worker": session.research_metadata.get("query_variant_worker", {}),
         "semantic_claim_dedupe": session.research_metadata.get("semantic_claim_dedupe", {}),
+        "conflict_scan_worker": session.research_metadata.get("conflict_scan_worker", {}),
         "start_time": session.start_time,
         "total_sources_processed": len(session.visited_urls),
         "total_facts_extracted": len(session.all_extracted_facts_raw),
@@ -3369,6 +3665,7 @@ async def _synthesize_findings(session: DeepResearchSession, verification_output
     """Erstellt KI-Synthese."""
     logger.info("📝 Erstelle Synthese...")
     plan = _ensure_research_plan(session)
+    conflict_scan_context = _get_conflict_scan_report_context(session)
 
     facts = verification_output.get("verified_facts", [])[:30]
 
@@ -3387,6 +3684,28 @@ async def _synthesize_findings(session: DeepResearchSession, verification_output
         f"MUSS-BEGRIFFE: {', '.join(plan.must_have_terms[:6])}\n"
         f"AUSSCHLUESSE: {', '.join(plan.exclude_terms[:8])}\n"
     )
+    conflict_scan_text = ""
+    if (
+        conflict_scan_context["conflicts"]
+        or conflict_scan_context["open_questions"]
+        or conflict_scan_context["weak_evidence_flags"]
+        or conflict_scan_context["report_notes"]
+    ):
+        lines = ["KONFLIKT-SCAN-HINWEISE:"]
+        for item in conflict_scan_context["conflicts"][:4]:
+            lines.append(
+                f"- Konflikt: {item.get('claim_text') or '-'} | "
+                f"{item.get('issue_type') or 'conflict'} | {item.get('reason') or '-'}"
+            )
+        for item in conflict_scan_context["weak_evidence_flags"][:4]:
+            lines.append(
+                f"- Schwache Evidenz: {item.get('claim_text') or '-'} | {item.get('reason') or '-'}"
+            )
+        for item in conflict_scan_context["open_questions"][:4]:
+            lines.append(f"- Offene Frage: {item}")
+        for item in conflict_scan_context["report_notes"][:3]:
+            lines.append(f"- Report-Hinweis: {item}")
+        conflict_scan_text = "\n".join(lines) + "\n"
 
     prompt = f"""Erstelle eine strukturierte Analyse für "{session.query}".
 
@@ -3396,10 +3715,13 @@ RECHERCHEPLAN:
 VERIFIZIERTE FAKTEN:
 {facts_text}
 
+{conflict_scan_text}
+
 WICHTIG:
 - Bleibe strikt innerhalb des Rechercheplans.
 - Verwerfe Randthemen und administrative Details.
 - Hebe offene Fragen nur dann hervor, wenn sie direkt zur Leitfrage gehoeren.
+- Nutze Konflikt-Scan-Hinweise nur als vorsichtige Report-Signale, nicht als neue Fakten.
 
 Antworte als JSON:
 {{
@@ -3473,6 +3795,7 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
         if claim.verdict in {ClaimVerdict.CONTESTED, ClaimVerdict.MIXED_EVIDENCE} or claim.unknowns
     ]
     open_questions = list(dict.fromkeys(contract.open_questions))
+    conflict_scan_context = _get_conflict_scan_report_context(session)
 
     lines: List[str] = []
 
@@ -3577,7 +3900,15 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
         "",
     ])
 
-    if conflict_claims or session.conflicting_info or open_questions:
+    if (
+        conflict_claims
+        or session.conflicting_info
+        or open_questions
+        or conflict_scan_context["conflicts"]
+        or conflict_scan_context["weak_evidence_flags"]
+        or conflict_scan_context["open_questions"]
+        or conflict_scan_context["report_notes"]
+    ):
         lines.extend([
             "### Konfliktbehaftete Claims",
             "",
@@ -3606,6 +3937,40 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
             for idx, item in enumerate(open_questions[:10], 1):
                 lines.append(f"{idx}. {item}")
             lines.append("")
+        if (
+            conflict_scan_context["conflicts"]
+            or conflict_scan_context["weak_evidence_flags"]
+            or conflict_scan_context["open_questions"]
+            or conflict_scan_context["report_notes"]
+        ):
+            lines.extend(["### Zusätzliche Conflict-Scan-Hinweise", ""])
+            for idx, item in enumerate(conflict_scan_context["conflicts"][:6], 1):
+                lines.extend([
+                    f"**Scan-Konflikt #{idx}:** {item.get('claim_text') or '-'}",
+                    f"- **Typ:** {item.get('issue_type') or 'conflict'}",
+                    f"- **Hinweis:** {item.get('reason') or '-'}",
+                    f"- **Confidence:** {float(item.get('confidence') or 0.0):.2f}",
+                    "",
+                ])
+            if conflict_scan_context["weak_evidence_flags"]:
+                lines.extend(["### Schwache Evidenz-Signale", ""])
+                for idx, item in enumerate(conflict_scan_context["weak_evidence_flags"][:6], 1):
+                    lines.extend([
+                        f"**Signal #{idx}:** {item.get('claim_text') or '-'}",
+                        f"- **Hinweis:** {item.get('reason') or '-'}",
+                        f"- **Confidence:** {float(item.get('confidence') or 0.0):.2f}",
+                        "",
+                    ])
+            if conflict_scan_context["open_questions"]:
+                lines.extend(["### Weitere offene Fragen aus dem Conflict-Scan", ""])
+                for idx, item in enumerate(conflict_scan_context["open_questions"][:8], 1):
+                    lines.append(f"{idx}. {item}")
+                lines.append("")
+            if conflict_scan_context["report_notes"]:
+                lines.extend(["### Report-Hinweise", ""])
+                for item in conflict_scan_context["report_notes"][:6]:
+                    lines.append(f"- {item}")
+                lines.append("")
     else:
         lines.extend([
             "Derzeit zeigen die strukturierten Claims keine ausgepraegte Konfliktlage; offene Punkte betreffen vor allem Reichweite und Vollstaendigkeit der Evidenz.",
@@ -4220,6 +4585,7 @@ async def _run_research_pipeline(
     }
     await _populate_semantic_claim_dedupe_cache(current_session, session_id=session_id)
     current_session.export_contract_v2()
+    await _populate_conflict_scan_cache(current_session, session_id=session_id)
 
     # PHASE 8: FINALE SYNTHESE
     logger.info("📝 Phase 8: Finale Synthese...")
