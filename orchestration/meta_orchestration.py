@@ -417,6 +417,18 @@ _ORCHESTRATION_RECIPE_AGENT_CHAINS: Dict[str, Tuple[str, ...]] = {
     "system_shell_probe_first": ("meta", "shell", "system"),
 }
 
+_ADAPTIVE_PLAN_SAFE_TASK_TYPES = {
+    "simple_live_lookup",
+    "simple_live_lookup_document",
+    "knowledge_research",
+    "youtube_content_extraction",
+    "web_content_extraction",
+    "location_local_search",
+    "location_route",
+}
+_ADAPTIVE_PLAN_MIN_CONFIDENCE = 0.78
+_ADAPTIVE_PLAN_MAX_CHAIN_LENGTH = 4
+
 
 _BROWSER_HINTS = (
     "browser",
@@ -740,6 +752,129 @@ def resolve_orchestration_alternative_recipes(
         if payload:
             results.append(payload)
     return results
+
+
+def _normalize_agent_chain(chain: Iterable[str]) -> List[str]:
+    cleaned: List[str] = []
+    for agent in chain:
+        value = str(agent or "").strip().lower()
+        if value and value not in cleaned:
+            cleaned.append(value)
+    return cleaned
+
+
+def resolve_adaptive_plan_adoption(classification: Dict[str, Any]) -> Dict[str, Any]:
+    adaptive_plan = dict(classification.get("adaptive_plan") or {})
+    current_recipe_id = str(classification.get("recommended_recipe_id") or "").strip()
+    current_chain = _normalize_agent_chain(classification.get("recommended_agent_chain") or [])
+    confidence = adaptive_plan.get("confidence")
+    confidence_value = float(confidence or 0.0)
+    baseline = {
+        "state": "fallback_current",
+        "reason": "adaptive_plan_unavailable",
+        "confidence": round(confidence_value, 2),
+        "adopted_recipe_id": current_recipe_id or None,
+        "adopted_chain": current_chain,
+    }
+
+    if str(adaptive_plan.get("planner_mode") or "").strip().lower() != "advisory":
+        return baseline
+
+    task_type = str(classification.get("task_type") or "").strip().lower()
+    if task_type not in _ADAPTIVE_PLAN_SAFE_TASK_TYPES:
+        return {
+            **baseline,
+            "state": "rejected",
+            "reason": "unsupported_task_type",
+        }
+
+    recommended_chain = _normalize_agent_chain(adaptive_plan.get("recommended_chain") or [])
+    if not recommended_chain:
+        return {
+            **baseline,
+            "state": "rejected",
+            "reason": "missing_recommended_chain",
+        }
+    if len(recommended_chain) > _ADAPTIVE_PLAN_MAX_CHAIN_LENGTH:
+        return {
+            **baseline,
+            "state": "rejected",
+            "reason": "chain_too_long",
+            "adopted_chain": recommended_chain,
+        }
+    if current_chain and recommended_chain[0] != current_chain[0]:
+        return {
+            **baseline,
+            "state": "rejected",
+            "reason": "entry_agent_mismatch",
+            "adopted_chain": recommended_chain,
+        }
+    if confidence_value < _ADAPTIVE_PLAN_MIN_CONFIDENCE:
+        return {
+            **baseline,
+            "state": "rejected",
+            "reason": "low_confidence",
+            "adopted_chain": recommended_chain,
+        }
+
+    recipe_hint = str(adaptive_plan.get("recommended_recipe_hint") or "").strip()
+    if not recipe_hint:
+        return {
+            **baseline,
+            "state": "rejected",
+            "reason": "missing_recipe_hint",
+            "adopted_chain": recommended_chain,
+        }
+
+    available_payloads: Dict[str, Dict[str, Any]] = {}
+    if current_recipe_id:
+        current_payload = _build_recipe_payload(current_recipe_id)
+        if current_payload:
+            available_payloads[current_recipe_id] = current_payload
+    for candidate in classification.get("alternative_recipes") or []:
+        recipe_id = str(candidate.get("recipe_id") or "").strip()
+        if recipe_id:
+            available_payloads[recipe_id] = {
+                "recipe_id": recipe_id,
+                "recipe_stages": [dict(stage) for stage in (candidate.get("recipe_stages") or [])],
+                "recipe_recoveries": [dict(item) for item in (candidate.get("recipe_recoveries") or [])],
+                "recommended_agent_chain": list(candidate.get("recommended_agent_chain") or []),
+            }
+
+    candidate_payload = available_payloads.get(recipe_hint)
+    if not candidate_payload:
+        return {
+            **baseline,
+            "state": "rejected",
+            "reason": "recipe_hint_unavailable",
+            "adopted_chain": recommended_chain,
+        }
+
+    candidate_chain = _normalize_agent_chain(candidate_payload.get("recommended_agent_chain") or [])
+    if candidate_chain != recommended_chain:
+        return {
+            **baseline,
+            "state": "rejected",
+            "reason": "recipe_chain_mismatch",
+            "adopted_recipe_id": recipe_hint,
+            "adopted_chain": recommended_chain,
+        }
+
+    if recipe_hint == current_recipe_id and candidate_chain == current_chain:
+        return {
+            **baseline,
+            "reason": "current_recipe_already_matches_plan",
+            "adopted_chain": current_chain,
+        }
+
+    return {
+        "state": "adopted",
+        "reason": "adaptive_plan_preferred",
+        "confidence": round(confidence_value, 2),
+        "adopted_recipe_id": recipe_hint,
+        "adopted_chain": candidate_chain,
+        "recipe_payload": candidate_payload,
+    }
 
 
 def _has_any(text: str, hints: Iterable[str]) -> bool:

@@ -23,7 +23,11 @@ from typing import Any, Dict, List, Optional
 
 from agent.base_agent import BaseAgent
 from agent.prompts import META_SYSTEM_PROMPT
-from orchestration.meta_orchestration import build_meta_feedback_targets, resolve_orchestration_recipe
+from orchestration.meta_orchestration import (
+    build_meta_feedback_targets,
+    resolve_adaptive_plan_adoption,
+    resolve_orchestration_recipe,
+)
 from orchestration.self_selected_strategy import classify_strategy_error
 
 log = logging.getLogger("TimusAgent-v4.4")
@@ -657,6 +661,11 @@ class MetaAgent(BaseAgent):
                     payload["adaptive_plan"] = json.loads(normalized_value)
                 except json.JSONDecodeError:
                     payload["adaptive_plan"] = {"raw": normalized_value}
+            elif normalized_key == "planner_resolution_json":
+                try:
+                    payload["planner_resolution"] = json.loads(normalized_value)
+                except json.JSONDecodeError:
+                    payload["planner_resolution"] = {"raw": normalized_value}
             elif normalized_key == "task_profile_json":
                 try:
                     payload["task_profile"] = json.loads(normalized_value)
@@ -704,6 +713,12 @@ class MetaAgent(BaseAgent):
     @classmethod
     def _select_initial_recipe_payload(cls, handoff: Dict[str, Any]) -> Dict[str, Any]:
         current = cls._current_recipe_payload_from_handoff(handoff)
+        planner_selected = cls._planner_preferred_recipe_payload(
+            handoff,
+            current_recipe_id=str(current.get("recipe_id") or ""),
+        )
+        if planner_selected is not None:
+            current = planner_selected
         strategy_selected = cls._strategy_preferred_recipe_payload(
             handoff,
             current_recipe_id=str(current.get("recipe_id") or ""),
@@ -747,6 +762,45 @@ class MetaAgent(BaseAgent):
         if selected is not None:
             return selected
         return current
+
+    @classmethod
+    def _planner_preferred_recipe_payload(
+        cls,
+        handoff: Dict[str, Any],
+        *,
+        current_recipe_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        planner_resolution = dict(handoff.get("planner_resolution") or {})
+        if str(planner_resolution.get("state") or "").strip().lower() == "adopted":
+            adopted_recipe_id = str(planner_resolution.get("adopted_recipe_id") or "").strip()
+            if adopted_recipe_id and adopted_recipe_id != current_recipe_id:
+                for candidate in handoff.get("alternative_recipes") or []:
+                    recipe_id = str(candidate.get("recipe_id") or "").strip()
+                    if recipe_id != adopted_recipe_id:
+                        continue
+                    return {
+                        "recipe_id": recipe_id,
+                        "recipe_stages": [dict(stage) for stage in (candidate.get("recipe_stages") or [])],
+                        "recipe_recoveries": [dict(item) for item in (candidate.get("recipe_recoveries") or [])],
+                        "recommended_agent_chain": list(candidate.get("recommended_agent_chain") or []),
+                        "switch_reason": "adaptive_planner_preferred",
+                    }
+
+        resolved = resolve_adaptive_plan_adoption(handoff)
+        if str(resolved.get("state") or "").strip().lower() != "adopted":
+            return None
+
+        recipe_payload = dict(resolved.get("recipe_payload") or {})
+        recipe_id = str(recipe_payload.get("recipe_id") or "").strip()
+        if not recipe_id or recipe_id == current_recipe_id:
+            return None
+        return {
+            "recipe_id": recipe_id,
+            "recipe_stages": [dict(stage) for stage in (recipe_payload.get("recipe_stages") or [])],
+            "recipe_recoveries": [dict(item) for item in (recipe_payload.get("recipe_recoveries") or [])],
+            "recommended_agent_chain": list(recipe_payload.get("recommended_agent_chain") or []),
+            "switch_reason": "adaptive_planner_preferred",
+        }
 
     @classmethod
     def _strategy_preferred_recipe_payload(

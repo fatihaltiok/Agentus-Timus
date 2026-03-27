@@ -20,6 +20,8 @@ def _build_meta_task(
     alternative_recipes: list[dict] | None = None,
     meta_self_state: dict | None = None,
     selected_strategy: dict | None = None,
+    adaptive_plan: dict | None = None,
+    planner_resolution: dict | None = None,
 ) -> str:
     import json
 
@@ -36,6 +38,10 @@ def _build_meta_task(
         lines.append("meta_self_state_json: " + json.dumps(meta_self_state, ensure_ascii=False, sort_keys=True))
     if selected_strategy is not None:
         lines.append("selected_strategy_json: " + json.dumps(selected_strategy, ensure_ascii=False, sort_keys=True))
+    if adaptive_plan is not None:
+        lines.append("adaptive_plan_json: " + json.dumps(adaptive_plan, ensure_ascii=False, sort_keys=True))
+    if planner_resolution is not None:
+        lines.append("planner_resolution_json: " + json.dumps(planner_resolution, ensure_ascii=False, sort_keys=True))
     if alternative_recipes is not None:
         lines.append("alternative_recipes_json: " + json.dumps(alternative_recipes, ensure_ascii=False, sort_keys=True))
     lines.append("recipe_stages:")
@@ -145,6 +151,166 @@ async def test_meta_recipe_execution_returns_direct_result_for_location_light_re
 
     assert "Offenbach am Main" in result
     assert "Meta-Rezept 'location_local_search' ausgefuehrt." not in result
+
+
+@pytest.mark.asyncio
+async def test_meta_recipe_execution_returns_direct_result_for_simple_live_lookup(monkeypatch):
+    from agent.agents.meta import MetaAgent
+    from agent.base_agent import BaseAgent
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        assert method == "delegate_to_agent"
+        assert params["agent_type"] == "executor"
+        assert "task_type: simple_live_lookup" in params["task"]
+        return {
+            "status": "success",
+            "agent": "executor",
+            "result": "Aus der Wissenschaft fallen gerade drei aktuelle Meldungen auf.",
+            "blackboard_key": "delegation:executor:2",
+            "metadata": {},
+            "artifacts": [],
+        }
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = MetaAgent.__new__(MetaAgent)
+    agent.conversation_session_id = "sess-meta-live-lookup-direct"
+
+    task = _build_meta_task(
+        recipe_id="simple_live_lookup",
+        chain="meta -> executor",
+        stages=[
+            ("live_lookup_scan", "executor", "Fuehre die Live-Recherche kompakt aus", "quick_summary", False),
+        ],
+        original_task="Was gibt es Neues aus der Wissenschaft?",
+        task_type="simple_live_lookup",
+        site_kind="web",
+    )
+
+    result = await MetaAgent.run(agent, task)
+
+    assert "Wissenschaft" in result
+    assert "Meta-Rezept 'simple_live_lookup' ausgefuehrt." not in result
+
+
+@pytest.mark.asyncio
+async def test_meta_recipe_execution_returns_direct_result_for_lookup_document_recipe(monkeypatch):
+    from agent.agents.meta import MetaAgent
+    from agent.base_agent import BaseAgent
+
+    calls = []
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        assert method == "delegate_to_agent"
+        calls.append(dict(params))
+        if params["agent_type"] == "executor":
+            return {
+                "status": "success",
+                "agent": "executor",
+                "result": (
+                    "Ich habe aus der zuletzt geprueften Quelle diese Preis-Tabelle herausgezogen:\n\n"
+                    "| Anbieter | Modell | Input | Output | Cached |\n"
+                    "| --- | --- | --- | --- | --- |\n"
+                    "| OpenAI | GPT-5.4 mini | $0.75 / 1M | $4.50 / 1M | $0.075 / 1M |\n"
+                    "| DeepSeek | DeepSeek V3 | $0.27 / 1M | $1.10 / 1M | $0.07 / 1M |"
+                ),
+                "blackboard_key": "delegation:executor:pricing",
+                "metadata": {},
+                "artifacts": [],
+            }
+        assert "output_format: XLSX" in params["task"]
+        assert "artifact_name: LLM_Preise_Vergleich" in params["task"]
+        assert "source_material:" in params["task"]
+        return {
+            "status": "success",
+            "agent": "document",
+            "result": "**Dokument erstellt:** `results/LLM_Preise_Vergleich.xlsx`\n**Format:** XLSX",
+            "blackboard_key": "delegation:document:pricing",
+            "metadata": {"artifact": "results/LLM_Preise_Vergleich.xlsx"},
+            "artifacts": ["results/LLM_Preise_Vergleich.xlsx"],
+        }
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = MetaAgent.__new__(MetaAgent)
+    agent.conversation_session_id = "sess-meta-lookup-document"
+
+    task = _build_meta_task(
+        recipe_id="simple_live_lookup_document",
+        chain="meta -> executor -> document",
+        stages=[
+            ("live_lookup_scan", "executor", "Fuehre die Live-Recherche kompakt aus", "structured_lookup_result", False),
+            ("document_output", "document", "Erzeuge Tabelle oder Datei", "xlsx artifact", False),
+        ],
+        original_task="Erstelle mir eine Liste mit den aktuellen Preisen der besten LLMs und zeige mir dann die Tabelle",
+        task_type="simple_live_lookup_document",
+        site_kind="web",
+    )
+
+    result = await MetaAgent.run(agent, task)
+
+    assert [call["agent_type"] for call in calls] == ["executor", "document"]
+    assert result.startswith("**Dokument erstellt:**")
+    assert "Meta-Rezept 'simple_live_lookup_document' ausgefuehrt." not in result
+
+
+@pytest.mark.asyncio
+async def test_meta_recipe_execution_prefers_adaptive_plan_before_recipe_fallbacks(monkeypatch):
+    from agent.agents.meta import MetaAgent
+    from agent.base_agent import BaseAgent
+    from orchestration.meta_orchestration import resolve_orchestration_recipe
+
+    calls = []
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        assert method == "delegate_to_agent"
+        calls.append(dict(params))
+        if params["agent_type"] == "executor":
+            return {
+                "status": "success",
+                "agent": "executor",
+                "result": "Preiszeilen extrahiert",
+                "blackboard_key": "delegation:executor:pricing",
+                "metadata": {},
+                "artifacts": [],
+            }
+        return {
+            "status": "success",
+            "agent": "document",
+            "result": "**Dokument erstellt:** `results/LLM_Preise_Vergleich.txt`\n**Format:** TXT",
+            "blackboard_key": "delegation:document:pricing",
+            "metadata": {"artifact": "results/LLM_Preise_Vergleich.txt"},
+            "artifacts": ["results/LLM_Preise_Vergleich.txt"],
+        }
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = MetaAgent.__new__(MetaAgent)
+    agent.conversation_session_id = "sess-meta-adaptive-planner"
+
+    document_recipe = resolve_orchestration_recipe("simple_live_lookup_document")
+    task = _build_meta_task(
+        recipe_id="simple_live_lookup",
+        chain="meta -> executor",
+        stages=[
+            ("live_lookup_scan", "executor", "Fuehre die Live-Recherche kompakt aus", "quick_summary", False),
+        ],
+        original_task="Speichere mir aktuelle LLM-Preise als txt Datei",
+        task_type="simple_live_lookup",
+        site_kind="web",
+        alternative_recipes=[document_recipe],
+        adaptive_plan={
+            "planner_mode": "advisory",
+            "confidence": 0.91,
+            "recommended_chain": ["meta", "executor", "document"],
+            "recommended_recipe_hint": "simple_live_lookup_document",
+        },
+    )
+
+    result = await MetaAgent.run(agent, task)
+
+    assert [call["agent_type"] for call in calls] == ["executor", "document"]
+    assert result.startswith("**Dokument erstellt:**")
 
 
 @pytest.mark.asyncio

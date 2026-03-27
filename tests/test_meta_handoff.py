@@ -104,6 +104,7 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert "goal_spec_json:" in result
     assert "capability_graph_json:" in result
     assert "adaptive_plan_json:" in result
+    assert "planner_resolution_json:" in result
     assert "task_profile_json:" in result
     assert "selected_strategy_json:" in result
     assert "meta_self_state_json:" in result
@@ -124,6 +125,7 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert meta["recommended_recipe_id"] == "youtube_content_extraction"
     assert meta["goal_spec"]["output_mode"] == "report"
     assert meta["adaptive_plan"]["planner_mode"] == "advisory"
+    assert meta["planner_resolution"]["state"] in {"fallback_current", "rejected", "adopted"}
     assert meta["task_profile"]["intent"] == "content_extraction"
     assert meta["selected_strategy"]["strategy_id"] == "layered_youtube_extraction"
     assert [item["recipe_id"] for item in meta["alternative_recipes"]] == [
@@ -140,6 +142,7 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert parsed["meta_self_state"]["identity"] == "Timus"
     assert parsed["goal_spec"]["output_mode"] == "report"
     assert parsed["adaptive_plan"]["recommended_chain"] == ["meta", "visual", "research", "document"]
+    assert parsed["planner_resolution"]["state"] in {"fallback_current", "rejected", "adopted"}
     assert parsed["task_profile"]["intent"] == "content_extraction"
     assert parsed["selected_strategy"]["strategy_id"] == "layered_youtube_extraction"
     assert parsed["meta_self_state"]["runtime_constraints"]["budget_state"] == "soft_limit"
@@ -321,6 +324,7 @@ def test_build_meta_handoff_payload_exposes_learning_snapshot(monkeypatch):
     assert payload["selected_strategy"]["strategy_id"] == "layered_youtube_extraction"
     assert payload["goal_spec"]["task_type"] == "youtube_content_extraction"
     assert payload["adaptive_plan"]["planner_mode"] == "advisory"
+    assert payload["planner_resolution"]["state"] in {"fallback_current", "rejected", "adopted"}
     assert "meta_learning_posture: conservative" in rendered
     assert "task_profile_intent: content_extraction" in rendered
     assert "selected_strategy_id: layered_youtube_extraction" in rendered
@@ -332,6 +336,7 @@ def test_build_meta_handoff_payload_exposes_learning_snapshot(monkeypatch):
     assert "goal_spec_json:" in rendered
     assert "capability_graph_json:" in rendered
     assert "adaptive_plan_json:" in rendered
+    assert "planner_resolution_json:" in rendered
     assert "task_profile_json:" in rendered
     assert "selected_strategy_json:" in rendered
     assert "alternative_recipes_json:" in rendered
@@ -382,3 +387,47 @@ def test_record_runtime_feedback_adds_meta_recipe_targets(monkeypatch):
         "namespace": "meta_agent_chain",
         "key": "meta__visual__research__document",
     } in captured["feedback_targets"]
+
+
+def test_build_meta_handoff_payload_adopts_safe_adaptive_plan(monkeypatch):
+    import main_dispatcher
+    from orchestration.meta_orchestration import resolve_orchestration_recipe
+
+    current = resolve_orchestration_recipe("simple_live_lookup")
+    alternative = resolve_orchestration_recipe("simple_live_lookup_document")
+
+    monkeypatch.setattr(
+        main_dispatcher,
+        "evaluate_query_orchestration",
+        lambda _query: {
+            "task_type": "simple_live_lookup",
+            "site_kind": "web",
+            "required_capabilities": ["live_lookup", "light_search"],
+            "recommended_entry_agent": "meta",
+            "recommended_agent_chain": ["meta", "executor"],
+            "needs_structured_handoff": True,
+            "meta_classification_reason": "simple_live_lookup",
+            "recommended_recipe_id": current["recipe_id"],
+            "recipe_stages": current["recipe_stages"],
+            "recipe_recoveries": current["recipe_recoveries"],
+            "alternative_recipes": [alternative],
+            "goal_spec": {"goal_signature": "pricing|live|light|artifact|txt|loc=0|deliver=0"},
+            "capability_graph": {"goal_gaps": ["artifact_output_stage_missing"]},
+            "adaptive_plan": {
+                "planner_mode": "advisory",
+                "confidence": 0.91,
+                "recommended_chain": ["meta", "executor", "document"],
+                "recommended_recipe_hint": "simple_live_lookup_document",
+            },
+            "task_profile": {},
+            "tool_affordances": [],
+            "selected_strategy": {},
+        },
+    )
+
+    payload = main_dispatcher._build_meta_handoff_payload("Speichere mir aktuelle LLM-Preise als txt Datei")
+
+    assert payload["recommended_recipe_id"] == "simple_live_lookup_document"
+    assert payload["recommended_agent_chain"] == ["meta", "executor", "document"]
+    assert payload["planner_resolution"]["state"] == "adopted"
+    assert payload["alternative_recipes"][0]["recipe_id"] == "simple_live_lookup"

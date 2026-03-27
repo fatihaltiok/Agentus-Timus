@@ -61,6 +61,7 @@ from orchestration.meta_orchestration import (
     build_meta_feedback_targets,
     meta_agent_chain_key,
     meta_site_recipe_key,
+    resolve_adaptive_plan_adoption,
 )
 from orchestration.meta_self_state import build_meta_self_state
 from orchestration.self_improvement_engine import LLMUsageRecord, get_improvement_engine
@@ -1636,6 +1637,36 @@ def _build_meta_handoff_payload(query: str) -> dict:
         "tool_affordances": list(policy.get("tool_affordances") or []),
         "selected_strategy": dict(policy.get("selected_strategy") or {}),
     }
+    planner_resolution = resolve_adaptive_plan_adoption(payload)
+    payload["planner_resolution"] = {
+        "state": planner_resolution.get("state"),
+        "reason": planner_resolution.get("reason"),
+        "confidence": planner_resolution.get("confidence"),
+        "adopted_recipe_id": planner_resolution.get("adopted_recipe_id"),
+        "adopted_chain": list(planner_resolution.get("adopted_chain") or []),
+    }
+    planner_recipe_payload = planner_resolution.get("recipe_payload")
+    if isinstance(planner_recipe_payload, dict) and planner_resolution.get("state") == "adopted":
+        previous_recipe_payload = {
+            "recipe_id": payload.get("recommended_recipe_id"),
+            "recipe_stages": list(payload.get("recipe_stages") or []),
+            "recipe_recoveries": list(payload.get("recipe_recoveries") or []),
+            "recommended_agent_chain": list(payload.get("recommended_agent_chain") or []),
+        }
+        payload["recommended_recipe_id"] = planner_recipe_payload.get("recipe_id")
+        payload["recipe_stages"] = list(planner_recipe_payload.get("recipe_stages") or [])
+        payload["recipe_recoveries"] = list(planner_recipe_payload.get("recipe_recoveries") or [])
+        payload["recommended_agent_chain"] = list(planner_recipe_payload.get("recommended_agent_chain") or [])
+        adopted_recipe_id = str(planner_recipe_payload.get("recipe_id") or "").strip()
+        remapped_alternatives = [
+            dict(candidate)
+            for candidate in (payload.get("alternative_recipes") or [])
+            if str(candidate.get("recipe_id") or "").strip() != adopted_recipe_id
+        ]
+        previous_recipe_id = str(previous_recipe_payload.get("recipe_id") or "").strip()
+        if previous_recipe_id and previous_recipe_id != adopted_recipe_id:
+            remapped_alternatives.insert(0, previous_recipe_payload)
+        payload["alternative_recipes"] = remapped_alternatives
     payload["feedback_targets"] = build_meta_feedback_targets(payload)
     payload["learning_snapshot"] = _build_meta_learning_snapshot(payload)
     payload["meta_self_state"] = build_meta_self_state(payload, payload["learning_snapshot"])
@@ -1807,6 +1838,11 @@ def _render_meta_handoff_block(payload: dict) -> str:
         lines.append(
             "adaptive_plan_json: "
             + json.dumps(payload["adaptive_plan"], ensure_ascii=False, sort_keys=True)
+        )
+    if payload.get("planner_resolution"):
+        lines.append(
+            "planner_resolution_json: "
+            + json.dumps(payload["planner_resolution"], ensure_ascii=False, sort_keys=True)
         )
     if payload.get("task_profile"):
         lines.append(

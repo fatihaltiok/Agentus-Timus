@@ -91,6 +91,8 @@ theorem executor_pricing_fetch_budget_covers_default_fetch : 1800 ≤ 6000 := by
 theorem simple_live_lookup_document_chain_has_document_stage : 2 ≤ 2 := by omega
 theorem goal_first_document_extension_nonshrinking : 2 ≤ 3 := by omega
 theorem adaptive_planner_candidate_cap_positive : 1 ≤ 4 := by omega
+theorem adaptive_plan_confidence_threshold_positive_scaled : 0 < 78 := by omega
+theorem adaptive_plan_safe_chain_bound : 3 ≤ 4 := by omega
 
 -- 3k1. MCP-HTTP-Layer deckt das Research-Runtime-Timeout mit Puffer ab
 -- Quelle: agent/base_agent.py:_resolve_tool_http_timeout
