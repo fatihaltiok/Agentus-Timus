@@ -19,11 +19,16 @@ from orchestration.meta_orchestration import build_meta_feedback_targets, classi
         "reason",
         "recommended_recipe_id",
         "recipe_stages",
+        "goal_spec",
+        "capability_graph",
+        "adaptive_plan",
     }
 )
 @deal.post(lambda r: isinstance(r["recommended_agent_chain"], list) and len(r["recommended_agent_chain"]) >= 1)
 @deal.post(lambda r: r["recommended_entry_agent"] == r["recommended_agent_chain"][0])
 @deal.post(lambda r: isinstance(r["recipe_stages"], list))
+@deal.post(lambda r: isinstance(r["goal_spec"], dict) and bool(r["goal_spec"].get("goal_signature")))
+@deal.post(lambda r: isinstance(r["adaptive_plan"], dict) and r["adaptive_plan"].get("planner_mode") == "advisory")
 def _contract_classify_meta_task(query: str, action_count: int) -> dict:
     return classify_meta_task(query, action_count=max(0, action_count))
 
@@ -35,6 +40,7 @@ def test_hypothesis_meta_orchestration_shape(query: str, action_count: int):
     assert isinstance(result["needs_structured_handoff"], bool)
     assert isinstance(result["required_capabilities"], list)
     assert all(isinstance(stage, dict) for stage in result["recipe_stages"])
+    assert isinstance(result["capability_graph"].get("matching_nodes"), list)
 
 
 @deal.post(lambda r: isinstance(r, list))

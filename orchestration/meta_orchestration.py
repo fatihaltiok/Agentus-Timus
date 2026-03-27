@@ -6,6 +6,9 @@ import re
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Iterable, List, Tuple
 
+from orchestration.adaptive_planner import build_adaptive_plan
+from orchestration.capability_graph import build_capability_graph
+from orchestration.goal_spec import derive_goal_spec
 from utils.location_local_intent import is_location_local_query, is_location_route_query
 
 
@@ -59,8 +62,8 @@ class OrchestrationRecipeRecovery:
 _AGENT_PROFILES: Dict[str, AgentCapabilityProfile] = {
     "executor": AgentCapabilityProfile(
         agent="executor",
-        capabilities=("quick_tool_execution", "light_search", "youtube_discovery", "short_summaries"),
-        strengths=("casual_requests", "fast_search_flows", "lightweight_followups"),
+        capabilities=("quick_tool_execution", "light_search", "live_lookup", "youtube_discovery", "short_summaries"),
+        strengths=("casual_requests", "fast_search_flows", "lightweight_followups", "location_aware_lookup"),
         typical_outputs=("top_results", "quick_summary", "source_urls"),
         handoff_fields=("goal", "expected_output", "success_signal", "constraints", "handoff_data"),
     ),
@@ -117,6 +120,42 @@ _AGENT_PROFILES: Dict[str, AgentCapabilityProfile] = {
 
 
 _ORCHESTRATION_RECIPES: Dict[str, Tuple[OrchestrationRecipeStage, ...]] = {
+    "simple_live_lookup": (
+        OrchestrationRecipeStage(
+            stage_id="live_lookup_scan",
+            agent="executor",
+            goal=(
+                "Fuehre eine kompakte aktuelle Live-Recherche mit direkten Suchtools aus, "
+                "nutze vorhandenen Standortkontext automatisch fuer lokale Anfragen und "
+                "bleibe auf schnelle verifizierbare Treffer fokussiert."
+            ),
+            expected_output="quick_summary, top_results, source_urls",
+            handoff_fields=("goal", "expected_output", "success_signal", "query", "preferred_search_tool"),
+        ),
+    ),
+    "simple_live_lookup_document": (
+        OrchestrationRecipeStage(
+            stage_id="live_lookup_scan",
+            agent="executor",
+            goal=(
+                "Fuehre eine kompakte aktuelle Live-Recherche mit direkten Suchtools aus, "
+                "extrahiere belastbare Kerndaten oder Tabellenmaterial und bereite das Ergebnis "
+                "fuer den nachfolgenden Dokumentschritt vor."
+            ),
+            expected_output="structured_lookup_result, source_urls, table_material",
+            handoff_fields=("goal", "expected_output", "success_signal", "query", "preferred_search_tool"),
+        ),
+        OrchestrationRecipeStage(
+            stage_id="document_output",
+            agent="document",
+            goal=(
+                "Erzeuge aus dem Lookup-Ergebnis die angeforderte Tabelle oder Datei im passenden "
+                "Format und liefere einen knappen Preview-Hinweis mit Artefaktpfad."
+            ),
+            expected_output="xlsx/txt/csv artifact",
+            handoff_fields=("goal", "source_material", "format", "artifacts"),
+        ),
+    ),
     "knowledge_research": (
         OrchestrationRecipeStage(
             stage_id="research_discovery",
@@ -362,6 +401,8 @@ _ORCHESTRATION_RECIPE_RECOVERIES: Dict[str, Tuple[OrchestrationRecipeRecovery, .
 
 
 _ORCHESTRATION_RECIPE_AGENT_CHAINS: Dict[str, Tuple[str, ...]] = {
+    "simple_live_lookup": ("meta", "executor"),
+    "simple_live_lookup_document": ("meta", "executor", "document"),
     "knowledge_research": ("meta", "research"),
     "youtube_light_research": ("meta", "executor"),
     "location_local_search": ("meta", "executor"),
@@ -448,6 +489,74 @@ _STRICT_RESEARCH_HINTS = (
     "papers",
 )
 
+_SIMPLE_LIVE_LOOKUP_DIRECT_HINTS = (
+    "wetter",
+    "temperatur",
+    "regen",
+    "news",
+    "nachrichten",
+    "neuigkeiten",
+    "wissenschaft",
+    "kino",
+    "film",
+    "filme",
+    "kinoprogramm",
+    "programm im kino",
+    "preise",
+    "preis",
+    "pricing",
+    "kosten",
+    "vergleich",
+    "liste",
+    "tabelle",
+    "modellpreise",
+    "tokenpreise",
+    "wer ist",
+    "wie heißt",
+    "wie heisst",
+    "ceo",
+    "präsident",
+    "praesident",
+    "vorstand",
+    "cafe",
+    "cafés",
+    "cafes",
+    "kaffee",
+    "restaurant",
+    "restaurants",
+    "bar",
+    "apotheke",
+    "supermarkt",
+)
+
+_SIMPLE_LIVE_LOOKUP_FRESHNESS_HINTS = (
+    "aktuell",
+    "aktuelle",
+    "aktuellen",
+    "heute",
+    "jetzt",
+    "live",
+    "neueste",
+    "neuester",
+    "neuste",
+    "current",
+    "latest",
+    "gerade",
+)
+
+_HARD_RESEARCH_HINTS = (
+    "tiefenrecherche",
+    "tiefen recherche",
+    "tiefe recherche",
+    "deep research",
+    "quellen",
+    "fakten",
+    "studie",
+    "studien",
+    "paper",
+    "papers",
+)
+
 _YOUTUBE_LIGHT_HINTS = (
     "schau mal",
     "was gibt",
@@ -480,6 +589,12 @@ _LOCAL_SEARCH_HINTS = (
 _DOCUMENT_HINTS = (
     "pdf",
     "docx",
+    "txt",
+    "xlsx",
+    "excel",
+    "csv",
+    "datei",
+    "tabelle",
     "bericht",
     "dokument",
     "exportiere",
@@ -551,6 +666,10 @@ def build_meta_feedback_targets(classification: Dict[str, Any]) -> List[Dict[str
 
 
 def _resolve_primary_recipe_id(task_type: str, site_kind: str | None = None) -> str | None:
+    if task_type == "simple_live_lookup":
+        return "simple_live_lookup"
+    if task_type == "simple_live_lookup_document":
+        return "simple_live_lookup_document"
     if task_type == "knowledge_research":
         return "knowledge_research"
     if task_type == "youtube_light_research":
@@ -596,7 +715,11 @@ def resolve_orchestration_alternative_recipes(
 ) -> List[Dict[str, Any]]:
     primary_recipe = _resolve_primary_recipe_id(task_type, site_kind)
     candidates: List[str] = []
-    if task_type == "youtube_content_extraction":
+    if task_type == "simple_live_lookup":
+        candidates.extend([])
+    elif task_type == "simple_live_lookup_document":
+        candidates.extend([])
+    elif task_type == "youtube_content_extraction":
         candidates.extend(["youtube_search_then_visual", "youtube_research_only"])
     elif task_type == "youtube_light_research":
         candidates.extend([])
@@ -678,10 +801,42 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
     has_extraction = _has_any(normalized, _EXTRACTION_HINTS) or has_summary_request
     has_broad_research = _has_any(normalized, _BROAD_RESEARCH_HINTS)
     has_strict_research = _has_any(normalized, _STRICT_RESEARCH_HINTS)
+    has_hard_research = _has_any(normalized, _HARD_RESEARCH_HINTS)
     has_youtube_light = site_kind == "youtube" and _has_any(normalized, _YOUTUBE_LIGHT_HINTS)
     has_local_search = site_kind == "maps" and (
         _has_any(normalized, _LOCAL_SEARCH_HINTS) or is_location_local_query(normalized)
     ) and not has_route_request
+    has_simple_live_lookup = (
+        (
+            _has_any(normalized, _SIMPLE_LIVE_LOOKUP_DIRECT_HINTS)
+            or (
+                _has_any(normalized, _SIMPLE_LIVE_LOOKUP_FRESHNESS_HINTS)
+                and any(
+                    marker in normalized
+                    for marker in (
+                        "preis",
+                        "preise",
+                        "pricing",
+                        "kosten",
+                        "vergleich",
+                        "tabelle",
+                        "liste",
+                        "news",
+                        "nachrichten",
+                        "wissenschaft",
+                        "wetter",
+                        "kino",
+                        "film",
+                        "filme",
+                    )
+                )
+            )
+        )
+        and not has_hard_research
+        and not has_route_request
+        and not has_local_search
+        and site_kind not in {"youtube", "booking", "x", "linkedin", "outlook", "github_login"}
+    )
     has_document = _has_any(normalized, _DOCUMENT_HINTS)
     has_delivery = _has_any(normalized, _DELIVERY_HINTS)
     has_system = _has_any(normalized, _SYSTEM_HINTS)
@@ -715,6 +870,16 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
         recommended_chain = ["meta", "executor"]
         task_type = "location_local_search"
         reason = "device_location_local_search"
+    elif has_simple_live_lookup and not has_delivery and not has_system:
+        required_capabilities.extend(["live_lookup", "light_search"])
+        if has_document:
+            recommended_chain = ["meta", "executor", "document"]
+            task_type = "simple_live_lookup_document"
+            reason = "simple_live_lookup_document"
+        else:
+            recommended_chain = ["meta", "executor"]
+            task_type = "simple_live_lookup"
+            reason = "simple_live_lookup"
     elif site_kind == "youtube" and has_youtube_light and not has_extraction and not has_multistep_browser:
         required_capabilities.extend(["youtube_search", "lightweight_summary"])
         recommended_chain = ["meta", "executor"]
@@ -757,7 +922,13 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
 
     if has_document and "document" not in required_capabilities:
         required_capabilities.append("document_creation")
-        if recommended_chain:
+        if task_type == "simple_live_lookup":
+            if not recommended_chain:
+                recommended_chain = ["meta", "executor"]
+        elif task_type == "simple_live_lookup_document":
+            if not recommended_chain:
+                recommended_chain = ["meta", "executor", "document"]
+        elif recommended_chain:
             if recommended_chain[0] != "meta":
                 recommended_chain = ["meta"] + recommended_chain
             if "document" not in recommended_chain:
@@ -792,7 +963,7 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
 
     recipe = resolve_orchestration_recipe(task_type, site_kind)
     alternatives = resolve_orchestration_alternative_recipes(task_type, site_kind)
-    return {
+    classification = {
         "task_type": task_type,
         "site_kind": site_kind,
         "required_capabilities": sorted(set(required_capabilities)),
@@ -804,4 +975,18 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
         "recipe_stages": [] if not recipe else recipe["recipe_stages"],
         "recipe_recoveries": [] if not recipe else recipe.get("recipe_recoveries", []),
         "alternative_recipes": alternatives,
+    }
+    goal_spec = derive_goal_spec(query, classification)
+    capability_graph = build_capability_graph(
+        goal_spec,
+        get_agent_capability_map(),
+        current_chain=deduped_chain,
+        required_capabilities=classification["required_capabilities"],
+    )
+    adaptive_plan = build_adaptive_plan(goal_spec, capability_graph, classification)
+    return {
+        **classification,
+        "goal_spec": goal_spec,
+        "capability_graph": capability_graph,
+        "adaptive_plan": adaptive_plan,
     }

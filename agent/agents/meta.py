@@ -33,11 +33,15 @@ from agent.shared.json_utils import extract_json_robust  # noqa: F401 - re-expor
 
 
 class MetaAgent(BaseAgent):
-    _RECIPE_DIRECT_RESULT_IDS = {"youtube_light_research", "location_local_search"}
+    _RECIPE_DIRECT_RESULT_IDS = {
+        "youtube_light_research",
+        "location_local_search",
+        "simple_live_lookup",
+        "simple_live_lookup_document",
+    }
     _META_HANDOFF_HEADER = "# META ORCHESTRATION HANDOFF"
     _ORIGINAL_TASK_HEADER = "# ORIGINAL USER TASK"
     _SPECIALIST_TOOL_AGENT_MAP = {
-        "search_web": "research",
         "open_url": "research",
         "start_deep_research": "research",
         "generate_research_report": "research",
@@ -133,7 +137,7 @@ class MetaAgent(BaseAgent):
         lines = tools_description.splitlines(keepends=True)
         filtered = []
         skip = False
-        hidden_tool_names = cls.SYSTEM_ONLY_TOOLS | {"search_web", "open_url"}
+        hidden_tool_names = cls.SYSTEM_ONLY_TOOLS | {"open_url"}
         for line in lines:
             stripped = line.strip()
             # Neuer Tool-Block beginnt (Name am Zeilenanfang, kein Einzug)
@@ -216,10 +220,6 @@ class MetaAgent(BaseAgent):
 
     @classmethod
     def _build_specialist_delegation_task(cls, method: str, params: Dict[str, Any]) -> str:
-        if method == "search_web":
-            query = cls._shorten(params.get("query"))
-            return f"Recherchiere diese Anfrage und liefere belastbare Ergebnisse: {query}".strip()
-
         if method == "open_url":
             url = cls._shorten(params.get("url"))
             return f"Analysiere den Inhalt dieser URL und extrahiere die relevanten Informationen: {url}".strip()
@@ -300,6 +300,138 @@ class MetaAgent(BaseAgent):
             return f"Fuehre die visuelle Aufgabe aus: {detail}".strip()
 
         return ""
+
+    @staticmethod
+    def _is_live_lookup_task(task: str) -> bool:
+        text = str(task or "").lower()
+        if not text:
+            return False
+
+        direct_markers = (
+            "preistabelle",
+            "pricing",
+            "preis pro",
+            "preise pro",
+            "aktuelle preise",
+            "aktuellen preisen",
+            "tokenpreise",
+            "token preise",
+            "live recherche",
+            "live-recherche",
+            "aktuelle infos",
+            "aktuelle informationen",
+            "neueste nachrichten",
+            "science news",
+            "wissenschaftsnews",
+            "wissenschaft news",
+            "wetter",
+            "temperatur",
+            "regen",
+            "wer ist",
+            "ceo",
+            "präsident",
+            "praesident",
+            "vorstand",
+            "kino",
+            "filme",
+            "cafes",
+            "cafés",
+            "kaffee",
+            "restaurant",
+            "restaurants",
+            "in meiner nähe",
+            "in meiner naehe",
+            "nahe mir",
+            "nearby",
+            "latest",
+            "current pricing",
+        )
+        if any(marker in text for marker in direct_markers):
+            return True
+
+        freshness_markers = (
+            "aktuell",
+            "aktuelle",
+            "aktuellen",
+            "heute",
+            "jetzt",
+            "live",
+            "neueste",
+            "latest",
+            "current",
+            "stand ",
+        )
+        lookup_markers = (
+            "preis",
+            "preise",
+            "pricing",
+            "kosten",
+            "vergleich",
+            "tabelle",
+            "auflisten",
+            "liste",
+            "nachrichten",
+            "news",
+            "kurs",
+            "modell",
+            "modelle",
+            "wissenschaft",
+            "wetter",
+            "ceo",
+            "präsident",
+            "praesident",
+            "vorstand",
+            "kino",
+            "film",
+            "filme",
+            "cafe",
+            "cafés",
+            "cafes",
+            "restaurant",
+            "restaurants",
+        )
+        return any(marker in text for marker in freshness_markers) and any(
+            marker in text for marker in lookup_markers
+        )
+
+    @staticmethod
+    def _looks_like_stale_training_fallback(result: str) -> bool:
+        text = str(result or "").lower()
+        fallback_markers = (
+            "trainingsdaten",
+            "trainingswissen",
+            "keine live-recherche",
+            "nicht live-recherchiert",
+            "nicht live recherchiert",
+            "live-recherche durchführen",
+            "live recherche durchführen",
+            "system-overflow",
+            "context-limit überschritten",
+            "kontext-overflow",
+        )
+        return any(marker in text for marker in fallback_markers)
+
+    def _guard_live_lookup_output(self, task: str, result: str) -> str:
+        if not self._is_live_lookup_task(task):
+            return result
+        if not self._looks_like_stale_training_fallback(result):
+            return result
+
+        log.warning("MetaAgent blockiert Trainingsdaten-Fallback fuer Live-Lookup.")
+        self._emit_step_trace(
+            action="live_lookup_guard_triggered",
+            output_data={
+                "task_preview": self._shorten(task, limit=180),
+                "result_preview": self._shorten(result, limit=220),
+            },
+            status="warning",
+        )
+        return (
+            "Ich konnte die angefragten aktuellen Daten gerade nicht verifiziert live abrufen. "
+            "Der Live-Pfad ist fehlgeschlagen, deshalb liefere ich bewusst keine unverifizierte "
+            "Ersatzliste. Starte die Anfrage bitte erneut oder ich reduziere sie auf 2-3 "
+            "offizielle Quellen fuer einen kompakten Live-Lookup."
+        )
 
     @classmethod
     def _build_specialist_handoff_payload(
@@ -510,6 +642,21 @@ class MetaAgent(BaseAgent):
                     payload["meta_self_state"] = json.loads(normalized_value)
                 except json.JSONDecodeError:
                     payload["meta_self_state"] = {"raw": normalized_value}
+            elif normalized_key == "goal_spec_json":
+                try:
+                    payload["goal_spec"] = json.loads(normalized_value)
+                except json.JSONDecodeError:
+                    payload["goal_spec"] = {"raw": normalized_value}
+            elif normalized_key == "capability_graph_json":
+                try:
+                    payload["capability_graph"] = json.loads(normalized_value)
+                except json.JSONDecodeError:
+                    payload["capability_graph"] = {"raw": normalized_value}
+            elif normalized_key == "adaptive_plan_json":
+                try:
+                    payload["adaptive_plan"] = json.loads(normalized_value)
+                except json.JSONDecodeError:
+                    payload["adaptive_plan"] = {"raw": normalized_value}
             elif normalized_key == "task_profile_json":
                 try:
                     payload["task_profile"] = json.loads(normalized_value)
@@ -1031,12 +1178,36 @@ class MetaAgent(BaseAgent):
         site_kind = str(handoff.get("site_kind") or "").strip()
         if site_kind:
             payload_lines.append(f"- site_kind: {site_kind}")
+        stage_agent = str(stage.get("agent") or "").strip().lower()
+        if stage_agent == "document":
+            output_format = cls._infer_document_output_format(original_user_task)
+            if output_format:
+                payload_lines.append(f"- output_format: {output_format}")
+            artifact_name = cls._infer_document_artifact_name(original_user_task)
+            if artifact_name:
+                payload_lines.append(f"- artifact_name: {artifact_name}")
         if (
             str(handoff.get("task_type") or "").strip().lower() == "youtube_light_research"
-            and str(stage.get("agent") or "").strip().lower() == "executor"
+            and stage_agent == "executor"
         ):
             payload_lines.append("- preferred_search_tool: search_youtube")
             payload_lines.append("- search_mode: live")
+            payload_lines.append("- avoid_deep_research: yes")
+            payload_lines.append("- max_results: 5")
+        if (
+            str(handoff.get("task_type") or "").strip().lower() == "simple_live_lookup"
+            and stage_agent == "executor"
+        ):
+            payload_lines.append("- preferred_search_tool: search_web")
+            payload_lines.append("- fallback_tools: search_news, fetch_url, search_google_maps_places")
+            payload_lines.append("- avoid_deep_research: yes")
+            payload_lines.append("- max_results: 5")
+        if (
+            str(handoff.get("task_type") or "").strip().lower() == "simple_live_lookup_document"
+            and stage_agent == "executor"
+        ):
+            payload_lines.append("- preferred_search_tool: search_web")
+            payload_lines.append("- fallback_tools: search_news, fetch_url, search_google_maps_places")
             payload_lines.append("- avoid_deep_research: yes")
             payload_lines.append("- max_results: 5")
 
@@ -1054,6 +1225,11 @@ class MetaAgent(BaseAgent):
             if previous_stage_result.get("result_preview"):
                 payload_lines.append(
                     f"- previous_stage_result: {previous_stage_result['result_preview']}"
+                )
+            if stage_agent == "document" and previous_stage_result.get("result_full"):
+                payload_lines.append(
+                    "- source_material: "
+                    + cls._encode_handoff_multiline(previous_stage_result["result_full"], limit=6000)
                 )
 
         prior_keys = [entry.get("blackboard_key") for entry in stage_history if entry.get("blackboard_key")]
@@ -1256,6 +1432,39 @@ class MetaAgent(BaseAgent):
             return float(str(value).strip())
         except (TypeError, ValueError):
             return None
+
+    @classmethod
+    def _encode_handoff_multiline(cls, value: Any, *, limit: int = 5000) -> str:
+        text = cls._shorten(str(value or ""), limit=limit)
+        return text.replace("\\", "\\\\").replace("\n", "\\n")
+
+    @classmethod
+    def _infer_document_output_format(cls, original_user_task: str) -> str:
+        normalized = str(original_user_task or "").strip().lower()
+        if any(token in normalized for token in ("xlsx", "excel", "tabelle")):
+            return "XLSX"
+        if "csv" in normalized:
+            return "CSV"
+        if any(token in normalized for token in ("txt", "textdatei", "text datei", "rohtext")):
+            return "TXT"
+        if any(token in normalized for token in ("docx", "word")):
+            return "DOCX"
+        if "pdf" in normalized:
+            return "PDF"
+        return ""
+
+    @classmethod
+    def _infer_document_artifact_name(cls, original_user_task: str) -> str:
+        normalized = str(original_user_task or "").strip().lower()
+        if "llm" in normalized and any(token in normalized for token in ("preis", "preise", "pricing", "kosten")):
+            return "LLM_Preise_Vergleich"
+        if "preis" in normalized or "pricing" in normalized or "kosten" in normalized:
+            return "Preisvergleich"
+        if "wetter" in normalized:
+            return "Wetteruebersicht"
+        if "news" in normalized or "nachrichten" in normalized:
+            return "Aktuelle_News"
+        return "Timus_Dokument"
 
     @classmethod
     def _build_research_validation_stage(
@@ -1683,6 +1892,12 @@ class MetaAgent(BaseAgent):
                 )
                 return self._normalize_delegation_result(specialist_agent, method, result)
         return await super()._call_tool(method, params)
+
+    async def _finalize_list_output(self, task: str, result: str) -> str:
+        guarded = self._guard_live_lookup_output(task, result)
+        if guarded != result:
+            return guarded
+        return await super()._finalize_list_output(task, result)
 
     # ------------------------------------------------------------------
     # Skill-System

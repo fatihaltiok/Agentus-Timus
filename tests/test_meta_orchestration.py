@@ -53,6 +53,8 @@ def test_classify_meta_task_recommends_visual_and_research_for_youtube_extractio
     assert result["recipe_recoveries"][0]["failed_stage_id"] == "visual_access"
     assert result["recipe_recoveries"][0]["recovery_stage_id"] == "research_context_recovery"
     assert result["recipe_recoveries"][0]["terminal"] is False
+    assert result["goal_spec"]["output_mode"] == "report"
+    assert result["adaptive_plan"]["recommended_chain"] == ["meta", "visual", "research", "document"]
 
 
 def test_classify_meta_task_routes_casual_youtube_discovery_to_meta_executor():
@@ -93,6 +95,61 @@ def test_classify_meta_task_routes_local_action_plus_place_queries_to_meta_execu
     assert result["task_type"] == "location_local_search"
     assert result["site_kind"] == "maps"
     assert result["recommended_agent_chain"] == ["meta", "executor"]
+
+
+def test_classify_meta_task_routes_simple_live_science_lookup_to_meta_executor():
+    result = classify_meta_task(
+        "Was gibt es Neues aus der Wissenschaft?",
+        action_count=0,
+    )
+
+    assert result["task_type"] == "simple_live_lookup"
+    assert result["recommended_entry_agent"] == "meta"
+    assert result["recommended_agent_chain"] == ["meta", "executor"]
+    assert result["recommended_recipe_id"] == "simple_live_lookup"
+    assert [stage["stage_id"] for stage in result["recipe_stages"]] == ["live_lookup_scan"]
+
+
+def test_classify_meta_task_routes_lookup_plus_txt_export_to_executor_and_document():
+    result = classify_meta_task(
+        "Speichere mir aktuelle LLM-Preise als txt Datei",
+        action_count=0,
+    )
+
+    assert result["task_type"] == "simple_live_lookup_document"
+    assert result["recommended_entry_agent"] == "meta"
+    assert result["recommended_agent_chain"] == ["meta", "executor", "document"]
+    assert result["recommended_recipe_id"] == "simple_live_lookup_document"
+    assert [stage["stage_id"] for stage in result["recipe_stages"]] == [
+        "live_lookup_scan",
+        "document_output",
+    ]
+    assert result["goal_spec"]["artifact_format"] == "txt"
+    assert result["capability_graph"]["goal_gaps"] == []
+    assert result["adaptive_plan"]["recommended_recipe_hint"] == "simple_live_lookup_document"
+
+
+def test_classify_meta_task_routes_lookup_plus_table_request_to_executor_and_document():
+    result = classify_meta_task(
+        "Erstelle mir eine Liste mit den aktuellen Preisen der besten LLMs und zeige mir dann die Tabelle",
+        action_count=0,
+    )
+
+    assert result["task_type"] == "simple_live_lookup_document"
+    assert result["recommended_agent_chain"] == ["meta", "executor", "document"]
+    assert result["recommended_recipe_id"] == "simple_live_lookup_document"
+    assert result["goal_spec"]["output_mode"] == "table"
+    assert result["adaptive_plan"]["recommended_chain"] == ["meta", "executor", "document"]
+
+
+def test_classify_meta_task_keeps_source_bound_research_out_of_simple_live_lookup():
+    result = classify_meta_task(
+        "Recherchiere aktuelle Entwicklungen zu KI-Agenten mit Quellen und Studien",
+        action_count=0,
+    )
+
+    assert result["task_type"] == "knowledge_research"
+    assert result["recommended_entry_agent"] == "research"
 
 
 def test_classify_meta_task_routes_route_queries_to_meta_executor():

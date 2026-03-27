@@ -1011,35 +1011,27 @@ def _has_any_local_camera_device() -> bool:
 
 # NEU: Keywords für VisualNemotronAgent (Multi-Step Web-Automation)
 VISUAL_NEMOTRON_KEYWORDS = [
-    # Multi-Step Sequenzen
-    "und dann",
-    "dann",
-    "danach",
-    "anschließend",
-    "zuerst",
-    "zuerst...dann",
-    "schritt für schritt",
-    # Web-Automation mit Cookies/Formularen
-    "cookie",
+    # Web-Automation mit Cookies/Formularen (nur sehr spezifische Phrasen)
     "cookies akzeptieren",
     "cookie banner",
-    "formular",
-    "login",
-    "anmelden",
+    "formular ausfüllen",
+    "formular absenden",
     "eingeben und absenden",
     "suche nach...und klicke",
     "gehe zu...und dann",
-    # Komplexe Navigation
+    # Komplexe Navigation (nur explizite Browser-Steuerung)
     "starte browser",
     "browser starten",
     "gehe zu webseite",
     "öffne webseite",
     "navigiere zu",
     "chat starten",
-    "unterhaltung",
     "nachricht senden",
     "warte auf antwort",
 ]
+# ENTFERNT wegen False-Positives (zu generisch, treffen auf normalen Text zu):
+# "und dann", "dann", "danach", "anschließend", "zuerst", "zuerst...dann",
+# "schritt für schritt", "cookie", "formular", "login", "anmelden", "unterhaltung"
 
 CREATIVE_KEYWORDS = [
     "male",
@@ -1428,14 +1420,16 @@ def quick_intent_check(query: str) -> Optional[str]:
             "klicke",
             "drücke",
             "druecke",
-            "formular",
-            "anmelden",
-            "login",
-            "suche",
+            "formular ausfüllen",
+            "formular absenden",
+            "anmelden auf",
+            "einloggen",
             "cookies akzeptieren",
             "cookie banner",
         )
     )
+    # HINWEIS: "suche", "formular", "anmelden", "login" wurden entfernt — zu generisch
+    # für isolierten Treffer, da sie in normalen Konversationen häufig vorkommen.
     if _has_browser_target and _has_browser_ui_action:
         if _is_complex_browser_workflow(query_lower):
             return "meta"
@@ -1635,6 +1629,9 @@ def _build_meta_handoff_payload(query: str) -> dict:
         "recipe_stages": list(policy.get("recipe_stages") or []),
         "recipe_recoveries": list(policy.get("recipe_recoveries") or []),
         "alternative_recipes": list(policy.get("alternative_recipes") or []),
+        "goal_spec": dict(policy.get("goal_spec") or {}),
+        "capability_graph": dict(policy.get("capability_graph") or {}),
+        "adaptive_plan": dict(policy.get("adaptive_plan") or {}),
         "task_profile": dict(policy.get("task_profile") or {}),
         "tool_affordances": list(policy.get("tool_affordances") or []),
         "selected_strategy": dict(policy.get("selected_strategy") or {}),
@@ -1795,6 +1792,21 @@ def _render_meta_handoff_block(payload: dict) -> str:
         lines.append(
             "meta_self_state_json: "
             + json.dumps(payload["meta_self_state"], ensure_ascii=False, sort_keys=True)
+        )
+    if payload.get("goal_spec"):
+        lines.append(
+            "goal_spec_json: "
+            + json.dumps(payload["goal_spec"], ensure_ascii=False, sort_keys=True)
+        )
+    if payload.get("capability_graph"):
+        lines.append(
+            "capability_graph_json: "
+            + json.dumps(payload["capability_graph"], ensure_ascii=False, sort_keys=True)
+        )
+    if payload.get("adaptive_plan"):
+        lines.append(
+            "adaptive_plan_json: "
+            + json.dumps(payload["adaptive_plan"], ensure_ascii=False, sort_keys=True)
         )
     if payload.get("task_profile"):
         lines.append(

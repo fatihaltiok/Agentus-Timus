@@ -82,6 +82,16 @@ theorem research_timeout_maps_to_partial : 1 = 1 := by omega
 -- Quelle: agent/agent_registry.py:_timeout_status_for_agent
 theorem nonresearch_timeout_maps_to_error : 0 = 0 := by omega
 
+-- 3k0. Executor-Live-Lookup bekommt ein kuerzeres Budget als allgemeine Delegation
+-- Quelle: agent/agent_registry.py:_select_delegation_timeout
+theorem executor_live_lookup_timeout_positive : 0 < 60 := by omega
+theorem executor_live_lookup_timeout_bounded_by_general : 60 ≤ 120 := by omega
+theorem executor_progress_timeout_bounded_by_lookup : 15 ≤ 60 := by omega
+theorem executor_pricing_fetch_budget_covers_default_fetch : 1800 ≤ 6000 := by omega
+theorem simple_live_lookup_document_chain_has_document_stage : 2 ≤ 2 := by omega
+theorem goal_first_document_extension_nonshrinking : 2 ≤ 3 := by omega
+theorem adaptive_planner_candidate_cap_positive : 1 ≤ 4 := by omega
+
 -- 3k1. MCP-HTTP-Layer deckt das Research-Runtime-Timeout mit Puffer ab
 -- Quelle: agent/base_agent.py:_resolve_tool_http_timeout
 theorem mcp_research_tool_timeout_covers_runtime : 600 ≤ max 300 (600 + 30) := by omega

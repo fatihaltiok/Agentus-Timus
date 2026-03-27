@@ -101,6 +101,9 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert "site_kind: youtube" in result
     assert "recommended_agent_chain: meta -> visual -> research -> document" in result
     assert "recommended_recipe_id: youtube_content_extraction" in result
+    assert "goal_spec_json:" in result
+    assert "capability_graph_json:" in result
+    assert "adaptive_plan_json:" in result
     assert "task_profile_json:" in result
     assert "selected_strategy_json:" in result
     assert "meta_self_state_json:" in result
@@ -119,6 +122,8 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert meta["recommended_agent_chain"] == ["meta", "visual", "research", "document"]
     assert meta["needs_structured_handoff"] is True
     assert meta["recommended_recipe_id"] == "youtube_content_extraction"
+    assert meta["goal_spec"]["output_mode"] == "report"
+    assert meta["adaptive_plan"]["planner_mode"] == "advisory"
     assert meta["task_profile"]["intent"] == "content_extraction"
     assert meta["selected_strategy"]["strategy_id"] == "layered_youtube_extraction"
     assert [item["recipe_id"] for item in meta["alternative_recipes"]] == [
@@ -133,6 +138,8 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     parsed = MetaAgent._parse_meta_orchestration_handoff(result)
     assert parsed is not None
     assert parsed["meta_self_state"]["identity"] == "Timus"
+    assert parsed["goal_spec"]["output_mode"] == "report"
+    assert parsed["adaptive_plan"]["recommended_chain"] == ["meta", "visual", "research", "document"]
     assert parsed["task_profile"]["intent"] == "content_extraction"
     assert parsed["selected_strategy"]["strategy_id"] == "layered_youtube_extraction"
     assert parsed["meta_self_state"]["runtime_constraints"]["budget_state"] == "soft_limit"
@@ -312,6 +319,8 @@ def test_build_meta_handoff_payload_exposes_learning_snapshot(monkeypatch):
     rendered = main_dispatcher._render_meta_handoff_block(payload)
     assert payload["task_profile"]["intent"] == "content_extraction"
     assert payload["selected_strategy"]["strategy_id"] == "layered_youtube_extraction"
+    assert payload["goal_spec"]["task_type"] == "youtube_content_extraction"
+    assert payload["adaptive_plan"]["planner_mode"] == "advisory"
     assert "meta_learning_posture: conservative" in rendered
     assert "task_profile_intent: content_extraction" in rendered
     assert "selected_strategy_id: layered_youtube_extraction" in rendered
@@ -320,6 +329,9 @@ def test_build_meta_handoff_payload_exposes_learning_snapshot(monkeypatch):
     assert "site_recipe_feedback_score: 0.78 (evidence=5)" in rendered
     assert "recommended_agent_chain_key: meta__visual__research__document" in rendered
     assert "meta_self_state_json:" in rendered
+    assert "goal_spec_json:" in rendered
+    assert "capability_graph_json:" in rendered
+    assert "adaptive_plan_json:" in rendered
     assert "task_profile_json:" in rendered
     assert "selected_strategy_json:" in rendered
     assert "alternative_recipes_json:" in rendered

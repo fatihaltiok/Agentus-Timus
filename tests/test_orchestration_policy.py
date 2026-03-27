@@ -132,6 +132,29 @@ def test_evaluate_query_orchestration_routes_broad_research_requests_to_meta():
     assert decision["selected_strategy"]["strategy_id"] == "knowledge_research_orchestration"
 
 
+def test_evaluate_query_orchestration_routes_simple_live_lookup_to_meta_executor():
+    decision = evaluate_query_orchestration("Was gibt es Neues aus der Wissenschaft?")
+
+    assert decision["route_to_meta"] is True
+    assert decision["task_type"] == "simple_live_lookup"
+    assert decision["recommended_entry_agent"] == "meta"
+    assert decision["recommended_agent_chain"] == ["meta", "executor"]
+    assert decision["recommended_recipe_id"] == "simple_live_lookup"
+    assert decision["selected_strategy"]["strategy_id"] == "executor_live_lookup"
+    assert "search_news" in decision["selected_strategy"]["preferred_tools"]
+    assert any(item["name"] == "fetch_url" for item in decision["tool_affordances"])
+    assert decision["goal_spec"]["freshness"] == "live"
+    assert decision["adaptive_plan"]["recommended_chain"] == ["meta", "executor"]
+
+
+def test_evaluate_query_orchestration_exposes_advisory_plan_for_live_lookup_document():
+    decision = evaluate_query_orchestration("Speichere mir aktuelle LLM-Preise als txt Datei")
+
+    assert decision["goal_spec"]["artifact_format"] == "txt"
+    assert decision["capability_graph"]["goal_gaps"] == []
+    assert decision["adaptive_plan"]["recommended_chain"] == ["meta", "executor", "document"]
+
+
 def test_evaluate_query_orchestration_keeps_strict_source_research_single_lane():
     decision = evaluate_query_orchestration(
         "Recherchiere aktuelle Entwicklungen zu KI-Agenten mit Quellen und Studien"

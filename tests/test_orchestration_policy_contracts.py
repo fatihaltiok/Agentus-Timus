@@ -13,7 +13,16 @@ from orchestration.orchestration_policy import evaluate_query_orchestration
 @deal.pre(lambda query: query.isascii())
 @deal.post(
     lambda r: set(r.keys())
-    >= {"route_to_meta", "capabilities", "capability_count", "action_count", "reason"}
+    >= {
+        "route_to_meta",
+        "capabilities",
+        "capability_count",
+        "action_count",
+        "reason",
+        "goal_spec",
+        "capability_graph",
+        "adaptive_plan",
+    }
 )
 @deal.post(
     lambda r: r["reason"]
@@ -22,6 +31,7 @@ from orchestration.orchestration_policy import evaluate_query_orchestration
 @deal.post(
     lambda r: not r["route_to_meta"] or r["recommended_agent_chain"][0] == "meta"
 )
+@deal.post(lambda r: isinstance(r["goal_spec"], dict) and bool(r["goal_spec"].get("goal_signature")))
 def _contract_evaluate_query_orchestration(query: str) -> dict:
     return evaluate_query_orchestration(query)
 
@@ -33,3 +43,4 @@ def test_hypothesis_orchestration_policy_shape(query: str):
     assert isinstance(result["route_to_meta"], bool)
     assert result["capability_count"] >= 0
     assert result["action_count"] >= 0
+    assert isinstance(result["adaptive_plan"].get("candidate_chains"), list)
