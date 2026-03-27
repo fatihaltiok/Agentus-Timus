@@ -26,6 +26,7 @@ from agent.prompts import META_SYSTEM_PROMPT
 from orchestration.meta_orchestration import (
     build_meta_feedback_targets,
     resolve_adaptive_plan_adoption,
+    resolve_runtime_goal_gap_stage,
     resolve_orchestration_recipe,
 )
 from orchestration.self_selected_strategy import classify_strategy_error
@@ -1331,7 +1332,20 @@ class MetaAgent(BaseAgent):
             None,
         )
         if final_success and final_success.get("result_full"):
-            if recipe_id in cls._RECIPE_DIRECT_RESULT_IDS:
+            clean_success_path = all(
+                str(entry.get("status") or "").strip().lower() in {"success", "skipped"}
+                and not entry.get("recovery_for")
+                for entry in stage_history
+            )
+            if recipe_id in cls._RECIPE_DIRECT_RESULT_IDS or (
+                clean_success_path
+                and
+                str(final_success.get("agent") or "").strip().lower() == "document"
+                and (
+                    bool(final_success.get("artifacts"))
+                    or str(final_success.get("result_full") or "").strip().startswith("**Dokument erstellt:**")
+                )
+            ):
                 return str(final_success["result_full"])
             lines.append("")
             lines.append("Finales Ergebnis:")
@@ -1593,6 +1607,59 @@ class MetaAgent(BaseAgent):
                 "adaptive_reason": adaptive_reason,
             },
         )
+
+    @staticmethod
+    def _stage_result_has_runtime_material(stage_result: Optional[Dict[str, Any]]) -> bool:
+        if not stage_result or str(stage_result.get("status") or "").strip().lower() != "success":
+            return False
+        if stage_result.get("artifacts"):
+            return True
+        if stage_result.get("metadata"):
+            return True
+        return bool(str(stage_result.get("result_full") or "").strip())
+
+    @classmethod
+    def _insert_runtime_goal_gap_stage(
+        cls,
+        *,
+        handoff: Dict[str, Any],
+        stages: List[Dict[str, Any]],
+        stage_index: int,
+        stage_history: List[Dict[str, Any]],
+        previous_stage_result: Optional[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        runtime_stage = resolve_runtime_goal_gap_stage(
+            dict(handoff.get("goal_spec") or {}),
+            current_stage_ids=[
+                *(str(stage.get("stage_id") or "") for stage in stages),
+                *(str(entry.get("stage_id") or "") for entry in stage_history),
+            ],
+            current_stage_agents=[
+                *(str(stage.get("agent") or "") for stage in stages),
+                *(str(entry.get("agent") or "") for entry in stage_history),
+            ],
+            previous_stage_status=str((previous_stage_result or {}).get("status") or ""),
+            previous_stage_agent=str((previous_stage_result or {}).get("agent") or ""),
+            has_result_material=cls._stage_result_has_runtime_material(previous_stage_result),
+        )
+        if runtime_stage is None:
+            return stages
+
+        adapted = [dict(stage) for stage in stages]
+        insert_at = len(adapted)
+        for idx in range(stage_index + 1, len(adapted)):
+            if str(adapted[idx].get("agent") or "").strip().lower() == "communication":
+                insert_at = idx
+                break
+        adapted.insert(insert_at, runtime_stage)
+        chain = [
+            str(agent).strip().lower()
+            for agent in handoff.get("recommended_agent_chain") or []
+            if str(agent).strip()
+        ]
+        if "document" not in chain:
+            handoff["recommended_agent_chain"] = [*chain, "document"]
+        return adapted
 
     @classmethod
     def _adapt_recipe_stages(
@@ -1865,6 +1932,16 @@ class MetaAgent(BaseAgent):
                     stage_history=stage_history,
                     failure=history_entry,
                 )
+            stages = self._insert_runtime_goal_gap_stage(
+                handoff=handoff_for_recipe,
+                stages=stages,
+                stage_index=stage_index,
+                stage_history=stage_history,
+                previous_stage_result=previous_stage_result,
+            )
+            selected_recipe["recommended_agent_chain"] = list(
+                handoff_for_recipe.get("recommended_agent_chain") or selected_recipe.get("recommended_agent_chain") or []
+            )
             stage_index += 1
 
         self._record_recipe_execution_outcome(

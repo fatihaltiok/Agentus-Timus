@@ -22,6 +22,7 @@ def _build_meta_task(
     selected_strategy: dict | None = None,
     adaptive_plan: dict | None = None,
     planner_resolution: dict | None = None,
+    goal_spec: dict | None = None,
 ) -> str:
     import json
 
@@ -42,6 +43,8 @@ def _build_meta_task(
         lines.append("adaptive_plan_json: " + json.dumps(adaptive_plan, ensure_ascii=False, sort_keys=True))
     if planner_resolution is not None:
         lines.append("planner_resolution_json: " + json.dumps(planner_resolution, ensure_ascii=False, sort_keys=True))
+    if goal_spec is not None:
+        lines.append("goal_spec_json: " + json.dumps(goal_spec, ensure_ascii=False, sort_keys=True))
     if alternative_recipes is not None:
         lines.append("alternative_recipes_json: " + json.dumps(alternative_recipes, ensure_ascii=False, sort_keys=True))
     lines.append("recipe_stages:")
@@ -310,6 +313,71 @@ async def test_meta_recipe_execution_prefers_adaptive_plan_before_recipe_fallbac
     result = await MetaAgent.run(agent, task)
 
     assert [call["agent_type"] for call in calls] == ["executor", "document"]
+    assert result.startswith("**Dokument erstellt:**")
+
+
+@pytest.mark.asyncio
+async def test_meta_recipe_execution_runtime_replan_inserts_document_stage_after_success(monkeypatch):
+    from agent.agents.meta import MetaAgent
+    from agent.base_agent import BaseAgent
+
+    calls = []
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        assert method == "delegate_to_agent"
+        calls.append(dict(params))
+        if params["agent_type"] == "research":
+            return {
+                "status": "success",
+                "agent": "research",
+                "result": "Belastbare Modellpreise extrahiert und strukturiert zusammengestellt.",
+                "blackboard_key": "delegation:research:prices",
+                "metadata": {"sources": ["https://example.com/pricing"]},
+                "artifacts": [],
+            }
+        assert params["agent_type"] == "document"
+        assert "source_material:" in params["task"]
+        assert "output_format: TXT" in params["task"]
+        return {
+            "status": "success",
+            "agent": "document",
+            "result": "**Dokument erstellt:** `results/Preisvergleich.txt`\n**Format:** TXT",
+            "blackboard_key": "delegation:document:prices",
+            "metadata": {"artifact": "results/Preisvergleich.txt"},
+            "artifacts": ["results/Preisvergleich.txt"],
+        }
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = MetaAgent.__new__(MetaAgent)
+    agent.conversation_session_id = "sess-meta-runtime-gap"
+
+    task = _build_meta_task(
+        recipe_id="knowledge_research",
+        chain="meta -> research",
+        stages=[
+            ("research_discovery", "research", "Recherchiere aktuelle Modellpreise", "summary", False),
+        ],
+        original_task="Recherchiere aktuelle LLM-Preise und speichere sie als txt Datei",
+        task_type="knowledge_research",
+        site_kind="web",
+        goal_spec={
+            "goal_signature": "pricing|recent|verified|artifact|txt|loc=0|deliver=0",
+            "task_type": "knowledge_research",
+            "domain": "pricing",
+            "freshness": "recent",
+            "evidence_level": "verified",
+            "output_mode": "artifact",
+            "artifact_format": "txt",
+            "uses_location": False,
+            "delivery_required": False,
+            "advisory_only": True,
+        },
+    )
+
+    result = await MetaAgent.run(agent, task)
+
+    assert [call["agent_type"] for call in calls] == ["research", "document"]
     assert result.startswith("**Dokument erstellt:**")
 
 

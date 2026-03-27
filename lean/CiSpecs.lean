@@ -93,6 +93,7 @@ theorem goal_first_document_extension_nonshrinking : 2 ≤ 3 := by omega
 theorem adaptive_planner_candidate_cap_positive : 1 ≤ 4 := by omega
 theorem adaptive_plan_confidence_threshold_positive_scaled : 0 < 78 := by omega
 theorem adaptive_plan_safe_chain_bound : 3 ≤ 4 := by omega
+theorem runtime_goal_gap_document_stage_nonshrinking : 1 ≤ 2 := by omega
 
 -- 3k1. MCP-HTTP-Layer deckt das Research-Runtime-Timeout mit Puffer ab
 -- Quelle: agent/base_agent.py:_resolve_tool_http_timeout

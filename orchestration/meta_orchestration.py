@@ -428,6 +428,7 @@ _ADAPTIVE_PLAN_SAFE_TASK_TYPES = {
 }
 _ADAPTIVE_PLAN_MIN_CONFIDENCE = 0.78
 _ADAPTIVE_PLAN_MAX_CHAIN_LENGTH = 4
+_RUNTIME_GOAL_GAP_ALLOWED_PREVIOUS_AGENTS = {"executor", "research"}
 
 
 _BROWSER_HINTS = (
@@ -874,6 +875,57 @@ def resolve_adaptive_plan_adoption(classification: Dict[str, Any]) -> Dict[str, 
         "adopted_recipe_id": recipe_hint,
         "adopted_chain": candidate_chain,
         "recipe_payload": candidate_payload,
+    }
+
+
+def resolve_runtime_goal_gap_stage(
+    goal_spec: Dict[str, Any],
+    *,
+    current_stage_ids: Iterable[str],
+    current_stage_agents: Iterable[str],
+    previous_stage_status: str,
+    previous_stage_agent: str,
+    has_result_material: bool,
+) -> Dict[str, Any] | None:
+    output_mode = str(goal_spec.get("output_mode") or "").strip().lower()
+    artifact_format = str(goal_spec.get("artifact_format") or "").strip().lower()
+    normalized_stage_ids = {str(item or "").strip().lower() for item in current_stage_ids if str(item or "").strip()}
+    normalized_stage_agents = {
+        str(item or "").strip().lower() for item in current_stage_agents if str(item or "").strip()
+    }
+    previous_agent = str(previous_stage_agent or "").strip().lower()
+    previous_status_clean = str(previous_stage_status or "").strip().lower()
+
+    if output_mode not in {"artifact", "table"} and not artifact_format:
+        return None
+    if previous_status_clean != "success":
+        return None
+    if previous_agent not in _RUNTIME_GOAL_GAP_ALLOWED_PREVIOUS_AGENTS:
+        return None
+    if not has_result_material:
+        return None
+    if "document_output" in normalized_stage_ids or "document" in normalized_stage_agents:
+        return None
+
+    expected_output = f"{artifact_format} artifact" if artifact_format else "structured table artifact"
+    if output_mode == "table" and not artifact_format:
+        expected_output = "structured table artifact"
+    goal_text = (
+        "Erzeuge aus dem bereits vorliegenden Ergebnis die noch fehlende Tabelle oder Datei im angeforderten Format."
+    )
+    if output_mode == "artifact" and artifact_format:
+        goal_text = (
+            "Erzeuge aus dem bereits vorliegenden Ergebnis das noch fehlende Ausgabe-Artefakt "
+            "im angeforderten Format."
+        )
+    return {
+        "stage_id": "document_output",
+        "agent": "document",
+        "goal": goal_text,
+        "expected_output": expected_output,
+        "optional": False,
+        "adaptive": True,
+        "adaptive_reason": "runtime_goal_gap_document",
     }
 
 
