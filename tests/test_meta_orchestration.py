@@ -142,6 +142,39 @@ def test_classify_meta_task_routes_lookup_plus_table_request_to_executor_and_doc
     assert result["adaptive_plan"]["recommended_chain"] == ["meta", "executor", "document"]
 
 
+def test_classify_meta_task_exposes_learned_chain_stats_when_available(monkeypatch):
+    class _FakeAdaptivePlanMemory:
+        def get_goal_chain_stats(self, goal_signature: str):
+            assert goal_signature
+            return [
+                {
+                    "chain": ["meta", "executor", "document"],
+                    "evidence_count": 3,
+                    "success_count": 3,
+                    "failure_count": 0,
+                    "success_rate": 1.0,
+                    "runtime_gap_rate": 0.0,
+                    "avg_duration_ms": 1100,
+                    "learned_confidence": 1.0,
+                    "learned_bias": 0.18,
+                    "last_seen_at": "2026-03-27T12:00:00",
+                }
+            ]
+
+    monkeypatch.setattr(
+        "orchestration.meta_orchestration.get_adaptive_plan_memory",
+        lambda: _FakeAdaptivePlanMemory(),
+    )
+
+    result = classify_meta_task(
+        "Erstelle mir eine Liste mit den aktuellen Preisen der besten LLMs und zeige mir dann die Tabelle",
+        action_count=0,
+    )
+
+    assert result["learned_chain_stats"][0]["chain"] == ["meta", "executor", "document"]
+    assert result["adaptive_plan"]["candidate_chains"][0]["learned_bias"] >= 0.0
+
+
 def test_classify_meta_task_keeps_source_bound_research_out_of_simple_live_lookup():
     result = classify_meta_task(
         "Recherchiere aktuelle Entwicklungen zu KI-Agenten mit Quellen und Studien",

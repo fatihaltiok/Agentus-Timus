@@ -21,6 +21,7 @@ from orchestration.meta_orchestration import classify_meta_task, get_agent_capab
         "recommended_chain",
         "confidence",
         "goal_gaps",
+        "learned_chain_stats",
         "candidate_chains",
     }
 )

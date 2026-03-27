@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional
 
 from agent.base_agent import BaseAgent
 from agent.prompts import META_SYSTEM_PROMPT
+from orchestration.adaptive_plan_memory import get_adaptive_plan_memory
 from orchestration.meta_orchestration import (
     build_meta_feedback_targets,
     resolve_adaptive_plan_adoption,
@@ -1135,6 +1136,33 @@ class MetaAgent(BaseAgent):
         return best_payload
 
     @classmethod
+    def _build_executed_agent_chain(
+        cls,
+        stage_history: List[Dict[str, Any]],
+        *,
+        fallback_chain: Optional[List[str]] = None,
+    ) -> List[str]:
+        chain: List[str] = ["meta"]
+        for entry in stage_history:
+            agent = str(entry.get("agent") or "").strip().lower()
+            if agent and agent not in chain:
+                chain.append(agent)
+        for agent in fallback_chain or []:
+            normalized = str(agent or "").strip().lower()
+            if normalized and normalized not in chain:
+                chain.append(normalized)
+        return chain
+
+    @staticmethod
+    def _collect_runtime_gap_insertions(stage_history: List[Dict[str, Any]]) -> List[str]:
+        collected: List[str] = []
+        for entry in stage_history:
+            reason = str(entry.get("adaptive_reason") or "").strip().lower()
+            if reason.startswith("runtime_goal_gap") and reason not in collected:
+                collected.append(reason)
+        return collected
+
+    @classmethod
     def _record_recipe_execution_outcome(
         cls,
         *,
@@ -1144,6 +1172,7 @@ class MetaAgent(BaseAgent):
         stage_history: List[Dict[str, Any]],
         failure: Optional[Dict[str, Any]] = None,
         switch_reason: str = "",
+        duration_ms: int = 0,
     ) -> None:
         try:
             from orchestration.feedback_engine import get_feedback_engine
@@ -1171,8 +1200,29 @@ class MetaAgent(BaseAgent):
                     "stage_count": len(stage_history),
                     "failed_stage_id": str((failure or {}).get("stage_id") or "")[:80],
                     "switch_reason": str(switch_reason or "")[:120],
+                    "duration_ms": max(0, int(duration_ms)),
                 },
                 feedback_targets=feedback_targets,
+            )
+        except Exception:
+            pass
+        try:
+            goal_signature = str((handoff.get("goal_spec") or {}).get("goal_signature") or "").strip()
+            if not goal_signature:
+                return
+            get_adaptive_plan_memory().record_outcome(
+                goal_signature=goal_signature,
+                task_type=str(handoff.get("task_type") or ""),
+                site_kind=str(handoff.get("site_kind") or ""),
+                recipe_id=str(recipe_payload.get("recipe_id") or ""),
+                recommended_chain=chain,
+                final_chain=cls._build_executed_agent_chain(stage_history, fallback_chain=chain),
+                success=success,
+                runtime_gap_insertions=cls._collect_runtime_gap_insertions(stage_history),
+                duration_ms=max(0, int(duration_ms)),
+                confidence=cls._as_float((handoff.get("adaptive_plan") or {}).get("confidence")) or 0.0,
+                failure_stage_id=str((failure or {}).get("stage_id") or ""),
+                switch_reason=switch_reason,
             )
         except Exception:
             pass
@@ -1798,6 +1848,7 @@ class MetaAgent(BaseAgent):
             handoff_for_recipe["recommended_agent_chain"] = list(selected_recipe.get("recommended_agent_chain") or [])
         stage_history: List[Dict[str, Any]] = []
         previous_stage_result: Optional[Dict[str, Any]] = None
+        recipe_started_at = time.monotonic()
         stage_index = 0
         while stage_index < len(stages):
             stages = self._adapt_recipe_stages(
@@ -1815,6 +1866,7 @@ class MetaAgent(BaseAgent):
                         "agent": stage.get("agent", "unknown"),
                         "status": "skipped",
                         "result_preview": "Optionale Stage fuer diese Anfrage uebersprungen.",
+                        "adaptive_reason": str(stage.get("adaptive_reason") or ""),
                     }
                 )
                 stage_index += 1
@@ -1854,6 +1906,7 @@ class MetaAgent(BaseAgent):
                 "error": normalized.get("error", "") if isinstance(normalized, dict) else "",
                 "metadata": normalized.get("metadata", {}) if isinstance(normalized, dict) else {},
                 "artifacts": normalized.get("artifacts", []) if isinstance(normalized, dict) else [],
+                "adaptive_reason": str(stage.get("adaptive_reason") or ""),
             }
             if history_entry["status"] != "success":
                 history_entry["error_signal"] = classify_strategy_error(
@@ -1882,6 +1935,7 @@ class MetaAgent(BaseAgent):
                             recipe_payload=selected_recipe,
                             success=True,
                             stage_history=stage_history,
+                            duration_ms=int((time.monotonic() - recipe_started_at) * 1000),
                         )
                         return self._render_recipe_execution_summary(
                             recipe_id=recipe_id,
@@ -1904,6 +1958,7 @@ class MetaAgent(BaseAgent):
                         stage_history=stage_history,
                         failure=history_entry,
                         switch_reason=str(alternative_recipe.get("switch_reason") or ""),
+                        duration_ms=int((time.monotonic() - recipe_started_at) * 1000),
                     )
                     switched = await self._execute_meta_recipe_handoff(
                         task,
@@ -1925,6 +1980,7 @@ class MetaAgent(BaseAgent):
                     success=False,
                     stage_history=stage_history,
                     failure=history_entry,
+                    duration_ms=int((time.monotonic() - recipe_started_at) * 1000),
                 )
                 return self._render_recipe_execution_summary(
                     recipe_id=recipe_id,
@@ -1949,6 +2005,7 @@ class MetaAgent(BaseAgent):
             recipe_payload=selected_recipe,
             success=True,
             stage_history=stage_history,
+            duration_ms=int((time.monotonic() - recipe_started_at) * 1000),
         )
         return self._render_recipe_execution_summary(
             recipe_id=recipe_id,

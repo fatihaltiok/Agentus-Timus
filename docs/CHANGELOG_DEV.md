@@ -180,6 +180,94 @@ Konkreter Ziel-Fall:
 - Phase 3 ist in diesem Arbeitsstand fertig implementiert und wird mit dem zugehörigen Session-Commit eingecheckt.
 - Live-Aktivierung ist zu diesem Stand noch nicht erfolgt.
 
+### Phase 4 — Learned Chains + breiteres Runtime-Replanning (Start umgesetzt)
+
+**Ziel**
+
+Timus soll nicht nur Ziele erkennen und sichere Ketten auswählen, sondern aus erfolgreichen Läufen lernen und weitere Ziel-Lücken selbstständig schließen.
+
+Der Kernsprung dieser Phase:
+
+- von statischer Ziel- und Fähigkeitsplanung
+- hin zu erfahrungsbasierter Kettenpriorisierung und breiterem Runtime-Replanning
+
+**Bisher umgesetzt**
+
+- Neue Lernschicht in [adaptive_plan_memory.py](/home/fatih-ubuntu/dev/timus/orchestration/adaptive_plan_memory.py)
+  - persistiert Chain-Outcomes pro `goal_signature`
+  - speichert empfohlene Kette, finale Kette, Erfolg/Misserfolg, Laufzeit und Runtime-Gap-Insertions
+  - aggregiert daraus konservative Chain-Statistiken mit `learned_bias` und `learned_confidence`
+- Planner-Anreicherung in [adaptive_planner.py](/home/fatih-ubuntu/dev/timus/orchestration/adaptive_planner.py)
+  - Candidate-Scores koennen jetzt durch gelernte positive oder negative Erfahrungswerte nachjustiert werden
+  - Candidate-Payloads zeigen `learned_bias` und Evidenz
+- Integration in [meta_orchestration.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_orchestration.py)
+  - `classify_meta_task(...)` liest gelernte Chain-Statistiken fuer die aktuelle `goal_signature`
+  - der Adaptive Planner bekommt diese Daten direkt in den Planungsaufruf
+- Rueckschreiben in [meta.py](/home/fatih-ubuntu/dev/timus/agent/agents/meta.py)
+  - echte Rezeptlaeufe schreiben ihre Outcomes jetzt in den Lernspeicher zurueck
+  - Runtime-Gap-Insertions wie `runtime_goal_gap_document` werden dabei explizit markiert
+- Validierung
+  - `48 passed`
+  - CrossHair gruen
+  - Lean gruen
+
+**Geplanter Restumfang**
+
+- Neue Lernschicht für erfolgreiche und gescheiterte Agentenketten
+  - `goal_signature`
+  - `recommended_chain`
+  - `final_chain`
+  - `success` oder `failure`
+  - `runtime_gap_insertions`
+  - `duration_ms`
+  - `confidence`
+- Planner-Anreicherung mit Erfahrungswissen
+  - bekannte gute Ketten sollen künftig bevorzugt werden
+  - bekannte schlechte Ketten sollen abgewertet werden
+- Erweiterung der Runtime-Gap-Erkennung über `document_output` hinaus
+  - zuerst `delivery`
+  - danach `verification`
+  - optional später `location_context`
+
+**Geplante Dateien**
+
+- Neue Datei [adaptive_plan_memory.py](/home/fatih-ubuntu/dev/timus/orchestration/adaptive_plan_memory.py)
+  - persistiert gelernte Ketten kompakt und deterministisch
+- Erweiterung in [adaptive_planner.py](/home/fatih-ubuntu/dev/timus/orchestration/adaptive_planner.py)
+  - kombiniert statische Planner-Heuristik mit Erfahrungsdaten
+- Erweiterung in [meta_orchestration.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_orchestration.py)
+  - zusätzliche Runtime-Gap-Typen
+  - sichere Adoptionslogik für gelernte Ketten
+- Erweiterung in [meta.py](/home/fatih-ubuntu/dev/timus/agent/agents/meta.py)
+  - schreibt Outcome-Signale nach Stage- und Gesamterfolg zurück
+  - nutzt gelernte Ketten nur innerhalb harter Guardrails
+- Kleiner Infrastruktur-Fix in [verify_pre_commit_lean.py](/home/fatih-ubuntu/dev/timus/scripts/verify_pre_commit_lean.py)
+  - nutzt fuer `CiSpecs.lean` jetzt bevorzugt die lokal installierte Lean-Toolchain statt den `elan`-Wrapper
+  - vermeidet unnoetige Download-/Timeout-Pfade in der lokalen Verifikation
+
+**Guardrails**
+
+- keine freie Rekursion
+- maximale Kettenlänge bleibt begrenzt
+- gelernte Ketten dürfen nur bekannte Agenten nutzen
+- `research` bleibt ein teurer Spezialpfad und wird nicht aggressiv hochpriorisiert
+- negative Lernsignale dürfen nur abwerten, nicht sofort alle Alternativen blockieren
+- neue Runtime-Gap-Typen werden einzeln und konservativ aktiviert
+
+**Implementierungsreihenfolge**
+
+1. Lernspeicher für Ketten-Outcome
+2. Planner-Priorisierung mit Erfahrungsdaten
+3. Runtime-Gap `delivery`
+4. Runtime-Gap `verification`
+5. erweiterte Regressionen, Contracts und Lean-Invarianten
+
+**Erfolgskriterium**
+
+- Timus soll bei wiederkehrenden Zielmustern schneller zur funktionierenden Kette greifen
+- Timus soll bekannte Fehlpfade seltener wiederholen
+- Timus soll nach erfolgreichen Zwischenresultaten weitere sichere Ziel-Lücken selbst schließen
+
 ### Aktueller Stand
 
 Timus ist nach dieser Session auf einem deutlich besseren Orchestrierungsniveau, aber noch nicht am Endziel.
@@ -215,8 +303,8 @@ Timus ist nach dieser Session auf einem deutlich besseren Orchestrierungsniveau,
 
 ### Nächster sinnvoller Schritt
 
-Phase 3 live schalten und beobachten:
+Phase 3 live schalten und danach Phase 4 beginnen:
 
 - Runtime-Replanning auf `timus-mcp` aktivieren
 - danach echte Live-Fälle prüfen, ob `research -> document` und später weitere Gap-Typen sauber nachgezogen werden
-- anschließend weitere Gap-Typen priorisieren, vor allem `delivery` und `verification`
+- anschließend Phase 4 mit Learned Chains und den ersten zusätzlichen Gap-Typen `delivery` und `verification` umsetzen

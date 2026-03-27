@@ -382,6 +382,94 @@ async def test_meta_recipe_execution_runtime_replan_inserts_document_stage_after
 
 
 @pytest.mark.asyncio
+async def test_meta_recipe_execution_records_learned_chain_outcome_after_runtime_gap(monkeypatch):
+    from agent.agents.meta import MetaAgent
+    from agent.base_agent import BaseAgent
+
+    recorded = []
+
+    class _FakeAdaptivePlanMemory:
+        def record_outcome(self, **kwargs):
+            recorded.append(kwargs)
+
+    class _FakeFeedbackEngine:
+        def record_runtime_outcome(self, **kwargs):
+            return kwargs
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        assert method == "delegate_to_agent"
+        if params["agent_type"] == "research":
+            return {
+                "status": "success",
+                "agent": "research",
+                "result": "Belastbare Modellpreise extrahiert und strukturiert zusammengestellt.",
+                "blackboard_key": "delegation:research:prices",
+                "metadata": {"sources": ["https://example.com/pricing"]},
+                "artifacts": [],
+            }
+        assert params["agent_type"] == "document"
+        return {
+            "status": "success",
+            "agent": "document",
+            "result": "**Dokument erstellt:** `results/Preisvergleich.txt`\n**Format:** TXT",
+            "blackboard_key": "delegation:document:prices",
+            "metadata": {"artifact": "results/Preisvergleich.txt"},
+            "artifacts": ["results/Preisvergleich.txt"],
+        }
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+    monkeypatch.setattr("orchestration.feedback_engine.get_feedback_engine", lambda: _FakeFeedbackEngine())
+    monkeypatch.setattr("agent.agents.meta.get_adaptive_plan_memory", lambda: _FakeAdaptivePlanMemory())
+
+    agent = MetaAgent.__new__(MetaAgent)
+    agent.conversation_session_id = "sess-meta-runtime-gap-learning"
+
+    task = _build_meta_task(
+        recipe_id="knowledge_research",
+        chain="meta -> research",
+        stages=[
+            ("research_discovery", "research", "Recherchiere aktuelle Modellpreise", "summary", False),
+        ],
+        original_task="Recherchiere aktuelle LLM-Preise und speichere sie als txt Datei",
+        task_type="knowledge_research",
+        site_kind="web",
+        goal_spec={
+            "goal_signature": "pricing|recent|verified|artifact|txt|loc=0|deliver=0",
+            "task_type": "knowledge_research",
+            "domain": "pricing",
+            "freshness": "recent",
+            "evidence_level": "verified",
+            "output_mode": "artifact",
+            "artifact_format": "txt",
+            "uses_location": False,
+            "delivery_required": False,
+            "advisory_only": True,
+        },
+        adaptive_plan={
+            "planner_mode": "advisory",
+            "advisory_only": True,
+            "goal_signature": "pricing|recent|verified|artifact|txt|loc=0|deliver=0",
+            "current_chain": ["meta", "research"],
+            "recommended_chain": ["meta", "research"],
+            "recommended_recipe_hint": "knowledge_research",
+            "confidence": 0.82,
+            "reason": "current_chain_retained",
+            "goal_gaps": ["artifact_output_stage_missing"],
+            "candidate_chains": [],
+        },
+    )
+
+    result = await MetaAgent.run(agent, task)
+
+    assert result.startswith("**Dokument erstellt:**")
+    assert len(recorded) == 1
+    assert recorded[0]["goal_signature"] == "pricing|recent|verified|artifact|txt|loc=0|deliver=0"
+    assert recorded[0]["final_chain"] == ["meta", "research", "document"]
+    assert recorded[0]["runtime_gap_insertions"] == ["runtime_goal_gap_document"]
+    assert recorded[0]["success"] is True
+
+
+@pytest.mark.asyncio
 async def test_meta_recipe_execution_inserts_strategy_lightweight_preflight(monkeypatch):
     from agent.agents.meta import MetaAgent
     from agent.base_agent import BaseAgent

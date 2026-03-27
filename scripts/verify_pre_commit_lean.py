@@ -20,6 +20,32 @@ if str(REPO_ROOT) not in sys.path:
 from tools.lean_tool.specs import BUILTIN_SPECS, build_combined_mathlib_specs
 
 
+def _resolve_lean_binary() -> str | None:
+    lean_path = shutil.which("lean")
+    if lean_path is None:
+        return None
+    lean_candidate = Path(lean_path)
+    if ".elan" not in str(lean_candidate):
+        return lean_path
+    toolchains_dir = Path.home() / ".elan" / "toolchains"
+    if not toolchains_dir.is_dir():
+        return lean_path
+    direct_candidates = sorted(
+        (
+            candidate / "bin" / "lean"
+            for candidate in toolchains_dir.iterdir()
+            if candidate.is_dir()
+            and not candidate.name.endswith(".lock")
+            and (candidate / "bin" / "lean").is_file()
+        ),
+        key=lambda item: item.parent.parent.name,
+        reverse=True,
+    )
+    if direct_candidates:
+        return str(direct_candidates[0])
+    return lean_path
+
+
 def _run_checked(cmd: list[str], *, cwd: Path, timeout: int, label: str) -> int:
     proc = subprocess.run(
         cmd,
@@ -39,7 +65,7 @@ def _run_checked(cmd: list[str], *, cwd: Path, timeout: int, label: str) -> int:
 
 
 def main() -> int:
-    lean_path = shutil.which("lean")
+    lean_path = _resolve_lean_binary()
     lake_path = shutil.which("lake")
 
     if lean_path is None:

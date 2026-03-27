@@ -6,6 +6,7 @@ import re
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Iterable, List, Tuple
 
+from orchestration.adaptive_plan_memory import get_adaptive_plan_memory
 from orchestration.adaptive_planner import build_adaptive_plan
 from orchestration.capability_graph import build_capability_graph
 from orchestration.goal_spec import derive_goal_spec
@@ -1170,10 +1171,23 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
         current_chain=deduped_chain,
         required_capabilities=classification["required_capabilities"],
     )
-    adaptive_plan = build_adaptive_plan(goal_spec, capability_graph, classification)
+    learned_chain_stats: List[Dict[str, Any]] = []
+    try:
+        learned_chain_stats = get_adaptive_plan_memory().get_goal_chain_stats(
+            str(goal_spec.get("goal_signature") or ""),
+        )
+    except Exception:
+        learned_chain_stats = []
+    adaptive_plan = build_adaptive_plan(
+        goal_spec,
+        capability_graph,
+        classification,
+        learned_chain_stats=learned_chain_stats,
+    )
     return {
         **classification,
         "goal_spec": goal_spec,
         "capability_graph": capability_graph,
+        "learned_chain_stats": learned_chain_stats,
         "adaptive_plan": adaptive_plan,
     }

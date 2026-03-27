@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 
 @dataclass(frozen=True)
@@ -12,11 +12,14 @@ class AdaptivePlanCandidate:
     score: float
     reason: str
     recipe_hint: str | None
+    learned_bias: float = 0.0
+    learned_evidence: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         payload = asdict(self)
         payload["chain"] = list(self.chain)
         payload["score"] = round(float(self.score), 2)
+        payload["learned_bias"] = round(float(self.learned_bias), 2)
         return payload
 
 
@@ -57,11 +60,41 @@ def _derive_recipe_hint(
     return current_hint
 
 
+def _normalize_learned_chain_stats(
+    learned_chain_stats: Sequence[Mapping[str, Any]] | None,
+) -> Dict[Tuple[str, ...], Dict[str, Any]]:
+    normalized: Dict[Tuple[str, ...], Dict[str, Any]] = {}
+    for item in learned_chain_stats or []:
+        chain = _dedupe_chain(item.get("chain") or [])
+        if not chain:
+            continue
+        normalized[chain] = {
+            "learned_bias": float(item.get("learned_bias") or 0.0),
+            "evidence_count": max(0, int(item.get("evidence_count") or 0)),
+            "learned_confidence": float(item.get("learned_confidence") or 0.0),
+        }
+    return normalized
+
+
+def _learned_chain_adjustment(
+    chain: Sequence[str],
+    learned_chain_stats: Mapping[Tuple[str, ...], Mapping[str, Any]],
+) -> Tuple[float, int]:
+    learned = learned_chain_stats.get(tuple(chain))
+    if not learned:
+        return 0.0, 0
+    evidence = max(0, int(learned.get("evidence_count") or 0))
+    bias = max(-0.25, min(0.25, float(learned.get("learned_bias") or 0.0)))
+    confidence = max(0.0, min(1.0, float(learned.get("learned_confidence") or 0.0)))
+    return bias * confidence, evidence
+
+
 def _score_chain(
     chain: Sequence[str],
     goal_spec: Dict[str, Any],
     goal_gaps: Sequence[str],
-) -> float:
+    learned_chain_stats: Mapping[Tuple[str, ...], Mapping[str, Any]] | None = None,
+) -> Tuple[float, float, int]:
     normalized = tuple(chain)
     score = 0.55
     if str(goal_spec.get("freshness") or "").strip().lower() == "live" and "executor" in normalized:
@@ -78,7 +111,9 @@ def _score_chain(
         score += 0.08
     score -= 0.03 * max(len(normalized) - 3, 0)
     score += 0.04 * len([gap for gap in goal_gaps if _covers_gap(gap, normalized)])
-    return max(0.0, min(0.99, score))
+    learned_adjustment, learned_evidence = _learned_chain_adjustment(normalized, learned_chain_stats or {})
+    score += learned_adjustment
+    return max(0.0, min(0.99, score)), learned_adjustment, learned_evidence
 
 
 def _covers_gap(gap: str, chain: Sequence[str]) -> bool:
@@ -94,7 +129,20 @@ def _covers_gap(gap: str, chain: Sequence[str]) -> bool:
     return False
 
 
-def _candidate_reason(current: Sequence[str], proposed: Sequence[str], goal_gaps: Sequence[str]) -> str:
+def _candidate_reason(
+    current: Sequence[str],
+    proposed: Sequence[str],
+    goal_gaps: Sequence[str],
+    *,
+    learned_bias: float = 0.0,
+    learned_evidence: int = 0,
+) -> str:
+    if (
+        tuple(current) != tuple(proposed)
+        and learned_bias >= 0.05
+        and learned_evidence >= 2
+    ):
+        return "learned_chain_preference"
     if tuple(current) == tuple(proposed):
         return "current_chain_satisfies_goal" if not goal_gaps else "current_chain_retained"
     if goal_gaps:
@@ -106,9 +154,12 @@ def build_adaptive_plan(
     goal_spec: Dict[str, Any],
     capability_graph: Dict[str, Any],
     classification: Dict[str, Any],
+    *,
+    learned_chain_stats: Sequence[Mapping[str, Any]] | None = None,
 ) -> Dict[str, Any]:
     current_chain = _maybe_prefix_meta(classification.get("recommended_agent_chain") or [])
     goal_gaps = list(capability_graph.get("goal_gaps") or [])
+    learned_stats_by_chain = _normalize_learned_chain_stats(learned_chain_stats)
     candidates: List[Tuple[str, ...]] = [current_chain]
 
     if str(goal_spec.get("freshness") or "").strip().lower() == "live" and "executor" not in current_chain:
@@ -130,12 +181,26 @@ def build_adaptive_plan(
 
     candidate_payloads: List[AdaptivePlanCandidate] = []
     for chain in unique_candidates:
+        score, learned_bias, learned_evidence = _score_chain(
+            chain,
+            goal_spec,
+            goal_gaps,
+            learned_chain_stats=learned_stats_by_chain,
+        )
         candidate_payloads.append(
             AdaptivePlanCandidate(
                 chain=chain,
-                score=_score_chain(chain, goal_spec, goal_gaps),
-                reason=_candidate_reason(current_chain, chain, goal_gaps),
+                score=score,
+                reason=_candidate_reason(
+                    current_chain,
+                    chain,
+                    goal_gaps,
+                    learned_bias=learned_bias,
+                    learned_evidence=learned_evidence,
+                ),
                 recipe_hint=_derive_recipe_hint(chain, goal_spec, classification),
+                learned_bias=learned_bias,
+                learned_evidence=learned_evidence,
             )
         )
 
@@ -151,5 +216,6 @@ def build_adaptive_plan(
         "confidence": round(float(recommended.score), 2),
         "reason": recommended.reason,
         "goal_gaps": goal_gaps,
+        "learned_chain_stats": list(learned_chain_stats or [])[:6],
         "candidate_chains": [item.to_dict() for item in candidate_payloads[:4]],
     }
