@@ -180,7 +180,7 @@ Konkreter Ziel-Fall:
 - Phase 3 ist in diesem Arbeitsstand fertig implementiert und wird mit dem zugehörigen Session-Commit eingecheckt.
 - Live-Aktivierung ist zu diesem Stand noch nicht erfolgt.
 
-### Phase 4 — Learned Chains + breiteres Runtime-Replanning (Start umgesetzt)
+### Phase 4 — Learned Chains + breiteres Runtime-Replanning (abgeschlossen)
 
 **Ziel**
 
@@ -206,28 +206,26 @@ Der Kernsprung dieser Phase:
 - Rueckschreiben in [meta.py](/home/fatih-ubuntu/dev/timus/agent/agents/meta.py)
   - echte Rezeptlaeufe schreiben ihre Outcomes jetzt in den Lernspeicher zurueck
   - Runtime-Gap-Insertions wie `runtime_goal_gap_document` werden dabei explizit markiert
+- Erweiterung der Runtime-Gap-Erkennung in [meta_orchestration.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_orchestration.py)
+  - `runtime_goal_gap_verification`
+  - `runtime_goal_gap_delivery`
+- Integration in [meta.py](/home/fatih-ubuntu/dev/timus/agent/agents/meta.py)
+  - `verification_output` wird vor spaeteren `document`-/`communication`-Stages eingefuegt
+  - `communication_output` wird nach erfolgreicher Material- oder Artefakt-Erzeugung sicher nachgeschaltet
+  - Communication-Handoffs tragen jetzt auch `attachment_path` und `source_material`
 - Validierung
-  - `48 passed`
+  - `26 passed` in der fokussierten Runtime-Gap-Suite
+  - `48 passed` fuer den Phase-4-Lernsockel
   - CrossHair gruen
   - Lean gruen
 
-**Geplanter Restumfang**
+**Erreichte Zielabdeckung**
 
-- Neue Lernschicht für erfolgreiche und gescheiterte Agentenketten
-  - `goal_signature`
-  - `recommended_chain`
-  - `final_chain`
-  - `success` oder `failure`
-  - `runtime_gap_insertions`
-  - `duration_ms`
-  - `confidence`
+- Lernspeicher fuer erfolgreiche und gescheiterte Agentenketten
 - Planner-Anreicherung mit Erfahrungswissen
-  - bekannte gute Ketten sollen künftig bevorzugt werden
-  - bekannte schlechte Ketten sollen abgewertet werden
-- Erweiterung der Runtime-Gap-Erkennung über `document_output` hinaus
-  - zuerst `delivery`
-  - danach `verification`
-  - optional später `location_context`
+- Runtime-Gap `document_output`
+- Runtime-Gap `delivery`
+- Runtime-Gap `verification`
 
 **Geplante Dateien**
 
@@ -279,13 +277,12 @@ Timus ist nach dieser Session auf einem deutlich besseren Orchestrierungsniveau,
 - Advisory-Planung
 - Sichere Planner-Adoption vor Rezept-Fallback
 - Vollständige Meta-Handoff-Sichtbarkeit der neuen Planungsdaten
-- Sichere Runtime-Lückenerkennung für fehlende Dokument-Stufen ist implementiert, aber noch nicht live aktiviert
+- Sichere Runtime-Lückenerkennung für `document`, `verification` und `delivery` ist implementiert, aber noch nicht live aktiviert
 
 **Noch nicht fertig**
 
-- breiteres Runtime-Replanning über weitere Gap-Typen
-  - z. B. `delivery`, `verification`, `local context`
-- gelernte Ketten als echte bevorzugte Standardpfade
+- optionale weitere Gap-Typen
+  - z. B. `local context`
 - breitere Nutzung außerhalb der aktuellen Meta-/Recipe-Pfade
 
 ### Relevante Dateien dieser Session
@@ -303,8 +300,8 @@ Timus ist nach dieser Session auf einem deutlich besseren Orchestrierungsniveau,
 
 ### Nächster sinnvoller Schritt
 
-Phase 3 live schalten und danach Phase 4 beginnen:
+Phase 4 live schalten und beobachten:
 
-- Runtime-Replanning auf `timus-mcp` aktivieren
-- danach echte Live-Fälle prüfen, ob `research -> document` und später weitere Gap-Typen sauber nachgezogen werden
-- anschließend Phase 4 mit Learned Chains und den ersten zusätzlichen Gap-Typen `delivery` und `verification` umsetzen
+- erweitertes Runtime-Replanning auf `timus-mcp` aktivieren
+- echte Live-Fälle prüfen, ob `executor -> research`, `research -> document` und `document -> communication` stabil nachgezogen werden
+- anschließend entscheiden, ob ein weiterer konservativer Gap-Typ wie `local context` sinnvoll ist

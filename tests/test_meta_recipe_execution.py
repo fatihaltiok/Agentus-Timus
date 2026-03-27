@@ -382,6 +382,145 @@ async def test_meta_recipe_execution_runtime_replan_inserts_document_stage_after
 
 
 @pytest.mark.asyncio
+async def test_meta_recipe_execution_runtime_replan_inserts_verification_stage_after_executor_success(monkeypatch):
+    from agent.agents.meta import MetaAgent
+    from agent.base_agent import BaseAgent
+
+    calls = []
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        assert method == "delegate_to_agent"
+        calls.append(dict(params))
+        if params["agent_type"] == "executor":
+            return {
+                "status": "success",
+                "agent": "executor",
+                "result": "Top-Quellen zu aktuellen Modellpreisen gesammelt.",
+                "blackboard_key": "delegation:executor:prices",
+                "metadata": {"source_urls": ["https://example.com/pricing"]},
+                "artifacts": [],
+            }
+        assert params["agent_type"] == "research"
+        assert "previous_stage_result:" in params["task"]
+        return {
+            "status": "success",
+            "agent": "research",
+            "result": "Verifizierte Preisübersicht mit belastbaren Quellen erstellt.",
+            "blackboard_key": "delegation:research:verify",
+            "metadata": {"sources": ["https://example.com/pricing"]},
+            "artifacts": [],
+        }
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = MetaAgent.__new__(MetaAgent)
+    agent.conversation_session_id = "sess-meta-runtime-gap-verification"
+
+    task = _build_meta_task(
+        recipe_id="simple_live_lookup",
+        chain="meta -> executor",
+        stages=[
+            ("live_lookup_scan", "executor", "Suche aktuelle Modellpreise", "quick_summary", False),
+        ],
+        original_task="Suche aktuelle LLM-Preise mit Quellen und verifiziere sie",
+        task_type="simple_live_lookup",
+        site_kind="web",
+        goal_spec={
+            "goal_signature": "pricing|live|verified|answer|none|loc=0|deliver=0",
+            "task_type": "simple_live_lookup",
+            "domain": "pricing",
+            "freshness": "live",
+            "evidence_level": "verified",
+            "output_mode": "answer",
+            "artifact_format": None,
+            "uses_location": False,
+            "delivery_required": False,
+            "advisory_only": True,
+        },
+    )
+
+    result = await MetaAgent.run(agent, task)
+
+    assert [call["agent_type"] for call in calls] == ["executor", "research"]
+    assert result == "Verifizierte Preisübersicht mit belastbaren Quellen erstellt."
+
+
+@pytest.mark.asyncio
+async def test_meta_recipe_execution_runtime_replan_inserts_delivery_stage_after_document_success(monkeypatch):
+    from agent.agents.meta import MetaAgent
+    from agent.base_agent import BaseAgent
+
+    calls = []
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        assert method == "delegate_to_agent"
+        calls.append(dict(params))
+        if params["agent_type"] == "executor":
+            return {
+                "status": "success",
+                "agent": "executor",
+                "result": "Aktuelle Modellpreise strukturiert gesammelt.",
+                "blackboard_key": "delegation:executor:pricing",
+                "metadata": {"rows": 8},
+                "artifacts": [],
+            }
+        if params["agent_type"] == "document":
+            return {
+                "status": "success",
+                "agent": "document",
+                "result": "**Dokument erstellt:** `results/Preisvergleich.txt`\n**Format:** TXT",
+                "blackboard_key": "delegation:document:pricing",
+                "metadata": {"artifact": "results/Preisvergleich.txt"},
+                "artifacts": ["results/Preisvergleich.txt"],
+            }
+        assert params["agent_type"] == "communication"
+        assert "attachment_path: results/Preisvergleich.txt" in params["task"]
+        assert "source_material:" in params["task"]
+        return {
+            "status": "success",
+            "agent": "communication",
+            "result": "**Nachricht erstellt:** Versand mit Artefakt vorbereitet.",
+            "blackboard_key": "delegation:communication:pricing",
+            "metadata": {"channel": "direct_message"},
+            "artifacts": [],
+        }
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = MetaAgent.__new__(MetaAgent)
+    agent.conversation_session_id = "sess-meta-runtime-gap-delivery"
+
+    task = _build_meta_task(
+        recipe_id="simple_live_lookup_document",
+        chain="meta -> executor -> document",
+        stages=[
+            ("live_lookup_scan", "executor", "Suche aktuelle Modellpreise", "structured_lookup_result", False),
+            ("document_output", "document", "Erzeuge txt Export", "txt artifact", False),
+        ],
+        original_task="Suche aktuelle LLM-Preise und schicke mir danach die txt Datei",
+        task_type="simple_live_lookup_document",
+        site_kind="web",
+        goal_spec={
+            "goal_signature": "pricing|live|light|artifact|txt|loc=0|deliver=1",
+            "task_type": "simple_live_lookup_document",
+            "domain": "pricing",
+            "freshness": "live",
+            "evidence_level": "light",
+            "output_mode": "artifact",
+            "artifact_format": "txt",
+            "uses_location": False,
+            "delivery_required": True,
+            "advisory_only": True,
+        },
+    )
+
+    result = await MetaAgent.run(agent, task)
+
+    assert [call["agent_type"] for call in calls] == ["executor", "document", "communication"]
+    assert result == "**Nachricht erstellt:** Versand mit Artefakt vorbereitet."
+
+
+@pytest.mark.asyncio
 async def test_meta_recipe_execution_records_learned_chain_outcome_after_runtime_gap(monkeypatch):
     from agent.agents.meta import MetaAgent
     from agent.base_agent import BaseAgent

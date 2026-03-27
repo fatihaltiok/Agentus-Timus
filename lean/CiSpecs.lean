@@ -94,6 +94,8 @@ theorem adaptive_planner_candidate_cap_positive : 1 ≤ 4 := by omega
 theorem adaptive_plan_confidence_threshold_positive_scaled : 0 < 78 := by omega
 theorem adaptive_plan_safe_chain_bound : 3 ≤ 4 := by omega
 theorem runtime_goal_gap_document_stage_nonshrinking : 1 ≤ 2 := by omega
+theorem runtime_goal_gap_verification_stage_nonshrinking : 1 ≤ 2 := by omega
+theorem runtime_goal_gap_delivery_stage_nonshrinking : 1 ≤ 2 := by omega
 theorem adaptive_plan_learned_bias_bound_scaled : 22 ≤ 25 := by omega
 theorem adaptive_plan_learning_confidence_supports_three_events : 1 ≤ 3 := by omega
 

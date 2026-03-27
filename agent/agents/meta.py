@@ -1291,6 +1291,8 @@ class MetaAgent(BaseAgent):
             artifact_name = cls._infer_document_artifact_name(original_user_task)
             if artifact_name:
                 payload_lines.append(f"- artifact_name: {artifact_name}")
+        if stage_agent == "communication":
+            payload_lines.append("- channel: direct_message_or_email")
         if (
             str(handoff.get("task_type") or "").strip().lower() == "youtube_light_research"
             and stage_agent == "executor"
@@ -1336,6 +1338,15 @@ class MetaAgent(BaseAgent):
                     "- source_material: "
                     + cls._encode_handoff_multiline(previous_stage_result["result_full"], limit=6000)
                 )
+            if stage_agent == "communication":
+                if previous_stage_result.get("result_full"):
+                    payload_lines.append(
+                        "- source_material: "
+                        + cls._encode_handoff_multiline(previous_stage_result["result_full"], limit=5000)
+                    )
+                artifacts = previous_stage_result.get("artifacts") or []
+                if artifacts:
+                    payload_lines.append(f"- attachment_path: {cls._shorten(artifacts[0], limit=260)}")
 
         prior_keys = [entry.get("blackboard_key") for entry in stage_history if entry.get("blackboard_key")]
         if prior_keys:
@@ -1390,10 +1401,12 @@ class MetaAgent(BaseAgent):
             if recipe_id in cls._RECIPE_DIRECT_RESULT_IDS or (
                 clean_success_path
                 and
-                str(final_success.get("agent") or "").strip().lower() == "document"
+                str(final_success.get("agent") or "").strip().lower() in {"document", "communication"}
                 and (
                     bool(final_success.get("artifacts"))
                     or str(final_success.get("result_full") or "").strip().startswith("**Dokument erstellt:**")
+                    or str(final_success.get("result_full") or "").strip().startswith("**Nachricht")
+                    or str(final_success.get("result_full") or "").strip().startswith("**Versand")
                 )
             ):
                 return str(final_success["result_full"])
@@ -1696,19 +1709,27 @@ class MetaAgent(BaseAgent):
             return stages
 
         adapted = [dict(stage) for stage in stages]
+        runtime_agent = str(runtime_stage.get("agent") or "").strip().lower()
         insert_at = len(adapted)
-        for idx in range(stage_index + 1, len(adapted)):
-            if str(adapted[idx].get("agent") or "").strip().lower() == "communication":
-                insert_at = idx
-                break
+        if runtime_agent == "research":
+            for idx in range(stage_index + 1, len(adapted)):
+                future_agent = str(adapted[idx].get("agent") or "").strip().lower()
+                if future_agent in {"document", "communication"}:
+                    insert_at = idx
+                    break
+        elif runtime_agent == "document":
+            for idx in range(stage_index + 1, len(adapted)):
+                if str(adapted[idx].get("agent") or "").strip().lower() == "communication":
+                    insert_at = idx
+                    break
         adapted.insert(insert_at, runtime_stage)
         chain = [
             str(agent).strip().lower()
             for agent in handoff.get("recommended_agent_chain") or []
             if str(agent).strip()
         ]
-        if "document" not in chain:
-            handoff["recommended_agent_chain"] = [*chain, "document"]
+        if runtime_agent and runtime_agent not in chain:
+            handoff["recommended_agent_chain"] = [*chain, runtime_agent]
         return adapted
 
     @classmethod
