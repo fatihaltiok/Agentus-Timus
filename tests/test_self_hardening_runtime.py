@@ -93,6 +93,38 @@ def test_record_self_hardening_event_tracks_verified_self_modify_result(tmp_path
     assert summary["metrics"]["verification_verified_total"] == 1
 
 
+def test_record_self_hardening_event_emits_autonomy_observation(monkeypatch, tmp_path: Path) -> None:
+    queue = TaskQueue(db_path=tmp_path / "task_queue.db")
+    observed = []
+
+    monkeypatch.setattr(
+        "orchestration.self_hardening_runtime.record_autonomy_observation",
+        lambda event_type, payload, observed_at="": observed.append(
+            {"event_type": event_type, "payload": dict(payload), "observed_at": observed_at}
+        )
+        or True,
+    )
+
+    record_self_hardening_event(
+        queue=queue,
+        stage="self_modify_finished",
+        status="success",
+        pattern_name="runtime_gap_missing_document",
+        component="meta_agent",
+        requested_fix_mode="self_modify_safe",
+        execution_mode="self_modify_safe",
+        route_target="self_modify",
+        verification_status="verified",
+        audit_id="audit-456",
+    )
+
+    assert len(observed) == 1
+    assert observed[0]["event_type"] == "self_hardening_runtime_event"
+    assert observed[0]["payload"]["stage"] == "self_modify_finished"
+    assert observed[0]["payload"]["status"] == "success"
+    assert observed[0]["payload"]["audit_id"] == "audit-456"
+
+
 def test_classify_self_hardening_runtime_state_maps_failures_to_critical() -> None:
     assert classify_self_hardening_runtime_state(last_status="error", last_stage="self_modify_finished") == "critical"
     assert classify_self_hardening_runtime_state(last_status="rolled_back", last_stage="self_modify_finished") == "critical"

@@ -56,6 +56,7 @@ from utils.chroma_runtime import configure_chroma_runtime
 from orchestration.lane_manager import lane_manager, LaneStatus
 from orchestration.browser_workflow_plan import build_browser_workflow_plan
 from orchestration.llm_budget_guard import evaluate_llm_budget, resolve_soft_budget_model_override
+from orchestration.autonomy_observation import record_autonomy_observation
 from orchestration.orchestration_policy import evaluate_query_orchestration
 from orchestration.meta_orchestration import (
     build_meta_feedback_targets,
@@ -1923,6 +1924,18 @@ async def get_agent_decision(user_query: str, session_id: str | None = None) -> 
                 "⚠️ Leere Dispatcher-Antwort. Fallback auf 'meta'. "
                 f"(raw_len={len(raw_content)}, raw_preview={repr(raw_content[:120])})"
             )
+            try:
+                record_autonomy_observation(
+                    "dispatcher_meta_fallback",
+                    {
+                        "reason": "empty_decision",
+                        "query_preview": str(user_query or "")[:180],
+                        "raw_len": len(raw_content),
+                        "raw_preview": repr(raw_content[:120]),
+                    },
+                )
+            except Exception:
+                pass
             return "meta"
 
         # Direkter Treffer
@@ -1942,10 +1955,33 @@ async def get_agent_decision(user_query: str, session_id: str | None = None) -> 
             f"⚠️ Unsicher ({decision}). Fallback auf 'meta'. "
             f"(raw_len={len(raw_content)}, raw_preview={repr(raw_content[:160])})"
         )
+        try:
+            record_autonomy_observation(
+                "dispatcher_meta_fallback",
+                {
+                    "reason": "uncertain_decision",
+                    "query_preview": str(user_query or "")[:180],
+                    "decision_preview": str(decision or "")[:160],
+                    "raw_len": len(raw_content),
+                },
+            )
+        except Exception:
+            pass
         return "meta"
 
     except Exception as e:
         log.error(f"❌ Dispatcher-Fehler: {e}")
+        try:
+            record_autonomy_observation(
+                "dispatcher_meta_fallback",
+                {
+                    "reason": "dispatcher_exception",
+                    "query_preview": str(user_query or "")[:180],
+                    "error": str(e)[:240],
+                },
+            )
+        except Exception:
+            pass
         return "meta"
 
 

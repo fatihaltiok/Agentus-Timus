@@ -24,8 +24,10 @@ from typing import Any, Dict, List, Optional
 from agent.base_agent import BaseAgent
 from agent.prompts import META_SYSTEM_PROMPT
 from orchestration.adaptive_plan_memory import get_adaptive_plan_memory
+from orchestration.autonomy_observation import record_autonomy_observation
 from orchestration.meta_orchestration import (
     build_meta_feedback_targets,
+    compile_meta_developer_task_payload,
     resolve_adaptive_plan_adoption,
     resolve_runtime_goal_gap_stage,
     resolve_orchestration_recipe,
@@ -33,12 +35,22 @@ from orchestration.meta_orchestration import (
 from orchestration.self_selected_strategy import classify_strategy_error
 
 log = logging.getLogger("TimusAgent-v4.4")
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 from agent.shared.json_utils import extract_json_robust  # noqa: F401 - re-exported
 
 
 class MetaAgent(BaseAgent):
+    _OBSERVED_DIRECT_TOOL_METHODS = {
+        "search_web",
+        "search_news",
+        "fetch_url",
+        "fetch_multiple_urls",
+        "open_url",
+        "search_google_maps_places",
+        "get_current_location_context",
+    }
     _RECIPE_DIRECT_RESULT_IDS = {
         "youtube_light_research",
         "location_local_search",
@@ -439,6 +451,421 @@ class MetaAgent(BaseAgent):
             "offizielle Quellen fuer einen kompakten Live-Lookup."
         )
 
+    @staticmethod
+    def _coerce_developer_diagnosis_records(params: Dict[str, Any]) -> List[Dict[str, Any]]:
+        records: List[Dict[str, Any]] = []
+        raw_records = params.get("diagnosis_records")
+        if isinstance(raw_records, list):
+            for item in raw_records:
+                if isinstance(item, dict):
+                    records.append(dict(item))
+
+        claim = str(
+            params.get("lead_diagnosis")
+            or params.get("claim")
+            or params.get("diagnosis")
+            or params.get("problem")
+            or ""
+        ).strip()
+        if claim:
+            records.append(
+                {
+                    "source_agent": params.get("source_agent") or "meta",
+                    "claim": claim,
+                    "evidence_level": params.get("evidence_level") or "hypothesis",
+                    "evidence_refs": list(params.get("evidence_refs") or []),
+                    "confidence": params.get("confidence") or 0.0,
+                    "actionability": params.get("actionability") or 1.0,
+                    "verified_paths": list(params.get("verified_paths") or []),
+                    "verified_functions": list(params.get("verified_functions") or []),
+                }
+            )
+        return records
+
+    @staticmethod
+    def _existing_paths_for_diagnosis_records(records: List[Dict[str, Any]]) -> List[str]:
+        existing: List[str] = []
+        for item in records:
+            for raw_path in list(item.get("verified_paths") or []):
+                text = str(raw_path or "").strip()
+                if not text.startswith("/"):
+                    continue
+                candidate = Path(text)
+                if candidate.exists():
+                    resolved = str(candidate.resolve())
+                    if resolved not in existing:
+                        existing.append(resolved)
+        return existing
+
+    @classmethod
+    def _build_developer_task_diagnosis_payload(cls, params: Dict[str, Any]) -> Dict[str, Any]:
+        raw_records = cls._coerce_developer_diagnosis_records(params)
+        if not raw_records:
+            return {}
+        existing_paths = cls._existing_paths_for_diagnosis_records(raw_records)
+        compiled = compile_meta_developer_task_payload(raw_records, existing_paths=existing_paths)
+        resolution = dict(compiled.get("diagnosis_resolution") or {})
+        brief = dict(compiled.get("developer_task_brief") or {})
+        root_cause = dict(compiled.get("root_cause_tasks") or {})
+        lead = dict(resolution.get("lead_diagnosis") or {})
+        if not str(brief.get("lead_diagnosis") or "").strip():
+            return {}
+        return {
+            "resolution": resolution,
+            "brief": brief,
+            "root_cause": root_cause,
+            "lead_source_agent": str(lead.get("source_agent") or ""),
+            "lead_evidence_level": str(brief.get("evidence_level") or ""),
+            "verified_paths_count": len(list(brief.get("verified_paths") or [])),
+            "verified_functions_count": len(list(brief.get("verified_functions") or [])),
+            "suppressed_claims_count": len(list(brief.get("suppressed_claims") or [])),
+            "root_cause_state": str(root_cause.get("state") or ""),
+            "followup_tasks_count": len(list(root_cause.get("followup_tasks") or [])),
+            "task_mix_suppressed_count": int(root_cause.get("task_mix_suppressed_count") or 0),
+        }
+
+    @staticmethod
+    def _wants_root_cause_task_output(task: str) -> bool:
+        text = str(task or "").strip().lower()
+        if not text:
+            return False
+        explicit_markers = (
+            "primary-fix-task",
+            "primary fix task",
+            "primary_fix",
+            "developer-task",
+            "developer task",
+            "verification needed",
+            "verification_needed",
+        )
+        if any(marker in text for marker in explicit_markers):
+            return True
+        mentions_root_cause = any(marker in text for marker in ("root cause", "root-cause", "ursache"))
+        mentions_task = any(marker in text for marker in ("task", "fix", "beheben", "developer"))
+        return mentions_root_cause and mentions_task
+
+    @staticmethod
+    def _normalize_repo_python_path(raw_path: str) -> str:
+        text = str(raw_path or "").strip().rstrip(").,;")
+        if not text:
+            return ""
+        if text.startswith("/"):
+            candidate = Path(text)
+        else:
+            candidate = _PROJECT_ROOT / text
+        try:
+            resolved = candidate.resolve()
+        except Exception:
+            return ""
+        return str(resolved) if resolved.exists() and str(resolved).endswith(".py") else ""
+
+    @classmethod
+    def _extract_path_refs_from_claim(cls, claim: str) -> tuple[list[str], list[str]]:
+        pattern = re.compile(
+            r"((?:/[A-Za-z0-9._/\-]+\.py)|(?:[A-Za-z0-9_./\-]+\.py))(?:[:#]L?(\d+))?"
+        )
+        verified_paths: List[str] = []
+        evidence_refs: List[str] = []
+        for match in pattern.finditer(str(claim or "")):
+            raw_path = str(match.group(1) or "").strip()
+            line_no = str(match.group(2) or "").strip()
+            normalized = cls._normalize_repo_python_path(raw_path)
+            if normalized and normalized not in verified_paths:
+                verified_paths.append(normalized)
+            if raw_path:
+                ref = f"{raw_path}:{line_no}" if line_no else raw_path
+                if ref not in evidence_refs:
+                    evidence_refs.append(ref)
+        return verified_paths[:8], evidence_refs[:8]
+
+    @staticmethod
+    def _extract_function_refs_from_claim(claim: str) -> list[str]:
+        matches = re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", str(claim or ""))
+        functions: List[str] = []
+        for name in matches:
+            if name not in functions:
+                functions.append(name)
+            if len(functions) >= 8:
+                break
+        return functions
+
+    @classmethod
+    def _extract_system_diagnosis_claims(cls, result_text: str) -> List[str]:
+        lines = [str(line or "").strip() for line in str(result_text or "").splitlines()]
+        collected: List[str] = []
+        in_cause_block = False
+        stop_prefixes = (
+            "empfehlung:",
+            "health-signale:",
+            "health_signals:",
+            "incident-summary:",
+            "incident_summary:",
+            "health signals:",
+            "systemstatus:",
+        )
+        for raw_line in lines:
+            line = raw_line.strip()
+            if not line:
+                continue
+            lower = line.lower()
+            if lower in {"ursache:", "root cause:", "root-cause:"}:
+                in_cause_block = True
+                continue
+            if any(lower.startswith(prefix) for prefix in stop_prefixes):
+                in_cause_block = False
+            if lower.startswith("suspected_root_cause:"):
+                claim = line.split(":", 1)[1].strip()
+                if claim and claim not in collected:
+                    collected.append(claim)
+                continue
+            if not in_cause_block:
+                continue
+            cleaned = re.sub(r"^[\-\*\d\.\)\s]+", "", line).strip()
+            cleaned = re.sub(r"^\*\*(.+?)\*\*\s*", r"\1 ", cleaned).strip()
+            if cleaned and cleaned not in collected:
+                collected.append(cleaned)
+
+        if collected:
+            return collected[:8]
+
+        fallback_keywords = ("error", "exception", "traceback", "typeerror", "attributeerror", "loop", "instabil")
+        for raw_line in lines:
+            line = raw_line.strip()
+            lower = line.lower()
+            if any(keyword in lower for keyword in fallback_keywords):
+                cleaned = re.sub(r"^[\-\*\d\.\)\s]+", "", line).strip()
+                if cleaned and cleaned not in collected:
+                    collected.append(cleaned)
+            if len(collected) >= 8:
+                break
+        return collected
+
+    @classmethod
+    def _build_system_diagnosis_records(cls, result_text: str) -> List[Dict[str, Any]]:
+        records: List[Dict[str, Any]] = []
+        for claim in cls._extract_system_diagnosis_claims(result_text):
+            verified_paths, evidence_refs = cls._extract_path_refs_from_claim(claim)
+            verified_functions = cls._extract_function_refs_from_claim(claim)
+            normalized = claim.lower()
+            has_error_signal = any(
+                marker in normalized
+                for marker in ("error", "exception", "traceback", "typeerror", "attributeerror", "dict", "string")
+            )
+            evidence_level = "observed" if (verified_paths or has_error_signal) else "hypothesis"
+            confidence = 0.85 if verified_paths and has_error_signal else 0.72 if has_error_signal else 0.45
+            actionability = 0.9 if verified_paths else 0.6 if has_error_signal else 0.35
+            records.append(
+                {
+                    "source_agent": "system",
+                    "claim": claim,
+                    "evidence_level": evidence_level,
+                    "evidence_refs": evidence_refs,
+                    "confidence": confidence,
+                    "actionability": actionability,
+                    "verified_paths": verified_paths,
+                    "verified_functions": verified_functions,
+                }
+            )
+        return records
+
+    @classmethod
+    def _build_system_diagnosis_task_payload(cls, result_text: str) -> Dict[str, Any]:
+        records = cls._build_system_diagnosis_records(result_text)
+        if not records:
+            return {}
+        return cls._build_developer_task_diagnosis_payload({"diagnosis_records": records})
+
+    @staticmethod
+    def _root_cause_gate_hint(gate_reason: str) -> str:
+        hints = {
+            "missing_lead_diagnosis": "Es liegt noch keine belastbare Fuehrungsdiagnose vor.",
+            "weak_root_cause_evidence": "Die primaere Ursache ist noch nicht stark genug belegt.",
+            "missing_verified_paths": "Es fehlt mindestens ein verifizierter Zielpfad.",
+            "missing_change_type": "Der benoetigte Aenderungstyp ist noch nicht klar ableitbar.",
+            "followup_only_lead": "Aktuell liegt nur ein Folge- oder Monitoring-Thema vor, kein primaerer Fix.",
+        }
+        return hints.get(str(gate_reason or "").strip(), "Die primaere Ursache braucht noch eine kurze Verifikation.")
+
+    @staticmethod
+    def _primary_fix_guidance(change_type: str) -> List[str]:
+        mapping = {
+            "type_normalization": [
+                "Rueckgabewert defensiv normalisieren, bevor String-Methoden verwendet werden.",
+                "dict/list/string robust behandeln; kein strip() oder startswith() auf Nicht-Strings.",
+            ],
+            "state_invalidation": [
+                "Veralteten Runtime-State explizit invalidieren, wenn der Nutzer eine Aktualisierung meldet.",
+                "Vor der naechsten Antwort eine frische Revalidierung erzwingen.",
+            ],
+            "loop_guard": [
+                "Wiederholte Tool-Loops frueh begrenzen und stale Wiederholungen unterdruecken.",
+                "Retry-/Backoff-Verhalten nur fuer echte Fortschrittssignale weiterlaufen lassen.",
+            ],
+            "parsing_fix": [
+                "Payload-/Parser-Normalisierung robust machen und Typabweichungen defensiv behandeln.",
+                "Ungueltige oder ueberraschende Payload-Formate frueh abfangen.",
+            ],
+            "logic_fix": [
+                "Den primaeren Logikpfad auf die belegte Ursache ausrichten und Nebenpfade trennen.",
+            ],
+        }
+        return list(mapping.get(str(change_type or "").strip(), mapping["logic_fix"]))
+
+    @classmethod
+    def _render_system_diagnosis_task_result(cls, diagnosis_payload: Dict[str, Any]) -> str:
+        root_cause = dict(diagnosis_payload.get("root_cause") or {})
+        brief = dict(diagnosis_payload.get("brief") or {})
+        primary_fix = dict(root_cause.get("primary_fix") or {})
+        verified_paths = list(brief.get("verified_paths") or [])
+        verified_functions = list(brief.get("verified_functions") or [])
+        evidence_refs = list(brief.get("evidence_refs") or [])
+        followups = list(root_cause.get("followup_tasks") or [])
+
+        if str(diagnosis_payload.get("root_cause_state") or "") != "primary_fix_emitted":
+            lines = [
+                "verification needed",
+                "",
+                f"Lead Diagnosis: {brief.get('lead_diagnosis') or 'Keine belastbare Fuehrungsdiagnose.'}",
+                f"Gate Reason: {root_cause.get('gate_reason') or 'unknown'}",
+                cls._root_cause_gate_hint(str(root_cause.get("gate_reason") or "")),
+            ]
+            if evidence_refs:
+                lines.append("Evidenz:")
+                lines.extend(f"- {item}" for item in evidence_refs[:4])
+            return "\n".join(lines)
+
+        lines = [
+            "Primary-Fix-Task",
+            "",
+            f"Lead Diagnosis: {primary_fix.get('summary') or brief.get('lead_diagnosis') or ''}",
+            f"Change Type: {primary_fix.get('change_type') or 'logic_fix'}",
+            f"Source Agent: {primary_fix.get('source_agent') or diagnosis_payload.get('lead_source_agent') or 'system'}",
+        ]
+        if verified_paths:
+            lines.append("Verified Paths:")
+            lines.extend(f"- {item}" for item in verified_paths)
+        if verified_functions:
+            lines.append("Verified Functions:")
+            lines.extend(f"- {item}" for item in verified_functions)
+        if evidence_refs:
+            lines.append("Evidenz:")
+            lines.extend(f"- {item}" for item in evidence_refs[:4])
+        lines.append("Task:")
+        lines.extend(
+            f"- {item}" for item in cls._primary_fix_guidance(str(primary_fix.get("change_type") or "logic_fix"))
+        )
+        if followups:
+            lines.append("Deferred Follow-ups:")
+            lines.extend(f"- {str(item.get('summary') or '').strip()}" for item in followups[:4] if str(item.get("summary") or "").strip())
+        return "\n".join(lines)
+
+    @classmethod
+    def _maybe_render_system_root_cause_task(
+        cls,
+        *,
+        original_user_task: str,
+        stage_history: List[Dict[str, Any]],
+    ) -> Optional[str]:
+        if not cls._wants_root_cause_task_output(original_user_task):
+            return None
+        system_success = next(
+            (
+                entry
+                for entry in reversed(stage_history)
+                if str(entry.get("agent") or "").strip().lower() == "system"
+                and str(entry.get("status") or "").strip().lower() == "success"
+            ),
+            None,
+        )
+        if not system_success:
+            return None
+        diagnosis_payload = cls._build_system_diagnosis_task_payload(str(system_success.get("result_full") or ""))
+        if not diagnosis_payload:
+            return "verification needed\n\nLead Diagnosis: Keine belastbare Root Cause aus dem System-Ergebnis extrahierbar."
+        cls._record_developer_task_observation(diagnosis_payload)
+        return cls._render_system_diagnosis_task_result(diagnosis_payload)
+
+    @staticmethod
+    def _format_handoff_value(value: Any) -> str:
+        if isinstance(value, (dict, list, tuple)):
+            try:
+                return json.dumps(value, ensure_ascii=False, sort_keys=True)
+            except Exception:
+                return str(value)
+        return str(value)
+
+    @classmethod
+    def _record_developer_task_observation(cls, diagnosis_payload: Dict[str, Any]) -> None:
+        if not diagnosis_payload:
+            return
+        brief = dict(diagnosis_payload.get("brief") or {})
+        resolution = dict(diagnosis_payload.get("resolution") or {})
+        root_cause = dict(diagnosis_payload.get("root_cause") or {})
+        try:
+            record_autonomy_observation(
+                "lead_diagnosis_selected",
+                {
+                    "source_agent": str(diagnosis_payload.get("lead_source_agent") or ""),
+                    "evidence_level": str(diagnosis_payload.get("lead_evidence_level") or ""),
+                    "verified_paths_count": int(diagnosis_payload.get("verified_paths_count") or 0),
+                    "verified_functions_count": int(diagnosis_payload.get("verified_functions_count") or 0),
+                },
+            )
+            if bool(brief.get("conflict_detected")):
+                record_autonomy_observation(
+                    "diagnosis_conflict_detected",
+                    {
+                        "supporting_count": len(list(resolution.get("supporting_diagnoses") or [])),
+                        "lead_source_agent": str(diagnosis_payload.get("lead_source_agent") or ""),
+                    },
+                )
+            record_autonomy_observation(
+                "developer_task_compiled",
+                {
+                    "verified_paths_count": int(diagnosis_payload.get("verified_paths_count") or 0),
+                    "verified_functions_count": int(diagnosis_payload.get("verified_functions_count") or 0),
+                    "suppressed_claims_count": int(diagnosis_payload.get("suppressed_claims_count") or 0),
+                },
+            )
+            if int(diagnosis_payload.get("suppressed_claims_count") or 0) > 0:
+                record_autonomy_observation(
+                    "unverified_claim_suppressed",
+                    {
+                        "suppressed_claims_count": int(diagnosis_payload.get("suppressed_claims_count") or 0),
+                    },
+                )
+            if str(diagnosis_payload.get("root_cause_state") or "") == "primary_fix_emitted":
+                record_autonomy_observation(
+                    "primary_fix_task_emitted",
+                    {
+                        "change_type": str((root_cause.get("primary_fix") or {}).get("change_type") or ""),
+                        "verified_paths_count": int(diagnosis_payload.get("verified_paths_count") or 0),
+                    },
+                )
+            else:
+                record_autonomy_observation(
+                    "root_cause_gate_blocked",
+                    {
+                        "gate_reason": str(root_cause.get("gate_reason") or ""),
+                    },
+                )
+            if int(diagnosis_payload.get("followup_tasks_count") or 0) > 0:
+                record_autonomy_observation(
+                    "followup_task_deferred",
+                    {
+                        "followup_tasks_count": int(diagnosis_payload.get("followup_tasks_count") or 0),
+                    },
+                )
+            if int(diagnosis_payload.get("task_mix_suppressed_count") or 0) > 0:
+                record_autonomy_observation(
+                    "task_mix_suppressed",
+                    {
+                        "task_mix_suppressed_count": int(diagnosis_payload.get("task_mix_suppressed_count") or 0),
+                    },
+                )
+        except Exception:
+            pass
+
     @classmethod
     def _build_specialist_handoff_payload(
         cls,
@@ -493,6 +920,43 @@ class MetaAgent(BaseAgent):
         elif specialist_agent == "developer":
             payload["expected_output"] = "Code, Patch oder Tool-Artefakt"
             payload["success_signal"] = "Implementierung erstellt oder validierter Patch vorhanden"
+            diagnosis_payload = cls._build_developer_task_diagnosis_payload(params)
+            if diagnosis_payload:
+                brief = dict(diagnosis_payload.get("brief") or {})
+                root_cause = dict(diagnosis_payload.get("root_cause") or {})
+                primary_fix = dict(root_cause.get("primary_fix") or {})
+                payload["constraints"] = [
+                    "nur_verifizierte_dateien_und_funktionen_verwenden",
+                    "unverifizierte_claims_nicht_als_belegt_behandeln",
+                ]
+                payload["handoff_data"]["root_cause_gate_json"] = {
+                    "state": diagnosis_payload.get("root_cause_state") or "",
+                    "gate_reason": root_cause.get("gate_reason") or "",
+                }
+                if str(diagnosis_payload.get("root_cause_state") or "") == "primary_fix_emitted":
+                    payload["goal"] = str(primary_fix.get("summary") or payload["goal"]).strip() or payload["goal"]
+                    payload["handoff_data"]["primary_fix_json"] = primary_fix
+                    payload["handoff_data"]["verified_paths_json"] = list(brief.get("verified_paths") or [])
+                    payload["handoff_data"]["verified_functions_json"] = list(brief.get("verified_functions") or [])
+                    payload["handoff_data"]["evidence_refs_json"] = list(brief.get("evidence_refs") or [])
+                    payload["handoff_data"]["followup_tasks_json"] = list(root_cause.get("followup_tasks") or [])
+                    payload["handoff_data"]["suppressed_claims_count"] = int(
+                        diagnosis_payload.get("suppressed_claims_count") or 0
+                    )
+                else:
+                    payload["goal"] = (
+                        "Verifiziere zuerst die primaere Ursache dieses Incidents; "
+                        "emittiere noch keinen gemischten Fix-Task."
+                    )
+                    payload["success_signal"] = "Primaere Ursache verifiziert oder Gate sauber blockiert"
+                    payload["constraints"].append("kein_fix_task_ohne_root_cause_gate")
+                    payload["handoff_data"]["verification_needed_json"] = {
+                        "lead_diagnosis": brief.get("lead_diagnosis") or "",
+                        "evidence_level": brief.get("evidence_level") or "",
+                        "source_agent": diagnosis_payload.get("lead_source_agent") or "",
+                    }
+                    payload["handoff_data"]["deferred_followup_tasks_json"] = list(root_cause.get("followup_tasks") or [])
+                payload["_diagnosis_observation"] = diagnosis_payload
         elif specialist_agent == "creative":
             payload["expected_output"] = "Bild/Text-Artefakt"
             payload["success_signal"] = "Kreatives Ergebnis erzeugt"
@@ -508,6 +972,7 @@ class MetaAgent(BaseAgent):
         task: str,
     ) -> str:
         payload = cls._build_specialist_handoff_payload(specialist_agent, method, params, task)
+        task_text = payload["goal"] if specialist_agent == "developer" else task
         lines = ["# DELEGATION HANDOFF"]
         lines.append(f"target_agent: {payload['target_agent']}")
         lines.append(f"goal: {payload['goal']}")
@@ -519,10 +984,12 @@ class MetaAgent(BaseAgent):
         if handoff_data:
             lines.append("handoff_data:")
             for key, value in handoff_data.items():
-                lines.append(f"- {key}: {value}")
+                lines.append(f"- {key}: {cls._format_handoff_value(value)}")
+        if specialist_agent == "developer":
+            cls._record_developer_task_observation(dict(payload.get("_diagnosis_observation") or {}))
         lines.append("")
         lines.append("# TASK")
-        lines.append(task)
+        lines.append(task_text)
         return "\n".join(lines)
 
     @classmethod
@@ -1174,11 +1641,17 @@ class MetaAgent(BaseAgent):
         switch_reason: str = "",
         duration_ms: int = 0,
     ) -> None:
+        recipe_id = str(recipe_payload.get("recipe_id") or "").strip().lower()
+        chain = list(recipe_payload.get("recommended_agent_chain") or handoff.get("recommended_agent_chain") or [])
+        final_chain = cls._build_executed_agent_chain(stage_history, fallback_chain=chain)
+        runtime_gap_insertions = cls._collect_runtime_gap_insertions(stage_history)
+        goal_signature = str((handoff.get("goal_spec") or {}).get("goal_signature") or "").strip()
+        planner_resolution = dict(handoff.get("planner_resolution") or {})
+        adaptive_plan = dict(handoff.get("adaptive_plan") or {})
+
         try:
             from orchestration.feedback_engine import get_feedback_engine
 
-            recipe_id = str(recipe_payload.get("recipe_id") or "").strip().lower()
-            chain = list(recipe_payload.get("recommended_agent_chain") or handoff.get("recommended_agent_chain") or [])
             feedback_targets = build_meta_feedback_targets(
                 {
                     "task_type": handoff.get("task_type"),
@@ -1207,22 +1680,43 @@ class MetaAgent(BaseAgent):
         except Exception:
             pass
         try:
-            goal_signature = str((handoff.get("goal_spec") or {}).get("goal_signature") or "").strip()
-            if not goal_signature:
-                return
-            get_adaptive_plan_memory().record_outcome(
-                goal_signature=goal_signature,
-                task_type=str(handoff.get("task_type") or ""),
-                site_kind=str(handoff.get("site_kind") or ""),
-                recipe_id=str(recipe_payload.get("recipe_id") or ""),
-                recommended_chain=chain,
-                final_chain=cls._build_executed_agent_chain(stage_history, fallback_chain=chain),
-                success=success,
-                runtime_gap_insertions=cls._collect_runtime_gap_insertions(stage_history),
-                duration_ms=max(0, int(duration_ms)),
-                confidence=cls._as_float((handoff.get("adaptive_plan") or {}).get("confidence")) or 0.0,
-                failure_stage_id=str((failure or {}).get("stage_id") or ""),
-                switch_reason=switch_reason,
+            if goal_signature:
+                get_adaptive_plan_memory().record_outcome(
+                    goal_signature=goal_signature,
+                    task_type=str(handoff.get("task_type") or ""),
+                    site_kind=str(handoff.get("site_kind") or ""),
+                    recipe_id=str(recipe_payload.get("recipe_id") or ""),
+                    recommended_chain=chain,
+                    final_chain=final_chain,
+                    success=success,
+                    runtime_gap_insertions=runtime_gap_insertions,
+                    duration_ms=max(0, int(duration_ms)),
+                    confidence=cls._as_float(adaptive_plan.get("confidence")) or 0.0,
+                    failure_stage_id=str((failure or {}).get("stage_id") or ""),
+                    switch_reason=switch_reason,
+                )
+        except Exception:
+            pass
+        try:
+            record_autonomy_observation(
+                "meta_recipe_outcome",
+                {
+                    "goal_signature": goal_signature,
+                    "task_type": str(handoff.get("task_type") or ""),
+                    "site_kind": str(handoff.get("site_kind") or ""),
+                    "recipe_id": recipe_id,
+                    "recommended_chain": chain,
+                    "final_chain": final_chain,
+                    "success": bool(success),
+                    "stage_count": len(stage_history),
+                    "runtime_gap_insertions": runtime_gap_insertions,
+                    "duration_ms": max(0, int(duration_ms)),
+                    "failure_stage_id": str((failure or {}).get("stage_id") or ""),
+                    "switch_reason": str(switch_reason or "")[:120],
+                    "planner_resolution_state": str(planner_resolution.get("state") or ""),
+                    "planner_adopted_recipe_id": str(planner_resolution.get("adopted_recipe_id") or ""),
+                    "adaptive_confidence": cls._as_float(adaptive_plan.get("confidence")) or 0.0,
+                },
             )
         except Exception:
             pass
@@ -1730,6 +2224,23 @@ class MetaAgent(BaseAgent):
         ]
         if runtime_agent and runtime_agent not in chain:
             handoff["recommended_agent_chain"] = [*chain, runtime_agent]
+        try:
+            record_autonomy_observation(
+                "runtime_goal_gap_inserted",
+                {
+                    "goal_signature": str((handoff.get("goal_spec") or {}).get("goal_signature") or ""),
+                    "task_type": str(handoff.get("task_type") or ""),
+                    "recipe_id": str(handoff.get("recommended_recipe_id") or ""),
+                    "stage_id": str(runtime_stage.get("stage_id") or ""),
+                    "agent": runtime_agent,
+                    "adaptive_reason": str(runtime_stage.get("adaptive_reason") or ""),
+                    "insert_at": insert_at,
+                    "previous_stage_agent": str((previous_stage_result or {}).get("agent") or ""),
+                    "previous_stage_status": str((previous_stage_result or {}).get("status") or ""),
+                },
+            )
+        except Exception:
+            pass
         return adapted
 
     @classmethod
@@ -2028,6 +2539,13 @@ class MetaAgent(BaseAgent):
             stage_history=stage_history,
             duration_ms=int((time.monotonic() - recipe_started_at) * 1000),
         )
+        if recipe_id == "system_diagnosis":
+            root_cause_result = self._maybe_render_system_root_cause_task(
+                original_user_task=original_user_task,
+                stage_history=stage_history,
+            )
+            if root_cause_result:
+                return root_cause_result
         return self._render_recipe_execution_summary(
             recipe_id=recipe_id,
             original_user_task=original_user_task,
@@ -2099,8 +2617,40 @@ class MetaAgent(BaseAgent):
                         "session_id": self.conversation_session_id,
                     },
                 )
-                return self._normalize_delegation_result(specialist_agent, method, result)
-        return await super()._call_tool(method, params)
+                normalized = self._normalize_delegation_result(specialist_agent, method, result)
+                try:
+                    normalized_dict = normalized if isinstance(normalized, dict) else {}
+                    record_autonomy_observation(
+                        "meta_specialist_delegation",
+                        {
+                            "method": method,
+                            "agent": specialist_agent,
+                            "status": str(normalized_dict.get("status") or ""),
+                            "has_error": bool(str(normalized_dict.get("error") or "").strip()),
+                            "error": str(normalized_dict.get("error") or "")[:240],
+                            "blackboard_key": str(normalized_dict.get("blackboard_key") or "")[:160],
+                        },
+                    )
+                except Exception:
+                    pass
+                return normalized
+        result = await super()._call_tool(method, params)
+        if method in self._OBSERVED_DIRECT_TOOL_METHODS:
+            try:
+                result_dict = result if isinstance(result, dict) else {}
+                record_autonomy_observation(
+                    "meta_direct_tool_call",
+                    {
+                        "method": method,
+                        "status": str(result_dict.get("status") or ""),
+                        "has_error": bool(str(result_dict.get("error") or "").strip()),
+                        "error": str(result_dict.get("error") or "")[:240],
+                        "result_type": type(result).__name__,
+                    },
+                )
+            except Exception:
+                pass
+        return result
 
     async def _finalize_list_output(self, task: str, result: str) -> str:
         guarded = self._guard_live_lookup_output(task, result)

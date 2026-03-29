@@ -526,6 +526,7 @@ async def test_meta_recipe_execution_records_learned_chain_outcome_after_runtime
     from agent.base_agent import BaseAgent
 
     recorded = []
+    observed = []
 
     class _FakeAdaptivePlanMemory:
         def record_outcome(self, **kwargs):
@@ -559,6 +560,13 @@ async def test_meta_recipe_execution_records_learned_chain_outcome_after_runtime
     monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
     monkeypatch.setattr("orchestration.feedback_engine.get_feedback_engine", lambda: _FakeFeedbackEngine())
     monkeypatch.setattr("agent.agents.meta.get_adaptive_plan_memory", lambda: _FakeAdaptivePlanMemory())
+    monkeypatch.setattr(
+        "agent.agents.meta.record_autonomy_observation",
+        lambda event_type, payload, observed_at="": observed.append(
+            {"event_type": event_type, "payload": dict(payload), "observed_at": observed_at}
+        )
+        or True,
+    )
 
     agent = MetaAgent.__new__(MetaAgent)
     agent.conversation_session_id = "sess-meta-runtime-gap-learning"
@@ -606,6 +614,192 @@ async def test_meta_recipe_execution_records_learned_chain_outcome_after_runtime
     assert recorded[0]["final_chain"] == ["meta", "research", "document"]
     assert recorded[0]["runtime_gap_insertions"] == ["runtime_goal_gap_document"]
     assert recorded[0]["success"] is True
+    assert [item["event_type"] for item in observed] == [
+        "runtime_goal_gap_inserted",
+        "meta_recipe_outcome",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_meta_system_diagnosis_emits_primary_fix_task_from_system_result(monkeypatch):
+    from agent.agents.meta import MetaAgent
+    from agent.base_agent import BaseAgent
+
+    observed = []
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        assert method == "delegate_to_agent"
+        assert params["agent_type"] == "system"
+        return {
+            "status": "success",
+            "agent": "system",
+            "result": (
+                "Diagnose: System stabil aber mit wiederkehrenden Vision-Tool-Fehlern.\n"
+                "Ursache:\n\n"
+                "Vision-Engine Datentyp-Fehler: Moondream gibt dict statt string zurueck -> "
+                "AttributeError: 'dict' object has no attribute 'strip' in tools/verified_vision_tool/tool.py:352\n"
+                "Screen-Contract OCR-Fehler: OCR-Texte kommen als dict statt str -> "
+                "TypeError in tools/screen_contract_tool/tool.py:118\n"
+                "Tool-Loop-Erkennung: Mehrfache Wiederholungen bei get_all_screen_text und scan_ui_elements.\n"
+                "Empfehlung:\n"
+                "Vision-Tool zuerst beheben."
+            ),
+            "blackboard_key": "delegation:system:vision",
+            "metadata": {},
+            "artifacts": [],
+        }
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+    monkeypatch.setattr(
+        "agent.agents.meta.record_autonomy_observation",
+        lambda event_type, payload, observed_at="": observed.append(
+            {"event_type": event_type, "payload": dict(payload), "observed_at": observed_at}
+        )
+        or True,
+    )
+
+    agent = MetaAgent.__new__(MetaAgent)
+    agent.conversation_session_id = "sess-meta-system-primary-fix"
+
+    task = _build_meta_task(
+        recipe_id="system_diagnosis",
+        chain="meta -> system",
+        stages=[
+            ("system_observe", "system", "Analysiere Logs und Services", "incident_summary", False),
+            ("shell_remediation", "shell", "Nur falls noetig", "command_output", True),
+        ],
+        original_task=(
+            "Analysiere den aktuell wichtigsten wiederkehrenden Fehler aus den Logs und erstelle daraus "
+            "genau einen Primary-Fix-Task. Wenn die Root Cause nicht belegt ist, gib verification needed aus."
+        ),
+        task_type="system_diagnosis",
+        site_kind="ops",
+    )
+
+    result = await MetaAgent.run(agent, task)
+
+    assert result.startswith("Primary-Fix-Task")
+    assert "tools/verified_vision_tool/tool.py" in result
+    assert "type_normalization" in result
+    event_types = [item["event_type"] for item in observed]
+    assert "lead_diagnosis_selected" in event_types
+    assert "developer_task_compiled" in event_types
+    assert "primary_fix_task_emitted" in event_types
+
+
+@pytest.mark.asyncio
+async def test_meta_system_diagnosis_returns_verification_needed_without_verified_root_cause(monkeypatch):
+    from agent.agents.meta import MetaAgent
+    from agent.base_agent import BaseAgent
+
+    observed = []
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        assert method == "delegate_to_agent"
+        assert params["agent_type"] == "system"
+        return {
+            "status": "success",
+            "agent": "system",
+            "result": (
+                "Diagnose: System stabil.\n"
+                "Ursache:\n\n"
+                "Monitoring fuer kuenftige Vorfaelle verbessern.\n"
+                "Empfehlung:\n"
+                "Spaeter Telemetrie ausbauen."
+            ),
+            "blackboard_key": "delegation:system:weak",
+            "metadata": {},
+            "artifacts": [],
+        }
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+    monkeypatch.setattr(
+        "agent.agents.meta.record_autonomy_observation",
+        lambda event_type, payload, observed_at="": observed.append(
+            {"event_type": event_type, "payload": dict(payload), "observed_at": observed_at}
+        )
+        or True,
+    )
+
+    agent = MetaAgent.__new__(MetaAgent)
+    agent.conversation_session_id = "sess-meta-system-verification-needed"
+
+    task = _build_meta_task(
+        recipe_id="system_diagnosis",
+        chain="meta -> system",
+        stages=[
+            ("system_observe", "system", "Analysiere Logs und Services", "incident_summary", False),
+        ],
+        original_task=(
+            "Analysiere den aktuell wichtigsten wiederkehrenden Fehler aus den Logs und erstelle daraus "
+            "genau einen Primary-Fix-Task. Wenn die Root Cause nicht belegt ist, gib verification needed aus."
+        ),
+        task_type="system_diagnosis",
+        site_kind="ops",
+    )
+
+    result = await MetaAgent.run(agent, task)
+
+    assert result.startswith("verification needed")
+    assert "weak_root_cause_evidence" in result
+    event_types = [item["event_type"] for item in observed]
+    assert "lead_diagnosis_selected" in event_types
+    assert "developer_task_compiled" in event_types
+    assert "root_cause_gate_blocked" in event_types
+
+
+@pytest.mark.asyncio
+async def test_meta_call_tool_records_specialist_and_direct_meta_observation(monkeypatch):
+    from agent.agents.meta import MetaAgent
+    from agent.base_agent import BaseAgent
+
+    observed = []
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        if method == "delegate_to_agent":
+            return {
+                "status": "error",
+                "agent": params["agent_type"],
+                "error": "context overflow",
+                "blackboard_key": "delegation:research:ctx",
+            }
+        if method == "search_web":
+            return {"status": "error", "error": "timeout"}
+        return {"status": "success"}
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+    monkeypatch.setattr(
+        "agent.agents.meta.record_autonomy_observation",
+        lambda event_type, payload, observed_at="": observed.append(
+            {"event_type": event_type, "payload": dict(payload), "observed_at": observed_at}
+        )
+        or True,
+    )
+
+    agent = MetaAgent.__new__(MetaAgent)
+    agent.conversation_session_id = "sess-meta-observation"
+
+    specialist = await MetaAgent._call_tool(
+        agent,
+        "start_deep_research",
+        {"query": "LLM Markt 2026"},
+    )
+    direct = await MetaAgent._call_tool(
+        agent,
+        "search_web",
+        {"query": "best countries tech immigration 2026"},
+    )
+
+    assert specialist["status"] == "error"
+    assert direct["status"] == "error"
+    assert [item["event_type"] for item in observed] == [
+        "meta_specialist_delegation",
+        "meta_direct_tool_call",
+    ]
+    assert observed[0]["payload"]["agent"] == "research"
+    assert observed[0]["payload"]["status"] == "error"
+    assert observed[1]["payload"]["method"] == "search_web"
+    assert observed[1]["payload"]["has_error"] is True
 
 
 @pytest.mark.asyncio

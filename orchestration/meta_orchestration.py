@@ -9,7 +9,13 @@ from typing import Any, Dict, Iterable, List, Tuple
 from orchestration.adaptive_plan_memory import get_adaptive_plan_memory
 from orchestration.adaptive_planner import build_adaptive_plan
 from orchestration.capability_graph import build_capability_graph
+from orchestration.diagnosis_records import (
+    build_diagnosis_records,
+    compile_developer_task_brief,
+    select_lead_diagnosis,
+)
 from orchestration.goal_spec import derive_goal_spec
+from orchestration.root_cause_tasks import build_root_cause_task_payload
 from utils.location_local_intent import is_location_local_query, is_location_route_query
 
 
@@ -765,6 +771,36 @@ def _normalize_agent_chain(chain: Iterable[str]) -> List[str]:
         if value and value not in cleaned:
             cleaned.append(value)
     return cleaned
+
+
+def build_meta_diagnosis_resolution(
+    raw_records: Iterable[Dict[str, Any]] | None,
+    *,
+    existing_paths: Iterable[str] | None = None,
+) -> Dict[str, Any]:
+    records = build_diagnosis_records(list(raw_records or []), existing_paths=existing_paths)
+    resolution = select_lead_diagnosis(records)
+    return {
+        "records": [item.to_dict() for item in records],
+        **resolution.to_dict(),
+    }
+
+
+def compile_meta_developer_task_payload(
+    raw_records: Iterable[Dict[str, Any]] | None,
+    *,
+    existing_paths: Iterable[str] | None = None,
+) -> Dict[str, Any]:
+    records = build_diagnosis_records(list(raw_records or []), existing_paths=existing_paths)
+    resolution = select_lead_diagnosis(records)
+    brief = compile_developer_task_brief(resolution)
+    root_cause_payload = build_root_cause_task_payload(resolution)
+    return {
+        "diagnosis_records": [item.to_dict() for item in records],
+        "diagnosis_resolution": resolution.to_dict(),
+        "developer_task_brief": brief.to_dict(),
+        "root_cause_tasks": root_cause_payload.to_dict(),
+    }
 
 
 def resolve_adaptive_plan_adoption(classification: Dict[str, Any]) -> Dict[str, Any]:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+from orchestration.autonomy_observation import record_autonomy_observation
 from orchestration.self_hardening_escalation import record_self_hardening_pattern_event
 from orchestration.self_hardening_rollout import get_self_hardening_rollout_stage
 from orchestration.self_hardening_verification import classify_self_hardening_verification_status
@@ -213,6 +214,32 @@ def record_self_hardening_event(
         metadata_update=metadata,
         observed_at=observed_at or None,
     )
+    try:
+        record_autonomy_observation(
+            "self_hardening_runtime_event",
+            {
+                "stage": str(stage or "").strip(),
+                "status": event_payload.get("status", ""),
+                "pattern_name": event_payload.get("pattern_name", ""),
+                "component": event_payload.get("component", ""),
+                "requested_fix_mode": event_payload.get("requested_fix_mode", ""),
+                "execution_mode": event_payload.get("execution_mode", ""),
+                "route_target": event_payload.get("route_target", ""),
+                "rollout_stage": event_payload.get("rollout_stage", ""),
+                "verification_status": event_payload.get("verification_status", ""),
+                "verification_required": bool(event_payload.get("verification_required")),
+                "audit_id": event_payload.get("audit_id", ""),
+                "task_id": event_payload.get("task_id", ""),
+                "goal_id": event_payload.get("goal_id", ""),
+                "target_file_path": event_payload.get("target_file_path", ""),
+                "change_type": event_payload.get("change_type", ""),
+                "pattern_effective_fix_mode": event_payload.get("pattern_effective_fix_mode", ""),
+                "pattern_freeze_active": bool(event_payload.get("pattern_freeze_active")),
+            },
+            observed_at=observed_at or "",
+        )
+    except Exception:
+        pass
     return {
         "last_event": str(stage or "").strip() or "unknown",
         "last_event_metadata": event_payload,
