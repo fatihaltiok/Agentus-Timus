@@ -1314,6 +1314,19 @@ Absicherung:
 - neue Contract-/Hypothesis-Datei fuer Dispatcher-Semantik
 - Lean `CiSpecs.lean` um zwei kleine Dispatcher-Invarianten erweitert
 
+### Phase A.1 - triviale Umgangssprache entkernen
+
+Die Beobachtung zeigt weiter ein Frontdoor-Problem bei sehr leichten Alltagsfragen wie:
+- `was denkst du wird es morgen regnen`
+- `kannst du mir sagen wie spaet es ist`
+- `weisst du wann heute sonnenuntergang ist`
+
+Darauf ist ein generischer Preparse-Block im Dispatcher angesetzt:
+- umgangssprachliche Fragehuellen wie `was denkst du`, `meinst du`, `glaubst du`, `kannst du mir sagen`, `weisst du` werden vor dem Routing reduziert
+- der Dispatcher arbeitet danach mit einer `NORMALIZED CORE QUERY`
+- kurze triviale Kernfragen mit klarer Frageform und ohne komplexe Marker koennen konservativ direkt an `executor` gehen
+- nicht-triviale Strategie-, Browser-, Research- oder Multi-Intent-Faelle bleiben weiter ausserhalb dieses Schnellpfads
+
 ## Fortschritt 2026-04-01 - Phase B Vorbereitung gestartet
 
 Phase B laeuft jetzt als konservative Advisory-Vorbereitung an, noch ohne harte Rezept-Umbauten.

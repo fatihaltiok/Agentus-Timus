@@ -21,6 +21,12 @@ def dispatcher_reference_followup_contract(text: str) -> bool:
     return main_dispatcher._looks_like_dispatcher_reference_followup(text)
 
 
+@deal.post(lambda r: isinstance(r, str))
+def dispatcher_core_query_contract(text: str) -> str:
+    """Die reduzierte Kernfrage bleibt immer ein String."""
+    return main_dispatcher._extract_dispatcher_core_query(text)
+
+
 def test_contract_dispatcher_focus_query_prefers_current_user_query():
     text = """# FOLLOW-UP CONTEXT
 last_agent: research
@@ -35,10 +41,20 @@ def test_contract_dispatcher_reference_followup_detects_short_reference():
     assert dispatcher_reference_followup_contract("dann uebernimm die empfehlung 2") is True
 
 
+def test_contract_dispatcher_core_query_strips_colloquial_shell():
+    assert dispatcher_core_query_contract("was denkst du wird es morgen regnen") == "wird es morgen regnen"
+
+
 @given(st.text(min_size=0, max_size=200))
 @settings(max_examples=150)
 def test_hypothesis_dispatcher_focus_query_always_returns_string(text: str):
     assert isinstance(dispatcher_focus_query_contract(text), str)
+
+
+@given(st.text(min_size=0, max_size=200))
+@settings(max_examples=150)
+def test_hypothesis_dispatcher_core_query_always_returns_string(text: str):
+    assert isinstance(dispatcher_core_query_contract(text), str)
 
 
 @given(st.text(min_size=0, max_size=60))

@@ -568,6 +568,11 @@ def _strip_meta_canvas_wrappers(query: str) -> str:
 DISPATCHER_PROMPT = """
 Du bist der zentrale Dispatcher für Timus. Analysiere die INTENTION des Nutzers und wähle den richtigen Spezialisten.
 
+Wenn sowohl `ORIGINAL USER QUERY` als auch `NORMALIZED CORE QUERY` gegeben sind:
+- nutze die `NORMALIZED CORE QUERY` für den semantischen Kern der Anfrage
+- nutze die `ORIGINAL USER QUERY` nur für Ton, Höflichkeit, Umgangssprache und Zusatzkontext
+- lasse dich von Fragehüllen wie "was denkst du", "meinst du", "glaubst du", "kannst du mir sagen" nicht vom eigentlichen Intent ablenken
+
 ### DIE AGENTEN
 
 1. **reasoning**: Der DENKER & ANALYST (NEU - Nemotron)
@@ -1444,6 +1449,94 @@ _DISPATCHER_REFERENCE_ACTION_TOKENS = (
     "beheb",
 )
 
+_DISPATCHER_COLLOQUIAL_PREFIX_PATTERNS = (
+    r"^\s*(?:hey|hi|hallo|ok(?:ay)?|also|nun|gut)\b[\s,:\-]*",
+    r"^\s*(?:hey|hi|hallo)\s+timus\b[\s,:\-]*",
+    r"^\s*timus\b[\s,:\-]*",
+    r"^\s*(?:bitte|mal\s+ehrlich|sag\s+mal|nur\s+mal)\b[\s,:\-]*",
+)
+
+_DISPATCHER_COLLOQUIAL_SHELL_PATTERNS = (
+    r"^\s*was\s+denkst\s+du(?:\s+dazu|\s+denn|\s+so)?\s+",
+    r"^\s*was\s+meinst\s+du(?:\s+dazu|\s+denn|\s+so)?\s+",
+    r"^\s*meinst\s+du(?:\s+dazu|\s+denn|\s+so)?\s+",
+    r"^\s*glaubst\s+du(?:\s+dazu|\s+denn|\s+so)?\s+",
+    r"^\s*w[eüu]rdest\s+du\s+sagen\s+",
+    r"^\s*kannst\s+du\s+mir(?:\s+bitte)?(?:\s+kurz)?\s+sagen\s+",
+    r"^\s*kannst\s+du\s+(?:bitte\s+)?sagen\s+",
+    r"^\s*wei(?:ß|ss|s)t\s+du(?:\s+vielleicht)?\s+",
+)
+
+_DISPATCHER_TRIVIAL_QUESTION_STARTS = (
+    "wer ",
+    "was ",
+    "wann ",
+    "wo ",
+    "wie ",
+    "wie viel ",
+    "wieviel ",
+    "welche ",
+    "welcher ",
+    "welches ",
+    "wird ",
+    "ist ",
+    "sind ",
+    "gibt es ",
+    "kann ich ",
+    "soll ich ",
+    "lohnt sich ",
+)
+
+_DISPATCHER_TRIVIAL_LOOKUP_HINTS = (
+    "wetter",
+    "regnen",
+    "regen",
+    "uhr",
+    "uhrzeit",
+    "spaet",
+    "spät",
+    "datum",
+    "morgen",
+    "heute",
+    "wochentag",
+    "sonnenaufgang",
+    "sonnenuntergang",
+    "temperatur",
+    "grad",
+)
+
+_DISPATCHER_NONTRIVIAL_QUERY_HINTS = (
+    "recherch",
+    "vergleich",
+    "vergleiche",
+    "analys",
+    "strategie",
+    "unternehmen",
+    "gruend",
+    "gründ",
+    "architektur",
+    "beweise",
+    "erklaer",
+    "erklär",
+    "schritt",
+    "code",
+    "skript",
+    "datei",
+    "pdf",
+    "email",
+    "mail",
+    "browser",
+    "oeffne",
+    "öffne",
+    "klicke",
+    "reservier",
+    "buche",
+    "reich machen",
+    "standort aktualisiert",
+    "systemstatus",
+    "logs",
+)
+
 
 def _structure_task(task: str, url: str) -> List[str]:
     """Legacy wrapper fuer den extrahierten Browser-Workflow-Planer."""
@@ -1468,6 +1561,62 @@ def _extract_dispatcher_focus_query(query: str) -> str:
     return source
 
 
+def _extract_dispatcher_core_query(query: str) -> str:
+    """Reduziert umgangssprachliche Fragehuellen auf den semantischen Kern."""
+    text = _extract_dispatcher_focus_query(query)
+    if not text:
+        return ""
+
+    reduced = text.strip()
+    changed = True
+    while changed and reduced:
+        changed = False
+        for pattern in _DISPATCHER_COLLOQUIAL_PREFIX_PATTERNS:
+            updated = re.sub(pattern, "", reduced, flags=re.IGNORECASE).strip()
+            if updated != reduced:
+                reduced = updated
+                changed = True
+        for pattern in _DISPATCHER_COLLOQUIAL_SHELL_PATTERNS:
+            updated = re.sub(pattern, "", reduced, flags=re.IGNORECASE).strip()
+            if updated != reduced:
+                reduced = updated
+                changed = True
+
+    reduced = re.sub(r"^[,:\-\.\?\!]+", "", reduced).strip()
+    reduced = re.sub(r"\s+", " ", reduced).strip()
+    return reduced or text.strip()
+
+
+def _looks_like_dispatcher_trivial_lookup(query: str) -> bool:
+    normalized = str(query or "").strip().lower()
+    if not normalized:
+        return False
+    if len(normalized.split()) > 14:
+        return False
+    if any(token in normalized for token in _DISPATCHER_NONTRIVIAL_QUERY_HINTS):
+        return False
+    if _looks_like_dispatcher_reference_followup(normalized):
+        return False
+    if any(connector in normalized for connector in (" und ", " danach ", " anschließend ", " anschliessend ")):
+        return False
+    starts_like_question = normalized.startswith(_DISPATCHER_TRIVIAL_QUESTION_STARTS)
+    has_lookup_hint = any(token in normalized for token in _DISPATCHER_TRIVIAL_LOOKUP_HINTS)
+    return starts_like_question and has_lookup_hint
+
+
+def _build_dispatcher_llm_query(query: str) -> str:
+    original = _extract_dispatcher_focus_query(query)
+    core = _extract_dispatcher_core_query(query)
+    if core and original and core.lower() != original.lower():
+        return (
+            "ORIGINAL USER QUERY:\n"
+            f"{original}\n\n"
+            "NORMALIZED CORE QUERY:\n"
+            f"{core}\n"
+        )
+    return original or str(query or "")
+
+
 def _looks_like_dispatcher_reference_followup(query: str) -> bool:
     normalized = str(query or "").strip().lower()
     if not normalized:
@@ -1485,11 +1634,14 @@ def quick_intent_check(query: str) -> Optional[str]:
     """Schnelle Keyword-basierte Intent-Erkennung."""
     raw_query = str(query or "")
     focus_query = _extract_dispatcher_focus_query(raw_query)
+    core_query = _extract_dispatcher_core_query(raw_query)
     query_lower = raw_query.lower()
     focus_lower = focus_query.lower()
+    core_lower = core_query.lower()
     has_followup_capsule = "# follow-up context" in query_lower
-    location_intent = analyze_location_local_intent(focus_lower)
-    orchestration_policy = evaluate_query_orchestration(focus_lower)
+    analysis_query = core_lower or focus_lower
+    location_intent = analyze_location_local_intent(analysis_query)
+    orchestration_policy = evaluate_query_orchestration(analysis_query)
 
     if any(re.search(pattern, focus_lower) for pattern in _DISPATCHER_SELF_REFLECTION_PATTERNS):
         return "executor"
@@ -1497,20 +1649,22 @@ def quick_intent_check(query: str) -> Optional[str]:
         return "meta"
     if _looks_like_dispatcher_reference_followup(focus_lower):
         return "meta" if has_followup_capsule or len(focus_lower.split()) <= 8 else "meta"
+    if _looks_like_dispatcher_trivial_lookup(core_lower):
+        return "executor"
     if (
-        focus_lower.startswith("soll ich ")
-        and " oder " in focus_lower
-        and len(focus_lower.split()) <= 8
+        analysis_query.startswith("soll ich ")
+        and " oder " in analysis_query
+        and len(analysis_query.split()) <= 8
     ):
         return None
 
-    if any(keyword in focus_lower for keyword in SELF_STATUS_KEYWORDS):
+    if any(keyword in analysis_query for keyword in SELF_STATUS_KEYWORDS):
         return "executor"
-    if any(keyword in focus_lower for keyword in SELF_REMEDIATION_KEYWORDS):
+    if any(keyword in analysis_query for keyword in SELF_REMEDIATION_KEYWORDS):
         return "executor"
-    if any(keyword in focus_lower for keyword in SELF_PRIORITY_KEYWORDS):
+    if any(keyword in analysis_query for keyword in SELF_PRIORITY_KEYWORDS):
         return "executor"
-    if focus_lower.strip() == "sag du es mir":
+    if analysis_query.strip() == "sag du es mir":
         return "executor"
     if location_intent.is_location_only:
         return "executor"
@@ -1519,10 +1673,10 @@ def quick_intent_check(query: str) -> Optional[str]:
     # Komplexe Browser-Workflows gehen an META, damit der Orchestrator
     # den Ablauf in robuste Teilaufgaben für Visual zerlegt.
     _has_browser_target = bool(
-        re.search(r"https?://[^\s]+", focus_lower)
-        or re.search(r"\b[a-z0-9.-]+\.(?:de|com|org|net|io|ai)\b", focus_lower)
-        or "browser" in focus_lower
-        or "webseite" in focus_lower
+        re.search(r"https?://[^\s]+", analysis_query)
+        or re.search(r"\b[a-z0-9.-]+\.(?:de|com|org|net|io|ai)\b", analysis_query)
+        or "browser" in analysis_query
+        or "webseite" in analysis_query
         or "website" in focus_lower
     )
     _has_browser_ui_action = any(
@@ -2033,7 +2187,8 @@ async def get_agent_decision(user_query: str, session_id: str | None = None) -> 
 
     # LLM-basierte Entscheidung
     try:
-        raw_content = await _call_dispatcher_llm(user_query, session_id=session_id or "")
+        dispatcher_query = _build_dispatcher_llm_query(user_query)
+        raw_content = await _call_dispatcher_llm(dispatcher_query, session_id=session_id or "")
         decision = _extract_dispatcher_decision(raw_content)
         if not decision:
             log.warning(

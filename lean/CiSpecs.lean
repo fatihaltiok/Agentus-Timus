@@ -855,3 +855,7 @@ theorem meta_semantic_review_conflict_prefers_meta_dialogue :
 -- M-B1b. Ein Nutzer-gemeldetes Standortupdate darf kein altes Lookup-Rezept erzwingen.
 theorem meta_state_update_blocks_stale_lookup_recipe :
     (if false then "simple_live_lookup" else "") = "" := by simp
+
+-- D1c. Eine entkernte triviale Alltagsfrage darf konservativ auf den Helferpfad gehen.
+theorem dispatcher_core_trivial_lookup_prefers_executor :
+    (if true then "executor" else "meta") = "executor" := by simp

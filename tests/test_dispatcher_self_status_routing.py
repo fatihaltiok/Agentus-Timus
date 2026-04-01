@@ -24,6 +24,31 @@ def test_quick_intent_routes_colloquial_self_reflection_to_executor():
     assert main_dispatcher.quick_intent_check("bist du ein funktionierendes ki system ?") == "executor"
 
 
+def test_dispatcher_extracts_core_query_from_colloquial_shells():
+    import main_dispatcher
+
+    assert main_dispatcher._extract_dispatcher_core_query("hey timus was denkst du wird es morgen regnen") == (
+        "wird es morgen regnen"
+    )
+    assert main_dispatcher._extract_dispatcher_core_query("kannst du mir sagen wie spaet es ist") == (
+        "wie spaet es ist"
+    )
+
+
+def test_quick_intent_routes_trivial_colloquial_lookups_to_executor():
+    import main_dispatcher
+
+    assert main_dispatcher.quick_intent_check("was denkst du wird es morgen regnen") == "executor"
+    assert main_dispatcher.quick_intent_check("kannst du mir sagen wie spaet es ist") == "executor"
+    assert main_dispatcher.quick_intent_check("weisst du wann heute sonnenuntergang ist") == "executor"
+
+
+def test_quick_intent_keeps_colloquial_nontrivial_strategy_question_out_of_executor():
+    import main_dispatcher
+
+    assert main_dispatcher.quick_intent_check("was meinst du wie koennte ich mein unternehmen skalieren") is None
+
+
 def test_quick_intent_routes_meta_feedback_and_reference_followups_to_meta():
     import main_dispatcher
 
