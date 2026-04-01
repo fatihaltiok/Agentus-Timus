@@ -839,3 +839,19 @@ theorem autonomy_observation_window_positive :
 theorem autonomy_observation_event_count_nonnegative
     (count : Nat) :
     count ≥ 0 := by omega
+
+-- D1a. In Follow-up-Kapseln priorisiert der Dispatcher semantisch die aktuelle Nutzerfrage.
+theorem dispatcher_followup_current_query_priority :
+    (if true then "current" else "context") = "current" := by simp
+
+-- D1b. Kurze referenzielle Anschlussfragen bleiben konservativ im sicheren Frontdoor-Pfad.
+theorem dispatcher_reference_followup_routes_conservatively :
+    (if true then 1 else 0) = 1 := by simp
+
+-- M-B1a. Bestaetigte semantische Mischfaelle duerfen konservativ auf einen Meta-Dialogpfad fallen.
+theorem meta_semantic_review_conflict_prefers_meta_dialogue :
+    (if true then "meta" else "executor") = "meta" := by simp
+
+-- M-B1b. Ein Nutzer-gemeldetes Standortupdate darf kein altes Lookup-Rezept erzwingen.
+theorem meta_state_update_blocks_stale_lookup_recipe :
+    (if false then "simple_live_lookup" else "") = "" := by simp

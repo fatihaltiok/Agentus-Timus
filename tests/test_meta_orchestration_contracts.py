@@ -41,6 +41,8 @@ def test_hypothesis_meta_orchestration_shape(query: str, action_count: int):
     assert isinstance(result["required_capabilities"], list)
     assert all(isinstance(stage, dict) for stage in result["recipe_stages"])
     assert isinstance(result["capability_graph"].get("matching_nodes"), list)
+    assert isinstance(result.get("semantic_ambiguity_hints"), list)
+    assert isinstance(result.get("semantic_review_recommended"), bool)
 
 
 @deal.post(lambda r: isinstance(r, list))

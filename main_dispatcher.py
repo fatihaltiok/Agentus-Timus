@@ -600,6 +600,10 @@ Du bist der zentrale Dispatcher für Timus. Analysiere die INTENTION des Nutzers
      - Erinnerungsfragen: "Erinnerst du dich?", "Was haben wir gemacht?", "Kennst du mich?"
      - "Wie spät ist es?", "Datum?", "Uhrzeit?"
      - Vorstellungen: "Ich heiße...", "Mein Name ist..."
+     - einfache Selbststatus-/Selbstbild-Fragen an Timus:
+       "Wie geht's dir?", "Bist du anpassungsfähig?", "Bist du ein funktionierendes KI-System?"
+     - kurze Selbststatus-Fragen wie:
+       "Was stoert dich?" / "Wie kann ich dir helfen?"
      - NIEMALS bei Aufgaben die Handlungen oder Werkzeuge erfordern!
 
 4. **meta**: Der HAUPT-ORCHESTRATOR — STANDARD FÜR ALLE AUFGABEN
@@ -610,6 +614,10 @@ Du bist der zentrale Dispatcher für Timus. Analysiere die INTENTION des Nutzers
      - Allgemeine Anfragen wie "Hilf mir mit...", "Kannst du..."
      - Breite Rechercheaufträge wie "Recherchiere X", "Finde heraus ...", "Informiere mich über ..."
      - Komplexe Fragen die Koordination brauchen
+     - Nutzerkorrekturen oder Meta-Feedback wie:
+       "Du verstehst mich nicht", "Das ist doch falsch", "Ich habe meinen Standort aktualisiert"
+     - kurze referenzielle Anschlussfragen wie:
+       "Dann uebernehme Empfehlung 2", "Kannst du damit arbeiten?", "Kannst du sie reparieren?"
      - Bei Unsicherheit welcher Agent zuständig ist: IMMER 'meta'
 
 5. **visual**: Der OPERATOR (Maus & Tastatur)
@@ -735,6 +743,8 @@ Du bist der zentrale Dispatcher für Timus. Analysiere die INTENTION des Nutzers
    - "mache eine recherche und schicke mir das Ergebnis per Mail" → 'meta'
    - "recherchiere X, erstelle einen Bericht und speichere ihn" → 'meta'
    Der Meta-Agent orchestriert: er delegiert die Recherche an den Research-Agenten und führt die Folgeaktion selbst durch.
+10. Wenn die Anfrage mit `# FOLLOW-UP CONTEXT` kommt, priorisiere semantisch `# CURRENT USER QUERY`.
+    Kurze referenzielle Anschlussfragen ohne klaren Einzelagenten gehen konservativ an 'meta'.
 
 ### ENTSCHEIDUNGSREGEL
 - Ist die Anfrage eine TRIVIALE Frage ohne Aktion (Begrüßung, Uhrzeit, Name)? → 'executor'
@@ -1372,6 +1382,68 @@ SELF_PRIORITY_KEYWORDS = [
     "was machst du als erstes",
 ]
 
+_DISPATCHER_FOLLOWUP_MARKER = "# current user query"
+
+_DISPATCHER_SELF_REFLECTION_PATTERNS = (
+    r"\bwie\s+geht(?:'s|s)?\s+dir\b",
+    r"\bwas\s+st[oö]rt\s+dich\b",
+    r"\bwie\s+kann\s+ich\s+dir\s+helfen\b",
+    r"\bbist\s+du\s+anpassungsf(?:aehig|[aä]hig)\b",
+    r"\bbist\s+du\s+ein\s+funktionierendes?\s+ki(?:-| )?system\b",
+    r"\bbist\s+du\s+(?:bereit|okay|ok)\b",
+)
+
+_DISPATCHER_META_FEEDBACK_PATTERNS = (
+    r"\banscheinend\s+verstehst\s+du\s+mich\s+nicht\b",
+    r"\bverstehst\s+du\s+mich\s+nicht\b",
+    r"\bdu\s+sollst\s+mich\b.*\bverstehen\b",
+    r"\bdu\s+musst\b.*\bregistrier(?:en)?\b",
+    r"\bwas\s+machst\s+du\s+da\b",
+    r"\bdas\s+ist\s+doch\s+falsch\b",
+    r"\bso\s+ist\s+das\s+falsch\b",
+    r"\bdu\s+interpretierst\b",
+    r"\bdu\s+verwechselst\b",
+)
+
+_DISPATCHER_REFERENCE_FOLLOWUP_PATTERNS = (
+    r"^\s*(?:und\s+)?was\s+jetzt\b",
+    r"^\s*(?:und\s+)?mach\s+weiter\b",
+    r"^\s*(?:und\s+)?weiter(?:\s+damit)?\b",
+    r"^\s*(?:dann\s+)?(?:uebernimm|übernimm|nimm)\b.*\b(?:empfehlung|option)\b",
+    r"^\s*die\s+(?:erste|zweite|dritte)(?:\s+option)?\b",
+    r"^\s*(?:kannst|k[oö]nntest)\s+du\s+(?:damit|das|sie)\b",
+)
+
+_DISPATCHER_REFERENCE_TOKENS = (
+    "damit",
+    "darauf",
+    "daran",
+    "dies",
+    "diese",
+    "das",
+    "sie",
+    "ihn",
+    "empfehlung",
+    "option",
+    "erste",
+    "zweite",
+    "dritte",
+)
+
+_DISPATCHER_REFERENCE_ACTION_TOKENS = (
+    "uebernimm",
+    "übernimm",
+    "nimm",
+    "mach",
+    "weiter",
+    "kannst",
+    "könntest",
+    "koenntest",
+    "reparier",
+    "fix",
+    "beheb",
+)
+
 
 def _structure_task(task: str, url: str) -> List[str]:
     """Legacy wrapper fuer den extrahierten Browser-Workflow-Planer."""
@@ -1382,19 +1454,63 @@ _IMAGE_EXTENSIONS = re.compile(r"\.(jpg|jpeg|png|webp|gif|bmp|tiff?|avif)\b", re
 _DATA_EXTENSIONS = re.compile(r"\.(csv|xlsx|xls|parquet)\b", re.IGNORECASE)
 
 
+def _extract_dispatcher_focus_query(query: str) -> str:
+    """Verwendet bei Follow-up-Kapseln bevorzugt den aktuellen User-Teil."""
+    source = _strip_meta_canvas_wrappers(str(query or "")).strip()
+    if not source:
+        return ""
+    normalized = source.lower()
+    marker_index = normalized.find(_DISPATCHER_FOLLOWUP_MARKER)
+    if marker_index >= 0:
+        focus = source[marker_index + len(_DISPATCHER_FOLLOWUP_MARKER):].strip()
+        if focus:
+            return focus
+    return source
+
+
+def _looks_like_dispatcher_reference_followup(query: str) -> bool:
+    normalized = str(query or "").strip().lower()
+    if not normalized:
+        return False
+    if len(normalized.split()) > 14:
+        return False
+    if any(re.search(pattern, normalized) for pattern in _DISPATCHER_REFERENCE_FOLLOWUP_PATTERNS):
+        return True
+    has_reference = any(token in normalized for token in _DISPATCHER_REFERENCE_TOKENS)
+    has_action = any(token in normalized for token in _DISPATCHER_REFERENCE_ACTION_TOKENS)
+    return has_reference and has_action
+
+
 def quick_intent_check(query: str) -> Optional[str]:
     """Schnelle Keyword-basierte Intent-Erkennung."""
-    query_lower = query.lower()
-    location_intent = analyze_location_local_intent(query_lower)
-    orchestration_policy = evaluate_query_orchestration(query_lower)
+    raw_query = str(query or "")
+    focus_query = _extract_dispatcher_focus_query(raw_query)
+    query_lower = raw_query.lower()
+    focus_lower = focus_query.lower()
+    has_followup_capsule = "# follow-up context" in query_lower
+    location_intent = analyze_location_local_intent(focus_lower)
+    orchestration_policy = evaluate_query_orchestration(focus_lower)
 
-    if any(keyword in query_lower for keyword in SELF_STATUS_KEYWORDS):
+    if any(re.search(pattern, focus_lower) for pattern in _DISPATCHER_SELF_REFLECTION_PATTERNS):
         return "executor"
-    if any(keyword in query_lower for keyword in SELF_REMEDIATION_KEYWORDS):
+    if any(re.search(pattern, focus_lower) for pattern in _DISPATCHER_META_FEEDBACK_PATTERNS):
+        return "meta"
+    if _looks_like_dispatcher_reference_followup(focus_lower):
+        return "meta" if has_followup_capsule or len(focus_lower.split()) <= 8 else "meta"
+    if (
+        focus_lower.startswith("soll ich ")
+        and " oder " in focus_lower
+        and len(focus_lower.split()) <= 8
+    ):
+        return None
+
+    if any(keyword in focus_lower for keyword in SELF_STATUS_KEYWORDS):
         return "executor"
-    if any(keyword in query_lower for keyword in SELF_PRIORITY_KEYWORDS):
+    if any(keyword in focus_lower for keyword in SELF_REMEDIATION_KEYWORDS):
         return "executor"
-    if query_lower.strip() == "sag du es mir":
+    if any(keyword in focus_lower for keyword in SELF_PRIORITY_KEYWORDS):
+        return "executor"
+    if focus_lower.strip() == "sag du es mir":
         return "executor"
     if location_intent.is_location_only:
         return "executor"
@@ -1403,14 +1519,14 @@ def quick_intent_check(query: str) -> Optional[str]:
     # Komplexe Browser-Workflows gehen an META, damit der Orchestrator
     # den Ablauf in robuste Teilaufgaben für Visual zerlegt.
     _has_browser_target = bool(
-        re.search(r"https?://[^\s]+", query_lower)
-        or re.search(r"\b[a-z0-9.-]+\.(?:de|com|org|net|io|ai)\b", query_lower)
-        or "browser" in query_lower
-        or "webseite" in query_lower
-        or "website" in query_lower
+        re.search(r"https?://[^\s]+", focus_lower)
+        or re.search(r"\b[a-z0-9.-]+\.(?:de|com|org|net|io|ai)\b", focus_lower)
+        or "browser" in focus_lower
+        or "webseite" in focus_lower
+        or "website" in focus_lower
     )
     _has_browser_ui_action = any(
-        keyword in query_lower
+        keyword in focus_lower
         for keyword in (
             "gehe auf",
             "gehe zu",
@@ -1433,7 +1549,7 @@ def quick_intent_check(query: str) -> Optional[str]:
     # HINWEIS: "suche", "formular", "anmelden", "login" wurden entfernt — zu generisch
     # für isolierten Treffer, da sie in normalen Konversationen häufig vorkommen.
     if _has_browser_target and _has_browser_ui_action:
-        if _is_complex_browser_workflow(query_lower):
+        if _is_complex_browser_workflow(focus_lower):
             return "meta"
         return "visual_nemotron"
 
@@ -1453,19 +1569,19 @@ def quick_intent_check(query: str) -> Optional[str]:
         return "data"
 
     # Kameraanalyse (RealSense/D435/Webcam) -> ImageAgent
-    _has_camera = any(keyword in query_lower for keyword in CAMERA_KEYWORDS)
+    _has_camera = any(keyword in focus_lower for keyword in CAMERA_KEYWORDS)
     if _has_camera:
-        _is_setup_question = any(keyword in query_lower for keyword in CAMERA_SETUP_KEYWORDS)
+        _is_setup_question = any(keyword in focus_lower for keyword in CAMERA_SETUP_KEYWORDS)
         _wants_camera_analysis = any(
-            keyword in query_lower for keyword in CAMERA_ANALYSIS_KEYWORDS
+            keyword in focus_lower for keyword in CAMERA_ANALYSIS_KEYWORDS
         )
 
         if _wants_camera_analysis and not _is_setup_question:
             return "image"
 
     # Natürliche Kurzformen ("kannst du mich sehen?", "schau dir das an")
-    _camera_shortcut = any(keyword in query_lower for keyword in CAMERA_SHORTCUT_KEYWORDS)
-    _has_non_camera_hint = any(keyword in query_lower for keyword in CAMERA_NON_INTENT_HINTS)
+    _camera_shortcut = any(keyword in focus_lower for keyword in CAMERA_SHORTCUT_KEYWORDS)
+    _has_non_camera_hint = any(keyword in focus_lower for keyword in CAMERA_NON_INTENT_HINTS)
     if _camera_shortcut and not _has_non_camera_hint and _has_any_local_camera_device():
         return "image"
 
@@ -1481,8 +1597,8 @@ def quick_intent_check(query: str) -> Optional[str]:
                       "mache eine tiefen recherche", "mach eine tiefen recherche",
                       "mache eine tiefe recherche", "mach eine tiefe recherche",
                       "mache eine tiefenrecherche", "mach eine tiefenrecherche")
-    _has_multi_step = any(t in query_lower for t in _MULTI_STEP_TRIGGERS)
-    _has_task_starter = any(t in query_lower for t in _TASK_STARTERS)
+    _has_multi_step = any(t in focus_lower for t in _MULTI_STEP_TRIGGERS)
+    _has_task_starter = any(t in focus_lower for t in _TASK_STARTERS)
     if _has_multi_step and _has_task_starter:
         return "meta"
 
@@ -1501,8 +1617,8 @@ def quick_intent_check(query: str) -> Optional[str]:
         "e-mail", "email", "bericht", "report", "dokument", "datei",
         "schreibe", "generiere", "exportiere",
     )
-    _has_research = any(kw in query_lower for kw in _RESEARCH_KEYWORDS_QUICK)
-    _has_follow_up = any(kw in query_lower for kw in _FOLLOW_UP_ACTIONS)
+    _has_research = any(kw in focus_lower for kw in _RESEARCH_KEYWORDS_QUICK)
+    _has_follow_up = any(kw in focus_lower for kw in _FOLLOW_UP_ACTIONS)
     if _has_research and _has_follow_up:
         return "meta"  # Meta orchestriert: Research + Folgeaktion
     if _has_research:
@@ -1510,71 +1626,71 @@ def quick_intent_check(query: str) -> Optional[str]:
 
     # REASONING (komplexe Analyse, Debugging, Architektur)
     for keyword in REASONING_KEYWORDS:
-        if keyword in query_lower:
+        if keyword in focus_lower:
             return "reasoning"
 
     # META-Keywords (mehrstufige Aufgaben)
     for keyword in META_KEYWORDS:
-        if keyword in query_lower:
+        if keyword in focus_lower:
             return "meta"
 
     # Research-Keywords (restliche)
     for keyword in RESEARCH_KEYWORDS:
-        if keyword in query_lower:
+        if keyword in focus_lower:
             return "research"
 
     # Shell-Keywords VOR Visual — Service-Restarts/Systemctl dürfen nie zu Visual routen
     for pattern in _SHELL_SERVICE_PATTERNS:
-        if re.search(pattern, query_lower):
+        if re.search(pattern, focus_lower):
             return "shell"
 
     for keyword in SHELL_KEYWORDS:
-        if keyword in query_lower:
+        if keyword in focus_lower:
             return "shell"
 
     # VisualNemotron-Keywords (Multi-Step Web-Automation)
     for keyword in VISUAL_NEMOTRON_KEYWORDS:
-        if keyword in query_lower:
+        if keyword in focus_lower:
             return "visual_nemotron"
 
     # Visual-Keywords (einfache UI-Tasks)
     for keyword in VISUAL_KEYWORDS:
-        if keyword in query_lower:
+        if keyword in focus_lower:
             return "visual"
 
     # Creative-Keywords
     for keyword in CREATIVE_KEYWORDS:
-        if keyword in query_lower:
+        if keyword in focus_lower:
             return "creative"
 
     # Development-Keywords
     for keyword in DEVELOPMENT_KEYWORDS:
-        if keyword in query_lower:
+        if keyword in focus_lower:
             return "development"
 
     # Executor-Keywords (einfache Fragen)
     for keyword in EXECUTOR_KEYWORDS:
-        if keyword in query_lower:
+        if keyword in focus_lower:
             return "executor"
 
     # Data-Keywords
     for keyword in DATA_KEYWORDS:
-        if keyword in query_lower:
+        if keyword in focus_lower:
             return "data"
 
     # Document-Keywords
     for keyword in DOCUMENT_KEYWORDS:
-        if keyword in query_lower:
+        if keyword in focus_lower:
             return "document"
 
     # Communication-Keywords
     for keyword in COMMUNICATION_KEYWORDS:
-        if keyword in query_lower:
+        if keyword in focus_lower:
             return "communication"
 
     # System-Keywords (niedrigste Prio — "log/prozess" können generisch sein)
     for keyword in SYSTEM_KEYWORDS:
-        if keyword in query_lower:
+        if keyword in focus_lower:
             return "system"
 
     return None  # LLM entscheiden lassen

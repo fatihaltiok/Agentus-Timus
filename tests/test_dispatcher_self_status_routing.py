@@ -16,6 +16,39 @@ def test_quick_intent_routes_self_status_to_executor():
     assert main_dispatcher.quick_intent_check("Hast du etwas zu korrigieren oder fixen?") == "executor"
 
 
+def test_quick_intent_routes_colloquial_self_reflection_to_executor():
+    import main_dispatcher
+
+    assert main_dispatcher.quick_intent_check("ok was stoert dich wie kann ich dir helfen") == "executor"
+    assert main_dispatcher.quick_intent_check("bist du anpassungsfaehig") == "executor"
+    assert main_dispatcher.quick_intent_check("bist du ein funktionierendes ki system ?") == "executor"
+
+
+def test_quick_intent_routes_meta_feedback_and_reference_followups_to_meta():
+    import main_dispatcher
+
+    assert main_dispatcher.quick_intent_check("anscheinend verstehst du mich nicht") == "meta"
+    assert main_dispatcher.quick_intent_check("was machst du da das ist doch falsch") == "meta"
+    assert main_dispatcher.quick_intent_check("dann uebernimm die empfehlung 2") == "meta"
+    assert main_dispatcher.quick_intent_check("koenntest du damit arbeiten") == "meta"
+    assert main_dispatcher.quick_intent_check("kannst du sie reparieren") == "meta"
+
+
+def test_quick_intent_prefers_current_user_query_inside_followup_capsule():
+    import main_dispatcher
+
+    augmented = """# FOLLOW-UP CONTEXT
+last_agent: research
+last_user: Recherchiere aktuelle LLM-Preise
+last_assistant: Ich habe drei Optionen gefunden.
+# CURRENT USER QUERY
+dann uebernimm die empfehlung 2
+"""
+
+    assert main_dispatcher._extract_dispatcher_focus_query(augmented) == "dann uebernimm die empfehlung 2"
+    assert main_dispatcher.quick_intent_check(augmented) == "meta"
+
+
 def test_quick_intent_does_not_route_generic_oder_to_reasoning():
     import main_dispatcher
 

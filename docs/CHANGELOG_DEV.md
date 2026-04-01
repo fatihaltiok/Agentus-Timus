@@ -1040,3 +1040,354 @@ duerfen erst danach und getrennt als Folge-Tasks erscheinen.
 - CPU/GPU-Fallback
 - Modellinitialisierungen
 - Peak-Memory vor Vision-/OCR-Aufrufen
+
+## Nach Beobachtungswoche - Dispatcher Semantic Upgrade + Meta/Dispatcher Buddy Loop
+
+### Aktueller Befund
+
+- der Dispatcher faellt zu oft mit `empty_decision` auf Meta zurueck
+- besonders schlecht sind aktuell:
+  - Umgangssprache
+  - kurze Anschlussfragen
+  - implizite Referenzen
+  - Meta-Kommunikation wie
+    - `du verstehst mich nicht`
+    - `uebernehme Empfehlung 2`
+    - `bist du ein funktionierendes ki system`
+- Meta ist in vielen dieser Faelle semantisch staerker als der Dispatcher und muss den Lauf retten
+
+### Prioritaet
+
+- **Top-Prioritaet 1 nach der Beobachtungswoche**
+  - `Dispatcher Semantic Upgrade for colloquial / follow-up / intent-aware routing`
+
+### Zielbild
+
+- Dispatcher und Meta sollen nicht nur strikt nacheinander arbeiten
+- sie sollen als **Buddy-/Agenten-Team** zusammenwirken:
+  - Dispatcher = schnelle Frontdoor-Semantik und Erstsortierung
+  - Meta = tiefere Bedeutungspruefung, Replanning und Konfliktaufloesung
+- bei Unsicherheit soll der Dispatcher nicht nur `empty_decision` liefern, sondern:
+  - eine semantische Vorhypothese
+  - erkannte Unsicherheit
+  - moegliche Lesarten / Kandidaten
+  an Meta uebergeben
+
+### Gewuenschte Eigenschaften
+
+1. Umgangssprache besser verstehen
+- locker formulierte Anfragen
+- unvollstaendige Sätze
+- kurze Frustrations- oder Korrektur-Saetze
+
+2. Follow-up-Verstaendnis
+- Bezug auf vorherige Antwort
+- Bezug auf `Empfehlung 2`, `das`, `so`, `nochmal`, `dieselbe Sache`
+
+3. Intent-aware Routing
+- nicht nur Keywords
+- sondern Bedeutung, Ziel und Gespraechszustand
+
+4. Buddy-Kommunikation zwischen Dispatcher und Meta
+- Dispatcher liefert bei Unsicherheit strukturierte Voranalyse statt Leerausfall
+- Meta kann diese Voranalyse uebernehmen, bestaetigen, korrigieren oder erweitern
+
+5. Beobachtbare Qualitaet
+- weniger `dispatcher_meta_fallback: empty_decision`
+- weniger Nutzerhinweise wie `du verstehst mich nicht`
+- weniger Meta-Rettung fuer triviale Frontdoor-Faelle
+
+### Nach der Beobachtungswoche konkret angehen
+
+1. Dispatcher-Prompt und Output-Schema fuer Umgangssprache/Follow-ups erweitern
+2. Unsicherheitsausgabe statt Leerausfall
+3. strukturierte Buddy-Handoff-Daten an Meta
+4. gemeinsame Beobachtungsmetriken fuer Dispatcher + Meta
+5. spaeter optional: kleiner semantischer Vorinterpretations-Worker nur fuer Frontdoor-Faelle
+
+### Konkretes Zielbild des Buddy Loops
+
+- Dispatcher und Meta arbeiten als gleichrangige Buddys
+- Dispatcher bleibt der schnelle Erstleser
+- Meta bleibt der tiefere Bedeutungspruefer
+- Entscheidungen entstehen ueber ein Buddy-Protokoll, nicht ueber Rang
+
+#### BuddyHypothesis
+
+Jeder Buddy soll eine strukturierte Hypothese liefern mit:
+
+- `intent`
+- `goal`
+- `confidence`
+- `uncertainty`
+- `candidate_routes`
+- `risk_level`
+- `needs_clarification`
+- `reasoning_summary`
+
+Optional:
+
+- `followup_reference`
+- `location_relevance`
+- `freshness_requirement`
+- `artifact_need`
+- `delivery_need`
+- `state_invalidation_signal`
+
+#### Arbitration-Zustaende
+
+- `aligned`
+  - beide sehen dieselbe Richtung
+- `soft_conflict`
+  - aehnliche Bedeutung, aber unterschiedliche Konservativitaet
+- `hard_conflict`
+  - unterschiedliche Bedeutungslesarten
+- `insufficient_signal`
+  - beide unsicher
+
+#### Entscheidungslogik
+
+- `aligned` -> Fast-Path
+- `soft_conflict` -> konservativere Route
+- `hard_conflict` -> Rueckfrage oder Meta-konservativer Pfad
+- `insufficient_signal` -> Rueckfrage statt Blindrouting
+
+#### Guardrails
+
+- max. 2 Buddy-Runden
+- Fast-Path nur bei hoher Konfidenz + niedrigem Risiko
+- bei Unsicherheit kein `empty_decision`, sondern strukturierte Vorhypothese
+- bei Risiko nie blind am Dispatcher vorbeilaufen
+
+#### Erfolgskriterium
+
+- weniger `dispatcher_meta_fallback: empty_decision`
+- weniger Meta-Rettung fuer triviale Frontdoor-Faelle
+- bessere Umgangssprache
+- bessere Follow-up-Verarbeitung
+- weniger Nutzerkorrekturen wie `du verstehst mich nicht`
+
+## Startplan ab 2026-04-01 - erste Ausbauwelle in 3 Phasen
+
+### Phase A - Dispatcher Semantic Upgrade
+
+Ziel:
+- Umgangssprache, kurze Anschlussfragen und implizite Referenzen an der Frontdoor deutlich besser verstehen
+
+Umfang:
+- Dispatcher-Prompt und Output-Schema fuer colloquial/follow-up/meta-dialogische Anfragen erweitern
+- `empty_decision` durch strukturiertere Unsicherheitsausgabe ersetzen
+- bessere Follow-up-Aufloesung fuer kurze Anschlussfragen wie:
+  - `kannst du sie reparieren`
+  - `uebernehme Empfehlung 2`
+  - `was machst du da das ist doch falsch`
+
+Erfolg:
+- deutlich weniger `dispatcher_meta_fallback: empty_decision`
+
+### Phase B - Meta Root-Cause und Semantik nachschaerfen
+
+Ziel:
+- Meta soll Diagnosen sauberer priorisieren und in echte primaere Fix-Aufgaben uebersetzen
+
+Umfang:
+- `M2`/`M2.1` weiter schaerfen
+- Ursachenzeilen aus `Ursache:` und `suspected_root_cause` haerter priorisieren
+- Pfadtragende Claims vor allgemeinen Diagnosezeilen bevorzugen
+- erstes echtes `primary_fix_task_emitted` erreichen
+- semantische Fehlklassifikationen wie Business-/Strategiefragen vs. lokale Suche spaeter ueber eine fruehe Meaning-Layer reduzieren
+
+Erfolg:
+- weniger `verification needed` aus rein extraktiven Gruenden
+- mindestens erste stabile primaere Fix-Tasks ohne Nutzer-Nachschleife
+
+#### Bestaetigte Semantik-Fehlfaelle fuer Phase B
+
+- `ich moechte ein cafe eroeffnen welches land ist am besten geeignet`
+  - soll als Strategie-/Businessfrage verstanden werden
+  - wurde in der Session mehrfach zu stark Richtung lokaler Suche gezogen
+- `soll ich kaffee oder tee trinken was meinst du und was und wie koenntest du mich reich machen`
+  - lief am **01.04.2026 20:48 CEST** direkt auf `meta`
+  - wurde dort als `simple_live_lookup` / `general_lookup|live|light|answer|none|loc=0|deliver=0` behandelt
+  - Ergebnis war eine stale Standortantwort statt einer kombinierten Praeferenz-/Lebensstrategie-Antwort
+  - Beleg:
+    - [2026-04-01_task_bc313161.jsonl](/home/fatih-ubuntu/dev/timus/logs/2026-04-01_task_bc313161.jsonl)
+    - [autonomy_observation.jsonl](/home/fatih-ubuntu/dev/timus/logs/autonomy_observation.jsonl)
+- `ich habe meinen handy standort aktualisiert du musst das registrieren`
+  - ist kein normaler Maps-Follow-up, sondern ein `user_reported_state_update`
+  - Meta braucht dafuer spaeter explizite State-Invalidation/Revalidation
+
+### Phase C - Runtime-Haertung fuer MCP und Vision/OCR
+
+Ziel:
+- sichtbare Laufzeitprobleme reduzieren, die Timus fuer Nutzer wie Telegram, Canvas oder Live-Recherche unzuverlaessig wirken lassen
+
+Umfang:
+- `mcp_health`-Timeout-/Self-Healing-Pfad pruefen und haengen gebliebene Playbooks abbauen
+- Vision/OCR-Hot-Path haerten
+- Florence-2-/PaddleOCR-Mischpfad und Speicher-/Device-Lifecycle spaeter konsolidieren
+- Antwortpfade beobachten, wenn Timus in Telegram denkt, aber nicht zurueckantwortet
+
+Erfolg:
+- weniger Health-Timeouts
+- weniger haengende Recovery-/Self-Healing-Aufgaben
+- stabilerer Antwortpfad bei laengeren oder schwereren Laeufen
+
+## Noch fehlende Faelle / Daten fuer die zweite Welle
+
+### 1. Buddy-Konfliktfaelle
+
+Wir brauchen mehr reale Faelle, in denen Dispatcher und Meta dieselbe Anfrage unterschiedlich lesen wuerden:
+- Umgangssprache
+- Follow-ups
+- implizite Referenzen
+- Nutzerkorrekturen
+- Meta-Kommunikation
+
+Nutzen:
+- Buddy-Loop spaeter auf echte Konfliktmuster statt nur Theorie zuschneiden
+
+### 2. Mehr technische Incident-Faelle fuer Meta M2
+
+Wir haben bisher erst sehr wenige echte Faelle, in denen:
+- `lead_diagnosis_selected`
+- `developer_task_compiled`
+- `root_cause_gate_blocked`
+oder spaeter
+- `primary_fix_task_emitted`
+
+sichtbar wurden.
+
+Nutzen:
+- Root-Cause-First-Tasking stabilisieren
+
+### 3. Reale Self-Hardening-Pfade
+
+Es fehlen noch echte Self-Hardening-/Self-Modify-Faelle fuer:
+- `dispatcher empty_decision`
+- `mcp_health`-Timeouts
+- Vision/OCR-/Browser-Folgen
+- stale state / Nutzerkorrekturen
+
+Nutzen:
+- Self-Hardening auf reale Live-Probleme statt auf zu enge Alt-Patterns anschliessen
+
+### 4. Bessere Korrelation fuer Telegram-/Antwortausfaelle
+
+Wir sehen bereits:
+- `mcp_health`-Timeouts
+- ausbleibende Antworten
+- Self-Healing-Playbooks in der Queue
+
+Es fehlen aber noch mehr klare Korrelationen zwischen:
+- eingehender Anfrage
+- laufenden Agenten/Tools
+- Queue-/Health-Zustand
+- ausbleibender Telegram-Antwort
+
+Nutzen:
+- Antwortpfad und Runtime-Blockaden spaeter gezielt haerten
+
+### 5. Vision/OCR-Lastbild unter echter Nutzung
+
+Es fehlen noch mehr belastbare Live-Faelle fuer:
+- parallele Browser-/Vision-/OCR-Laeufe
+- RAM-/VRAM-Spitzen
+- CPU-/GPU-Fallbacks
+- OOM-Vorlaeufer
+
+Nutzen:
+- Vision/OCR-Haertung spaeter nicht nur reaktiv, sondern systematisch angehen
+
+## Fortschritt 2026-04-01 - Phase A gestartet
+
+Phase A (Dispatcher Semantic Upgrade) ist im ersten konservativen Block umgesetzt.
+
+- `main_dispatcher.py` priorisiert bei Follow-up-Kapseln jetzt semantisch `# CURRENT USER QUERY`
+- kurze referenzielle Anschlussfragen wie `dann uebernimm die Empfehlung 2`, `koenntest du damit arbeiten`, `kannst du sie reparieren` werden konservativ frueh als `meta` erkannt statt spaeter in `empty_decision` zu kippen
+- umgangssprachliche Selbststatus-/Selbstbild-Fragen wie `ok was stoert dich wie kann ich dir helfen`, `bist du anpassungsfaehig`, `bist du ein funktionierendes ki system` werden frueh als `executor` erkannt
+- Nutzerkorrektur-/Beschwerdephaenomene wie `anscheinend verstehst du mich nicht` oder `was machst du da das ist doch falsch` werden frueh als `meta` behandelt
+- ein enger Guard verhindert, dass harmlose Kurzfragen wie `soll ich kaffee oder tee trinken` durch die neue Frontdoor vorschnell auf `meta` gehoben werden
+
+Absicherung:
+- Dispatcher-Tests fuer die beobachteten Umgangssprache-Faelle erweitert
+- neue Contract-/Hypothesis-Datei fuer Dispatcher-Semantik
+- Lean `CiSpecs.lean` um zwei kleine Dispatcher-Invarianten erweitert
+
+## Fortschritt 2026-04-01 - Phase B Vorbereitung gestartet
+
+Phase B laeuft jetzt als konservative Advisory-Vorbereitung an, noch ohne harte Rezept-Umbauten.
+
+- `classify_meta_task(...)` markiert ab jetzt beobachtete semantische Konfliktmuster nur advisory:
+  - `mixed_personal_preference_and_wealth_strategy`
+  - `business_strategy_vs_local_lookup`
+  - `user_reported_location_state_update`
+- diese Marker aendern das Routing heute noch nicht hart, geben uns aber ab sofort sauberere Signale fuer:
+  - spaetere Meaning-Layer vor der Rezeptwahl
+  - State-Correction-Handling
+  - besseres Mischen/Trennen von Lebenshilfe-, Strategie- und Lookup-Fragen
+- neue Meta-Orchestration-Tests decken die bestaetigten Live-Faelle jetzt explizit ab
+
+## Fortschritt 2026-04-01 - Phase B erster echter Schnitt
+
+Der erste konservative Phase-B-Schnitt ist jetzt im Meta-Classifier drin.
+
+- bestaetigte Semantik-Konfliktfaelle werden nicht mehr in bekannte Live-Lookup-Rezepte gezwungen
+- stattdessen faellt Meta fuer diese Faelle bewusst auf einen rezeptlosen `single_lane` / `meta`-Dialogpfad zurueck
+- konkret gilt das jetzt fuer:
+  - `mixed_personal_preference_and_wealth_strategy`
+  - `business_strategy_vs_local_lookup`
+  - `user_reported_location_state_update`
+- damit werden genau die beobachteten Fehlmuster konservativ unterbrochen:
+  - `ich moechte ein cafe eroeffnen welches land ist am besten geeignet`
+  - `soll ich kaffee oder tee trinken ... wie koenntest du mich reich machen`
+  - `ich habe meinen handy standort aktualisiert du musst das registrieren`
+
+Wichtig:
+- das ist noch keine vollwertige Meaning-Layer
+- aber es stoppt erste klar belegte Fehlpfade, bevor Meta sie wieder in `simple_live_lookup` oder lokale Rezeptpfade zwingt
+
+## Spaetere Phase D - Assistive Action Workflows mit Approval Gate
+
+Der Fall `reserviere mir ein hotel in portugal lissabon` zeigt eine eigene, spaetere Ausbauphase:
+
+- Ziel ist nicht nur Suche oder Vergleich
+- Ziel ist assistierte Handlung bis kurz vor den finalen Commit
+- Timus soll aktiv mitdenken, vorbereiten und den Nutzer erst bei sensiblen/bindenden Schritten einbinden
+
+### Zielbild
+
+- Meta versteht `buche`, `reserviere`, `bestelle`, `beantrage`, `melde an` als assistierte Aktions-Workflows
+- Visual-/Operator-Agent arbeitet aktiv bis kurz vor:
+  - Zahlung
+  - finalem Submit
+  - rechtlich/finanziell bindendem Schritt
+- Timus uebergibt dann sauber:
+  - `Ich habe alles vorbereitet`
+  - `Bitte hier Daten eingeben / Zahlung bestaetigen`
+
+### Bausteine
+
+1. Action Intent Understanding
+- nicht nur `finden`
+- sondern `vorbereiten und fast abschliessen`
+
+2. Operator Readiness
+- robustere UI-/Screen-Erkennung
+- praezisere Navigation
+- bessere Formularrobustheit
+
+3. Approval Gate
+- harter Stop vor Zahlung / finalem Commit
+
+4. Preference Memory
+- Budgets, Praeferenzen, wiederkehrende Nutzerwuensche merken
+
+5. Session Persistence
+- abgebrochene Flows spaeter wieder aufnehmen koennen
+
+### Erfolgskriterium
+
+- Timus schickt nicht nur einen Link
+- sondern arbeitet aktiv bis zum letzten sicheren Schritt
+- und zeigt damit echtes assistives Mitdenken statt nur Such-/Antwortlogik

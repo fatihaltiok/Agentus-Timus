@@ -97,6 +97,48 @@ def test_classify_meta_task_routes_local_action_plus_place_queries_to_meta_execu
     assert result["recommended_agent_chain"] == ["meta", "executor"]
 
 
+def test_classify_meta_task_marks_mixed_preference_and_wealth_prompt_for_semantic_review():
+    result = classify_meta_task(
+        "soll ich kaffee oder tee trinken was meinst du und was und wie koenntest du mich reich machen",
+        action_count=0,
+    )
+
+    assert result["semantic_review_recommended"] is True
+    assert "mixed_personal_preference_and_wealth_strategy" in result["semantic_ambiguity_hints"]
+    assert result["task_type"] == "single_lane"
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["recommended_recipe_id"] is None
+    assert result["reason"] == "semantic_multi_intent_dialogue_review"
+
+
+def test_classify_meta_task_marks_business_strategy_cafe_prompt_for_semantic_review():
+    result = classify_meta_task(
+        "ich moechte ein cafe eroeffnen welches land ist am besten geeignet",
+        action_count=0,
+    )
+
+    assert result["semantic_review_recommended"] is True
+    assert "business_strategy_vs_local_lookup" in result["semantic_ambiguity_hints"]
+    assert result["task_type"] == "single_lane"
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["recommended_recipe_id"] is None
+    assert result["reason"] == "semantic_business_strategy_review"
+
+
+def test_classify_meta_task_marks_user_reported_location_update_for_semantic_review():
+    result = classify_meta_task(
+        "ich habe meinen handy standort aktualisiert du musst das registrieren",
+        action_count=0,
+    )
+
+    assert result["semantic_review_recommended"] is True
+    assert "user_reported_location_state_update" in result["semantic_ambiguity_hints"]
+    assert result["task_type"] == "single_lane"
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["recommended_recipe_id"] is None
+    assert result["reason"] == "semantic_state_update_review"
+
+
 def test_classify_meta_task_routes_simple_live_science_lookup_to_meta_executor():
     result = classify_meta_task(
         "Was gibt es Neues aus der Wissenschaft?",

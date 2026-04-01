@@ -642,6 +642,45 @@ _SYSTEM_HINTS = (
     "prozess",
 )
 
+_SEMANTIC_BUSINESS_STRATEGY_HINTS = (
+    "eroeffnen",
+    "eröffnen",
+    "gruenden",
+    "gründen",
+    "unternehmen",
+    "business",
+    "welches land",
+    "welches ist am besten geeignet",
+    "am besten geeignet",
+    "welches land ist am besten",
+)
+
+_SEMANTIC_WEALTH_HINTS = (
+    "reich",
+    "reich machen",
+    "geld verdienen",
+    "vermoegen",
+    "vermögen",
+    "finanziell frei",
+)
+
+_SEMANTIC_PERSONAL_PREFERENCE_HINTS = (
+    "kaffee",
+    "tee",
+    "trinken",
+    "was meinst du",
+)
+
+_SEMANTIC_LOCATION_STATE_UPDATE_HINTS = (
+    "standort aktualisiert",
+    "handy standort aktualisiert",
+    "du musst das registrieren",
+    "neu pruefen",
+    "neu prüfen",
+    "stimmt nicht mehr",
+    "aktualisiert",
+)
+
 
 def get_agent_capability_map() -> Dict[str, Dict[str, Any]]:
     return {agent: profile.to_dict() for agent, profile in _AGENT_PROFILES.items()}
@@ -1037,6 +1076,69 @@ def _site_kind(text: str) -> str | None:
     return None
 
 
+def _derive_semantic_review_payload(
+    text: str,
+    *,
+    has_simple_live_lookup: bool,
+    has_local_search: bool,
+) -> Dict[str, Any]:
+    hints: List[str] = []
+
+    if _has_any(text, _SEMANTIC_PERSONAL_PREFERENCE_HINTS) and _has_any(text, _SEMANTIC_WEALTH_HINTS):
+        hints.append("mixed_personal_preference_and_wealth_strategy")
+
+    if (
+        _has_any(text, _SEMANTIC_BUSINESS_STRATEGY_HINTS)
+        and any(token in text for token in ("cafe", "cafes", "cafés", "restaurant", "bar"))
+        and (has_local_search or has_simple_live_lookup)
+    ):
+        hints.append("business_strategy_vs_local_lookup")
+
+    if (
+        "standort" in text
+        and _has_any(text, _SEMANTIC_LOCATION_STATE_UPDATE_HINTS)
+    ):
+        hints.append("user_reported_location_state_update")
+
+    return {
+        "semantic_ambiguity_hints": hints,
+        "semantic_review_recommended": bool(hints),
+    }
+
+
+def _apply_semantic_review_override(
+    classification: Dict[str, Any],
+    semantic_review: Dict[str, Any],
+) -> Dict[str, Any]:
+    hints = [str(item or "").strip().lower() for item in semantic_review.get("semantic_ambiguity_hints") or [] if str(item or "").strip()]
+    if not hints:
+        return classification
+
+    override_reason = ""
+    if "user_reported_location_state_update" in hints:
+        override_reason = "semantic_state_update_review"
+    elif "business_strategy_vs_local_lookup" in hints:
+        override_reason = "semantic_business_strategy_review"
+    elif "mixed_personal_preference_and_wealth_strategy" in hints:
+        override_reason = "semantic_multi_intent_dialogue_review"
+    if not override_reason:
+        return classification
+
+    return {
+        **classification,
+        "task_type": "single_lane",
+        "required_capabilities": ["workflow_orchestration"],
+        "recommended_entry_agent": "meta",
+        "recommended_agent_chain": ["meta"],
+        "needs_structured_handoff": False,
+        "reason": override_reason,
+        "recommended_recipe_id": None,
+        "recipe_stages": [],
+        "recipe_recoveries": [],
+        "alternative_recipes": [],
+    }
+
+
 def extract_effective_meta_query(query: str) -> str:
     """Bewertet bei Follow-up-Kapseln nur die eigentliche Nutzerfrage.
 
@@ -1230,6 +1332,11 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
 
     recipe = resolve_orchestration_recipe(task_type, site_kind)
     alternatives = resolve_orchestration_alternative_recipes(task_type, site_kind)
+    semantic_review = _derive_semantic_review_payload(
+        normalized,
+        has_simple_live_lookup=has_simple_live_lookup,
+        has_local_search=has_local_search,
+    )
     classification = {
         "task_type": task_type,
         "site_kind": site_kind,
@@ -1243,6 +1350,8 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
         "recipe_recoveries": [] if not recipe else recipe.get("recipe_recoveries", []),
         "alternative_recipes": alternatives,
     }
+    classification = _apply_semantic_review_override(classification, semantic_review)
+    classification.update(semantic_review)
     goal_spec = derive_goal_spec(query, classification)
     capability_graph = build_capability_graph(
         goal_spec,
