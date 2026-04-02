@@ -186,6 +186,33 @@ class BaseAgent(DynamicToolMixin):
     """Basisklasse fuer alle Agenten mit Multi-Provider Support und DynamicToolMixin."""
 
     @staticmethod
+    def _resolve_env_float(name: str, default: float) -> float:
+        raw = str(os.getenv(name, str(default))).strip()
+        try:
+            return float(raw)
+        except ValueError:
+            return float(default)
+
+    @classmethod
+    def _resolve_tool_http_timeout(cls, method: str, params: dict) -> float:
+        base_timeout = cls._resolve_env_float("MCP_TOOL_HTTP_TIMEOUT", 300.0)
+        research_timeout = cls._resolve_env_float("RESEARCH_TIMEOUT", 600.0)
+        research_buffer = max(
+            0.0,
+            cls._resolve_env_float("MCP_RESEARCH_HTTP_TIMEOUT_BUFFER_SECONDS", 30.0),
+        )
+
+        if method in {"start_deep_research", "generate_research_report"}:
+            return max(base_timeout, research_timeout + research_buffer)
+
+        if method == "delegate_to_agent":
+            target_agent = str((params or {}).get("agent_type") or "").strip().lower()
+            if target_agent == "research":
+                return max(base_timeout, research_timeout + research_buffer)
+
+        return base_timeout
+
+    @staticmethod
     def _resolve_model_without_validation(agent_type: str) -> Tuple[str, ModelProvider]:
         if agent_type in AgentModelConfig.AGENT_CONFIGS:
             model_env, provider_env, fallback_model, fallback_provider = AgentModelConfig.AGENT_CONFIGS[agent_type]
@@ -463,6 +490,21 @@ class BaseAgent(DynamicToolMixin):
         r")",
         re.IGNORECASE,
     )
+    _PARSE_ERROR_PROGRESS_PATTERNS = re.compile(
+        r"^\s*(?:"
+        r"ich\s+(?:recherch|pr[üu]f|analys|suche|schaue|lese|hole|arbeite|versuche|denke)"
+        r"|einen\s+moment"
+        r"|warte\s+kurz"
+        r"|ich\s+bin\s+dran"
+        r")",
+        re.IGNORECASE,
+    )
+    _PARSE_ERROR_FORMAT_ECHO_PATTERNS = re.compile(
+        r"(?:ausschlie(?:ss|ß)lich).*(?:format|final answer|tool aufrufen)"
+        r"|^\s*verstanden\.\s*ich\s+antworte\s+ab\s+jetzt"
+        r"|^\s*ich\s+antworte\s+ab\s+jetzt",
+        re.IGNORECASE | re.DOTALL,
+    )
 
     @classmethod
     def _looks_like_implicit_final_answer(cls, text: str) -> bool:
@@ -475,6 +517,29 @@ class BaseAgent(DynamicToolMixin):
         if "{" in text:
             return False  # JSON vorhanden → normaler Tool-Call-Versuch
         return bool(cls._COMPLETION_PATTERNS.search(text))
+
+    @classmethod
+    def _looks_like_salvageable_parse_error_answer(cls, text: str) -> bool:
+        """Erkennt laengere Nutzantworten, die trotz fehlendem Action-JSON schon final sind."""
+        normalized = str(text or "").strip()
+        if not normalized:
+            return False
+        if "{" in normalized or normalized.startswith("Action:") or "Final Answer:" in normalized:
+            return False
+        if cls._PARSE_ERROR_FORMAT_ECHO_PATTERNS.search(normalized):
+            return False
+        if cls._PARSE_ERROR_PROGRESS_PATTERNS.search(normalized):
+            return False
+        if cls._looks_like_implicit_final_answer(normalized):
+            return True
+        if len(normalized) < 120 and "\n" not in normalized:
+            return False
+        has_structure = bool(
+            "\n" in normalized
+            or normalized.count(". ") >= 2
+            or re.search(r"(?m)^\s*(?:[-*]|\d+\.)\s+", normalized)
+        )
+        return has_structure
 
     # ------------------------------------------------------------------
     # Loop-Detection
@@ -926,9 +991,11 @@ class BaseAgent(DynamicToolMixin):
         )
 
         try:
+            request_timeout = self._resolve_tool_http_timeout(method, params)
             resp = await self.http_client.post(
                 MCP_URL,
                 json={"jsonrpc": "2.0", "method": method, "params": params, "id": "1"},
+                timeout=request_timeout,
             )
             data = resp.json()
 
@@ -2341,6 +2408,28 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                     )
                     self._emit_step_trace(
                         action="implicit_final_answer",
+                        output_data={
+                            "step": step,
+                            "final_preview": self._preview_value(final_result, 800),
+                            "final_chars": len(final_result),
+                        },
+                        status="completed",
+                    )
+                    if roi_set:
+                        self._clear_roi()
+                    await self._run_reflection(task, final_result, success=True)
+                    return final_result
+
+                if (err or "").strip().lower() == "kein json gefunden" and self._looks_like_salvageable_parse_error_answer(reply):
+                    final_result = await self._finalize_list_output(task, reply.strip())
+                    self._emit_live_status(
+                        phase="final",
+                        detail=f"parse salvage ({len(final_result)} chars)",
+                        step=step,
+                        total_steps=self.max_iterations,
+                    )
+                    self._emit_step_trace(
+                        action="parse_error_salvaged_final_answer",
                         output_data={
                             "step": step,
                             "final_preview": self._preview_value(final_result, 800),

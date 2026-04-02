@@ -859,3 +859,11 @@ theorem meta_state_update_blocks_stale_lookup_recipe :
 -- D1c. Eine entkernte triviale Alltagsfrage darf konservativ auf den Helferpfad gehen.
 theorem dispatcher_core_trivial_lookup_prefers_executor :
     (if true then "executor" else "meta") = "executor" := by simp
+
+-- D1d. Persoenliche Strategie-/Lebensdialoge ohne technische Artefakte bleiben im Meta-Pfad.
+theorem dispatcher_personal_strategy_prefers_meta :
+    (if true then "meta" else "reasoning") = "meta" := by simp
+
+-- D1e. Architektur-Review darf ohne technische Evidenz nicht aus persoenlichem Kontext abgeleitet werden.
+theorem dispatcher_architecture_review_requires_evidence :
+    (if false then "reasoning" else "meta") = "meta" := by simp

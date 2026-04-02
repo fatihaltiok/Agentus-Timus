@@ -27,6 +27,18 @@ def dispatcher_core_query_contract(text: str) -> str:
     return main_dispatcher._extract_dispatcher_core_query(text)
 
 
+@deal.post(lambda r: isinstance(r, bool))
+def dispatcher_personal_strategy_contract(text: str) -> bool:
+    """Persoenliche Strategie-/Lebensdialoge werden total und boolesch erkannt."""
+    return main_dispatcher._looks_like_dispatcher_personal_strategy_dialogue(text)
+
+
+@deal.post(lambda r: isinstance(r, bool))
+def dispatcher_reasoning_guard_contract(text: str) -> bool:
+    """Der allgemeine Reasoning-Guard bleibt total und boolesch."""
+    return main_dispatcher._should_guard_dispatcher_reasoning_route(text)
+
+
 def test_contract_dispatcher_focus_query_prefers_current_user_query():
     text = """# FOLLOW-UP CONTEXT
 last_agent: research
@@ -45,6 +57,22 @@ def test_contract_dispatcher_core_query_strips_colloquial_shell():
     assert dispatcher_core_query_contract("was denkst du wird es morgen regnen") == "wird es morgen regnen"
 
 
+def test_contract_dispatcher_personal_strategy_detects_job_change_context():
+    text = (
+        "ich arbeite seit 2010 im job, will in eine neue richtung und "
+        "habe kein finanzielles polster"
+    )
+    assert dispatcher_personal_strategy_contract(text) is True
+
+
+def test_contract_dispatcher_reasoning_guard_blocks_architecture_without_technical_evidence():
+    text = (
+        "ich arbeite in meinem job schon lange, verstehe software architektur "
+        "und brauche finanziell eine neue richtung"
+    )
+    assert dispatcher_reasoning_guard_contract(text) is True
+
+
 @given(st.text(min_size=0, max_size=200))
 @settings(max_examples=150)
 def test_hypothesis_dispatcher_focus_query_always_returns_string(text: str):
@@ -61,6 +89,18 @@ def test_hypothesis_dispatcher_core_query_always_returns_string(text: str):
 @settings(max_examples=150)
 def test_hypothesis_dispatcher_reference_followup_always_returns_bool(text: str):
     assert isinstance(dispatcher_reference_followup_contract(text), bool)
+
+
+@given(st.text(min_size=0, max_size=200))
+@settings(max_examples=150)
+def test_hypothesis_dispatcher_personal_strategy_contract_returns_bool(text: str):
+    assert isinstance(dispatcher_personal_strategy_contract(text), bool)
+
+
+@given(st.text(min_size=0, max_size=200))
+@settings(max_examples=150)
+def test_hypothesis_dispatcher_reasoning_guard_contract_returns_bool(text: str):
+    assert isinstance(dispatcher_reasoning_guard_contract(text), bool)
 
 
 @given(st.text(min_size=0, max_size=80))

@@ -49,6 +49,24 @@ def test_quick_intent_keeps_colloquial_nontrivial_strategy_question_out_of_execu
     assert main_dispatcher.quick_intent_check("was meinst du wie koennte ich mein unternehmen skalieren") is None
 
 
+def test_quick_intent_routes_personal_strategy_dialogue_to_meta_instead_of_reasoning():
+    import main_dispatcher
+
+    query = (
+        "ich arbeite bei norma germany bin einrichter an montage automaten "
+        "und verstehe software architektur, will aber in 12 monaten raus "
+        "und habe kein finanzielles polster"
+    )
+    assert main_dispatcher.quick_intent_check(query) == "meta"
+
+
+def test_quick_intent_keeps_real_technical_architecture_review_on_reasoning():
+    import main_dispatcher
+
+    query = "Welche Software-Architektur passt fuer diese Python-API mit Postgres, Worker und zwei Services?"
+    assert main_dispatcher.quick_intent_check(query) == "reasoning"
+
+
 def test_quick_intent_routes_meta_feedback_and_reference_followups_to_meta():
     import main_dispatcher
 

@@ -1404,3 +1404,33 @@ Der Fall `reserviere mir ein hotel in portugal lissabon` zeigt eine eigene, spae
 - Timus schickt nicht nur einen Link
 - sondern arbeitet aktiv bis zum letzten sicheren Schritt
 - und zeigt damit echtes assistives Mitdenken statt nur Such-/Antwortlogik
+
+## Fortschritt 2026-04-02 - Frontdoor/Reasoning Guard + Parse-Recovery Hardening
+
+Die beobachteten Chat-Fehlfaelle vom 02.04.2026 haben drei konkrete Schutzmassnahmen ausgeloest:
+
+- Frontdoor-Guard fuer persoenliche Strategie-/Lebensdialoge:
+  - lange Ich-/Job-/Karriere-/Finanz-Kontexte gehen jetzt konservativ an `meta`
+  - sie sollen nicht mehr allein wegen Woertern wie `architektur` oder `design` in `reasoning` kippen
+- allgemeiner Evidenz-Guard fuer Architektur-/Review-Routen:
+  - `reasoning` darf eine Architektur-/Review-Lesart nur noch bevorzugen, wenn technische Artefakte/Evidenz vorhanden sind
+  - Beispiele fuer Evidenz: `code`, `datei`, `api`, `service`, `traceback`, `db`, `framework`
+- zusaetzlicher Schutz im `ReasoningAgent` selbst:
+  - falls ein persoenlicher Kontext trotzdem bei `reasoning` landet, wird `PROBLEM_TYP: Architektur-Review` ohne technische Evidenz unterdrueckt
+- Parse-Recovery im `BaseAgent` gehaertet:
+  - laengere, strukturierte Freitextantworten koennen bei `Kein JSON gefunden` jetzt als finale Antwort gerettet werden
+  - dadurch soll ein guter erster Reply nicht mehr vom strikten JSON-Reparaturprompt zerstoert werden
+
+Neue/erweiterte Tests:
+
+- Dispatcher-Routing fuer:
+  - persoenliche Strategie-/Jobwechsel-Kontexte
+  - echte technische Architektur-Reviews
+- Reasoning-Problemtyp-Guard
+- Parse-Error-Salvage fuer gute Advisory-Antworten
+
+Verifikation:
+
+- fokussierte Pytest-Suite gruen (`46 passed`, `2 deselected`)
+- Lean gruen
+- CrossHair auf dem Dispatcher-Contract bleibt wegen der schweren `main_dispatcher`-Imports weiterhin instabil/langsam und liefert hier keinen verlaesslichen Abschluss

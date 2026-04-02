@@ -1537,6 +1537,102 @@ _DISPATCHER_NONTRIVIAL_QUERY_HINTS = (
     "logs",
 )
 
+_DISPATCHER_PERSONAL_STRATEGY_HINTS = (
+    "ich muss",
+    "ich moechte",
+    "ich möchte",
+    "ich waere",
+    "ich wäre",
+    "ich arbeite",
+    "ich bin",
+    "ich kann",
+    "mein job",
+    "meine arbeit",
+    "mein beruf",
+    "karriere",
+    "jobwechsel",
+    "selbststaendig",
+    "selbstständig",
+    "selbständig",
+    "entwicklung",
+    "aufstieg",
+    "perspektive",
+    "richtung",
+    "finanziell",
+    "gehalt",
+    "kein polster",
+    "kein finanzielles polster",
+    "bewerbung",
+    "kuendigen",
+    "kündigen",
+    "mobil",
+)
+
+_DISPATCHER_PERSONAL_FIRST_PERSON_HINTS = (
+    "ich ",
+    "mein ",
+    "meine ",
+    "mir ",
+    "mich ",
+)
+
+_DISPATCHER_REASONING_REVIEW_HINTS = (
+    "architektur",
+    "architecture",
+    "design",
+    "refactor",
+    "struktur",
+    "pattern",
+    "abhängigkeit",
+    "abhaengigkeit",
+    "welche technologie",
+    "welches framework",
+    "best practice",
+    "design entscheidung",
+)
+
+_DISPATCHER_TECHNICAL_REVIEW_EVIDENCE_HINTS = (
+    "code",
+    "codebase",
+    "repository",
+    "repo",
+    "datei",
+    "file",
+    "pfad",
+    "modul",
+    "klasse",
+    "funktion",
+    "komponente",
+    "service",
+    "api",
+    "endpoint",
+    "traceback",
+    "exception",
+    "stacktrace",
+    "bug",
+    "fehler",
+    "crash",
+    "performance",
+    "latenz",
+    "memory",
+    "datenbank",
+    "database",
+    "db",
+    "schema",
+    "json",
+    "yaml",
+    "docker",
+    "kubernetes",
+    "framework",
+    "library",
+    "modell",
+    "provider",
+    "prompt",
+    "workflow",
+    "tool",
+    "system",
+)
+
 
 def _structure_task(task: str, url: str) -> List[str]:
     """Legacy wrapper fuer den extrahierten Browser-Workflow-Planer."""
@@ -1604,6 +1700,39 @@ def _looks_like_dispatcher_trivial_lookup(query: str) -> bool:
     return starts_like_question and has_lookup_hint
 
 
+def _has_dispatcher_technical_review_evidence(query: str) -> bool:
+    normalized = str(query or "").strip().lower()
+    if not normalized:
+        return False
+    if any(token in normalized for token in _DISPATCHER_TECHNICAL_REVIEW_EVIDENCE_HINTS):
+        return True
+    return bool(
+        re.search(r"\b[\w./-]+\.(?:py|js|ts|tsx|jsx|java|go|rs|json|ya?ml|toml|sql)\b", normalized)
+    )
+
+
+def _looks_like_dispatcher_personal_strategy_dialogue(query: str) -> bool:
+    normalized = str(query or "").strip().lower()
+    if not normalized:
+        return False
+    if _has_dispatcher_technical_review_evidence(normalized):
+        return False
+    has_first_person = any(token in normalized for token in _DISPATCHER_PERSONAL_FIRST_PERSON_HINTS)
+    hint_hits = sum(1 for token in _DISPATCHER_PERSONAL_STRATEGY_HINTS if token in normalized)
+    return has_first_person and hint_hits >= 2
+
+
+def _should_guard_dispatcher_reasoning_route(query: str) -> bool:
+    normalized = str(query or "").strip().lower()
+    if not normalized:
+        return False
+    if not any(token in normalized for token in _DISPATCHER_REASONING_REVIEW_HINTS):
+        return False
+    if _has_dispatcher_technical_review_evidence(normalized):
+        return False
+    return _looks_like_dispatcher_personal_strategy_dialogue(normalized)
+
+
 def _build_dispatcher_llm_query(query: str) -> str:
     original = _extract_dispatcher_focus_query(query)
     core = _extract_dispatcher_core_query(query)
@@ -1651,6 +1780,8 @@ def quick_intent_check(query: str) -> Optional[str]:
         return "meta" if has_followup_capsule or len(focus_lower.split()) <= 8 else "meta"
     if _looks_like_dispatcher_trivial_lookup(core_lower):
         return "executor"
+    if _looks_like_dispatcher_personal_strategy_dialogue(analysis_query):
+        return "meta"
     if (
         analysis_query.startswith("soll ich ")
         and " oder " in analysis_query
@@ -1779,6 +1910,8 @@ def quick_intent_check(query: str) -> Optional[str]:
         return "research"  # Reine Recherche → direkt zum Research-Agent
 
     # REASONING (komplexe Analyse, Debugging, Architektur)
+    if _should_guard_dispatcher_reasoning_route(analysis_query):
+        return "meta"
     for keyword in REASONING_KEYWORDS:
         if keyword in focus_lower:
             return "reasoning"

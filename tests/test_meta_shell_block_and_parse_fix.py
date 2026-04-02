@@ -132,3 +132,25 @@ class TestImplicitFinalAnswer:
     def test_kurioser_json_substring(self):
         """Text mit { → nicht als Final Answer eingestuft."""
         assert self._check("Das Ergebnis {data} wurde gespeichert. ✅") is False
+
+
+class TestParseErrorSalvage:
+    """Längere, gute Freitextantworten sollen bei Parse-Errors erhalten bleiben."""
+
+    def test_salvage_accepts_long_structured_advisory_answer(self):
+        text = (
+            "Du hast gute Voraussetzungen fuer einen Wechsel.\n\n"
+            "1. Nutze deine Industrie-Erfahrung als Einstieg in Automatisierung.\n"
+            "2. Baue in den naechsten 12 Monaten ein kleines KI-Service-Angebot auf.\n"
+            "3. Halte die Fixkosten niedrig und teste zuerst mit kleinen Kunden."
+        )
+        assert BaseAgent._looks_like_salvageable_parse_error_answer(text) is True
+
+    def test_salvage_rejects_progress_update(self):
+        assert BaseAgent._looks_like_salvageable_parse_error_answer(
+            "Ich recherchiere jetzt die besten Optionen und melde mich gleich."
+        ) is False
+
+    def test_salvage_rejects_format_echo(self):
+        text = "Verstanden. Ich antworte ab jetzt ausschliesslich im geforderten Format."
+        assert BaseAgent._looks_like_salvageable_parse_error_answer(text) is False

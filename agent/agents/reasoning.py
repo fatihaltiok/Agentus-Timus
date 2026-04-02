@@ -28,10 +28,48 @@ _PROBLEM_PATTERNS: list[tuple[str, re.Pattern]] = [
     )),
 ]
 
+_TECHNICAL_REVIEW_EVIDENCE = re.compile(
+    r"\b("
+    r"code|codebase|repo|repository|datei|file|pfad|modul|klasse|funktion|komponente|service|api|"
+    r"endpoint|traceback|exception|stacktrace|bug|fehler|crash|performance|latenz|memory|"
+    r"datenbank|database|db|schema|json|yaml|docker|kubernetes|framework|library|modell|"
+    r"provider|prompt|workflow|tool|system"
+    r")\b",
+    re.I,
+)
+_PERSONAL_STRATEGY_CONTEXT = re.compile(
+    r"\b("
+    r"ich|mein|meine|mir|mich|job|arbeit|beruf|karriere|selbststaendig|selbstständig|"
+    r"selbständig|entwicklung|aufstieg|perspektive|richtung|finanziell|gehalt|bewerbung|"
+    r"polster|mobil|kündigen|kuendigen"
+    r")\b",
+    re.I,
+)
+
+
+def _should_guard_architecture_review(task: str) -> bool:
+    normalized = str(task or "").strip().lower()
+    if not normalized:
+        return False
+    has_architecture_hint = bool(
+        re.search(
+            r"\b(architektur|architecture|design|refactor|struktur|pattern|abh[äa]ngigkeit|welche technologie|welches framework|best practice)\b",
+            normalized,
+            re.I,
+        )
+    )
+    if not has_architecture_hint:
+        return False
+    if _TECHNICAL_REVIEW_EVIDENCE.search(normalized):
+        return False
+    return bool(_PERSONAL_STRATEGY_CONTEXT.search(normalized))
+
 
 def _detect_problem_type(task: str) -> str:
     for label, pattern in _PROBLEM_PATTERNS:
         if pattern.search(task):
+            if label == "Architektur-Review" and _should_guard_architecture_review(task):
+                continue
             return label
     return "Analyse"
 
