@@ -4,6 +4,7 @@ from orchestration.meta_orchestration import (
     build_meta_feedback_targets,
     classify_meta_task,
     extract_effective_meta_query,
+    extract_meta_context_anchor,
     get_agent_capability_map,
 )
 from agent.agents.meta import MetaAgent
@@ -317,6 +318,30 @@ def test_extract_effective_meta_query_prefers_current_user_query_from_followup_c
     assert extract_effective_meta_query(query) == "hey timus ist das chunking fertig"
 
 
+def test_extract_effective_meta_query_handles_single_line_serialized_followup_context():
+    query = (
+        "# FOLLOW-UP CONTEXT last_agent: meta session_id: canvas_nruf7dni "
+        "last_user: ich arbeite seit 2010 als industriemechaniker "
+        'last_assistant: Die meisten KI-Leute kennen Maschinen nur aus YouTube-Videos. '
+        "# CURRENT USER QUERY und wie kannst du mir dabei behilflich sein"
+    )
+
+    assert extract_effective_meta_query(query) == "und wie kannst du mir dabei behilflich sein"
+
+
+def test_extract_meta_context_anchor_prefers_last_user_from_followup_context():
+    query = (
+        "# FOLLOW-UP CONTEXT last_agent: meta session_id: canvas_nruf7dni "
+        "last_user: ich arbeite seit 2010 als industriemechaniker und will in die ki selbststaendigkeit "
+        "last_assistant: System stabil. "
+        "# CURRENT USER QUERY und wie kannst du mir dabei behilflich sein"
+    )
+
+    assert extract_meta_context_anchor(query) == (
+        "ich arbeite seit 2010 als industriemechaniker und will in die ki selbststaendigkeit"
+    )
+
+
 def test_classify_meta_task_does_not_route_chunking_followup_to_system_diagnosis():
     query = (
         "# FOLLOW-UP CONTEXT\n"
@@ -332,6 +357,38 @@ def test_classify_meta_task_does_not_route_chunking_followup_to_system_diagnosis
 
     assert result["task_type"] != "system_diagnosis"
     assert result["recommended_recipe_id"] != "system_diagnosis"
+
+
+def test_classify_meta_task_ignores_old_assistant_text_in_single_line_followup_capsule():
+    query = (
+        "# FOLLOW-UP CONTEXT last_agent: meta session_id: canvas_nruf7dni "
+        "last_user: ich arbeite seit 2010 als industriemechaniker "
+        "last_assistant: System stabil. Die meisten KI-Leute kennen Maschinen nur aus YouTube-Videos. "
+        "# CURRENT USER QUERY und wie kannst du mir dabei behilflich sein"
+    )
+
+    result = classify_meta_task(query, action_count=0)
+
+    assert result["site_kind"] is None
+    assert result["task_type"] != "system_diagnosis"
+    assert result["recommended_recipe_id"] != "system_diagnosis"
+
+
+def test_classify_meta_task_keeps_context_dependent_career_followup_on_meta():
+    query = (
+        "# FOLLOW-UP CONTEXT last_agent: meta session_id: canvas_nruf7dni "
+        "last_user: ich arbeite seit 2010 als industriemechaniker in der industrie und will mich in richtung ki selbststaendig machen "
+        "last_assistant: Die meisten KI-Leute kennen Maschinen nur aus YouTube-Videos. "
+        "# CURRENT USER QUERY und wie kannst du mir dabei behilflich sein"
+    )
+
+    result = classify_meta_task(query, action_count=0)
+
+    assert result["task_type"] == "single_lane"
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["context_anchor_applied"] is True
+    assert result["reason"] == "context_anchored_followup"
+    assert result["site_kind"] is None
 
 
 def test_classify_meta_task_keeps_real_system_question_inside_followup_context():

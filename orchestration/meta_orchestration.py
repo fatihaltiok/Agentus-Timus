@@ -681,6 +681,46 @@ _SEMANTIC_LOCATION_STATE_UPDATE_HINTS = (
     "aktualisiert",
 )
 
+_FOLLOWUP_CONTEXT_FIELD_NAMES = (
+    "last_agent",
+    "session_id",
+    "last_user",
+    "last_assistant",
+    "session_summary",
+    "recent_agents",
+    "recent_user_queries",
+    "recent_assistant_replies",
+    "topic_recall",
+    "inherited_topic_recall",
+    "semantic_recall",
+    "pending_followup_prompt",
+)
+
+_CONTEXT_ANCHORED_FOLLOWUP_HINTS = (
+    "wie kannst du mir dabei",
+    "wie kannst du mir damit",
+    "wie kannst du mir helfen",
+    "wie kannst du mir behilflich sein",
+    "wie wuerdest du mir helfen",
+    "wie würdest du mir helfen",
+    "womit sollte ich anfangen",
+    "was waere der erste schritt",
+    "was wäre der erste schritt",
+    "und was jetzt",
+    "mach weiter damit",
+    "weiter damit",
+)
+
+_CONTEXT_ANCHORED_REFERENCE_TOKENS = (
+    "dabei",
+    "damit",
+    "darauf",
+    "daran",
+    "diesem",
+    "dieser",
+    "diesen",
+)
+
 
 def get_agent_capability_map() -> Dict[str, Dict[str, Any]]:
     return {agent: profile.to_dict() for agent, profile in _AGENT_PROFILES.items()}
@@ -1139,6 +1179,24 @@ def _apply_semantic_review_override(
     }
 
 
+def _extract_meta_followup_field(raw: str, field_name: str) -> str:
+    source = str(raw or "")
+    key = str(field_name or "").strip()
+    if not source or not key:
+        return ""
+    other_fields = [name for name in _FOLLOWUP_CONTEXT_FIELD_NAMES if name != key]
+    boundary = "|".join(re.escape(name) for name in other_fields)
+    pattern = (
+        rf"(?:^|\n|\s){re.escape(key)}:\s*(.*?)"
+        rf"(?=(?:\n\s*(?:{boundary})\s*:)|(?:\s(?:{boundary})\s*:)|(?:\n?\s*#\s*CURRENT USER QUERY\b)|$)"
+    )
+    match = re.search(pattern, source, flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        return ""
+    value = str(match.group(1) or "").strip()
+    return re.sub(r"\s+", " ", value).strip()
+
+
 def extract_effective_meta_query(query: str) -> str:
     """Bewertet bei Follow-up-Kapseln nur die eigentliche Nutzerfrage.
 
@@ -1154,15 +1212,81 @@ def extract_effective_meta_query(query: str) -> str:
         return raw
 
     match = re.search(r"^\s*#\s*CURRENT USER QUERY\s*$", raw, flags=re.IGNORECASE | re.MULTILINE)
-    if not match:
+    if match:
+        extracted = raw[match.end() :].strip()
+        return extracted or raw
+
+    inline_match = re.search(r"#\s*CURRENT USER QUERY\b", raw, flags=re.IGNORECASE)
+    if not inline_match:
         return raw
 
-    extracted = raw[match.end() :].strip()
+    extracted = raw[inline_match.end() :].strip()
+    extracted = re.sub(r"^[\s:>\-]+", "", extracted).strip()
+    extracted = re.sub(r"\s+\Z", "", extracted).strip()
+    extracted = re.sub(r"['\"}]+\Z", "", extracted).strip()
     return extracted or raw
 
 
+def extract_meta_context_anchor(query: str) -> str:
+    raw = str(query or "").strip()
+    if not raw or "# current user query" not in raw.lower():
+        return ""
+
+    parts: List[str] = []
+    last_user = _extract_meta_followup_field(raw, "last_user")
+    if last_user:
+        parts.append(last_user)
+    else:
+        recent_users = _extract_meta_followup_field(raw, "recent_user_queries")
+        if recent_users:
+            recent_parts = [item.strip() for item in recent_users.split("||") if item.strip()]
+            if recent_parts:
+                parts.append(recent_parts[-1])
+
+    pending_followup_prompt = _extract_meta_followup_field(raw, "pending_followup_prompt")
+    if pending_followup_prompt:
+        parts.append(pending_followup_prompt)
+    elif not parts:
+        topic_recall = _extract_meta_followup_field(raw, "topic_recall")
+        if topic_recall:
+            parts.append(topic_recall)
+
+    deduped: List[str] = []
+    for item in parts:
+        cleaned = re.sub(r"\s+", " ", str(item or "")).strip()
+        if cleaned and cleaned not in deduped:
+            deduped.append(cleaned[:320])
+    return " | ".join(deduped[:2])
+
+
+def _should_apply_meta_context_anchor(current_query: str, context_anchor: str) -> bool:
+    text = str(current_query or "").strip().lower()
+    anchor = str(context_anchor or "").strip()
+    if not text or not anchor:
+        return False
+    if len(text.split()) > 18:
+        return False
+    if any(hint in text for hint in _CONTEXT_ANCHORED_FOLLOWUP_HINTS):
+        return True
+    has_reference_token = any(token in text for token in _CONTEXT_ANCHORED_REFERENCE_TOKENS)
+    asks_for_guidance = any(
+        token in text for token in ("wie ", "womit ", "was ", "kannst du ", "hilf", "helfen", "behilflich")
+    )
+    if has_reference_token and asks_for_guidance:
+        return True
+    if text.startswith("und ") and asks_for_guidance:
+        return True
+    return False
+
+
 def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
-    normalized = extract_effective_meta_query(query).lower()
+    effective_query = extract_effective_meta_query(query)
+    context_anchor = extract_meta_context_anchor(query)
+    context_anchor_applied = _should_apply_meta_context_anchor(effective_query, context_anchor)
+    normalized_source = effective_query
+    if context_anchor_applied:
+        normalized_source = f"{effective_query}\ncontext_anchor: {context_anchor}"
+    normalized = normalized_source.lower()
     site_kind = _site_kind(normalized)
     has_route_request = site_kind == "maps" and is_location_route_query(normalized)
     has_browser = _has_any(normalized, _BROWSER_HINTS)
@@ -1322,7 +1446,11 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
             reason = "delivery_request"
 
     if not recommended_chain:
-        recommended_chain = ["meta"] if ("und dann" in normalized or "danach" in normalized) else ["executor"]
+        if context_anchor_applied:
+            recommended_chain = ["meta"]
+            reason = "context_anchored_followup"
+        else:
+            recommended_chain = ["meta"] if ("und dann" in normalized or "danach" in normalized) else ["executor"]
 
     # Reihenfolge deduplizieren, ohne den Ablauf umzubauen.
     deduped_chain: List[str] = []
@@ -1349,6 +1477,9 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
         "recipe_stages": [] if not recipe else recipe["recipe_stages"],
         "recipe_recoveries": [] if not recipe else recipe.get("recipe_recoveries", []),
         "alternative_recipes": alternatives,
+        "effective_query": effective_query,
+        "context_anchor": context_anchor or None,
+        "context_anchor_applied": context_anchor_applied,
     }
     classification = _apply_semantic_review_override(classification, semantic_review)
     classification.update(semantic_review)

@@ -1434,3 +1434,67 @@ Verifikation:
 - fokussierte Pytest-Suite gruen (`46 passed`, `2 deselected`)
 - Lean gruen
 - CrossHair auf dem Dispatcher-Contract bleibt wegen der schweren `main_dispatcher`-Imports weiterhin instabil/langsam und liefert hier keinen verlaesslichen Abschluss
+
+## Fortschritt 2026-04-02 - Phase B Follow-up-Kapsel-Fix
+
+Ein weiterer echter Phase-B-Fehlfall aus dem Live-Chat ist jetzt abgesichert:
+
+- beobachteter Fehler:
+  - Follow-up wie `und wie kannst du mir dabei behilflich sein` wurde als `system_diagnosis` klassifiziert
+  - alter Antworttext aus der Follow-up-Kapsel (`System stabil`, `YouTube-Videos`) wurde mitklassifiziert
+- Ursache:
+  - `extract_effective_meta_query(...)` konnte nur echte Mehrzeilen-Kapseln sauber auspacken
+  - serialisierte / einzeilige Follow-up-Kapseln fielen auf den kompletten Rohtext zurueck
+- Fix:
+  - `extract_effective_meta_query(...)` versteht jetzt auch Ein-Zeilen-/serialisierte Kapseln
+  - bei `# CURRENT USER QUERY` wird der Text nach dem Marker jetzt auch ohne Zeilenumbruch extrahiert
+  - fuehrende Trenner und offensichtliche Serialisierungsreste werden abgeschnitten
+- Wirkung:
+  - alter Antworttext darf `site_kind`, `task_type` und Rezeptwahl nicht mehr aus der Bahn werfen
+  - der aktuelle Nutzer-Follow-up wird isoliert klassifiziert
+
+Tests:
+
+- Ein-Zeilen-Follow-up fuer `extract_effective_meta_query(...)`
+- Klassifikation mit altem `System stabil`-/`YouTube-Videos`-Text in derselben Kapsel
+
+Verifikation:
+
+- fokussierte Meta-Orchestration-Suite gruen (`31 passed`)
+- CrossHair auf `tests/test_meta_semantic_review_contracts.py` gruen
+
+## Fortschritt 2026-04-02 - Phase B Context Anchoring Layer (erster Schnitt)
+
+Der Follow-up-Kapsel-Fix allein reicht nicht fuer laengere Themenverlaeufe. Deshalb gibt es jetzt einen ersten Context-Anchoring-Schnitt in der Meta-Klassifikation:
+
+- neues Ziel:
+  - kurze Anschlussfragen wie `und wie kannst du mir dabei behilflich sein`
+  - sollen am aktiven Thema haengen bleiben
+  - ohne alten Assistant-Text wieder in `system_diagnosis`, `youtube` oder andere Spezialpfade zu kippen
+
+- Umsetzung:
+  - `extract_meta_context_anchor(...)` zieht einen sauberen Themenanker aus der Follow-up-Kapsel
+  - Prioritaet:
+    1. `last_user`
+    2. `recent_user_queries`
+    3. `pending_followup_prompt`
+    4. `topic_recall` (nur als Fallback)
+  - `last_assistant` wird bewusst NICHT als Anker genutzt, um Trigger-Leaks aus alten Antworten zu vermeiden
+  - `_should_apply_meta_context_anchor(...)` aktiviert den Anker nur bei kurzen, kontextabhaengigen Follow-ups
+    - z. B. `dabei`, `damit`, `wie kannst du mir helfen`, `womit sollte ich anfangen`, `und was jetzt`
+
+- Wirkung:
+  - Meta klassifiziert die aktuelle Nutzerfrage weiterhin primär ueber `# CURRENT USER QUERY`
+  - bei mehrdeutigen Kurz-Follow-ups wird zusaetzlich der letzte Nutzerkontext beruecksichtigt
+  - daraus faellt der Fall konservativ auf `single_lane` / `meta` statt auf `executor` oder ein falsches Spezialrezept
+
+Tests:
+
+- Themenanker aus serialisierten Follow-up-Kapseln
+- Karriere-/KI-Selbstaendigkeits-Follow-up bleibt auf `meta`
+- alter Assistant-Text mit `System stabil` oder `YouTube-Videos` darf nicht mehr die Route bestimmen
+
+Verifikation:
+
+- fokussierte Meta-Orchestration-Suite gruen (`33 passed`)
+- CrossHair auf `tests/test_meta_semantic_review_contracts.py` gruen
