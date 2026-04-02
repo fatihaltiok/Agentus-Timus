@@ -1498,3 +1498,56 @@ Verifikation:
 
 - fokussierte Meta-Orchestration-Suite gruen (`33 passed`)
 - CrossHair auf `tests/test_meta_semantic_review_contracts.py` gruen
+
+## Fortschritt 2026-04-02 - Phase B Active Topic State + komprimierte Follow-ups
+
+Der erste Context-Anchoring-Schnitt reicht fuer laengere Themen noch nicht aus. Deshalb wurde die Meta-Klassifikation jetzt um einen kleinen userseitigen Dialogzustand erweitert:
+
+- neues Ziel:
+  - aktive Themen ueber mehrere Turns stabil halten
+  - `open_goal` und einfache Nutzer-Constraints wiederverwenden
+  - knappe Advisory-Follow-ups wie `KI-Consulting, KI-Tools 2 stunden budget 0` nicht mehr als inhaltsleeren Rest behandeln
+
+- Umsetzung:
+  - `extract_meta_dialog_state(...)` extrahiert jetzt:
+    - `active_topic`
+    - `open_goal`
+    - `constraints`
+    - `next_step`
+    - `compressed_followup_parsed`
+    - `active_topic_reused`
+  - Themenquellen bleiben bewusst userseitig:
+    - `context_anchor`
+    - `last_user`
+    - `recent_user_queries`
+    - `pending_followup_prompt`
+    - nur spaet als Fallback `topic_recall` / `session_summary`
+  - alte Assistant-Texte werden weiterhin NICHT als Themenanker verwendet
+  - kompakte Advisory-Eingaben mit Zeit-/Budget-Slots werden jetzt konservativ erkannt
+    - z. B. `2 stunden`
+    - `budget 0`
+    - `kein finanzielles polster`
+    - `ohne team`
+  - wenn so ein komprimierter Advisory-Follow-up erkannt wird, faellt Meta konservativ auf `single_lane` / `meta` statt auf den generischen Executor-Default
+
+- Wirkung:
+  - Phase B haelt nicht nur den letzten Query-String sauber, sondern merkt sich jetzt auch einen kleinen aktiven Nutzerkontext
+  - knappe Planungs-/Beratungs-Follow-ups koennen mit Themenanker + Constraints weiterlaufen
+  - Brasilien-/Karriere-/KI-Selbstaendigkeits-Faelle bleiben stabiler auf dem eigentlichen Thema
+  - Spezialpfade wie `system_diagnosis`, `location_local_search` oder `simple_live_lookup` werden jetzt wieder staerker an die AKTUELLE Nutzerfrage gebunden
+  - ein alter Themenanker darf diese Spezialrouten nicht mehr allein ausloesen
+
+Neue Tests:
+
+- Dialog-State-Extraktion fuer Karriere-/KI-Selbstaendigkeits-Follow-up mit `2 stunden` + `budget 0`
+- komprimierter Advisory-Follow-up `KI-Consulting, KI-Tools 2 stunden budget 0`
+- Brasilien-/KI-Follow-up mit wiederverwendetem Aktivthema
+- Orts-/Maps-Anker darf eine allgemeine Anschlussfrage nicht wieder in `location_local_search` ziehen
+- neue Contract-Datei fuer `extract_meta_dialog_state(...)`
+
+Verifikation:
+
+- `python -m py_compile` gruen
+- fokussierte Pytest-Suite gruen (`36 passed`)
+- Lean gruen
+- CrossHair auf `tests/test_meta_dialog_state_contracts.py` bleibt hier aktuell haengen und wird deshalb NICHT als falsches Gruen gewertet

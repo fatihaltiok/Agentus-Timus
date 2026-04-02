@@ -721,6 +721,49 @@ _CONTEXT_ANCHORED_REFERENCE_TOKENS = (
     "diesen",
 )
 
+_META_CONSTRAINT_BUDGET_ZERO_HINTS = (
+    "budget 0",
+    "0 euro",
+    "0 eur",
+    "0€",
+    "kein budget",
+    "ohne budget",
+    "kein finanzielles polster",
+)
+
+_META_CONSTRAINT_MOBILITY_HINTS = (
+    "mobil",
+    "ortsunabhaengig",
+    "ortsunabhängig",
+)
+
+_META_CONSTRAINT_SOLO_HINTS = (
+    "ohne team",
+    "ganz allein",
+    "allein",
+    "solo",
+)
+
+_META_COMPRESSED_FOLLOWUP_HINTS = (
+    "budget",
+    "stunden",
+    "stunde",
+    "tage",
+    "tag",
+    "wochen",
+    "woche",
+    "monate",
+    "monat",
+    "ki-consulting",
+    "ki consulting",
+    "ki-tools",
+    "ki tools",
+    "selbststaendig",
+    "selbständig",
+    "beratung",
+    "brasilien",
+)
+
 
 def get_agent_capability_map() -> Dict[str, Dict[str, Any]]:
     return {agent: profile.to_dict() for agent, profile in _AGENT_PROFILES.items()}
@@ -1197,6 +1240,80 @@ def _extract_meta_followup_field(raw: str, field_name: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
+def _clean_meta_state_fragment(text: str, *, max_chars: int = 320) -> str:
+    cleaned = re.sub(r"\s+", " ", str(text or "")).strip().strip("'\"")
+    return cleaned[:max_chars]
+
+
+def _dedupe_meta_state_fragments(items: Iterable[str], *, limit: int = 3, max_chars: int = 320) -> List[str]:
+    deduped: List[str] = []
+    for item in items:
+        cleaned = _clean_meta_state_fragment(item, max_chars=max_chars)
+        if cleaned and cleaned not in deduped:
+            deduped.append(cleaned)
+        if len(deduped) >= limit:
+            break
+    return deduped
+
+
+def _extract_meta_constraints_from_text(raw: str) -> List[str]:
+    text = _clean_meta_state_fragment(raw, max_chars=400)
+    normalized = text.lower()
+    constraints: List[str] = []
+
+    for match in re.finditer(r"\b(\d+)\s*(stunden?|tage?|wochen?|monate?|jahre?)\b", normalized):
+        constraints.append(match.group(0))
+
+    if any(hint in normalized for hint in _META_CONSTRAINT_BUDGET_ZERO_HINTS):
+        if "kein finanzielles polster" in normalized:
+            constraints.append("kein finanzielles polster")
+        elif "kein budget" in normalized or "ohne budget" in normalized:
+            constraints.append("kein budget")
+        else:
+            constraints.append("budget 0")
+
+    if any(hint in normalized for hint in _META_CONSTRAINT_MOBILITY_HINTS):
+        constraints.append("mobil")
+
+    if any(hint in normalized for hint in _META_CONSTRAINT_SOLO_HINTS):
+        constraints.append("ohne team")
+
+    return _dedupe_meta_state_fragments(constraints, limit=6, max_chars=80)
+
+
+def _extract_meta_interest_fragments(raw: str) -> List[str]:
+    source = _clean_meta_state_fragment(raw, max_chars=400)
+    if not source:
+        return []
+    parts = re.split(r"[,;/|]", source)
+    filtered: List[str] = []
+    for part in parts:
+        cleaned = _clean_meta_state_fragment(part, max_chars=120)
+        if not cleaned:
+            continue
+        if _extract_meta_constraints_from_text(cleaned):
+            continue
+        if re.fullmatch(r"[\d\s€$.,:=-]+", cleaned):
+            continue
+        filtered.append(cleaned)
+    return _dedupe_meta_state_fragments(filtered, limit=3, max_chars=120)
+
+
+def _looks_like_compressed_meta_followup(text: str) -> bool:
+    cleaned = _clean_meta_state_fragment(text, max_chars=240)
+    lowered = cleaned.lower()
+    if not cleaned:
+        return False
+    if len(cleaned.split()) > 16:
+        return False
+    if any(token in lowered for token in ("http://", "https://", "www.", "booking.com", "youtube")):
+        return False
+    has_compact_separator = any(sep in cleaned for sep in (",", ";", "/", "|"))
+    has_constraint = bool(_extract_meta_constraints_from_text(cleaned))
+    has_hint = any(hint in lowered for hint in _META_COMPRESSED_FOLLOWUP_HINTS)
+    return (has_compact_separator or has_constraint) and has_hint
+
+
 def extract_effective_meta_query(query: str) -> str:
     """Bewertet bei Follow-up-Kapseln nur die eigentliche Nutzerfrage.
 
@@ -1253,10 +1370,101 @@ def extract_meta_context_anchor(query: str) -> str:
 
     deduped: List[str] = []
     for item in parts:
-        cleaned = re.sub(r"\s+", " ", str(item or "")).strip()
+        cleaned = _clean_meta_state_fragment(item)
         if cleaned and cleaned not in deduped:
-            deduped.append(cleaned[:320])
+            deduped.append(cleaned)
     return " | ".join(deduped[:2])
+
+
+def extract_meta_dialog_state(query: str) -> Dict[str, Any]:
+    raw = str(query or "").strip()
+    effective_query = extract_effective_meta_query(raw)
+    context_anchor = extract_meta_context_anchor(raw)
+    last_user = _extract_meta_followup_field(raw, "last_user")
+    pending_followup_prompt = _extract_meta_followup_field(raw, "pending_followup_prompt")
+    topic_recall = _extract_meta_followup_field(raw, "topic_recall")
+    session_summary = _extract_meta_followup_field(raw, "session_summary")
+    recent_users_raw = _extract_meta_followup_field(raw, "recent_user_queries")
+    recent_users = [item.strip() for item in recent_users_raw.split("||") if item.strip()]
+
+    compressed_followup_parsed = _looks_like_compressed_meta_followup(effective_query)
+    active_topic_candidates: List[str] = []
+    open_goal_candidates: List[str] = []
+
+    if context_anchor:
+        active_topic_candidates.append(context_anchor)
+    elif last_user:
+        active_topic_candidates.append(last_user)
+    elif recent_users:
+        active_topic_candidates.append(recent_users[-1])
+
+    if not active_topic_candidates and compressed_followup_parsed:
+        interest_fragments = _extract_meta_interest_fragments(effective_query)
+        if interest_fragments:
+            active_topic_candidates.extend(interest_fragments[:2])
+        else:
+            active_topic_candidates.append(effective_query)
+
+    if not active_topic_candidates and topic_recall:
+        active_topic_candidates.append(topic_recall)
+    if not active_topic_candidates and session_summary:
+        active_topic_candidates.append(session_summary)
+
+    if pending_followup_prompt:
+        open_goal_candidates.append(pending_followup_prompt)
+    if last_user:
+        open_goal_candidates.append(last_user)
+    elif recent_users:
+        open_goal_candidates.append(recent_users[-1])
+
+    if compressed_followup_parsed:
+        open_goal_candidates.append(effective_query)
+
+    active_topic_parts = _dedupe_meta_state_fragments(active_topic_candidates, limit=2, max_chars=220)
+    active_topic = " | ".join(active_topic_parts)
+    open_goal_parts = _dedupe_meta_state_fragments(open_goal_candidates, limit=2, max_chars=220)
+    open_goal = " | ".join(open_goal_parts)
+
+    constraints = _dedupe_meta_state_fragments(
+        [
+            *(_extract_meta_constraints_from_text(effective_query)),
+            *(_extract_meta_constraints_from_text(last_user)),
+            *(_extract_meta_constraints_from_text(pending_followup_prompt)),
+            *(_extract_meta_constraints_from_text(context_anchor)),
+        ],
+        limit=6,
+        max_chars=80,
+    )
+
+    next_step = ""
+    lowered_query = effective_query.lower()
+    if any(
+        token in lowered_query
+        for token in (
+            "wie kannst du mir",
+            "wie wuerdest du mir",
+            "wie würdest du mir",
+            "womit sollte ich anfangen",
+            "was waere der erste schritt",
+            "was wäre der erste schritt",
+            "und was jetzt",
+            "naechster schritt",
+            "nächster schritt",
+        )
+    ):
+        next_step = _clean_meta_state_fragment(effective_query, max_chars=180)
+    elif pending_followup_prompt:
+        next_step = _clean_meta_state_fragment(pending_followup_prompt, max_chars=180)
+
+    active_topic_reused = bool(active_topic and (context_anchor or compressed_followup_parsed))
+    return {
+        "active_topic": active_topic or None,
+        "open_goal": open_goal or None,
+        "constraints": constraints,
+        "next_step": next_step or None,
+        "compressed_followup_parsed": compressed_followup_parsed,
+        "active_topic_reused": active_topic_reused,
+    }
 
 
 def _should_apply_meta_context_anchor(current_query: str, context_anchor: str) -> bool:
@@ -1282,30 +1490,43 @@ def _should_apply_meta_context_anchor(current_query: str, context_anchor: str) -
 def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
     effective_query = extract_effective_meta_query(query)
     context_anchor = extract_meta_context_anchor(query)
+    dialog_state = extract_meta_dialog_state(query)
+    active_topic = str(dialog_state.get("active_topic") or "").strip()
+    open_goal = str(dialog_state.get("open_goal") or "").strip()
+    dialog_constraints = [str(item or "").strip() for item in dialog_state.get("constraints") or [] if str(item or "").strip()]
+    compressed_followup_parsed = bool(dialog_state.get("compressed_followup_parsed"))
+    active_topic_reused = bool(dialog_state.get("active_topic_reused"))
     context_anchor_applied = _should_apply_meta_context_anchor(effective_query, context_anchor)
     normalized_source = effective_query
     if context_anchor_applied:
         normalized_source = f"{effective_query}\ncontext_anchor: {context_anchor}"
+        if active_topic:
+            normalized_source += f"\nactive_topic: {active_topic}"
+        if open_goal and open_goal != active_topic:
+            normalized_source += f"\nopen_goal: {open_goal}"
+        if dialog_constraints:
+            normalized_source += f"\nconstraints: {' | '.join(dialog_constraints)}"
     normalized = normalized_source.lower()
-    site_kind = _site_kind(normalized)
-    has_route_request = site_kind == "maps" and is_location_route_query(normalized)
-    has_browser = _has_any(normalized, _BROWSER_HINTS)
-    has_summary_request = ("fasse" in normalized and "zusammen" in normalized) or "wichtigsten punkte" in normalized
-    has_extraction = _has_any(normalized, _EXTRACTION_HINTS) or has_summary_request
-    has_broad_research = _has_any(normalized, _BROAD_RESEARCH_HINTS)
-    has_strict_research = _has_any(normalized, _STRICT_RESEARCH_HINTS)
-    has_hard_research = _has_any(normalized, _HARD_RESEARCH_HINTS)
-    has_youtube_light = site_kind == "youtube" and _has_any(normalized, _YOUTUBE_LIGHT_HINTS)
+    current_normalized = effective_query.lower()
+    site_kind = _site_kind(current_normalized)
+    has_route_request = site_kind == "maps" and is_location_route_query(current_normalized)
+    has_browser = _has_any(current_normalized, _BROWSER_HINTS)
+    has_summary_request = ("fasse" in current_normalized and "zusammen" in current_normalized) or "wichtigsten punkte" in current_normalized
+    has_extraction = _has_any(current_normalized, _EXTRACTION_HINTS) or has_summary_request
+    has_broad_research = _has_any(current_normalized, _BROAD_RESEARCH_HINTS)
+    has_strict_research = _has_any(current_normalized, _STRICT_RESEARCH_HINTS)
+    has_hard_research = _has_any(current_normalized, _HARD_RESEARCH_HINTS)
+    has_youtube_light = site_kind == "youtube" and _has_any(current_normalized, _YOUTUBE_LIGHT_HINTS)
     has_local_search = site_kind == "maps" and (
-        _has_any(normalized, _LOCAL_SEARCH_HINTS) or is_location_local_query(normalized)
+        _has_any(current_normalized, _LOCAL_SEARCH_HINTS) or is_location_local_query(current_normalized)
     ) and not has_route_request
     has_simple_live_lookup = (
         (
-            _has_any(normalized, _SIMPLE_LIVE_LOOKUP_DIRECT_HINTS)
+            _has_any(current_normalized, _SIMPLE_LIVE_LOOKUP_DIRECT_HINTS)
             or (
-                _has_any(normalized, _SIMPLE_LIVE_LOOKUP_FRESHNESS_HINTS)
+                _has_any(current_normalized, _SIMPLE_LIVE_LOOKUP_FRESHNESS_HINTS)
                 and any(
-                    marker in normalized
+                    marker in current_normalized
                     for marker in (
                         "preis",
                         "preise",
@@ -1330,14 +1551,14 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
         and not has_local_search
         and site_kind not in {"youtube", "booking", "x", "linkedin", "outlook", "github_login"}
     )
-    has_document = _has_any(normalized, _DOCUMENT_HINTS)
-    has_delivery = _has_any(normalized, _DELIVERY_HINTS)
-    has_system = _has_any(normalized, _SYSTEM_HINTS)
-    has_login = any(token in normalized for token in ("login", "log in", "sign in", "anmelden", "einloggen"))
+    has_document = _has_any(current_normalized, _DOCUMENT_HINTS)
+    has_delivery = _has_any(current_normalized, _DELIVERY_HINTS)
+    has_system = _has_any(current_normalized, _SYSTEM_HINTS)
+    has_login = any(token in current_normalized for token in ("login", "log in", "sign in", "anmelden", "einloggen"))
     has_multistep_browser = has_browser and (
         action_count >= 2
         or has_login
-        or any(token in normalized for token in ("und dann", "danach", "anschließend", "anschliessend"))
+        or any(token in current_normalized for token in ("und dann", "danach", "anschließend", "anschliessend"))
     )
 
     required_capabilities: List[str] = []
@@ -1449,6 +1670,9 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
         if context_anchor_applied:
             recommended_chain = ["meta"]
             reason = "context_anchored_followup"
+        elif compressed_followup_parsed or active_topic_reused:
+            recommended_chain = ["meta"]
+            reason = "compressed_advisory_followup" if compressed_followup_parsed else "active_topic_followup"
         else:
             recommended_chain = ["meta"] if ("und dann" in normalized or "danach" in normalized) else ["executor"]
 
@@ -1461,7 +1685,7 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
     recipe = resolve_orchestration_recipe(task_type, site_kind)
     alternatives = resolve_orchestration_alternative_recipes(task_type, site_kind)
     semantic_review = _derive_semantic_review_payload(
-        normalized,
+        current_normalized,
         has_simple_live_lookup=has_simple_live_lookup,
         has_local_search=has_local_search,
     )
@@ -1480,6 +1704,12 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
         "effective_query": effective_query,
         "context_anchor": context_anchor or None,
         "context_anchor_applied": context_anchor_applied,
+        "active_topic": active_topic or None,
+        "open_goal": open_goal or None,
+        "dialog_constraints": dialog_constraints,
+        "next_step": dialog_state.get("next_step"),
+        "active_topic_reused": active_topic_reused,
+        "compressed_followup_parsed": compressed_followup_parsed,
     }
     classification = _apply_semantic_review_override(classification, semantic_review)
     classification.update(semantic_review)

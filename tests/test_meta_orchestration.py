@@ -3,6 +3,7 @@ from __future__ import annotations
 from orchestration.meta_orchestration import (
     build_meta_feedback_targets,
     classify_meta_task,
+    extract_meta_dialog_state,
     extract_effective_meta_query,
     extract_meta_context_anchor,
     get_agent_capability_map,
@@ -342,6 +343,24 @@ def test_extract_meta_context_anchor_prefers_last_user_from_followup_context():
     )
 
 
+def test_extract_meta_dialog_state_keeps_active_topic_and_constraints_for_compact_followup():
+    query = (
+        "# FOLLOW-UP CONTEXT last_agent: meta session_id: canvas_nruf7dni "
+        "last_user: ich arbeite seit 2010 als industriemechaniker in der industrie und will mich in richtung ki selbststaendig machen "
+        "pending_followup_prompt: entwickle mit mir einen realistischen plan fuer den einstieg in ki-consulting "
+        "# CURRENT USER QUERY KI-Consulting, KI-Tools 2 stunden budget 0"
+    )
+
+    state = extract_meta_dialog_state(query)
+
+    assert "industriemechaniker" in (state["active_topic"] or "")
+    assert "ki-consulting" in (state["open_goal"] or "").lower()
+    assert "2 stunden" in state["constraints"]
+    assert "budget 0" in state["constraints"]
+    assert state["compressed_followup_parsed"] is True
+    assert state["active_topic_reused"] is True
+
+
 def test_classify_meta_task_does_not_route_chunking_followup_to_system_diagnosis():
     query = (
         "# FOLLOW-UP CONTEXT\n"
@@ -389,6 +408,49 @@ def test_classify_meta_task_keeps_context_dependent_career_followup_on_meta():
     assert result["context_anchor_applied"] is True
     assert result["reason"] == "context_anchored_followup"
     assert result["site_kind"] is None
+
+
+def test_classify_meta_task_routes_compact_budget_followup_to_meta():
+    result = classify_meta_task("KI-Consulting, KI-Tools 2 stunden budget 0", action_count=0)
+
+    assert result["task_type"] == "single_lane"
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["compressed_followup_parsed"] is True
+    assert result["reason"] == "compressed_advisory_followup"
+    assert "2 stunden" in result["dialog_constraints"]
+    assert "budget 0" in result["dialog_constraints"]
+
+
+def test_classify_meta_task_reuses_brazil_topic_for_short_followup():
+    query = (
+        "# FOLLOW-UP CONTEXT last_agent: executor session_id: canvas_am26swx3 "
+        "last_user: was denkst du ueber brasilien wie koennte ich mich dort machen ich habe kontakte zu brasilien ich bin mit einer brasilianerin zusammen "
+        "pending_followup_prompt: pruefe ob ich dort mit ki beeindrucken kann "
+        "# CURRENT USER QUERY koennte ich dort mit ki oder mit dir sogar beeindrucken"
+    )
+
+    result = classify_meta_task(query, action_count=0)
+
+    assert result["task_type"] == "single_lane"
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["active_topic_reused"] is True
+    assert "brasilien" in (result["active_topic"] or "").lower()
+    assert "ki" in (result["open_goal"] or "").lower()
+
+
+def test_classify_meta_task_requires_current_location_evidence_despite_location_anchor():
+    query = (
+        "# FOLLOW-UP CONTEXT last_agent: meta session_id: canvas_maps1 "
+        "last_user: was ist hier in meiner naehe gerade offen "
+        "pending_followup_prompt: schlage einen naechsten schritt vor "
+        "# CURRENT USER QUERY und wie koennte ich mich dort vorstellen"
+    )
+
+    result = classify_meta_task(query, action_count=0)
+
+    assert result["site_kind"] is None
+    assert result["task_type"] == "single_lane"
+    assert result["recommended_agent_chain"] == ["meta"]
 
 
 def test_classify_meta_task_keeps_real_system_question_inside_followup_context():
