@@ -130,3 +130,24 @@ async def test_executor_youtube_light_ignores_response_language_prefix(monkeypat
 
     assert seen_queries == ["trending deutschland"]
     assert "YouTube Trends heute" in result
+
+
+@pytest.mark.asyncio
+async def test_executor_youtube_light_refuses_direct_video_fact_check(monkeypatch):
+    from agent.agents.executor import ExecutorAgent
+    from agent.base_agent import BaseAgent
+
+    async def _unexpected_call_tool(self, method: str, params: dict):
+        raise AssertionError("search_youtube darf fuer direkte Video-Faktenchecks nicht aufgerufen werden")
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _unexpected_call_tool)
+
+    agent = ExecutorAgent.__new__(ExecutorAgent)
+    result = await ExecutorAgent.run(
+        agent,
+        _build_executor_youtube_task(
+            "https://youtu.be/j4jBGHv9Eow?is=7eXEJB7wHGDk0F_f schau mal ob da etwas wahres dran ist"
+        ),
+    )
+
+    assert "konkreten YouTube-Video-Faktencheck" in result

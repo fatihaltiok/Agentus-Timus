@@ -38,6 +38,35 @@ def test_self_selected_strategy_prefers_lightweight_youtube_lookup():
     assert strategy["error_strategy"] == "switch_tool_then_degrade"
 
 
+def test_self_selected_strategy_prefers_executor_live_lookup():
+    classification = {
+        "task_type": "simple_live_lookup",
+        "recommended_recipe_id": "simple_live_lookup",
+        "recommended_agent_chain": ["meta", "executor"],
+    }
+
+    task_profile = build_task_profile(
+        "Was gibt es Neues aus der Wissenschaft?",
+        classification,
+    )
+    affordances = select_tool_affordances(classification, task_profile)
+    strategy = select_strategy(
+        "Was gibt es Neues aus der Wissenschaft?",
+        classification,
+        task_profile,
+        affordances,
+    )
+
+    assert task_profile["intent"] == "live_lookup"
+    assert task_profile["desired_depth"] == "light"
+    assert any(item["name"] == "search_news" for item in affordances)
+    assert any(item["name"] == "fetch_url" for item in affordances)
+    assert strategy["strategy_id"] == "executor_live_lookup"
+    assert strategy["primary_recipe_id"] == "simple_live_lookup"
+    assert "search_news" in strategy["preferred_tools"]
+    assert "start_deep_research" in strategy["avoid_tools"]
+
+
 def test_self_selected_strategy_prefers_layered_youtube_extraction():
     classification = {
         "task_type": "youtube_content_extraction",

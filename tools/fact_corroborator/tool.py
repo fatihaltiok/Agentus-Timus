@@ -26,7 +26,7 @@ if not logger.hasHandlers(): # Standard-Logging-Setup
     )
 
 # OpenAI Client initialisieren
-load_dotenv()
+load_dotenv(override=True)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 if not client.api_key:
     logger.warning("OPENAI_API_KEY nicht in .env gefunden. Fakt-Korrelationstool wird nicht voll funktionsfähig sein.")

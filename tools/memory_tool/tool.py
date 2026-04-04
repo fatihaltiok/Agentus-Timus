@@ -37,7 +37,7 @@ from dotenv import load_dotenv
 from agent.providers import ModelProvider, resolve_model_provider_env
 from memory.semantic_backend_policy import normalize_semantic_memory_backend
 
-load_dotenv()
+load_dotenv(override=True)
 
 # === LOGGING ===
 log = logging.getLogger("memory_tool")

@@ -55,10 +55,14 @@ from tools.deep_research.research_contracts import (
     ClaimVerdict,
     EvidenceRecord,
     EvidenceStance,
+    SourceType,
     build_source_record_from_legacy,
     compute_claim_verdict,
     extract_query_anchor_terms,
+    infer_country_code,
     infer_domain_from_text,
+    infer_source_type,
+    is_german_state_affiliated_url,
     initial_research_contract,
     sort_claims_for_report,
     summarize_claims,
@@ -130,6 +134,7 @@ _GENERIC_ADMIN_RESULT_TERMS = {
     "registration", "login", "download", "coupon", "discount", "support",
     "customer service", "faq",
 }
+_TOPIC_ADMIN_PATTERNS = tuple(sorted(_GENERIC_ADMIN_RESULT_TERMS))
 
 _BROAD_SCOPE_MARKERS = {
     "latest", "developments", "trends", "trend", "landscape", "ecosystem", "overview",
@@ -1231,11 +1236,13 @@ class BiasLevel(str, Enum):
 class SourceQualityMetrics:
     """Qualitätsmetriken für eine Quelle."""
     authority_score: float = 0.5       # 0-1: Autorität der Domain
+    independence_score: float = 0.5    # 0-1: Unabhängigkeit / Distanz zur betroffenen Partei
     bias_level: BiasLevel = BiasLevel.UNKNOWN
     bias_score: float = 0.0            # 0-1: 0=unbiased, 1=stark biased
     recency_score: float = 0.5         # 0-1: Aktualität
     transparency_score: float = 0.5    # 0-1: Autor/Methodik genannt
     citation_score: float = 0.5        # 0-1: Zitiert andere Quellen
+    scope_fit_score: float = 0.5       # 0-1: Wie direkt zahlt die Quelle auf die Leitfrage ein
     overall_quality: SourceQuality = SourceQuality.UNKNOWN
     quality_score: float = 0.5         # 0-1: Gewichteter Durchschnitt
     confidence: float = 0.5            # 0-1: Confidence in dieser Bewertung
@@ -1787,7 +1794,13 @@ async def _call_llm_for_facts(messages: List[Dict[str, Any]], use_json: bool = T
 # QUELLENQUALITÄTS-BEWERTUNG (NEU v5.0)
 # ==============================================================================
 
-async def _evaluate_source_quality(node: ResearchNode, content: str) -> SourceQualityMetrics:
+async def _evaluate_source_quality(
+    node: ResearchNode,
+    content: str,
+    *,
+    query: str = "",
+    plan: Optional[ResearchPlan] = None,
+) -> SourceQualityMetrics:
     """
     Bewertet die Qualität einer Quelle nach mehreren Kriterien.
 
@@ -1798,6 +1811,11 @@ async def _evaluate_source_quality(node: ResearchNode, content: str) -> SourceQu
 
     # 1. AUTORITÄTSSCORE basierend auf Domain
     domain_lower = node.domain.lower()
+    active_plan = plan or _build_research_plan(query or f"{node.title} {node.url}", None)
+    query_targets_germany = _query_targets_germany(query or active_plan.primary_question)
+    source_country = infer_country_code(node.url)
+    source_type = infer_source_type(node.url)
+    german_state_affiliated = is_german_state_affiliated_url(node.url)
 
     # Höchste Autorität
     if any(tld in domain_lower for tld in [".gov", ".edu", ".mil"]):
@@ -1817,6 +1835,21 @@ async def _evaluate_source_quality(node: ResearchNode, content: str) -> SourceQu
     # Standard
     else:
         metrics.authority_score = 0.5
+
+    if german_state_affiliated:
+        metrics.independence_score = 0.12 if query_targets_germany else 0.28
+    elif query_targets_germany and source_country and source_country not in {"", "de"}:
+        metrics.independence_score = 0.9
+    elif query_targets_germany and not domain_lower.endswith(".de"):
+        metrics.independence_score = 0.8
+    elif source_type in {SourceType.PAPER, SourceType.BENCHMARK, SourceType.REPOSITORY}:
+        metrics.independence_score = 0.82
+    elif source_type in {SourceType.PRESS, SourceType.ANALYSIS}:
+        metrics.independence_score = 0.74
+    elif source_type in {SourceType.OFFICIAL, SourceType.REGULATOR, SourceType.FILING}:
+        metrics.independence_score = 0.4
+    else:
+        metrics.independence_score = 0.5
 
     # 2. BIAS-ERKENNUNG
     content_lower = content.lower()
@@ -1898,21 +1931,32 @@ async def _evaluate_source_quality(node: ResearchNode, content: str) -> SourceQu
     else:
         metrics.recency_score = 0.5  # Unbekannt
 
+    metrics.scope_fit_score = _estimate_scope_fit(
+        node=node,
+        content=content,
+        query=query or active_plan.primary_question,
+        plan=active_plan,
+    )
+
     # 6. GESAMTQUALITÄT berechnen (gewichteter Durchschnitt)
     weights = {
-        'authority': 0.35,
-        'bias': 0.25,  # Niedriger Bias ist besser
-        'transparency': 0.15,
-        'citations': 0.15,
-        'recency': 0.10
+        'authority': 0.21,
+        'independence': 0.17,
+        'bias': 0.16,  # Niedriger Bias ist besser
+        'transparency': 0.10,
+        'citations': 0.10,
+        'recency': 0.08,
+        'scope_fit': 0.18,
     }
 
     metrics.quality_score = (
         metrics.authority_score * weights['authority'] +
+        metrics.independence_score * weights['independence'] +
         (1 - metrics.bias_score) * weights['bias'] +  # Invertiert!
         metrics.transparency_score * weights['transparency'] +
         metrics.citation_score * weights['citations'] +
-        metrics.recency_score * weights['recency']
+        metrics.recency_score * weights['recency'] +
+        metrics.scope_fit_score * weights['scope_fit']
     )
 
     # 7. Overall Quality Level
@@ -1932,9 +1976,11 @@ async def _evaluate_source_quality(node: ResearchNode, content: str) -> SourceQu
         1 if metrics.bias_level != BiasLevel.UNKNOWN else 0,
         1 if transparency_indicators > 0 else 0,
         1 if citation_count > 0 else 0,
-        1 if found_date is not None else 0
+        1 if found_date is not None else 0,
+        1 if metrics.scope_fit_score != 0.5 else 0,
+        1 if metrics.independence_score != 0.5 else 0,
     ])
-    metrics.confidence = min(indicators_found / 5.0, 1.0)
+    metrics.confidence = min(indicators_found / 7.0, 1.0)
 
     # 9. Notes für Bericht
     notes = []
@@ -1944,6 +1990,14 @@ async def _evaluate_source_quality(node: ResearchNode, content: str) -> SourceQu
         notes.append(f"Potential {metrics.bias_level.value} bias detected")
     if metrics.transparency_score < 0.3:
         notes.append("Limited transparency (no author/methodology)")
+    if metrics.scope_fit_score < 0.35:
+        notes.append("Weak topic fit")
+    elif metrics.scope_fit_score >= 0.7:
+        notes.append("Direct topic fit")
+    if german_state_affiliated:
+        notes.append("German state-affiliated source")
+    elif query_targets_germany and metrics.independence_score >= 0.8:
+        notes.append("Foreign independent perspective")
 
     metrics.notes = "; ".join(notes) if notes else "Standard source"
 
@@ -2491,14 +2545,30 @@ def _profile_query_angles(profile: str, lang: str, domain: str, query_terms: Lis
         }
         for token in query_terms
     )
+    germany_focus = any(
+        token in {"deutschland", "deutsch", "germany", "german", "bundesrepublik"}
+        for token in query_terms
+    )
 
     if profile == "policy_regulation":
+        if germany_focus:
+            return [
+                "international reporting independent legal analysis",
+                "foreign press germany policy scrutiny",
+                "official law text with external verification",
+            ]
         return [
             "official regulation guidance",
             "law compliance implementation",
             "government documentation analysis",
         ]
     if profile == "news":
+        if germany_focus:
+            return [
+                "foreign press germany developments",
+                "independent analysis international reporting",
+                "timeline reporting sources",
+            ]
         return [
             "official announcement update",
             "latest developments analysis",
@@ -2534,9 +2604,147 @@ def _profile_query_angles(profile: str, lang: str, domain: str, query_terms: Lis
     ]
 
 
+def _profile_source_priority_terms(profile: str, lang: str) -> List[str]:
+    if lang == "de":
+        if profile == "policy_regulation":
+            return [
+                "auslaendische presse deutschland unabhaengige analyse",
+                "ngo watchdog rechtsanalyse europa international",
+                "primaerquelle gesetzestext gericht regulator dokument",
+            ]
+        if profile == "scientific":
+            return [
+                "peer reviewed paper systematische uebersicht",
+                "benchmark methodik datensatz replizierbarkeit",
+                "primaerquelle studie paper review",
+            ]
+        if profile == "news":
+            return [
+                "offizielle mitteilung primaerquelle",
+                "reuters ap dpa bestaetigte meldung",
+                "zeitachse ankundigung statement",
+            ]
+        if profile == "vendor_comparison":
+            return [
+                "offizielle dokumentation benchmark unabhaengige analyse",
+                "methodik evaluierung limitations",
+                "primaerquelle release notes benchmark",
+            ]
+        if profile == "market_intelligence":
+            return [
+                "offizielle filing investor relations branche daten",
+                "marktbericht annual report industrieanalyse",
+                "primaerquelle unternehmensbericht regulator filing",
+            ]
+        return [
+            "primaerquelle offizielle quelle originaldokument",
+            "faktencheck belastbare quelle bestaetigung",
+            "direkter nachweis offizielle angabe",
+        ]
+    if profile == "policy_regulation":
+        return [
+            "foreign press germany independent analysis",
+            "ngo watchdog legal analysis international",
+            "primary source legislative text court regulator document",
+        ]
+    if profile == "scientific":
+        return [
+            "peer reviewed paper systematic review",
+            "benchmark methodology dataset reproducibility",
+            "primary source study paper review",
+        ]
+    if profile == "news":
+        return [
+            "official statement primary source",
+            "reuters ap confirmed reporting",
+            "timeline announcement statement",
+        ]
+    if profile == "vendor_comparison":
+        return [
+            "official documentation benchmark independent analysis",
+            "methodology evaluation limitations",
+            "primary source release notes benchmark",
+        ]
+    if profile == "market_intelligence":
+        return [
+            "official filing investor relations industry data",
+            "market report annual report industry analysis",
+            "primary source company filing regulator",
+        ]
+    return [
+        "primary source official document",
+        "fact check reliable source confirmation",
+        "direct evidence official statement",
+    ]
+
+
 def _count_term_matches(terms: List[str], text: str) -> int:
     haystack = str(text or "").lower()
     return sum(1 for term in terms if term and term in haystack)
+
+
+def _query_targets_germany(query: str) -> bool:
+    haystack = f" {_normalize_space(query).lower()} "
+    return any(
+        token in haystack
+        for token in (" deutschland ", " bundesrepublik ", " germany ", " german ")
+    ) or "deutsch" in haystack
+
+
+def _estimate_scope_fit(
+    *,
+    node: "ResearchNode",
+    content: str,
+    query: str,
+    plan: "ResearchPlan",
+) -> float:
+    title_text = _normalize_space(node.title).lower()
+    body_text = _normalize_space(str(content or "")[:6000]).lower()
+    combined = f"{title_text} {body_text}".strip()
+    if not combined:
+        return 0.0
+
+    must_terms = _unique_texts(list(plan.must_have_terms or []), lowercase=True)
+    include_terms = _unique_texts(list(plan.include_terms or []), lowercase=True)
+    related_terms = _unique_texts(list(plan.related_terms or []), lowercase=True)
+    if not must_terms:
+        must_terms = _unique_texts(extract_query_anchor_terms(query), lowercase=True)
+    if not include_terms:
+        include_terms = list(must_terms)
+
+    must_hits = _count_term_matches(must_terms[:8], combined)
+    include_hits = _count_term_matches(include_terms[:12], combined)
+    related_hits = _count_term_matches(related_terms[:12], combined)
+    title_must_hits = _count_term_matches(must_terms[:8], title_text)
+    admin_like = any(pattern in combined[:1800] for pattern in _TOPIC_ADMIN_PATTERNS)
+
+    inferred_source_type = infer_source_type(node.url).value
+    preferred_type_match = inferred_source_type in {str(item or "").strip().lower() for item in plan.preferred_source_types}
+
+    score = 0.12
+    if must_hits >= 2:
+        score = 0.82
+    elif must_hits == 1:
+        score = 0.66 if include_hits >= 2 else 0.58
+    elif include_hits >= 3:
+        score = 0.48
+    elif include_hits >= 2:
+        score = 0.38
+    elif related_hits >= 3:
+        score = 0.32
+    elif include_hits >= 1 or related_hits >= 1:
+        score = 0.24
+
+    if title_must_hits:
+        score += 0.10
+    if preferred_type_match:
+        score += 0.06
+    if plan.strict_topic and must_terms and must_hits == 0:
+        score -= 0.18
+    if admin_like and must_hits == 0:
+        score -= 0.16
+
+    return max(0.0, min(1.0, score))
 
 
 def _resolve_scope_mode(
@@ -2591,6 +2799,7 @@ def _build_research_plan(query: str, focus_areas: Optional[List[str]], session: 
     domain = _detect_domain(query_norm)
     profile_raw = getattr(getattr(getattr(session, "contract_v2", None), "question", None), "profile", "fact_check")
     profile = getattr(profile_raw, "value", str(profile_raw or "fact_check"))
+    germany_focus = _query_targets_germany(query_norm)
 
     raw_query_terms = _tokenize_query_terms(query_norm)
     anchor_terms = _unique_texts(extract_query_anchor_terms(query_norm), lowercase=True)
@@ -2639,6 +2848,16 @@ def _build_research_plan(query: str, focus_areas: Optional[List[str]], session: 
         variants.append(f"{query_norm} {suffix}".strip())
     if alias_terms:
         variants.append(f"{query_norm} {' '.join(alias_terms[:3])}")
+    for source_terms in _profile_source_priority_terms(profile, lang)[:3]:
+        suffix = " ".join(part for part in [focus_fragment, source_terms, temporal_fragment] if part).strip()
+        variants.append(f"{query_norm} {suffix}".strip())
+    if germany_focus:
+        if lang == "de":
+            variants.append(f"{query_norm} internationale presse unabhaengige analyse europa")
+            variants.append(f"{query_norm} auslaendische quelle watchdog bericht")
+        else:
+            variants.append(f"{query_norm} foreign press independent analysis europe")
+            variants.append(f"{query_norm} international watchdog report")
 
     if lang == "de":
         variants.append(f"{query_norm} studie analyse evidenz statistik")
@@ -2660,7 +2879,7 @@ def _build_research_plan(query: str, focus_areas: Optional[List[str]], session: 
 
     preferred_source_types = ["official", "paper", "benchmark", "analysis"]
     if profile == "policy_regulation":
-        preferred_source_types = ["regulator", "official", "analysis"]
+        preferred_source_types = ["analysis", "press", "paper", "regulator", "official"]
     elif profile == "news":
         preferred_source_types = ["official", "press", "analysis"]
 
@@ -2670,6 +2889,10 @@ def _build_research_plan(query: str, focus_areas: Optional[List[str]], session: 
         "Verwirf administrative, Recruiting-, Preis-, Kontakt- und reine Marketingseiten, sofern nicht explizit angefragt.",
         "Verwirf Seitenthemen ohne klare Ueberschneidung mit den Kernbegriffen der Anfrage.",
     ]
+    if germany_focus:
+        topic_boundaries.append(
+            "Nutze deutsche staatsnahe Quellen hoechstens als Primärkontext; fuer Einordnung und Bestaetigung priorisiere auslaendische, unabhaengige Quellen."
+        )
 
     return ResearchPlan(
         primary_question=query_norm,
@@ -3683,7 +3906,14 @@ async def _process_source_safe(
         )
 
         # NEU v5.0: Quellenqualitätsbewertung
-        node.quality_metrics = await _evaluate_source_quality(node, content)
+        plan = _ensure_research_plan(session)
+        node.quality_metrics = await _evaluate_source_quality(
+            node,
+            content,
+            query=session.query,
+            plan=plan,
+        )
+        node.relevance_score = node.quality_metrics.scope_fit_score
 
         session.add_node(node)
 
@@ -3890,12 +4120,15 @@ def _research_confidence_snapshot(
     robust_claim_count: int,
     contract_claims_count: int,
     high_quality_percent: float,
+    source_fit_percent: float,
 ) -> tuple[str, str]:
     reliability_rate = robust_claim_count / max(contract_claims_count, 1)
-    if robust_claim_count >= 3 and reliability_rate >= 0.6 and high_quality_percent >= 60:
+    if robust_claim_count >= 3 and reliability_rate >= 0.6 and high_quality_percent >= 60 and source_fit_percent >= 70:
         return "Hoch", "mehrere belastbare Claims werden von einer ueberwiegend starken Quellenbasis getragen"
-    if robust_claim_count >= 1 and reliability_rate >= 0.3:
+    if robust_claim_count >= 1 and reliability_rate >= 0.3 and source_fit_percent >= 50:
         return "Mittel", "erste belastbare Claims liegen vor, die Evidenz ist aber noch nicht in allen Teilfragen gleich dicht"
+    if source_fit_percent < 45:
+        return "Niedrig", "ein grosser Teil der Quellen zahlt nicht direkt auf die Leitfrage ein"
     return "Niedrig", "die belastbare Evidenz ist noch zu duenn oder zu ungleichmaessig verteilt"
 
 
@@ -3995,11 +4228,57 @@ def _assess_research_completion(
     }
 
 
+def _source_fit_snapshot(session: DeepResearchSession) -> Dict[str, float]:
+    scored_nodes = [
+        node for node in list(session.research_tree or [])
+        if getattr(node, "quality_metrics", None) is not None
+    ]
+    if not scored_nodes:
+        return {
+            "avg_scope_fit": 0.0,
+            "direct_fit_percent": 0.0,
+            "weak_fit_percent": 0.0,
+        }
+
+    scores = [float(node.quality_metrics.scope_fit_score or 0.0) for node in scored_nodes]
+    direct_fit_count = sum(1 for score in scores if score >= 0.55)
+    weak_fit_count = sum(1 for score in scores if score < 0.35)
+    total = max(len(scores), 1)
+    return {
+        "avg_scope_fit": round(sum(scores) / total, 3),
+        "direct_fit_percent": (direct_fit_count / total) * 100,
+        "weak_fit_percent": (weak_fit_count / total) * 100,
+    }
+
+
+def _calibrate_negative_evidence_summary(summary: str, source_fit: Dict[str, float]) -> str:
+    text = _normalize_space(summary)
+    if not text:
+        return text
+    direct_fit_percent = float(source_fit.get("direct_fit_percent") or 0.0)
+    weak_fit_percent = float(source_fit.get("weak_fit_percent") or 0.0)
+    if direct_fit_percent >= 45 and weak_fit_percent < 60:
+        return text
+
+    lowered = text.lower()
+    if any(token in lowered for token in ("falschinformation", "fakenews", "gerücht", "geruecht")):
+        text = re.sub(r"\b(falschinformation|fakenews|gerücht|geruecht)\b", "nicht belastbar belegt", text, flags=re.IGNORECASE)
+    caution = (
+        "Hinweis: Die Quellenbasis ist thematisch nur teilweise passend; "
+        "Negativbefunde sind daher als 'in den geprueften Quellen kein belastbarer Beleg' "
+        "zu lesen, nicht als vollstaendiger Ausschluss."
+    )
+    if caution.lower() not in text.lower():
+        text = f"{caution} {text}".strip()
+    return text
+
+
 async def _synthesize_findings(session: DeepResearchSession, verification_output: Dict) -> Dict:
     """Erstellt KI-Synthese."""
     logger.info("📝 Erstelle Synthese...")
     plan = _ensure_research_plan(session)
     conflict_scan_context = _get_conflict_scan_report_context(session)
+    source_fit = _source_fit_snapshot(session)
 
     facts = verification_output.get("verified_facts", [])[:30]
 
@@ -4056,6 +4335,13 @@ WICHTIG:
 - Verwerfe Randthemen und administrative Details.
 - Hebe offene Fragen nur dann hervor, wenn sie direkt zur Leitfrage gehoeren.
 - Nutze Konflikt-Scan-Hinweise nur als vorsichtige Report-Signale, nicht als neue Fakten.
+- Wenn die Quellenbasis thematisch indirekt oder duenn ist, formuliere Negativbefunde nur als
+  "in den geprueften Quellen kein belastbarer Beleg", NICHT als absoluten Ausschluss,
+  "Falschinformation" oder endgueltiges Debunking.
+
+QUELLENPASSUNG:
+- Direkte Quellenpassung: {source_fit['direct_fit_percent']:.0f}%
+- Schwache Quellenpassung: {source_fit['weak_fit_percent']:.0f}%
 
 Antworte als JSON:
 {{
@@ -4072,13 +4358,20 @@ Antworte als JSON:
         ], use_json=True)
 
         data = json.loads(response.choices[0].message.content)
+        data["executive_summary"] = _calibrate_negative_evidence_summary(
+            str(data.get("executive_summary") or ""),
+            source_fit,
+        )
         data["research_metadata_summary"] = _get_research_metadata_summary(session)
         return data
 
     except Exception as e:
         logger.error(f"Synthese-Fehler: {e}")
         return {
-            "executive_summary": f"Recherche zu '{session.query}' abgeschlossen.",
+            "executive_summary": _calibrate_negative_evidence_summary(
+                f"Recherche zu '{session.query}' abgeschlossen.",
+                source_fit,
+            ),
             "key_findings": [f.get("fact") for f in facts[:5]],
             "research_metadata_summary": _get_research_metadata_summary(session)
         }
@@ -4119,10 +4412,12 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
     excellent_count = session.source_quality_summary.get("excellent", 0)
     good_count = session.source_quality_summary.get("good", 0)
     high_quality_percent = ((excellent_count + good_count) / max(meta["total_sources_processed"], 1) * 100)
+    source_fit = _source_fit_snapshot(session)
     confidence_label, confidence_reason = _research_confidence_snapshot(
         robust_claim_count=robust_claim_count,
         contract_claims_count=contract_claims,
         high_quality_percent=high_quality_percent,
+        source_fit_percent=source_fit["direct_fit_percent"],
     )
     conflict_claims = [
         claim for claim in claims
@@ -4194,6 +4489,20 @@ def _create_academic_markdown_report(session: DeepResearchSession, include_metho
     if session.source_quality_summary:
         lines.extend([
             f"**Quellenqualitaet:** {high_quality_percent:.0f}% der Quellen wurden als 'Excellent' oder 'Good' eingestuft.",
+            "",
+        ])
+    if meta["total_sources_processed"] > 0:
+        lines.extend([
+            f"**Quellenpassung:** {source_fit['direct_fit_percent']:.0f}% der Quellen zahlen direkt auf die Leitfrage ein.",
+            "",
+        ])
+    if source_fit["direct_fit_percent"] < 45:
+        lines.extend([
+            (
+                "**Einschraenkung:** Ein grosser Teil der Quellen ist thematisch nur indirekt passend. "
+                "Negative Befunde sind deshalb vor allem als 'in den geprueften Quellen kein belastbarer Beleg' "
+                "zu lesen, nicht als vollstaendiger Ausschluss."
+            ),
             "",
         ])
 

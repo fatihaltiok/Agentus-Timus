@@ -181,6 +181,7 @@ class Skill:
         if script_path.suffix == '.py':
             import subprocess
             import sys
+            import json
             
             cmd = [sys.executable, str(script_path)] + list(args)
             try:
@@ -191,12 +192,19 @@ class Skill:
                     timeout=60,
                     cwd=str(self.skill_dir)
                 )
-                return {
+                payload = {
                     "success": result.returncode == 0,
                     "stdout": result.stdout,
                     "stderr": result.stderr,
                     "returncode": result.returncode
                 }
+                stdout_text = (result.stdout or "").strip()
+                if stdout_text:
+                    try:
+                        payload["parsed_output"] = json.loads(stdout_text)
+                    except json.JSONDecodeError:
+                        pass
+                return payload
             except subprocess.TimeoutExpired:
                 return {"success": False, "error": "Script-Timeout (60s)"}
             except Exception as e:

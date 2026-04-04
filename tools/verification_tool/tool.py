@@ -29,7 +29,7 @@ from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 from dotenv import load_dotenv
 
 # --- Setup ---
-load_dotenv()
+load_dotenv(override=True)
 log = logging.getLogger("verification_tool")
 
 # Konfiguration (gefixt: Sehr niedriger Threshold)

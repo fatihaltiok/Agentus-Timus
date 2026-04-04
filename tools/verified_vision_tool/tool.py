@@ -81,6 +81,73 @@ def get_llm_client():
             _LLM_CLIENT = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     return _LLM_CLIENT
 
+
+def _strip_json_fences(text: str) -> str:
+    text = str(text or "").strip()
+    if "```json" in text:
+        return text.split("```json", 1)[1].split("```", 1)[0].strip()
+    if "```" in text:
+        return text.split("```", 1)[1].split("```", 1)[0].strip()
+    return text
+
+
+def _unwrap_model_payload(payload: Any) -> Any:
+    """Normalisiert Modellantworten, die bereits strukturierte Wrapper sein koennen."""
+    current = payload
+    seen_ids: set[int] = set()
+
+    while isinstance(current, dict) and id(current) not in seen_ids:
+        seen_ids.add(id(current))
+        for key in ("raw_response", "content", "text", "answer"):
+            value = current.get(key)
+            if value not in (None, "", [], {}):
+                current = value
+                break
+        else:
+            return current
+
+    return current
+
+
+def _parse_json_like_payload(payload: Any) -> Any:
+    """Akzeptiert sowohl JSON-Strings als auch bereits geparste Dict/List-Payloads."""
+    current = _unwrap_model_payload(payload)
+    if isinstance(current, (list, dict)):
+        return current
+    return json.loads(_strip_json_fences(current))
+
+
+def _stringify_model_payload(payload: Any) -> str:
+    current = _unwrap_model_payload(payload)
+    if isinstance(current, str):
+        return _strip_json_fences(current)
+    if current is None:
+        return ""
+    return json.dumps(current, ensure_ascii=False)
+
+
+def _normalize_target_elements(target_elements: Optional[List[Any]]) -> list[str]:
+    """Akzeptiert sowohl String-Labels als auch strukturierte Element-Specs."""
+    if not target_elements:
+        return ["buttons", "input fields", "links", "text fields"]
+
+    normalized: list[str] = []
+    for item in target_elements:
+        if isinstance(item, dict):
+            parts = [
+                str(item.get("type") or "").strip(),
+                str(item.get("label") or item.get("text") or item.get("name") or "").strip(),
+            ]
+            text = " ".join(part for part in parts if part)
+            if not text:
+                text = json.dumps(item, ensure_ascii=False)
+        else:
+            text = str(item or "").strip()
+        if text:
+            normalized.append(text)
+
+    return normalized or ["buttons", "input fields", "links", "text fields"]
+
 VERIFICATION_MODEL = os.getenv("VERIFICATION_MODEL", "gpt-4.1-nano")
 
 
@@ -271,15 +338,10 @@ Rules:
                 **api_params
             )
 
-            content = response.choices[0].message.content.strip()
-
-            # Extrahiere JSON aus möglichem Markdown
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
-
-            verified_data = json.loads(content)
+            content = response.choices[0].message.content
+            verified_data = _parse_json_like_payload(content)
+            if isinstance(verified_data, dict):
+                verified_data = [verified_data]
 
             verified_elements = []
             for elem in verified_data:
@@ -326,7 +388,7 @@ Rules:
         screenshot = self._capture_screenshot()
         image_url = self._image_to_base64(screenshot, max_size=(800, 600))
 
-        search_types = target_elements or ["buttons", "input fields", "links", "text fields"]
+        search_types = _normalize_target_elements(target_elements)
 
         logger.info(f"Layer 1: Qwen-VL analyzing for {search_types}...")
         question = (
@@ -341,27 +403,19 @@ Rules:
             return []
 
         moondream_answer = vision_result.get("answer", "")
+        moondream_description = _stringify_model_payload(moondream_answer)
 
         # Parse Moondream JSON
         moondream_elements = []
         try:
-            if "```json" in moondream_answer:
-                json_str = moondream_answer.split("```json")[1].split("```")[0].strip()
-            elif "```" in moondream_answer:
-                json_str = moondream_answer.split("```")[1].split("```")[0].strip()
-            elif moondream_answer.strip().startswith("["):
-                json_str = moondream_answer.strip()
-            else:
-                json_str = moondream_answer
-
-            moondream_elements = json.loads(json_str)
+            moondream_elements = _parse_json_like_payload(moondream_answer)
             if not isinstance(moondream_elements, list):
                 moondream_elements = [moondream_elements]
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, TypeError):
             logger.warning("Moondream returned non-JSON, attempting to parse...")
             moondream_elements = [{
                 "type": "unknown",
-                "label": moondream_answer[:100],
+                "label": moondream_description[:100],
                 "position": {"x": 0.5, "y": 0.5},
                 "confidence": 0.3
             }]
@@ -381,7 +435,7 @@ Rules:
             self.elements = await self._verify_with_llm(
                 moondream_elements,
                 ocr_text,
-                moondream_answer
+                moondream_description
             )
             verified_count = sum(1 for e in self.elements if e.verified)
             logger.info(f"Layer 3: {verified_count}/{len(self.elements)} elements verified")

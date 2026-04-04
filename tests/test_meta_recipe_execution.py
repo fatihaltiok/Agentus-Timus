@@ -803,6 +803,43 @@ async def test_meta_call_tool_records_specialist_and_direct_meta_observation(mon
 
 
 @pytest.mark.asyncio
+async def test_meta_screen_text_read_uses_direct_tool_instead_of_visual_delegation(monkeypatch):
+    from agent.agents.meta import MetaAgent
+    from agent.base_agent import BaseAgent
+
+    observed = []
+    calls = []
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        calls.append((method, dict(params or {})))
+        if method == "delegate_to_agent":
+            raise AssertionError("screen-text reads should not delegate to visual anymore")
+        if method == "get_all_screen_text":
+            return {"status": "success", "text": "Google Calendar", "items": ["Google Calendar"]}
+        raise AssertionError(f"unexpected method: {method}")
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+    monkeypatch.setattr(
+        "agent.agents.meta.record_autonomy_observation",
+        lambda event_type, payload, observed_at="": observed.append(
+            {"event_type": event_type, "payload": dict(payload), "observed_at": observed_at}
+        )
+        or True,
+    )
+
+    agent = MetaAgent.__new__(MetaAgent)
+    agent.conversation_session_id = "sess-meta-direct-screen-text"
+
+    result = await MetaAgent._call_tool(agent, "get_all_screen_text", {})
+
+    assert result["status"] == "success"
+    assert calls == [("get_all_screen_text", {})]
+    assert [item["event_type"] for item in observed] == ["meta_direct_tool_call"]
+    assert observed[0]["payload"]["method"] == "get_all_screen_text"
+    assert observed[0]["payload"]["has_error"] is False
+
+
+@pytest.mark.asyncio
 async def test_meta_recipe_execution_inserts_strategy_lightweight_preflight(monkeypatch):
     from agent.agents.meta import MetaAgent
     from agent.base_agent import BaseAgent

@@ -19,6 +19,8 @@ class ModelProvider(str, Enum):
     """Unterstuetzte LLM-Provider."""
     OPENAI = "openai"
     ZAI = "zai"
+    DASHSCOPE = "dashscope"
+    DASHSCOPE_NATIVE = "dashscope_native"
     ANTHROPIC = "anthropic"
     DEEPSEEK = "deepseek"
     INCEPTION = "inception"
@@ -40,6 +42,8 @@ class MultiProviderClient:
     BASE_URLS = {
         ModelProvider.OPENAI: "https://api.openai.com/v1",
         ModelProvider.ZAI: "https://api.z.ai/api/paas/v4",
+        ModelProvider.DASHSCOPE: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        ModelProvider.DASHSCOPE_NATIVE: "https://dashscope-intl.aliyuncs.com/api/v1",
         ModelProvider.ANTHROPIC: "https://api.anthropic.com",
         ModelProvider.DEEPSEEK: "https://api.deepseek.com/v1",
         ModelProvider.INCEPTION: "https://api.inceptionlabs.ai/v1",
@@ -51,6 +55,8 @@ class MultiProviderClient:
     API_KEY_ENV = {
         ModelProvider.OPENAI: "OPENAI_API_KEY",
         ModelProvider.ZAI: "ZAI_API_KEY",
+        ModelProvider.DASHSCOPE: "DASHSCOPE_API_KEY",
+        ModelProvider.DASHSCOPE_NATIVE: "DASHSCOPE_NATIVE_API_KEY",
         ModelProvider.ANTHROPIC: "ANTHROPIC_API_KEY",
         ModelProvider.DEEPSEEK: "DEEPSEEK_API_KEY",
         ModelProvider.INCEPTION: "INCEPTION_API_KEY",
@@ -61,6 +67,7 @@ class MultiProviderClient:
 
     API_KEY_ALIASES = {
         ModelProvider.GOOGLE: ("GEMINI_API_KEY",),
+        ModelProvider.DASHSCOPE_NATIVE: ("DASHSCOPE_WORKSPACE_API_KEY", "DASHSCOPE_API_KEY"),
     }
 
     # Abweichende Basis-URLs für OpenAI-SDK-Compat-Calls (wenn nötig).
@@ -125,7 +132,7 @@ class MultiProviderClient:
             )
 
         if provider in [
-            ModelProvider.OPENAI, ModelProvider.ZAI, ModelProvider.DEEPSEEK,
+            ModelProvider.OPENAI, ModelProvider.ZAI, ModelProvider.DASHSCOPE, ModelProvider.DEEPSEEK,
             ModelProvider.INCEPTION, ModelProvider.NVIDIA,
             ModelProvider.OPENROUTER, ModelProvider.GOOGLE,
         ]:

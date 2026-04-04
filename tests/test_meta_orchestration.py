@@ -74,6 +74,24 @@ def test_classify_meta_task_routes_casual_youtube_discovery_to_meta_executor():
     assert result["alternative_recipes"] == []
 
 
+def test_classify_meta_task_routes_direct_youtube_fact_check_to_research_recipe():
+    result = classify_meta_task(
+        "https://youtu.be/j4jBGHv9Eow?is=7eXEJB7wHGDk0F_f schau mal ob da etwas wahres dran ist",
+        action_count=0,
+    )
+
+    assert result["task_type"] == "youtube_content_extraction"
+    assert result["site_kind"] == "youtube"
+    assert result["recommended_entry_agent"] == "meta"
+    assert result["recommended_agent_chain"] == ["meta", "research"]
+    assert result["recommended_recipe_id"] == "youtube_research_only"
+    assert [stage["stage_id"] for stage in result["recipe_stages"]] == ["research_discovery", "document_output"]
+    assert [item["recipe_id"] for item in result["alternative_recipes"]] == [
+        "youtube_content_extraction",
+        "youtube_search_then_visual",
+    ]
+
+
 def test_classify_meta_task_routes_local_nearby_queries_to_meta_executor():
     result = classify_meta_task(
         "Was ist hier in meiner Nähe gerade offen?",
@@ -252,6 +270,19 @@ def test_classify_meta_task_routes_broad_research_requests_via_meta():
     assert result["task_type"] == "knowledge_research"
     assert result["recommended_entry_agent"] == "meta"
     assert result["recommended_agent_chain"] == ["meta", "research"]
+    assert result["recommended_recipe_id"] == "knowledge_research"
+    assert [stage["stage_id"] for stage in result["recipe_stages"]] == ["research_discovery"]
+
+
+def test_classify_meta_task_routes_legal_claim_check_direct_to_research():
+    result = classify_meta_task(
+        "das ist falsch ich will wissen ob es wirklich Bestrebungen gibt das wenn man ausreisen moechte sie Deutschland eine Genehmigung braucht",
+        action_count=0,
+    )
+
+    assert result["task_type"] == "knowledge_research"
+    assert result["recommended_entry_agent"] == "research"
+    assert result["recommended_agent_chain"] == ["research"]
     assert result["recommended_recipe_id"] == "knowledge_research"
     assert [stage["stage_id"] for stage in result["recipe_stages"]] == ["research_discovery"]
 
@@ -467,6 +498,22 @@ def test_classify_meta_task_keeps_real_system_question_inside_followup_context()
 
     assert result["task_type"] == "system_diagnosis"
     assert result["recommended_recipe_id"] == "system_diagnosis"
+
+
+def test_classify_meta_task_applies_context_anchor_for_ok_fang_an_followup():
+    query = (
+        "# FOLLOW-UP CONTEXT last_agent: meta session_id: phaseb_live_replay_20260403 "
+        "last_user: hey timus kannst du meinen googlekalender einsehen "
+        "pending_followup_prompt: Hast du schon ein Google Cloud Projekt oder soll ich dich durch die Erstellung führen? "
+        "# CURRENT USER QUERY ok fang an"
+    )
+
+    result = classify_meta_task(query, action_count=0)
+
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["context_anchor_applied"] is True
+    assert result["reason"] == "context_anchored_followup"
+    assert "google cloud projekt" in (result["active_topic"] or "").lower()
 
 
 def test_build_meta_feedback_targets_emits_task_recipe_and_chain_targets():

@@ -162,6 +162,15 @@ _AFFORDANCE_CATALOG: Dict[str, ToolAffordance] = {
         good_for=("fallback_discovery", "cross_source_search"),
         avoid_when=("direct_ui_state_needed",),
     ),
+    "search_news": ToolAffordance(
+        name="search_news",
+        kind="tool",
+        cost="low",
+        latency="low",
+        reliability="medium",
+        good_for=("news_lookup", "current_updates", "headline_scan"),
+        avoid_when=("deep_source_verification",),
+    ),
     "get_current_location_context": ToolAffordance(
         name="get_current_location_context",
         kind="tool",
@@ -216,6 +225,15 @@ _AFFORDANCE_CATALOG: Dict[str, ToolAffordance] = {
         good_for=("direct_navigation", "non_interactive_fetch"),
         avoid_when=("forms_and_login",),
     ),
+    "fetch_url": ToolAffordance(
+        name="fetch_url",
+        kind="tool",
+        cost="low",
+        latency="low",
+        reliability="high",
+        good_for=("page_fetch", "source_excerpt", "quick_verification"),
+        avoid_when=("interactive_login",),
+    ),
     "run_command": ToolAffordance(
         name="run_command",
         kind="tool",
@@ -237,6 +255,18 @@ def build_task_profile(query: str, classification: Dict[str, Any]) -> Dict[str, 
     if task_type == "youtube_light_research":
         profile = TaskProfile(
             intent="casual_lookup",
+            desired_depth="light",
+            effort_level="light",
+            risk_level="low",
+            browser_need="avoid_if_possible",
+            latency_expectation="fast",
+            cost_sensitivity="high",
+            output_mode="quick_summary",
+            error_recovery_bias="switch_tool_then_degrade",
+        )
+    elif task_type == "simple_live_lookup":
+        profile = TaskProfile(
+            intent="live_lookup",
             desired_depth="light",
             effort_level="light",
             risk_level="low",
@@ -349,7 +379,17 @@ def build_task_profile(query: str, classification: Dict[str, Any]) -> Dict[str, 
 def select_tool_affordances(classification: Dict[str, Any], task_profile: Dict[str, Any]) -> List[Dict[str, Any]]:
     task_type = str(classification.get("task_type") or "").strip().lower()
     names: List[str]
-    if task_type == "youtube_light_research":
+    if task_type == "simple_live_lookup":
+        names = [
+            "executor",
+            "search_web",
+            "search_news",
+            "fetch_url",
+            "get_current_location_context",
+            "search_google_maps_places",
+            "get_google_maps_place",
+        ]
+    elif task_type == "youtube_light_research":
         names = ["executor", "search_youtube", "search_web", "start_deep_research"]
     elif task_type == "youtube_content_extraction":
         names = [
@@ -403,7 +443,26 @@ def select_strategy(
     task_type = str(classification.get("task_type") or "").strip().lower()
     recommended_recipe_id = str(classification.get("recommended_recipe_id") or "").strip()
 
-    if task_type == "youtube_light_research":
+    if task_type == "simple_live_lookup":
+        strategy = SelectedStrategy(
+            strategy_id="executor_live_lookup",
+            strategy_mode="lightweight_first",
+            primary_recipe_id=recommended_recipe_id or "simple_live_lookup",
+            fallback_recipe_id="",
+            preferred_tools=(
+                "get_current_location_context",
+                "search_google_maps_places",
+                "get_google_maps_place",
+                "search_news",
+                "search_web",
+                "fetch_url",
+            ),
+            fallback_tools=("search_web",),
+            avoid_tools=("start_deep_research", "visual"),
+            error_strategy="switch_tool_then_degrade",
+            rationale="Aktuelle Alltagsrecherchen zuerst ueber den executor mit direkter Search-/Maps-Toolchain beantworten.",
+        )
+    elif task_type == "youtube_light_research":
         strategy = SelectedStrategy(
             strategy_id="youtube_lightweight_scan",
             strategy_mode="lightweight_first",

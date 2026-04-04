@@ -30,12 +30,39 @@ def _parse_iso_datetime(value: str) -> Optional[datetime]:
         return None
 
 
+def _normalize_duration_days(value: Any, *, default: int = 7) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = int(default)
+    return max(0, parsed)
+
+
 def _normalize_counter_key(value: Any, *, fallback: str = "unknown") -> str:
     normalized = str(value or "").strip().lower()
     if not normalized:
         return fallback
     cleaned = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in normalized)
     return cleaned[:80] or fallback
+
+
+def _should_skip_default_test_writes() -> bool:
+    """Verhindert, dass Pytest-Läufe in das produktive Beobachtungslog schreiben.
+
+    Standardfall:
+    - unter Pytest keine Writes in `logs/autonomy_observation.jsonl`
+    Ausnahmen:
+    - explizit erlaubt über `AUTONOMY_OBSERVATION_ALLOW_TEST_WRITES`
+    - oder wenn Tests einen eigenen Log-/State-Pfad gesetzt haben
+    """
+    if not str(os.getenv("PYTEST_CURRENT_TEST") or "").strip():
+        return False
+    allow = str(os.getenv("AUTONOMY_OBSERVATION_ALLOW_TEST_WRITES", "")).strip().lower()
+    if allow in {"1", "true", "yes", "on"}:
+        return False
+    if os.getenv("AUTONOMY_OBSERVATION_LOG_PATH") or os.getenv("AUTONOMY_OBSERVATION_STATE_PATH"):
+        return False
+    return True
 
 
 def _json_safe(value: Any, *, depth: int = 0) -> Any:
@@ -361,12 +388,19 @@ class AutonomyObservationStore:
         ends_at = str(raw.get("ends_at") or "").strip()
         now = _parse_iso_datetime(_iso_now())
         end_dt = _parse_iso_datetime(ends_at)
-        active = bool(started_at and ends_at and now and end_dt and now <= end_dt)
+        open_ended = bool(started_at and not ends_at)
+        active = bool(
+            started_at
+            and (
+                open_ended
+                or (ends_at and now and end_dt and now <= end_dt)
+            )
+        )
         return {
             "label": str(raw.get("label") or "").strip(),
             "started_at": started_at,
             "ends_at": ends_at,
-            "duration_days": max(1, int(raw.get("duration_days") or 7)),
+            "duration_days": _normalize_duration_days(raw.get("duration_days"), default=(0 if open_ended else 7)),
             "active": active,
             "log_path": str(raw.get("log_path") or self.log_path),
         }
@@ -391,14 +425,14 @@ class AutonomyObservationStore:
         duration_days: int = 7,
         started_at: str = "",
     ) -> Dict[str, Any]:
-        safe_days = max(1, min(30, int(duration_days or 7)))
+        safe_days = min(365, _normalize_duration_days(duration_days, default=7))
         start_dt = _parse_iso_datetime(started_at) or datetime.now().astimezone()
-        end_dt = start_dt + timedelta(days=safe_days)
+        end_dt = start_dt + timedelta(days=safe_days) if safe_days > 0 else None
         self._ensure_parent_dirs()
         state = {
             "label": str(label or "phase3_phase4_weekly").strip()[:120],
             "started_at": start_dt.isoformat(),
-            "ends_at": end_dt.isoformat(),
+            "ends_at": end_dt.isoformat() if end_dt else "",
             "duration_days": safe_days,
             "active": True,
             "log_path": str(self.log_path),
@@ -410,6 +444,7 @@ class AutonomyObservationStore:
                 "label": state["label"],
                 "duration_days": safe_days,
                 "ends_at": state["ends_at"],
+                "open_ended": safe_days == 0,
             },
             observed_at=state["started_at"],
         )
@@ -480,6 +515,8 @@ def start_autonomy_observation(*, label: str = "phase3_phase4_weekly", duration_
 def record_autonomy_observation(event_type: str, payload: Dict[str, Any], *, observed_at: str = "") -> bool:
     enabled = str(os.getenv("AUTONOMY_OBSERVATION_ENABLED", "true")).strip().lower()
     if enabled in {"0", "false", "no", "off"}:
+        return False
+    if _should_skip_default_test_writes():
         return False
     return get_autonomy_observation_store().record_event(event_type, payload, observed_at=observed_at)
 

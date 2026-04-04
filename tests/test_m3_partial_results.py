@@ -150,3 +150,31 @@ async def test_max_iterationen_ergibt_partial():
         task="do something",
     )
     assert result["status"] == "partial", f"Erwartet partial, bekam: {result}"
+
+
+@pytest.mark.asyncio
+async def test_success_dict_ohne_finale_antwort_wird_partial():
+    """Regression: Timeout-Platzhalter darf nicht als success durchgehen."""
+    registry = _base_registry()
+
+    class _PseudoSuccessAgent:
+        async def run(self, task: str) -> dict:
+            return {
+                "status": "success",
+                "result": "⚠️ Maximale Anzahl an Schritten erreicht, ohne finale Antwort.",
+                "metadata": {},
+                "artifacts": [],
+            }
+
+    registry.register_spec(
+        "pseudo_success", "pseudo_success", ["pseudo_success"],
+        lambda tools_description_string: _PseudoSuccessAgent(),
+    )
+
+    result = await registry.delegate(
+        from_agent="executor",
+        to_agent="pseudo_success",
+        task="do something",
+    )
+    assert result["status"] == "partial", f"Erwartet partial, bekam: {result}"
+    assert "ohne finale Antwort" in result["result"]

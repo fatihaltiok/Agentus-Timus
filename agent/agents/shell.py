@@ -50,6 +50,9 @@ class ShellAgent(BaseAgent):
             max_iterations=20,
             agent_type="shell",
         )
+        # Shell-Aufgaben sind Datei-/Kommando-orientiert. Auto-Screenshots an das
+        # LLM fuehren hier nur zu falschen multimodalen Requests und Provider-404s.
+        self._vision_enabled = False
 
     # ------------------------------------------------------------------
     # Erweiterter run()-Einstieg: System-Kontext injizieren

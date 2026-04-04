@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 from utils.coordinate_converter import resolve_click_coordinates
 
 # --- Setup ---
-load_dotenv()
+load_dotenv(override=True)
 log = logging.getLogger("hybrid_detection")
 
 # MCP Server URL für Tool-Aufrufe

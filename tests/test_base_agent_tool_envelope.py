@@ -179,6 +179,37 @@ async def test_call_tool_formats_jsonrpc_error_dict(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_call_tool_uses_extended_timeout_for_research_delegation(monkeypatch):
+    import agent.base_agent as base_agent_module
+
+    agent = _minimal_base_agent()
+    captured = {}
+
+    async def _fake_post(url, json, timeout=None):
+        captured["timeout"] = timeout
+        return SimpleNamespace(
+            json=lambda: {
+                "jsonrpc": "2.0",
+                "result": {"status": "success", "agent": "research", "result": "ok"},
+            }
+        )
+
+    agent.http_client = SimpleNamespace(post=_fake_post)
+
+    monkeypatch.setattr(base_agent_module, "evaluate_policy_gate", lambda **kwargs: {"allowed": True})
+    monkeypatch.setattr(base_agent_module, "audit_policy_decision", lambda decision: None)
+    monkeypatch.setattr(base_agent_module.registry_v2, "validate_tool_call", lambda *args, **kwargs: kwargs)
+    monkeypatch.delenv("MCP_TOOL_HTTP_TIMEOUT", raising=False)
+    monkeypatch.delenv("RESEARCH_TIMEOUT", raising=False)
+    monkeypatch.delenv("MCP_RESEARCH_HTTP_TIMEOUT_BUFFER_SECONDS", raising=False)
+
+    result = await agent._call_tool("delegate_to_agent", {"agent_type": "research", "task": "x"})
+
+    assert result["status"] == "success"
+    assert captured["timeout"] == pytest.approx(630.0)
+
+
+@pytest.mark.asyncio
 async def test_call_tool_blocks_restart_without_explicit_restart_intent(monkeypatch):
     import agent.base_agent as base_agent_module
 

@@ -66,6 +66,12 @@ from orchestration.meta_orchestration import (
 )
 from orchestration.meta_self_state import build_meta_self_state
 from orchestration.self_improvement_engine import LLMUsageRecord, get_improvement_engine
+from utils.dashscope_native import (
+    build_dashscope_native_payload,
+    dashscope_native_generation_url,
+    extract_dashscope_native_reasoning,
+    extract_dashscope_native_text,
+)
 from tools.tool_registry_v2 import registry_v2
 from agent.providers import ModelProvider, get_provider_client
 from utils.llm_usage import build_usage_payload
@@ -142,6 +148,7 @@ logging.basicConfig(
 _DISPATCHER_OPENAI_COMPAT_PROVIDERS = {
     ModelProvider.OPENAI,
     ModelProvider.ZAI,
+    ModelProvider.DASHSCOPE,
     ModelProvider.DEEPSEEK,
     ModelProvider.INCEPTION,
     ModelProvider.NVIDIA,
@@ -172,6 +179,7 @@ def _dispatcher_model_from_env() -> str:
 def _dispatcher_provider_supports_native_call(provider: ModelProvider) -> bool:
     return provider in _DISPATCHER_OPENAI_COMPAT_PROVIDERS or provider in {
         ModelProvider.ANTHROPIC,
+        ModelProvider.DASHSCOPE_NATIVE,
         ModelProvider.GOOGLE,
     }
 
@@ -472,6 +480,62 @@ async def _call_dispatcher_google(model: str, user_query: str, *, session_id: st
         raise
 
 
+async def _call_dispatcher_dashscope_native(model: str, user_query: str, *, session_id: str = "") -> str:
+    provider_client = get_provider_client()
+    api_key = provider_client.get_api_key(ModelProvider.DASHSCOPE_NATIVE)
+    base_url = provider_client.get_base_url(ModelProvider.DASHSCOPE_NATIVE)
+    payload = build_dashscope_native_payload(
+        model=model,
+        messages=[
+            {"role": "system", "content": DISPATCHER_PROMPT},
+            {"role": "user", "content": user_query},
+        ],
+        temperature=0.0,
+        max_tokens=20,
+    )
+    started = time.perf_counter()
+    response_payload: Any = None
+    try:
+        async with httpx.AsyncClient(timeout=float(os.getenv("DASHSCOPE_NATIVE_TIMEOUT", "30"))) as http:
+            response = await http.post(
+                dashscope_native_generation_url(base_url, model),
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            try:
+                response_payload = response.json()
+            except Exception:
+                response_payload = None
+            response.raise_for_status()
+
+        text = extract_dashscope_native_text(response_payload or {})
+        if not text:
+            text = extract_dashscope_native_reasoning(response_payload or {})
+        text = _strip_dispatcher_think_tags(str(text or "").strip())
+        _record_dispatcher_llm_usage(
+            provider=ModelProvider.DASHSCOPE_NATIVE,
+            model=model,
+            session_id=session_id,
+            latency_ms=round((time.perf_counter() - started) * 1000),
+            success=bool(text),
+            response_payload=response_payload,
+        )
+        return text
+    except Exception:
+        _record_dispatcher_llm_usage(
+            provider=ModelProvider.DASHSCOPE_NATIVE,
+            model=model,
+            session_id=session_id,
+            latency_ms=round((time.perf_counter() - started) * 1000),
+            success=False,
+            response_payload=response_payload,
+        )
+        raise
+
+
 def _record_dispatcher_llm_usage(
     *,
     provider: ModelProvider,
@@ -541,6 +605,8 @@ async def _call_dispatcher_llm(user_query: str, *, session_id: str = "") -> str:
         return await _call_dispatcher_openai_compatible(provider, model, user_query, session_id=session_id)
     if provider == ModelProvider.ANTHROPIC:
         return await _call_dispatcher_anthropic(model, user_query, session_id=session_id)
+    if provider == ModelProvider.DASHSCOPE_NATIVE:
+        return await _call_dispatcher_dashscope_native(model, user_query, session_id=session_id)
     if provider == ModelProvider.GOOGLE:
         return await _call_dispatcher_google(model, user_query, session_id=session_id)
     raise ValueError(f"Dispatcher-Provider {provider.value} nicht unterstuetzt")
@@ -854,6 +920,48 @@ def _extract_dispatcher_decision(raw_content: str) -> str:
         cleaned,
     )
     return matches[-1] if matches else ""
+
+
+def _looks_like_blackboard_or_memory_query(text: str) -> bool:
+    query = str(text or "").strip().lower()
+    if not query:
+        return False
+    if "blackboard" not in query and "working memory" not in query:
+        return False
+    signals = (
+        "was gibt",
+        "was gibts",
+        "was gibt's",
+        "zeige",
+        "zeig",
+        "inhalt",
+        "eintrag",
+        "eintraeg",
+        "status",
+        "uebersicht",
+        "übersicht",
+        "auf dem",
+        "im ",
+        "lies",
+        "lese",
+    )
+    return any(signal in query for signal in signals)
+
+
+def _looks_like_external_calendar_access_query(text: str) -> bool:
+    query = str(text or "").strip().lower()
+    if not query:
+        return False
+    calendar_markers = (
+        "google calendar",
+        "google kalender",
+        "googlekalender",
+        "calendar api",
+        "kalender api",
+    )
+    if not any(marker in query for marker in calendar_markers):
+        return False
+    return True
 
 
 # Keywords für schnelle Erkennung (ohne LLM)
@@ -1641,6 +1749,27 @@ def _structure_task(task: str, url: str) -> List[str]:
 
 _IMAGE_EXTENSIONS = re.compile(r"\.(jpg|jpeg|png|webp|gif|bmp|tiff?|avif)\b", re.IGNORECASE)
 _DATA_EXTENSIONS = re.compile(r"\.(csv|xlsx|xls|parquet)\b", re.IGNORECASE)
+_DISPATCHER_YOUTUBE_VERIFICATION_HINTS = (
+    "überprüfe",
+    "ueberpruefe",
+    "überpruefe",
+    "prüfe",
+    "pruefe",
+    "verifiziere",
+    "verify",
+    "faktencheck",
+    "fact check",
+    "ob es wahr ist",
+    "ist das wahr",
+    "wahr ist",
+    "ob das stimmt",
+    "stimmt das",
+    "stimmt es",
+    "behauptung",
+    "behauptet",
+    "gerücht",
+    "geruecht",
+)
 
 
 def _extract_dispatcher_focus_query(query: str) -> str:
@@ -1759,6 +1888,16 @@ def _looks_like_dispatcher_reference_followup(query: str) -> bool:
     return has_reference and has_action
 
 
+def _looks_like_direct_youtube_verification_query(query: str) -> bool:
+    normalized = str(query or "").strip().lower()
+    if not normalized:
+        return False
+    has_direct_youtube_url = "youtu.be/" in normalized or "youtube.com/watch" in normalized
+    if not has_direct_youtube_url:
+        return False
+    return any(token in normalized for token in _DISPATCHER_YOUTUBE_VERIFICATION_HINTS)
+
+
 def quick_intent_check(query: str) -> Optional[str]:
     """Schnelle Keyword-basierte Intent-Erkennung."""
     raw_query = str(query or "")
@@ -1775,6 +1914,12 @@ def quick_intent_check(query: str) -> Optional[str]:
     if any(re.search(pattern, focus_lower) for pattern in _DISPATCHER_SELF_REFLECTION_PATTERNS):
         return "executor"
     if any(re.search(pattern, focus_lower) for pattern in _DISPATCHER_META_FEEDBACK_PATTERNS):
+        return "meta"
+    if _looks_like_direct_youtube_verification_query(analysis_query):
+        return "meta"
+    if _looks_like_blackboard_or_memory_query(analysis_query):
+        return "meta"
+    if _looks_like_external_calendar_access_query(analysis_query):
         return "meta"
     if _looks_like_dispatcher_reference_followup(focus_lower):
         return "meta" if has_followup_capsule or len(focus_lower.split()) <= 8 else "meta"

@@ -96,6 +96,33 @@ def test_evaluate_query_orchestration_routes_casual_youtube_discovery_to_meta_ex
     assert any(item["name"] == "search_youtube" for item in decision["tool_affordances"])
 
 
+def test_evaluate_query_orchestration_routes_direct_youtube_fact_check_to_research_recipe():
+    decision = evaluate_query_orchestration(
+        "https://youtu.be/j4jBGHv9Eow?is=7eXEJB7wHGDk0F_f schau mal ob da etwas wahres dran ist"
+    )
+
+    assert decision["route_to_meta"] is True
+    assert decision["task_type"] == "youtube_content_extraction"
+    assert decision["site_kind"] == "youtube"
+    assert decision["recommended_agent_chain"] == ["meta", "research"]
+    assert decision["recommended_recipe_id"] == "youtube_research_only"
+    assert decision["selected_strategy"]["primary_recipe_id"] == "youtube_research_only"
+    assert "get_youtube_video_info" in decision["selected_strategy"]["preferred_tools"]
+    assert "get_youtube_subtitles" in decision["selected_strategy"]["preferred_tools"]
+
+
+def test_evaluate_query_orchestration_routes_direct_youtube_verification_phrase_to_research_recipe():
+    decision = evaluate_query_orchestration(
+        "überprüfe das mal ob es wahr ist was da erzählt wird https://youtu.be/niHG1OTfBrY"
+    )
+
+    assert decision["route_to_meta"] is True
+    assert decision["task_type"] == "youtube_content_extraction"
+    assert decision["site_kind"] == "youtube"
+    assert decision["recommended_agent_chain"] == ["meta", "research"]
+    assert decision["recommended_recipe_id"] == "youtube_research_only"
+
+
 def test_evaluate_query_orchestration_routes_local_maps_queries_to_meta_executor():
     decision = evaluate_query_orchestration(
         "Was ist hier in meiner Nähe und welche Apotheke hat noch offen?"
@@ -128,6 +155,19 @@ def test_evaluate_query_orchestration_routes_broad_research_requests_to_meta():
     assert decision["task_type"] == "knowledge_research"
     assert decision["recommended_entry_agent"] == "meta"
     assert decision["recommended_agent_chain"] == ["meta", "research"]
+    assert decision["recommended_recipe_id"] == "knowledge_research"
+    assert decision["selected_strategy"]["strategy_id"] == "knowledge_research_orchestration"
+
+
+def test_evaluate_query_orchestration_routes_legal_claim_check_direct_to_research():
+    decision = evaluate_query_orchestration(
+        "das ist falsch ich will wissen ob es wirklich Bestrebungen gibt das wenn man ausreisen moechte sie Deutschland eine Genehmigung braucht"
+    )
+
+    assert decision["route_to_meta"] is False
+    assert decision["task_type"] == "knowledge_research"
+    assert decision["recommended_entry_agent"] == "research"
+    assert decision["recommended_agent_chain"] == ["research"]
     assert decision["recommended_recipe_id"] == "knowledge_research"
     assert decision["selected_strategy"]["strategy_id"] == "knowledge_research_orchestration"
 

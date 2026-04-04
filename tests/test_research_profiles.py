@@ -76,6 +76,37 @@ def test_policy_profile_confirms_with_regulator_source():
     assert verdict == ClaimVerdict.CONFIRMED
 
 
+def test_policy_profile_does_not_treat_german_state_source_as_independent_confirmation():
+    sources = [
+        SourceRecord(
+            "s1",
+            "https://www.bundestag.de/dokumente/textarchiv",
+            "Bundestag",
+            SourceType.REGULATOR,
+            SourceTier.A,
+            is_primary=True,
+            is_official=True,
+            metadata={"state_affiliated": True, "country_code": "de"},
+        ),
+        SourceRecord(
+            "s2",
+            "https://www.reuters.com/world/europe/example",
+            "Reuters",
+            SourceType.PRESS,
+            SourceTier.B,
+            has_methodology=True,
+        ),
+    ]
+    evidences = [
+        EvidenceRecord("e1", "c1", "s1", EvidenceStance.SUPPORTS),
+        EvidenceRecord("e2", "c1", "s2", EvidenceStance.SUPPORTS),
+    ]
+
+    verdict = compute_claim_verdict(ResearchProfile.POLICY_REGULATION, evidences, sources)
+
+    assert verdict == ClaimVerdict.CONFIRMED
+
+
 def test_scientific_profile_does_not_confirm_without_primary_or_methodological_support():
     sources = [
         SourceRecord("s1", "https://analysis.example/a", "Analysis A", SourceType.ANALYSIS, SourceTier.B),

@@ -31,6 +31,8 @@ def test_meta_filters_specialist_tool_blocks_from_prompt_manifest():
         "  param: cmd\n"
         "search_web: suche\n"
         "  param: query\n"
+        "open_url: seite oeffnen\n"
+        "  param: url\n"
     )
 
     filtered = MetaAgent._filter_tools_for_meta(tools_description)
@@ -38,7 +40,37 @@ def test_meta_filters_specialist_tool_blocks_from_prompt_manifest():
     assert "delegate_to_agent" in filtered
     assert "send_email" not in filtered
     assert "run_command" not in filtered
-    assert "search_web" not in filtered
+    assert "search_web" in filtered
+    assert "open_url" not in filtered
+
+
+@pytest.mark.asyncio
+async def test_meta_uses_search_web_directly(monkeypatch):
+    from agent.agents.meta import MetaAgent
+    from agent.base_agent import BaseAgent
+
+    captured = {}
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        captured["method"] = method
+        captured["params"] = dict(params)
+        return [{"title": "OpenAI Pricing", "url": "https://developers.openai.com/api/docs/pricing"}]
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = MetaAgent.__new__(MetaAgent)
+    agent.conversation_session_id = "sess-meta-search"
+
+    result = await MetaAgent._call_tool(
+        agent,
+        "search_web",
+        {"query": "OpenAI pricing March 2026", "max_results": 5},
+    )
+
+    assert isinstance(result, list)
+    assert captured["method"] == "search_web"
+    assert captured["params"]["query"] == "OpenAI pricing March 2026"
+    assert "agent_type" not in captured["params"]
 
 
 @pytest.mark.asyncio
@@ -107,6 +139,26 @@ async def test_meta_reroutes_screen_text_tools_to_visual(monkeypatch):
     assert captured["params"]["agent_type"] == "visual"
     assert "target_agent: visual" in captured["params"]["task"]
     assert "Lies den sichtbaren Bildschirmtext ueber den Visual-Agenten aus." in captured["params"]["task"]
+
+
+@pytest.mark.asyncio
+async def test_meta_blocks_training_data_fallback_for_live_lookup():
+    from agent.agents.meta import MetaAgent
+
+    agent = MetaAgent.__new__(MetaAgent)
+    agent._emit_step_trace = lambda *args, **kwargs: None
+
+    result = await MetaAgent._finalize_list_output(
+        agent,
+        "Bitte liste die aktuellen LLM-Preise auf und bewerte sie.",
+        (
+            "**LLM-Preistabelle — Stand meiner Trainingsdaten (NICHT Live-recherchiert)**\n\n"
+            "Aufgrund eines System-Overflows konnte ich keine aktuelle Live-Recherche durchführen."
+        ),
+    )
+
+    assert "Trainingsdaten" not in result
+    assert "nicht verifiziert live abrufen" in result
 
 
 @pytest.mark.asyncio

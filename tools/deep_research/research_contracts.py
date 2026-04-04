@@ -217,6 +217,22 @@ _ACADEMIC_PUBLICATION_DOMAINS = (
     "paperswithcode.com",
 )
 
+_GERMAN_GOVERNMENT_DOMAINS = (
+    "bund.de",
+    "bundesregierung.de",
+    "bundestag.de",
+    "bundesrat.de",
+    "gesetze-im-internet.de",
+    "destatis.de",
+    "verfassungsgericht.de",
+)
+
+_GERMAN_STATE_FUNDED_DOMAINS = (
+    "dw.com",
+    "deutschland.de",
+    "bpb.de",
+)
+
 _CLAIM_QUERY_STOPWORDS = {
     "the", "and", "for", "with", "from", "into", "about", "than", "that", "this",
     "und", "oder", "der", "die", "das", "mit", "von", "über", "ueber", "fuer",
@@ -365,6 +381,61 @@ def choose_research_profile(query: str, metadata: Optional[Dict[str, Any]] = Non
     return ResearchProfile.FACT_CHECK
 
 
+def normalize_source_domain(value: str) -> str:
+    domain = str(value or "").strip().lower()
+    if domain.startswith("http://") or domain.startswith("https://"):
+        domain = urlparse(domain).netloc.lower()
+    if domain.startswith("www."):
+        domain = domain[4:]
+    return domain
+
+
+def is_german_government_domain(value: str) -> bool:
+    domain = normalize_source_domain(value)
+    if not domain:
+        return False
+    if domain.endswith(".bund.de"):
+        return True
+    return any(
+        domain == candidate or domain.endswith(f".{candidate}")
+        for candidate in _GERMAN_GOVERNMENT_DOMAINS
+    )
+
+
+def is_german_state_affiliated_url(url: str, metadata: Optional[Dict[str, Any]] = None) -> bool:
+    meta = metadata or {}
+    if meta.get("state_affiliated") is True:
+        return True
+    domain = normalize_source_domain(url)
+    if not domain:
+        return False
+    if is_german_government_domain(domain):
+        return True
+    return any(
+        domain == candidate or domain.endswith(f".{candidate}")
+        for candidate in _GERMAN_STATE_FUNDED_DOMAINS
+    )
+
+
+def infer_country_code(url: str, metadata: Optional[Dict[str, Any]] = None) -> str:
+    meta = metadata or {}
+    explicit = str(meta.get("country_code") or meta.get("country") or "").strip().lower()
+    if explicit:
+        return explicit
+    domain = normalize_source_domain(url)
+    if not domain:
+        return ""
+    if is_german_state_affiliated_url(domain, metadata=meta) or domain.endswith(".de"):
+        return "de"
+    if domain.endswith(".eu"):
+        return "eu"
+    if domain.endswith(".gov") or ".gov." in domain:
+        return "us"
+    if domain.endswith(".uk") or domain.endswith(".co.uk"):
+        return "uk"
+    return ""
+
+
 def infer_source_type(url: str, declared_type: str = "", metadata: Optional[Dict[str, Any]] = None) -> SourceType:
     declared = (declared_type or "").strip().lower()
     if declared == "youtube":
@@ -390,6 +461,8 @@ def infer_source_type(url: str, declared_type: str = "", metadata: Optional[Dict
     # pmc.ncbi.nlm.nih.gov fälschlicherweise als REGULATOR statt PAPER.
     if any(acad_domain in domain for acad_domain in _ACADEMIC_PUBLICATION_DOMAINS):
         return SourceType.PAPER
+    if is_german_government_domain(domain):
+        return SourceType.REGULATOR
     if domain.endswith(".gov") or domain.endswith(".eu"):
         return SourceType.REGULATOR
     if any(vendor_domain in domain for vendor_domain in _VENDOR_DOMAINS):
@@ -434,7 +507,9 @@ def build_source_record_from_legacy(
     declared_type: str = "",
     metadata: Optional[Dict[str, Any]] = None,
 ) -> SourceRecord:
-    meta = metadata or {}
+    meta = dict(metadata or {})
+    meta.setdefault("country_code", infer_country_code(url, meta))
+    meta.setdefault("state_affiliated", is_german_state_affiliated_url(url, meta))
     source_type = infer_source_type(url, declared_type=declared_type, metadata=meta)
     is_official = bool(meta.get("is_official")) or source_type in {SourceType.OFFICIAL, SourceType.REGULATOR}
     has_transcript = bool(meta.get("has_transcript"))
@@ -554,6 +629,7 @@ def compute_claim_verdict(
     independent_support = [
         src for src in supporting_sources
         if src.source_type != SourceType.VENDOR
+        and not is_german_state_affiliated_url(src.url, src.metadata)
     ]
     vendor_support = [
         src for src in supporting_sources
@@ -575,11 +651,11 @@ def compute_claim_verdict(
 
     has_primary_support = any(
         src.is_primary or src.source_type in {SourceType.PAPER, SourceType.BENCHMARK, SourceType.REPOSITORY, SourceType.REGULATOR, SourceType.FILING}
-        for src in independent_support
+        for src in supporting_sources
     )
     has_authoritative_support = any(
         src.is_official or src.source_type in {SourceType.OFFICIAL, SourceType.REGULATOR, SourceType.FILING}
-        for src in independent_support
+        for src in supporting_sources
     )
     has_methodological_support = any(
         src.has_methodology or src.source_type in {SourceType.BENCHMARK, SourceType.PAPER, SourceType.REPOSITORY}

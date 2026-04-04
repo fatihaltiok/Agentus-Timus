@@ -565,6 +565,68 @@ async def test_canvas_chat_routes_capability_followup_to_executor(monkeypatch, t
     assert "Pizza bestellen" in followup_query or "Pizza bestellen".lower() in followup_query.lower()
 
 
+async def test_canvas_chat_treats_result_extraction_as_lookup_followup(monkeypatch, tmp_path):
+    captured = {"decision_queries": [], "run_queries": []}
+    mcp_server._chat_history.clear()
+    monkeypatch.setenv("TIMUS_SESSION_STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setattr(mcp_server, "_semantic_store_chat_turn", lambda **kwargs: None)
+    monkeypatch.setattr(mcp_server, "_semantic_recall_chat_turns", lambda **kwargs: [])
+
+    async def fake_build_tools_description():
+        return "tools"
+
+    async def fake_get_agent_decision(query, session_id=None):
+        captured["decision_queries"].append((query, session_id))
+        return "meta"
+
+    async def fake_run_agent(agent_name, query, tools_description, session_id=None):
+        captured["run_queries"].append((agent_name, query, session_id, tools_description))
+        if "aktuelle llm preise" in query.lower():
+            return (
+                "Zu den aktuellen Preisen habe ich gerade diese Treffer gefunden:\n"
+                "Top-Treffer:\n"
+                "- Alle KI-Modelle vergleichen – LLM Vergleich (2026) | https://www.byte.de/vergleich/llm\n"
+                "Direkt gepruefte Quelle:\n"
+                "- Alle KI-Modelle vergleichen – LLM Vergleich (2026) | https://www.byte.de/vergleich/llm"
+            )
+        return "Ich habe aus der Quelle die Preise extrahiert."
+
+    fake_dispatcher = SimpleNamespace(
+        get_agent_decision=fake_get_agent_decision,
+        run_agent=fake_run_agent,
+    )
+
+    monkeypatch.setattr(mcp_server, "_build_tools_description", fake_build_tools_description)
+    monkeypatch.setitem(sys.modules, "main_dispatcher", fake_dispatcher)
+
+    first = await mcp_server.canvas_chat(
+        _FakeRequest(
+            {
+                "query": "so jetzt suche mir aktuelle llm preise der besten llms in abhänggkeit ihrer leistungen mach eine tabelle",
+                "session_id": "lookup_followup_lane",
+            }
+        )
+    )
+    second = await mcp_server.canvas_chat(
+        _FakeRequest(
+            {
+                "query": "hole die preise heraus und liste sie mir aus",
+                "session_id": "lookup_followup_lane",
+            }
+        )
+    )
+
+    assert first["status"] == "success"
+    assert second["status"] == "success"
+    followup_agent, followup_query, followup_session_id, _ = captured["run_queries"][-1]
+    assert followup_agent == "meta"
+    assert followup_session_id == "lookup_followup_lane"
+    assert "# FOLLOW-UP CONTEXT" in followup_query
+    assert "last_assistant:" in followup_query
+    assert "https://www.byte.de/vergleich/llm" in followup_query
+    assert "hole die preise heraus und liste sie mir aus" in followup_query
+
+
 async def test_canvas_chat_routes_short_contextual_reply_to_same_lane(monkeypatch, tmp_path):
     captured = {"decision_queries": [], "run_queries": []}
     mcp_server._chat_history.clear()

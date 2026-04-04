@@ -108,6 +108,23 @@ _YOUTUBE_GENERIC_PATTERNS = (
     r"\bauf englisch\b",
 )
 
+_YOUTUBE_DIRECT_URL_RE = re.compile(r"https?://(?:www\.)?(?:youtube\.com/watch\S*|youtu\.be/\S+)", re.IGNORECASE)
+
+_YOUTUBE_FACT_CHECK_HINTS = (
+    "ob da etwas wahres dran ist",
+    "ob da was wahres dran ist",
+    "wahres dran",
+    "ob das stimmt",
+    "stimmt das",
+    "stimmt es",
+    "faktencheck",
+    "fact check",
+    "behauptung",
+    "behauptet",
+    "gerücht",
+    "geruecht",
+)
+
 _YOUTUBE_EDGE_FILLER_TOKENS = {
     "was",
     "es",
@@ -166,6 +183,123 @@ _YOUTUBE_EN_FILLER_TOKENS = {
     "die", "der", "das", "auch", "im", "in", "an", "auf",
     "mit", "von", "für", "fuer", "zu",
 }
+
+_SIMPLE_LOOKUP_HARD_RESEARCH_MARKERS = (
+    "tiefenrecherche",
+    "tiefen recherche",
+    "tiefe recherche",
+    "deep research",
+    "quellen",
+    "studie",
+    "studien",
+    "paper",
+    "papers",
+    "bericht",
+    "pdf",
+    "docx",
+    "analysiere",
+    "maximal viel",
+    "extrahiere",
+)
+
+_SIMPLE_LOOKUP_WEATHER_MARKERS = ("wetter", "temperatur", "regen", "sonne", "wind")
+_SIMPLE_LOOKUP_NEWS_MARKERS = ("news", "nachrichten", "neuigkeiten", "was gibt es neues", "was gibts neues", "neues aus")
+_SIMPLE_LOOKUP_SCIENCE_MARKERS = ("wissenschaft", "forschung", "studie", "studien", "science")
+_SIMPLE_LOOKUP_PRICING_MARKERS = ("preis", "preise", "pricing", "kosten", "vergleich", "tabelle", "tokenpreise", "modellpreise")
+_SIMPLE_LOOKUP_PERSON_MARKERS = ("wer ist", "wie heißt", "wie heisst", "ceo", "präsident", "praesident", "vorstand", "gründer", "gruender")
+_SIMPLE_LOOKUP_CINEMA_MARKERS = ("kino", "kinoprogramm", "film", "filme", "filmstarts")
+_SIMPLE_LOOKUP_LOCAL_PLACE_QUERY_MAP: dict[str, str] = {
+    "café": "Cafes",
+    "cafés": "Cafes",
+    "cafe": "Cafes",
+    "cafes": "Cafes",
+    "kaffee": "Cafes",
+    "restaurant": "Restaurants",
+    "restaurants": "Restaurants",
+    "bar": "Bars",
+    "bars": "Bars",
+    "apotheke": "Apotheken",
+    "apotheken": "Apotheken",
+    "supermarkt": "Supermaerkte",
+    "supermärkte": "Supermaerkte",
+    "supermaerkte": "Supermaerkte",
+    "bäckerei": "Baeckereien",
+    "baeckerei": "Baeckereien",
+    "bäckereien": "Baeckereien",
+    "baeckereien": "Baeckereien",
+}
+_SIMPLE_LOOKUP_FRESHNESS_MARKERS = ("aktuell", "aktuelle", "aktuellen", "heute", "jetzt", "live", "neueste", "latest", "current", "gerade")
+_LOOKUP_EXTRACTION_FOLLOWUP_PATTERNS = (
+    r"\bhol(?:e)?\b.*\bheraus\b",
+    r"\bzieh(?:e)?\b.*\bheraus\b",
+    r"\blist(?:e)?\b.*\baus\b",
+    r"\bextrah(?:ier|iere)\b",
+    r"\bfass\b.*\bzusammen\b",
+    r"\bmach(?:e)?\b.*\btabelle\b",
+    r"\btabell(?:e|arisch)\b",
+)
+_LOOKUP_PRICE_SIGNAL_PATTERNS = (
+    r"\$ ?\d",
+    r"\b(?:input|output|cached)[ -]?(?:preis|price|token)s?\b",
+    r"\b\d+(?:[.,]\d+)?\s*(?:usd|eur|euro)\b",
+    r"/\s*1m\b",
+    r"/\s*1k\b",
+)
+_LOOKUP_MODEL_SIGNAL_PATTERNS = (
+    r"\bgpt[- ]?\d",
+    r"\bclaude\b",
+    r"\bgemini\b",
+    r"\bdeepseek\b",
+    r"\bglm[- ]?\d",
+    r"\bqwen\b",
+    r"\bgrok\b",
+    r"\bkimi\b",
+    r"\bminimax\b",
+    r"\bo[34](?:-mini)?\b",
+)
+_LOOKUP_ARTIFACT_FORMAT_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("xlsx", r"\b(?:xlsx|excel)\b"),
+    ("csv", r"\bcsv\b"),
+    ("txt", r"\b(?:txt|textdatei|text datei|plaintext|rohtext)\b"),
+)
+_LOOKUP_PRICING_OUTPUT_NOISE_PATTERNS = (
+    r"\berstelle(?:\s+mir)?\b",
+    r"\bmach(?:e)?(?:\s+mir)?\b",
+    r"\bzeige(?:\s+mir)?\b",
+    r"\bliste(?:\s+mir)?\b",
+    r"\bsuche(?:\s+da)?\b",
+    r"\bhol(?:e)?\b",
+    r"\bzieh(?:e)?\b",
+    r"\baus\b",
+    r"\bheraus\b",
+    r"\btxt\b",
+    r"\bdatei\b",
+    r"\btextdatei\b",
+    r"\btabelle\b",
+    r"\bliste\b",
+)
+_LOOKUP_PRICE_VALUE_MARKERS = (
+    "preis-leistung",
+    "preis leistung",
+    "fuer sein geld",
+    "für sein geld",
+    "am meisten fuer sein geld",
+    "am meisten für sein geld",
+    "besser fuer sein geld",
+    "besser für sein geld",
+)
+_PRICING_PROVIDER_HINTS: dict[str, tuple[str, ...]] = {
+    "OpenAI": ("openai", "gpt", "chatgpt", "o3", "o4"),
+    "Anthropic": ("anthropic", "claude"),
+    "Google": ("google", "gemini"),
+    "DeepSeek": ("deepseek",),
+    "Qwen": ("qwen", "alibaba"),
+    "Zhipu GLM": ("zhipu", "glm"),
+    "Kimi": ("kimi", "moonshot"),
+    "MiniMax": ("minimax",),
+    "Baidu ERNIE": ("baidu", "ernie"),
+}
+_CHINESE_PRICING_PROVIDERS = ("DeepSeek", "Qwen", "Zhipu GLM", "Kimi", "MiniMax", "Baidu ERNIE")
 
 
 def _youtube_translate_query(query: str) -> str:
@@ -234,6 +368,25 @@ class ExecutorAgent(BaseAgent):
                 lines.append(f"{label}: {value}")
         return "\n".join(lines)
 
+    def _notify_delegation_progress(self, stage: str, **payload: Any) -> None:
+        callback = getattr(self, "_delegation_progress_callback", None)
+        if not callable(callback):
+            return
+        try:
+            callback(stage=stage, payload=payload)
+            return
+        except TypeError:
+            pass
+        try:
+            callback(stage, payload)
+            return
+        except TypeError:
+            pass
+        try:
+            callback(stage)
+        except Exception:
+            return
+
     @staticmethod
     def _recover_user_query(task_text: str) -> str:
         text = str(task_text or "").strip()
@@ -279,6 +432,586 @@ class ExecutorAgent(BaseAgent):
         ):
             return ""
         return text
+
+    @staticmethod
+    def _is_simple_live_lookup_query(task: str) -> bool:
+        normalized = str(task or "").strip().lower()
+        if not normalized:
+            return False
+        if any(marker in normalized for marker in _SIMPLE_LOOKUP_HARD_RESEARCH_MARKERS):
+            return False
+        if analyze_location_route_intent(normalized).is_route_request:
+            return False
+        if any(marker in normalized for marker in _SIMPLE_LOOKUP_WEATHER_MARKERS):
+            return True
+        if any(marker in normalized for marker in _SIMPLE_LOOKUP_PRICING_MARKERS):
+            return True
+        if any(marker in normalized for marker in _SIMPLE_LOOKUP_PERSON_MARKERS):
+            return True
+        if any(marker in normalized for marker in _SIMPLE_LOOKUP_CINEMA_MARKERS):
+            return True
+        if any(marker in normalized for marker in _SIMPLE_LOOKUP_LOCAL_PLACE_QUERY_MAP):
+            return True
+        if any(marker in normalized for marker in _SIMPLE_LOOKUP_NEWS_MARKERS):
+            return True
+        if any(marker in normalized for marker in _SIMPLE_LOOKUP_SCIENCE_MARKERS):
+            return True
+        lookup_markers = (
+            "preis",
+            "preise",
+            "pricing",
+            "news",
+            "nachrichten",
+            "wetter",
+            "film",
+            "kino",
+            "modell",
+            "modelle",
+        )
+        return any(marker in normalized for marker in _SIMPLE_LOOKUP_FRESHNESS_MARKERS) and any(
+            marker in normalized for marker in lookup_markers
+        )
+
+    @staticmethod
+    def _infer_simple_live_lookup_category(task: str) -> str:
+        normalized = str(task or "").strip().lower()
+        if any(marker in normalized for marker in _SIMPLE_LOOKUP_WEATHER_MARKERS):
+            return "weather"
+        if any(marker in normalized for marker in _SIMPLE_LOOKUP_LOCAL_PLACE_QUERY_MAP):
+            return "local_places"
+        if any(marker in normalized for marker in _SIMPLE_LOOKUP_CINEMA_MARKERS):
+            return "cinema"
+        if any(marker in normalized for marker in _SIMPLE_LOOKUP_SCIENCE_MARKERS):
+            return "science_news"
+        if any(marker in normalized for marker in _SIMPLE_LOOKUP_NEWS_MARKERS):
+            return "news"
+        if any(marker in normalized for marker in _SIMPLE_LOOKUP_PRICING_MARKERS):
+            return "pricing"
+        if any(marker in normalized for marker in _SIMPLE_LOOKUP_PERSON_MARKERS):
+            return "person_lookup"
+        return "web_lookup"
+
+    @staticmethod
+    def _truncate_text(text: Any, limit: int = 280) -> str:
+        cleaned = re.sub(r"\s+", " ", str(text or "")).strip()
+        if len(cleaned) <= limit:
+            return cleaned
+        return cleaned[: max(0, limit - 3)].rstrip() + "..."
+
+    @classmethod
+    def _infer_simple_live_lookup_local_query(cls, user_task: str) -> str:
+        normalized = str(user_task or "").strip().lower()
+        for marker, canonical in _SIMPLE_LOOKUP_LOCAL_PLACE_QUERY_MAP.items():
+            if marker in normalized:
+                return canonical
+        return ""
+
+    @staticmethod
+    def _task_mentions_explicit_place(task: str) -> bool:
+        normalized = str(task or "").strip().lower()
+        return any(
+            marker in normalized
+            for marker in (
+                " in ",
+                " bei ",
+                " um ",
+                " nahe ",
+                " nähe ",
+                " naehe ",
+                " frankfurt",
+                "offenbach",
+                "berlin",
+                "münchen",
+                "muenchen",
+                "hamburg",
+                "köln",
+                "koeln",
+            )
+        )
+
+    @staticmethod
+    def _is_lookup_result_extraction_query(task: str) -> bool:
+        normalized = str(task or "").strip().lower()
+        if not normalized:
+            return False
+        if len(normalized.split()) > 18:
+            return False
+        return any(re.search(pattern, normalized) for pattern in _LOOKUP_EXTRACTION_FOLLOWUP_PATTERNS)
+
+    @staticmethod
+    def _extract_urls_from_context(task_text: str, *, limit: int = 4) -> list[str]:
+        text = str(task_text or "")
+        if not text:
+            return []
+        matches = re.findall(r"https?://[^\s|]+", text, flags=re.IGNORECASE)
+        urls: list[str] = []
+        seen: set[str] = set()
+        for raw in matches:
+            cleaned = str(raw).strip().rstrip(".,);]>\"'")
+            if not cleaned or cleaned in seen:
+                continue
+            seen.add(cleaned)
+            urls.append(cleaned)
+            if len(urls) >= limit:
+                break
+        return urls
+
+    @staticmethod
+    def _contextual_lookup_seed(topic_recall: list[str], recent_assistant_replies: list[str]) -> str:
+        candidates = [*topic_recall, *recent_assistant_replies]
+        for item in candidates:
+            cleaned = re.sub(r"https?://\S+", " ", str(item or ""))
+            cleaned = re.sub(r"\b(?:assistant|user|executor|meta)\s*:\s*", " ", cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(r"\s+", " ", cleaned).strip(" |-")
+            if len(cleaned) >= 20:
+                return cleaned[:180]
+        return ""
+
+    @classmethod
+    def _infer_lookup_artifact_format(cls, task: str) -> str:
+        normalized = str(task or "").strip().lower()
+        if not normalized:
+            return ""
+        for format_name, pattern in _LOOKUP_ARTIFACT_FORMAT_PATTERNS:
+            if re.search(pattern, normalized):
+                return format_name
+        return ""
+
+    @classmethod
+    def _strip_lookup_output_request_terms(cls, task: str) -> str:
+        cleaned = str(task or "").strip().lower()
+        for pattern in _LOOKUP_PRICING_OUTPUT_NOISE_PATTERNS:
+            cleaned = re.sub(pattern, " ", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\bund\b", " ", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\banschlie(?:ss|ß)end\b", " ", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.-")
+        return cleaned
+
+    @classmethod
+    def _infer_pricing_provider_focus(cls, task: str, *, context_seed: str = "") -> list[str]:
+        normalized = f"{task or ''} {context_seed or ''}".lower()
+        providers: list[str] = []
+        seen: set[str] = set()
+        if any(marker in normalized for marker in ("chines", "china", "chinesisch", "chinesichen")):
+            for provider in _CHINESE_PRICING_PROVIDERS:
+                providers.append(provider)
+                seen.add(provider)
+        for provider, aliases in _PRICING_PROVIDER_HINTS.items():
+            if any(alias in normalized for alias in aliases) and provider not in seen:
+                providers.append(provider)
+                seen.add(provider)
+        return providers
+
+    @classmethod
+    def _extract_pricing_lines_from_text(cls, text: str) -> list[str]:
+        raw_text = str(text or "")
+        if not raw_text:
+            return []
+        lines = [re.sub(r"\s+", " ", line).strip() for line in raw_text.splitlines()]
+        lines = [line for line in lines if line]
+        extracted: list[str] = []
+        seen: set[str] = set()
+        for line in lines:
+            lower = line.lower()
+            has_price_signal = any(re.search(pattern, lower) for pattern in _LOOKUP_PRICE_SIGNAL_PATTERNS)
+            has_model_signal = any(re.search(pattern, lower) for pattern in _LOOKUP_MODEL_SIGNAL_PATTERNS)
+            is_table_like = "|" in line and ("modell" in lower or has_price_signal or has_model_signal)
+            if not ((has_price_signal and has_model_signal) or is_table_like):
+                continue
+            cleaned = line.strip()
+            if len(cleaned) > 220:
+                cleaned = cleaned[:220].rstrip() + "..."
+            key = cleaned.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            extracted.append(cleaned)
+            if len(extracted) >= 10:
+                break
+        return extracted
+
+    @classmethod
+    def _filter_pricing_lines_for_provider_focus(
+        cls,
+        lines: list[str],
+        provider_focus: list[str],
+    ) -> list[str]:
+        if not provider_focus:
+            return list(lines)
+        allowed_patterns: list[str] = []
+        for provider in provider_focus:
+            aliases = _PRICING_PROVIDER_HINTS.get(provider, ())
+            allowed_patterns.extend(alias for alias in aliases if alias)
+        filtered: list[str] = []
+        for line in lines:
+            lower = line.lower()
+            if any(alias in lower for alias in allowed_patterns):
+                filtered.append(line)
+        return filtered or list(lines)
+
+    @classmethod
+    def _infer_pricing_provider_from_text(cls, text: str) -> str:
+        lowered = str(text or "").lower()
+        for provider, aliases in _PRICING_PROVIDER_HINTS.items():
+            if any(alias in lowered for alias in aliases):
+                return provider
+        return ""
+
+    @staticmethod
+    def _extract_price_value(text: str) -> float | None:
+        raw = str(text or "")
+        match = re.search(r"(\d+(?:[.,]\d+)?)", raw)
+        if not match:
+            return None
+        try:
+            return float(match.group(1).replace(",", "."))
+        except ValueError:
+            return None
+
+    @classmethod
+    def _parse_pricing_rows(cls, lines: list[str]) -> list[dict[str, str]]:
+        parsed: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for raw_line in lines:
+            cleaned = re.sub(r"\s+", " ", str(raw_line or "")).strip().strip("|")
+            if not cleaned:
+                continue
+            columns = [col.strip() for col in cleaned.split("|") if col.strip()]
+            if len(columns) < 2:
+                continue
+            model = columns[0]
+            lowered_columns = [col.lower() for col in columns]
+            if model.lower() in {"modell", "model", "anbieter"}:
+                continue
+            input_value = ""
+            output_value = ""
+            cached_value = ""
+            for index, column in enumerate(columns[1:], start=1):
+                lowered = lowered_columns[index]
+                if "cached" in lowered or "cache" in lowered:
+                    cached_value = column
+                elif "output" in lowered or "ausgabe" in lowered:
+                    output_value = column
+                elif "input" in lowered or "eingabe" in lowered:
+                    input_value = column
+            if not input_value and len(columns) >= 2:
+                input_value = columns[1]
+            if not output_value and len(columns) >= 3:
+                output_value = columns[2]
+            if not cached_value and len(columns) >= 4:
+                cached_value = columns[3]
+            if not (input_value or output_value or cached_value):
+                continue
+            provider = cls._infer_pricing_provider_from_text(f"{model} {cleaned}")
+            key = f"{provider}|{model}|{input_value}|{output_value}|{cached_value}".casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            parsed.append(
+                {
+                    "provider": provider or "Unbekannt",
+                    "model": model,
+                    "input": input_value,
+                    "output": output_value,
+                    "cached": cached_value,
+                    "raw": cleaned,
+                }
+            )
+        return parsed
+
+    @classmethod
+    def _render_pricing_table(cls, rows: list[dict[str, str]]) -> str:
+        if not rows:
+            return ""
+        lines = [
+            "| Anbieter | Modell | Input | Output | Cached |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+        for row in rows[:10]:
+            lines.append(
+                "| {provider} | {model} | {input} | {output} | {cached} |".format(
+                    provider=row.get("provider") or "-",
+                    model=row.get("model") or "-",
+                    input=row.get("input") or "-",
+                    output=row.get("output") or "-",
+                    cached=row.get("cached") or "-",
+                )
+            )
+        return "\n".join(lines)
+
+    @classmethod
+    def _render_pricing_plaintext_table(cls, rows: list[dict[str, str]]) -> str:
+        if not rows:
+            return ""
+        lines = ["Anbieter | Modell | Input | Output | Cached"]
+        for row in rows[:10]:
+            lines.append(
+                " | ".join(
+                    [
+                        row.get("provider") or "-",
+                        row.get("model") or "-",
+                        row.get("input") or "-",
+                        row.get("output") or "-",
+                        row.get("cached") or "-",
+                    ]
+                )
+            )
+        return "\n".join(lines)
+
+    @classmethod
+    def _render_pricing_value_note(cls, user_task: str, rows: list[dict[str, str]]) -> str:
+        normalized = str(user_task or "").lower()
+        if not any(marker in normalized for marker in _LOOKUP_PRICE_VALUE_MARKERS):
+            return ""
+        cheapest_input = min(
+            (row for row in rows if cls._extract_price_value(row.get("input")) is not None),
+            key=lambda row: cls._extract_price_value(row.get("input")) or 0.0,
+            default=None,
+        )
+        cheapest_output = min(
+            (row for row in rows if cls._extract_price_value(row.get("output")) is not None),
+            key=lambda row: cls._extract_price_value(row.get("output")) or 0.0,
+            default=None,
+        )
+        notes: list[str] = []
+        if cheapest_input:
+            notes.append(
+                f"Beim Input wirkt {cheapest_input.get('provider')} / {cheapest_input.get('model')} aktuell am guenstigsten."
+            )
+        if cheapest_output:
+            notes.append(
+                f"Beim Output wirkt {cheapest_output.get('provider')} / {cheapest_output.get('model')} aktuell am guenstigsten."
+            )
+        if notes:
+            notes.append(
+                "Das ist nur ein Preisvergleich. Fuer einen echten Preis-Leistungs-Sieger brauche ich zusaetzlich aktuelle Benchmarkdaten."
+            )
+        return " ".join(notes)
+
+    async def _maybe_create_lookup_artifact(
+        self,
+        *,
+        artifact_format: str,
+        user_task: str,
+        rows: list[dict[str, str]],
+        source_title: str,
+        source_url: str,
+        value_note: str,
+    ) -> str:
+        if not artifact_format or not rows:
+            return ""
+        title = "LLM_Preise_Vergleich"
+        if artifact_format == "txt":
+            content = self._render_pricing_plaintext_table(rows)
+            if source_title or source_url:
+                source_parts = [part for part in (source_title, source_url) if part]
+                content += "\n\nQuelle: " + " | ".join(source_parts)
+            if value_note:
+                content += "\n\n" + value_note
+            result = await self._call_tool("create_txt", {"title": title, "content": content})
+        elif artifact_format == "csv":
+            result = await self._call_tool(
+                "create_csv",
+                {
+                    "title": title,
+                    "headers": ["Anbieter", "Modell", "Input", "Output", "Cached"],
+                    "rows": [
+                        [
+                            row.get("provider") or "-",
+                            row.get("model") or "-",
+                            row.get("input") or "-",
+                            row.get("output") or "-",
+                            row.get("cached") or "-",
+                        ]
+                        for row in rows[:10]
+                    ],
+                },
+            )
+        elif artifact_format == "xlsx":
+            result = await self._call_tool(
+                "create_xlsx",
+                {
+                    "title": title,
+                    "headers": ["Anbieter", "Modell", "Input", "Output", "Cached"],
+                    "rows": [
+                        [
+                            row.get("provider") or "-",
+                            row.get("model") or "-",
+                            row.get("input") or "-",
+                            row.get("output") or "-",
+                            row.get("cached") or "-",
+                        ]
+                        for row in rows[:10]
+                    ],
+                },
+            )
+        else:
+            return ""
+        payload = self._tool_payload(result)
+        if (
+            (isinstance(result, dict) and result.get("error"))
+            or str(payload.get("status") or "").strip().lower() == "error"
+        ):
+            return ""
+        path = str(payload.get("path") or payload.get("filepath") or "").strip()
+        filename = str(payload.get("filename") or "").strip()
+        location = path or filename
+        if not location:
+            return ""
+        response_lines = [f"Ich habe die {artifact_format.upper()}-Datei mit den aktuellen LLM-Preisen erstellt: {location}"]
+        response_lines.append("")
+        response_lines.append(self._render_pricing_table(rows))
+        if value_note:
+            response_lines.append("")
+            response_lines.append(value_note)
+        return "\n".join(response_lines)
+
+    async def _finalize_pricing_lookup(
+        self,
+        *,
+        user_task: str,
+        source_title: str,
+        source_url: str,
+        source_text: str,
+        context_seed: str = "",
+        allow_artifact_creation: bool = True,
+    ) -> str:
+        extracted_lines = self._extract_pricing_lines_from_text(source_text)
+        provider_focus = self._infer_pricing_provider_focus(user_task, context_seed=context_seed)
+        focused_lines = self._filter_pricing_lines_for_provider_focus(extracted_lines, provider_focus)
+        rows = self._parse_pricing_rows(focused_lines)
+        if not rows:
+            return ""
+        value_note = self._render_pricing_value_note(user_task, rows)
+        if allow_artifact_creation:
+            artifact_format = self._infer_lookup_artifact_format(user_task)
+            artifact_response = await self._maybe_create_lookup_artifact(
+                artifact_format=artifact_format,
+                user_task=user_task,
+                rows=rows,
+                source_title=source_title,
+                source_url=source_url,
+                value_note=value_note,
+            )
+            if artifact_response:
+                return artifact_response
+        lines = ["Ich habe aus der zuletzt geprueften Quelle diese Preis-Tabelle herausgezogen:"]
+        if source_title or source_url:
+            lines.append("Quelle: " + " | ".join(part for part in (source_title, source_url) if part))
+        lines.append("")
+        lines.append(self._render_pricing_table(rows))
+        if value_note:
+            lines.append("")
+            lines.append(value_note)
+        return "\n".join(lines)
+
+    @classmethod
+    def _format_pricing_source_response(
+        cls,
+        *,
+        source_title: str,
+        source_url: str,
+        extracted_lines: list[str],
+    ) -> str:
+        lines = ["Ich habe aus der zuletzt geprueften Quelle diese Preisangaben herausgezogen:"]
+        if source_title or source_url:
+            source_parts = [part for part in (source_title, source_url) if part]
+            lines.append("Quelle: " + " | ".join(source_parts))
+        for line in extracted_lines[:8]:
+            lines.append(f"- {line}")
+        return "\n".join(lines)
+
+    @classmethod
+    def _build_simple_live_lookup_query(
+        cls,
+        *,
+        user_task: str,
+        category: str,
+        location_label: str = "",
+        context_seed: str = "",
+    ) -> str:
+        base_query = str(user_task or "").strip()
+        if not base_query:
+            return ""
+        if cls._is_lookup_result_extraction_query(base_query) and context_seed:
+            if category == "pricing":
+                return f"aktuelle llm preise input output token vergleich {context_seed[:140]}"
+            return f"{base_query} {context_seed[:140]}".strip()
+        if category == "weather":
+            if location_label and not cls._task_mentions_explicit_place(base_query):
+                return f"Wetter heute {location_label}"
+            return base_query
+        if category == "pricing":
+            cleaned = cls._strip_lookup_output_request_terms(base_query)
+            provider_focus = cls._infer_pricing_provider_focus(cleaned, context_seed=context_seed)
+            query_terms = ["aktuelle", "llm", "api", "preise", "input", "output", "token"]
+            if provider_focus:
+                query_terms.extend(provider_focus)
+            elif cleaned:
+                query_terms.append(cleaned)
+            elif context_seed:
+                query_terms.append(context_seed[:120])
+            deduped: list[str] = []
+            seen: set[str] = set()
+            for term in query_terms:
+                normalized = re.sub(r"\s+", " ", str(term or "")).strip()
+                if not normalized:
+                    continue
+                key = normalized.casefold()
+                if key in seen:
+                    continue
+                seen.add(key)
+                deduped.append(normalized)
+            return " ".join(deduped).strip()
+        if category == "cinema":
+            if location_label and not cls._task_mentions_explicit_place(base_query):
+                return f"Kinoprogramm heute {location_label}"
+            return base_query
+        if category == "science_news" and "wissenschaft" not in base_query.lower():
+            return f"Wissenschaft News aktuell {base_query}"
+        return base_query
+
+    @classmethod
+    def _format_simple_lookup_results(
+        cls,
+        *,
+        intro: str,
+        results: list[dict[str, Any]],
+        fetched_payload: dict[str, Any] | None = None,
+    ) -> str:
+        if not results:
+            return intro
+
+        lines = [intro, "Top-Treffer:"]
+        for item in results[:5]:
+            title = str(item.get("title") or "").strip()
+            if not title:
+                continue
+            parts = [title]
+            snippet = cls._truncate_text(item.get("snippet") or item.get("description") or "", limit=160)
+            if snippet:
+                parts.append(snippet)
+            domain = str(item.get("domain") or "").strip()
+            if domain:
+                parts.append(domain)
+            url = str(item.get("url") or "").strip()
+            if url:
+                parts.append(url)
+            lines.append("- " + " | ".join(parts))
+
+        if isinstance(fetched_payload, dict) and str(fetched_payload.get("status") or "success").lower() == "success":
+            source_title = str(fetched_payload.get("title") or "").strip()
+            source_url = str(fetched_payload.get("url") or "").strip()
+            excerpt = cls._truncate_text(fetched_payload.get("content") or fetched_payload.get("markdown") or "", limit=320)
+            if source_title or excerpt:
+                lines.append("")
+                lines.append("Direkt gepruefte Quelle:")
+                checked_parts = [part for part in (source_title, source_url) if part]
+                if checked_parts:
+                    lines.append("- " + " | ".join(checked_parts))
+                if excerpt:
+                    lines.append(cls._truncate_text(excerpt, limit=320))
+        return "\n".join(lines)
 
     @staticmethod
     def _recover_semantic_recall(task_text: str) -> list[str]:
@@ -870,8 +1603,19 @@ class ExecutorAgent(BaseAgent):
         normalized = str(user_task or "").strip().lower()
         if not normalized:
             return "trending deutschland"
+        if normalized.startswith("antworte ausschliesslich auf deutsch") or normalized.startswith(
+            "antworte ausschließlich auf deutsch"
+        ):
+            return "trending deutschland"
+        normalized = re.sub(
+            r"^antworte\s+.*?nutzeranfrage:\s*",
+            "",
+            normalized,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        normalized = re.sub(r"^nutzeranfrage:\s*", "", normalized, flags=re.IGNORECASE)
 
-        query = normalized
+        query = _YOUTUBE_DIRECT_URL_RE.sub(" ", normalized)
         for pattern in _YOUTUBE_GENERIC_PATTERNS:
             query = re.sub(pattern, " ", query, flags=re.IGNORECASE)
         query = re.sub(r"\s+", " ", query).strip(" ,.!?:;")
@@ -903,6 +1647,15 @@ class ExecutorAgent(BaseAgent):
         if query in {"youtube", "neu", "neues", "aktuell", "aktuelle videos"}:
             return "trending deutschland"
         return query
+
+    @staticmethod
+    def _is_direct_youtube_fact_check_request(user_task: str) -> bool:
+        normalized = str(user_task or "").strip().lower()
+        if not normalized:
+            return False
+        return bool(_YOUTUBE_DIRECT_URL_RE.search(normalized)) and any(
+            hint in normalized for hint in _YOUTUBE_FACT_CHECK_HINTS
+        )
 
     @classmethod
     def _format_views(cls, views: Any) -> str:
@@ -1111,6 +1864,7 @@ class ExecutorAgent(BaseAgent):
         handoff: DelegationHandoff,
         task_text: str = "",
     ) -> str:
+        self._notify_delegation_progress("location_local_search_start")
         source_task = (
             handoff.handoff_data.get("original_user_task")
             or handoff.handoff_data.get("query")
@@ -1122,6 +1876,7 @@ class ExecutorAgent(BaseAgent):
             recovered_from_task = self._recover_user_query(task_text)
             if analyze_location_local_intent(recovered_from_task).is_location_relevant:
                 user_task = recovered_from_task
+        self._notify_delegation_progress("location_context_lookup")
         location_result = await self._call_tool("get_current_location_context", {})
         if isinstance(location_result, dict) and location_result.get("error"):
             return f"Ich konnte den aktuellen Standort nicht laden: {location_result['error']}"
@@ -1141,6 +1896,15 @@ class ExecutorAgent(BaseAgent):
             return self._format_stale_location_response(location)
 
         maps_query = self._infer_location_nearby_query(user_task)
+        canonical_maps_query = self._infer_simple_live_lookup_local_query(user_task)
+        if canonical_maps_query and (
+            not maps_query
+            or maps_query.strip().lower() in {
+                canonical_maps_query.strip().lower(),
+                canonical_maps_query.strip().lower().rstrip("s"),
+            }
+        ):
+            maps_query = canonical_maps_query
         if not maps_query:
             return self._format_location_response(
                 user_task=user_task,
@@ -1154,6 +1918,7 @@ class ExecutorAgent(BaseAgent):
         if latitude is not None and longitude is not None:
             maps_params["latitude"] = latitude
             maps_params["longitude"] = longitude
+        self._notify_delegation_progress("maps_places_lookup", query=maps_query)
         maps_result = await self._call_tool("search_google_maps_places", maps_params)
         if isinstance(maps_result, dict) and maps_result.get("error"):
             return (
@@ -1182,6 +1947,7 @@ class ExecutorAgent(BaseAgent):
         handoff: DelegationHandoff,
         task_text: str = "",
     ) -> str:
+        self._notify_delegation_progress("location_route_start")
         source_task = (
             handoff.handoff_data.get("original_user_task")
             or handoff.handoff_data.get("query")
@@ -1205,6 +1971,7 @@ class ExecutorAgent(BaseAgent):
                 "Nenne mir das Ziel bitte direkt, zum Beispiel: 'Route zur Zeil in Frankfurt'."
             )
 
+        self._notify_delegation_progress("location_context_lookup")
         location_result = await self._call_tool("get_current_location_context", {})
         if isinstance(location_result, dict) and location_result.get("error"):
             return f"Ich konnte den aktuellen Standort nicht laden: {location_result['error']}"
@@ -1232,6 +1999,7 @@ class ExecutorAgent(BaseAgent):
         if latitude is not None and longitude is not None:
             route_params["latitude"] = latitude
             route_params["longitude"] = longitude
+        self._notify_delegation_progress("maps_route_lookup", destination=destination_query)
         route_result = await self._call_tool(
             "get_google_maps_route",
             route_params,
@@ -1256,6 +2024,7 @@ class ExecutorAgent(BaseAgent):
         return self._format_route_response(route=route_payload)
 
     async def _run_youtube_light_research(self, handoff: DelegationHandoff) -> str:
+        self._notify_delegation_progress("youtube_light_lookup_start")
         raw_task = (
             handoff.handoff_data.get("original_user_task")
             or handoff.handoff_data.get("query")
@@ -1263,6 +2032,12 @@ class ExecutorAgent(BaseAgent):
             or ""
         )
         user_task = self._recover_user_query(raw_task)
+        if self._is_direct_youtube_fact_check_request(user_task):
+            return (
+                "Das sieht nach einem konkreten YouTube-Video-Faktencheck aus, nicht nach einer allgemeinen "
+                "YouTube-Suche. Dafuer brauche ich den Analyse-/Research-Pfad auf genau dieses Video statt "
+                "einer Trefferliste."
+            )
         preferred_search_tool = str(handoff.handoff_data.get("preferred_search_tool") or "search_youtube").strip()
         max_results = handoff.handoff_data.get("max_results") or 5
         try:
@@ -1289,6 +2064,7 @@ class ExecutorAgent(BaseAgent):
         combined_results: list[dict] = []
 
         async def _fetch(query: str, lang: str) -> list[dict]:
+            self._notify_delegation_progress("youtube_search_lookup", query=query, language=lang)
             res = await self._call_tool(
                 preferred_search_tool,
                 {
@@ -1339,6 +2115,176 @@ class ExecutorAgent(BaseAgent):
             results=combined_results,
         )
 
+    async def _run_simple_live_lookup(
+        self,
+        handoff: DelegationHandoff | None,
+        task_text: str = "",
+    ) -> str:
+        self._notify_delegation_progress("simple_live_lookup_start")
+        handoff_task_type = str(handoff.handoff_data.get("task_type") or "").strip().lower() if handoff else ""
+        allow_pricing_artifact_creation = handoff_task_type != "simple_live_lookup_document"
+        source_task = (
+            handoff.handoff_data.get("original_user_task")
+            if handoff
+            else ""
+        ) or (
+            handoff.handoff_data.get("query")
+            if handoff
+            else ""
+        ) or (
+            handoff.goal
+            if handoff
+            else ""
+        ) or task_text
+        user_task = self._recover_user_query(source_task)
+        category = self._infer_simple_live_lookup_category(user_task)
+        context_text = task_text or source_task
+        topic_recall = self._recover_topic_recall(context_text)
+        recent_assistant_replies = self._recover_recent_assistant_replies(context_text)
+        extraction_followup = self._is_lookup_result_extraction_query(user_task)
+        context_seed = self._contextual_lookup_seed(topic_recall, recent_assistant_replies)
+        contextual_urls = self._extract_urls_from_context(context_text)
+
+        if category == "local_places":
+            synthetic_handoff = handoff or DelegationHandoff(
+                goal=user_task,
+                handoff_data={
+                    "task_type": "location_local_search",
+                    "original_user_task": user_task,
+                    "query": user_task,
+                },
+            )
+            return await self._run_location_local_search(synthetic_handoff, task_text or user_task)
+
+        location_label = ""
+        if category in {"weather", "cinema"}:
+            self._notify_delegation_progress("location_context_lookup")
+            location_result = await self._call_tool("get_current_location_context", {})
+            if not (isinstance(location_result, dict) and location_result.get("error")):
+                location_payload = self._tool_payload(location_result)
+                has_location, location, presence_status = self._resolve_effective_location(
+                    location_payload=location_payload,
+                    task_text=task_text or source_task,
+                )
+                if (
+                    has_location
+                    and isinstance(location, dict)
+                    and presence_status in {"live", "recent"}
+                    and bool(location.get("usable_for_context", True))
+                ):
+                    location_label = self._location_summary(location)
+
+        fetched_payload: dict[str, Any] | None = None
+        if category == "pricing" and contextual_urls:
+            primary_url = contextual_urls[0]
+            self._notify_delegation_progress("fetch_contextual_source", url=primary_url)
+            fetched = await self._call_tool(
+                "fetch_url",
+                {"url": primary_url, "max_content_length": 6000, "timeout": 15},
+            )
+            if not (isinstance(fetched, dict) and fetched.get("error")):
+                fetched_payload = self._tool_payload(fetched)
+                pricing_response = await self._finalize_pricing_lookup(
+                    user_task=user_task,
+                    source_title=str(fetched_payload.get("title") or "").strip(),
+                    source_url=str(fetched_payload.get("url") or primary_url).strip(),
+                    source_text=str(fetched_payload.get("content") or fetched_payload.get("markdown") or ""),
+                    context_seed=context_seed,
+                    allow_artifact_creation=allow_pricing_artifact_creation,
+                )
+                if pricing_response:
+                    return pricing_response
+        elif extraction_followup and contextual_urls:
+            primary_url = contextual_urls[0]
+            self._notify_delegation_progress("fetch_contextual_source", url=primary_url)
+            fetched = await self._call_tool(
+                "fetch_url",
+                {"url": primary_url, "max_content_length": 6000, "timeout": 15},
+            )
+            if not (isinstance(fetched, dict) and fetched.get("error")):
+                fetched_payload = self._tool_payload(fetched)
+
+        search_query = self._build_simple_live_lookup_query(
+            user_task=user_task,
+            category=category,
+            location_label=location_label,
+            context_seed=context_seed,
+        )
+        if not search_query:
+            return "Ich konnte aus der Anfrage noch keine brauchbare Live-Suchanfrage ableiten."
+
+        if category in {"news", "science_news"}:
+            self._notify_delegation_progress("news_lookup", query=search_query)
+            search_result = await self._call_tool(
+                "search_news",
+                {"query": search_query, "max_results": 5, "language_code": "de"},
+            )
+        else:
+            self._notify_delegation_progress("web_lookup", query=search_query)
+            search_result = await self._call_tool(
+                "search_web",
+                {
+                    "query": search_query,
+                    "max_results": 5,
+                    "language_code": "en" if category == "pricing" else "de",
+                },
+            )
+        if isinstance(search_result, dict) and search_result.get("error"):
+            return f"Die Live-Suche ist gerade fehlgeschlagen: {search_result['error']}"
+
+        results = self._tool_list_payload(search_result)
+        if results and not fetched_payload:
+            top_url = str(results[0].get("url") or "").strip()
+            if top_url:
+                self._notify_delegation_progress("fetch_primary_source", url=top_url)
+                fetched = await self._call_tool(
+                    "fetch_url",
+                    {
+                        "url": top_url,
+                        "max_content_length": 6000 if category == "pricing" else 1800,
+                        "timeout": 15,
+                    },
+                )
+                if not (isinstance(fetched, dict) and fetched.get("error")):
+                    fetched_payload = self._tool_payload(fetched)
+                    if category == "pricing":
+                        pricing_response = await self._finalize_pricing_lookup(
+                            user_task=user_task,
+                            source_title=str(fetched_payload.get("title") or "").strip(),
+                            source_url=str(fetched_payload.get("url") or top_url).strip(),
+                            source_text=str(fetched_payload.get("content") or fetched_payload.get("markdown") or ""),
+                            context_seed=context_seed,
+                            allow_artifact_creation=allow_pricing_artifact_creation,
+                        )
+                        if pricing_response:
+                            return pricing_response
+
+        intros = {
+            "weather": f"Zum Wetter habe ich gerade diese aktuellen Treffer{' fuer ' + location_label if location_label else ''} gefunden:",
+            "news": "Ich habe gerade diese aktuellen Treffer gefunden:",
+            "science_news": "Aus der Wissenschaft fallen gerade diese aktuellen Treffer auf:",
+            "pricing": "Zu den aktuellen Preisen habe ich gerade diese Treffer gefunden:",
+            "person_lookup": "Zu der aktuellen Personen- oder Rollenfrage habe ich gerade diese Treffer gefunden:",
+            "cinema": f"Zum aktuellen Kinoprogramm{' bei ' + location_label if location_label else ''} habe ich diese Treffer gefunden:",
+            "web_lookup": "Ich habe gerade diese aktuellen Treffer gefunden:",
+        }
+        empty_messages = {
+            "weather": "Ich habe zum Wetter gerade keine brauchbaren Live-Treffer gefunden.",
+            "news": "Ich habe gerade keine brauchbaren News-Treffer gefunden.",
+            "science_news": "Ich habe gerade keine brauchbaren Wissenschafts-Treffer gefunden.",
+            "pricing": "Ich habe gerade keine brauchbaren Preis-Treffer gefunden.",
+            "person_lookup": "Ich habe gerade keine brauchbaren aktuellen Personen-Treffer gefunden.",
+            "cinema": "Ich habe gerade kein brauchbares Kinoprogramm gefunden.",
+            "web_lookup": "Ich habe gerade keine brauchbaren Live-Treffer gefunden.",
+        }
+        return self._format_simple_lookup_results(
+            intro=empty_messages.get(category, "Ich habe gerade keine brauchbaren Live-Treffer gefunden.")
+            if not results
+            else intros.get(category, "Ich habe gerade diese aktuellen Treffer gefunden:"),
+            results=results,
+            fetched_payload=fetched_payload,
+        )
+
     async def _run_self_status_probe(self) -> str:
         ops_result = await self._call_tool("get_ops_observability", {"days": 7, "limit": 4})
         if isinstance(ops_result, dict) and ops_result.get("error"):
@@ -1384,6 +2330,7 @@ class ExecutorAgent(BaseAgent):
         }
 
     async def run(self, task: str) -> str:
+        self._notify_delegation_progress("executor_run_started")
         handoff = parse_delegation_handoff(task)
         plain_task = self._recover_user_query(task)
         semantic_recall = self._recover_semantic_recall(task)
@@ -1418,6 +2365,10 @@ class ExecutorAgent(BaseAgent):
             return await self._run_location_route(handoff, task)
         if handoff and handoff.handoff_data.get("task_type") == "youtube_light_research":
             return await self._run_youtube_light_research(handoff)
+        if handoff and handoff.handoff_data.get("task_type") in {"simple_live_lookup", "simple_live_lookup_document"}:
+            return await self._run_simple_live_lookup(handoff, task)
+        if not handoff and self._is_simple_live_lookup_query(plain_task):
+            return await self._run_simple_live_lookup(None, plain_task)
         if not handoff and self._is_self_status_query(plain_task):
             return await self._run_self_status_probe()
         if not handoff and self._is_self_remediation_query(plain_task):
@@ -1476,4 +2427,5 @@ class ExecutorAgent(BaseAgent):
         effective_task = handoff.goal if handoff and handoff.goal else task
         handoff_context = self._build_executor_handoff_context(handoff)
         enriched_task = "\n\n".join(part for part in (effective_task, handoff_context) if part)
+        self._notify_delegation_progress("executor_llm_fallback")
         return await super().run(enriched_task)

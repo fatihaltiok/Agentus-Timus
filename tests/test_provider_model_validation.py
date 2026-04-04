@@ -196,6 +196,23 @@ def test_multi_provider_client_accepts_gemini_api_key_alias(monkeypatch):
     assert client.get_api_key(ModelProvider.GOOGLE) == "gem-test-key"
 
 
+def test_multi_provider_client_accepts_dashscope_api_key(monkeypatch):
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "dash-test-key")
+
+    client = MultiProviderClient()
+
+    assert client.get_api_key(ModelProvider.DASHSCOPE) == "dash-test-key"
+
+
+def test_multi_provider_client_accepts_dashscope_native_workspace_key_alias(monkeypatch):
+    monkeypatch.delenv("DASHSCOPE_NATIVE_API_KEY", raising=False)
+    monkeypatch.setenv("DASHSCOPE_WORKSPACE_API_KEY", "dash-ws-test-key")
+
+    client = MultiProviderClient()
+
+    assert client.get_api_key(ModelProvider.DASHSCOPE_NATIVE) == "dash-ws-test-key"
+
+
 class TestGoogleProviderOpenAICompat:
     """GP1-Fix: ModelProvider.GOOGLE muss über OpenAI-kompatible Branch laufen."""
 
@@ -261,3 +278,54 @@ class TestGoogleProviderOpenAICompat:
         )
         # Model landet im validated-Cache trotzdem
         assert (ModelProvider.GOOGLE, "gemini-3-flash-preview") in client._validated_models
+
+
+class TestDashScopeProviderOpenAICompat:
+    def test_dashscope_base_url_can_be_overridden_for_workspace(self, monkeypatch):
+        monkeypatch.setenv(
+            "DASHSCOPE_API_BASE",
+            "https://ws-example.eu-central-1.maas.aliyuncs.com/compatible-mode/v1",
+        )
+        client = MultiProviderClient()
+        assert client.get_base_url(ModelProvider.DASHSCOPE) == (
+            "https://ws-example.eu-central-1.maas.aliyuncs.com/compatible-mode/v1"
+        )
+        assert client.get_openai_compat_base_url(ModelProvider.DASHSCOPE) == (
+            "https://ws-example.eu-central-1.maas.aliyuncs.com/compatible-mode/v1"
+        )
+
+    def test_dashscope_validate_skips_model_listing(self):
+        client = MultiProviderClient()
+        client._api_keys[ModelProvider.DASHSCOPE] = "fake-key"
+
+        client.validate_model_or_raise(
+            ModelProvider.DASHSCOPE,
+            "qwen3.6-plus",
+            agent_type="executor",
+        )
+
+        assert (ModelProvider.DASHSCOPE, "qwen3.6-plus") in client._validated_models
+
+
+class TestDashScopeNativeProvider:
+    def test_dashscope_native_base_url_can_be_overridden_for_workspace(self, monkeypatch):
+        monkeypatch.setenv(
+            "DASHSCOPE_NATIVE_API_BASE",
+            "https://ws-example.eu-central-1.maas.aliyuncs.com/api/v1",
+        )
+        client = MultiProviderClient()
+        assert client.get_base_url(ModelProvider.DASHSCOPE_NATIVE) == (
+            "https://ws-example.eu-central-1.maas.aliyuncs.com/api/v1"
+        )
+
+    def test_dashscope_native_validate_skips_model_listing(self):
+        client = MultiProviderClient()
+        client._api_keys[ModelProvider.DASHSCOPE_NATIVE] = "fake-key"
+
+        client.validate_model_or_raise(
+            ModelProvider.DASHSCOPE_NATIVE,
+            "qwen3.6-plus",
+            agent_type="executor",
+        )
+
+        assert (ModelProvider.DASHSCOPE_NATIVE, "qwen3.6-plus") in client._validated_models

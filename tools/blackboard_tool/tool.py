@@ -74,10 +74,20 @@ async def read_from_blackboard(topic: str, key: str = "") -> dict:
     """Liest Einträge aus dem Blackboard."""
     from memory.agent_blackboard import get_blackboard
 
-    entries = get_blackboard().read(topic=topic, key=key)
+    blackboard = get_blackboard()
+    entries = blackboard.read(topic=topic, key=key)
+    lookup_mode = "topic"
+
+    # Delegations-Ergebnisse werden unter topic="delegation_results" und key=<blackboard_key>
+    # persistiert. Meta-Agenten lesen im Lauf aber oft direkt mit dem blackboard_key als topic.
+    if not entries and not key and str(topic or "").startswith("delegation:"):
+        entries = blackboard.read(topic="delegation_results", key=topic)
+        lookup_mode = "delegation_key"
+
     return {
         "status": "ok",
         "topic": topic,
+        "lookup_mode": lookup_mode,
         "count": len(entries),
         "entries": entries,
     }

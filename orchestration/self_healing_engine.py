@@ -15,6 +15,8 @@ import os
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, Optional
 
+import httpx
+
 from orchestration.health_orchestrator import HealthOrchestrator
 from orchestration.task_queue import (
     Priority,
@@ -26,6 +28,12 @@ from orchestration.task_queue import (
     get_queue,
 )
 from utils.http_health import fetch_http_text
+from utils.dashscope_native import (
+    build_dashscope_native_payload,
+    dashscope_native_generation_url,
+    extract_dashscope_native_reasoning,
+    extract_dashscope_native_text,
+)
 from utils.policy_gate import audit_policy_decision, evaluate_policy_gate
 
 log = logging.getLogger("SelfHealingEngine")
@@ -1275,6 +1283,8 @@ class SelfHealingEngine:
             if provider not in {
                 ModelProvider.OPENAI,
                 ModelProvider.ZAI,
+                ModelProvider.DASHSCOPE,
+                ModelProvider.DASHSCOPE_NATIVE,
                 ModelProvider.DEEPSEEK,
                 ModelProvider.INCEPTION,
                 ModelProvider.NVIDIA,
@@ -1282,7 +1292,6 @@ class SelfHealingEngine:
             }:
                 log.debug("LLM-Diagnose uebersprungen: system provider '%s' ist hier nicht openai-kompatibel", provider.value)
                 return {}
-            client = get_provider_client().get_client(provider)
             prompt = (
                 "Du bist ein KI-System-Diagnostiker für den autonomen Agenten Timus.\n"
                 "Analysiere folgenden Incident und antworte NUR mit validem JSON.\n\n"
@@ -1296,13 +1305,37 @@ class SelfHealingEngine:
                 '"recommended_action": "...", "urgency": "low|medium|high|immediate", '
                 '"pattern_hint": "..."}'
             )
-            response = client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=300,
-            )
-            raw = (response.choices[0].message.content or "").strip()
+            if provider == ModelProvider.DASHSCOPE_NATIVE:
+                provider_client = get_provider_client()
+                api_key = provider_client.get_api_key(ModelProvider.DASHSCOPE_NATIVE)
+                base_url = provider_client.get_base_url(ModelProvider.DASHSCOPE_NATIVE)
+                payload = build_dashscope_native_payload(
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.1,
+                    max_tokens=300,
+                )
+                with httpx.Client(timeout=float(os.getenv("DASHSCOPE_NATIVE_TIMEOUT", "60"))) as http:
+                    response = http.post(
+                        dashscope_native_generation_url(base_url, model),
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    )
+                    response.raise_for_status()
+                    response_payload = response.json()
+                raw = extract_dashscope_native_text(response_payload) or extract_dashscope_native_reasoning(response_payload)
+            else:
+                client = get_provider_client().get_client(provider)
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.1,
+                    max_tokens=300,
+                )
+                raw = (response.choices[0].message.content or "").strip()
             match = re.search(r"\{.*\}", raw, re.DOTALL)
             if match:
                 return json.loads(match.group(0))

@@ -47,6 +47,26 @@ class _FakeProviderClient:
         return _FakeOpenAIClient(self.response)
 
 
+class _FakeDashScopeAsyncClient:
+    def __init__(self, payload):
+        self.payload = payload
+        self.calls = []
+
+    async def post(self, url, headers=None, json=None, timeout=None):
+        self.calls.append(
+            {
+                "url": url,
+                "headers": headers,
+                "json": json,
+                "timeout": timeout,
+            }
+        )
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: self.payload,
+        )
+
+
 def test_self_improvement_engine_summarizes_llm_usage(tmp_path):
     engine = SelfImprovementEngine(db_path=tmp_path / "usage.db")
     engine.record_llm_usage(
@@ -164,3 +184,60 @@ async def test_dispatcher_records_openai_compatible_usage(monkeypatch):
     assert record.model == "glm-5"
     assert record.input_tokens == 120
     assert record.output_tokens == 45
+
+
+@pytest.mark.asyncio
+async def test_base_agent_records_dashscope_native_usage(monkeypatch):
+    capture_engine = _CaptureEngine()
+    payload = {
+        "output": {
+            "choices": [
+                {
+                    "message": {
+                        "content": "ok",
+                        "reasoning_content": "",
+                    }
+                }
+            ]
+        },
+        "usage": {
+            "input_tokens": 88,
+            "output_tokens": 19,
+            "input_tokens_details": {"cached_tokens": 7},
+        },
+    }
+
+    class _ProviderClient:
+        def get_api_key(self, _provider):
+            return "dash-key"
+
+        def get_base_url(self, _provider):
+            return "https://dashscope.example/api/v1"
+
+    fake_http = _FakeDashScopeAsyncClient(payload)
+    monkeypatch.setattr(base_agent_mod, "get_improvement_engine", lambda: capture_engine)
+
+    agent = base_agent_mod.BaseAgent.__new__(base_agent_mod.BaseAgent)
+    agent.provider_client = _ProviderClient()
+    agent.http_client = fake_http
+    agent.provider = ModelProvider.DASHSCOPE_NATIVE
+    agent.model = "qwen3.6-plus"
+    agent.agent_type = "meta"
+    agent.conversation_session_id = "sess-native"
+
+    text = await base_agent_mod.BaseAgent._call_dashscope_native(
+        agent,
+        [{"role": "user", "content": "hello"}],
+    )
+
+    assert text == "ok"
+    assert fake_http.calls[0]["url"].endswith("/services/aigc/multimodal-generation/generation")
+    assert len(capture_engine.records) == 1
+    record = capture_engine.records[0]
+    assert record.session_id == "sess-native"
+    assert record.agent == "meta"
+    assert record.provider == "dashscope_native"
+    assert record.input_tokens == 88
+    assert record.output_tokens == 19
+    assert record.cached_tokens == 7
+    assert record.success is True

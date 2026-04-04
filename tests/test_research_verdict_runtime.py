@@ -146,3 +146,36 @@ def test_academic_report_uses_claim_language_instead_of_blanket_multisource_veri
     assert report.index("## Executive Briefing") < report.index("## Executive Verdict Table")
     assert report.index("## Kernthesen") < report.index("## Claim Register")
     assert report.index("## Schlussfolgerungen") < report.index("## Domain Scorecards")
+
+
+def test_confidence_snapshot_drops_to_low_when_source_fit_is_weak():
+    from tools.deep_research.tool import _research_confidence_snapshot
+
+    label, reason = _research_confidence_snapshot(
+        robust_claim_count=3,
+        contract_claims_count=4,
+        high_quality_percent=85.0,
+        source_fit_percent=25.0,
+    )
+
+    assert label == "Niedrig"
+    assert "nicht direkt auf die Leitfrage" in reason
+
+
+def test_negative_evidence_summary_calibration_softens_fake_news_wording():
+    from tools.deep_research.tool import _calibrate_negative_evidence_summary
+
+    summary = (
+        "Das ist Falschinformation. In den geprueften Quellen fand ich keinen Beleg. "
+        "Das ist ein Geruecht."
+    )
+
+    calibrated = _calibrate_negative_evidence_summary(
+        summary,
+        {"direct_fit_percent": 20.0, "weak_fit_percent": 80.0},
+    )
+
+    assert "Hinweis:" in calibrated
+    assert "Falschinformation" not in calibrated
+    assert "Geruecht" not in calibrated
+    assert "nicht belastbar belegt" in calibrated

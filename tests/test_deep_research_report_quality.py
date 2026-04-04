@@ -112,6 +112,104 @@ def test_research_metadata_summary_exposes_research_plan():
     assert "narrative_report" in summary
 
 
+def test_policy_research_plan_adds_primary_source_priority_variants():
+    from tools.deep_research.research_contracts import ResearchProfile
+    from tools.deep_research.tool import DeepResearchSession, _ensure_research_plan
+
+    session = DeepResearchSession(
+        "Braucht Deutschland eine Ausreisegenehmigung?",
+        focus_areas=["Gesetzesentwurf", "Bundestag"],
+    )
+    session.contract_v2.question.profile = ResearchProfile.POLICY_REGULATION
+
+    plan = _ensure_research_plan(session)
+    joined_variants = " || ".join(plan.query_variants).lower()
+
+    assert "gesetzesentwurf" in joined_variants
+    assert any(
+        marker in joined_variants
+        for marker in (
+            "primaerquelle",
+            "ministerium",
+            "drucksache",
+            "behoerdenangabe",
+            "official source",
+            "legislative text",
+            "ministry regulation",
+            "primary source",
+        )
+    )
+    assert "regulator" in plan.preferred_source_types
+
+
+@pytest.mark.asyncio
+async def test_source_quality_scope_fit_penalizes_off_topic_high_authority_source():
+    from tools.deep_research.research_contracts import ResearchProfile
+    from tools.deep_research.tool import (
+        DeepResearchSession,
+        ResearchNode,
+        _ensure_research_plan,
+        _evaluate_source_quality,
+    )
+
+    session = DeepResearchSession(
+        "Braucht Deutschland eine Ausreisegenehmigung?",
+        focus_areas=["Gesetzesentwurf", "Ausreise"],
+    )
+    session.contract_v2.question.profile = ResearchProfile.POLICY_REGULATION
+    plan = _ensure_research_plan(session)
+    node = ResearchNode(
+        url="https://example.gov/contact",
+        title="Contact, jobs and customer service",
+        content_snippet="Kontaktseite",
+    )
+
+    metrics = await _evaluate_source_quality(
+        node,
+        "Contact customer service support jobs address registration helpdesk.",
+        query=session.query,
+        plan=plan,
+    )
+
+    assert metrics.authority_score > 0.9
+    assert metrics.scope_fit_score < 0.35
+    assert "Weak topic fit" in metrics.notes
+    assert metrics.quality_score < 0.75
+
+
+@pytest.mark.asyncio
+async def test_source_quality_marks_german_state_sources_as_non_independent_for_germany_queries():
+    from tools.deep_research.research_contracts import ResearchProfile
+    from tools.deep_research.tool import (
+        DeepResearchSession,
+        ResearchNode,
+        _ensure_research_plan,
+        _evaluate_source_quality,
+    )
+
+    session = DeepResearchSession(
+        "Braucht Deutschland eine Ausreisegenehmigung?",
+        focus_areas=["Gesetzesentwurf", "Ausreise"],
+    )
+    session.contract_v2.question.profile = ResearchProfile.POLICY_REGULATION
+    plan = _ensure_research_plan(session)
+    node = ResearchNode(
+        url="https://www.bundestag.de/dokumente/textarchiv",
+        title="Deutscher Bundestag",
+        content_snippet="Gesetzgebungsverfahren und Drucksachen",
+    )
+
+    metrics = await _evaluate_source_quality(
+        node,
+        "Drucksachen, Gesetzgebungsverfahren und Dokumentation des Bundestags.",
+        query=session.query,
+        plan=plan,
+    )
+
+    assert metrics.independence_score < 0.25
+    assert "German state-affiliated source" in metrics.notes
+
+
 @pytest.mark.asyncio
 async def test_narrative_synthesis_falls_back_when_llm_returns_empty(monkeypatch):
     from tools.deep_research.tool import DeepResearchSession, ResearchNode, _create_narrative_synthesis_report

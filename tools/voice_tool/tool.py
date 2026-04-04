@@ -27,7 +27,7 @@ from tools.tool_registry_v2 import ToolParameter as P
 from tools.tool_registry_v2 import tool
 from utils.voice_text import normalize_tts_text
 
-load_dotenv()
+load_dotenv(override=True)
 log = logging.getLogger("voice_tool")
 
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "medium")

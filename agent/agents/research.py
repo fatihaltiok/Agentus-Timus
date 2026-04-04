@@ -24,6 +24,7 @@ import httpx
 from agent.base_agent import BaseAgent
 from agent.prompts import DEEP_RESEARCH_PROMPT_TEMPLATE
 from agent.shared.delegation_handoff import DelegationHandoff, parse_delegation_handoff
+from tools.deep_research.research_contracts import is_german_state_affiliated_url
 
 log = logging.getLogger("DeepResearchAgent")
 
@@ -441,6 +442,10 @@ class DeepResearchAgent(BaseAgent):
                     score += 1
             except (ValueError, TypeError):
                 pass
+
+            if is_german_state_affiliated_url(url):
+                score -= 1.5
+                s["source_policy_flag"] = "german_state_affiliated"
 
             # Clamp [0, MAX_RANKING_SCORE]
             s["ranking_score"] = max(0, min(cls.MAX_RANKING_SCORE, round(score, 2)))

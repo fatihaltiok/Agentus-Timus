@@ -4,7 +4,7 @@ import html
 import re
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import quote_plus
+from urllib.parse import parse_qs, quote_plus, urlparse
 
 
 _ROUTE_MODE_ALIASES = {
@@ -171,6 +171,29 @@ def build_google_maps_directions_url(
         f"&destination={safe_destination}"
         f"&travelmode={safe_mode}"
     )
+
+
+def _extract_origin_coordinates_from_route_url(route_url: str) -> dict[str, float]:
+    raw_url = str(route_url or "").strip()
+    if not raw_url:
+        return {}
+    try:
+        parsed = urlparse(raw_url)
+        params = parse_qs(parsed.query, keep_blank_values=False)
+    except Exception:
+        return {}
+    origin_values = params.get("origin") or []
+    if not origin_values:
+        return {}
+    raw_origin = str(origin_values[0] or "").strip()
+    if not raw_origin or "," not in raw_origin:
+        return {}
+    latitude_raw, longitude_raw = raw_origin.split(",", 1)
+    latitude = _as_float(latitude_raw, default=0.0)
+    longitude = _as_float(longitude_raw, default=0.0)
+    if latitude == 0.0 and longitude == 0.0:
+        return {}
+    return {"latitude": latitude, "longitude": longitude}
 
 
 def _normalize_route_step(raw: dict[str, Any], position: int) -> dict[str, Any]:
@@ -552,6 +575,23 @@ def prepare_route_snapshot(payload: dict[str, Any], *, saved_at: str | None = No
             if isinstance(item, dict):
                 normalized_steps.append(_normalize_route_step(item, idx))
 
+    start_coordinates = (
+        safe.get("start_coordinates")
+        if isinstance(safe.get("start_coordinates"), dict)
+        else {}
+    )
+    origin_payload = safe.get("origin") if isinstance(safe.get("origin"), dict) else {}
+    fallback_origin_coordinates = _extract_origin_coordinates_from_route_url(route_url)
+    if not _extract_coordinates(start_coordinates):
+        start_coordinates = fallback_origin_coordinates or start_coordinates
+    normalized_origin = dict(origin_payload) if origin_payload else {}
+    if not _extract_coordinates(normalized_origin):
+        normalized_origin.update(fallback_origin_coordinates)
+    if not str(normalized_origin.get("display_name") or "").strip() and str(safe.get("start_address") or "").strip():
+        normalized_origin["display_name"] = str(safe.get("start_address") or "").strip()
+    if "usable_for_context" not in normalized_origin and fallback_origin_coordinates:
+        normalized_origin["usable_for_context"] = True
+
     return {
         "has_route": bool(route_url and destination_query),
         "destination_query": destination_query,
@@ -565,8 +605,8 @@ def prepare_route_snapshot(payload: dict[str, Any], *, saved_at: str | None = No
         "end_address": str(safe.get("end_address") or "").strip(),
         "steps": normalized_steps[:12],
         "step_count": len(normalized_steps),
-        "origin": safe.get("origin") if isinstance(safe.get("origin"), dict) else {},
-        "start_coordinates": safe.get("start_coordinates") if isinstance(safe.get("start_coordinates"), dict) else {},
+        "origin": normalized_origin,
+        "start_coordinates": start_coordinates,
         "end_coordinates": safe.get("end_coordinates") if isinstance(safe.get("end_coordinates"), dict) else {},
         "path_coordinates": _normalize_path_coordinates(safe.get("path_coordinates")),
         "overview_polyline": str(safe.get("overview_polyline") or "").strip(),

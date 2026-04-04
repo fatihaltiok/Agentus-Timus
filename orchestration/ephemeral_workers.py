@@ -18,6 +18,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+import httpx
+
 from agent.providers import (
     ModelProvider,
     get_provider_client,
@@ -31,6 +33,12 @@ from orchestration.llm_budget_guard import (
     resolve_soft_budget_model_override,
 )
 from orchestration.self_improvement_engine import LLMUsageRecord, get_improvement_engine
+from utils.dashscope_native import (
+    build_dashscope_native_payload,
+    dashscope_native_generation_url,
+    extract_dashscope_native_reasoning,
+    extract_dashscope_native_text,
+)
 from utils.llm_usage import build_usage_payload
 from utils.openai_compat import prepare_openai_params
 
@@ -39,6 +47,7 @@ logger = logging.getLogger("TimusEphemeralWorkers")
 _OPENAI_COMPAT_PROVIDERS = {
     ModelProvider.OPENAI,
     ModelProvider.ZAI,
+    ModelProvider.DASHSCOPE,
     ModelProvider.DEEPSEEK,
     ModelProvider.INCEPTION,
     ModelProvider.NVIDIA,
@@ -255,11 +264,11 @@ async def run_worker(
     effective_model = model_override.model if model_override else profile.model
     effective_tokens = min(max_tokens, max(int(budget.max_tokens_cap or max_tokens), 1))
 
-    if effective_provider not in _OPENAI_COMPAT_PROVIDERS:
+    if effective_provider != ModelProvider.DASHSCOPE_NATIVE and effective_provider not in _OPENAI_COMPAT_PROVIDERS:
         return WorkerResult(
             worker_type=task.worker_type,
             status="unsupported_provider",
-            error=f"Worker provider '{effective_provider.value}' is not openai-compatible.",
+            error=f"Worker provider '{effective_provider.value}' is not supported here.",
             provider=effective_provider.value,
             model=effective_model,
             max_tokens=effective_tokens,
@@ -271,8 +280,6 @@ async def run_worker(
         effective_model,
         agent_type=f"{agent}_{task.worker_type}_worker",
     )
-    client = get_provider_client().get_client(effective_provider)
-
     schema_block = json.dumps(task.response_schema or {}, ensure_ascii=False, indent=2)
     input_block = json.dumps(task.input_payload or {}, ensure_ascii=False, indent=2)
     messages = [
@@ -292,23 +299,55 @@ async def run_worker(
             ),
         },
     ]
-    kwargs = prepare_openai_params(
-        {
-            "model": effective_model,
-            "messages": messages,
-            "temperature": 0.1,
-            "max_tokens": effective_tokens,
-        }
-    )
 
     started = time.perf_counter()
     response_payload: Any = None
     try:
-        response_payload = await asyncio.wait_for(
-            asyncio.to_thread(client.chat.completions.create, **kwargs),
-            timeout=timeout_sec,
-        )
-        text = _extract_response_text(response_payload)
+        if effective_provider == ModelProvider.DASHSCOPE_NATIVE:
+            provider_client = get_provider_client()
+            api_key = provider_client.get_api_key(ModelProvider.DASHSCOPE_NATIVE)
+            base_url = provider_client.get_base_url(ModelProvider.DASHSCOPE_NATIVE)
+            payload = build_dashscope_native_payload(
+                model=effective_model,
+                messages=messages,
+                temperature=0.1,
+                max_tokens=effective_tokens,
+            )
+            async with httpx.AsyncClient(timeout=float(timeout_sec)) as http:
+                response = await asyncio.wait_for(
+                    http.post(
+                        dashscope_native_generation_url(base_url, effective_model),
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    ),
+                    timeout=timeout_sec,
+                )
+                try:
+                    response_payload = response.json()
+                except Exception:
+                    response_payload = None
+                response.raise_for_status()
+            text = extract_dashscope_native_text(response_payload or {})
+            if not text:
+                text = extract_dashscope_native_reasoning(response_payload or {})
+        else:
+            client = get_provider_client().get_client(effective_provider)
+            kwargs = prepare_openai_params(
+                {
+                    "model": effective_model,
+                    "messages": messages,
+                    "temperature": 0.1,
+                    "max_tokens": effective_tokens,
+                }
+            )
+            response_payload = await asyncio.wait_for(
+                asyncio.to_thread(client.chat.completions.create, **kwargs),
+                timeout=timeout_sec,
+            )
+            text = _extract_response_text(response_payload)
         if not text:
             _record_worker_usage(
                 agent=agent,

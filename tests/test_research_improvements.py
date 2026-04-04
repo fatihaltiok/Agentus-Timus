@@ -145,3 +145,14 @@ def test_rank_sorted_descending():
 
 def test_rank_empty_list():
     assert DeepResearchAgent._rank_sources([]) == []
+
+
+def test_rank_penalizes_german_state_affiliated_sources():
+    sources = [
+        {"url": "https://www.bundestag.de/dokumente/textarchiv", "relevance_score": 0.9, "verified": True},
+        {"url": "https://www.reuters.com/world/europe/example", "relevance_score": 0.9, "verified": True},
+    ]
+    result = DeepResearchAgent._rank_sources(sources)
+    assert result[0]["url"].startswith("https://www.reuters.com")
+    flagged = next(item for item in result if "bundestag.de" in item["url"])
+    assert flagged["source_policy_flag"] == "german_state_affiliated"

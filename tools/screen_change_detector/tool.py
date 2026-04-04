@@ -27,7 +27,7 @@ from utils.stable_hash import stable_hex_digest
 from dotenv import load_dotenv
 
 # --- Setup ---
-load_dotenv()
+load_dotenv(override=True)
 log = logging.getLogger("screen_change_detector")
 
 # Konfiguration

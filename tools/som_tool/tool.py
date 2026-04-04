@@ -36,7 +36,7 @@ from utils.coordinate_converter import (
 )
 
 # --- Setup ---
-load_dotenv()
+load_dotenv(override=True)
 log = logging.getLogger("som_tool")
 
 # Konfiguration

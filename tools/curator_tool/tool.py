@@ -19,7 +19,7 @@ from tools.planner.planner_helpers import call_tool_internal
 log = logging.getLogger(__name__)
 
 # --- Initialisierung ---
-load_dotenv()
+load_dotenv(override=True)
 
 # Nemotron via OpenRouter fuer strukturierte Entscheidungen
 client = OpenAI(

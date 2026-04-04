@@ -171,6 +171,47 @@ async def test_run_skill_executes_skill_md_script(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_skill_ignores_init_py_and_prefers_real_entrypoint(tmp_path, monkeypatch):
+    skills_yml_path = tmp_path / "skills.yml"
+    skills_yml_path.write_text("", encoding="utf-8")
+
+    skills_md_dir = tmp_path / "skills"
+    skill_dir = skills_md_dir / "script-skill"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        (
+            "---\n"
+            "name: script-skill\n"
+            "description: Skill with explicit run entrypoint\n"
+            "---\n\n"
+            "# Skill\n"
+        ),
+        encoding="utf-8",
+    )
+    scripts_dir = skill_dir / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    (scripts_dir / "__init__.py").write_text("raise SystemExit('wrong entrypoint')\n", encoding="utf-8")
+    (scripts_dir / "run.py").write_text(
+        (
+            "import json\n"
+            "if __name__ == '__main__':\n"
+            "    print(json.dumps({'status': 'success', 'entrypoint': 'run.py'}))\n"
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(planner_tool, "SKILLS_PATH", skills_yml_path)
+    monkeypatch.setattr(planner_tool, "SKILL_MD_DIR", skills_md_dir)
+
+    details = await planner_tool.get_skill_details("script-skill")
+    assert details["entry_script"] == "run.py"
+
+    result = await planner_tool.run_skill("script-skill")
+    assert result["result"]["success"] is True
+    assert result["result"]["parsed_output"]["entrypoint"] == "run.py"
+
+
+@pytest.mark.asyncio
 async def test_run_skill_returns_instructional_payload_for_skill_md_without_script(tmp_path, monkeypatch):
     skills_yml_path = tmp_path / "skills.yml"
     skills_yml_path.write_text("", encoding="utf-8")

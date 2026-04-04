@@ -8,7 +8,19 @@
 
 import json
 import re
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
+
+
+def _normalize_parsed_action(data: Any) -> Tuple[Optional[dict], Optional[str]]:
+    if isinstance(data, dict):
+        if "action" in data:
+            action = data["action"]
+            if isinstance(action, dict):
+                return action, None
+            return None, "Action-JSON muss ein Objekt sein, keine Liste."
+        if "method" in data:
+            return data, None
+    return None, None
 
 
 def parse_action(text: str) -> Tuple[Optional[dict], Optional[str]]:
@@ -23,10 +35,9 @@ def parse_action(text: str) -> Tuple[Optional[dict], Optional[str]]:
     if text.startswith("{") and text.endswith("}"):
         try:
             data = json.loads(text)
-            if "action" in data:
-                return data["action"], None
-            if "method" in data:
-                return data, None
+            action, error = _normalize_parsed_action(data)
+            if action is not None or error is not None:
+                return action, error
         except json.JSONDecodeError:
             pass  # Fallback zu anderen Methoden
 
@@ -36,10 +47,9 @@ def parse_action(text: str) -> Tuple[Optional[dict], Optional[str]]:
         if line.startswith("{") and line.endswith("}"):
             try:
                 data = json.loads(line)
-                if "action" in data:
-                    return data["action"], None
-                if "method" in data:
-                    return data, None
+                action, error = _normalize_parsed_action(data)
+                if action is not None or error is not None:
+                    return action, error
             except json.JSONDecodeError:
                 continue
 
@@ -59,10 +69,9 @@ def parse_action(text: str) -> Tuple[Optional[dict], Optional[str]]:
             try:
                 json_str = re.sub(r",\s*([\}\]])", r"\1", match.group(1).strip())
                 data = json.loads(json_str)
-                if "action" in data:
-                    return data["action"], None
-                if "method" in data:
-                    return data, None
+                action, error = _normalize_parsed_action(data)
+                if action is not None or error is not None:
+                    return action, error
             except (json.JSONDecodeError, ValueError):
                 continue
 
@@ -72,10 +81,9 @@ def parse_action(text: str) -> Tuple[Optional[dict], Optional[str]]:
         try:
             json_str = re.sub(r",\s*([\}\]])", r"\1", brace_match.group(1).strip())
             data = json.loads(json_str)
-            if "action" in data:
-                return data["action"], None
-            if "method" in data:
-                return data, None
+            action, error = _normalize_parsed_action(data)
+            if action is not None or error is not None:
+                return action, error
         except (json.JSONDecodeError, ValueError):
             pass
 

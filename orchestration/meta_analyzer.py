@@ -10,11 +10,20 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from datetime import datetime
 from typing import Any, Dict, List
 
+import httpx
+
 from orchestration.task_queue import TaskQueue, get_queue
+from utils.dashscope_native import (
+    build_dashscope_native_payload,
+    dashscope_native_generation_url,
+    extract_dashscope_native_reasoning,
+    extract_dashscope_native_text,
+)
 
 log = logging.getLogger("MetaAnalyzer")
 
@@ -130,6 +139,8 @@ class MetaAnalyzer:
         if provider not in {
             ModelProvider.OPENAI,
             ModelProvider.ZAI,
+            ModelProvider.DASHSCOPE,
+            ModelProvider.DASHSCOPE_NATIVE,
             ModelProvider.DEEPSEEK,
             ModelProvider.INCEPTION,
             ModelProvider.NVIDIA,
@@ -140,8 +151,6 @@ class MetaAnalyzer:
                 provider.value,
             )
             return {}
-        client = get_provider_client().get_client(provider)
-
         history_summary = json.dumps(history[-10:], ensure_ascii=False)
         incidents_summary = json.dumps(incidents, ensure_ascii=False)
 
@@ -163,13 +172,37 @@ class MetaAnalyzer:
             '"risk_level": "low|medium|high"}'
         )
 
-        response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-            max_tokens=400,
-        )
-        raw = (response.choices[0].message.content or "").strip()
+        if provider == ModelProvider.DASHSCOPE_NATIVE:
+            provider_client = get_provider_client()
+            api_key = provider_client.get_api_key(ModelProvider.DASHSCOPE_NATIVE)
+            base_url = provider_client.get_base_url(ModelProvider.DASHSCOPE_NATIVE)
+            payload = build_dashscope_native_payload(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+                max_tokens=400,
+            )
+            with httpx.Client(timeout=float(os.getenv("DASHSCOPE_NATIVE_TIMEOUT", "60"))) as http:
+                response = http.post(
+                    dashscope_native_generation_url(base_url, model),
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+                response.raise_for_status()
+                response_payload = response.json()
+            raw = extract_dashscope_native_text(response_payload) or extract_dashscope_native_reasoning(response_payload)
+        else:
+            client = get_provider_client().get_client(provider)
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+                max_tokens=400,
+            )
+            raw = (response.choices[0].message.content or "").strip()
         match = re.search(r"\{.*\}", raw, re.DOTALL)
         if match:
             return json.loads(match.group(0))

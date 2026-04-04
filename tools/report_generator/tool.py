@@ -19,7 +19,7 @@ import os
 
 # --- Setup ---
 logger = logging.getLogger("report_generator")
-load_dotenv()
+load_dotenv(override=True)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # HINWEIS: Wir entfernen den lokalen `session_data`-Speicher.

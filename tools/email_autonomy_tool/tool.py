@@ -18,7 +18,7 @@ from typing import Any, Dict, List
 from dotenv import load_dotenv
 from tools.tool_registry_v2 import ToolCategory as C, ToolParameter as P, tool
 
-load_dotenv()
+load_dotenv(override=True)
 log = logging.getLogger("email_autonomy_tool")
 
 

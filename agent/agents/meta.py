@@ -50,6 +50,12 @@ class MetaAgent(BaseAgent):
         "open_url",
         "search_google_maps_places",
         "get_current_location_context",
+        "get_all_screen_text",
+        "read_text_from_screen",
+    }
+    _META_DIRECT_READONLY_VISION_TOOLS = {
+        "get_all_screen_text",
+        "read_text_from_screen",
     }
     _RECIPE_DIRECT_RESULT_IDS = {
         "youtube_light_research",
@@ -2598,6 +2604,24 @@ class MetaAgent(BaseAgent):
         return result
 
     async def _call_tool(self, method: str, params: dict) -> dict:
+        if method in self._META_DIRECT_READONLY_VISION_TOOLS:
+            result = await super()._call_tool(method, params)
+            try:
+                result_dict = result if isinstance(result, dict) else {}
+                record_autonomy_observation(
+                    "meta_direct_tool_call",
+                    {
+                        "method": method,
+                        "status": str(result_dict.get("status") or ""),
+                        "has_error": bool(str(result_dict.get("error") or "").strip()),
+                        "error": str(result_dict.get("error") or "")[:240],
+                        "result_type": type(result).__name__,
+                    },
+                )
+            except Exception:
+                pass
+            return result
+
         specialist_agent = self._SPECIALIST_TOOL_AGENT_MAP.get(method)
         if specialist_agent:
             task = self._build_specialist_delegation_task(method, params)

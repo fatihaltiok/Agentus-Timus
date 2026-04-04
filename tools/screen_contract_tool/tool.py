@@ -32,6 +32,28 @@ MCP_URL = os.getenv("MCP_SERVER_URL", "http://127.0.0.1:5000")
 TIMEOUT = 180.0
 
 
+def _normalize_ocr_text_lines(texts: Any) -> list[str]:
+    """Normalisiert OCR-Listen, die je nach Backend Strings oder Dicts enthalten koennen."""
+    if texts is None:
+        return []
+    if isinstance(texts, (str, bytes)):
+        return [str(texts).strip()] if str(texts).strip() else []
+    if not isinstance(texts, list):
+        texts = [texts]
+
+    normalized: list[str] = []
+    for item in texts:
+        if isinstance(item, dict):
+            text = str(item.get("text") or item.get("label") or "").strip()
+            if not text:
+                text = str(item).strip()
+        else:
+            text = str(item).strip()
+        if text:
+            normalized.append(text)
+    return normalized
+
+
 # ==============================================================================
 # DATA MODELS (JSON-Verträge)
 # ==============================================================================
@@ -381,8 +403,8 @@ class ScreenContractEngine:
         if extract_ocr:
             ocr_result = await self._call_tool("get_all_screen_text")
             if ocr_result:
-                texts = ocr_result.get("texts", [])
-                ocr_text = "\n".join(texts)
+                texts = _normalize_ocr_text_lines(ocr_result.get("texts", []))
+                ocr_text = "\n".join(texts) if texts else None
 
         # 4. Warnungen und fehlende Elemente
         warnings = []

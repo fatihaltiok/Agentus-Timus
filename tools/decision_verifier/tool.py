@@ -23,7 +23,7 @@ if not logger.hasHandlers():
     )
 
 # OpenAI Client
-load_dotenv()
+load_dotenv(override=True)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # Verifikations-Strategien

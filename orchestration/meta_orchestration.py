@@ -511,6 +511,41 @@ _STRICT_RESEARCH_HINTS = (
     "papers",
 )
 
+_CLAIM_CHECK_HINTS = (
+    "stimmt das",
+    "stimmt es",
+    "ist das wahr",
+    "ob das stimmt",
+    "ob es wahr ist",
+    "wirklich",
+    "faktencheck",
+    "fact check",
+    "behauptung",
+    "behauptet",
+    "das ist falsch",
+)
+
+_LEGAL_POLICY_RESEARCH_HINTS = (
+    "gesetz",
+    "gesetzes",
+    "gesetzesentwurf",
+    "gesetzesinitiative",
+    "gesetzesinitiativen",
+    "bestrebung",
+    "bestrebungen",
+    "bundestag",
+    "bundesrat",
+    "verordnung",
+    "regelung",
+    "regelungen",
+    "pflicht",
+    "genehmigung",
+    "genehmigungspflicht",
+    "deutschland",
+    "ausreise",
+    "ausreisen",
+)
+
 _SIMPLE_LIVE_LOOKUP_DIRECT_HINTS = (
     "wetter",
     "temperatur",
@@ -590,6 +625,31 @@ _YOUTUBE_LIGHT_HINTS = (
     "auf youtube so",
     "auf youtube gerade",
     "auf youtube aktuell",
+)
+
+_YOUTUBE_FACT_CHECK_HINTS = (
+    "überprüfe",
+    "ueberpruefe",
+    "überpruefe",
+    "prüfe",
+    "pruefe",
+    "verifiziere",
+    "verify",
+    "ob es wahr ist",
+    "ist das wahr",
+    "ob da etwas wahres dran ist",
+    "ob da was wahres dran ist",
+    "wahres dran",
+    "wahr ist",
+    "ob das stimmt",
+    "stimmt das",
+    "stimmt es",
+    "faktencheck",
+    "fact check",
+    "behauptung",
+    "behauptet",
+    "gerücht",
+    "geruecht",
 )
 
 _LOCAL_SEARCH_HINTS = (
@@ -709,6 +769,12 @@ _CONTEXT_ANCHORED_FOLLOWUP_HINTS = (
     "und was jetzt",
     "mach weiter damit",
     "weiter damit",
+    "ja mach das",
+    "mach das",
+    "ok fang an",
+    "fang an",
+    "ok leg los",
+    "leg los",
 )
 
 _CONTEXT_ANCHORED_REFERENCE_TOKENS = (
@@ -1159,6 +1225,11 @@ def _site_kind(text: str) -> str | None:
     return None
 
 
+def _has_direct_youtube_url(text: str) -> bool:
+    lowered = str(text or "").lower()
+    return "youtu.be/" in lowered or "youtube.com/watch" in lowered
+
+
 def _derive_semantic_review_payload(
     text: str,
     *,
@@ -1515,8 +1586,17 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
     has_extraction = _has_any(current_normalized, _EXTRACTION_HINTS) or has_summary_request
     has_broad_research = _has_any(current_normalized, _BROAD_RESEARCH_HINTS)
     has_strict_research = _has_any(current_normalized, _STRICT_RESEARCH_HINTS)
+    has_claim_check = _has_any(current_normalized, _CLAIM_CHECK_HINTS)
+    has_legal_policy_research = _has_any(current_normalized, _LEGAL_POLICY_RESEARCH_HINTS)
+    if has_claim_check and has_legal_policy_research:
+        has_strict_research = True
     has_hard_research = _has_any(current_normalized, _HARD_RESEARCH_HINTS)
     has_youtube_light = site_kind == "youtube" and _has_any(current_normalized, _YOUTUBE_LIGHT_HINTS)
+    has_direct_youtube_url = site_kind == "youtube" and _has_direct_youtube_url(current_normalized)
+    has_youtube_fact_check = site_kind == "youtube" and (
+        _has_any(current_normalized, _YOUTUBE_FACT_CHECK_HINTS)
+        or (has_direct_youtube_url and has_strict_research)
+    )
     has_local_search = site_kind == "maps" and (
         _has_any(current_normalized, _LOCAL_SEARCH_HINTS) or is_location_local_query(current_normalized)
     ) and not has_route_request
@@ -1594,6 +1674,11 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
             recommended_chain = ["meta", "executor"]
             task_type = "simple_live_lookup"
             reason = "simple_live_lookup"
+    elif site_kind == "youtube" and has_direct_youtube_url and has_youtube_fact_check:
+        required_capabilities.extend(["content_extraction", "source_research", "fact_verification"])
+        recommended_chain = ["meta", "research"]
+        task_type = "youtube_content_extraction"
+        reason = "youtube_fact_check"
     elif site_kind == "youtube" and has_youtube_light and not has_extraction and not has_multistep_browser:
         required_capabilities.extend(["youtube_search", "lightweight_summary"])
         recommended_chain = ["meta", "executor"]
@@ -1682,8 +1767,23 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
         if agent not in deduped_chain:
             deduped_chain.append(agent)
 
+    prefer_youtube_research_only = (
+        task_type == "youtube_content_extraction"
+        and has_direct_youtube_url
+        and has_youtube_fact_check
+        and not has_browser
+    )
     recipe = resolve_orchestration_recipe(task_type, site_kind)
     alternatives = resolve_orchestration_alternative_recipes(task_type, site_kind)
+    if prefer_youtube_research_only:
+        preferred_recipe = _build_recipe_payload("youtube_research_only")
+        if preferred_recipe:
+            recipe = preferred_recipe
+            alternatives = []
+            for candidate_id in ("youtube_content_extraction", "youtube_search_then_visual"):
+                payload = _build_recipe_payload(candidate_id)
+                if payload and payload["recipe_id"] != preferred_recipe["recipe_id"]:
+                    alternatives.append(payload)
     semantic_review = _derive_semantic_review_payload(
         current_normalized,
         has_simple_live_lookup=has_simple_live_lookup,

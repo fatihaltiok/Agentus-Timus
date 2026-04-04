@@ -30,7 +30,7 @@ from tools.tool_registry_v2 import ToolCategory as C
 from tools.tool_registry_v2 import ToolParameter as P
 from tools.tool_registry_v2 import tool
 
-load_dotenv()
+load_dotenv(override=True)
 logger = logging.getLogger(__name__)
 
 # elan PATH erweitern damit shutil.which("lean"/"lake") funktioniert

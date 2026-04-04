@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 
 from tools.planner.planner_helpers import call_tool_internal
 
-load_dotenv()
+load_dotenv(override=True)
 logger = logging.getLogger("image_collector")
 
 _RESULTS_DIR = Path(os.getenv("TIMUS_RESULTS_DIR", "/home/fatih-ubuntu/dev/timus/results"))

@@ -318,12 +318,13 @@ def _pick_entry_script(script_names: List[str]) -> Optional[str]:
         return None
 
     preferred = ("main.py", "run.py", "entrypoint.py")
-    names_set = set(script_names)
+    filtered_names = [name for name in script_names if name != "__init__.py"]
+    names_set = set(filtered_names)
     for candidate in preferred:
         if candidate in names_set:
             return candidate
 
-    sorted_names = sorted(script_names)
+    sorted_names = sorted(filtered_names or script_names)
     for suffix in (".py", ".sh", ".bash"):
         for name in sorted_names:
             if name.endswith(suffix):

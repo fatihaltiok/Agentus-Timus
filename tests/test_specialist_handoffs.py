@@ -154,6 +154,49 @@ async def test_document_run_uses_structured_handoff(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_document_run_exports_lookup_table_without_llm(monkeypatch):
+    captured = {}
+
+    async def _unexpected_super_run(self, task: str) -> str:
+        raise AssertionError("BaseAgent.run darf fuer strukturierte Lookup-Tabellenexports nicht aufgerufen werden")
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        captured["method"] = method
+        captured["params"] = dict(params)
+        return {
+            "status": "success",
+            "path": "results/LLM_Preise_Vergleich.xlsx",
+            "filename": "LLM_Preise_Vergleich.xlsx",
+        }
+
+    monkeypatch.setattr(BaseAgent, "run", _unexpected_super_run)
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = DocumentAgent(tools_description_string="")
+    result = await agent.run(
+        _handoff_for(
+            "document",
+            "Erzeuge aus dem Lookup-Ergebnis die angeforderte Tabelle oder Datei.",
+            (
+                "- output_format: XLSX\n"
+                "- artifact_name: LLM_Preise_Vergleich\n"
+                "- source_material: | Anbieter | Modell | Input | Output | Cached |\\n"
+                "| --- | --- | --- | --- | --- |\\n"
+                "| OpenAI | GPT-5.4 mini | $0.75 / 1M | $4.50 / 1M | $0.075 / 1M |\\n"
+                "| DeepSeek | DeepSeek V3 | $0.27 / 1M | $1.10 / 1M | $0.07 / 1M |\n"
+            ),
+        )
+    )
+
+    assert captured["method"] == "create_xlsx"
+    assert captured["params"]["title"] == "LLM_Preise_Vergleich"
+    assert captured["params"]["headers"] == ["Anbieter", "Modell", "Input", "Output", "Cached"]
+    assert captured["params"]["rows"][0][0] == "OpenAI"
+    assert "Dokument erstellt" in result
+    assert "Vorschau" in result
+
+
+@pytest.mark.asyncio
 async def test_system_run_uses_structured_handoff(monkeypatch):
     captured = {}
 

@@ -79,6 +79,21 @@ def extract_normalized_usage(provider: ModelProvider, response_or_payload: Any) 
             cached_tokens=cached_tokens,
         )
 
+    if provider == ModelProvider.DASHSCOPE_NATIVE:
+        input_tokens = _as_non_negative_int(_read_field(usage, "input_tokens"))
+        output_tokens = _as_non_negative_int(_read_field(usage, "output_tokens"))
+        cached_tokens = _as_non_negative_int(
+            _read_field(usage, "input_tokens_details", "cached_tokens")
+        )
+        cached_tokens += _as_non_negative_int(
+            _read_field(usage, "prompt_tokens_details", "cached_tokens")
+        )
+        return NormalizedLLMUsage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cached_tokens=cached_tokens,
+        )
+
     if provider == ModelProvider.ANTHROPIC:
         input_tokens = _as_non_negative_int(_read_field(usage, "input_tokens"))
         output_tokens = _as_non_negative_int(_read_field(usage, "output_tokens"))

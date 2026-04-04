@@ -77,6 +77,27 @@ def test_quick_intent_routes_meta_feedback_and_reference_followups_to_meta():
     assert main_dispatcher.quick_intent_check("kannst du sie reparieren") == "meta"
 
 
+def test_quick_intent_routes_blackboard_queries_directly_to_meta():
+    import main_dispatcher
+
+    assert main_dispatcher.quick_intent_check("was gibts auf dem blackboard") == "meta"
+    assert main_dispatcher.quick_intent_check("zeige mir die working memory uebersicht") == "meta"
+
+
+def test_quick_intent_routes_google_calendar_access_queries_to_meta():
+    import main_dispatcher
+
+    assert main_dispatcher.quick_intent_check("hey timus kannst du meinen googlekalender einsehen") == "meta"
+    assert main_dispatcher.quick_intent_check("hilf mir bei einer google calendar integration") == "meta"
+
+
+def test_quick_intent_routes_direct_youtube_verification_to_meta():
+    import main_dispatcher
+
+    query = "überprüfe das mal ob es wahr ist was da erzählt wird https://youtu.be/niHG1OTfBrY"
+    assert main_dispatcher.quick_intent_check(query) == "meta"
+
+
 def test_quick_intent_prefers_current_user_query_inside_followup_capsule():
     import main_dispatcher
 

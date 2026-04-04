@@ -188,25 +188,146 @@ async def test_call_dispatcher_llm_uses_google_generate_content(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_call_dispatcher_llm_uses_dashscope_openai_compatible_provider(monkeypatch):
+    fake_client = _FakeOpenAICompatClient("meta")
+    fake_provider_client = _FakeProviderClient(compat_client=fake_client)
+    monkeypatch.setenv("DISPATCHER_MODEL_PROVIDER", "dashscope")
+    monkeypatch.setenv("DISPATCHER_MODEL", "qwen3.6-plus")
+    monkeypatch.setattr(main_dispatcher, "get_provider_client", lambda: fake_provider_client)
+
+    result = await main_dispatcher._call_dispatcher_llm("plane einen naechsten schritt")
+
+    assert result == "meta"
+    assert fake_provider_client.validated == [
+        (ModelProvider.DASHSCOPE, "qwen3.6-plus", "dispatcher")
+    ]
+    assert fake_client.calls
+    assert fake_client.calls[0]["model"] == "qwen3.6-plus"
+
+
+@pytest.mark.asyncio
+async def test_call_dispatcher_llm_uses_dashscope_native_generation_endpoint(monkeypatch):
+    captured = {}
+
+    class _FakeAsyncClient:
+        def __init__(self, timeout):
+            captured["timeout"] = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["json"] = json
+            return SimpleNamespace(
+                raise_for_status=lambda: None,
+                json=lambda: {
+                    "output": {
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": "meta",
+                                    "reasoning_content": "",
+                                }
+                            }
+                        ]
+                    },
+                    "usage": {
+                        "input_tokens": 11,
+                        "output_tokens": 3,
+                        "input_tokens_details": {"cached_tokens": 0},
+                    },
+                },
+            )
+
+    fake_provider_client = _FakeProviderClient()
+    monkeypatch.setenv("DISPATCHER_MODEL_PROVIDER", "dashscope_native")
+    monkeypatch.setenv("DISPATCHER_MODEL", "qwen3.6-plus")
+    monkeypatch.setattr(main_dispatcher, "get_provider_client", lambda: fake_provider_client)
+    monkeypatch.setattr(main_dispatcher.httpx, "AsyncClient", _FakeAsyncClient)
+
+    result = await main_dispatcher._call_dispatcher_llm("plane einen naechsten schritt")
+
+    assert result == "meta"
+    assert fake_provider_client.validated == [
+        (ModelProvider.DASHSCOPE_NATIVE, "qwen3.6-plus", "dispatcher")
+    ]
+    assert captured["url"].endswith("/services/aigc/multimodal-generation/generation")
+    assert captured["json"]["model"] == "qwen3.6-plus"
+    assert captured["json"]["parameters"]["result_format"] == "message"
+    assert captured["json"]["input"]["messages"][0]["role"] == "system"
+
+@pytest.mark.asyncio
 async def test_get_agent_decision_falls_back_to_meta_on_dispatcher_error(monkeypatch):
     async def _boom(_query: str) -> str:
         raise RuntimeError("provider down")
 
+    observed = []
     monkeypatch.setattr(main_dispatcher, "_call_dispatcher_llm", _boom)
+    monkeypatch.setattr(
+        main_dispatcher,
+        "record_autonomy_observation",
+        lambda event_type, payload, observed_at="": observed.append(
+            {"event_type": event_type, "payload": dict(payload), "observed_at": observed_at}
+        )
+        or True,
+    )
 
     result = await main_dispatcher.get_agent_decision("vage anfrage ohne keyword")
 
     assert result == "meta"
+    assert observed[0]["event_type"] == "dispatcher_meta_fallback"
+    assert observed[0]["payload"]["reason"] == "dispatcher_exception"
 
 
 @pytest.mark.asyncio
 async def test_get_agent_decision_extracts_agent_from_verbose_dispatcher_response(monkeypatch):
-    async def _verbose(_query: str) -> str:
+    async def _verbose(_query: str, session_id: str = "") -> str:
         return "Ich wähle hier klar den Agenten meta."
 
     monkeypatch.setattr(main_dispatcher, "_call_dispatcher_llm", _verbose)
 
     result = await main_dispatcher.get_agent_decision("was kannst du alles")
+
+    assert result == "meta"
+
+
+@pytest.mark.asyncio
+async def test_get_agent_decision_records_meta_fallback_on_empty_dispatcher_decision(monkeypatch):
+    observed = []
+
+    async def _empty(_query: str, session_id: str = "") -> str:
+        return ""
+
+    monkeypatch.setattr(main_dispatcher, "_call_dispatcher_llm", _empty)
+    monkeypatch.setattr(
+        main_dispatcher,
+        "record_autonomy_observation",
+        lambda event_type, payload, observed_at="": observed.append(
+            {"event_type": event_type, "payload": dict(payload), "observed_at": observed_at}
+        )
+        or True,
+    )
+
+    result = await main_dispatcher.get_agent_decision("welches land passt besser zu mir")
+
+    assert result == "meta"
+    assert observed[0]["event_type"] == "dispatcher_meta_fallback"
+    assert observed[0]["payload"]["reason"] == "empty_decision"
+
+
+@pytest.mark.asyncio
+async def test_get_agent_decision_skips_llm_for_blackboard_query(monkeypatch):
+    async def _boom(_query: str, session_id: str = "") -> str:
+        raise AssertionError("dispatcher llm should not be called")
+
+    monkeypatch.setattr(main_dispatcher, "_call_dispatcher_llm", _boom)
+
+    result = await main_dispatcher.get_agent_decision("was gibts auf dem blackboard")
 
     assert result == "meta"
 

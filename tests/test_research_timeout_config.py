@@ -236,3 +236,33 @@ class TestResearchTimeoutConfig:
         assert "_default_timeout" in source, (
             "run_single() sollte _default_timeout Variable nutzen"
         )
+
+    def test_base_agent_research_tool_http_timeout_has_buffer(self, monkeypatch):
+        """Meta -> MCP darf Research nicht schon nach 300s abbrechen."""
+        from agent.base_agent import BaseAgent
+
+        monkeypatch.delenv("MCP_TOOL_HTTP_TIMEOUT", raising=False)
+        monkeypatch.delenv("RESEARCH_TIMEOUT", raising=False)
+        monkeypatch.delenv("MCP_RESEARCH_HTTP_TIMEOUT_BUFFER_SECONDS", raising=False)
+
+        timeout = BaseAgent._resolve_tool_http_timeout(
+            "delegate_to_agent",
+            {"agent_type": "research", "task": "recherchiere"},
+        )
+
+        assert timeout == pytest.approx(630.0)
+        assert timeout > 600.0
+
+    def test_base_agent_non_research_tool_http_timeout_stays_default(self, monkeypatch):
+        from agent.base_agent import BaseAgent
+
+        monkeypatch.delenv("MCP_TOOL_HTTP_TIMEOUT", raising=False)
+        monkeypatch.delenv("RESEARCH_TIMEOUT", raising=False)
+        monkeypatch.delenv("MCP_RESEARCH_HTTP_TIMEOUT_BUFFER_SECONDS", raising=False)
+
+        timeout = BaseAgent._resolve_tool_http_timeout(
+            "delegate_to_agent",
+            {"agent_type": "document", "task": "erstelle pdf"},
+        )
+
+        assert timeout == pytest.approx(300.0)

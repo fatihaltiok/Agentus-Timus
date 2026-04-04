@@ -15,6 +15,7 @@ import re
 import time
 import uuid
 import httpx
+from contextlib import suppress
 from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass, field
 from contextvars import ContextVar
@@ -52,6 +53,10 @@ class AgentResult:
     artifacts: List[Dict[str, Any]] = field(default_factory=list)  # Typed file refs etc.
 
 
+class DelegationProgressTimeout(TimeoutError):
+    """Agent zeigte innerhalb des Startfensters keinen verwertbaren Fortschritt."""
+
+
 class AgentRegistry:
     """
     Zentrale Registry fuer Agent-zu-Agent Delegation.
@@ -62,6 +67,7 @@ class AgentRegistry:
     """
 
     MAX_DELEGATION_DEPTH = 3
+    _DELEGATION_TASK_TYPE_RE = re.compile(r"^\s*-?\s*task_type:\s*([^\n]+)", re.IGNORECASE | re.MULTILINE)
     _ERROR_TEXT_PATTERNS = (
         re.compile(r"^\s*(?:error|fehler)\s*:", re.IGNORECASE),
         re.compile(r"invalid_request_error", re.IGNORECASE),
@@ -224,13 +230,40 @@ class AgentRegistry:
 
     # Strings die auf ein nur teilweise abgeschlossenes Ergebnis hinweisen
     _PARTIAL_MARKERS = frozenset({"Limit erreicht.", "Max Iterationen."})
+    _PARTIAL_TEXT_PATTERNS = (
+        re.compile(r"maximale anzahl an schritten erreicht", re.IGNORECASE),
+        re.compile(r"ohne finale antwort", re.IGNORECASE),
+        re.compile(r"max(?:imale)?\s+iterationen?", re.IGNORECASE),
+    )
 
-    @staticmethod
-    def _select_delegation_timeout(agent_name: str) -> float:
+    @classmethod
+    def _extract_handoff_task_type(cls, task: str) -> str:
+        text = str(task or "")
+        match = cls._DELEGATION_TASK_TYPE_RE.search(text)
+        if not match:
+            return ""
+        return match.group(1).strip().lower()
+
+    @classmethod
+    def _is_simple_live_lookup_delegation(cls, agent_name: str, task: str) -> bool:
+        return agent_name == "executor" and cls._extract_handoff_task_type(task) == "simple_live_lookup"
+
+    @classmethod
+    def _select_delegation_timeout(cls, agent_name: str, task: str = "") -> float:
         """Waehlt den Default-Timeout pro Agentenrolle."""
+        if cls._is_simple_live_lookup_delegation(agent_name, task):
+            return float(os.getenv("EXECUTOR_LOOKUP_TIMEOUT", "60"))
         if agent_name == "research":
             return float(os.getenv("RESEARCH_TIMEOUT", "600"))
         return float(os.getenv("DELEGATION_TIMEOUT", "120"))
+
+    @classmethod
+    def _select_progress_timeout(cls, agent_name: str, task: str = "") -> float:
+        """Kurzes Startfenster, in dem ein delegierter Executor Fortschritt zeigen muss."""
+        if agent_name != "executor":
+            return 0.0
+        configured = float(os.getenv("EXECUTOR_PROGRESS_TIMEOUT", "15"))
+        return min(max(1.0, configured), cls._select_delegation_timeout(agent_name, task))
 
     @staticmethod
     def _timeout_status_for_agent(agent_name: str) -> str:
@@ -245,11 +278,13 @@ class AgentRegistry:
         timeout_seconds: float,
         session_id: Optional[str],
         attempts: int,
+        timeout_phase: str = "run",
     ) -> Dict[str, Any]:
         meta: Dict[str, Any] = {
             "timed_out": True,
             "timeout_seconds": timeout_seconds,
             "attempts": attempts,
+            "timeout_phase": timeout_phase,
         }
         if session_id:
             meta["session_id"] = session_id
@@ -258,6 +293,56 @@ class AgentRegistry:
                 "Recherche enger formulieren und genau einmal erneut delegieren."
             )
         return meta
+
+    @staticmethod
+    def _make_progress_callback(progress_event: asyncio.Event, progress_state: Dict[str, Any]) -> Callable[..., None]:
+        def _callback(*args: Any, **kwargs: Any) -> None:
+            stage = str(kwargs.get("stage") or (args[0] if args else "") or "").strip()
+            if stage:
+                progress_state["stage"] = stage
+            progress_state["updated_at"] = time.monotonic()
+            progress_event.set()
+
+        return _callback
+
+    @classmethod
+    async def _run_agent_with_watchdog(
+        cls,
+        agent: Any,
+        task: str,
+        *,
+        timeout: float,
+        progress_timeout: float,
+        progress_event: asyncio.Event | None,
+    ) -> Any:
+        if progress_timeout <= 0 or progress_event is None:
+            return await asyncio.wait_for(agent.run(task), timeout=timeout)
+
+        deadline = asyncio.get_running_loop().time() + timeout
+        run_task = asyncio.create_task(agent.run(task))
+        progress_task = asyncio.create_task(progress_event.wait())
+        try:
+            wait_budget = min(timeout, progress_timeout)
+            done, _ = await asyncio.wait(
+                {run_task, progress_task},
+                timeout=wait_budget,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if run_task in done:
+                return run_task.result()
+            if progress_task in done and progress_event.is_set():
+                remaining = max(0.001, deadline - asyncio.get_running_loop().time())
+                return await asyncio.wait_for(run_task, timeout=remaining)
+            run_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await run_task
+            raise DelegationProgressTimeout(
+                f"Timeout: Agent '{getattr(agent, 'role', 'executor')}' zeigte innerhalb von {wait_budget}s keinen Fortschritt"
+            )
+        finally:
+            progress_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await progress_task
 
     async def delegate(
         self,
@@ -376,13 +461,21 @@ class AgentRegistry:
             payload={"stack_depth": len(next_stack)},
         )
 
-        timeout = self._select_delegation_timeout(to_agent)
+        timeout = self._select_delegation_timeout(to_agent, task)
+        progress_timeout = self._select_progress_timeout(to_agent, task)
         max_retries = int(os.getenv("DELEGATION_MAX_RETRIES", "1"))
 
         agent = None
         previous_session_id: Optional[str] = None
         target_has_session_attr = False
+        previous_progress_callback: Any = None
+        had_progress_callback = False
+        previous_delegation_context: Any = None
+        had_delegation_context = False
+        progress_event: asyncio.Event | None = None
+        progress_state: Dict[str, Any] = {}
         last_error: Optional[Exception] = None
+        last_timeout_phase = "run"
         try:
             agent = await self._get_or_create(to_agent)
             if hasattr(agent, "conversation_session_id"):
@@ -390,16 +483,54 @@ class AgentRegistry:
                 previous_session_id = getattr(agent, "conversation_session_id", None)
                 if effective_session_id:
                     setattr(agent, "conversation_session_id", effective_session_id)
+            if to_agent == "executor":
+                progress_event = asyncio.Event()
+                had_progress_callback = hasattr(agent, "_delegation_progress_callback")
+                previous_progress_callback = getattr(agent, "_delegation_progress_callback", None)
+                setattr(
+                    agent,
+                    "_delegation_progress_callback",
+                    self._make_progress_callback(progress_event, progress_state),
+                )
+                had_delegation_context = hasattr(agent, "_delegation_context")
+                previous_delegation_context = getattr(agent, "_delegation_context", None)
+                setattr(
+                    agent,
+                    "_delegation_context",
+                    {
+                        "from_agent": from_agent,
+                        "session_id": effective_session_id,
+                        "task_type": self._extract_handoff_task_type(task),
+                    },
+                )
 
             for attempt in range(max_retries):
                 try:
-                    raw = await asyncio.wait_for(agent.run(task), timeout=timeout)
+                    if progress_event is not None:
+                        progress_event.clear()
+                    raw = await self._run_agent_with_watchdog(
+                        agent,
+                        task,
+                        timeout=timeout,
+                        progress_timeout=progress_timeout,
+                        progress_event=progress_event,
+                    )
                     last_error = None
                     break
+                except DelegationProgressTimeout as e:
+                    last_error = e
+                    last_timeout_phase = "progress"
+                    log.warning(
+                        f"Delegation {from_agent} -> {to_agent} Startfenster-Timeout "
+                        f"(Versuch {attempt + 1}/{max_retries})"
+                    )
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(2 ** attempt)
                 except asyncio.TimeoutError as e:
                     last_error = TimeoutError(
                         f"Timeout: Agent '{to_agent}' hat nicht innerhalb von {timeout}s geantwortet"
                     )
+                    last_timeout_phase = "run"
                     log.warning(
                         f"Delegation {from_agent} -> {to_agent} Timeout "
                         f"(Versuch {attempt + 1}/{max_retries})"
@@ -569,6 +700,7 @@ class AgentRegistry:
                 timeout_seconds=timeout,
                 session_id=effective_session_id,
                 attempts=max_retries,
+                timeout_phase=last_timeout_phase,
             )
             self._log_canvas_delegation(
                 from_agent=from_agent,
@@ -577,7 +709,12 @@ class AgentRegistry:
                 status="error" if timeout_status == "error" else "completed",
                 task=task,
                 message=f"Delegation Timeout: {e}",
-                payload={"timeout_seconds": timeout, "attempts": max_retries},
+                payload={
+                    "timeout_seconds": timeout,
+                    "attempts": max_retries,
+                    "timeout_phase": last_timeout_phase,
+                    "last_progress_stage": str(progress_state.get("stage") or ""),
+                },
             )
             self._record_routing_outcome(task, to_agent, timeout_status)
             try:
@@ -664,6 +801,15 @@ class AgentRegistry:
         finally:
             if target_has_session_attr and agent is not None:
                 setattr(agent, "conversation_session_id", previous_session_id)
+            if agent is not None and to_agent == "executor":
+                if had_progress_callback:
+                    setattr(agent, "_delegation_progress_callback", previous_progress_callback)
+                elif hasattr(agent, "_delegation_progress_callback"):
+                    delattr(agent, "_delegation_progress_callback")
+                if had_delegation_context:
+                    setattr(agent, "_delegation_context", previous_delegation_context)
+                elif hasattr(agent, "_delegation_context"):
+                    delattr(agent, "_delegation_context")
             self._delegation_stack_var.reset(stack_token)
 
     @staticmethod
@@ -739,6 +885,7 @@ class AgentRegistry:
     @classmethod
     def _classify_delegation_outcome(cls, raw: Any, result_text: str) -> tuple[str, str]:
         """Klassifiziert delegierte Ergebnisse, damit Fehlertext nicht als Erfolg durchgeht."""
+        stripped = (result_text or "").strip()
         if isinstance(raw, dict):
             raw_status = str(raw.get("status") or "").strip().lower()
             if raw.get("skipped") is True:
@@ -749,11 +896,16 @@ class AgentRegistry:
                 return "error", str(raw.get("error") or result_text)
             if raw.get("error"):
                 return "error", str(raw.get("error"))
+            if raw_status == "success" and any(pattern.search(stripped) for pattern in cls._PARTIAL_TEXT_PATTERNS):
+                return "partial", stripped
 
         if result_text in cls._PARTIAL_MARKERS:
             return "partial", result_text
 
-        stripped = (result_text or "").strip()
+        for pattern in cls._PARTIAL_TEXT_PATTERNS:
+            if pattern.search(stripped):
+                return "partial", stripped
+
         for pattern in cls._ERROR_TEXT_PATTERNS:
             if pattern.search(stripped):
                 return "error", stripped
@@ -1146,8 +1298,9 @@ class AgentRegistry:
             task_id    = task.get("task_id") or f"t{uuid.uuid4().hex[:6]}"
             agent_name = self.normalize_agent_name(task.get("agent", ""))
             task_desc  = task.get("task", "")
-            _default_timeout = AgentRegistry._select_delegation_timeout(agent_name)
+            _default_timeout = AgentRegistry._select_delegation_timeout(agent_name, task_desc)
             timeout = float(task.get("timeout", _default_timeout))
+            progress_timeout = AgentRegistry._select_progress_timeout(agent_name, task_desc)
             subtrace   = f"{trace_id}-{task_id}"
 
             if not agent_name or not task_desc:
@@ -1182,11 +1335,23 @@ class AgentRegistry:
                     fresh_agent = spec.factory(tools_desc, **spec.extra_kwargs)
                     previous_session_id: Optional[str] = None
                     target_has_session_attr = False
+                    had_progress_callback = False
+                    previous_progress_callback = None
+                    progress_event: asyncio.Event | None = None
                     if hasattr(fresh_agent, "conversation_session_id"):
                         target_has_session_attr = True
                         previous_session_id = getattr(fresh_agent, "conversation_session_id", None)
                         if effective_session_id:
                             setattr(fresh_agent, "conversation_session_id", effective_session_id)
+                    if agent_name == "executor":
+                        progress_event = asyncio.Event()
+                        had_progress_callback = hasattr(fresh_agent, "_delegation_progress_callback")
+                        previous_progress_callback = getattr(fresh_agent, "_delegation_progress_callback", None)
+                        setattr(
+                            fresh_agent,
+                            "_delegation_progress_callback",
+                            AgentRegistry._make_progress_callback(progress_event, {}),
+                        )
 
                     # Schritt 3: read-only fuer diesen Task setzen (ContextVar — nur dieser Task)
                     MemoryAccessGuard.set_read_only(True)
@@ -1203,8 +1368,12 @@ class AgentRegistry:
                     )
 
                     # Schritt 5: Task ausfuehren
-                    raw = await asyncio.wait_for(
-                        fresh_agent.run(task_desc), timeout=timeout
+                    raw = await AgentRegistry._run_agent_with_watchdog(
+                        fresh_agent,
+                        task_desc,
+                        timeout=timeout,
+                        progress_timeout=progress_timeout,
+                        progress_event=progress_event,
                     )
 
                     # Schritt 6: read-only zuruecksetzen
@@ -1269,6 +1438,11 @@ class AgentRegistry:
                     try:
                         if target_has_session_attr:
                             setattr(fresh_agent, "conversation_session_id", previous_session_id)
+                        if agent_name == "executor":
+                            if had_progress_callback:
+                                setattr(fresh_agent, "_delegation_progress_callback", previous_progress_callback)
+                            elif hasattr(fresh_agent, "_delegation_progress_callback"):
+                                delattr(fresh_agent, "_delegation_progress_callback")
                     except Exception:
                         pass
 

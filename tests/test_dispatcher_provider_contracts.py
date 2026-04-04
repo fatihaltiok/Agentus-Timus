@@ -37,6 +37,14 @@ def test_contract_google_is_supported_natively():
     assert dispatcher_provider_supports_native_contract(ModelProvider.GOOGLE.value) is True
 
 
+def test_contract_dashscope_is_supported_natively():
+    assert dispatcher_provider_supports_native_contract(ModelProvider.DASHSCOPE.value) is True
+
+
+def test_contract_dashscope_native_is_supported_natively():
+    assert dispatcher_provider_supports_native_contract(ModelProvider.DASHSCOPE_NATIVE.value) is True
+
+
 @given(st.text(min_size=0, max_size=30))
 @settings(max_examples=200)
 def test_hypothesis_normalized_dispatcher_provider_always_valid(raw: str):
@@ -62,6 +70,8 @@ def test_hypothesis_support_contract_returns_bool(provider: str):
     ModelProvider.DEEPSEEK.value,
     ModelProvider.INCEPTION.value,
     ModelProvider.NVIDIA.value,
+    ModelProvider.DASHSCOPE.value,
+    ModelProvider.DASHSCOPE_NATIVE.value,
     ModelProvider.ANTHROPIC.value,
     ModelProvider.GOOGLE.value,
 ]))

@@ -53,6 +53,12 @@ from orchestration.llm_budget_guard import (
 )
 from orchestration.self_improvement_engine import LLMUsageRecord, ToolUsageRecord, get_improvement_engine
 from utils.context_guard import ContextGuard, ContextStatus
+from utils.dashscope_native import (
+    build_dashscope_native_payload,
+    dashscope_native_generation_url,
+    extract_dashscope_native_reasoning,
+    extract_dashscope_native_text,
+)
 from utils.headless_service_guard import desktop_open_block_reason
 from utils.llm_usage import build_usage_payload
 
@@ -505,6 +511,66 @@ class BaseAgent(DynamicToolMixin):
         r"|^\s*ich\s+antworte\s+ab\s+jetzt",
         re.IGNORECASE | re.DOTALL,
     )
+    _SAFE_EMBEDDED_FINAL_ANSWER_ACTION_METHODS = frozenset(
+        {
+            "search_blackboard",
+            "search_log",
+            "get_processes",
+            "get_system_stats",
+            "get_service_status",
+            "list_directory",
+        }
+    )
+    _SAFE_EMBEDDED_FINAL_ANSWER_TASK_PATTERNS = re.compile(
+        r"\b(?:"
+        r"runtime"
+        r"|laufzeit"
+        r"|betriebszustand"
+        r"|systemzustand"
+        r"|timus-zustand"
+        r"|blackboard"
+        r"|diagnos"
+        r"|baustell"
+        r"|health"
+        r"|status"
+        r"|service"
+        r"|system"
+        r"|cpu"
+        r"|ram"
+        r"|disk"
+        r"|speicher"
+        r"|log"
+        r"|fehler"
+        r"|error"
+        r"|exception"
+        r")\b",
+        re.IGNORECASE,
+    )
+    _SAFE_EMBEDDED_FINAL_ANSWER_EXAMPLE_PATTERNS = re.compile(
+        r"(?:beispiel|example|format)\s*:?.{0,120}action\s*:",
+        re.IGNORECASE | re.DOTALL,
+    )
+    _NEGATIVE_EVIDENCE_MARKERS = (
+        "keine belastbaren belege",
+        "kein belastbarer beleg",
+        "in den geprueften quellen kein belastbarer beleg",
+        "in den geprüften quellen kein belastbarer beleg",
+        "keine belastbare evidenz",
+        "nicht sicher belegen",
+        "kein belastbarer nachweis",
+    )
+    _OFF_TOPIC_EVIDENCE_MARKERS = (
+        "behandelten komplett andere themen",
+        "thematisch nur teilweise passend",
+        "nicht direkt auf die leitfrage ein",
+        "nur indirekt passend",
+        "evidenz ist noch zu duenn",
+        "scope-gap",
+    )
+    _STRONG_DEBUNK_PATTERNS = re.compile(
+        r"\b(?:falschinformation|fakenews|gerücht|geruecht)\b",
+        re.IGNORECASE,
+    )
 
     @classmethod
     def _looks_like_implicit_final_answer(cls, text: str) -> bool:
@@ -541,6 +607,94 @@ class BaseAgent(DynamicToolMixin):
         )
         return has_structure
 
+    @staticmethod
+    def _extract_final_answer_body(text: str) -> str:
+        normalized = str(text or "")
+        if "Final Answer:" not in normalized:
+            return normalized.strip()
+        return normalized.split("Final Answer:", 1)[1].strip()
+
+    @classmethod
+    def _soften_unproven_verdict_language(cls, text: str) -> str:
+        normalized = str(text or "").strip()
+        if not normalized:
+            return normalized
+
+        lowered = normalized.lower()
+        has_negative_evidence_marker = any(
+            marker in lowered for marker in cls._NEGATIVE_EVIDENCE_MARKERS
+        )
+        has_off_topic_marker = any(
+            marker in lowered for marker in cls._OFF_TOPIC_EVIDENCE_MARKERS
+        )
+        if not has_negative_evidence_marker and not has_off_topic_marker:
+            return normalized
+
+        softened = normalized
+        if cls._STRONG_DEBUNK_PATTERNS.search(softened):
+            softened = cls._STRONG_DEBUNK_PATTERNS.sub(
+                "nicht belastbar belegt",
+                softened,
+            )
+
+        softened = re.sub(
+            r"(?i)wer das behauptet, sollte quellen vorlegen\s*[—-]\s*und die gibt es nicht\.?",
+            (
+                "Wer das behauptet, sollte belastbare Primaer- oder Sekundaerquellen "
+                "vorlegen. In den geprueften Quellen liegt dafuer derzeit kein belastbarer "
+                "Beleg vor."
+            ),
+            softened,
+        )
+        softened = re.sub(
+            r"(?i)\bund die gibt es nicht\b",
+            "und dafuer liegt in den geprueften Quellen derzeit kein belastbarer Beleg vor",
+            softened,
+        )
+
+        if has_off_topic_marker:
+            caution = (
+                "Hinweis: Die Quellenlage ist thematisch nur teilweise passend; "
+                "Negativbefunde sind hier als 'in den geprueften Quellen kein belastbarer "
+                "Beleg' zu lesen, nicht als vollstaendiger Ausschluss."
+            )
+            if caution.lower() not in softened.lower():
+                softened = f"{caution}\n\n{softened}".strip()
+
+        return softened
+
+    @classmethod
+    def _should_salvage_embedded_final_answer_action(
+        cls,
+        task_text: str,
+        reply: str,
+        action: Optional[dict],
+    ) -> bool:
+        if not isinstance(action, dict):
+            return False
+
+        method = str(action.get("method") or "").strip()
+        if method not in cls._SAFE_EMBEDDED_FINAL_ANSWER_ACTION_METHODS:
+            return False
+
+        final_body = cls._extract_final_answer_body(reply)
+        if "Action:" not in final_body:
+            return False
+        if cls._PARSE_ERROR_FORMAT_ECHO_PATTERNS.search(final_body):
+            return False
+        if cls._SAFE_EMBEDDED_FINAL_ANSWER_EXAMPLE_PATTERNS.search(final_body):
+            return False
+
+        task_candidates = [
+            str(cls._extract_primary_task_text(task_text) or ""),
+            str(task_text or ""),
+        ]
+        return any(
+            cls._SAFE_EMBEDDED_FINAL_ANSWER_TASK_PATTERNS.search(candidate)
+            for candidate in task_candidates
+            if candidate
+        )
+
     # ------------------------------------------------------------------
     # Loop-Detection
     # ------------------------------------------------------------------
@@ -564,8 +718,9 @@ class BaseAgent(DynamicToolMixin):
         r"\bklick(?:e|en|t)?\b",
         r"\bclick\b",
         r"\bbooking\b",
-        r"\bgoogle\b",
-        r"\bamazon\b",
+        r"\bgoogle\s+maps\b",
+        r"\bgoogle\.(?:com|de)\b",
+        r"\bamazon\.(?:com|de)\b",
         r"\bnavigat(?:e|ion)\b",
         r"\boeffne\b",
         r"\böffne\b",
@@ -680,7 +835,85 @@ class BaseAgent(DynamicToolMixin):
             params["x"] = int(params["x"])
             params["y"] = int(params["y"])
 
+        if method == "delegate_to_agent":
+            params = self._normalize_delegate_to_agent_params(params)
+
         return method, params
+
+    @staticmethod
+    def _build_lightweight_executor_handoff(task: str, *, task_type: str) -> str:
+        safe_task = str(task or "").strip()
+        payload_lines = [
+            "# DELEGATION HANDOFF",
+            "target_agent: executor",
+            f"goal: {safe_task}",
+            "expected_output: Aktuelle Treffer und kurze verifizierte Zusammenfassung",
+            "success_signal: Leichter Live-Lookup erfolgreich abgeschlossen",
+            "constraints: nutze_leichte_live_suche_ohne_deep_research, bleibe_quellengebunden_und_kurz",
+            "handoff_data:",
+            f"- task_type: {task_type}",
+            f"- original_user_task: {safe_task[:500]}",
+            f"- query: {safe_task[:500]}",
+            "- preferred_search_tool: search_web",
+            "- fallback_tools: search_news, fetch_url, search_google_maps_places",
+            "- avoid_deep_research: yes",
+            "- max_results: 5",
+            "",
+            "# TASK",
+            safe_task,
+        ]
+        return "\n".join(payload_lines)
+
+    def _normalize_delegate_to_agent_params(self, params: dict) -> dict:
+        if not isinstance(params, dict):
+            return params
+
+        refined = dict(params)
+        target_agent = str(refined.get("agent_type") or "").strip().lower()
+        raw_task = str(refined.get("task") or "").strip()
+        if target_agent != "executor" or not raw_task:
+            return refined
+        if parse_delegation_handoff(raw_task):
+            return refined
+
+        try:
+            from orchestration.meta_orchestration import classify_meta_task
+
+            classification = classify_meta_task(raw_task, action_count=0)
+        except Exception as e:
+            log.debug("Delegations-Klassifizierung fuer %s fehlgeschlagen: %s", target_agent, e)
+            return refined
+
+        task_type = str(classification.get("task_type") or "").strip().lower()
+        recommended_chain = [
+            str(agent or "").strip().lower()
+            for agent in (classification.get("recommended_agent_chain") or [])
+            if str(agent or "").strip()
+        ]
+
+        if (
+            self.agent_type == "meta"
+            and task_type == "knowledge_research"
+            and "research" in recommended_chain
+        ):
+            refined["agent_type"] = "research"
+            log.warning(
+                "Delegation auto-korrigiert: meta wollte executor, Klassifizierung verlangt research | task_type=%s",
+                task_type,
+            )
+            return refined
+
+        if task_type in {"simple_live_lookup", "simple_live_lookup_document", "youtube_light_research"}:
+            refined["task"] = self._build_lightweight_executor_handoff(
+                raw_task,
+                task_type=task_type,
+            )
+            log.info(
+                "Executor-Delegation mit strukturiertem Handoff angereichert | task_type=%s",
+                task_type,
+            )
+
+        return refined
 
     # ------------------------------------------------------------------
     # File Artifacts
@@ -807,7 +1040,7 @@ class BaseAgent(DynamicToolMixin):
     # ------------------------------------------------------------------
 
     def _task_text_for_restart_guard(self) -> str:
-        text = str(getattr(self, "_current_task_text", "") or "")
+        text = self._extract_primary_task_text(str(getattr(self, "_current_task_text", "") or ""))
         for marker in (
             "\n# SHELL-KONTEXT",
             "\n# Bekannte Informationen (Agent-Blackboard):",
@@ -816,6 +1049,47 @@ class BaseAgent(DynamicToolMixin):
             if marker in text:
                 text = text.split(marker, 1)[0]
         return text.strip().lower()
+
+    @staticmethod
+    def _extract_primary_task_text(task_text: str) -> str:
+        """Extrahiert die eigentliche Aufgabe aus Meta-/Memory-angereicherten Tasks.
+
+        Hintergrund:
+        Der BaseAgent bekommt haeufig zusaetzliche System-, Skill- und Working-Memory-
+        Bloecke vorangestellt. Heuristiken wie Navigationserkennung duerfen nicht auf
+        diesem angereicherten Gesamttext laufen, sonst triggern Begriffe wie "browser"
+        aus dem Kontext faelschlich den Visual-/Navigation-Pfad.
+        """
+        text = str(task_text or "").strip()
+        if not text:
+            return ""
+
+        handoff = parse_delegation_handoff(text)
+        if handoff and handoff.goal:
+            return str(handoff.goal).strip()
+
+        segment = text
+        for marker in (
+            "# CURRENT USER QUERY",
+            "AKTUELLE_NUTZERANFRAGE:",
+            "# AUFGABE",
+        ):
+            if marker in text:
+                segment = text.split(marker, 1)[1].lstrip()
+                break
+
+        for stop_marker in (
+            "\n\nBearbeite jetzt ausschließlich die aktuelle Nutzeranfrage.",
+            "\n\nPrüfe ob verfügbare Skills zur Aufgabe passen und nutze sie entsprechend.",
+            "\n\n# INSTRUCTIONS",
+            "\n\nUse the above skills when appropriate for this task.",
+            "\n\nFollow the skill instructions and use provided scripts/references.",
+            "\n\n## DECOMPOSITION-REGEL",
+        ):
+            if stop_marker in segment:
+                segment = segment.split(stop_marker, 1)[0]
+
+        return segment.strip()
 
     def _has_explicit_restart_intent(self) -> bool:
         task_text = self._task_text_for_restart_guard()
@@ -841,7 +1115,9 @@ class BaseAgent(DynamicToolMixin):
         )
 
     def _current_task_type_for_analytics(self) -> str:
-        task_text = str(getattr(self, "_current_task_text", "") or "").strip()
+        task_text = self._extract_primary_task_text(
+            str(getattr(self, "_current_task_text", "") or "")
+        ).strip()
         if not task_text:
             return ""
         handoff = parse_delegation_handoff(task_text)
@@ -1500,6 +1776,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         if effective_provider in [
             ModelProvider.OPENAI,
             ModelProvider.ZAI,
+            ModelProvider.DASHSCOPE,
             ModelProvider.DEEPSEEK,
             ModelProvider.INCEPTION,
             ModelProvider.NVIDIA,
@@ -1507,6 +1784,12 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             ModelProvider.GOOGLE,
         ]:
             return await self._call_openai_compatible(
+                messages,
+                budget_decision=budget_decision,
+                model_override=model_override,
+            )
+        if effective_provider == ModelProvider.DASHSCOPE_NATIVE:
+            return await self._call_dashscope_native(
                 messages,
                 budget_decision=budget_decision,
                 model_override=model_override,
@@ -1834,12 +2117,95 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             )
             raise
 
+    async def _call_dashscope_native(
+        self,
+        messages: List[Dict],
+        *,
+        budget_decision: Optional[LLMBudgetDecision] = None,
+        model_override: Optional[BudgetModelOverride] = None,
+    ) -> str:
+        effective_provider = model_override.provider if model_override else ModelProvider.DASHSCOPE_NATIVE
+        effective_model = model_override.model if model_override else self.model
+        if effective_provider != ModelProvider.DASHSCOPE_NATIVE:
+            return await self._call_openai_compatible(
+                messages,
+                budget_decision=budget_decision,
+                model_override=model_override,
+            )
+
+        max_tokens = self._get_max_tokens_for_model(effective_model)
+        if budget_decision and budget_decision.max_tokens_cap:
+            max_tokens = min(max_tokens, max(int(budget_decision.max_tokens_cap), 1))
+
+        response_payload: Any = None
+        started = time.perf_counter()
+        try:
+            provider_client = self.provider_client
+            api_key = provider_client.get_api_key(ModelProvider.DASHSCOPE_NATIVE)
+            base_url = provider_client.get_base_url(ModelProvider.DASHSCOPE_NATIVE)
+            payload = build_dashscope_native_payload(
+                model=effective_model,
+                messages=messages,
+                temperature=0.3,
+                max_tokens=max_tokens,
+            )
+            response = await self.http_client.post(
+                dashscope_native_generation_url(base_url, effective_model),
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=float(os.getenv("DASHSCOPE_NATIVE_TIMEOUT", "180")),
+            )
+            try:
+                response_payload = response.json()
+            except Exception:
+                response_payload = None
+            response.raise_for_status()
+
+            text = extract_dashscope_native_text(response_payload or {})
+            if not text:
+                reasoning = extract_dashscope_native_reasoning(response_payload or {})
+                if reasoning:
+                    text = reasoning
+            text = self._strip_think_tags(str(text or "").strip())
+
+            self._record_llm_usage(
+                latency_ms=round((time.perf_counter() - started) * 1000),
+                success=bool(text),
+                response_payload=response_payload,
+                provider_override=effective_provider,
+                model_override=effective_model,
+            )
+            return text
+        except Exception:
+            self._record_llm_usage(
+                latency_ms=round((time.perf_counter() - started) * 1000),
+                success=False,
+                response_payload=response_payload,
+                provider_override=effective_provider,
+                model_override=effective_model,
+            )
+            raise
+
     # ------------------------------------------------------------------
     # Action Parser (delegiert an shared)
     # ------------------------------------------------------------------
 
     def _parse_action(self, text: str) -> Tuple[Optional[dict], Optional[str]]:
         return parse_action(text)
+
+    @staticmethod
+    def _normalize_action_payload(
+        action: Any,
+        err: Optional[str],
+    ) -> Tuple[Optional[dict], Optional[str]]:
+        if action is None:
+            return None, err
+        if isinstance(action, dict):
+            return action, err
+        return None, err or "Action-JSON muss ein Objekt sein, keine Liste."
 
     def _format_generate_text_output(self, text: str) -> str:
         """Bereitet generate_text-Ergebnisse nutzerfreundlich auf (falls JSON-Liste)."""
@@ -1882,7 +2248,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 lines.append(f"{idx}. {name}")
 
         if lines:
-            return "Hier ist deine Liste:\n" + "\n".join(lines)
+            return "\n".join(lines)
         return raw
 
     def _is_list_request(self, task_lower: str) -> bool:
@@ -1896,11 +2262,29 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         )
         return any(re.search(p, task_lower) for p in patterns)
 
+    @staticmethod
+    def _looks_like_preformatted_list_answer(text: str) -> bool:
+        """Bewahrt bereits gut strukturierte Antworten vor erzwungener Umformatierung."""
+        stripped = str(text or "").strip()
+        if not stripped:
+            return False
+
+        if re.search(r"(?m)^\s*(?:[-*]\s+|\d+\.\s+)", stripped):
+            return True
+        if re.search(r"(?m)^\s{0,3}#{1,6}\s+\S+", stripped):
+            return True
+        if re.search(r"(?m)^\s*\*\*[^*\n]+\*\*(?:\s*:)?\s*$", stripped):
+            return True
+        if "\n\n" in stripped and re.search(r"[.!?](?:\s|$)", stripped):
+            return True
+        return False
+
     async def _finalize_list_output(self, task: str, result: str) -> str:
         """
         Formatiert Listenanfragen in ein konsistentes Ausgabeformat und speichert sie als Datei.
         """
-        task_lower = (task or "").lower()
+        primary_task = self._extract_primary_task_text(task)
+        task_lower = (primary_task or task or "").lower()
         if not self._is_list_request(task_lower):
             return result
 
@@ -1913,10 +2297,13 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             final_text = self._format_generate_text_output(final_text)
 
         # Falls noch keine klare Listenform vorhanden ist, einfache Zeilen als nummerierte Liste ausgeben.
-        if not re.search(r"(?m)^\s*\d+\.\s+", final_text):
+        if (
+            not re.search(r"(?m)^\s*\d+\.\s+", final_text)
+            and not self._looks_like_preformatted_list_answer(final_text)
+        ):
             raw_lines = [ln.strip(" -\t") for ln in final_text.splitlines() if ln.strip()]
             if raw_lines:
-                final_text = "Hier ist deine Liste:\n" + "\n".join(
+                final_text = "\n".join(
                     f"{i}. {line}" for i, line in enumerate(raw_lines, start=1)
                 )
 
@@ -1943,6 +2330,10 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         if saved_ok:
             return f"{final_text}\n\nGespeichert unter: `{file_path}`"
         return final_text
+
+    async def _finalize_user_output(self, task: str, result: str) -> str:
+        softened = self._soften_unproven_verdict_language(result)
+        return await self._finalize_list_output(task, softened)
 
     def _maybe_finalize_after_terminal_tool(self, method: str, obs: Any) -> str | None:
         if method != "restart_timus" or not isinstance(obs, dict):
@@ -2187,18 +2578,19 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             except Exception:
                 pass
 
-        task_lower = task.lower()
+        primary_task_text = self._extract_primary_task_text(task) or str(task or "")
+        task_lower = primary_task_text.lower()
         is_memory_query = self._is_memory_recall_query(task_lower)
 
         if is_memory_query:
-            memory_answer = await self._try_memory_recall(task)
+            memory_answer = await self._try_memory_recall(primary_task_text)
             if memory_answer:
                 if roi_set:
                     self._clear_roi()
                 self._task_action_history = [
                     {
                         "method": "recall",
-                        "params": {"query": task, "n_results": 5},
+                        "params": {"query": primary_task_text, "n_results": 5},
                         "result": memory_answer[:200],
                     }
                 ]
@@ -2216,7 +2608,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         is_navigation_task = self._is_navigation_task(task_lower)
 
         if is_navigation_task:
-            structured_result = await self._try_structured_navigation(task)
+            structured_result = await self._try_structured_navigation(primary_task_text)
             if structured_result and structured_result.get("success"):
                 log.info(
                     f"Strukturierte Navigation erfolgreich: {structured_result['result']}"
@@ -2329,7 +2721,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 and last_generate_text_output
             ):
                 final_result = self._format_generate_text_output(last_generate_text_output)
-                final_result = await self._finalize_list_output(task, final_result)
+                final_result = await self._finalize_user_output(task, final_result)
                 self._emit_live_status(
                     phase="final",
                     detail="Fallback: generate_text übernommen",
@@ -2369,37 +2761,63 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 )
                 await self._run_reflection(task, reply, success=False)
                 return reply
-            if "Final Answer:" in reply:
-                final_result = reply.split("Final Answer:")[1].strip()
-                final_result = await self._finalize_list_output(task, final_result)
-                self._emit_live_status(
-                    phase="final",
-                    detail=f"{len(final_result)} chars",
-                    step=step,
-                    total_steps=self.max_iterations,
-                )
-                if roi_set:
-                    self._clear_roi()
-                self._emit_step_trace(
-                    action="final_answer_detected",
-                    output_data={
-                        "step": step,
-                        "final_preview": self._preview_value(final_result, 800),
-                        "final_chars": len(final_result),
-                    },
-                    status="completed",
-                )
-                await self._run_reflection(task, final_result, success=True)
-                return final_result
+            action: Optional[dict] = None
+            err: Optional[str] = None
+            should_append_reply = True
 
-            action, err = self._parse_action(reply)
-            messages.append({"role": "assistant", "content": reply})
+            if "Final Answer:" in reply:
+                action, err = self._parse_action(reply)
+                action, err = self._normalize_action_payload(action, err)
+                if self._should_salvage_embedded_final_answer_action(task, reply, action):
+                    self._emit_live_status(
+                        phase="action_salvage",
+                        detail=str(action.get("method") or "")[:120],
+                        step=step,
+                        total_steps=self.max_iterations,
+                    )
+                    self._emit_step_trace(
+                        action="embedded_final_answer_action_salvaged",
+                        output_data={
+                            "step": step,
+                            "method": str(action.get("method") or ""),
+                            "reply_preview": self._preview_value(reply, 900),
+                        },
+                        status="warning",
+                    )
+                else:
+                    final_result = self._extract_final_answer_body(reply)
+                    final_result = await self._finalize_user_output(task, final_result)
+                    self._emit_live_status(
+                        phase="final",
+                        detail=f"{len(final_result)} chars",
+                        step=step,
+                        total_steps=self.max_iterations,
+                    )
+                    if roi_set:
+                        self._clear_roi()
+                    self._emit_step_trace(
+                        action="final_answer_detected",
+                        output_data={
+                            "step": step,
+                            "final_preview": self._preview_value(final_result, 800),
+                            "final_chars": len(final_result),
+                        },
+                        status="completed",
+                    )
+                    await self._run_reflection(task, final_result, success=True)
+                    return final_result
+            else:
+                action, err = self._parse_action(reply)
+                action, err = self._normalize_action_payload(action, err)
+
+            if should_append_reply:
+                messages.append({"role": "assistant", "content": reply})
 
             if not action:
                 # Implicit Final Answer: LLM schrieb Abschluss-Text ohne Action-JSON
                 if self._looks_like_implicit_final_answer(reply):
                     final_result = reply
-                    final_result = await self._finalize_list_output(task, final_result)
+                    final_result = await self._finalize_user_output(task, final_result)
                     self._emit_live_status(
                         phase="final",
                         detail=f"implicit final answer ({len(final_result)} chars)",
@@ -2421,7 +2839,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                     return final_result
 
                 if (err or "").strip().lower() == "kein json gefunden" and self._looks_like_salvageable_parse_error_answer(reply):
-                    final_result = await self._finalize_list_output(task, reply.strip())
+                    final_result = await self._finalize_user_output(task, reply.strip())
                     self._emit_live_status(
                         phase="final",
                         detail=f"parse salvage ({len(final_result)} chars)",

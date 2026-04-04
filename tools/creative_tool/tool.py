@@ -15,7 +15,7 @@ from utils.openai_compat import prepare_openai_params
 from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 
 # --- Setup ---
-load_dotenv()
+load_dotenv(override=True)
 log = logging.getLogger("creative_tool")
 try:
     # Annahme: Der Client wird im shared_context initialisiert

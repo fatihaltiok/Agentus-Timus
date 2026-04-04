@@ -33,7 +33,7 @@ import requests
 from dotenv import load_dotenv
 from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 
-load_dotenv()
+load_dotenv(override=True)
 log = logging.getLogger("email_tool")
 
 # ── Konfiguration ─────────────────────────────────────────────────────────────

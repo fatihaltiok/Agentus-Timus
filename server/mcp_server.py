@@ -200,6 +200,8 @@ _AFFIRMATION_PATTERNS = (
     r"^\s*ja\s*[.!]?\s*$",
     r"^\s*ok\s*[.!]?\s*$",
     r"^\s*okay\s*[.!]?\s*$",
+    r"^\s*(?:ok(?:ay)?\s+)?fang\s+an\s*[.!]?\s*$",
+    r"^\s*(?:ok(?:ay)?\s+)?leg\s+los\s*[.!]?\s*$",
     r"\bja\s+mach\s+das\b",
     r"\bja\s+mach\s+mal\b",
     r"\bja\s+schau\s+(mal\s+)?danach\b",
@@ -253,6 +255,16 @@ _CONTEXTUAL_RECALL_PATTERNS = (
     r"\bdaran\b",
     r"\berklaer\b",
     r"\berklär\b",
+)
+
+_RESULT_EXTRACTION_FOLLOWUP_PATTERNS = (
+    r"\bhol(?:e)?\b.*\bheraus\b",
+    r"\bzieh(?:e)?\b.*\bheraus\b",
+    r"\blist(?:e)?\b.*\baus\b",
+    r"\bextrah(?:ier|iere)\b",
+    r"\bfass\b.*\bzusammen\b",
+    r"\bmach(?:e)?\b.*\btabelle\b",
+    r"\btabell(?:e|arisch)\b",
 )
 
 _CAPABILITY_FOLLOWUP_PATTERNS = (
@@ -566,8 +578,40 @@ def _is_capability_followup_query(query: str, last_assistant: str = "") -> bool:
     return any(marker in previous for marker in blocker_markers)
 
 
+def _is_result_extraction_followup_query(query: str, last_assistant: str = "") -> bool:
+    normalized = str(query or "").strip().lower()
+    if not normalized:
+        return False
+    if len(normalized.split()) > 18:
+        return False
+    if not any(re.search(pattern, normalized) for pattern in _RESULT_EXTRACTION_FOLLOWUP_PATTERNS):
+        return False
+    previous = str(last_assistant or "").strip().lower()
+    if not previous:
+        return False
+    result_markers = (
+        "top-treffer:",
+        "direkt gepruefte quelle",
+        "direkt geprüfte quelle",
+        "https://",
+        "http://",
+    )
+    return any(marker in previous for marker in result_markers)
+
+
 _PROPOSAL_TRAILING_VERBS = re.compile(
     r"\s+(?:suchen|starten|machen|ausführen|ausfuehren|recherchieren|ansehen|anschauen|schauen)\s*$",
+    re.IGNORECASE,
+)
+
+_PROPOSAL_AGENT_DELEGATION_RE = re.compile(
+    r"(?:den|die|das)?\s*`?(?P<agent>developer|research|executor|system|shell|document|communication|data|visual|creative|reasoning|meta)`?"
+    r"(?:\s*-\s*agent(?:en)?)?\s+beauftragen(?:\s*,\s*|\s+)(?P<task>.+?)(?:\s*\?.*)?$",
+    re.IGNORECASE,
+)
+
+_PROPOSAL_GUIDED_ASSISTANCE_RE = re.compile(
+    r"(?:soll ich|ich kann|ich könnte|ich koennte)\s+dich\s+durch\s+(?P<topic>.+?)\s+f(?:ü|ue)hren(?:\s*\?.*)?$",
     re.IGNORECASE,
 )
 
@@ -576,6 +620,35 @@ def _clean_proposal_query(text: str) -> str:
     """Entfernt Verb-Residuen am Ende einer extrahierten Proposal-Query."""
     cleaned = _PROPOSAL_TRAILING_VERBS.sub("", text.strip()).strip(" ,.!?")
     return cleaned
+
+
+def _should_prefer_pending_followup_prompt(
+    proposal: dict | None,
+    pending_followup_prompt: str,
+) -> bool:
+    """Lässt schwache Generic-Proposals hinter einer expliziten Rückfrage zurücktreten."""
+    if not proposal or not pending_followup_prompt:
+        return False
+
+    kind = str(proposal.get("kind") or "").strip().lower()
+    target_agent = str(proposal.get("target_agent") or "").strip()
+    suggested_query = str(proposal.get("suggested_query") or "").strip()
+    raw_sentence = str(proposal.get("raw_sentence") or "").strip().lower()
+    pending_prompt = str(pending_followup_prompt or "").strip().lower()
+
+    if target_agent or kind in {"agent_delegation", "youtube_search", "web_search"}:
+        return False
+
+    if len(suggested_query.split()) <= 1 or len(suggested_query) < 12:
+        return True
+
+    if "dich durch" in raw_sentence and re.search(
+        r"\b(soll ich|willst du|magst du|möchtest du|moechtest du|hast du)\b",
+        pending_prompt,
+    ):
+        return True
+
+    return False
 
 
 def _extract_proposal_metadata(text: str) -> dict | None:
@@ -597,6 +670,29 @@ def _extract_proposal_metadata(text: str) -> dict | None:
         normalized = sentence.lower()
         if not any(re.search(p, normalized) for p in _PROPOSAL_TRIGGER_PATTERNS):
             continue
+
+        agent_delegation_match = _PROPOSAL_AGENT_DELEGATION_RE.search(sentence)
+        if agent_delegation_match:
+            target_agent = str(agent_delegation_match.group("agent") or "").strip("` ").lower()
+            suggested = _clean_proposal_query(agent_delegation_match.group("task") or "")
+            return {
+                "kind": "agent_delegation",
+                "target": "agent",
+                "target_agent": target_agent,
+                "suggested_query": suggested[:200],
+                "raw_sentence": sentence[:300],
+            }
+
+        guided_match = _PROPOSAL_GUIDED_ASSISTANCE_RE.search(sentence)
+        if guided_match:
+            topic = _clean_proposal_query(guided_match.group("topic") or "")
+            if topic and len(topic) >= 4:
+                return {
+                    "kind": "generic_action",
+                    "target": "meta",
+                    "suggested_query": f"durch {topic} führen"[:200],
+                    "raw_sentence": sentence[:300],
+                }
 
         # YouTube: sowohl "youtube zu X" als auch "X auf youtube" / "X in youtube"
         yt_match = re.search(
@@ -951,7 +1047,17 @@ def _resolve_followup_agent(query: str, capsule: dict[str, str]) -> str:
         normalized,
         str(capsule.get("last_assistant") or ""),
     )
-    if not (is_followup or is_contextual_recall or is_short_contextual_reply or is_capability_followup):
+    is_result_extraction_followup = _is_result_extraction_followup_query(
+        normalized,
+        str(capsule.get("last_assistant") or ""),
+    )
+    if not (
+        is_followup
+        or is_contextual_recall
+        or is_short_contextual_reply
+        or is_capability_followup
+        or is_result_extraction_followup
+    ):
         return ""
     matched_reply_points = capsule.get("matched_reply_points") or []
     last_agent = str(capsule.get("last_agent") or "").strip().lower()
@@ -959,6 +1065,8 @@ def _resolve_followup_agent(query: str, capsule: dict[str, str]) -> str:
         return ""
     if is_capability_followup:
         return "executor"
+    if is_result_extraction_followup and last_agent:
+        return last_agent
     if is_contextual_recall and matched_reply_points:
         return "executor"
     if is_short_contextual_reply and last_agent:
@@ -974,6 +1082,31 @@ def _resolve_followup_agent(query: str, capsule: dict[str, str]) -> str:
     return last_agent if last_agent == "meta" else ""
 
 
+def _resolve_resolved_proposal_agent(dispatcher_query: str) -> str:
+    """Leitet RESOLVED_PROPOSAL-Anfragen auf den passenden Entry-Agenten."""
+    if not str(dispatcher_query or "").startswith("# RESOLVED_PROPOSAL"):
+        return ""
+
+    kind_match = re.search(r"^kind:\s*(\S+)", dispatcher_query, re.MULTILINE)
+    proposal_kind = str(kind_match.group(1) if kind_match else "generic_action").strip().lower()
+
+    target_agent_match = re.search(r"^target_agent:\s*(\S+)", dispatcher_query, re.MULTILINE)
+    target_agent = str(target_agent_match.group(1) if target_agent_match else "").strip().lower()
+
+    raw_proposal_match = re.search(r"^raw_proposal:\s*(.+)$", dispatcher_query, re.MULTILINE)
+    raw_proposal = str(raw_proposal_match.group(1) if raw_proposal_match else "").strip().lower()
+
+    if target_agent:
+        return "meta"
+    if proposal_kind == "agent_delegation":
+        return "meta"
+    if "agent" in raw_proposal and "beauftragen" in raw_proposal:
+        return "meta"
+    if proposal_kind in {"youtube_search", "web_search"}:
+        return "executor"
+    return "meta"
+
+
 def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
     is_ref = _is_reference_continuation(query)
     is_affirm = _is_affirmation(query)
@@ -984,27 +1117,47 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
         query,
         str(capsule.get("last_assistant") or ""),
     )
+    is_result_extraction_followup = _is_result_extraction_followup_query(
+        query,
+        str(capsule.get("last_assistant") or ""),
+    )
 
     last_proposed_action: dict | None = capsule.get("last_proposed_action") or None
+    pending_followup_prompt = str(capsule.get("pending_followup_prompt") or "").strip()
 
     # P4: Kurze Zustimmung + gespeichertes Angebot → direkt auflösen
-    if is_affirm and last_proposed_action:
+    if is_affirm and last_proposed_action and not _should_prefer_pending_followup_prompt(
+        last_proposed_action,
+        pending_followup_prompt,
+    ):
         kind = str(last_proposed_action.get("kind") or "generic_action")
+        target_agent = str(last_proposed_action.get("target_agent") or "").strip()
         suggested_query = str(last_proposed_action.get("suggested_query") or "").strip()
         raw_sentence = str(last_proposed_action.get("raw_sentence") or "").strip()
         parts = [
             "# RESOLVED_PROPOSAL",
             f"kind: {kind}",
+        ]
+        if target_agent:
+            parts.append(f"target_agent: {target_agent}")
+        parts.extend([
             f"suggested_query: {suggested_query}",
             f"raw_proposal: {raw_sentence[:200]}",
             "",
             "# CURRENT USER QUERY",
             query,
-        ]
+        ])
         return "\n".join(parts)
 
     # P2/P3/normale Follow-up: Kontext aufbauen
-    if not (is_followup or is_recall or is_ref or is_short_contextual_reply or is_capability_followup):
+    if not (
+        is_followup
+        or is_recall
+        or is_ref
+        or is_short_contextual_reply
+        or is_capability_followup
+        or is_result_extraction_followup
+    ):
         return query
 
     last_agent = str(capsule.get("last_agent") or "").strip()
@@ -1018,7 +1171,6 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
     matched_reply_points = capsule.get("matched_reply_points") or []
     inherited_topic_recall = capsule.get("inherited_topic_recall") or []
     semantic_recall = capsule.get("semantic_recall") or []
-    pending_followup_prompt = str(capsule.get("pending_followup_prompt") or "").strip()
 
     if not (
         last_agent
@@ -1284,8 +1436,11 @@ def _load_route_snapshot_from_disk() -> None:
         with open(_RUNTIME_ROUTE_SNAPSHOT_PATH) as handle:
             payload = _json.load(handle)
         if isinstance(payload, dict):
+            normalized = prepare_route_snapshot(payload, saved_at=str(payload.get("saved_at") or "").strip() or None)
             with _route_snapshot_lock:
-                _route_snapshot = payload
+                _route_snapshot = normalized
+            if normalized != payload:
+                _persist_route_snapshot(normalized)
             log.info(f"✅ Runtime-Route geladen: {_RUNTIME_ROUTE_SNAPSHOT_PATH}")
     except Exception as exc:
         log.warning(f"⚠️ Runtime-Route konnte nicht geladen werden: {exc}")
@@ -2850,14 +3005,7 @@ async def canvas_chat(request: Request):
     # P4: RESOLVED_PROPOSAL → Agenten direkt setzen, Proposal aus Kapsel löschen
     resolved_proposal_agent = ""
     if dispatcher_query.startswith("# RESOLVED_PROPOSAL"):
-        kind_match = re.search(r"^kind:\s*(\S+)", dispatcher_query, re.MULTILINE)
-        proposal_kind = kind_match.group(1) if kind_match else "generic_action"
-        if proposal_kind in {"youtube_search"}:
-            resolved_proposal_agent = "executor"
-        elif proposal_kind in {"web_search"}:
-            resolved_proposal_agent = "executor"
-        else:
-            resolved_proposal_agent = "meta"
+        resolved_proposal_agent = _resolve_resolved_proposal_agent(dispatcher_query)
         # Proposal einmalig konsumiert → löschen damit es nicht wiederholt ausgelöst wird
         _store_proposal_in_capsule(session_id, None)
 

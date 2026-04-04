@@ -103,6 +103,173 @@ def test_without_think_action_still_parseable():
     assert action["method"] == "search_web"
 
 
+def test_parse_action_rejects_list_shaped_action_payload():
+    from agent.shared.action_parser import parse_action
+
+    raw = 'Action: {"action": [{"method": "read_file", "params": {"path": "x"}}]}'
+    action, err = parse_action(raw)
+
+    assert action is None
+    assert err == "Action-JSON muss ein Objekt sein, keine Liste."
+
+
+def test_base_agent_normalize_action_payload_rejects_non_dict():
+    action, err = BaseAgent._normalize_action_payload(
+        [{"method": "read_file", "params": {"path": "x"}}],
+        None,
+    )
+
+    assert action is None
+    assert err == "Action-JSON muss ein Objekt sein, keine Liste."
+
+
+def test_refine_tool_call_reroutes_meta_executor_knowledge_research_to_research():
+    agent = BaseAgent(
+        system_prompt_template="Du bist ein Test-Agent.",
+        tools_description_string="",
+        max_iterations=2,
+        agent_type="meta",
+        skip_model_validation=True,
+    )
+    try:
+        method, params = agent._refine_tool_call(
+            "delegate_to_agent",
+            {
+                "agent_type": "executor",
+                "task": (
+                    "Recherchiere ob es in Deutschland aktuelle politische Bestrebungen, "
+                    "Gesetzesentwürfe oder Diskussionen gibt, die eine "
+                    "Genehmigungspflicht bei Ausreise aus Deutschland vorsehen."
+                ),
+            },
+        )
+    finally:
+        asyncio.run(agent.http_client.aclose())
+
+    assert method == "delegate_to_agent"
+    assert params["agent_type"] == "research"
+    assert params["task"].startswith("Recherchiere ob es in Deutschland aktuelle politische Bestrebungen")
+
+
+def test_refine_tool_call_wraps_executor_simple_live_lookup_in_handoff():
+    agent = BaseAgent(
+        system_prompt_template="Du bist ein Test-Agent.",
+        tools_description_string="",
+        max_iterations=2,
+        agent_type="meta",
+        skip_model_validation=True,
+    )
+    try:
+        method, params = agent._refine_tool_call(
+            "delegate_to_agent",
+            {
+                "agent_type": "executor",
+                "task": "Zeig mir aktuelle News zu OpenAI.",
+            },
+        )
+    finally:
+        asyncio.run(agent.http_client.aclose())
+
+    assert method == "delegate_to_agent"
+    assert params["agent_type"] == "executor"
+    assert params["task"].startswith("# DELEGATION HANDOFF")
+    assert "- task_type: simple_live_lookup" in params["task"]
+    assert "preferred_search_tool: search_web" in params["task"]
+
+
+def test_embedded_final_answer_action_salvage_requires_safe_runtime_context():
+    action = {"method": "get_processes", "params": {"cpu_threshold": 20}}
+    reply = (
+        "Final Answer: Ich habe die groessten Baustellen eingegrenzt.\n"
+        "Naechster Schritt: Action: {\"method\": \"get_processes\", "
+        "\"params\": {\"cpu_threshold\": 20}}"
+    )
+
+    assert BaseAgent._should_salvage_embedded_final_answer_action(
+        "Analysiere den aktuellen Timus-Zustand und priorisiere Runtime-Baustellen.",
+        reply,
+        action,
+    ) is True
+    assert BaseAgent._should_salvage_embedded_final_answer_action(
+        "Schreibe mir einen Blogpost ueber Prozessmanagement.",
+        reply,
+        action,
+    ) is False
+
+
+@pytest.mark.asyncio
+async def test_run_executes_safe_embedded_action_before_finalizing(monkeypatch):
+    replies = iter(
+        [
+            'Action: {"method": "search_blackboard", "params": {"query": "ambient_audit"}}',
+            (
+                "Final Answer: Ich habe drei Runtime-Baustellen identifiziert.\n"
+                "Prioritaet 1: CPU-Spitzen zuerst verifizieren.\n"
+                'Naechster Schritt: Action: {"method": "get_processes", '
+                '"params": {"cpu_threshold": 20}}'
+            ),
+            "Final Answer: Ich habe jetzt die Prozesse geprueft und die Top-CPU-Verursacher bestaetigt.",
+        ]
+    )
+    tool_calls = []
+
+    async def _fake_detect(self, task: str) -> bool:
+        return False
+
+    async def _fake_working_memory(self, task: str) -> str:
+        return ""
+
+    def _fake_inject(self, task: str, working_memory_context: str) -> str:
+        return task
+
+    async def _fake_llm(self, messages):
+        return next(replies)
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        tool_calls.append((method, dict(params)))
+        if method == "search_blackboard":
+            return {"status": "success", "results": [{"topic": "ambient_audit"}]}
+        if method == "get_processes":
+            return {
+                "status": "success",
+                "returned": 1,
+                "processes": [{"pid": 1234, "name": "python", "cpu_percent": 47.5}],
+            }
+        raise AssertionError(f"Unerwartetes Tool: {method}")
+
+    async def _fake_reflection(self, task: str, result: str, success: bool = True) -> None:
+        return None
+
+    monkeypatch.setattr(BaseAgent, "_detect_dynamic_ui_and_set_roi", _fake_detect)
+    monkeypatch.setattr(BaseAgent, "_build_working_memory_context", _fake_working_memory)
+    monkeypatch.setattr(BaseAgent, "_inject_working_memory_into_task", _fake_inject)
+    monkeypatch.setattr(BaseAgent, "_call_llm", _fake_llm)
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+    monkeypatch.setattr(BaseAgent, "_run_reflection", _fake_reflection)
+
+    agent = BaseAgent(
+        system_prompt_template="Du bist ein Test-Agent.",
+        tools_description_string="",
+        max_iterations=4,
+        agent_type="reasoning",
+        skip_model_validation=True,
+    )
+    try:
+        result = await agent.run(
+            "Analysiere den aktuellen Timus-Zustand. Nutze Blackboard und den "
+            "aktuellen Betriebszustand, identifiziere die 3 wichtigsten "
+            "verbleibenden Runtime-Baustellen."
+        )
+    finally:
+        await agent.http_client.aclose()
+
+    assert result == "Ich habe jetzt die Prozesse geprueft und die Top-CPU-Verursacher bestaetigt."
+    assert tool_calls == [
+        ("search_blackboard", {"query": "ambient_audit"}),
+        ("get_processes", {"cpu_threshold": 20}),
+    ]
+
+
 # ── 4. Prompt-Korrektheit ─────────────────────────────────────────────────
 
 def test_reasoning_prompt_mentions_qwq():
@@ -112,6 +279,12 @@ def test_reasoning_prompt_mentions_qwq():
 def test_reasoning_prompt_has_format_rule():
     from agent.prompts import REASONING_PROMPT_TEMPLATE
     assert "FORMAT" in REASONING_PROMPT_TEMPLATE
+
+def test_reasoning_prompt_enforces_runtime_evidence_discipline():
+    from agent.prompts import REASONING_PROMPT_TEMPLATE
+    assert "RUNTIME-/BETRIEBSZUSTAND-DISZIPLIN" in REASONING_PROMPT_TEMPLATE
+    assert 'delegate_to_agent("system"' in REASONING_PROMPT_TEMPLATE
+    assert "KEINE ausfuehrbaren Action-Snippets in `Final Answer` verstecken." in REASONING_PROMPT_TEMPLATE
 
 def test_research_prompt_uses_dynamic_iteration_budget():
     from agent.prompts import DEEP_RESEARCH_PROMPT_TEMPLATE
@@ -129,6 +302,44 @@ def test_research_prompt_mentions_research_plan():
 def test_research_prompt_mentions_scope_mode():
     from agent.prompts import DEEP_RESEARCH_PROMPT_TEMPLATE
     assert "scope_mode" in DEEP_RESEARCH_PROMPT_TEMPLATE
+
+def test_research_prompt_forbids_absolute_debunking_on_thin_evidence():
+    from agent.prompts import DEEP_RESEARCH_PROMPT_TEMPLATE
+    assert "NEGATIVBEFUND-DISZIPLIN" in DEEP_RESEARCH_PROMPT_TEMPLATE
+    assert "kein belastbarer Beleg" in DEEP_RESEARCH_PROMPT_TEMPLATE
+    assert "NICHT: \"Falschinformation\", \"Fakenews\"" in DEEP_RESEARCH_PROMPT_TEMPLATE
+
+def test_meta_prompt_requires_cautious_negative_summary_language():
+    from agent.prompts import META_SYSTEM_PROMPT
+    assert "NEGATIVBEFUND-DISZIPLIN" in META_SYSTEM_PROMPT
+    assert "keine belastbaren Belege" in META_SYSTEM_PROMPT
+    assert "nicht als vollstaendiger Ausschluss" in META_SYSTEM_PROMPT
+
+def test_soften_unproven_verdict_language_rewrites_overhard_fake_news_claims():
+    raw = (
+        "**Klare Antwort: Nein, es gibt keine solchen Bestrebungen.**\n\n"
+        "Die Recherche hat ergeben: **Keine belastbaren Belege** fuer eine "
+        "Ausreisegenehmigungspflicht in Deutschland.\n\n"
+        "Die analysierten Quellen behandelten komplett andere Themen.\n\n"
+        "**Fazit:** Das ist ein Geruecht oder eine Falschinformation. "
+        "Wer das behauptet, sollte Quellen vorlegen — und die gibt es nicht."
+    )
+
+    softened = BaseAgent._soften_unproven_verdict_language(raw)
+
+    assert "Hinweis:" in softened
+    assert "Falschinformation" not in softened
+    assert "Geruecht" not in softened
+    assert "nicht belastbar belegt" in softened
+    assert "derzeit kein belastbarer Beleg" in softened
+
+def test_soften_unproven_verdict_language_leaves_direct_evidence_untouched():
+    raw = (
+        "Bundestagsdrucksache 20/12345 und die offizielle Ministeriumsantwort "
+        "belegen den vorgeschlagenen Regelungsinhalt direkt."
+    )
+
+    assert BaseAgent._soften_unproven_verdict_language(raw) == raw
 
 
 def test_working_memory_settings_fall_back_to_memory_env(monkeypatch):

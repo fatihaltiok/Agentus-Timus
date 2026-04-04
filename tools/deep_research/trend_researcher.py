@@ -28,7 +28,7 @@ from openai import OpenAI
 if TYPE_CHECKING:
     from tools.deep_research.tool import DeepResearchSession
 
-load_dotenv()
+load_dotenv(override=True)
 logger = logging.getLogger("trend_researcher")
 
 # --- Konfiguration ---

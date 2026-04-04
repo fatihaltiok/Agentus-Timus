@@ -10,6 +10,7 @@ from tools.deep_research.research_contracts import (
     SourceType,
     build_source_record_from_legacy,
     infer_source_type,
+    is_german_state_affiliated_url,
 )
 
 
@@ -30,6 +31,21 @@ def test_build_source_record_marks_official_youtube_with_transcript_as_a():
     )
     assert source.source_type == SourceType.YOUTUBE
     assert source.tier == SourceTier.A
+
+
+def test_build_source_record_marks_german_state_affiliated_metadata():
+    source = build_source_record_from_legacy(
+        source_id="de1",
+        url="https://www.bundestag.de/dokumente/textarchiv",
+        title="Deutscher Bundestag",
+    )
+    assert source.source_type == SourceType.REGULATOR
+    assert source.metadata["state_affiliated"] is True
+    assert source.metadata["country_code"] == "de"
+
+
+def test_detects_state_affiliated_dw_domain():
+    assert is_german_state_affiliated_url("https://www.dw.com/de/thema")
 
 
 class TestAcademicPublicationDomains:
@@ -85,4 +101,3 @@ def test_build_source_record_marks_forum_like_sources_as_d():
     )
     assert source.source_type == SourceType.UNKNOWN
     assert source.tier == SourceTier.D
-

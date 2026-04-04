@@ -219,3 +219,21 @@ def test_prepare_route_snapshot_marks_complete_route() -> None:
     assert snapshot["path_coordinates"] == []
     assert snapshot["overview_polyline"] == ""
     assert snapshot["saved_at"] == "2026-03-16T12:30:00Z"
+
+
+def test_prepare_route_snapshot_recovers_origin_coordinates_from_route_url() -> None:
+    snapshot = prepare_route_snapshot(
+        {
+            "destination_query": "Hanau",
+            "destination_label": "Hanau, Deutschland",
+            "start_address": "Flutstraße 37, 63071 Offenbach am Main, Deutschland",
+            "route_url": "https://www.google.com/maps/dir/?api=1&origin=50.1002421,8.778806&destination=hanau&travelmode=driving",
+        }
+    )
+
+    assert snapshot["has_route"] is True
+    assert snapshot["start_coordinates"] == {"latitude": 50.1002421, "longitude": 8.778806}
+    assert snapshot["origin"]["latitude"] == 50.1002421
+    assert snapshot["origin"]["longitude"] == 8.778806
+    assert snapshot["origin"]["display_name"] == "Flutstraße 37, 63071 Offenbach am Main, Deutschland"
+    assert snapshot["origin"]["usable_for_context"] is True

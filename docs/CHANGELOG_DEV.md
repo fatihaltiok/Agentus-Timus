@@ -2,6 +2,539 @@
 
 ---
 
+## Status 2026-04-04 20:43 CEST - Phase B Abschluss
+
+### Phase-B-Stand
+
+- Gesamtstand Phase B: **abgeschlossen**
+- Fokus verschiebt sich jetzt von Routing-/Follow-up-Stabilisierung auf **Phase C Runtime-Haertung und Grounding**
+- konkrete Vorbereitung fuer Phase C liegt jetzt in [PHASE_C_RUNTIME_PLAN.md](/home/fatih-ubuntu/dev/timus/docs/PHASE_C_RUNTIME_PLAN.md)
+
+### Phase B abgeschlossen durch
+
+- Follow-up-/Proposal-Routing fuer `ja mach das`, `ok fang an`, `mach das`, `leg los`
+- `RESOLVED_PROPOSAL` zurueck nach `meta` statt falschem Pfad in `executor`
+- Delegation-Blackboard-Reads ueber `delegation:`-Keys
+- Guided-Follow-up-Prioritaet gegen schwache Generic-Proposals
+- `developer`-Crash `list has no attribute get`
+- False Positives bei Navigation-/Vision-Routing aus angereichertem Kontext
+- natuerlichere Antwort-Finalisierung ohne starres `Hier ist deine Liste:`
+- Dispatcher-Bypass fuer klare Meta-Queries (`blackboard`, `google calendar`)
+- Beobachtungslog gegen Test-Pollution
+- direkte Meta-Reads fuer Screentext/OCR statt teurer `visual`-Delegation
+- Guard gegen fehlgeroutete `meta -> executor`-Research-Delegationen
+- generische Research-Haertung bei duenner/off-topic Evidenz
+- staerkere Quellenpolitik fuer Deutschland-bezogene Recherche
+- Dispatcher-Haertung fuer direkte YouTube-Verifikation
+- strittige Rechts-/Politik-Claims werden jetzt als `knowledge_research` statt `single_lane/executor` klassifiziert
+- Skill-Runner ignoriert `__init__.py` als Entrypoint und kann JSON-Script-Output strukturiert lesen
+
+### Letzte Live-Abnahme
+
+- `was gibts auf dem blackboard`
+  - sauber ueber `meta` mit direktem Blackboard-Pfad
+- Deutschland-/Genehmigungsfall
+  - kein alter `executor`-Fehlpfad mehr
+  - live in `timus-mcp` direkt `meta -> research` / Deep-Research-Start bestaetigt
+- Google-Calendar
+  - Runde 1: ehrliche Setup-/OAuth-Antwort statt kaputtem Skill-Import
+  - Runde 2 `ok fang an`: korrekt als `RESOLVED_PROPOSAL` fuer den OAuth-Start aufgeloest, nicht mehr als Fremd-Follow-up
+
+### Noch offen, aber nicht mehr Phase B
+
+- echter browsergestuetzter OAuth-Abschluss fuer Google Calendar
+- video-grounded Fact-Checking ohne Drift auf andere Videos
+- allgemeine Runtime-Haertung fuer MCP / Vision / OCR / Langlaeufer in Phase C
+
+### Phase C vorbereitet
+
+- Baseline fuer Phase C aus aktuellem Runtime-Verhalten und Beobachtungslog verdichtet
+- konkrete Workstreams definiert:
+  - `C1` MCP Health / Restart / Self-Healing
+  - `C2` Observability / Anfrage-zu-Fehler-Korrelation
+  - `C5` Persistenz-/Runtime-Spam
+  - `C3` Vision / OCR
+  - `C4` Langlaeufer-/Antwortpfade
+- erster Angriffsblock fuer Phase C ist jetzt klar auf `C1` gesetzt
+
+## Fortschritt 2026-04-04 20:43 CEST - Klassifikation fuer strittige Politik-/Rechtsclaims und Skill-Entrypoints gehaertet
+
+### Problemstellung
+
+Die heutige Abschlussrunde zeigte noch zwei konkrete Restpunkte:
+
+- die Deutschland-/Ausreise-Genehmigungsfrage wurde in der Policy noch als `single_lane` / `executor` eingeordnet, obwohl sie faktisch ein strittiger Recherche-/Verifikationsfall ist
+- der `google-calendar`-Skill wurde ueber `scripts/__init__.py` gestartet und fiel deshalb mit einem Importfehler aus
+
+### Umgesetzt
+
+- [orchestration/meta_orchestration.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_orchestration.py)
+  - neue Claim-Check-Hinweise fuer `stimmt das` / `ist das wahr` / `das ist falsch`
+  - neue Politik-/Rechts-Hinweise fuer `Bestrebungen`, `Gesetz`, `Genehmigung`, `Ausreise`, `Deutschland`
+  - Kombination aus Claim-Check + Politik/Recht erzwingt jetzt `knowledge_research`
+- [tools/planner/tool.py](/home/fatih-ubuntu/dev/timus/tools/planner/tool.py)
+  - `_pick_entry_script(...)` ignoriert jetzt `__init__.py` als Skill-Entrypoint
+- [utils/skill_types.py](/home/fatih-ubuntu/dev/timus/utils/skill_types.py)
+  - Python-Skill-Skripte liefern jetzt bei JSON-`stdout` zusaetzlich `parsed_output`
+- [skills/google-calendar/scripts/run.py](/home/fatih-ubuntu/dev/timus/skills/google-calendar/scripts/run.py)
+  - neuer echter Runtime-Entrypoint fuer `status`, `list`, `create`, `delete`
+  - bekannte Setup-Zustaende wie fehlendes Token werden als strukturierte JSON-Antwort statt als Import-/Exit-Fehler geliefert
+
+### Regressionen
+
+- [tests/test_meta_orchestration.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_orchestration.py)
+  - strittiger Deutschland-/Genehmigungsclaim geht jetzt in `knowledge_research`
+- [tests/test_orchestration_policy.py](/home/fatih-ubuntu/dev/timus/tests/test_orchestration_policy.py)
+  - derselbe Claim laeuft nicht mehr als `single_lane/executor`
+- [tests/test_planner_skill_catalog_bridge.py](/home/fatih-ubuntu/dev/timus/tests/test_planner_skill_catalog_bridge.py)
+  - `__init__.py` wird als Entry-Script ignoriert
+  - JSON-Output aus Skill-Skripten wird strukturiert erkannt
+
+### Validierung
+
+- `python -m py_compile` gruen
+- `56 passed` in `tests/test_meta_orchestration.py` + `tests/test_orchestration_policy.py`
+- `6 passed` in `tests/test_planner_skill_catalog_bridge.py`
+- `timus-mcp` und `timus-dispatcher` neu geladen
+- `timus-mcp` wieder `healthy` um `20:40:04 CEST`
+
+## Status 2026-04-03 21:18 CEST - Wo wir stehen
+
+### Phase-B-Stand
+
+- Gesamtstand Phase B: ca. **90-92%**
+- Fokus verschiebt sich von grobem Routing/Fallback-Fixing auf **Autonomie-Qualität und Antwortdisziplin**
+
+### Bereits stabilisiert
+
+- Follow-up-/Proposal-Routing fuer `ja mach das`, `ok fang an`, `mach das`, `leg los`
+- `RESOLVED_PROPOSAL` zurueck nach `meta` statt falschem Pfad in `executor`
+- Delegation-Blackboard-Reads ueber `delegation:`-Keys
+- Guided-Follow-up-Prioritaet gegen schwache Generic-Proposals
+- `developer`-Crash `list has no attribute get`
+- False Positives bei Navigation-/Vision-Routing aus angereichertem Kontext
+- natuerlichere Antwort-Finalisierung ohne starres `Hier ist deine Liste:`
+- Dispatcher-Bypass fuer klare Meta-Queries (`blackboard`, `google calendar`)
+- Beobachtungslog gegen Test-Pollution
+- direkte Meta-Reads fuer Screentext/OCR statt teurer `visual`-Delegation
+- Guard gegen fehlgeroutete `meta -> executor`-Research-Delegationen
+- automatischer strukturierter Handoff fuer rohe `executor`-Simple-Lookups
+
+### Neuester Fortschritt
+
+- Timus fuehrt bei offensichtlichen Runtime-Diagnosen jetzt **erste sichere Read-only-Evidenzschritte selbst aus**, statt nur Analyse + Empfehlungen auszugeben
+- Der Agent-Loop salvaget sichere eingebettete Runtime-Actions aus vorschnellen `Final Answer`-Antworten
+- `reasoning` hat jetzt eine explizite Runtime-/Betriebszustand-Disziplin im Prompt
+- Direkte YouTube-Links mit Wahrheits-/Faktencheck werden nicht mehr als lockere YouTube-Suche missverstanden
+- Deep Research ist jetzt generisch haerter gegen **duenne/off-topic Negativbefunde**, damit aus "kein belastbarer Beleg" nicht vorschnell "Fakenews" wird
+- Der Dispatcher erkennt direkte YouTube-Verifikationssaetze jetzt frueh genug und laesst sie nicht mehr in `empty_decision` laufen
+- Deutschland-bezogene Recherche priorisiert jetzt deutlich staerker **auslaendische, unabhaengige Einordnungsquellen**, waehrend deutsche staatsnahe Quellen nur noch als Primärkontext und nicht mehr als unabhaengige Bestaetigung zaehlen
+
+## Nachtrag 2026-04-04 - Quellenpolitik fuer Deutschland-bezogene Recherche
+
+### Problemstellung
+
+Ein wiederkehrendes Muster war:
+
+- deutsche staatsnahe Quellen wurden zu leicht als belastbare Gegen- oder Bestaetigungsquelle mitgezaehlt
+- Query-Varianten fuer Politik-/Faktencheck-Themen priorisierten noch zu oft `official/government` statt auslaendischer Analyse- und Pressequellen
+- der schnelle Research-Ranker konnte staatsnahe deutsche Quellen noch nach oben ziehen, obwohl fuer Einordnung eigentlich ein unabhaengiger Aussenblick sinnvoller ist
+
+Ziel war daher:
+
+- deutsche staatsnahe Quellen weiter fuer `was sagt der Staat selbst?` nutzbar zu halten
+- sie aber **nicht mehr als unabhaengige Bestaetigung** zu behandeln
+- bei Deutschland-Themen auslaendische, unabhaengige Analyse-/Pressequellen frueher und staerker zu priorisieren
+
+### Umgesetzt
+
+- [tools/deep_research/research_contracts.py](/home/fatih-ubuntu/dev/timus/tools/deep_research/research_contracts.py)
+  - neue Erkennung fuer deutsche Regierungs-/staatsnahe Domains
+  - `build_source_record_from_legacy(...)` markiert jetzt automatisch `state_affiliated` und `country_code`
+  - deutsche staatsnahe Quellen zaehlen in `compute_claim_verdict(...)` nicht mehr als `independent_support`
+  - Primär-/Autoritätsnachweis darf weiterhin aus solchen Primärquellen kommen; nur die Unabhaengigkeitszaehlung wurde getrennt
+- [tools/deep_research/tool.py](/home/fatih-ubuntu/dev/timus/tools/deep_research/tool.py)
+  - neue `independence_score`-Metrik in der Quellenqualitaet
+  - deutliche Abwertung deutscher staatsnaher Quellen als unabhaengige Evidenz bei Deutschland-bezogenen Queries
+  - Bonus fuer auslaendische, unabhaengige Perspektiven bei Deutschland-Themen
+  - Query-Plan priorisiert fuer `policy_regulation` staerker internationale Presse, unabhaengige Analyse und NGO-/Watchdog-Sicht
+  - `preferred_source_types` fuer Politikfragen wurde so gedreht, dass Analyse/Presse frueher kommen und Regulator/Official als Kontextanker erhalten bleiben
+- [agent/agents/research.py](/home/fatih-ubuntu/dev/timus/agent/agents/research.py)
+  - der schnelle Source-Ranker gibt deutschen staatsnahen Quellen jetzt einen Policy-Malus
+
+### Regressionen
+
+- [tests/test_source_assessment.py](/home/fatih-ubuntu/dev/timus/tests/test_source_assessment.py)
+  - Markierung deutscher staatsnaher Quellen
+- [tests/test_research_profiles.py](/home/fatih-ubuntu/dev/timus/tests/test_research_profiles.py)
+  - Primärquelle + unabhaengige Auslandsquelle fuer `policy_regulation`
+- [tests/test_research_improvements.py](/home/fatih-ubuntu/dev/timus/tests/test_research_improvements.py)
+  - Ranking-Malus fuer staatsnahe deutsche Domains
+- [tests/test_deep_research_report_quality.py](/home/fatih-ubuntu/dev/timus/tests/test_deep_research_report_quality.py)
+  - Abwertung der Unabhaengigkeit bei Deutschland-bezogenen Queries
+
+### Validierung
+
+- `python -m py_compile` gruen
+- `53 passed` in den fokussierten Source-/Profile-/Ranking-/Quality-Tests
+
+## Nachtrag 2026-04-04 14:35 CEST - Dispatcher-Haertung fuer direkte YouTube-Verifikation
+
+### Problemstellung
+
+Der heutige Live-Fall
+
+- `ueberpruefe das mal ob es wahr ist was da erzaehlt wird https://youtu.be/niHG1OTfBrY`
+
+lief noch in einen Dispatcher-Fehlpfad:
+
+- Observation: `dispatcher_meta_fallback` mit `reason=empty_decision`
+- erst `meta` selbst hat den Fall danach sauber als Video-Verifikation an `research` weitergegeben
+
+Das Problem war also:
+
+- `meta_orchestration` konnte den Fall prinzipiell schon
+- aber der Dispatcher-Fast-Path und die fruehe Policy-Sprachliste waren fuer genau diese natuerliche deutsche Formulierung noch zu schwach
+
+### Umgesetzt
+
+- [main_dispatcher.py](/home/fatih-ubuntu/dev/timus/main_dispatcher.py)
+  - neuer Fast-Path-Guard fuer `direkte YouTube-URL + Verifikationssprache`
+  - Phrasen wie `ueberpruefe`, `pruefe`, `verifiziere`, `ob es wahr ist`, `stimmt das` routen mit direkter YouTube-URL jetzt sofort nach `meta`
+- [orchestration/meta_orchestration.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_orchestration.py)
+  - `_YOUTUBE_FACT_CHECK_HINTS` erweitert, damit Dispatcher-Policy und Meta-Klassifikation dieselbe natuerliche Sprachvariante verstehen
+
+### Regressionen
+
+- [tests/test_dispatcher_self_status_routing.py](/home/fatih-ubuntu/dev/timus/tests/test_dispatcher_self_status_routing.py)
+  - neuer Quick-Intent-Test fuer den exakten `niHG1OTfBrY`-Satz
+- [tests/test_orchestration_policy.py](/home/fatih-ubuntu/dev/timus/tests/test_orchestration_policy.py)
+  - neuer Policy-Test fuer dieselbe natuerliche Verifikationsformulierung
+
+### Validierung
+
+- `python -m py_compile` gruen
+- `34 passed` in den fokussierten Dispatcher-/Policy-Regressionen
+- direkter Repro:
+  - `quick_intent_check(...) == "meta"`
+  - `task_type == "youtube_content_extraction"`
+  - `route_to_meta == True`
+
+## Nachtrag 2026-04-04 10:54 CEST - Generische Research-Haertung fuer alle Themen
+
+### Problemstellung
+
+Der heutige politische Faktencheck hat gezeigt:
+
+- das Problem war **nicht nur** ein einzelnes Thema
+- Timus suchte teils noch zu breit oder mit falscher Quellen-Prioritaet
+- und spaetere Agenten konnten aus einem duennen Negativbefund eine zu harte Schlussfolgerung machen
+
+Die eigentliche Zielkorrektur war daher generisch:
+
+- bessere Query-Praezisierung pro Research-Profil
+- staerkere Bewertung, ob eine Quelle **wirklich** auf die Leitfrage einzahlt
+- vorsichtigere Confidence- und Schlussformulierung bei duennen/off-topic Quellenlagen
+
+### Umgesetzt
+
+- [tools/deep_research/tool.py](/home/fatih-ubuntu/dev/timus/tools/deep_research/tool.py)
+  - profilabhaengige Source-Priority-Query-Varianten fuer `policy_regulation`, `scientific`, `news`, `vendor_comparison`, `market_intelligence` und Default/Fact-Check
+  - neue `scope_fit_score`-Logik in der Quellenqualitaet
+  - Confidence-Downgrade wenn ein grosser Teil der Quellen nicht direkt auf die Leitfrage einzahlt
+  - Executive-Summary-Kalibrierung: starke Debunking-Woerter werden bei schwacher Quellenpassung auf `nicht belastbar belegt` zurueckgenommen
+  - akademischer Report nennt jetzt explizit die `Quellenpassung` und warnt bei niedriger direkter Themenpassung
+- [agent/prompts.py](/home/fatih-ubuntu/dev/timus/agent/prompts.py)
+  - `DEEP_RESEARCH_PROMPT_TEMPLATE` hat jetzt eine klare `NEGATIVBEFUND-DISZIPLIN`
+  - `META_SYSTEM_PROMPT` traegt dieselbe Vorsichtsregel weiter, damit nachgelagerte Zusammenfassungen duenne Negativbefunde nicht ueberhaerten
+- [agent/base_agent.py](/home/fatih-ubuntu/dev/timus/agent/base_agent.py)
+  - generischer Final-Answer-Guard fuer ueberharte Negativurteile bei off-topic/duenner Evidenzlage
+  - typische Muster wie `Falschinformation` / `Fakenews` / `Geruecht` werden in diesem Fall auf vorsichtige Formulierungen zurueckgenommen
+
+### Regressionen
+
+- [tests/test_agent_loop_fixes.py](/home/fatih-ubuntu/dev/timus/tests/test_agent_loop_fixes.py)
+  - Prompt-Regeln fuer Research/Meta
+  - Final-Answer-Guard gegen ueberharte Negativurteile
+- [tests/test_deep_research_report_quality.py](/home/fatih-ubuntu/dev/timus/tests/test_deep_research_report_quality.py)
+  - profilabhaengige Source-Priority-Querys
+  - Scope-Fit-Abwertung fuer off-topic High-Authority-Quellen
+- [tests/test_research_verdict_runtime.py](/home/fatih-ubuntu/dev/timus/tests/test_research_verdict_runtime.py)
+  - Confidence-Downgrade bei schwacher Quellenpassung
+  - Kalibrierung von Executive-Summaries bei duennen Negativbefunden
+
+### Validierung
+
+- `python -m py_compile` auf geaenderte Agent-/Prompt-/Research-Dateien gruen
+- `52 passed` in den fokussierten Research-/Prompt-/Verdict-Regressionen
+
+### Wirkung
+
+- Timus behandelt diese Klasse jetzt **generisch fuer alle Themen**, nicht nur fuer den heutigen Politikfall
+- Mehr Webseiten allein sind nicht mehr der Haupthebel; zuerst werden Suchfokus, Quellenfamilien und Schlusslogik verbessert
+- Wenn die Quellenlage duenn oder thematisch schief ist, soll Timus kuenftig sauber sagen:
+  - `In den geprueften Quellen finde ich derzeit keinen belastbaren Beleg dafuer.`
+  - statt vorschnell: `Das ist Fakenews.`
+
+## Nachtrag 2026-04-04 10:32 CEST - YouTube-Link mit Faktencheck sauber geroutet
+
+### Problemstellung
+
+Der reale Morgenfall in [2026-04-04_task_582b7c10.jsonl](/home/fatih-ubuntu/dev/timus/logs/2026-04-04_task_582b7c10.jsonl) zeigte einen klaren Verstehensfehler:
+
+- Nutzer schickte einen **konkreten YouTube-Link** plus `schau mal ob da etwas wahres dran ist`
+- Timus behandelte das als `youtube_light_research`
+- der Executor formte daraus eine Suchanfrage und lieferte irrelevante Treffer wie `Peppa Wutz`
+
+Das Problem war also **nicht** die spaetere politische Antwort, sondern die erste falsche Intent-Deutung:
+
+- direkter Video-Link + Wahrheits-/Faktencheck
+- wurde als allgemeine YouTube-Discovery-Suche missverstanden
+
+### Umgesetzt
+
+- Routing-Fix in [orchestration/meta_orchestration.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_orchestration.py)
+  - neue Erkennung fuer `YouTube-URL + Faktencheck/Wahrheitspruefung`
+  - solche Faelle laufen jetzt als `youtube_content_extraction`
+  - bei direktem Video-Link ohne Browser-Auftrag wird gleich das konservative Rezept `youtube_research_only` als Primärrezept gesetzt
+  - dadurch geht der Pfad auf **Video-/Quellenanalyse** statt auf bloße Trefferliste
+- Defensiver Guard in [agent/agents/executor.py](/home/fatih-ubuntu/dev/timus/agent/agents/executor.py)
+  - wenn ein direkter Video-Faktencheck doch noch irrtuemlich als `youtube_light_research` landet, startet `executor` **keine** blinde YouTube-Suche mehr
+  - stattdessen kommt eine ehrliche Guard-Antwort statt irrefuehrender Suchtreffer
+  - zusaetzlich wird die Suchquery-Normalisierung gegen `Antworte ... Nutzeranfrage:`-Praefixe robust gehalten
+- Regressionen:
+  - [tests/test_meta_orchestration.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_orchestration.py)
+  - [tests/test_orchestration_policy.py](/home/fatih-ubuntu/dev/timus/tests/test_orchestration_policy.py)
+  - [tests/test_executor_youtube_light.py](/home/fatih-ubuntu/dev/timus/tests/test_executor_youtube_light.py)
+
+### Validierung
+
+- `python -m py_compile` auf geaenderte Routing-/Executor-/Test-Dateien gruen
+- `57 passed` in den fokussierten YouTube-/Orchestration-Regressionen
+
+### Wirkung
+
+- Konkrete YouTube-Links mit `stimmt das`, `wahres dran`, `Faktencheck`, `Behauptung`, `Geruecht` o. ae. werden nicht mehr wie eine lockere Discovery-Anfrage behandelt
+- der Morgenfall aus dem Chatverlauf ist damit genau auf der Missverstaendnis-Stelle abgesichert
+- falls ein aehnlicher Fall trotzdem in `executor` landet, ist der Fallback jetzt defensiv statt halluzinatorisch
+
+## Nachtrag 2026-04-04 10:12 CEST - Guard gegen falsche Executor-Research-Delegation
+
+### Problemstellung
+
+Im heutigen Beobachtungslog war der klarste echte Laufzeitfehler:
+
+- in [2026-04-04_task_a5b542a0.jsonl](/home/fatih-ubuntu/dev/timus/logs/2026-04-04_task_a5b542a0.jsonl) delegierte `meta` einen politischen Faktencheck an `executor`
+- die vorhandene Task-Klassifizierung bewertet genau diese Anfrage aber als `knowledge_research`
+- Ergebnis: `executor` lief in den 120s-Timeout und `meta` musste danach auf `research` umplanen
+
+Damit war das eigentliche Problem nicht ein "langsamer executor", sondern eine **falsche rohe Delegation ohne strukturierten Guard**.
+
+### Umgesetzt
+
+- Delegations-Normalisierung in [agent/base_agent.py](/home/fatih-ubuntu/dev/timus/agent/base_agent.py)
+  - rohe `delegate_to_agent(... executor ...)`-Aufrufe werden jetzt vor dem Tool-Call gegen `classify_meta_task(...)` gespiegelt
+  - wenn `meta` einen echten `knowledge_research`-Task faelschlich an `executor` schicken will, wird intern automatisch auf `research` korrigiert
+  - wenn ein echter `simple_live_lookup` / `simple_live_lookup_document` / `youtube_light_research` ohne Handoff an `executor` geht, wird automatisch ein strukturierter `# DELEGATION HANDOFF` gebaut
+- Regressionen in [tests/test_agent_loop_fixes.py](/home/fatih-ubuntu/dev/timus/tests/test_agent_loop_fixes.py)
+  - `meta -> executor` bei `knowledge_research` wird auf `research` umgebogen
+  - rohe `executor`-Simple-Lookups bekommen automatisch den leichten Handoff
+
+### Validierung
+
+- `python -m py_compile agent/base_agent.py tests/test_agent_loop_fixes.py` gruen
+- `29 passed` in [tests/test_agent_loop_fixes.py](/home/fatih-ubuntu/dev/timus/tests/test_agent_loop_fixes.py)
+- zusaetzlich `3 passed` in [tests/test_executor_delegation_stability.py](/home/fatih-ubuntu/dev/timus/tests/test_executor_delegation_stability.py)
+- zusaetzlich relevante Meta-Klassifizierung gruen:
+  - `1 passed` in [tests/test_meta_orchestration.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_orchestration.py)
+
+### Live-Befund
+
+- frischer Repro in [2026-04-04_task_4a7f23a3.jsonl](/home/fatih-ubuntu/dev/timus/logs/2026-04-04_task_4a7f23a3.jsonl)
+  - `meta` wollte im LLM-Text erneut an `executor` delegieren
+  - der zentrale Guard hat das intern korrigiert
+- App-Log-Beweis in [timus_server.log](/home/fatih-ubuntu/dev/timus/timus_server.log)
+  - `2026-04-04 10:10:04,866 | WARNING | TimusAgent-v4.4 | Delegation auto-korrigiert: meta wollte executor, Klassifizierung verlangt research | task_type=knowledge_research`
+
+### Offener Rest
+
+- Der Guard verhindert den heutigen Timeout-Pfad sauber.
+- Als naechster Folgeschritt bleibt der **Dispatcher-Memory-Write-Spike** vom 04.04.2026 als neuer groesster Beobachtungs-Kandidat.
+
+### Was als Nächstes ansteht
+
+1. **Single-Action-Disziplin im Reasoning-Agenten**
+   - aktueller Live-Befund: das Modell mischt noch mehrere `Action:`-Vorschlaege in einer Antwort
+   - Ziel: pro Schritt genau eine sichere, priorisierte Aktion
+2. **Sauberer Runtime-Diagnosepfad**
+   - nach Blackboard-/Service-Hinweisen bevorzugt in echte Evidenzpfade (`system`, `stats`, `logs`) bleiben
+   - keine halbfertigen Workaround-Blackboard-Writes mitten in der Diagnose
+3. **Alibaba/Qwen-Recheck nach KYC-Freigabe**
+   - Timus-seitige Vorbereitung steht
+   - externer Blocker bleibt aktuell Alibaba Risk/KYC
+
+### Letzte Verifikation
+
+- fokussierte Regressionen gruen
+- Live-Showcase bestaetigt: Runtime-Diagnose startet jetzt mit echter Observation statt reiner Schlussantwort
+- `timus-mcp` nach Reload wieder `healthy` um **2026-04-03 21:15:42 CEST**
+
+## Nachtrag 2026-04-03 21:17 CEST - Mehr selbstbewusstes Runtime-Handeln im Agent-Loop
+
+### Problemstellung
+
+Im Live-Showcase blieb Timus bei Runtime-/Betriebszustandsfragen noch zu passiv:
+
+- erst Analyse und Priorisierung
+- dann lediglich empfohlene `Action:`-Snippets in der Antwort
+- aber keine oder zu wenige echte eigene Evidenzschritte
+
+Zusätzlich gab es einen unguenstigen Sonderfall:
+
+- das Modell konnte eine `Final Answer:` formulieren und darin trotzdem noch eine sinnvolle, sichere Read-only-Aktion verstecken
+- der alte Loop brach an dieser Stelle sofort ab
+
+### Umgesetzt
+
+- Agent-Loop-Haertung in [agent/base_agent.py](/home/fatih-ubuntu/dev/timus/agent/base_agent.py)
+  - neue enge Salvage-Regel fuer eingebettete Runtime-Actions in vorschnellen `Final Answer`-Antworten
+  - nur fuer kleine sichere Menge an Read-only-Diagnosepfaden
+  - keine breite Auto-Ausfuehrung beliebiger eingebetteter Aktionen
+- Runtime-Disziplin im [agent/prompts.py](/home/fatih-ubuntu/dev/timus/agent/prompts.py)
+  - bei Timus-Zustand / Services / CPU-RAM-Disk / Blackboard-Audits erst Evidenz holen
+  - nach Blackboard-Hinweisen nicht sofort finalisieren
+  - keine `Action:`-Snippets mehr in `Final Answer` verstecken
+- Regressionen in [tests/test_agent_loop_fixes.py](/home/fatih-ubuntu/dev/timus/tests/test_agent_loop_fixes.py)
+  - Runtime-Kontext erforderlich fuer Action-Salvage
+  - sicherer eingebetteter Schritt wird vor Finalisierung wirklich ausgefuehrt
+  - Prompt-Disziplin fuer Runtime-/Betriebszustand abgesichert
+
+### Validierung
+
+- `python -m py_compile agent/base_agent.py agent/prompts.py tests/test_agent_loop_fixes.py` gruen
+- `27 passed` in `tests/test_agent_loop_fixes.py`
+- `timus-mcp` neu geladen, danach wieder `healthy`
+
+### Live-Befund
+
+- Erster Showcase-Fix:
+  - in [logs/2026-04-03_task_99c67948.jsonl](/home/fatih-ubuntu/dev/timus/logs/2026-04-03_task_99c67948.jsonl) fuehrt Timus nach der Analyse zumindest selbst `read_from_blackboard(topic="ambient_audit")` aus, statt direkt nur bei Text zu bleiben
+- Zweiter Showcase nach Prompt-Update:
+  - in [logs/2026-04-03_task_57018090.jsonl](/home/fatih-ubuntu/dev/timus/logs/2026-04-03_task_57018090.jsonl) startet `reasoning` direkt mit echten Runtime-Evidenzschritten
+  - sichtbar ist zuerst `get_service_status("timus-mcp.service")`
+  - damit ist der grobe Passivitaetsfehler gebrochen: Timus handelt in diesem Pfad jetzt spuerbar selbststaendiger
+
+### Offener Rest
+
+- Das Modell ist noch nicht sauber genug bei **Single-Action pro Schritt**
+- im zweiten Showcase produzierte `reasoning` zuerst mehrere `Action:`-Vorschlaege in einer Antwort
+- danach driftete der Pfad teilweise in halbdiagnostische Blackboard-Writes
+
+Das ist jetzt der naechste konkrete Arbeitsblock.
+
+## 2026-04-03 — Phase B: Action-Continuation-Routing, Delegation-Blackboard-Fix und Guided-Follow-up-Priorität
+
+### Problemstellung
+
+Die Phase-B-Follow-up-Logik hatte am 2026-04-03 noch drei reale Laufzeitprobleme:
+
+- Kurze Zustimmungen wie `ja mach das` wurden zwar erkannt, aber im Proposal-Pfad teils falsch an `executor` statt an `meta` weitergegeben.
+- Delegationsresultate wurden über ihren `blackboard_key` gespeichert, aber spätere Reads behandelten denselben Wert als `topic`, wodurch leere Blackboard-Lookups entstanden.
+- Ein Guided-Follow-up wie `Hast du schon ein Google Cloud Projekt oder soll ich dich durch die Erstellung führen?` wurde bei `ok fang an` semantisch falsch auf ein schwaches Generic-Proposal `führen` reduziert, statt die offene Rückfrage fortzusetzen.
+
+### Umgesetzt
+
+- Follow-up-/Proposal-Härtung in [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - `ok fang an`, `fang an`, `ok leg los`, `leg los` als echte Zustimmungen ergänzt
+  - explizite Agenten-Angebote wie `den developer-Agenten beauftragen ...` werden jetzt als `agent_delegation` erkannt
+  - `RESOLVED_PROPOSAL` mit `target_agent` wird direkt zurück an `meta` geroutet
+  - Guided-Angebote vom Typ `soll ich dich durch ... führen` werden nicht mehr zu bloß `führen` degradiert
+  - neue Prioritätsregel: eine explizite `pending_followup_prompt` gewinnt gegen schwache `generic_action`-Proposals
+- Delegation-Result-Contract in [agent/agent_registry.py](/home/fatih-ubuntu/dev/timus/agent/agent_registry.py)
+  - Platzhalter-Erfolge wie `Maximale Anzahl an Schritten erreicht, ohne finale Antwort` werden nicht mehr als `success`, sondern als `partial` klassifiziert
+- Blackboard-Key-Lookup in [tools/blackboard_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/blackboard_tool/tool.py)
+  - `read_from_blackboard(...)` kann Delegations-`blackboard_key`s jetzt direkt gegen `delegation_results` auflösen
+  - Rückgabe enthält `lookup_mode=delegation_key`, wenn dieser Fallback gezogen wurde
+- Meta-Follow-up-Anker in [orchestration/meta_orchestration.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_orchestration.py)
+  - `ok fang an`, `mach das`, `leg los` gelten jetzt auch im Meta-Dialogzustand als kontextverankerte Fortsetzung
+
+### Validierung
+
+- Neue/erweiterte Regressionen:
+  - [tests/test_phase_b_action_continuation.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_b_action_continuation.py)
+  - [tests/test_blackboard_tool_key_lookup.py](/home/fatih-ubuntu/dev/timus/tests/test_blackboard_tool_key_lookup.py)
+  - [tests/test_m3_partial_results.py](/home/fatih-ubuntu/dev/timus/tests/test_m3_partial_results.py)
+  - [tests/test_meta_orchestration.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_orchestration.py)
+- Testläufe:
+  - `53 passed` in Proposal-/Phase-B-/Partial-Regressionen
+  - `39 passed` in `auto_blackboard_write` + `meta_recipe_execution`
+  - `20 passed` in `m3_delegate_parallel`
+  - `82 passed` in `test_phase_b_action_continuation.py`, `test_meta_orchestration.py`, `test_reference_and_proposal.py`
+- Live-Replay nach Neustart:
+  - `ja mach das` läuft jetzt in `meta`, nicht mehr in `executor`
+  - `ok fang an` startet jetzt korrekt in `meta`
+  - der problematische Guided-Fall wird jetzt als `# FOLLOW-UP CONTEXT` mit `pending_followup_prompt` fortgesetzt statt als `# RESOLVED_PROPOSAL kind: generic_action suggested_query: führen`
+- Dienststatus:
+  - `timus-mcp` nach Neustart wieder `healthy` am `2026-04-03 19:11:41 CEST`
+
+### Offener Punkt
+
+Der nächste echte Laufzeitfehler liegt jetzt hinter dem Routing:
+
+- Delegation an `developer` scheitert im Live-Task `task_b0bef236` mit `'list' object has no attribute 'get'`
+
+Dieser Fehler ist nach den Phase-B-Fixes nun der nächste direkte Arbeitsblock.
+
+### Nachtrag 03.04.2026 20:19:29 CEST — Navigation-Classifier entkoppelt und Shell-Auto-Vision deaktiviert
+
+#### Problemstellung
+
+Nach den Routing-Fixes blieb ein weiterer Phase-B-Laufzeitfehler sichtbar:
+
+- `structured_navigation_fallback` sprang bei nicht-visuellen Queries wie `hey timus kannst du meinen googlekalender einsehen` und `was gibts auf dem blackboard` an, obwohl es keine Browser-Aufgaben waren.
+- Ursache: `BaseAgent` klassifizierte Navigation auf dem **voll angereicherten Meta-/Memory-Task**, nicht auf der eigentlichen Nutzeranfrage.
+- Zusätzlich konnte der `shell`-Agent bei Aufgaben mit Begriffen wie `google-calendar` fälschlich in den multimodalen Pfad geraten und scheiterte dann mit `404 - No endpoints found that support image input`.
+
+#### Umgesetzt
+
+- Aufgaben-Extraktion in [agent/base_agent.py](/home/fatih-ubuntu/dev/timus/agent/base_agent.py)
+  - neue Helper-Methode `_extract_primary_task_text(...)`
+  - bevorzugt die eigentliche Aufgaben-Sektion aus `# CURRENT USER QUERY`, `AKTUELLE_NUTZERANFRAGE:` oder `# AUFGABE`
+  - ignoriert nachgelagerte Skill-/Memory-/Decomposition-Hinweise
+- Navigation-/Recall-Guards in [agent/base_agent.py](/home/fatih-ubuntu/dev/timus/agent/base_agent.py)
+  - Memory-Recall, Navigationserkennung und Structured-Navigation arbeiten jetzt auf der extrahierten Primäraufgabe
+  - Analytics-/Restart-Guards nutzen ebenfalls den bereinigten Task-Text
+- Navigation-Patterns in [agent/base_agent.py](/home/fatih-ubuntu/dev/timus/agent/base_agent.py)
+  - nackte Einzelwörter `google` und `amazon` entfernt
+  - ersetzt durch spezifischere Marker wie `google.com`, `google.de`, `google maps`, `amazon.com`, `amazon.de`
+- Shell-Härtung in [agent/agents/shell.py](/home/fatih-ubuntu/dev/timus/agent/agents/shell.py)
+  - `self._vision_enabled = False`
+  - Shell-Aufgaben hängen damit keine Auto-Screenshots mehr an LLM-Requests
+
+#### Validierung
+
+- Neue Regressionen:
+  - [tests/test_navigation_task_extraction.py](/home/fatih-ubuntu/dev/timus/tests/test_navigation_task_extraction.py)
+- Testlauf:
+  - `33 passed` in `tests/test_navigation_task_extraction.py`, `tests/test_agent_loop_fixes.py`, `tests/test_phase_b_action_continuation.py`
+- Dienststatus:
+  - `timus-mcp` nach Neustart wieder `healthy` um `03.04.2026 20:17:04 CEST`
+- Live-Replay:
+  - `task_f2a01e70` (`hey timus kannst du meinen googlekalender einsehen`)
+    - startet jetzt direkt mit `working_memory_injected`
+    - **kein** `structured_navigation_fallback`
+    - **kein** Shell-`image input`-404
+    - erfolgreicher Abschluss um `20:18:45 CEST`
+  - `task_c7419cba` (`was gibts auf dem blackboard`)
+    - startet ebenfalls direkt mit `working_memory_injected`
+    - **kein** `structured_navigation_fallback` mehr im Startpfad
+
+#### Wirkung
+
+Der Phase-B-Classifier reagiert jetzt auf die eigentliche Nutzeraufgabe statt auf zufällige Browser-/Google-Marker im angereicherten Kontext. Damit sind die beiden zuletzt sichtbaren False Positives aus den Live-Replays beseitigt.
+
+---
+
 ## ⚠️ NACHTRAG (dokumentiert am 2026-03-27, implementiert 2026-03-23 bis 2026-03-25)
 
 Diese Einträge wurden nicht in Echtzeit protokolliert, sondern nachträglich aus dem Review-Verlauf rekonstruiert.
@@ -1405,6 +1938,99 @@ Der Fall `reserviere mir ein hotel in portugal lissabon` zeigt eine eigene, spae
 - sondern arbeitet aktiv bis zum letzten sicheren Schritt
 - und zeigt damit echtes assistives Mitdenken statt nur Such-/Antwortlogik
 
+## Spaetere Phase E - Self-Improvement aus erkannter Schwaeche
+
+Die Beobachtung zeigt klar:
+- Timus kennt viele seiner Schwaechen bereits
+- aber er kann sie noch nicht sauber selbst in konkrete Verbesserungsmassnahmen uebersetzen
+
+### Zielbild
+
+- Timus erkennt wiederkehrende Schwachstellen aus Live-Betrieb und Beobachtung
+- Timus klassifiziert sie als:
+  - Prompt-/Routingproblem
+  - Kontext-/Meaning-Problem
+  - Runtime-/Infra-Problem
+  - Tool-/Spezialistenproblem
+- Timus erzeugt daraus selbst:
+  - `developer_task`
+  - `shell_task`
+  - oder konservativ `verification_needed`
+
+### Bausteine
+
+1. Weakness-to-Task Compiler
+- aus beobachteter Schwaeche wird eine belastbare Massnahme
+- nicht nur Selbstbeschreibung, sondern konkrete Umsetzungsempfehlung
+
+2. Observation -> Diagnosis -> Action
+- Beobachtungsereignisse muessen spaeter direkt in Hardening-/Verbesserungspfade einspeisen
+
+3. Safe Self-Hardening
+- nur konservative, klar begrenzte Aenderungen ohne hohes Risiko
+- z. B.:
+  - Guards
+  - Schwellenwerte
+  - kleine Parser-/Routingverbesserungen
+  - Prompt-Haertung
+  - Tests/Regressionen
+
+4. Approval Gate fuer groessere Eingriffe
+- Modellwechsel
+- groessere Refactors
+- kritische Runtime-/Infra-Aenderungen
+- alles davon nur mit expliziter Freigabe oder starkem Policy-Gate
+
+### Erfolgskriterium
+
+- Timus beschreibt Schwaechen nicht nur
+- sondern kann daraus spaeter selbst belastbare Verbesserungs-Tasks ableiten
+- und in sicheren Faellen sogar konservativ anstossen
+
+## Naechster Arbeitsblock - 2026-04-03 Abend
+
+Aus dem Google-Calendar-Fall ergeben sich zwei direkte Folgearbeiten:
+
+### 1. Action-Continuation Routing
+
+Kurze Fortsetzungsantworten wie:
+
+- `ja mach das`
+- `ok fang an`
+- `mach weiter`
+- `ja bitte`
+
+sollen nicht nur als lockere Bestaetigung behandelt werden, sondern als echte Fortsetzung eines offenen Arbeitsauftrags.
+
+Ziel:
+
+- offene Delegationen / Vorschlaege / naechste Schritte werden als fortsetzbarer Auftrag erkannt
+- der naechste Agent wird wirklich beauftragt
+- der Turn endet nicht in blosser verbaler Zusage ohne Ausfuehrung
+
+### 2. Delegation Success Contract
+
+Delegationen duerfen nur dann als `success` gelten, wenn ein verwertbares Ergebnis zurueckkommt.
+
+Nicht ausreichend:
+
+- nur verbale Bestaetigung
+- nur ein Titel
+- leerer Blackboard-Eintrag
+- `max steps reached` ohne verwertbaren Inhalt
+
+Erforderlich je nach Task:
+
+- brauchbarer Final-Text
+- oder Blackboard-Eintrag mit Inhalt
+- oder Artefakt
+- oder klarer Fehler-/Partial-Status statt falschem `success`
+
+Ziel:
+
+- andere Agenten akzeptieren saubere Instruktionen als echten Auftrag
+- und das System erkennt unbrauchbare Pseudo-Erfolge nicht mehr als Erfolg an
+
 ## Fortschritt 2026-04-02 - Frontdoor/Reasoning Guard + Parse-Recovery Hardening
 
 Die beobachteten Chat-Fehlfaelle vom 02.04.2026 haben drei konkrete Schutzmassnahmen ausgeloest:
@@ -1551,3 +2177,101 @@ Verifikation:
 - fokussierte Pytest-Suite gruen (`36 passed`)
 - Lean gruen
 - CrossHair auf `tests/test_meta_dialog_state_contracts.py` bleibt hier aktuell haengen und wird deshalb NICHT als falsches Gruen gewertet
+
+## Nachtrag 2026-04-03 20:30 CEST - Natuerlichere Antwortfinalisierung fuer Listen
+
+Die Listen-Finalisierung war noch zu aggressiv und hat auch bereits brauchbare Antworten in das starre Format `Hier ist deine Liste:` gepresst. Das fiel im Live-Reply fuer Blackboard- und Google-Calendar-Faelle unnoetig mechanisch auf.
+
+- Umsetzung:
+  - `BaseAgent._finalize_list_output(...)` prueft Listenwunsch jetzt gegen die extrahierte Primaeraufgabe statt gegen den voll angereicherten Task
+  - dadurch loesen Wrapper-Texte mit `Liste` im Meta-/Skill-Kontext keine falsche Listenformatierung mehr aus
+  - `_looks_like_preformatted_list_answer(...)` bewahrt bereits gut formatierte Markdown-/Bullet-/Absatz-Antworten vor der erzwungenen Umnummerierung
+  - `_format_generate_text_output(...)` und die Plain-Line-Normalisierung erzeugen nur noch nummerierte Punkte, aber keine stockige Standard-Einleitung mehr
+
+- Neue Regressionen:
+  - `tests/test_list_output_naturalization.py`
+  - abgedeckt sind:
+    - keine Listen-Finalisierung durch Wrapper-Kontext
+    - Markdown/Bullets bleiben natuerlich erhalten
+    - rohe Zeilen werden weiter sauber nummeriert
+    - JSON-Listen verlieren die Standard-Einleitung
+
+- Verifikation:
+  - `python -m py_compile agent/base_agent.py tests/test_list_output_naturalization.py` gruen
+  - fokussierte Suite gruen (`15 passed`)
+  - `timus-mcp` neu gestartet, `/health` wieder `healthy` um `20:29:38 CEST`
+  - Live-Check `/chat` fuer `was gibts auf dem blackboard` liefert jetzt eine normale Markdown-Antwort mit `**Blackboard-Uebersicht ...**` statt `Hier ist deine Liste:`
+
+## Nachtrag 2026-04-03 20:38 CEST - Dispatcher-Bypass fuer klare Meta-Queries
+
+Im Beobachtungslog tauchten fuer klare interne Meta-Queries weiterhin `dispatcher_meta_fallback`-Eintraege mit `reason=empty_decision` auf. Ursache war nicht der Parser, sondern dass der Dispatcher-LLM bei Anfragen wie `was gibts auf dem blackboard` oder `kannst du meinen googlekalender einsehen` nur paraphrasiert hat statt einen Agenten zu nennen.
+
+- Umsetzung:
+  - `main_dispatcher.quick_intent_check(...)` erkennt jetzt zwei eindeutige Meta-Klassen vor dem Dispatcher-LLM:
+    - Blackboard-/Working-Memory-Abfragen
+    - Google-Calendar-/Calendar-API-Zugriffsfragen
+  - dadurch werden diese Faelle direkt auf `meta` geroutet und umgehen den leeren LLM-Decision-Pfad
+
+- Neue Regressionen:
+  - `tests/test_dispatcher_self_status_routing.py`
+    - Blackboard → `meta`
+    - Google Calendar → `meta`
+  - `tests/test_dispatcher_provider_selection.py`
+    - `get_agent_decision(...)` ruft fuer Blackboard den Dispatcher-LLM nicht mehr auf
+
+- Verifikation:
+  - `python -m py_compile main_dispatcher.py tests/test_dispatcher_self_status_routing.py tests/test_dispatcher_provider_selection.py` gruen
+  - fokussierte Dispatcher-Suite gruen (`38 passed`)
+  - `timus-mcp` neu gestartet, `/health` wieder `healthy` um `20:37:36 CEST`
+  - Live-Checks `/chat` fuer
+    - `was gibts auf dem blackboard`
+    - `hey timus kannst du meinen googlekalender einsehen`
+    liefen beide erfolgreich ueber `meta`
+  - nach den Live-Checks erschien kein neuer `dispatcher_meta_fallback`-Eintrag fuer diese beiden Queries im Beobachtungslog
+
+## Nachtrag 2026-04-03 20:51 CEST - Beobachtungslog gegen Test-Pollution gehaertet
+
+Im Live-Beobachtungslog erschien ein `dispatcher_exception`, der nicht aus einer echten Laufzeit, sondern aus einem fehlerhaften Unit-Test-Stub kam (`_verbose(..., session_id=...)`). Dadurch konnte Pytest versehentlich in `logs/autonomy_observation.jsonl` schreiben.
+
+- Umsetzung:
+  - `tests/test_dispatcher_provider_selection.py`
+    - der betroffene Dispatcher-Stub akzeptiert jetzt ebenfalls `session_id`
+  - `orchestration/autonomy_observation.py`
+    - `record_autonomy_observation(...)` schreibt unter Pytest standardmaessig NICHT mehr in das produktive Beobachtungslog
+    - Ausnahmen bleiben moeglich, wenn Tests explizit eigene `AUTONOMY_OBSERVATION_LOG_PATH` / `AUTONOMY_OBSERVATION_STATE_PATH` setzen oder Test-Writes bewusst freigeben
+
+- Neue Regressionen:
+  - `tests/test_autonomy_observation.py`
+    - default Pytest-Run schreibt nicht ins Live-Log
+    - explizite Tmp-Pfade erlauben weiterhin kontrollierte Test-Writes
+
+- Verifikation:
+  - `python -m py_compile orchestration/autonomy_observation.py tests/test_autonomy_observation.py tests/test_dispatcher_provider_selection.py` gruen
+  - fokussierte Suite gruen (`18 passed`)
+  - der Test-Rerun hat keine neuen Eintraege in `logs/autonomy_observation.jsonl` erzeugt
+  - `timus-mcp` neu gestartet, `/health` wieder `healthy` um `20:51:07 CEST`
+
+## Nachtrag 2026-04-03 20:57 CEST - Visual-Timeouts fuer reine Screentext-Reads abgeschnitten
+
+Die verbleibenden `visual`-Timeouts im Beobachtungslog stammten aus Meta-Delegationen fuer `get_all_screen_text` / `read_text_from_screen`. Fuer diese read-only OCR-Aufrufe war die volle `visual`-Agent-Delegation mit 120s-Timeout unnoetig teuer.
+
+- Umsetzung:
+  - `agent/agents/meta.py`
+    - `get_all_screen_text` und `read_text_from_screen` laufen im Meta-Agent jetzt direkt ueber das Tool
+    - sie werden nicht mehr als Spezialisten-Delegation an `visual` geschickt
+    - gleichzeitig werden sie als `meta_direct_tool_call` beobachtet
+
+- Neue Regression:
+  - `tests/test_meta_recipe_execution.py`
+    - Screen-Text-Read darf nicht mehr `delegate_to_agent(visual)` ausloesen
+    - stattdessen direkter Tool-Call + Observation als Direct-Tool-Event
+
+- Verifikation:
+  - `python -m py_compile agent/agents/meta.py tests/test_meta_recipe_execution.py` gruen
+  - fokussierte Meta-Suite gruen (`2 passed`)
+  - `timus-mcp` neu gestartet, `/health` wieder `healthy` um `20:57:09 CEST`
+
+- Erwartete Wirkung:
+  - weniger `meta_specialist_delegation`-Timeouts fuer `visual`
+  - schnellere, robustere OCR-/Screentext-Reads
+  - der `visual`-Agent bleibt fuer echte UI-Interaktion reserviert
