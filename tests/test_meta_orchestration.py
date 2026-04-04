@@ -7,6 +7,7 @@ from orchestration.meta_orchestration import (
     extract_effective_meta_query,
     extract_meta_context_anchor,
     get_agent_capability_map,
+    looks_like_meta_clarification_turn,
 )
 from agent.agents.meta import MetaAgent
 
@@ -157,6 +158,26 @@ def test_classify_meta_task_marks_user_reported_location_update_for_semantic_rev
     assert result["recommended_agent_chain"] == ["meta"]
     assert result["recommended_recipe_id"] is None
     assert result["reason"] == "semantic_state_update_review"
+
+
+def test_meta_clarification_turn_helper_recognizes_short_ambiguous_dialogue():
+    assert looks_like_meta_clarification_turn("muss ich mir noch überlegen") is True
+    assert looks_like_meta_clarification_turn("ich bin mir noch nicht sicher") is True
+    assert looks_like_meta_clarification_turn("wie meinst du das") is True
+    assert looks_like_meta_clarification_turn("prüfe bitte den systemstatus und die logs") is False
+
+
+def test_classify_meta_task_routes_conversational_clarification_turn_to_meta():
+    result = classify_meta_task(
+        "muss ich mir noch überlegen",
+        action_count=0,
+    )
+
+    assert result["task_type"] == "single_lane"
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["recommended_recipe_id"] is None
+    assert result["reason"] == "semantic_clarification_turn"
+    assert "conversational_clarification_needed" in result["semantic_ambiguity_hints"]
 
 
 def test_classify_meta_task_routes_simple_live_science_lookup_to_meta_executor():
@@ -514,6 +535,23 @@ def test_classify_meta_task_applies_context_anchor_for_ok_fang_an_followup():
     assert result["context_anchor_applied"] is True
     assert result["reason"] == "context_anchored_followup"
     assert "google cloud projekt" in (result["active_topic"] or "").lower()
+
+
+def test_classify_meta_task_applies_context_anchor_for_deferred_decision_followup():
+    query = (
+        "# FOLLOW-UP CONTEXT last_agent: meta session_id: canvas_geh1xquj "
+        "last_user: könntest du dir selbst eine telefonfunktion einrichten um mit mir zu telefonieren "
+        "pending_followup_prompt: Was willst du? "
+        "# CURRENT USER QUERY muss ich mir noch überlegen"
+    )
+
+    result = classify_meta_task(query, action_count=0)
+
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["context_anchor_applied"] is True
+    assert result["reason"] == "semantic_clarification_turn"
+    assert "telefonfunktion" in (result["active_topic"] or "").lower()
+    assert "was willst du" in (result["open_goal"] or "").lower()
 
 
 def test_build_meta_feedback_targets_emits_task_recipe_and_chain_targets():

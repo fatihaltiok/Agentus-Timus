@@ -690,6 +690,70 @@ async def test_canvas_chat_routes_short_contextual_reply_to_same_lane(monkeypatc
     assert "die erste option" in followup_query
 
 
+async def test_canvas_chat_routes_deferred_contextual_reply_to_same_meta_lane(monkeypatch, tmp_path):
+    captured = {"decision_queries": [], "run_queries": []}
+    mcp_server._chat_history.clear()
+    monkeypatch.setenv("TIMUS_SESSION_STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setattr(mcp_server, "_semantic_store_chat_turn", lambda **kwargs: None)
+    monkeypatch.setattr(mcp_server, "_semantic_recall_chat_turns", lambda **kwargs: [])
+
+    async def fake_build_tools_description():
+        return "tools"
+
+    async def fake_get_agent_decision(query, session_id=None):
+        captured["decision_queries"].append((query, session_id))
+        return "meta"
+
+    async def fake_run_agent(agent_name, query, tools_description, session_id=None):
+        captured["run_queries"].append((agent_name, query, session_id, tools_description))
+        if "telefonfunktion" in query.lower():
+            return (
+                "Was willst du?\n\n"
+                "A) Lokalen Voice-Chat nutzen\n"
+                "B) Twilio-Integration einrichten\n"
+                "C) Telegram Voice-Integration"
+            )
+        return "Klar, überleg es dir in Ruhe. Wenn du dich entschieden hast, machen wir damit weiter."
+
+    fake_dispatcher = SimpleNamespace(
+        get_agent_decision=fake_get_agent_decision,
+        run_agent=fake_run_agent,
+    )
+
+    monkeypatch.setattr(mcp_server, "_build_tools_description", fake_build_tools_description)
+    monkeypatch.setitem(sys.modules, "main_dispatcher", fake_dispatcher)
+
+    first = await mcp_server.canvas_chat(
+        _FakeRequest(
+            {
+                "query": "könntest du dir selbst eine telefonfunktion einrichten um mit mir zu telefonieren",
+                "session_id": "phone_followup_lane",
+            }
+        )
+    )
+    second = await mcp_server.canvas_chat(
+        _FakeRequest(
+            {
+                "query": "muss ich mir noch überlegen",
+                "session_id": "phone_followup_lane",
+            }
+        )
+    )
+
+    assert first["status"] == "success"
+    assert second["status"] == "success"
+    assert second["agent"] == "meta"
+    assert len(captured["decision_queries"]) == 1
+    assert captured["decision_queries"][0][0] == "könntest du dir selbst eine telefonfunktion einrichten um mit mir zu telefonieren"
+    followup_agent, followup_query, followup_session_id, _ = captured["run_queries"][-1]
+    assert followup_agent == "meta"
+    assert followup_session_id == "phone_followup_lane"
+    assert "# FOLLOW-UP CONTEXT" in followup_query
+    assert "pending_followup_prompt:" in followup_query
+    assert "Was willst du?" in followup_query
+    assert "muss ich mir noch überlegen" in followup_query
+
+
 async def test_canvas_chat_logs_completed_interaction_to_memory(monkeypatch, tmp_path):
     captured = {"memory_logs": []}
     mcp_server._chat_history.clear()

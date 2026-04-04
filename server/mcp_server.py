@@ -336,6 +336,13 @@ _SHORT_CONTEXTUAL_REPLY_PATTERNS = (
     r"^\s*nimm\s+die\s+zweite\s*$",
 )
 
+_DEFERRED_CONTEXTUAL_REPLY_PATTERNS = (
+    r"^\s*(?:(?:ich\s+)?muss|muss\s+ich)\s+(?:mir\s+)?(?:das\s+)?noch\s+(?:überlegen|ueberlegen|uberlegen)\s*[.!]?\s*$",
+    r"^\s*(?:ich\s+)?(?:überlege|ueberlege|uberlege)\s+(?:mir\s+)?(?:das\s+)?noch\s*[.!]?\s*$",
+    r"^\s*(?:ich\s+)?denke\s+(?:noch\s+)?dar(?:ü|ue)ber\s+nach\s*[.!]?\s*$",
+    r"^\s*(?:dar(?:ü|ue)ber\s+)?muss\s+ich\s+(?:noch\s+)?nachdenken\s*[.!]?\s*$",
+)
+
 # P4: Angebots-Muster am Ende einer Assistenten-Antwort
 _PROPOSAL_TRIGGER_PATTERNS = (
     r"\bsoll\s+ich\b",
@@ -1068,7 +1075,9 @@ def _is_short_contextual_reply(query: str, capsule: dict) -> bool:
         return False
     if any(re.search(pattern, normalized) for pattern in _AFFIRMATION_PATTERNS):
         return True
-    return any(re.search(pattern, normalized) for pattern in _SHORT_CONTEXTUAL_REPLY_PATTERNS)
+    if any(re.search(pattern, normalized) for pattern in _SHORT_CONTEXTUAL_REPLY_PATTERNS):
+        return True
+    return any(re.search(pattern, normalized) for pattern in _DEFERRED_CONTEXTUAL_REPLY_PATTERNS)
 
 
 def _build_followup_capsule(session_id: str, query: str = "") -> dict:

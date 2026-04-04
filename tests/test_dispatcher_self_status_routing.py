@@ -77,6 +77,14 @@ def test_quick_intent_routes_meta_feedback_and_reference_followups_to_meta():
     assert main_dispatcher.quick_intent_check("kannst du sie reparieren") == "meta"
 
 
+def test_quick_intent_routes_conversational_clarification_turns_to_meta():
+    import main_dispatcher
+
+    assert main_dispatcher.quick_intent_check("muss ich mir noch ueberlegen") == "meta"
+    assert main_dispatcher.quick_intent_check("ich bin mir noch nicht sicher") == "meta"
+    assert main_dispatcher.quick_intent_check("wie meinst du das") == "meta"
+
+
 def test_quick_intent_routes_blackboard_queries_directly_to_meta():
     import main_dispatcher
 
@@ -110,6 +118,21 @@ dann uebernimm die empfehlung 2
 """
 
     assert main_dispatcher._extract_dispatcher_focus_query(augmented) == "dann uebernimm die empfehlung 2"
+    assert main_dispatcher.quick_intent_check(augmented) == "meta"
+
+
+def test_quick_intent_routes_deferred_followup_inside_capsule_to_meta():
+    import main_dispatcher
+
+    augmented = """# FOLLOW-UP CONTEXT
+last_agent: meta
+last_user: koenntest du dir selbst eine telefonfunktion einrichten um mit mir zu telefonieren
+pending_followup_prompt: Was willst du?
+# CURRENT USER QUERY
+muss ich mir noch ueberlegen
+"""
+
+    assert main_dispatcher._extract_dispatcher_focus_query(augmented) == "muss ich mir noch ueberlegen"
     assert main_dispatcher.quick_intent_check(augmented) == "meta"
 
 

@@ -2,6 +2,115 @@
 
 ---
 
+## Fortschritt 2026-04-04 22:55 CEST - Meta klaert mehrdeutige Gespraechszuege zuerst selbst
+
+### Problemstellung
+
+Die Follow-up-Haertung fuer konkrete Vertagungen war schon drin, aber die generische Dialogregel fehlte noch:
+
+- `meta` delegierte zwar korrekt bei klaren Aufgaben
+- kurze, mehrdeutige oder nur halb ausformulierte Gespraechszuege waren aber nicht explizit als `meta`-eigene Klaerungsfaelle verankert
+- dadurch konnten Saetze wie `muss ich mir noch ueberlegen`, `ich bin mir noch nicht sicher` oder `wie meinst du das` je nach Kontext noch zu frueh aus dem Meta-Layer herausfallen
+
+### Umgesetzt
+
+- [orchestration/meta_orchestration.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_orchestration.py)
+  - gemeinsamer Helper `looks_like_meta_clarification_turn(...)`
+  - erkennt kurze, mehrdeutige Gespraechszuege als semantische Klaerungsfaelle
+  - solche Faelle erzeugen jetzt die Ambiguitaet `conversational_clarification_needed`
+  - Klassifikation bleibt dann auf `single_lane -> meta` mit `reason = semantic_clarification_turn`
+- [main_dispatcher.py](/home/fatih-ubuntu/dev/timus/main_dispatcher.py)
+  - Dispatcher nutzt denselben gemeinsamen Helper
+  - dadurch gibt es keine zweite, konkurrierende Regelmaschine fuer denselben Gespraechstyp
+- [agent/prompts.py](/home/fatih-ubuntu/dev/timus/agent/prompts.py)
+  - `META_SYSTEM_PROMPT` hat jetzt eine explizite `SEMANTISCHE KLAERUNG VOR DELEGATION`-Regel:
+    - Satz erst als Gespraechszug lesen
+    - bei Mehrdeutigkeit bei `meta` bleiben
+    - im Zweifel genau eine knappe Klaerungsfrage
+    - erst delegieren, wenn Bezug und Ziel klar sind
+
+### Regressionen, Contracts, Hypothesis, CrossHair, Lean
+
+- [tests/test_dispatcher_self_status_routing.py](/home/fatih-ubuntu/dev/timus/tests/test_dispatcher_self_status_routing.py)
+  - neue Regressionsfaelle fuer:
+    - `muss ich mir noch ueberlegen`
+    - `ich bin mir noch nicht sicher`
+    - `wie meinst du das`
+- [tests/test_meta_orchestration.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_orchestration.py)
+  - neuer Helper-Test fuer `looks_like_meta_clarification_turn(...)`
+  - neue Meta-Klassifikation fuer `semantic_clarification_turn`
+- [tests/test_meta_dialog_state_contracts.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_dialog_state_contracts.py)
+  - bestehende Deal/Hypothesis-Grenze erneut gegen die geaenderte Meta-Semantik gefahren
+
+### Validierung
+
+- `python -m py_compile orchestration/meta_orchestration.py main_dispatcher.py agent/prompts.py tests/test_dispatcher_self_status_routing.py tests/test_meta_orchestration.py tests/test_meta_dialog_state_contracts.py` gruen
+- `57 passed` in:
+  - `tests/test_dispatcher_self_status_routing.py`
+  - `tests/test_meta_orchestration.py`
+  - `tests/test_meta_dialog_state_contracts.py`
+- `python -m crosshair check tests/test_meta_dialog_state_contracts.py` gruen
+- `python scripts/verify_pre_commit_lean.py` komplett gruen
+  - `CiSpecs.lean` gruen
+  - `Mathlib bundle (12 Specs)` gruen
+
+## Fortschritt 2026-04-04 22:40 CEST - Zögernde Follow-ups bleiben im offenen Meta-Dialog
+
+### Problemstellung
+
+Ein echter Canvas-Fall war noch falsch:
+
+- Nutzer fragt nach Telefonfunktion / Voice-Optionen
+- `meta` antwortet korrekt mit offenem Follow-up (`Was willst du?`)
+- Nutzer sagt nur `muss ich mir noch überlegen`
+- der Turn verliert den offenen Dialogkontext und kippt wegen `überlege` in `reasoning`
+
+Das war kein Session-Verlust, sondern eine semantische Lücke:
+
+- Follow-up-Kapsel erkannte zögernde / vertagende Kurzantworten noch nicht
+- der Dispatcher wertete `überlege` isoliert als Reasoning-Signal
+- der Meta-Dialoganker behandelte diese Antwort noch nicht als kontextgebundene Fortsetzung
+
+### Umgesetzt
+
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - neue Erkennung fuer vertagende Follow-up-Antworten wie:
+    - `muss ich mir noch überlegen`
+    - `ich überlege noch`
+    - `darüber muss ich nachdenken`
+  - solche Antworten bleiben jetzt bei vorhandenem `pending_followup_prompt` oder Proposal auf der bestehenden Lane statt erneut durch den Dispatcher zu fallen
+- [main_dispatcher.py](/home/fatih-ubuntu/dev/timus/main_dispatcher.py)
+  - neuer Dispatcher-Guard fuer `deferred followups` innerhalb einer `# FOLLOW-UP CONTEXT`-Kapsel
+  - verhindert, dass das Keyword `überlege` den Turn in `reasoning` zieht
+- [orchestration/meta_orchestration.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_orchestration.py)
+  - Meta-Dialoganker kennt diese zögernden Antworten jetzt ebenfalls als echte Fortsetzung
+  - offener Dialogkontext bleibt fuer `meta` erhalten
+
+### Regressionen, Contracts, Hypothesis
+
+- [tests/test_android_chat_language.py](/home/fatih-ubuntu/dev/timus/tests/test_android_chat_language.py)
+  - neuer Canvas-Repro fuer den exakten Telefon-/`muss ich mir noch überlegen`-Fall
+- [tests/test_dispatcher_self_status_routing.py](/home/fatih-ubuntu/dev/timus/tests/test_dispatcher_self_status_routing.py)
+  - Dispatcher-Regressionsfall fuer dieselbe Follow-up-Kapsel
+- [tests/test_meta_orchestration.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_orchestration.py)
+  - Meta-Anchor-Regressionsfall fuer vertagte Entscheidungen
+- [tests/test_meta_dialog_state_contracts.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_dialog_state_contracts.py)
+  - bestehende Deal/Hypothesis-Schicht erneut gegen die veraenderte Dialog-State-Logik gefahren
+
+### Validierung
+
+- `python -m py_compile server/mcp_server.py main_dispatcher.py orchestration/meta_orchestration.py tests/test_android_chat_language.py tests/test_dispatcher_self_status_routing.py tests/test_meta_orchestration.py tests/test_meta_dialog_state_contracts.py` gruen
+- `69 passed` in:
+  - `tests/test_android_chat_language.py`
+  - `tests/test_dispatcher_self_status_routing.py`
+  - `tests/test_meta_orchestration.py`
+  - `tests/test_meta_dialog_state_contracts.py`
+- `python -m crosshair check tests/test_meta_dialog_state_contracts.py` gruen
+- `python scripts/verify_pre_commit_lean.py`
+  - `CiSpecs.lean` gruen
+  - bekanntes Restproblem bleibt unveraendert: `Mathlib bundle` laeuft weiter ins bestehende `60s`-Timeout
+
+
 ## Status 2026-04-04 20:43 CEST - Phase B Abschluss
 
 ### Phase-B-Stand

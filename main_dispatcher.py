@@ -60,6 +60,7 @@ from orchestration.autonomy_observation import record_autonomy_observation
 from orchestration.orchestration_policy import evaluate_query_orchestration
 from orchestration.meta_orchestration import (
     build_meta_feedback_targets,
+    looks_like_meta_clarification_turn,
     meta_agent_chain_key,
     meta_site_recipe_key,
     resolve_adaptive_plan_adoption,
@@ -1527,6 +1528,13 @@ _DISPATCHER_REFERENCE_FOLLOWUP_PATTERNS = (
     r"^\s*(?:kannst|k[oö]nntest)\s+du\s+(?:damit|das|sie)\b",
 )
 
+_DISPATCHER_DEFERRED_FOLLOWUP_PATTERNS = (
+    r"^\s*(?:(?:ich\s+)?muss|muss\s+ich)\s+(?:mir\s+)?(?:das\s+)?noch\s+(?:überlegen|ueberlegen|uberlegen)\s*[.!]?\s*$",
+    r"^\s*(?:ich\s+)?(?:überlege|ueberlege|uberlege)\s+(?:mir\s+)?(?:das\s+)?noch\s*[.!]?\s*$",
+    r"^\s*(?:ich\s+)?denke\s+(?:noch\s+)?dar(?:ü|ue)ber\s+nach\s*[.!]?\s*$",
+    r"^\s*(?:dar(?:ü|ue)ber\s+)?muss\s+ich\s+(?:noch\s+)?nachdenken\s*[.!]?\s*$",
+)
+
 _DISPATCHER_REFERENCE_TOKENS = (
     "damit",
     "darauf",
@@ -1888,6 +1896,15 @@ def _looks_like_dispatcher_reference_followup(query: str) -> bool:
     return has_reference and has_action
 
 
+def _looks_like_dispatcher_deferred_followup(query: str) -> bool:
+    normalized = str(query or "").strip().lower()
+    if not normalized:
+        return False
+    if len(normalized.split()) > 12:
+        return False
+    return any(re.search(pattern, normalized) for pattern in _DISPATCHER_DEFERRED_FOLLOWUP_PATTERNS)
+
+
 def _looks_like_direct_youtube_verification_query(query: str) -> bool:
     normalized = str(query or "").strip().lower()
     if not normalized:
@@ -1920,6 +1937,10 @@ def quick_intent_check(query: str) -> Optional[str]:
     if _looks_like_blackboard_or_memory_query(analysis_query):
         return "meta"
     if _looks_like_external_calendar_access_query(analysis_query):
+        return "meta"
+    if looks_like_meta_clarification_turn(analysis_query):
+        return "meta"
+    if has_followup_capsule and _looks_like_dispatcher_deferred_followup(focus_lower):
         return "meta"
     if _looks_like_dispatcher_reference_followup(focus_lower):
         return "meta" if has_followup_capsule or len(focus_lower.split()) <= 8 else "meta"

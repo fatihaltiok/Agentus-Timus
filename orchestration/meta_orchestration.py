@@ -741,6 +741,19 @@ _SEMANTIC_LOCATION_STATE_UPDATE_HINTS = (
     "aktualisiert",
 )
 
+_SEMANTIC_DIALOGUE_CLARIFICATION_PATTERNS = (
+    r"^\s*(?:(?:ich\s+)?muss|muss\s+ich)\s+(?:mir\s+)?(?:das\s+)?noch\s+(?:überlegen|ueberlegen|uberlegen)\s*[.!]?\s*$",
+    r"^\s*(?:ich\s+)?(?:überlege|ueberlege|uberlege)\s+(?:mir\s+)?(?:das\s+)?noch\s*[.!]?\s*$",
+    r"^\s*(?:dar(?:ü|ue)ber\s+)?muss\s+ich\s+(?:noch\s+)?nachdenken\s*[.!]?\s*$",
+    r"^\s*(?:ich\s+)?denke\s+(?:noch\s+)?dar(?:ü|ue)ber\s+nach\s*[.!]?\s*$",
+    r"^\s*(?:ich\s+)?bin\s+mir\s+(?:noch\s+)?nicht\s+sicher\s*[.!]?\s*$",
+    r"^\s*(?:das\s+)?weiss\s+ich\s+(?:noch\s+)?nicht\s*[.!]?\s*$",
+    r"^\s*(?:das\s+)?weiß\s+ich\s+(?:noch\s+)?nicht\s*[.!]?\s*$",
+    r"^\s*wie\s+meinst\s+du\s+das\s*[.!?]?\s*$",
+    r"^\s*was\s+meinst\s+du\s+genau\s*[.!?]?\s*$",
+    r"^\s*was\s+genau\s+meinst\s+du\s*[.!?]?\s*$",
+)
+
 _FOLLOWUP_CONTEXT_FIELD_NAMES = (
     "last_agent",
     "session_id",
@@ -775,6 +788,14 @@ _CONTEXT_ANCHORED_FOLLOWUP_HINTS = (
     "fang an",
     "ok leg los",
     "leg los",
+    "muss ich mir noch überlegen",
+    "ich muss noch überlegen",
+    "ich überlege noch",
+    "ich ueberlege noch",
+    "darüber muss ich nachdenken",
+    "darueber muss ich nachdenken",
+    "ich denke noch darüber nach",
+    "ich denke noch darueber nach",
 )
 
 _CONTEXT_ANCHORED_REFERENCE_TOKENS = (
@@ -1201,6 +1222,15 @@ def _has_any(text: str, hints: Iterable[str]) -> bool:
     return any(hint in text for hint in hints)
 
 
+def looks_like_meta_clarification_turn(text: str) -> bool:
+    normalized = str(text or "").strip().lower()
+    if not normalized:
+        return False
+    if len(normalized.split()) > 14:
+        return False
+    return any(re.search(pattern, normalized) for pattern in _SEMANTIC_DIALOGUE_CLARIFICATION_PATTERNS)
+
+
 def _site_kind(text: str) -> str | None:
     if "youtube" in text or "youtu.be" in text:
         return "youtube"
@@ -1254,6 +1284,9 @@ def _derive_semantic_review_payload(
     ):
         hints.append("user_reported_location_state_update")
 
+    if looks_like_meta_clarification_turn(text):
+        hints.append("conversational_clarification_needed")
+
     return {
         "semantic_ambiguity_hints": hints,
         "semantic_review_recommended": bool(hints),
@@ -1275,6 +1308,8 @@ def _apply_semantic_review_override(
         override_reason = "semantic_business_strategy_review"
     elif "mixed_personal_preference_and_wealth_strategy" in hints:
         override_reason = "semantic_multi_intent_dialogue_review"
+    elif "conversational_clarification_needed" in hints:
+        override_reason = "semantic_clarification_turn"
     if not override_reason:
         return classification
 
