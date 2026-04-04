@@ -247,3 +247,120 @@ def test_open_ended_autonomy_observation_session_stays_active(tmp_path: Path) ->
     summary = store.build_summary()
     assert summary["event_counts"]["observation_started"] == 1
     assert summary["event_counts"]["dispatcher_meta_fallback"] == 1
+
+
+def test_autonomy_observation_summarizes_request_and_task_correlation(tmp_path: Path) -> None:
+    base = datetime.now().astimezone().replace(microsecond=0)
+    store = AutonomyObservationStore(
+        log_path=tmp_path / "autonomy_observation.jsonl",
+        state_path=tmp_path / "autonomy_observation_state.json",
+    )
+    store.start_session(label="c2-correlation", duration_days=1, started_at=(base - timedelta(minutes=5)).isoformat())
+
+    assert store.record_event(
+        "chat_request_received",
+        {
+            "request_id": "req-1",
+            "session_id": "canvas_demo",
+            "source": "canvas_chat",
+            "query_preview": "pruefe das video",
+        },
+        observed_at=(base - timedelta(minutes=4, seconds=50)).isoformat(),
+    )
+    assert store.record_event(
+        "dispatcher_route_selected",
+        {
+            "session_id": "canvas_demo",
+            "source": "dispatcher",
+            "agent": "meta",
+            "decision_source": "llm_exact",
+            "query_preview": "pruefe das video",
+        },
+        observed_at=(base - timedelta(minutes=4, seconds=49)).isoformat(),
+    )
+    assert store.record_event(
+        "request_route_selected",
+        {
+            "request_id": "req-1",
+            "session_id": "canvas_demo",
+            "source": "canvas_chat",
+            "agent": "meta",
+            "route_source": "dispatcher",
+        },
+        observed_at=(base - timedelta(minutes=4, seconds=48)).isoformat(),
+    )
+    assert store.record_event(
+        "chat_request_failed",
+        {
+            "request_id": "req-1",
+            "session_id": "canvas_demo",
+            "source": "canvas_chat",
+            "agent": "meta",
+            "error_class": "canvas_chat_exception",
+            "error": "provider down",
+            "query_preview": "pruefe das video",
+        },
+        observed_at=(base - timedelta(minutes=4, seconds=47)).isoformat(),
+    )
+    assert store.record_event(
+        "task_execution_started",
+        {
+            "task_id": "task-1",
+            "session_id": "auto_1234",
+            "source": "autonomous_runner",
+            "agent": "",
+            "description_preview": "bearbeite den incident task",
+        },
+        observed_at=(base - timedelta(minutes=3)).isoformat(),
+    )
+    assert store.record_event(
+        "task_route_selected",
+        {
+            "task_id": "task-1",
+            "session_id": "auto_1234",
+            "source": "autonomous_runner",
+            "agent": "research",
+            "route_source": "dispatcher",
+            "incident_key": "m3_mcp_health_unavailable",
+        },
+        observed_at=(base - timedelta(minutes=2, seconds=58)).isoformat(),
+    )
+    assert store.record_event(
+        "task_execution_failed",
+        {
+            "task_id": "task-1",
+            "session_id": "auto_1234",
+            "source": "autonomous_runner",
+            "agent": "research",
+            "incident_key": "m3_mcp_health_unavailable",
+            "error_class": "task_exception",
+            "error": "timeout",
+            "description_preview": "bearbeite den incident task",
+        },
+        observed_at=(base - timedelta(minutes=2, seconds=57)).isoformat(),
+    )
+
+    summary = store.build_summary()
+
+    correlation = summary["request_correlation"]
+    assert correlation["chat_requests_total"] == 1
+    assert correlation["chat_failed_total"] == 1
+    assert correlation["dispatcher_routes_total"] == 1
+    assert correlation["request_routes_total"] == 1
+    assert correlation["task_routes_total"] == 1
+    assert correlation["task_started_total"] == 1
+    assert correlation["task_failed_total"] == 1
+    assert correlation["user_visible_failures_total"] == 1
+    assert correlation["by_agent"]["meta"] >= 1
+    assert correlation["by_agent"]["research"] >= 1
+    assert correlation["by_source"]["canvas_chat"] >= 1
+    assert correlation["by_source"]["autonomous_runner"] >= 1
+    assert correlation["by_error_class"]["canvas_chat_exception"] == 1
+    assert correlation["by_error_class"]["task_exception"] == 1
+    assert correlation["recent_failures"][0]["event_type"] == "task_execution_failed"
+    assert correlation["recent_failures"][1]["event_type"] == "chat_request_failed"
+
+    markdown = render_autonomy_observation_markdown(summary)
+    assert "## Request-Korrelation" in markdown
+    assert "## Letzte korrelierte Fehler" in markdown
+    assert "canvas_chat_exception" in markdown

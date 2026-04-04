@@ -118,3 +118,46 @@ async def test_non_self_healing_tasks_keep_normal_notifications(monkeypatch, tmp
     await runner._execute_task(queue.claim_next())
 
     assert deliveries == {"telegram": 2, "email": 2}
+
+
+@pytest.mark.asyncio
+async def test_autonomous_runner_records_task_correlation_events(monkeypatch, tmp_path: Path) -> None:
+    queue = TaskQueue(db_path=tmp_path / "task_queue.db")
+    task_id = queue.add(description="Normale autonome Aufgabe C", target_agent="research", max_retries=1)
+
+    runner = AutonomousRunner(interval_minutes=15)
+    monkeypatch.setattr("orchestration.autonomous_runner.get_queue", lambda: queue)
+    monkeypatch.setitem(sys.modules, "main_dispatcher", SimpleNamespace(get_agent_decision=_fake_get_agent_decision))
+    monkeypatch.setitem(sys.modules, "utils.model_failover", SimpleNamespace(failover_run_agent=_fake_failover_run_agent))
+
+    events = []
+    monkeypatch.setattr(
+        "orchestration.autonomous_runner.record_autonomy_observation",
+        lambda event_type, payload, observed_at="": events.append(
+            {"event_type": event_type, "payload": dict(payload), "observed_at": observed_at}
+        )
+        or True,
+    )
+
+    async def _send_tg(description: str, result: str) -> bool:
+        del description, result
+        return False
+
+    async def _send_mail(description: str, result: str) -> bool:
+        del description, result
+        return False
+
+    monkeypatch.setattr(runner, "_send_result_to_telegram", _send_tg)
+    monkeypatch.setattr(runner, "_send_result_to_email", _send_mail)
+
+    await runner._execute_task(queue.claim_next())
+
+    event_types = [item["event_type"] for item in events]
+    assert event_types == [
+        "task_execution_started",
+        "task_route_selected",
+        "task_execution_completed",
+    ]
+    assert events[0]["payload"]["task_id"] == task_id
+    assert events[1]["payload"]["agent"] == "research"
+    assert events[2]["payload"]["notification_suppressed"] is False

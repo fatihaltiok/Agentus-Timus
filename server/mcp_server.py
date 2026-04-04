@@ -114,6 +114,7 @@ from server.mobile_route_ui import build_mobile_route_ui_html
 from server.conversation_qdrant import recall_chat_turns as _semantic_recall_chat_turns
 from server.conversation_qdrant import store_chat_turn as _semantic_store_chat_turn
 from gateway.status_snapshot import collect_status_snapshot
+from orchestration.autonomy_observation import record_autonomy_observation
 from memory.semantic_backend_policy import normalize_semantic_memory_backend
 from utils.location_presence import (
     enrich_location_presence_snapshot,
@@ -252,11 +253,26 @@ def _build_health_payload(app: FastAPI) -> dict:
 
 
 def _sse_connection_ttl_sec() -> float:
-    raw = str(os.getenv("TIMUS_SSE_CONNECTION_TTL_SEC") or "8.0").strip()
+    """Optionale Maximaldauer fuer eine SSE-Verbindung.
+
+    Standard: deaktiviert (`0`), weil der Canvas-Flow unter kuenstlichen
+    Reconnects leidet. Restarts werden ueber `shutdown_event` und Uvicorns
+    eigener Verbindungsschliessung sauber behandelt.
+
+    Wenn explizit gesetzt:
+    - `<= 0` deaktiviert die TTL
+    - positive Werte werden konservativ auf mindestens 60s geklemmt
+    """
+    raw = str(os.getenv("TIMUS_SSE_CONNECTION_TTL_SEC") or "").strip()
+    if not raw:
+        return 0.0
     try:
-        return max(5.0, float(raw))
+        parsed = float(raw)
     except (TypeError, ValueError):
-        return 8.0
+        return 0.0
+    if parsed <= 0:
+        return 0.0
+    return max(60.0, parsed)
 
 _FOLLOWUP_PATTERNS = (
     r"^\s*und\b",
@@ -896,6 +912,13 @@ def _log_chat_interaction(
             session_id,
             exc,
         )
+
+
+def _record_chat_observation(event_type: str, payload: dict) -> None:
+    try:
+        record_autonomy_observation(event_type, payload)
+    except Exception as exc:
+        log.debug("Chat observation logging failed (%s): %s", event_type, exc)
 
 
 def _tokenize_followup_focus(text: str) -> list[str]:
@@ -3131,17 +3154,20 @@ async def events_stream(request: Request):
             )
             yield f"data: {init_data}\n\n"
             while True:
-                elapsed = loop.time() - started_monotonic
-                remaining = max_connection_age_s - elapsed
-                if remaining <= 0:
-                    yield 'data: {"type":"server_refresh"}\n\n'
-                    break
+                timeout_s = 25.0
+                if max_connection_age_s > 0:
+                    elapsed = loop.time() - started_monotonic
+                    remaining = max_connection_age_s - elapsed
+                    if remaining <= 0:
+                        yield 'data: {"type":"server_refresh"}\n\n'
+                        break
+                    timeout_s = min(25.0, max(0.2, remaining))
                 if shutdown_event.is_set() or await request.is_disconnected():
                     break
                 kind, data = await _await_sse_queue_item(
                     queue,
                     shutdown_event,
-                    timeout_s=min(25.0, max(0.2, remaining)),
+                    timeout_s=timeout_s,
                 )
                 if kind == "shutdown":
                     break
@@ -3181,6 +3207,7 @@ async def canvas_chat(request: Request):
     response_language = ((body or {}).get("response_language") or "").strip().lower()
 
     session_id = (body or {}).get("session_id") or f"canvas_{uuid.uuid4().hex[:8]}"
+    request_id = str((body or {}).get("request_id") or f"req_{uuid.uuid4().hex[:12]}").strip()
     ts = datetime.utcnow().isoformat() + "Z"
 
     followup_capsule = _build_followup_capsule(session_id, query=query)
@@ -3199,10 +3226,31 @@ async def canvas_chat(request: Request):
         resolved_proposal_agent = _resolve_resolved_proposal_agent(dispatcher_query)
         # Proposal einmalig konsumiert → löschen damit es nicht wiederholt ausgelöst wird
         _store_proposal_in_capsule(session_id, None)
+    dispatcher_query_kind = (
+        "resolved_proposal"
+        if dispatcher_query.startswith("# RESOLVED_PROPOSAL")
+        else "followup"
+        if dispatcher_query.startswith("# FOLLOW-UP CONTEXT")
+        else "plain"
+    )
 
     _append_chat_entry(session_id=session_id, role="user", text=query, ts=ts)
 
-    _broadcast_sse({"type": "chat_user", "text": query, "ts": ts})
+    _record_chat_observation(
+        "chat_request_received",
+        {
+            "request_id": request_id,
+            "session_id": session_id,
+            "source": "canvas_chat",
+            "query_preview": query[:180],
+            "response_language": response_language,
+            "dispatcher_query_kind": dispatcher_query_kind,
+            "followup_agent": followup_agent,
+            "resolved_proposal_agent": resolved_proposal_agent,
+        },
+    )
+
+    _broadcast_sse({"type": "chat_user", "request_id": request_id, "text": query, "ts": ts})
 
     agent = "executor"
     try:
@@ -3211,7 +3259,27 @@ async def canvas_chat(request: Request):
         # Tool-Beschreibungen — identisch zu /get_tool_descriptions
         tools_desc = await _build_tools_description()
 
+        route_source = (
+            "resolved_proposal"
+            if resolved_proposal_agent
+            else "followup_capsule"
+            if followup_agent
+            else "dispatcher"
+        )
         agent = resolved_proposal_agent or followup_agent or await get_agent_decision(dispatcher_query, session_id=session_id)
+        _record_chat_observation(
+            "request_route_selected",
+            {
+                "request_id": request_id,
+                "session_id": session_id,
+                "source": "canvas_chat",
+                "agent": agent,
+                "route_source": route_source,
+                "dispatcher_query_kind": dispatcher_query_kind,
+                "followup_agent": followup_agent,
+                "resolved_proposal_agent": resolved_proposal_agent,
+            },
+        )
         _set_agent_status(agent, "thinking", query)
 
         query_for_agent = dispatcher_query
@@ -3259,13 +3327,8 @@ async def canvas_chat(request: Request):
             assistant_response=reply,
             agent=agent,
             metadata={
-                "dispatcher_query_kind": (
-                    "resolved_proposal"
-                    if dispatcher_query.startswith("# RESOLVED_PROPOSAL")
-                    else "followup"
-                    if dispatcher_query.startswith("# FOLLOW-UP CONTEXT")
-                    else "plain"
-                ),
+                "request_id": request_id,
+                "dispatcher_query_kind": dispatcher_query_kind,
                 "followup_agent": followup_agent,
                 "location_context_injected": bool(
                     location_decision.should_inject and isinstance(location_snapshot, dict)
@@ -3275,15 +3338,47 @@ async def canvas_chat(request: Request):
             },
         )
 
-        _broadcast_sse({"type": "chat_reply", "agent": agent, "text": reply, "ts": reply_ts})
-        return {"status": "success", "agent": agent, "reply": reply, "session_id": session_id}
+        _record_chat_observation(
+            "chat_request_completed",
+            {
+                "request_id": request_id,
+                "session_id": session_id,
+                "source": "canvas_chat",
+                "agent": agent,
+                "route_source": route_source,
+                "dispatcher_query_kind": dispatcher_query_kind,
+                "reply_length": len(reply),
+                "location_context_injected": bool(
+                    location_decision.should_inject and isinstance(location_snapshot, dict)
+                ),
+                "pending_followup_prompt": pending_followup_prompt,
+            },
+        )
+
+        _broadcast_sse({"type": "chat_reply", "request_id": request_id, "agent": agent, "text": reply, "ts": reply_ts})
+        return {"status": "success", "agent": agent, "reply": reply, "session_id": session_id, "request_id": request_id}
 
     except Exception as e:
         log.error(f"Canvas-Chat Fehler: {e}", exc_info=True)
         _set_agent_status(agent, "error", query)
-        _broadcast_sse({"type": "chat_error", "error": str(e)})
+        _record_chat_observation(
+            "chat_request_failed",
+            {
+                "request_id": request_id,
+                "session_id": session_id,
+                "source": "canvas_chat",
+                "agent": agent,
+                "dispatcher_query_kind": dispatcher_query_kind,
+                "followup_agent": followup_agent,
+                "resolved_proposal_agent": resolved_proposal_agent,
+                "query_preview": query[:180],
+                "error_class": "canvas_chat_exception",
+                "error": str(e)[:240],
+            },
+        )
+        _broadcast_sse({"type": "chat_error", "request_id": request_id, "error": str(e)})
         return JSONResponse(
-            status_code=500, content={"status": "error", "error": str(e)}
+            status_code=500, content={"status": "error", "error": str(e), "request_id": request_id}
         )
 
 

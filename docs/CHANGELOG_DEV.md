@@ -57,6 +57,126 @@
   - `C4` Langlaeufer-/Antwortpfade
 - erster Angriffsblock fuer Phase C ist jetzt klar auf `C1` gesetzt
 
+## Fortschritt 2026-04-04 22:34 CEST - C2 Request-, Routing- und Task-Korrelation gestartet
+
+### Problemstellung
+
+Nach C1 war der MCP-Zustand deutlich ehrlicher, aber C2 fehlte noch im eigentlichen Nutzerpfad:
+
+- `/chat`-, Dispatcher- und Runner-Ereignisse liessen sich noch nicht als zusammenhaengender Incident lesen
+- Request-Routing und Task-Routing waren im Beobachtungsmodell noch nicht sauber getrennt
+- es gab noch keinen formalen Contract fuer die neue Korrelationsebene
+
+### Umgesetzt
+
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - `request_id` fuer `/chat` eingefuehrt und in Antwort, SSE und Chat-Memory-Metadaten mitgezogen
+  - neue Observation-Events:
+    - `chat_request_received`
+    - `request_route_selected`
+    - `chat_request_completed`
+    - `chat_request_failed`
+- [main_dispatcher.py](/home/fatih-ubuntu/dev/timus/main_dispatcher.py)
+  - Dispatcher schreibt jetzt explizit `dispatcher_route_selected`
+  - bestehende `dispatcher_meta_fallback`-Events tragen jetzt den `session_id`-Bezug mit
+- [orchestration/autonomous_runner.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomous_runner.py)
+  - neue Runtime-Korrelations-Events:
+    - `task_execution_started`
+    - `task_route_selected`
+    - `task_execution_completed`
+    - `task_execution_failed`
+- [orchestration/autonomy_observation.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomy_observation.py)
+  - neuer Summary-Block `request_correlation`
+  - trennt jetzt sauber:
+    - `dispatcher_routes_total`
+    - `request_routes_total`
+    - `task_routes_total`
+    - `task_started_total`
+    - `task_completed_total`
+    - `task_failed_total`
+    - `user_visible_failures_total`
+  - `recent_failures` fasst die juengsten korrelierten Nutzer-/Task-Fehler kompakt zusammen
+  - Markdown-Render zeigt jetzt eine eigene C2-Sektion `Request-Korrelation`
+
+### Regressionen, Contracts, Hypothesis
+
+- [tests/test_autonomy_observation.py](/home/fatih-ubuntu/dev/timus/tests/test_autonomy_observation.py)
+  - neuer Regressionsfall fuer `chat` + Dispatcher + Task-Fehlerkette
+- [tests/test_autonomous_runner_incident_notifications.py](/home/fatih-ubuntu/dev/timus/tests/test_autonomous_runner_incident_notifications.py)
+  - prueft die neue Task-Korrelation im Runner
+- [tests/test_autonomy_observation_contracts.py](/home/fatih-ubuntu/dev/timus/tests/test_autonomy_observation_contracts.py)
+  - Deal-Contract erweitert um die neue `request_correlation`-Struktur
+  - verhindert negative oder semantisch widerspruechliche Zaehler
+- [tests/test_autonomy_observation_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_autonomy_observation_hypothesis.py)
+  - neue Hypothesis-Schicht fuer die Boundedness der C2-Korrelationszaehler
+
+### Validierung
+
+- `python -m py_compile orchestration/autonomy_observation.py server/mcp_server.py main_dispatcher.py orchestration/autonomous_runner.py tests/test_autonomy_observation.py tests/test_autonomous_runner_incident_notifications.py tests/test_autonomy_observation_contracts.py tests/test_autonomy_observation_hypothesis.py` gruen
+- `40 passed` in:
+  - `tests/test_autonomy_observation.py`
+  - `tests/test_autonomy_observation_contracts.py`
+  - `tests/test_autonomy_observation_hypothesis.py`
+  - `tests/test_autonomous_runner_incident_notifications.py`
+  - `tests/test_dispatcher_provider_selection.py`
+  - `tests/test_android_chat_language.py`
+- `python -m crosshair check tests/test_autonomy_observation_contracts.py --analysis_kind=deal` gruen
+- `python scripts/verify_pre_commit_lean.py` komplett gruen:
+  - `lean/CiSpecs.lean`
+  - Mathlib-Bundle (12 Specs)
+
+### Wirkung
+
+- ein `/chat`-Fehlfall ist jetzt sichtbar als Kette:
+  - Request rein
+  - Dispatcher-Route
+  - Request-Route
+  - Task-Start / Task-Route / Task-Fail
+- Request- und Task-Routing sind bewusst getrennt; C2 fuehrt keine neue konkurrierende Incident-Logik ein
+- das Beobachtungslog ist damit als erster Einstiegspunkt fuer Anfrage-zu-Fehler-Korrelation deutlich brauchbarer
+
+### Naechster Rest in C2
+
+- Live-Korrelation in die operativen Status-/Diagnosepfade heben
+- letzte Anfrage / letzter korrelierter Fehler im Snapshot bzw. Diagnosezugang sichtbar machen
+- danach gezielt die noch fehlende Nutzerwirkungsebene (`response_never_delivered`, `silent_failure`) nachziehen
+
+## Nachtrag 2026-04-04 22:18 CEST - Canvas-SSE-Reconnect-Schleife aus C1 entschaerft
+
+### Problemstellung
+
+Im Canvas fiel nach C1 ein neues Muster auf:
+
+- `/events/stream` wurde in kurzen, regelmaessigen Intervallen neu aufgebaut
+- dadurch verlor der Canvas waehrend laengerer Antworten sichtbar den Flow
+- Ursache war die neue erzwungene SSE-TTL mit Default `8s`
+
+Journalbild:
+
+- neue `GET /events/stream`-Requests ca. alle `13s`
+- das passte zu `server_refresh` + Browser-Reconnect-Delay
+
+### Umgesetzt
+
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - `_sse_connection_ttl_sec()` ist jetzt standardmaessig **deaktiviert**
+  - erzwungene Stream-TTL greift nur noch, wenn `TIMUS_SSE_CONNECTION_TTL_SEC` explizit gesetzt wird
+  - positive Werte werden konservativ auf mindestens `60s` geklemmt
+  - Shutdown-Sicherheit bleibt ueber `shutdown_event` und den bestehenden Stream-Abbruchpfad erhalten
+- [tests/test_mcp_shutdown_hardening.py](/home/fatih-ubuntu/dev/timus/tests/test_mcp_shutdown_hardening.py)
+  - Regression angepasst:
+    - Default `0.0`
+    - Low values clampen auf `60.0`
+
+### Validierung
+
+- `python -m py_compile server/mcp_server.py tests/test_mcp_shutdown_hardening.py` gruen
+- `14 passed` in `tests/test_mcp_shutdown_hardening.py` + `tests/test_mcp_health_runtime_contracts.py`
+- `python -m crosshair check tests/test_mcp_health_runtime_contracts.py --analysis_kind=deal` gruen
+- `python scripts/verify_pre_commit_lean.py` komplett gruen:
+  - `lean/CiSpecs.lean`
+  - Mathlib-Bundle (12 Specs)
+
 ## Fortschritt 2026-04-04 21:12 CEST - C1 MCP-Lifecycle, Startup und Shutdown gehaertet
 
 ### Problemstellung

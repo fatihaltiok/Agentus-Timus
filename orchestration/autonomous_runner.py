@@ -16,11 +16,19 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from orchestration.scheduler import ProactiveScheduler, SchedulerEvent, init_scheduler
+from orchestration.autonomy_observation import record_autonomy_observation
 from orchestration.self_hardening_runtime import record_self_hardening_event
 from orchestration.task_queue import Priority, TaskType, get_queue
 from utils.stable_hash import stable_text_digest
 
 log = logging.getLogger("AutonomousRunner")
+
+
+def _record_runtime_correlation(event_type: str, payload: dict) -> None:
+    try:
+        record_autonomy_observation(event_type, payload)
+    except Exception:
+        pass
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -1628,10 +1636,16 @@ class AutonomousRunner:
         """Führt einen Task mit automatischem Failover aus."""
         task_id = task.get("id", "?")
         description = task.get("description", "")
+        task_type = str(task.get("task_type") or "")
         target_agent = task.get("target_agent")
         priority = task.get("priority", Priority.NORMAL)
         goal_id = task.get("goal_id")
         metadata = _parse_task_metadata(task.get("metadata"))
+        source = str(
+            metadata.get("source")
+            or ("self_healing" if metadata.get("self_healing") else "autonomous_runner")
+        ).strip() or "autonomous_runner"
+        incident_key = str(metadata.get("incident_key") or "").strip()
         queue = get_queue()
 
         if not description:
@@ -1748,7 +1762,35 @@ class AutonomousRunner:
             from utils.model_failover import failover_run_agent
 
             session_id = f"auto_{uuid.uuid4().hex[:8]}"
+            _record_runtime_correlation(
+                "task_execution_started",
+                {
+                    "task_id": task_id,
+                    "session_id": session_id,
+                    "source": source,
+                    "incident_key": incident_key,
+                    "goal_id": str(goal_id or ""),
+                    "task_type": task_type,
+                    "target_agent": str(target_agent or ""),
+                    "priority": int(priority),
+                    "description_preview": description[:180],
+                },
+            )
             agent = target_agent if target_agent else await get_agent_decision(description, session_id=session_id)
+            _record_runtime_correlation(
+                "task_route_selected",
+                {
+                    "task_id": task_id,
+                    "session_id": session_id,
+                    "source": source,
+                    "incident_key": incident_key,
+                    "goal_id": str(goal_id or ""),
+                    "agent": agent,
+                    "route_source": "target_agent" if target_agent else "dispatcher",
+                    "task_type": task_type,
+                    "description_preview": description[:180],
+                },
+            )
 
             result = await failover_run_agent(
                 agent_name=agent,
@@ -1792,16 +1834,79 @@ class AutonomousRunner:
                             email_sent=email_sent,
                             result_preview=result_str,
                         )
+                    _record_runtime_correlation(
+                        "task_execution_completed",
+                        {
+                            "task_id": task_id,
+                            "session_id": session_id,
+                            "source": source,
+                            "incident_key": incident_key,
+                            "goal_id": str(goal_id or ""),
+                            "agent": agent,
+                            "task_type": task_type,
+                            "result_length": len(result_str),
+                            "telegram_sent": bool(telegram_sent),
+                            "email_sent": bool(email_sent),
+                            "notification_suppressed": False,
+                        },
+                    )
+                if result is not None and notification_guard and not notification_guard.get("send", True):
+                    _record_runtime_correlation(
+                        "task_execution_completed",
+                        {
+                            "task_id": task_id,
+                            "session_id": session_id,
+                            "source": source,
+                            "incident_key": incident_key,
+                            "goal_id": str(goal_id or ""),
+                            "agent": agent,
+                            "task_type": task_type,
+                            "result_length": len(result_str),
+                            "telegram_sent": False,
+                            "email_sent": False,
+                            "notification_suppressed": True,
+                        },
+                    )
             else:
                 queue.fail(task_id, "Alle Failover-Versuche erschöpft")
                 if goal_id and _goals_feature_enabled():
                     queue.refresh_goal_progress(goal_id, last_task_id=task_id, last_event="task_failover_exhausted")
+                _record_runtime_correlation(
+                    "task_execution_failed",
+                    {
+                        "task_id": task_id,
+                        "session_id": session_id,
+                        "source": source,
+                        "incident_key": incident_key,
+                        "goal_id": str(goal_id or ""),
+                        "agent": agent,
+                        "task_type": task_type,
+                        "error_class": "failover_exhausted",
+                        "error": "Alle Failover-Versuche erschöpft",
+                        "description_preview": description[:180],
+                    },
+                )
 
         except Exception as e:
             log.error(f"❌ Task [{task_id[:8]}] Fehler: {e}", exc_info=True)
             queue.fail(task_id, str(e))
             if goal_id and _goals_feature_enabled():
                 queue.refresh_goal_progress(goal_id, last_task_id=task_id, last_event="task_failed")
+            _record_runtime_correlation(
+                "task_execution_failed",
+                {
+                    "task_id": task_id,
+                    "session_id": locals().get("session_id", ""),
+                    "source": source,
+                    "incident_key": incident_key,
+                    "goal_id": str(goal_id or ""),
+                    "agent": locals().get("agent", "") or str(target_agent or ""),
+                    "task_type": task_type,
+                    "error_class": "task_exception",
+                    "error": str(e)[:240],
+                    "description_preview": description[:180],
+                },
+            )
 
     async def _try_execute_self_hardening_autofix(
         self,

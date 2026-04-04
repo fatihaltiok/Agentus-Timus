@@ -126,8 +126,11 @@ def test_health_payload_exposes_lifecycle_and_warmup_state():
 def test_sse_connection_ttl_has_safe_minimum(monkeypatch):
     from server.mcp_server import _sse_connection_ttl_sec
 
-    monkeypatch.setenv("TIMUS_SSE_CONNECTION_TTL_SEC", "1")
-    assert _sse_connection_ttl_sec() == 5.0
+    monkeypatch.delenv("TIMUS_SSE_CONNECTION_TTL_SEC", raising=False)
+    assert _sse_connection_ttl_sec() == 0.0
 
-    monkeypatch.setenv("TIMUS_SSE_CONNECTION_TTL_SEC", "9.5")
-    assert _sse_connection_ttl_sec() == 9.5
+    monkeypatch.setenv("TIMUS_SSE_CONNECTION_TTL_SEC", "1")
+    assert _sse_connection_ttl_sec() == 60.0
+
+    monkeypatch.setenv("TIMUS_SSE_CONNECTION_TTL_SEC", "90")
+    assert _sse_connection_ttl_sec() == 90.0

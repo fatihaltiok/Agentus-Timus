@@ -129,16 +129,56 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
             "self_modify_rolled_back_total": 0,
             "self_modify_error_total": 0,
         },
+        "request_correlation": {
+            "chat_requests_total": 0,
+            "chat_completed_total": 0,
+            "chat_failed_total": 0,
+            "dispatcher_routes_total": 0,
+            "request_routes_total": 0,
+            "task_routes_total": 0,
+            "task_started_total": 0,
+            "task_completed_total": 0,
+            "task_failed_total": 0,
+            "user_visible_failures_total": 0,
+            "by_agent": {},
+            "by_source": {},
+            "by_error_class": {},
+            "recent_failures": [],
+        },
         "top_goal_signatures": [],
     }
 
     recipe_duration_total = 0
     goal_counts: Dict[str, Dict[str, int]] = {}
     meta_diag = summary["meta_diagnostics"]
+    request_correlation = summary["request_correlation"]
+    recent_failures: List[Dict[str, Any]] = []
+
+    def _bump(bucket: Dict[str, Any], key: Any, *, amount: int = 1, fallback: str = "unknown") -> None:
+        normalized = _normalize_counter_key(key, fallback=fallback)
+        bucket[normalized] = int(bucket.get(normalized) or 0) + int(amount)
+
+    def _record_recent_failure(event_type: str, observed_at: str, payload: Dict[str, Any]) -> None:
+        recent_failures.append(
+            {
+                "event_type": _normalize_counter_key(event_type),
+                "observed_at": str(observed_at or ""),
+                "request_id": str(payload.get("request_id") or ""),
+                "session_id": str(payload.get("session_id") or ""),
+                "task_id": str(payload.get("task_id") or ""),
+                "agent": str(payload.get("agent") or ""),
+                "source": str(payload.get("source") or ""),
+                "incident_key": str(payload.get("incident_key") or ""),
+                "error_class": str(payload.get("error_class") or ""),
+                "error": str(payload.get("error") or "")[:240],
+                "query_preview": str(payload.get("query_preview") or payload.get("description_preview") or "")[:180],
+            }
+        )
 
     for raw_event in events:
         event = dict(raw_event or {})
         event_type = _normalize_counter_key(event.get("event_type"))
+        observed_at = str(event.get("observed_at") or "")
         payload = dict(event.get("payload") or {})
         summary["total_events"] += 1
         summary["event_counts"][event_type] = int(summary["event_counts"].get(event_type) or 0) + 1
@@ -259,6 +299,60 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
                 elif status == "error":
                     hardening["self_modify_error_total"] += 1
 
+        elif event_type == "chat_request_received":
+            request_correlation["chat_requests_total"] += 1
+            _bump(request_correlation["by_source"], payload.get("source"))
+
+        elif event_type == "chat_request_completed":
+            request_correlation["chat_completed_total"] += 1
+            _bump(request_correlation["by_source"], payload.get("source"))
+            _bump(request_correlation["by_agent"], payload.get("agent"))
+
+        elif event_type == "chat_request_failed":
+            request_correlation["chat_failed_total"] += 1
+            request_correlation["user_visible_failures_total"] += 1
+            _bump(request_correlation["by_source"], payload.get("source"))
+            _bump(request_correlation["by_agent"], payload.get("agent"), fallback="none")
+            _bump(
+                request_correlation["by_error_class"],
+                payload.get("error_class") or "chat_request_failed",
+            )
+            _record_recent_failure(event_type, observed_at, payload)
+
+        elif event_type == "dispatcher_route_selected":
+            request_correlation["dispatcher_routes_total"] += 1
+            _bump(request_correlation["by_source"], payload.get("source") or "dispatcher")
+            _bump(request_correlation["by_agent"], payload.get("agent"))
+
+        elif event_type == "request_route_selected":
+            request_correlation["request_routes_total"] += 1
+            _bump(request_correlation["by_source"], payload.get("source"))
+            _bump(request_correlation["by_agent"], payload.get("agent"))
+
+        elif event_type == "task_route_selected":
+            request_correlation["task_routes_total"] += 1
+            _bump(request_correlation["by_source"], payload.get("source"))
+            _bump(request_correlation["by_agent"], payload.get("agent"))
+
+        elif event_type == "task_execution_started":
+            request_correlation["task_started_total"] += 1
+            _bump(request_correlation["by_source"], payload.get("source"))
+
+        elif event_type == "task_execution_completed":
+            request_correlation["task_completed_total"] += 1
+            _bump(request_correlation["by_source"], payload.get("source"))
+            _bump(request_correlation["by_agent"], payload.get("agent"))
+
+        elif event_type == "task_execution_failed":
+            request_correlation["task_failed_total"] += 1
+            _bump(request_correlation["by_source"], payload.get("source"))
+            _bump(request_correlation["by_agent"], payload.get("agent"), fallback="none")
+            _bump(
+                request_correlation["by_error_class"],
+                payload.get("error_class") or "task_execution_failed",
+            )
+            _record_recent_failure(event_type, observed_at, payload)
+
     recipe_total = int(summary["recipe_outcomes"]["total"] or 0)
     if recipe_total > 0:
         summary["recipe_outcomes"]["average_duration_ms"] = int(recipe_duration_total / recipe_total)
@@ -276,6 +370,11 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
         key=lambda item: (-int(item["total"]), item["goal_signature"]),
     )
     summary["top_goal_signatures"] = top_goal_signatures[:8]
+    summary["request_correlation"]["recent_failures"] = sorted(
+        recent_failures,
+        key=lambda item: str(item.get("observed_at") or ""),
+        reverse=True,
+    )[:8]
     return summary
 
 
@@ -286,6 +385,7 @@ def render_autonomy_observation_markdown(summary: Dict[str, Any]) -> str:
     runtime = dict(summary.get("runtime_gaps") or {})
     hardening = dict(summary.get("self_hardening") or {})
     meta_diag = dict(summary.get("meta_diagnostics") or {})
+    request_correlation = dict(summary.get("request_correlation") or {})
     event_counts = dict(summary.get("event_counts") or {})
 
     lines = [
@@ -345,6 +445,18 @@ def render_autonomy_observation_markdown(summary: Dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "## Request-Korrelation",
+            f"- Chat-Requests: `{int(request_correlation.get('chat_requests_total') or 0)}`",
+            f"- Chat abgeschlossen: `{int(request_correlation.get('chat_completed_total') or 0)}`",
+            f"- Chat fehlgeschlagen: `{int(request_correlation.get('chat_failed_total') or 0)}`",
+            f"- Dispatcher-Routen: `{int(request_correlation.get('dispatcher_routes_total') or 0)}`",
+            f"- Request-Routen: `{int(request_correlation.get('request_routes_total') or 0)}`",
+            f"- Task-Routen: `{int(request_correlation.get('task_routes_total') or 0)}`",
+            f"- Tasks gestartet: `{int(request_correlation.get('task_started_total') or 0)}`",
+            f"- Tasks abgeschlossen: `{int(request_correlation.get('task_completed_total') or 0)}`",
+            f"- Tasks fehlgeschlagen: `{int(request_correlation.get('task_failed_total') or 0)}`",
+            f"- Nutzer-sichtbare Fehler: `{int(request_correlation.get('user_visible_failures_total') or 0)}`",
+            "",
             "## Self-Hardening",
             f"- Events gesamt: `{int(hardening.get('total') or 0)}`",
             f"- Self-Modify gestartet: `{int(hardening.get('self_modify_started_total') or 0)}`",
@@ -362,6 +474,27 @@ def render_autonomy_observation_markdown(summary: Dict[str, Any]) -> str:
             f"- `{item.get('goal_signature')}`: total `{int(item.get('total') or 0)}`, "
             f"success `{int(item.get('success_total') or 0)}`, failure `{int(item.get('failure_total') or 0)}`"
         )
+    for key, value in sorted(dict(request_correlation.get("by_source") or {}).items()):
+        lines.append(f"- Source `{key}`: `{int(value or 0)}`")
+    for key, value in sorted(dict(request_correlation.get("by_agent") or {}).items()):
+        lines.append(f"- Agent `{key}`: `{int(value or 0)}`")
+    for key, value in sorted(dict(request_correlation.get("by_error_class") or {}).items()):
+        lines.append(f"- Fehlerklasse `{key}`: `{int(value or 0)}`")
+    if list(request_correlation.get("recent_failures") or []):
+        lines.append("")
+        lines.append("## Letzte korrelierte Fehler")
+        for item in list(request_correlation.get("recent_failures") or [])[:6]:
+            lines.append(
+                "- `{event}` | `{source}` | agent `{agent}` | req `{request_id}` | task `{task_id}` | `{error_class}` | `{preview}`".format(
+                    event=item.get("event_type", ""),
+                    source=item.get("source", "") or "unknown",
+                    agent=item.get("agent", "") or "none",
+                    request_id=str(item.get("request_id", "") or "")[:12],
+                    task_id=str(item.get("task_id", "") or "")[:12],
+                    error_class=item.get("error_class", "") or "unknown",
+                    preview=(item.get("query_preview", "") or item.get("error", "") or "")[:120],
+                )
+            )
     return "\n".join(lines).rstrip() + "\n"
 
 

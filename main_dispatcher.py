@@ -2455,11 +2455,28 @@ def _render_meta_handoff_block(payload: dict) -> str:
 async def get_agent_decision(user_query: str, session_id: str | None = None) -> str:
     """Bestimmt welcher Agent für die Anfrage zuständig ist."""
     log.info(f"🧠 Analysiere Intention: '{user_query}'")
+    safe_session_id = str(session_id or "").strip()
+
+    def _record_dispatcher_route(agent: str, *, decision_source: str) -> None:
+        try:
+            record_autonomy_observation(
+                "dispatcher_route_selected",
+                {
+                    "session_id": safe_session_id,
+                    "source": "dispatcher",
+                    "agent": str(agent or "").strip(),
+                    "decision_source": str(decision_source or "").strip(),
+                    "query_preview": str(user_query or "")[:180],
+                },
+            )
+        except Exception:
+            pass
 
     # Schnelle Keyword-Erkennung zuerst
     quick_result = quick_intent_check(user_query)
     if quick_result:
         biased_quick_result = _apply_dispatcher_feedback_bias(user_query, quick_result)
+        _record_dispatcher_route(biased_quick_result, decision_source="quick_intent")
         log.info(f"✅ Schnell-Entscheidung (Keyword): {biased_quick_result}")
         return biased_quick_result
 
@@ -2476,13 +2493,14 @@ async def get_agent_decision(user_query: str, session_id: str | None = None) -> 
             try:
                 record_autonomy_observation(
                     "dispatcher_meta_fallback",
-                    {
-                        "reason": "empty_decision",
-                        "query_preview": str(user_query or "")[:180],
-                        "raw_len": len(raw_content),
-                        "raw_preview": repr(raw_content[:120]),
-                    },
-                )
+                {
+                    "reason": "empty_decision",
+                    "session_id": safe_session_id,
+                    "query_preview": str(user_query or "")[:180],
+                    "raw_len": len(raw_content),
+                    "raw_preview": repr(raw_content[:120]),
+                },
+            )
             except Exception:
                 pass
             return "meta"
@@ -2490,6 +2508,7 @@ async def get_agent_decision(user_query: str, session_id: str | None = None) -> 
         # Direkter Treffer
         if decision in AGENT_CLASS_MAP:
             biased_decision = _apply_dispatcher_feedback_bias(user_query, decision)
+            _record_dispatcher_route(biased_decision, decision_source="llm_exact")
             log.info(f"✅ Entscheidung: {biased_decision}")
             return biased_decision
 
@@ -2497,6 +2516,7 @@ async def get_agent_decision(user_query: str, session_id: str | None = None) -> 
         for key in AGENT_CLASS_MAP.keys():
             if re.search(rf"\b{re.escape(key)}\b", decision):
                 biased_key = _apply_dispatcher_feedback_bias(user_query, key)
+                _record_dispatcher_route(biased_key, decision_source="llm_extracted")
                 log.info(f"✅ Entscheidung (extrahiert): {biased_key}")
                 return biased_key
 
@@ -2509,6 +2529,7 @@ async def get_agent_decision(user_query: str, session_id: str | None = None) -> 
                 "dispatcher_meta_fallback",
                 {
                     "reason": "uncertain_decision",
+                    "session_id": safe_session_id,
                     "query_preview": str(user_query or "")[:180],
                     "decision_preview": str(decision or "")[:160],
                     "raw_len": len(raw_content),
@@ -2525,6 +2546,7 @@ async def get_agent_decision(user_query: str, session_id: str | None = None) -> 
                 "dispatcher_meta_fallback",
                 {
                     "reason": "dispatcher_exception",
+                    "session_id": safe_session_id,
                     "query_preview": str(user_query or "")[:180],
                     "error": str(e)[:240],
                 },
