@@ -55,6 +55,12 @@ except ImportError:
     log.warning("⚠️ Transformers nicht installiert. 'pip install transformers'")
 
 # PaddleOCR
+#
+# PaddleX fuehrt beim Import standardmaessig einen Netzwerk-Hoster-Check aus.
+# Das blockiert den MCP-Startup unnoetig. Der Default hier schaltet nur den
+# Connectivity-Check ab, nicht die eigentliche Modellnutzung. Explizite ENV-
+# Vorgaben aus der Umgebung koennen diesen Default weiterhin ueberschreiben.
+os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "1")
 try:
     from paddleocr import PaddleOCR
     PADDLEOCR_AVAILABLE = True

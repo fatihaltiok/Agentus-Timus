@@ -25,6 +25,7 @@ from memory.qdrant_provider import normalize_qdrant_mode, resolve_qdrant_ready_u
 from orchestration.llm_budget_guard import get_public_budget_status
 from orchestration.ops_observability import build_ops_observability_summary
 from orchestration.ops_release_gate import evaluate_ops_release_gate
+from orchestration.e2e_regression_matrix import E2E_WARN_STALE_RESTART_STATUS_SECONDS
 from orchestration.self_hardening_runtime import get_self_hardening_runtime_summary
 from orchestration.self_stabilization_gate import evaluate_self_stabilization_gate
 from orchestration.self_improvement_engine import get_improvement_engine
@@ -123,13 +124,20 @@ def _read_restart_status() -> Dict[str, Any]:
     try:
         payload = json.loads(_RESTART_STATUS_PATH.read_text(encoding="utf-8"))
         age_seconds = max(0.0, time.time() - _RESTART_STATUS_PATH.stat().st_mtime)
+        status = str(payload.get("status", "unknown") or "unknown")
+        phase = str(payload.get("phase", "") or "")
+        stale = (
+            status.strip().lower() in {"running", "unknown"}
+            and phase.strip().lower() in {"preflight", "launcher", "launcher_error", "running"}
+            and age_seconds >= float(E2E_WARN_STALE_RESTART_STATUS_SECONDS)
+        )
         return {
             "exists": True,
-            "status": str(payload.get("status", "unknown") or "unknown"),
-            "phase": str(payload.get("phase", "") or ""),
+            "status": status,
+            "phase": phase,
             "request_id": str(payload.get("request_id", "") or ""),
             "age_seconds": round(age_seconds, 3),
-            "stale": False,
+            "stale": stale,
             "payload": payload,
         }
     except Exception as exc:
@@ -142,6 +150,112 @@ def _read_restart_status() -> Dict[str, Any]:
             "stale": False,
             "error": str(exc),
         }
+
+
+def _matching_mcp_incident(self_healing: Dict[str, Any]) -> Dict[str, Any]:
+    incidents = list((self_healing or {}).get("incidents", []) or [])
+    for incident in incidents:
+        if str(incident.get("component") or "").strip().lower() != "mcp":
+            continue
+        if str(incident.get("signal") or "").strip().lower() != "mcp_health":
+            continue
+        return dict(incident)
+    return {}
+
+
+def _matching_mcp_breaker(self_healing: Dict[str, Any]) -> Dict[str, Any]:
+    breakers = list((self_healing or {}).get("open_breakers", []) or [])
+    for breaker in breakers:
+        if str(breaker.get("component") or "").strip().lower() != "mcp":
+            continue
+        if str(breaker.get("signal") or "").strip().lower() != "mcp_health":
+            continue
+        return dict(breaker)
+    return {}
+
+
+def _build_mcp_runtime_correlation(
+    *,
+    services: Dict[str, Any],
+    local: Dict[str, Any],
+    restart: Dict[str, Any],
+    self_healing: Dict[str, Any],
+    stability_gate: Dict[str, Any],
+) -> Dict[str, Any]:
+    mcp_service = (services or {}).get("mcp", {}) or {}
+    mcp_health = (local or {}).get("mcp_health", {}) or {}
+    mcp_payload = (mcp_health.get("data") or {}) if isinstance(mcp_health.get("data"), dict) else {}
+    lifecycle = (mcp_payload.get("lifecycle") or {}) if isinstance(mcp_payload.get("lifecycle"), dict) else {}
+    restart_payload = dict(restart or {})
+    incident = _matching_mcp_incident(self_healing)
+    breaker = _matching_mcp_breaker(self_healing)
+
+    service_ok = bool(mcp_service.get("ok", False))
+    health_ok = bool(mcp_health.get("ok", False))
+    mcp_status = str(mcp_payload.get("status") or "").strip().lower()
+    lifecycle_phase = str(lifecycle.get("phase") or "").strip().lower()
+    lifecycle_transient = bool(mcp_payload.get("transient"))
+    warmup_pending = bool(mcp_payload.get("warmup_pending"))
+    restart_status = str(restart_payload.get("status") or "").strip().lower()
+    restart_phase = str(restart_payload.get("phase") or "").strip().lower()
+    restart_stale = bool(restart_payload.get("stale"))
+    restart_running = bool(restart_payload.get("exists")) and restart_status == "running" and not restart_stale
+    uptime_seconds: float | None = None
+    try:
+        raw_uptime = mcp_service.get("uptime_seconds")
+        uptime_seconds = None if raw_uptime is None else float(raw_uptime)
+    except Exception:
+        uptime_seconds = None
+    startup_grace = bool(service_ok and uptime_seconds is not None and uptime_seconds <= 45.0)
+
+    state = "healthy"
+    reason = "steady_state"
+    if restart_running:
+        state = "restart_in_progress"
+        reason = f"restart:{restart_phase or restart_status or 'running'}"
+    elif lifecycle_transient and mcp_status in {"starting", "shutting_down"}:
+        state = "transient_lifecycle"
+        reason = f"lifecycle:{mcp_status}"
+    elif startup_grace or lifecycle_phase in {"startup", "warmup"} or warmup_pending:
+        state = "startup_grace"
+        reason = f"lifecycle:{lifecycle_phase or 'warmup'}"
+    elif not service_ok or not health_ok or mcp_status in {"down", "unhealthy", "error"}:
+        state = "outage"
+        reason = "mcp_service_or_health_unhealthy"
+    elif incident or breaker:
+        state = "recovering"
+        reason = "open_mcp_health_incident"
+
+    return {
+        "state": state,
+        "reason": reason,
+        "service_active": str(mcp_service.get("active", "") or ""),
+        "service_ok": service_ok,
+        "service_uptime_seconds": float(uptime_seconds or 0.0),
+        "http_ok": health_ok,
+        "http_status_code": mcp_health.get("status_code"),
+        "latency_ms": mcp_health.get("latency_ms"),
+        "mcp_status": mcp_status or "unknown",
+        "ready": bool(mcp_payload.get("ready")),
+        "warmup_pending": warmup_pending,
+        "transient": lifecycle_transient,
+        "lifecycle_phase": lifecycle_phase or "",
+        "lifecycle_started_at": str(lifecycle.get("started_at") or ""),
+        "lifecycle_ready_at": str(lifecycle.get("ready_at") or ""),
+        "restart_status": restart_status or "missing",
+        "restart_phase": restart_phase or "",
+        "restart_request_id": str(restart_payload.get("request_id") or ""),
+        "restart_age_seconds": restart_payload.get("age_seconds"),
+        "restart_stale": restart_stale,
+        "startup_grace": startup_grace,
+        "incident_open": bool(incident),
+        "incident_key": str(incident.get("incident_key") or ""),
+        "incident_severity": str(incident.get("severity") or ""),
+        "incident_phase": str(incident.get("recovery_phase") or ""),
+        "breaker_open": bool(breaker),
+        "breaker_until": str(breaker.get("opened_until") or ""),
+        "stability_gate_state": str((stability_gate or {}).get("state") or ""),
+    }
 
 
 async def _fetch_local_json(client: httpx.AsyncClient, url: str) -> Dict[str, Any]:
@@ -558,6 +672,8 @@ async def collect_status_snapshot(mcp_base_url: str | None = None) -> Dict[str, 
         pass
     self_healing_summary = _build_self_healing_summary()
     self_hardening_summary = _build_self_hardening_summary()
+    stability_gate = evaluate_self_stabilization_gate(self_healing_summary)
+    restart = _read_restart_status()
 
     try:
         live_tool_stats = _safe_engine_stat(
@@ -605,9 +721,17 @@ async def collect_status_snapshot(mcp_base_url: str | None = None) -> Dict[str, 
             "llm_success_rate": 0.0,
         }
 
+    mcp_runtime = _build_mcp_runtime_correlation(
+        services=services,
+        local=local_results,
+        restart=restart,
+        self_healing=self_healing_summary,
+        stability_gate=stability_gate,
+    )
+
     return {
         "services": services,
-        "restart": _read_restart_status(),
+        "restart": restart,
         "local": local_results,
         "location": (local_results.get("location_status", {}).get("data", {}) or {}),
         "providers": provider_results,
@@ -618,7 +742,8 @@ async def collect_status_snapshot(mcp_base_url: str | None = None) -> Dict[str, 
         "ops_gate": evaluate_ops_release_gate(ops_summary),
         "self_healing": self_healing_summary,
         "self_hardening": self_hardening_summary,
-        "stability_gate": evaluate_self_stabilization_gate(self_healing_summary),
+        "stability_gate": stability_gate,
+        "mcp_runtime": mcp_runtime,
         "api_control": _build_api_control_summary(provider_results, usage_summary, budget_status),
         "thinking": bool((local_results["agent_status"].get("data", {}) or {}).get("thinking", False)),
     }
@@ -650,6 +775,18 @@ def _service_icon(ok: bool) -> str:
     return "🟢" if ok else "🔴"
 
 
+def _mcp_runtime_icon(state: str) -> str:
+    normalized = (state or "").strip().lower()
+    return {
+        "healthy": "🟢",
+        "recovering": "🟠",
+        "startup_grace": "🟠",
+        "transient_lifecycle": "🟠",
+        "restart_in_progress": "🟠",
+        "outage": "🔴",
+    }.get(normalized, "⚪")
+
+
 def format_status_message(snapshot: Dict[str, Any], summary_lines: List[str]) -> str:
     services = snapshot.get("services", {}) or {}
     local = snapshot.get("local", {}) or {}
@@ -662,6 +799,7 @@ def format_status_message(snapshot: Dict[str, Any], summary_lines: List[str]) ->
     self_healing = snapshot.get("self_healing", {}) or {}
     self_hardening = snapshot.get("self_hardening", {}) or {}
     stability_gate = snapshot.get("stability_gate", {}) or {}
+    mcp_runtime = snapshot.get("mcp_runtime", {}) or {}
     thinking = snapshot.get("thinking", False)
 
     mcp_health = local.get("mcp_health", {}) or {}
@@ -677,6 +815,33 @@ def format_status_message(snapshot: Dict[str, Any], summary_lines: List[str]) ->
         f"{_service_icon(services.get('dispatcher', {}).get('ok', False))} Dispatcher: {services.get('dispatcher', {}).get('active', 'unknown')}",
         f"{'🤔' if thinking else '⚪'} Thinking: {'aktiv' if thinking else 'inaktiv'}",
     ]
+    if mcp_runtime:
+        runtime_bits = [str(mcp_runtime.get("state", "unknown") or "unknown")]
+        lifecycle_phase = str(mcp_runtime.get("lifecycle_phase", "") or "")
+        if lifecycle_phase:
+            runtime_bits.append(f"lifecycle {lifecycle_phase}")
+        runtime_bits.append(f"ready {'yes' if bool(mcp_runtime.get('ready')) else 'no'}")
+        if bool(mcp_runtime.get("warmup_pending")):
+            runtime_bits.append("warmup pending")
+        restart_state = str(mcp_runtime.get("restart_status", "") or "")
+        restart_phase = str(mcp_runtime.get("restart_phase", "") or "")
+        if restart_state and restart_state != "missing":
+            restart_label = f"restart {restart_state}"
+            if restart_phase:
+                restart_label += f"/{restart_phase}"
+            if bool(mcp_runtime.get("restart_stale")):
+                restart_label += " stale"
+            runtime_bits.append(restart_label)
+        if bool(mcp_runtime.get("incident_open")):
+            severity = str(mcp_runtime.get("incident_severity", "") or "")
+            runtime_bits.append(f"incident open{f' {severity}' if severity else ''}")
+        gate_state = str(mcp_runtime.get("stability_gate_state", "") or "")
+        if gate_state and gate_state not in {"", "pass"}:
+            runtime_bits.append(f"gate {gate_state}")
+        core_lines.append(
+            f"{_mcp_runtime_icon(str(mcp_runtime.get('state', 'unknown') or 'unknown'))} MCP Runtime: "
+            + " | ".join(runtime_bits)
+        )
     if "qdrant" in services:
         qdrant_ready = local.get("qdrant_ready", {}) or {}
         ready_suffix = ""

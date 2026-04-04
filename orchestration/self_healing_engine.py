@@ -169,6 +169,11 @@ class SelfHealingEngine:
 
     def _is_verified_outage(self, *, component: str, signal: str, details: Dict[str, Any]) -> bool:
         payload = details if isinstance(details, dict) else {}
+        if bool(payload.get("transient")):
+            if str(payload.get("status") or "").lower() in {"starting", "shutting_down"}:
+                return False
+            if str(payload.get("lifecycle_phase") or "").lower() in {"startup", "shutdown", "warmup"}:
+                return False
         if payload.get("ok") is False:
             return True
         if component == "mcp" and signal == "mcp_health":
@@ -1436,11 +1441,16 @@ class SelfHealingEngine:
                 except Exception:
                     payload = {"raw_body": body[:200]}
             healthy = status_code == 200 and str(payload.get("status") or "").lower() in {"healthy", "ok"}
+            lifecycle = payload.get("lifecycle") if isinstance(payload.get("lifecycle"), dict) else {}
+            status = str(payload.get("status") or "")
+            transient = bool(payload.get("transient"))
             return {
                 "ok": healthy,
                 "http_status": status_code,
                 "endpoint": url,
                 "status": payload.get("status"),
+                "transient": transient,
+                "lifecycle_phase": lifecycle.get("phase"),
             }
         except Exception as e:
             return {"ok": False, "endpoint": url, "error": str(e)}

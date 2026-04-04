@@ -57,6 +57,146 @@
   - `C4` Langlaeufer-/Antwortpfade
 - erster Angriffsblock fuer Phase C ist jetzt klar auf `C1` gesetzt
 
+## Fortschritt 2026-04-04 21:12 CEST - C1 MCP-Lifecycle, Startup und Shutdown gehaertet
+
+### Problemstellung
+
+Der erste Phase-C-Block zeigte zwei echte Runtime-Kanten:
+
+- `timus-mcp` blockierte den Restart zu lange im Startup, weil beim OCR-/PaddleX-Import ein externer Model-Hoster-Check lief
+- offene `/events/stream`-Verbindungen fuehrten beim Reload wiederholt zu `timeout graceful shutdown exceeded`
+
+### Umgesetzt
+
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - neuer MCP-Lifecycle-State in `/health` mit `ready`, `warmup_pending`, `transient` und `lifecycle`
+  - optionale Warmups (`inception_health`, Browser-Context, Scheduler, RealSense) aus dem kritischen Startup-Pfad in einen Post-Startup-Task verschoben
+  - SSE-Helfer fuer Queue-vs-Shutdown-Waiting eingefuehrt
+  - `/events/stream` bekommt jetzt eine kontrollierte Verbindungs-TTL mit `server_refresh`, damit Canvas-Clients sauber reconnecten und Restarts nicht an einer alten Langverbindung haengen
+- [tools/engines/ocr_engine.py](/home/fatih-ubuntu/dev/timus/tools/engines/ocr_engine.py)
+  - `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=1` als Default fuer den Timus-Runtime-Pfad gesetzt
+  - Wirkung: der teure PaddleX-Hoster-Check wird beim OCR-Import standardmaessig uebersprungen, ohne die eigentliche Modellnutzung zu verbieten
+- [orchestration/self_healing_engine.py](/home/fatih-ubuntu/dev/timus/orchestration/self_healing_engine.py)
+  - transiente MCP-Health-Zustaende (`starting`, `shutting_down`) werden nicht mehr als verifizierter Ausfall interpretiert
+
+### Regressionen und Contracts
+
+- [tests/test_mcp_shutdown_hardening.py](/home/fatih-ubuntu/dev/timus/tests/test_mcp_shutdown_hardening.py)
+  - neue Checks fuer SSE-Waiting, Health-Payload und sichere SSE-TTL-Untergrenze
+- [tests/test_mcp_health_runtime_contracts.py](/home/fatih-ubuntu/dev/timus/tests/test_mcp_health_runtime_contracts.py)
+  - neuer CrossHair- und Hypothesis-Contract fuer transiente MCP-Health-Zustaende
+- bestehende Self-Healing-/E2E-Readiness-Suiten gegen die neue Semantik gegengeprueft
+
+### Validierung
+
+- `python -m py_compile server/mcp_server.py orchestration/self_healing_engine.py tools/engines/ocr_engine.py tests/test_mcp_shutdown_hardening.py tests/test_mcp_health_runtime_contracts.py` gruen
+- `12 passed` in `tests/test_mcp_shutdown_hardening.py` + `tests/test_mcp_health_runtime_contracts.py`
+- `6 passed` in `tests/test_m3_self_healing_baseline.py`
+- `7 passed` in `tests/test_e2e_regression_matrix.py`
+- `python -m crosshair check tests/test_mcp_health_runtime_contracts.py tests/test_self_healing_recovery_ladder_contracts.py --analysis_kind=deal` gruen
+- `python scripts/verify_pre_commit_lean.py`
+  - `lean/CiSpecs.lean` gruen
+  - Mathlib-Bundle weiterhin nur am bekannten `60s`-Timeout gescheitert, kein neuer Lean-Widerspruch im C1-Patch
+
+### Live-Befund
+
+- Startup:
+  - vor dem Patch: Startfenster ca. `21:06:21 -> 21:06:33` mit vollem `Checking connectivity to the model hosters...`
+  - nach dem Patch: Startfenster ca. `21:11:00 -> 21:11:06/07` mit `Connectivity check ... skipped`
+- `/health` liefert jetzt den Runtime-Lifecycle sichtbar mit Warmup-Details statt nur blind `healthy`
+- finaler Restart um `21:11:27 CEST` lief ohne den alten `timeout graceful shutdown exceeded`-Pfad durch; der Dienst war danach wieder sauber oben
+
+### Offener Rest in C1
+
+- der MCP-Startup ist klar kuerzer und ehrlicher, aber noch nicht instantan
+- als naechstes in `C1` bleibt deshalb:
+  - Startup-/Warmup-Dauer weiter ausmessen
+  - Incident-Korrelation in Richtung `mcp_health` / Restart / Observation nachziehen
+
+## Fortschritt 2026-04-04 22:02 CEST - C1 MCP-Runtime-Korrelation in Status-Snapshots nachgezogen
+
+### Problemstellung
+
+Nach dem Lifecycle-/Warmup-Patch war `/health` ehrlicher, aber die operative Lage fuer `telegram /status`, `self_improvement_tool` und Diagnosepfade blieb noch verteilt:
+
+- `services.mcp`
+- `local.mcp_health`
+- `restart`
+- `self_healing`
+- `stability_gate`
+
+Die Information war da, aber nicht als ein zusammenhaengender Runtime-Befund.
+
+### Umgesetzt
+
+- [gateway/status_snapshot.py](/home/fatih-ubuntu/dev/timus/gateway/status_snapshot.py)
+  - `mcp_runtime` als korrelierter Statusblock eingefuehrt
+  - vereint jetzt:
+    - Service-/HTTP-Gesundheit
+    - Lifecycle-/Warmup-Zustand
+    - Restart-Status inkl. Phase und Request-ID
+    - offene `mcp_health`-Incidents / Breaker
+    - aktuellen `stability_gate`-State
+  - fehlende `uptime_seconds` triggern **nicht** mehr faelschlich `startup_grace`
+  - doppelte `restart`-/`mcp_runtime`-Berechnung in `collect_status_snapshot()` bereinigt
+  - `format_status_message(...)` zeigt jetzt eine eigene `MCP Runtime`-Zeile im Core-Block
+
+### Regressionen und Contracts
+
+- [tests/test_telegram_status_snapshot.py](/home/fatih-ubuntu/dev/timus/tests/test_telegram_status_snapshot.py)
+  - Snapshot-Regressionsfall um `mcp_runtime` erweitert
+  - direkte Tests fuer:
+    - `restart_in_progress`
+    - kein falsches `startup_grace` ohne explizite Uptime
+- [tests/test_mcp_health_runtime_contracts.py](/home/fatih-ubuntu/dev/timus/tests/test_mcp_health_runtime_contracts.py)
+  - Contract-/Hypothesis-Erweiterung fuer die Runtime-Zustaende:
+    - `transient_lifecycle`
+    - `restart_in_progress`
+
+### Validierung
+
+- `python -m py_compile gateway/status_snapshot.py tests/test_telegram_status_snapshot.py tests/test_mcp_health_runtime_contracts.py` gruen
+- `16 passed` in `tests/test_telegram_status_snapshot.py` + `tests/test_mcp_health_runtime_contracts.py` + `tests/test_e2e_regression_matrix.py`
+- `1 passed` in `tests/test_self_improvement_tool_ops.py`
+- `python -m crosshair check tests/test_mcp_health_runtime_contracts.py --analysis_kind=deal` gruen
+- `python scripts/verify_pre_commit_lean.py` jetzt komplett gruen:
+  - `lean/CiSpecs.lean`
+  - Mathlib-Bundle (12 Specs)
+
+### Wirkung
+
+- `status`-/Snapshot-Konsumenten sehen jetzt mit einem Blick, ob MCP wirklich gesund ist, sich noch im Warmup befindet, gerade restartet oder nur wegen eines offenen `mcp_health`-Incidents unter Beobachtung steht
+- die frueher manuelle Korrelation ueber mehrere Teilbloecke ist fuer den MCP-Fall deutlich reduziert
+
+### Rest in C1
+
+- C1 ist damit funktional fast zu
+- verbleibend ist vor allem:
+  - ein kurzer Live-Status-Check auf dem geladenen Dienst
+  - danach kann der Beobachtungs-/Anfragebezug sauber in `C2` weitergehen
+
+### Live-Nachtrag 2026-04-04 21:45 CEST
+
+- beim ersten Live-Check fiel noch ein alter Restart-Artefaktzustand auf:
+  - `timus_restart_status.json` stand seit Wochen auf `running/preflight`
+  - der Snapshot hatte das deshalb zuerst noch als `restart_in_progress` gelesen
+- Nachgezogen:
+  - [gateway/status_snapshot.py](/home/fatih-ubuntu/dev/timus/gateway/status_snapshot.py)
+    - `stale`-Erkennung fuer alte Restart-Artefakte jetzt an dieselbe Drift-Semantik wie die E2E-Matrix gekoppelt
+    - `mcp_runtime` ignoriert `running`-Restarts, wenn sie stale sind
+    - Snapshot zeigt den Restart weiter sichtbar an, aber nicht mehr als aktiven Recovery-Zustand
+- neue Regressionen in [tests/test_telegram_status_snapshot.py](/home/fatih-ubuntu/dev/timus/tests/test_telegram_status_snapshot.py):
+  - altes `running/preflight` wird als `stale` markiert
+  - stale Restart-Dateien triggern kein falsches `restart_in_progress`
+- erneute Validierung:
+  - `19 passed` in der fokussierten Snapshot-/Contract-/E2E-Suite
+  - CrossHair erneut gruen
+  - Lean-Bundle erneut komplett gruen
+- Live-Snapshot nach Reload:
+  - `restart.stale = true`
+  - `mcp_runtime.state = startup_grace`
+  - also kein falscher laufender Restart mehr, waehrend der Dienst real gesund hochkommt
+
 ## Fortschritt 2026-04-04 20:43 CEST - Klassifikation fuer strittige Politik-/Rechtsclaims und Skill-Entrypoints gehaertet
 
 ### Problemstellung

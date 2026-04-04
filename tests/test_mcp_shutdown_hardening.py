@@ -65,3 +65,69 @@ def test_canvas_ui_url_normalizes_unspecified_bind_host(monkeypatch):
     monkeypatch.setenv("PORT", "5000")
 
     assert _canvas_ui_url() == "http://127.0.0.1:5000/canvas/ui"
+
+
+@pytest.mark.asyncio
+async def test_await_sse_queue_item_returns_data_when_available():
+    from server.mcp_server import _await_sse_queue_item
+
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    shutdown_event = asyncio.Event()
+    await queue.put('{"type":"chat_reply"}')
+
+    kind, payload = await _await_sse_queue_item(queue, shutdown_event, timeout_s=0.2)
+
+    assert kind == "data"
+    assert payload == '{"type":"chat_reply"}'
+
+
+@pytest.mark.asyncio
+async def test_await_sse_queue_item_returns_shutdown_when_server_is_stopping():
+    from server.mcp_server import _await_sse_queue_item
+
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    shutdown_event = asyncio.Event()
+    shutdown_event.set()
+
+    kind, payload = await _await_sse_queue_item(queue, shutdown_event, timeout_s=0.2)
+
+    assert kind == "shutdown"
+    assert payload is None
+
+
+def test_health_payload_exposes_lifecycle_and_warmup_state():
+    from server.mcp_server import app, _build_health_payload, _set_app_mcp_lifecycle
+
+    app.state.inception = {
+        "registered": True,
+        "env_url": "https://api.inceptionlabs.ai/v1",
+        "health": {"ok": None, "detail": "not_checked_yet"},
+    }
+    _set_app_mcp_lifecycle(
+        app,
+        phase="warmup",
+        status="healthy",
+        ready=True,
+        warmup_pending=True,
+        transient=False,
+        warmups={"inception_health": {"ok": None, "detail": "queued"}},
+    )
+
+    payload = _build_health_payload(app)
+
+    assert payload["status"] == "healthy"
+    assert payload["ready"] is True
+    assert payload["warmup_pending"] is True
+    assert payload["transient"] is False
+    assert payload["lifecycle"]["phase"] == "warmup"
+    assert payload["lifecycle"]["warmups"]["inception_health"]["detail"] == "queued"
+
+
+def test_sse_connection_ttl_has_safe_minimum(monkeypatch):
+    from server.mcp_server import _sse_connection_ttl_sec
+
+    monkeypatch.setenv("TIMUS_SSE_CONNECTION_TTL_SEC", "1")
+    assert _sse_connection_ttl_sec() == 5.0
+
+    monkeypatch.setenv("TIMUS_SSE_CONNECTION_TTL_SEC", "9.5")
+    assert _sse_connection_ttl_sec() == 9.5

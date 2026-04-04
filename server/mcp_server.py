@@ -170,6 +170,93 @@ _route_snapshot_lock = threading.Lock()
 _SHUTDOWN_STEP_TIMEOUT_S = float(os.getenv("TIMUS_SHUTDOWN_STEP_TIMEOUT", "6"))
 _CONSOLE_FILE_DIRS = ("results", "data/uploads")
 _CHAT_HISTORY_LIMIT = int(os.getenv("TIMUS_CHAT_HISTORY_LIMIT", "200"))
+_mcp_lifecycle: dict = {}
+
+
+def _reset_mcp_lifecycle(*, phase: str = "startup", status: str = "starting") -> dict:
+    """Setzt den MCP-Lifecycle-Zustand fuer Startup/Restart neu auf."""
+    global _mcp_lifecycle
+    timestamp = datetime.utcnow().isoformat() + "Z"
+    _mcp_lifecycle = {
+        "phase": phase,
+        "status": status,
+        "ready": False,
+        "warmup_pending": False,
+        "transient": status != "healthy",
+        "started_at": timestamp,
+        "ready_at": None,
+        "shutdown_at": None,
+        "warmups": {},
+        "last_error": None,
+    }
+    return dict(_mcp_lifecycle)
+
+
+def _update_mcp_lifecycle(**changes) -> dict:
+    """Aktualisiert den MCP-Lifecycle-Zustand atomar."""
+    global _mcp_lifecycle
+    if not _mcp_lifecycle:
+        _reset_mcp_lifecycle()
+    next_state = dict(_mcp_lifecycle)
+    next_state.update({k: v for k, v in changes.items() if v is not None})
+    status = str(next_state.get("status") or "").strip().lower()
+    next_state["transient"] = bool(next_state.get("transient")) or status in {
+        "starting",
+        "shutting_down",
+    }
+    if next_state.get("ready") and not next_state.get("ready_at"):
+        next_state["ready_at"] = datetime.utcnow().isoformat() + "Z"
+    if status == "shutting_down":
+        next_state["shutdown_at"] = datetime.utcnow().isoformat() + "Z"
+    _mcp_lifecycle = next_state
+    return dict(_mcp_lifecycle)
+
+
+def _current_mcp_lifecycle(app: FastAPI | None = None) -> dict:
+    state = getattr(getattr(app, "state", None), "mcp_lifecycle", None)
+    if isinstance(state, dict) and state:
+        return dict(state)
+    if _mcp_lifecycle:
+        return dict(_mcp_lifecycle)
+    return _reset_mcp_lifecycle()
+
+
+def _set_app_mcp_lifecycle(app: FastAPI, **changes) -> dict:
+    state = _update_mcp_lifecycle(**changes)
+    app.state.mcp_lifecycle = dict(state)
+    return state
+
+
+def _build_health_payload(app: FastAPI) -> dict:
+    tools = registry_v2.list_all_tools()
+    lifecycle = _current_mcp_lifecycle(app)
+    return {
+        "status": lifecycle.get("status") or "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "total_rpc_methods": len(tools),
+        "registry": "v2",
+        "ready": bool(lifecycle.get("ready")),
+        "warmup_pending": bool(lifecycle.get("warmup_pending")),
+        "transient": bool(lifecycle.get("transient")),
+        "lifecycle": lifecycle,
+        "inception": getattr(
+            app.state,
+            "inception",
+            {
+                "registered": False,
+                "env_url": None,
+                "health": {"ok": None, "detail": "n/a"},
+            },
+        ),
+    }
+
+
+def _sse_connection_ttl_sec() -> float:
+    raw = str(os.getenv("TIMUS_SSE_CONNECTION_TTL_SEC") or "8.0").strip()
+    try:
+        return max(5.0, float(raw))
+    except (TypeError, ValueError):
+        return 8.0
 
 _FOLLOWUP_PATTERNS = (
     r"^\s*und\b",
@@ -2202,6 +2289,153 @@ async def _cancel_background_task(name: str, task: asyncio.Task | None, timeout_
         return False
 
 
+async def _await_sse_queue_item(
+    queue: asyncio.Queue,
+    shutdown_event: asyncio.Event,
+    *,
+    timeout_s: float = 25.0,
+) -> tuple[str, str | None]:
+    """Wartet auf Queue-Daten oder einen Server-Shutdown fuer SSE-Verbindungen."""
+    queue_task = asyncio.create_task(queue.get())
+    shutdown_task = asyncio.create_task(shutdown_event.wait())
+    try:
+        done, pending = await asyncio.wait(
+            {queue_task, shutdown_task},
+            timeout=max(0.2, float(timeout_s)),
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if not done:
+            return ("ping", None)
+        if shutdown_task in done and shutdown_task.result():
+            return ("shutdown", None)
+        if queue_task in done:
+            return ("data", str(queue_task.result()))
+        return ("ping", None)
+    finally:
+        for task in (queue_task, shutdown_task):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(queue_task, shutdown_task, return_exceptions=True)
+
+
+async def _run_post_startup_warmups(app: FastAPI) -> None:
+    """Fuehrt optionale Warmups nach dem HTTP-Start aus, ohne Readiness zu blockieren."""
+    warmups: dict[str, dict] = {}
+    try:
+        if "inception_health" in registry_v2.list_all_tools():
+            try:
+                probe = await _rpc_call_local("inception_health", {})
+                ok = isinstance(probe, dict) and not probe.get("error")
+                app.state.inception["health"] = {"ok": bool(ok), "detail": probe}
+                warmups["inception_health"] = {
+                    "ok": bool(ok),
+                    "detail": probe if ok else str(probe)[:240],
+                }
+                if ok:
+                    log.info("🩺 Inception-Health: OK (Post-Startup-Warmup)")
+                else:
+                    log.warning("🩺 Inception-Health: Problematisch (Post-Startup-Warmup) → %s", probe)
+            except Exception as exc:
+                app.state.inception["health"] = {
+                    "ok": False,
+                    "detail": f"health_call_error: {exc}",
+                }
+                warmups["inception_health"] = {"ok": False, "detail": str(exc)}
+                log.warning("🩺 Inception-Health: Fehler beim Warmup: %s", exc)
+        else:
+            warmups["inception_health"] = {"ok": None, "detail": "not_registered"}
+
+        try:
+            from tools.browser_tool.persistent_context import PersistentContextManager
+
+            manager = PersistentContextManager()
+            await manager.initialize()
+            shared_context.browser_context_manager = manager
+            warmups["persistent_browser_context_manager"] = {"ok": True}
+            log.info("✅ Browser PersistentContextManager initialisiert (Post-Startup-Warmup)")
+        except Exception as exc:
+            warmups["persistent_browser_context_manager"] = {"ok": False, "detail": str(exc)}
+            log.warning("⚠️ PersistentContextManager konnte nicht gestartet werden: %s", exc)
+
+        app.state.scheduler = None
+        if os.getenv("HEARTBEAT_ENABLED", "true").lower() == "true":
+            try:
+                from orchestration.scheduler import init_scheduler, _set_scheduler_instance
+
+                async def on_scheduler_wake(event):
+                    log.info(f"💓 Scheduler Event: {event.event_type}")
+                    if shared_context.browser_context_manager:
+                        expired = await shared_context.browser_context_manager.cleanup_expired()
+                        if expired > 0:
+                            log.info(f"🧹 {expired} abgelaufene Browser-Sessions entfernt")
+
+                scheduler = init_scheduler(on_wake=on_scheduler_wake)
+                _set_scheduler_instance(scheduler)
+                await scheduler.start()
+                app.state.scheduler = scheduler
+                warmups["heartbeat_scheduler"] = {
+                    "ok": True,
+                    "interval_min": scheduler.interval.total_seconds() / 60,
+                }
+                log.info(
+                    "✅ Heartbeat-Scheduler gestartet (Post-Startup-Warmup, Interval: %.0fmin)",
+                    scheduler.interval.total_seconds() / 60,
+                )
+            except Exception as exc:
+                warmups["heartbeat_scheduler"] = {"ok": False, "detail": str(exc)}
+                log.warning("⚠️ Scheduler konnte nicht gestartet werden: %s", exc)
+        else:
+            warmups["heartbeat_scheduler"] = {"ok": None, "detail": "disabled"}
+            log.info("ℹ️ Heartbeat-Scheduler deaktiviert (HEARTBEAT_ENABLED=false)")
+
+        app.state.realsense_stream_manager = None
+        if os.getenv("REALSENSE_STREAM_AUTO_START", "false").lower() in {"1", "true", "yes", "on"}:
+            try:
+                from utils.realsense_stream import get_realsense_stream_manager
+
+                width = int(os.getenv("REALSENSE_STREAM_WIDTH", "1280"))
+                height = int(os.getenv("REALSENSE_STREAM_HEIGHT", "720"))
+                fps = float(os.getenv("REALSENSE_STREAM_FPS", "10"))
+                device_raw = (os.getenv("REALSENSE_STREAM_DEVICE") or "").strip()
+                device_index = int(device_raw) if device_raw else None
+
+                stream_manager = get_realsense_stream_manager()
+                status = await asyncio.to_thread(
+                    stream_manager.start,
+                    width,
+                    height,
+                    fps,
+                    device_index,
+                )
+                app.state.realsense_stream_manager = stream_manager
+                warmups["realsense_stream"] = {"ok": True, "detail": status}
+                log.info("✅ RealSense-Stream gestartet (Post-Startup-Warmup): %s", status)
+            except Exception as exc:
+                warmups["realsense_stream"] = {"ok": False, "detail": str(exc)}
+                log.warning("⚠️ RealSense-Stream Auto-Start fehlgeschlagen: %s", exc)
+        else:
+            warmups["realsense_stream"] = {"ok": None, "detail": "disabled"}
+            log.info("ℹ️ RealSense-Stream Auto-Start deaktiviert (REALSENSE_STREAM_AUTO_START=false)")
+
+    except asyncio.CancelledError:
+        log.info("ℹ️ Post-Startup-Warmups wurden beim Shutdown abgebrochen.")
+        raise
+    finally:
+        current = _current_mcp_lifecycle(app)
+        if str(current.get("status") or "").lower() == "shutting_down":
+            _set_app_mcp_lifecycle(app, warmups=warmups)
+        else:
+            _set_app_mcp_lifecycle(
+                app,
+                phase="ready",
+                status="healthy",
+                ready=True,
+                warmup_pending=False,
+                transient=False,
+                warmups=warmups,
+            )
+
+
 async def _canvas_mirror_log_worker(interval_seconds: float = 1.2) -> None:
     """Spiegelt neue Canvas-Events/Edges als MCP-Logeintraege."""
     interval = max(0.3, float(interval_seconds))
@@ -2299,6 +2533,12 @@ async def lifespan(app: FastAPI):
     log.info("=" * 50)
     log.info("🚀 TIMUS MCP SERVER STARTUP-PROZESS BEGINNT...")
     log.info("=" * 50)
+    _reset_mcp_lifecycle()
+    app.state.mcp_lifecycle = _current_mcp_lifecycle()
+    app.state.sse_shutdown_event = asyncio.Event()
+    app.state.post_startup_warmup_task = None
+    app.state.scheduler = None
+    app.state.realsense_stream_manager = None
 
     load_dotenv(override=True)
     log.info("✅ .env-Datei geladen.")
@@ -2381,29 +2621,9 @@ async def lifespan(app: FastAPI):
     else:
         log.warning("⚠️ Keine INCEPTION_URL/INCEPTION_API_URL in ENV gesetzt.")
 
-    if "inception_health" in registry_v2.list_all_tools():
-        try:
-            probe = await _rpc_call_local("inception_health", {})
-            if isinstance(probe, dict) and not probe.get("error"):
-                app.state.inception["health"] = {"ok": True, "detail": probe}
-                log.info("🩺 Inception-Health: OK")
-            else:
-                app.state.inception["health"] = {"ok": False, "detail": probe}
-                log.warning(f"🩺 Inception-Health: Problematisch → {probe}")
-        except Exception as e:
-            app.state.inception["health"] = {
-                "ok": False,
-                "detail": f"health_call_error: {e}",
-            }
-            log.warning(f"🩺 Inception-Health: Fehler beim Aufruf: {e}")
-    else:
-        log.info(
-            "ℹ️ Keine 'inception_health'-Methode registriert – überspringe Health-Call."
-        )
-
     # Finales Status-Logging
     log.info("=" * 50)
-    log.info("🌐 TIMUS MCP SERVER IST BEREIT FÜR ANFRAGEN")
+    log.info("🌐 TIMUS MCP SERVER NIMMT ANFRAGEN AN (optionale Warmups laufen im Hintergrund)")
     log.info(
         f"📦 {len(loaded)}/{len(TOOL_MODULES)} Module geladen. Fehlgeschlagen: {len(failed)}"
     )
@@ -2417,71 +2637,39 @@ async def lifespan(app: FastAPI):
         log.info(f"  - {tool_name}")
     log.info("=" * 50)
 
-    # === BROWSER CONTEXT MANAGER (v2.0) ===
-    try:
-        from tools.browser_tool.persistent_context import PersistentContextManager
-        manager = PersistentContextManager()
-        await manager.initialize()
-        shared_context.browser_context_manager = manager
-        log.info("✅ Browser PersistentContextManager initialisiert")
-    except Exception as e:
-        log.warning(f"⚠️ PersistentContextManager konnte nicht gestartet werden: {e}")
-
-    # === HEARTBEAT SCHEDULER STARTEN ===
-    app.state.scheduler = None
-    if os.getenv("HEARTBEAT_ENABLED", "true").lower() == "true":
-        try:
-            from orchestration.scheduler import init_scheduler, _set_scheduler_instance
-            
-            # Scheduler-Callback für Custom Actions
-            async def on_scheduler_wake(event):
-                log.info(f"💓 Scheduler Event: {event.event_type}")
-                # Browser-Context Cleanup
-                if shared_context.browser_context_manager:
-                    expired = await shared_context.browser_context_manager.cleanup_expired()
-                    if expired > 0:
-                        log.info(f"🧹 {expired} abgelaufene Browser-Sessions entfernt")
-            
-            scheduler = init_scheduler(on_wake=on_scheduler_wake)
-            _set_scheduler_instance(scheduler)
-            await scheduler.start()
-            app.state.scheduler = scheduler
-            log.info(f"✅ Heartbeat-Scheduler gestartet (Interval: {scheduler.interval.total_seconds()/60:.0f}min)")
-        except Exception as e:
-            log.warning(f"⚠️ Scheduler konnte nicht gestartet werden: {e}")
-    else:
-        log.info("ℹ️ Heartbeat-Scheduler deaktiviert (HEARTBEAT_ENABLED=false)")
-
-    # === OPTIONAL: REALSENSE LIVE-STREAM AUTO-START ===
-    app.state.realsense_stream_manager = None
-    if os.getenv("REALSENSE_STREAM_AUTO_START", "false").lower() in {"1", "true", "yes", "on"}:
-        try:
-            from utils.realsense_stream import get_realsense_stream_manager
-
-            width = int(os.getenv("REALSENSE_STREAM_WIDTH", "1280"))
-            height = int(os.getenv("REALSENSE_STREAM_HEIGHT", "720"))
-            fps = float(os.getenv("REALSENSE_STREAM_FPS", "10"))
-            device_raw = (os.getenv("REALSENSE_STREAM_DEVICE") or "").strip()
-            device_index = int(device_raw) if device_raw else None
-
-            stream_manager = get_realsense_stream_manager()
-            status = await asyncio.to_thread(
-                stream_manager.start,
-                width,
-                height,
-                fps,
-                device_index,
-            )
-            app.state.realsense_stream_manager = stream_manager
-            log.info(f"✅ RealSense-Stream gestartet: {status}")
-        except Exception as e:
-            log.warning(f"⚠️ RealSense-Stream Auto-Start fehlgeschlagen: {e}")
-    else:
-        log.info("ℹ️ RealSense-Stream Auto-Start deaktiviert (REALSENSE_STREAM_AUTO_START=false)")
+    _set_app_mcp_lifecycle(
+        app,
+        phase="warmup",
+        status="healthy",
+        ready=True,
+        warmup_pending=True,
+        transient=False,
+        last_error=None,
+    )
+    app.state.post_startup_warmup_task = asyncio.create_task(_run_post_startup_warmups(app))
 
     yield  # Server läuft
 
     log.info("🛑 TIMUS MCP SERVER SHUTDOWN beginnt...")
+    _set_app_mcp_lifecycle(
+        app,
+        phase="shutdown",
+        status="shutting_down",
+        ready=False,
+        warmup_pending=False,
+        transient=True,
+    )
+    try:
+        app.state.sse_shutdown_event.set()
+        _broadcast_sse({"type": "server_shutdown", "ts": datetime.utcnow().isoformat() + "Z"})
+    except Exception:
+        pass
+
+    await _cancel_background_task(
+        "post_startup_warmup_task",
+        getattr(app.state, "post_startup_warmup_task", None),
+        timeout_s=3.0,
+    )
 
     # === SHUTDOWN: Voice-Task abbrechen ===
     global _voice_listen_task
@@ -2560,22 +2748,7 @@ app.add_middleware(
 # --- API Endpoints ---
 @app.get("/health", summary="Health Check")
 async def health_check():
-    tools = registry_v2.list_all_tools()
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "total_rpc_methods": len(tools),
-        "registry": "v2",
-        "inception": getattr(
-            app.state,
-            "inception",
-            {
-                "registered": False,
-                "env_url": None,
-                "health": {"ok": None, "detail": "n/a"},
-            },
-        ),
-    }
+    return _build_health_payload(app)
 
 
 async def _build_tools_description() -> str:
@@ -2940,6 +3113,13 @@ async def status_snapshot_endpoint():
 async def events_stream(request: Request):
     """Server-Sent Events: Pushing agent-status, thinking-LED und Chat-Events."""
     queue: asyncio.Queue = asyncio.Queue(maxsize=500)
+    shutdown_event = getattr(app.state, "sse_shutdown_event", None)
+    if shutdown_event is None:
+        shutdown_event = asyncio.Event()
+        app.state.sse_shutdown_event = shutdown_event
+    loop = asyncio.get_running_loop()
+    started_monotonic = loop.time()
+    max_connection_age_s = _sse_connection_ttl_sec()
     with _sse_lock:
         _sse_queues.append(queue)
 
@@ -2951,12 +3131,23 @@ async def events_stream(request: Request):
             )
             yield f"data: {init_data}\n\n"
             while True:
-                if await request.is_disconnected():
+                elapsed = loop.time() - started_monotonic
+                remaining = max_connection_age_s - elapsed
+                if remaining <= 0:
+                    yield 'data: {"type":"server_refresh"}\n\n'
                     break
-                try:
-                    data = await asyncio.wait_for(queue.get(), timeout=25.0)
+                if shutdown_event.is_set() or await request.is_disconnected():
+                    break
+                kind, data = await _await_sse_queue_item(
+                    queue,
+                    shutdown_event,
+                    timeout_s=min(25.0, max(0.2, remaining)),
+                )
+                if kind == "shutdown":
+                    break
+                if kind == "data" and data is not None:
                     yield f"data: {data}\n\n"
-                except asyncio.TimeoutError:
+                else:
                     yield 'data: {"type":"ping"}\n\n'
         finally:
             with _sse_lock:

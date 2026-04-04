@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -142,7 +144,28 @@ async def test_collect_status_snapshot_builds_agent_rows(monkeypatch):
 
     monkeypatch.setattr(status_snapshot, "_fetch_local_json", fake_fetch_local_json)
     monkeypatch.setattr(status_snapshot, "_check_provider_api", fake_check_provider_api)
-    monkeypatch.setattr(status_snapshot, "_service_state", lambda svc: {"service": svc, "active": "active", "ok": True})
+    monkeypatch.setattr(
+        status_snapshot,
+        "_service_state",
+        lambda svc: {
+            "service": svc,
+            "active": "active",
+            "ok": True,
+            "uptime_seconds": 120.0,
+        },
+    )
+    monkeypatch.setattr(
+        status_snapshot,
+        "_read_restart_status",
+        lambda: {
+            "exists": False,
+            "status": "missing",
+            "phase": "",
+            "request_id": "",
+            "age_seconds": None,
+            "stale": False,
+        },
+    )
     monkeypatch.setattr(status_snapshot, "_providers_to_check", lambda: [ModelProvider.OPENROUTER, ModelProvider.ZAI, ModelProvider.OPENAI, ModelProvider.INCEPTION])
     monkeypatch.setattr(status_snapshot, "get_provider_client", lambda: SimpleNamespace())
     monkeypatch.setattr(
@@ -341,6 +364,10 @@ async def test_collect_status_snapshot_builds_agent_rows(monkeypatch):
     assert snapshot["self_healing"]["incidents"][0]["quarantine_state"] == "active"
     assert snapshot["self_healing"]["resource_guard_state"] == "active"
     assert snapshot["stability_gate"]["state"] == "blocked"
+    assert snapshot["mcp_runtime"]["state"] == "recovering"
+    assert snapshot["mcp_runtime"]["incident_open"] is True
+    assert snapshot["mcp_runtime"]["breaker_open"] is True
+    assert snapshot["mcp_runtime"]["stability_gate_state"] == "blocked"
     assert snapshot["api_control"]["active_provider_count"] >= 1
     assert snapshot["api_control"]["providers"][0]["api_env"] == "X"
 
@@ -493,6 +520,17 @@ def test_format_status_message_contains_core_provider_and_agent_sections():
             "cooldown_incidents": 1,
             "known_bad_patterns": 1,
         },
+        "mcp_runtime": {
+            "state": "recovering",
+            "ready": True,
+            "warmup_pending": False,
+            "lifecycle_phase": "ready",
+            "restart_status": "completed",
+            "restart_phase": "post_check",
+            "incident_open": True,
+            "incident_severity": "high",
+            "stability_gate_state": "blocked",
+        },
         "thinking": True,
     }
 
@@ -500,6 +538,7 @@ def test_format_status_message_contains_core_provider_and_agent_sections():
 
     assert "🤖 Timus Status" in msg
     assert "Core" in msg
+    assert "MCP Runtime: recovering | lifecycle ready | ready yes | restart completed/post_check | incident open high | gate blocked" in msg
     assert "Self-Healing" in msg
     assert "Ops" in msg
     assert "LLM/API Health" in msg
@@ -524,3 +563,149 @@ def test_format_status_message_contains_core_provider_and_agent_sections():
     assert "Agent meta: $0.031000 | 4 req" in msg
     assert "meta" in msg
     assert "z-ai/glm-5" in msg
+
+
+def test_build_mcp_runtime_correlation_prioritizes_restart_over_other_states():
+    result = status_snapshot._build_mcp_runtime_correlation(
+        services={
+            "mcp": {
+                "active": "active",
+                "ok": True,
+                "uptime_seconds": 180.0,
+            }
+        },
+        local={
+            "mcp_health": {
+                "ok": True,
+                "status_code": 200,
+                "latency_ms": 24,
+                "data": {
+                    "status": "healthy",
+                    "ready": True,
+                    "warmup_pending": False,
+                    "transient": False,
+                    "lifecycle": {"phase": "ready"},
+                },
+            }
+        },
+        restart={
+            "exists": True,
+            "status": "running",
+            "phase": "drain",
+            "request_id": "r-1",
+            "age_seconds": 2.5,
+        },
+        self_healing={"incidents": [], "open_breakers": []},
+        stability_gate={"state": "pass"},
+    )
+
+    assert result["state"] == "restart_in_progress"
+    assert result["restart_status"] == "running"
+    assert result["restart_phase"] == "drain"
+    assert result["restart_request_id"] == "r-1"
+    assert result["restart_stale"] is False
+
+
+def test_build_mcp_runtime_correlation_missing_uptime_does_not_fake_startup_grace():
+    result = status_snapshot._build_mcp_runtime_correlation(
+        services={
+            "mcp": {
+                "active": "active",
+                "ok": True,
+            }
+        },
+        local={
+            "mcp_health": {
+                "ok": True,
+                "status_code": 200,
+                "latency_ms": 18,
+                "data": {
+                    "status": "healthy",
+                    "ready": True,
+                    "warmup_pending": False,
+                    "transient": False,
+                    "lifecycle": {"phase": "ready"},
+                },
+            }
+        },
+        restart={"exists": False, "status": "missing", "phase": ""},
+        self_healing={
+            "incidents": [
+                {
+                    "incident_key": "m3_mcp_health_unavailable",
+                    "component": "mcp",
+                    "signal": "mcp_health",
+                    "severity": "high",
+                    "recovery_phase": "recovering",
+                }
+            ],
+            "open_breakers": [],
+        },
+        stability_gate={"state": "warn"},
+    )
+
+    assert result["startup_grace"] is False
+    assert result["state"] == "recovering"
+
+
+def test_build_mcp_runtime_correlation_ignores_stale_restart_artifact():
+    result = status_snapshot._build_mcp_runtime_correlation(
+        services={
+            "mcp": {
+                "active": "active",
+                "ok": True,
+                "uptime_seconds": 180.0,
+            }
+        },
+        local={
+            "mcp_health": {
+                "ok": True,
+                "status_code": 200,
+                "latency_ms": 14,
+                "data": {
+                    "status": "healthy",
+                    "ready": True,
+                    "warmup_pending": False,
+                    "transient": False,
+                    "lifecycle": {"phase": "ready"},
+                },
+            }
+        },
+        restart={
+            "exists": True,
+            "status": "running",
+            "phase": "preflight",
+            "request_id": "old-r",
+            "age_seconds": 7200.0,
+            "stale": True,
+        },
+        self_healing={"incidents": [], "open_breakers": []},
+        stability_gate={"state": "pass"},
+    )
+
+    assert result["restart_stale"] is True
+    assert result["state"] == "healthy"
+
+
+def test_read_restart_status_marks_old_running_preflight_as_stale(monkeypatch, tmp_path):
+    restart_file = tmp_path / "timus_restart_status.json"
+    restart_file.write_text(
+        json.dumps(
+            {
+                "status": "running",
+                "phase": "preflight",
+                "request_id": "stale-r",
+            }
+        ),
+        encoding="utf-8",
+    )
+    old_mtime = restart_file.stat().st_mtime - (status_snapshot.E2E_WARN_STALE_RESTART_STATUS_SECONDS + 10)
+    os.utime(restart_file, (old_mtime, old_mtime))
+    monkeypatch.setattr(status_snapshot, "_RESTART_STATUS_PATH", restart_file)
+
+    result = status_snapshot._read_restart_status()
+
+    assert result["exists"] is True
+    assert result["status"] == "running"
+    assert result["phase"] == "preflight"
+    assert result["stale"] is True
