@@ -155,5 +155,51 @@ async def test_scrapingant_client_uses_documented_v2_query_params(monkeypatch):
     assert captured["params"]["browser"] == "true"
     assert captured["params"]["proxy_type"] == "residential"
     assert captured["params"]["timeout"] == "45"
+    assert captured["params"]["wait_for_selector"] == 'article, [data-testid="tweet"], main article'
     assert "render_js" not in captured["params"]
     assert "return_page_source" not in captured["params"]
+
+
+@pytest.mark.asyncio
+async def test_scrapingant_client_returns_auth_required_for_detected_x_login_wall(monkeypatch):
+    from tools.social_media_tool import client as sa_client
+
+    class FakeResponse:
+        text = """
+        <html>
+          <body>
+            <main>
+              <h1>Happening now</h1>
+              <a href="/i/flow/login">Sign in to X</a>
+              <div>Join X today</div>
+            </main>
+          </body>
+        </html>
+        """
+
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, params=None):
+            return FakeResponse()
+
+    monkeypatch.setattr(sa_client, "get_scrapingant_api_key", lambda: "test-key")
+    monkeypatch.setattr(sa_client.httpx, "AsyncClient", lambda *args, **kwargs: FakeClient())
+
+    result = await sa_client.fetch_page_text_via_scrapingant(
+        "https://x.com/example/status/1",
+        render_js=True,
+        timeout_seconds=45.0,
+        max_chars=500,
+    )
+
+    assert result["status"] == "auth_required"
+    assert result["auth_required"] is True
+    assert "Login-Zugang" in result["user_action_required"]

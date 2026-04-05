@@ -1743,6 +1743,96 @@ class MetaAgent(BaseAgent):
         ]
         return str(stage.get("agent") or "").strip().lower() in recommended_chain
 
+    @staticmethod
+    def _detect_live_lookup_source_hint(task: str, *, site_kind: str = "") -> str:
+        normalized = re.sub(r"\s+", " ", str(task or "").strip().lower())
+        if not normalized:
+            return ""
+        normalized_site_kind = str(site_kind or "").strip().lower()
+        if normalized_site_kind in {"x", "linkedin"}:
+            return normalized_site_kind
+        source_markers = (
+            ("x", ("x.com", "twitter", "auf x", "bei x", "von x")),
+            ("linkedin", ("linkedin",)),
+            ("reddit", ("reddit",)),
+            ("github", ("github",)),
+            ("arxiv", ("arxiv",)),
+            ("hacker_news", ("hacker news", "hackernews", "hn ")),
+            ("product_hunt", ("product hunt",)),
+            ("instagram", ("instagram",)),
+            ("tiktok", ("tiktok",)),
+            ("threads", ("threads.net", "threads")),
+            ("bluesky", ("bsky.app", "bluesky")),
+            ("mastodon", ("mastodon",)),
+            ("social_media", ("social media", "soziale medien")),
+        )
+        for hint, markers in source_markers:
+            if any(marker in normalized for marker in markers):
+                return hint
+        return ""
+
+    @classmethod
+    def _build_source_aware_live_lookup_executor_goal(
+        cls,
+        *,
+        original_user_task: str,
+        source_hint: str,
+    ) -> str:
+        user_request = cls._shorten(original_user_task, limit=500)
+        social_hints = {
+            "x",
+            "linkedin",
+            "reddit",
+            "instagram",
+            "tiktok",
+            "threads",
+            "bluesky",
+            "mastodon",
+            "social_media",
+        }
+        if source_hint in social_hints:
+            source_label = {
+                "x": "X/Twitter",
+                "linkedin": "LinkedIn",
+                "reddit": "Reddit",
+                "instagram": "Instagram",
+                "tiktok": "TikTok",
+                "threads": "Threads",
+                "bluesky": "Bluesky",
+                "mastodon": "Mastodon",
+                "social_media": "die genannte Social-Media-Plattform",
+            }.get(source_hint, source_hint)
+            return "\n".join(
+                [
+                    f"Fuehre eine kompakte aktuelle Live-Recherche mit Fokus auf {source_label} aus.",
+                    "Leite Thema und Suchrichtung direkt aus der Nutzerfrage ab.",
+                    "Suche gezielt nach relevanten aktuellen Plattform-Treffern statt allgemeine News-Feeds als ersten Schritt zu verwenden.",
+                    "Nutze bevorzugt search_web fuer gezielte Treffer-URLs und fetch_social_media fuer die eigentlichen Inhalte.",
+                    "Falls der Social-Fetch nicht reicht, nutze fetch_page_with_js als JS-Fallback.",
+                    "Wenn die Plattform fuer lesbare Inhalte einen Login oder eine Session verlangt, stoppe und frage den Nutzer explizit nach Login-Zugang statt mit duennen Snippets weiterzumachen.",
+                    "Weiche erst dann auf allgemeine News-Suche aus, wenn die Plattform selbst keine brauchbaren Treffer liefert.",
+                    "Fasse die wichtigsten Beobachtungen kurz zusammen und nenne die direkt genutzten Links.",
+                    f"Nutzerfrage: {user_request}",
+                ]
+            )
+        source_label = {
+            "github": "GitHub",
+            "arxiv": "arXiv",
+            "hacker_news": "Hacker News",
+            "product_hunt": "Product Hunt",
+        }.get(source_hint, source_hint or "der genannten Quelle")
+        return "\n".join(
+            [
+                f"Fuehre eine kompakte aktuelle Live-Recherche mit Fokus auf {source_label} aus.",
+                "Leite Thema und Suchrichtung direkt aus der Nutzerfrage ab.",
+                "Suche gezielt nach aktuellen Treffern aus der genannten Quelle statt allgemeine News-Feeds als ersten Schritt zu verwenden.",
+                "Nutze bevorzugt search_web fuer source-spezifische Treffer und fetch_url fuer die direkt relevanten Quellen.",
+                "Weiche erst dann auf allgemeine News-Suche aus, wenn die genannte Quelle keine brauchbaren Treffer liefert.",
+                "Fasse die wichtigsten Beobachtungen kurz zusammen und nenne die direkt genutzten Links.",
+                f"Nutzerfrage: {user_request}",
+            ]
+        )
+
     @classmethod
     def _build_recipe_stage_delegation_task(
         cls,
@@ -1754,15 +1844,33 @@ class MetaAgent(BaseAgent):
         stage_history: List[Dict[str, Any]],
     ) -> str:
         constraints = ["folge_dem_rezept_und_erfinde_keine_neuen_stages"]
+        raw_task_type = str(handoff.get("task_type") or "").strip().lower() or "single_lane"
+        stage_agent = str(stage.get("agent") or "").strip().lower()
+        site_kind = str(handoff.get("site_kind") or "").strip()
+        source_hint = (
+            cls._detect_live_lookup_source_hint(original_user_task, site_kind=site_kind)
+            if stage_agent == "executor" and raw_task_type in {"simple_live_lookup", "simple_live_lookup_document"}
+            else ""
+        )
+        source_aware_live_lookup = bool(source_hint)
+        effective_task_type = "single_lane" if source_aware_live_lookup else raw_task_type
+        stage_goal = (
+            cls._build_source_aware_live_lookup_executor_goal(
+                original_user_task=original_user_task,
+                source_hint=source_hint,
+            )
+            if source_aware_live_lookup
+            else stage.get("goal", original_user_task)
+        )
         payload_lines = [
             "# DELEGATION HANDOFF",
             f"target_agent: {stage.get('agent', 'unknown')}",
-            f"goal: {stage.get('goal', original_user_task)}",
+            f"goal: {stage_goal}",
             f"expected_output: {stage.get('expected_output', 'Spezialistenergebnis')}",
             f"success_signal: Stage '{stage.get('stage_id', 'stage')}' erfolgreich abgeschlossen",
             "constraints: " + ", ".join(constraints),
             "handoff_data:",
-            f"- task_type: {handoff.get('task_type', 'single_lane')}",
+            f"- task_type: {effective_task_type}",
             f"- recipe_id: {handoff.get('recommended_recipe_id', '')}",
             f"- stage_id: {stage.get('stage_id', '')}",
             f"- original_user_task: {cls._shorten(original_user_task, limit=500)}",
@@ -1783,10 +1891,8 @@ class MetaAgent(BaseAgent):
         avoid_tools = selected_strategy.get("avoid_tools") or []
         if avoid_tools:
             payload_lines.append("- avoid_tools: " + ", ".join(str(item) for item in avoid_tools))
-        site_kind = str(handoff.get("site_kind") or "").strip()
         if site_kind:
             payload_lines.append(f"- site_kind: {site_kind}")
-        stage_agent = str(stage.get("agent") or "").strip().lower()
         if stage_agent == "document":
             output_format = cls._infer_document_output_format(original_user_task)
             if output_format:
@@ -1805,21 +1911,42 @@ class MetaAgent(BaseAgent):
             payload_lines.append("- avoid_deep_research: yes")
             payload_lines.append("- max_results: 5")
         if (
-            str(handoff.get("task_type") or "").strip().lower() == "simple_live_lookup"
+            raw_task_type == "simple_live_lookup"
             and stage_agent == "executor"
+            and not source_aware_live_lookup
         ):
             payload_lines.append("- preferred_search_tool: search_web")
             payload_lines.append("- fallback_tools: search_news, fetch_url, search_google_maps_places")
             payload_lines.append("- avoid_deep_research: yes")
             payload_lines.append("- max_results: 5")
         if (
-            str(handoff.get("task_type") or "").strip().lower() == "simple_live_lookup_document"
+            raw_task_type == "simple_live_lookup_document"
             and stage_agent == "executor"
+            and not source_aware_live_lookup
         ):
             payload_lines.append("- preferred_search_tool: search_web")
             payload_lines.append("- fallback_tools: search_news, fetch_url, search_google_maps_places")
             payload_lines.append("- avoid_deep_research: yes")
             payload_lines.append("- max_results: 5")
+        if source_aware_live_lookup:
+            if source_hint in {
+                "x",
+                "linkedin",
+                "reddit",
+                "instagram",
+                "tiktok",
+                "threads",
+                "bluesky",
+                "mastodon",
+                "social_media",
+            }:
+                payload_lines.append("- preferred_tools: search_web, fetch_social_media, fetch_page_with_js")
+            else:
+                payload_lines.append("- preferred_tools: search_web, fetch_url")
+            payload_lines.append("- avoid_tools: search_news_as_primary_step")
+            payload_lines.append("- avoid_deep_research: yes")
+            payload_lines.append("- max_results: 5")
+            payload_lines.append(f"- source_hint: {source_hint}")
 
         if previous_stage_result:
             payload_lines.append(
@@ -1855,7 +1982,7 @@ class MetaAgent(BaseAgent):
         if prior_keys:
             payload_lines.append(f"- prior_blackboard_keys: {', '.join(prior_keys)}")
 
-        payload_lines.extend(["", "# TASK", stage.get("goal", original_user_task)])
+        payload_lines.extend(["", "# TASK", stage_goal])
         return "\n".join(payload_lines)
 
     @classmethod

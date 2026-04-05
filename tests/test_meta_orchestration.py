@@ -193,6 +193,89 @@ def test_classify_meta_task_routes_simple_live_science_lookup_to_meta_executor()
     assert [stage["stage_id"] for stage in result["recipe_stages"]] == ["live_lookup_scan"]
 
 
+def test_meta_recipe_stage_delegation_uses_source_aware_handoff_for_x_lookup():
+    handoff = {
+        "task_type": "simple_live_lookup",
+        "recommended_recipe_id": "simple_live_lookup",
+        "site_kind": "",
+    }
+    stage = {
+        "agent": "executor",
+        "stage_id": "live_lookup_scan",
+        "goal": "Fuehre eine kompakte aktuelle Live-Recherche aus.",
+        "expected_output": "quick_summary, top_results, source_urls",
+    }
+
+    task = MetaAgent._build_recipe_stage_delegation_task(
+        handoff=handoff,
+        stage=stage,
+        original_user_task="hey timus was gibts denn so auf x an neuigkeiten über ki",
+        previous_stage_result=None,
+        stage_history=[],
+    )
+
+    assert "- task_type: single_lane" in task
+    assert "- source_hint: x" in task
+    assert "preferred_tools: search_web, fetch_social_media, fetch_page_with_js" in task
+    assert "search_news_as_primary_step" in task
+    assert "X/Twitter" in task
+    assert "frage den Nutzer explizit nach Login-Zugang" in task
+
+
+def test_meta_recipe_stage_delegation_uses_source_aware_handoff_for_github_lookup():
+    handoff = {
+        "task_type": "simple_live_lookup",
+        "recommended_recipe_id": "simple_live_lookup",
+        "site_kind": "",
+    }
+    stage = {
+        "agent": "executor",
+        "stage_id": "live_lookup_scan",
+        "goal": "Fuehre eine kompakte aktuelle Live-Recherche aus.",
+        "expected_output": "quick_summary, top_results, source_urls",
+    }
+
+    task = MetaAgent._build_recipe_stage_delegation_task(
+        handoff=handoff,
+        stage=stage,
+        original_user_task="was gibt es auf github neues zu KI agenten",
+        previous_stage_result=None,
+        stage_history=[],
+    )
+
+    assert "- task_type: single_lane" in task
+    assert "- source_hint: github" in task
+    assert "preferred_tools: search_web, fetch_url" in task
+    assert "fetch_social_media" not in task
+    assert "GitHub" in task
+
+
+def test_meta_recipe_stage_delegation_keeps_structured_lookup_for_generic_science_query():
+    handoff = {
+        "task_type": "simple_live_lookup",
+        "recommended_recipe_id": "simple_live_lookup",
+        "site_kind": "",
+    }
+    stage = {
+        "agent": "executor",
+        "stage_id": "live_lookup_scan",
+        "goal": "Fuehre eine kompakte aktuelle Live-Recherche aus.",
+        "expected_output": "quick_summary, top_results, source_urls",
+    }
+
+    task = MetaAgent._build_recipe_stage_delegation_task(
+        handoff=handoff,
+        stage=stage,
+        original_user_task="Was gibt es Neues aus der Wissenschaft?",
+        previous_stage_result=None,
+        stage_history=[],
+    )
+
+    assert "- task_type: simple_live_lookup" in task
+    assert "fallback_tools: search_news, fetch_url, search_google_maps_places" in task
+    assert "source_hint:" not in task
+
+
 def test_classify_meta_task_routes_lookup_plus_txt_export_to_executor_and_document():
     result = classify_meta_task(
         "Speichere mir aktuelle LLM-Preise als txt Datei",

@@ -2617,11 +2617,37 @@ Der Fall `reserviere mir ein hotel in portugal lissabon` zeigt eine eigene, spae
 5. Session Persistence
 - abgebrochene Flows spaeter wieder aufnehmen koennen
 
+6. Authenticated Access Workflows
+- wenn eine Plattform fuer brauchbare Inhalte Login verlangt, soll Timus das nicht still umgehen oder rohe Credentials im Chat erwarten
+- stattdessen:
+  - klare Rueckfrage an den Nutzer, ob ein Login mit seinem Zugang erfolgen darf
+  - sensibler Schritt nur mit expliziter Freigabe
+  - Nutzer gibt Passwort / 2FA idealerweise selbst im Browser ein oder bestaetigt den naechsten Schritt
+  - danach darf Timus die authentische Session fuer den laufenden Workflow weiterverwenden
+- typische Zielbilder:
+  - X / LinkedIn / Reddit / andere Plattformen mit Login-Wand
+  - gespeicherte Session spaeter wieder aufnehmen
+  - sauberer Handover bei CAPTCHA / 2FA / Challenge
+
+### Zuschnitt innerhalb von Phase D
+
+- **D1 Auth Need Detection**
+  - erkennt, wann eine Quelle ohne Login nur duenne Snippets oder Login-Waende liefert
+- **D2 Approval + Consent Gate**
+  - Timus fragt aktiv nach Freigabe fuer echten Account-Zugriff
+- **D3 User-mediated Login**
+  - Nutzer fuehrt sensible Eingaben selbst aus oder bestaetigt sie bewusst
+- **D4 Auth Session Reuse**
+  - authentische Browser-Sitzung fuer den Workflow und spaetere Wiederaufnahme sichern
+- **D5 Challenge Handover**
+  - 2FA / CAPTCHA / Security-Checks sauber an den Nutzer uebergeben statt blind weiterzulaufen
+
 ### Erfolgskriterium
 
 - Timus schickt nicht nur einen Link
 - sondern arbeitet aktiv bis zum letzten sicheren Schritt
 - und zeigt damit echtes assistives Mitdenken statt nur Such-/Antwortlogik
+- inklusive echter, nutzerfreigegebener Account-Nutzung wenn ein Dienst ohne Login nicht sinnvoll benutzbar ist
 
 ## Spaetere Phase E - Self-Improvement aus erkannter Schwaeche
 
