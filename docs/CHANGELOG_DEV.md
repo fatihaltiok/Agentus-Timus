@@ -2,6 +2,94 @@
 
 ---
 
+## Fortschritt 2026-04-05 13:59 CEST - C2 end-to-end geschlossen
+
+### Problemstellung
+
+Die C2-Grundstruktur stand bereits, aber zwei letzte Luecken machten den Incident-Trace noch unvollstaendig:
+
+- Task-Erzeuger uebernahmen eine laufende `request_id` nicht zentral, sondern nur dort, wo einzelne Producer sie explizit setzten
+- Dispatcher-Fallbacks auf `meta` (`empty_decision`, `uncertain_decision`, `dispatcher_exception`) erschienen im Incident-Trace nicht sauber als eigener Routing-Schritt
+
+Damit war `/autonomy/incident/<request_id>` bei echten Live-Faellen noch nicht wirklich end-to-end belastbar.
+
+### Umgesetzt
+
+- [orchestration/request_correlation.py](/home/fatih-ubuntu/dev/timus/orchestration/request_correlation.py)
+  - neuer ContextVar-basierter Laufzeitkontext fuer `request_id` / `session_id`
+  - `bind_request_correlation(...)` und Getter fuer die aktuelle Request-Korrelation
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - `/chat` bindet die laufende `request_id` jetzt waehrend Dispatcher- und Agentenlauf zentral in den Runtime-Kontext
+  - `/autonomy/incident/{request_id}` beschreibt jetzt praezise nur noch die fuer diese `request_id` aufgezeichneten Korrelations-Events
+- [orchestration/autonomous_runner.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomous_runner.py)
+  - Task-Ausfuehrung bindet geerbte `request_id` jetzt ebenfalls in den Runtime-Kontext
+  - dadurch koennen aus Tasks erzeugte Folge-Tasks dieselbe Request-Korrelation weitertragen
+- [orchestration/task_queue.py](/home/fatih-ubuntu/dev/timus/orchestration/task_queue.py)
+  - `queue.add(...)` ergaenzt JSON-Objekt-Metadaten automatisch um die aktuelle `request_id`, wenn sie fehlt
+  - explizite `request_id` bleibt vorrangig erhalten
+  - nicht-JSON-/Legacy-Metadaten bleiben absichtlich unveraendert
+- [main_dispatcher.py](/home/fatih-ubuntu/dev/timus/main_dispatcher.py)
+  - Dispatcher-Fallbacks tragen jetzt ebenfalls `request_id`
+  - bei `empty_decision`, `uncertain_decision` und `dispatcher_exception` wird zusaetzlich ein echtes `dispatcher_route_selected -> meta` emittiert
+- [orchestration/autonomy_observation.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomy_observation.py)
+  - `build_incident_trace(...)` ist robust gegen heterogene Event-Listen und ignoriert Nicht-Dict-Eintraege statt zu crashen
+
+### Regressionen, Contracts, Hypothesis, CrossHair, Lean
+
+- [tests/test_c2_request_correlation_runtime.py](/home/fatih-ubuntu/dev/timus/tests/test_c2_request_correlation_runtime.py)
+  - Runtime-Regressionsfaelle fuer:
+    - Context-Reset
+    - automatische `request_id`-Uebernahme in `queue.add(...)`
+    - Vorrang expliziter `request_id`
+    - Passthrough fuer nicht-JSON-Metadaten
+- [tests/test_dispatcher_provider_selection.py](/home/fatih-ubuntu/dev/timus/tests/test_dispatcher_provider_selection.py)
+  - Dispatcher-Fallbacks pruefen jetzt explizit:
+    - `dispatcher_meta_fallback` mit `request_id`
+    - nachfolgenden `dispatcher_route_selected` mit `fallback_*`-Quelle
+- [tests/test_c2_observability.py](/home/fatih-ubuntu/dev/timus/tests/test_c2_observability.py)
+  - neuer Guard-Fall fuer heterogene Event-Listen in `build_incident_trace(...)`
+- [tests/test_c2_observability_contracts.py](/home/fatih-ubuntu/dev/timus/tests/test_c2_observability_contracts.py)
+  - CrossHair laeuft jetzt auch gegen den robusteren heterogenen Listenpfad
+- [tests/test_c2_entrypoints.py](/home/fatih-ubuntu/dev/timus/tests/test_c2_entrypoints.py)
+  - gemischte ISO-/Offset-Sortierung und HTTP-/CLI-Einstiegspunkte bleiben weiter abgesichert
+
+### Validierung
+
+- `python -m py_compile orchestration/request_correlation.py orchestration/task_queue.py orchestration/autonomous_runner.py orchestration/autonomy_observation.py main_dispatcher.py server/mcp_server.py scripts/evaluate_autonomy_observation.py tests/test_dispatcher_provider_selection.py tests/test_c2_observability.py tests/test_c2_observability_contracts.py tests/test_c2_entrypoints.py tests/test_c2_request_correlation_runtime.py` gruen
+- `59 passed` in:
+  - `tests/test_dispatcher_provider_selection.py`
+  - `tests/test_c2_observability.py`
+  - `tests/test_c2_observability_contracts.py`
+  - `tests/test_c2_entrypoints.py`
+  - `tests/test_c2_request_correlation_runtime.py`
+- `python -m crosshair check tests/test_c2_observability_contracts.py` gruen
+- `python scripts/verify_pre_commit_lean.py` komplett gruen
+  - `CiSpecs.lean` gruen
+  - `Mathlib bundle (12 Specs)` gruen
+
+### Live-Abnahme
+
+- `timus-mcp` neu geladen; `/health` wieder `healthy`
+- echter `/chat`-Replay:
+  - Query: `Was ist die Hauptstadt von Frankreich?`
+  - Session: `c2_final_live_v2`
+  - `request_id = req_cfa58e3535f8`
+- `/autonomy/incident/req_cfa58e3535f8` zeigt jetzt die vollstaendige korrelierte Kette:
+  - `chat_request_received`
+  - `dispatcher_meta_fallback`
+  - `dispatcher_route_selected`
+  - `request_route_selected`
+  - `chat_request_completed`
+
+### Ergebnis
+
+`C2` ist damit abgeschlossen:
+
+- Request-/Route-/Outcome-Korrelation ist live erreichbar
+- Dispatcher-Fallbacks sind im Incident-Trace sichtbar
+- Request-Korrelation kann in Folge-Tasks zentral weitergetragen werden
+- HTTP, CLI, Hypothesis, CrossHair und Lean sind fuer den C2-Block gruen
+
 ## Fortschritt 2026-04-04 23:20 CEST - C2 hebt letzte Requests, Routen und Fehler in den Status-Snapshot
 
 ### Problemstellung

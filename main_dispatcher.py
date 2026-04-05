@@ -2473,16 +2473,23 @@ def _render_meta_handoff_block(payload: dict) -> str:
     return "\n".join(lines)
 
 
-async def get_agent_decision(user_query: str, session_id: str | None = None) -> str:
+async def get_agent_decision(
+    user_query: str,
+    session_id: str | None = None,
+    *,
+    request_id: str = "",
+) -> str:
     """Bestimmt welcher Agent für die Anfrage zuständig ist."""
     log.info(f"🧠 Analysiere Intention: '{user_query}'")
     safe_session_id = str(session_id or "").strip()
+    safe_request_id = str(request_id or "").strip()
 
     def _record_dispatcher_route(agent: str, *, decision_source: str) -> None:
         try:
             record_autonomy_observation(
                 "dispatcher_route_selected",
                 {
+                    "request_id": safe_request_id,
                     "session_id": safe_session_id,
                     "source": "dispatcher",
                     "agent": str(agent or "").strip(),
@@ -2514,16 +2521,18 @@ async def get_agent_decision(user_query: str, session_id: str | None = None) -> 
             try:
                 record_autonomy_observation(
                     "dispatcher_meta_fallback",
-                {
-                    "reason": "empty_decision",
-                    "session_id": safe_session_id,
-                    "query_preview": str(user_query or "")[:180],
-                    "raw_len": len(raw_content),
-                    "raw_preview": repr(raw_content[:120]),
-                },
-            )
+                    {
+                        "request_id": safe_request_id,
+                        "reason": "empty_decision",
+                        "session_id": safe_session_id,
+                        "query_preview": str(user_query or "")[:180],
+                        "raw_len": len(raw_content),
+                        "raw_preview": repr(raw_content[:120]),
+                    },
+                )
             except Exception:
                 pass
+            _record_dispatcher_route("meta", decision_source="fallback_empty_decision")
             return "meta"
 
         # Direkter Treffer
@@ -2549,6 +2558,7 @@ async def get_agent_decision(user_query: str, session_id: str | None = None) -> 
             record_autonomy_observation(
                 "dispatcher_meta_fallback",
                 {
+                    "request_id": safe_request_id,
                     "reason": "uncertain_decision",
                     "session_id": safe_session_id,
                     "query_preview": str(user_query or "")[:180],
@@ -2558,6 +2568,7 @@ async def get_agent_decision(user_query: str, session_id: str | None = None) -> 
             )
         except Exception:
             pass
+        _record_dispatcher_route("meta", decision_source="fallback_uncertain_decision")
         return "meta"
 
     except Exception as e:
@@ -2566,6 +2577,7 @@ async def get_agent_decision(user_query: str, session_id: str | None = None) -> 
             record_autonomy_observation(
                 "dispatcher_meta_fallback",
                 {
+                    "request_id": safe_request_id,
                     "reason": "dispatcher_exception",
                     "session_id": safe_session_id,
                     "query_preview": str(user_query or "")[:180],
@@ -2574,6 +2586,7 @@ async def get_agent_decision(user_query: str, session_id: str | None = None) -> 
             )
         except Exception:
             pass
+        _record_dispatcher_route("meta", decision_source="fallback_dispatcher_exception")
         return "meta"
 
 

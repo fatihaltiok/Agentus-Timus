@@ -1,0 +1,318 @@
+"""C2 Entrypoint-Tests: HTTP-Endpoints und CLI.
+
+Monkeypatcht die IO-Schicht — testet Import, Routing, Serialisierung
+und Fehlerverhalten der neuen C2-Einstiegspunkte.
+"""
+from __future__ import annotations
+
+import sys
+from io import StringIO
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
+# ---------------------------------------------------------------------------
+# HTTP-Endpoint-Tests
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def client():
+    from fastapi.testclient import TestClient
+    from server.mcp_server import app
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def _fake_summary():
+    return {
+        "total_events": 3,
+        "event_counts": {"chat_request_received": 1},
+        "meta_diagnostics": {"dispatcher_meta_fallback_total": 0},
+        "recipe_outcomes": {"total": 0},
+        "runtime_gaps": {"total_insertions": 0},
+        "self_hardening": {"total": 0},
+        "request_correlation": {
+            "chat_requests_total": 1,
+            "chat_completed_total": 1,
+            "chat_failed_total": 0,
+            "dispatcher_routes_total": 1,
+            "request_routes_total": 1,
+            "task_routes_total": 0,
+            "task_started_total": 0,
+            "task_completed_total": 0,
+            "task_failed_total": 0,
+            "user_visible_failures_total": 0,
+            "by_agent": {},
+            "by_source": {},
+            "by_error_class": {},
+            "recent_requests": [],
+            "recent_routes": [],
+            "recent_outcomes": [],
+            "recent_failures": [],
+        },
+        "user_impact": {
+            "response_never_delivered_total": 0,
+            "silent_failure_total": 0,
+            "user_visible_timeout_total": 0,
+            "misroute_recovered_total": 0,
+            "recent_impacts": [],
+        },
+        "top_goal_signatures": [],
+        "session": {},
+        "window": {},
+        "log_path": "/dev/null",
+    }
+
+
+def _fake_trace():
+    return [
+        {
+            "id": "abc",
+            "observed_at": "2026-04-05T10:00:00",
+            "event_type": "chat_request_received",
+            "payload": {"request_id": "req-test", "session_id": "s1", "source": "canvas_chat"},
+        },
+        {
+            "id": "def",
+            "observed_at": "2026-04-05T10:00:01",
+            "event_type": "dispatcher_route_selected",
+            "payload": {"request_id": "req-test", "agent": "meta", "decision_source": "llm"},
+        },
+    ]
+
+
+def test_observation_endpoint_returns_success(client):
+    with (
+        patch("orchestration.autonomy_observation.build_autonomy_observation_summary", return_value=_fake_summary()),
+        patch("orchestration.autonomy_observation.render_autonomy_observation_markdown", return_value="# Test\n"),
+    ):
+        resp = client.get("/autonomy/observation")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "success"
+    assert "summary" in data
+    assert "markdown" in data
+
+
+def test_observation_endpoint_has_user_impact_block(client):
+    with (
+        patch("orchestration.autonomy_observation.build_autonomy_observation_summary", return_value=_fake_summary()),
+        patch("orchestration.autonomy_observation.render_autonomy_observation_markdown", return_value="# Test\n"),
+    ):
+        resp = client.get("/autonomy/observation")
+    ui = resp.json()["summary"]["user_impact"]
+    assert "response_never_delivered_total" in ui
+    assert "silent_failure_total" in ui
+    assert "user_visible_timeout_total" in ui
+    assert "misroute_recovered_total" in ui
+
+
+def test_incident_trace_endpoint_returns_trace(client):
+    with patch("orchestration.autonomy_observation.get_incident_trace", return_value=_fake_trace()):
+        resp = client.get("/autonomy/incident/req-test")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "success"
+    assert data["request_id"] == "req-test"
+    assert data["event_count"] == 2
+    assert len(data["trace"]) == 2
+
+
+def test_incident_trace_endpoint_empty_trace(client):
+    with patch("orchestration.autonomy_observation.get_incident_trace", return_value=[]):
+        resp = client.get("/autonomy/incident/req-unknown")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["event_count"] == 0
+    assert data["trace"] == []
+
+
+def test_incident_trace_endpoint_error_returns_500(client):
+    with patch("orchestration.autonomy_observation.get_incident_trace", side_effect=RuntimeError("boom")):
+        resp = client.get("/autonomy/incident/req-x")
+    assert resp.status_code == 500
+    assert resp.json()["status"] == "error"
+
+
+# ---------------------------------------------------------------------------
+# CLI-Tests
+# ---------------------------------------------------------------------------
+
+def test_cli_normal_mode_prints_markdown(capsys):
+    with (
+        patch("orchestration.autonomy_observation.build_autonomy_observation_summary", return_value=_fake_summary()),
+        patch("orchestration.autonomy_observation.render_autonomy_observation_markdown", return_value="# Observation\n"),
+        patch("sys.argv", ["evaluate_autonomy_observation.py"]),
+    ):
+        from scripts.evaluate_autonomy_observation import main
+        rc = main()
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "Observation" in captured.out
+
+
+def test_cli_request_id_mode_shows_trace(capsys):
+    with (
+        patch("scripts.evaluate_autonomy_observation.get_incident_trace", return_value=_fake_trace()),
+        patch("sys.argv", ["evaluate_autonomy_observation.py", "--request-id", "req-test"]),
+    ):
+        from scripts.evaluate_autonomy_observation import main
+        rc = main()
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "req-test" in captured.out
+    assert "chat_request_received" in captured.out
+    assert "dispatcher_route_selected" in captured.out
+
+
+def test_cli_request_id_empty_trace(capsys):
+    with (
+        patch("scripts.evaluate_autonomy_observation.get_incident_trace", return_value=[]),
+        patch("sys.argv", ["evaluate_autonomy_observation.py", "--request-id", "req-none"]),
+    ):
+        from scripts.evaluate_autonomy_observation import main
+        rc = main()
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "Keine Events" in captured.out
+
+
+def test_cli_output_writes_file(tmp_path, capsys):
+    out_file = tmp_path / "trace.md"
+    with (
+        patch("scripts.evaluate_autonomy_observation.get_incident_trace", return_value=_fake_trace()),
+        patch("sys.argv", ["evaluate_autonomy_observation.py", "--request-id", "req-test", "--output", str(out_file)]),
+    ):
+        from scripts.evaluate_autonomy_observation import main
+        main()
+    assert out_file.exists()
+    content = out_file.read_text()
+    assert "req-test" in content
+
+
+def test_cli_trace_includes_all_correlation_fields(capsys):
+    """Trace-Ausgabe enthält task_id, session_id, incident_key, route_source."""
+    rich_trace = [
+        {
+            "id": "x",
+            "observed_at": "2026-04-05T10:00:00",
+            "event_type": "task_execution_started",
+            "payload": {
+                "request_id": "req-1",
+                "task_id": "task-abc",
+                "session_id": "sess-xyz",
+                "incident_key": "inc-001",
+                "route_source": "dispatcher",
+                "agent": "research",
+                "source": "autonomous_runner",
+            },
+        }
+    ]
+    with (
+        patch("scripts.evaluate_autonomy_observation.get_incident_trace", return_value=rich_trace),
+        patch("sys.argv", ["evaluate_autonomy_observation.py", "--request-id", "req-1"]),
+    ):
+        from scripts.evaluate_autonomy_observation import main
+        main()
+    captured = capsys.readouterr()
+    assert "task_id" in captured.out
+    assert "task-abc" in captured.out
+    assert "session_id" in captured.out
+    assert "incident_key" in captured.out
+    assert "route_source" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# build_incident_trace — Zeitordnung mit gemischten ISO-Formaten
+# ---------------------------------------------------------------------------
+
+def test_trace_offset_ahead_sorts_by_utc_not_wall_clock():
+    """Echter Gegenbeispiel-Test: 10:00+02:00 (= 08:00 UTC) muss VOR 08:30Z (= 08:30 UTC) stehen.
+    dt.replace(tzinfo=None) würde 10:00 > 08:30 liefern und die Reihenfolge umkehren.
+    dt.astimezone(utc).replace(tzinfo=None) liefert korrekt 08:00 < 08:30.
+    """
+    from orchestration.autonomy_observation import build_incident_trace
+    events = [
+        # Wall clock 08:30, UTC 08:30 — soll an zweiter Stelle stehen
+        {"id": "later", "observed_at": "2026-04-05T08:30:00Z", "event_type": "second",
+         "payload": {"request_id": "req-1"}},
+        # Wall clock 10:00, UTC 08:00 — soll an erster Stelle stehen
+        {"id": "earlier", "observed_at": "2026-04-05T10:00:00+02:00", "event_type": "first",
+         "payload": {"request_id": "req-1"}},
+    ]
+    trace = build_incident_trace(events, "req-1")
+    assert [e["event_type"] for e in trace] == ["first", "second"], (
+        "10:00+02:00 (= 08:00 UTC) muss vor 08:30Z (= 08:30 UTC) stehen"
+    )
+
+
+def test_trace_negative_offset_sorts_correctly():
+    """Negativer Offset: 06:00-02:00 (= 08:00 UTC) muss VOR 09:00+00:00 (= 09:00 UTC) stehen."""
+    from orchestration.autonomy_observation import build_incident_trace
+    events = [
+        {"id": "b", "observed_at": "2026-04-05T09:00:00+00:00", "event_type": "second",
+         "payload": {"request_id": "req-x"}},
+        {"id": "a", "observed_at": "2026-04-05T06:00:00-02:00", "event_type": "first",
+         "payload": {"request_id": "req-x"}},
+    ]
+    trace = build_incident_trace(events, "req-x")
+    assert [e["event_type"] for e in trace] == ["first", "second"], (
+        "06:00-02:00 (= 08:00 UTC) muss vor 09:00+00:00 (= 09:00 UTC) stehen"
+    )
+
+
+def test_trace_same_utc_different_offsets_stable():
+    """Zwei Timestamps die denselben UTC-Instant darstellen: keine Exception, stabile Ordnung."""
+    from orchestration.autonomy_observation import build_incident_trace
+    events = [
+        {"id": "x", "observed_at": "2026-04-05T10:00:00+02:00", "event_type": "plus2",
+         "payload": {"request_id": "req-y"}},
+        {"id": "y", "observed_at": "2026-04-05T08:00:00Z", "event_type": "utc",
+         "payload": {"request_id": "req-y"}},
+    ]
+    trace = build_incident_trace(events, "req-y")
+    assert len(trace) == 2
+    # Beide repräsentieren 08:00 UTC — Reihenfolge stabil (nicht crashen)
+
+
+def test_trace_aware_before_naive_when_utc_earlier():
+    """Aware 08:00+00:00 (= 08:00 UTC) soll vor naivem 09:00 kommen."""
+    from orchestration.autonomy_observation import build_incident_trace
+    events = [
+        {"id": "b", "observed_at": "2026-04-05T09:00:00", "event_type": "naive_later",
+         "payload": {"request_id": "req-z"}},
+        {"id": "a", "observed_at": "2026-04-05T08:00:00+00:00", "event_type": "aware_earlier",
+         "payload": {"request_id": "req-z"}},
+    ]
+    trace = build_incident_trace(events, "req-z")
+    assert trace[0]["event_type"] == "aware_earlier"
+
+
+def test_trace_unparseable_timestamp_sorts_first():
+    from orchestration.autonomy_observation import build_incident_trace
+    events = [
+        {"id": "b", "observed_at": "2026-04-05T10:00:00", "event_type": "valid",
+         "payload": {"request_id": "req-1"}},
+        {"id": "a", "observed_at": "not-a-date", "event_type": "broken",
+         "payload": {"request_id": "req-1"}},
+    ]
+    trace = build_incident_trace(events, "req-1")
+    # kaputte Zeitstempel landen vorne (datetime.min Fallback), kein Crash
+    assert len(trace) == 2
+    assert trace[0]["event_type"] == "broken"
+
+
+def test_trace_same_timestamp_stable_order():
+    from orchestration.autonomy_observation import build_incident_trace
+    ts = "2026-04-05T10:00:00"
+    events = [
+        {"id": str(i), "observed_at": ts, "event_type": f"e{i}",
+         "payload": {"request_id": "req-1"}}
+        for i in range(5)
+    ]
+    trace = build_incident_trace(events, "req-1")
+    # Gleiche Zeitstempel: stabile Sortierung, alle Events vorhanden
+    assert len(trace) == 5

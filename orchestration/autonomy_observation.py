@@ -4,7 +4,7 @@ import json
 import os
 import threading
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -15,6 +15,15 @@ DEFAULT_STATE_PATH = PROJECT_ROOT / "logs" / "autonomy_observation_state.json"
 
 _AUTONOMY_OBSERVATION_STORE: Optional["AutonomyObservationStore"] = None
 _RECENT_CORRELATION_LIMIT = 8
+
+# C2: abgeschlossene Menge der Nutzerwirkungs-Klassen.
+# Emitter werden erst gesetzt wenn der Trigger-Pfad semantisch gesichert ist.
+_USER_IMPACT_EVENT_TYPES: frozenset = frozenset({
+    "response_never_delivered",
+    "silent_failure",
+    "user_visible_timeout",
+    "misroute_recovered",
+})
 
 
 def _iso_now() -> str:
@@ -81,6 +90,53 @@ def _json_safe(value: Any, *, depth: int = 0) -> Any:
     if isinstance(value, (list, tuple, set)):
         return [_json_safe(item, depth=depth + 1) for item in list(value)[:24]]
     return str(value)[:240]
+
+
+def _classify_user_impact_event(event_type: str) -> str:
+    """Gibt den kanonischen User-Impact-Klassennamen zurück, oder 'none'.
+
+    Pure Funktion — kein IO. Abgeschlossene Wertemenge, CrossHair-kontraktfähig.
+    """
+    normalized = _normalize_counter_key(event_type)
+    return normalized if normalized in _USER_IMPACT_EVENT_TYPES else "none"
+
+
+def build_incident_trace(
+    events: List[Dict[str, Any]],
+    request_id: str,
+) -> List[Dict[str, Any]]:
+    """Filtert alle Events mit matching request_id und gibt sie chronologisch sortiert zurück.
+
+    Pure Funktion — kein IO. Testbar mit CrossHair und Hypothesis.
+    Leere request_id → leere Liste (keine Exception).
+
+    Kerninvariante (strukturell bewiesen in lean/CiSpecs.lean):
+    len(result) ≤ len(events)
+    """
+    target = str(request_id or "").strip()
+    if not target:
+        return []
+    matched = [
+        e
+        for e in events
+        if isinstance(e, dict)
+        and str((dict(e.get("payload") or {}).get("request_id") or "")).strip() == target
+    ]
+    # Zeitordnung via _parse_iso_datetime — toleriert Z, Offsets und naive Formate.
+    # Bei unparsbaren Zeitstempeln: stabiler Fallback auf leeres datetime (sortiert nach vorne),
+    # Originalreihenfolge innerhalb gleicher Zeitstempel bleibt erhalten (stabile Sortierung).
+    _FALLBACK_DT = datetime.min.replace(tzinfo=None)
+
+    def _sort_key(e: dict) -> datetime:
+        dt = _parse_iso_datetime(str(e.get("observed_at") or ""))
+        if dt is None:
+            return _FALLBACK_DT
+        # Aware → UTC konvertieren, dann naive für Vergleich; naive bleibt wie ist.
+        if dt.tzinfo is not None:
+            return dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt
+
+    return sorted(matched, key=_sort_key)
 
 
 def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
@@ -150,16 +206,27 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
             "recent_failures": [],
         },
         "top_goal_signatures": [],
+        # C2: Nutzerwirkungs-Klassen — eigener Block, unabhängig von request_correlation.
+        # user_visible_failures_total in request_correlation wird NICHT doppelt erhöht.
+        "user_impact": {
+            "response_never_delivered_total": 0,
+            "silent_failure_total": 0,
+            "user_visible_timeout_total": 0,
+            "misroute_recovered_total": 0,
+            "recent_impacts": [],
+        },
     }
 
     recipe_duration_total = 0
     goal_counts: Dict[str, Dict[str, int]] = {}
     meta_diag = summary["meta_diagnostics"]
     request_correlation = summary["request_correlation"]
+    user_impact = summary["user_impact"]
     recent_requests: List[Dict[str, Any]] = []
     recent_routes: List[Dict[str, Any]] = []
     recent_outcomes: List[Dict[str, Any]] = []
     recent_failures: List[Dict[str, Any]] = []
+    recent_impacts: List[Dict[str, Any]] = []
 
     def _bump(bucket: Dict[str, Any], key: Any, *, amount: int = 1, fallback: str = "unknown") -> None:
         normalized = _normalize_counter_key(key, fallback=fallback)
@@ -413,6 +480,21 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
             _record_recent_outcome(event_type, observed_at, payload)
             _record_recent_failure(event_type, observed_at, payload)
 
+        elif event_type in _USER_IMPACT_EVENT_TYPES:
+            # C2: Nutzerwirkungs-Klassen. Eigener Block — user_visible_failures_total
+            # in request_correlation wird nicht doppelt erhöht.
+            counter_key = f"{event_type}_total"
+            user_impact[counter_key] = int(user_impact.get(counter_key) or 0) + 1
+            recent_impacts.append({
+                "event_type": event_type,
+                "observed_at": str(observed_at or ""),
+                "request_id": str(payload.get("request_id") or ""),
+                "session_id": str(payload.get("session_id") or ""),
+                "agent": str(payload.get("agent") or ""),
+                "source": str(payload.get("source") or ""),
+                "query_preview": str(payload.get("query_preview") or "")[:180],
+            })
+
     recipe_total = int(summary["recipe_outcomes"]["total"] or 0)
     if recipe_total > 0:
         summary["recipe_outcomes"]["average_duration_ms"] = int(recipe_duration_total / recipe_total)
@@ -447,6 +529,11 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
     )[:_RECENT_CORRELATION_LIMIT]
     summary["request_correlation"]["recent_failures"] = sorted(
         recent_failures,
+        key=lambda item: str(item.get("observed_at") or ""),
+        reverse=True,
+    )[:_RECENT_CORRELATION_LIMIT]
+    summary["user_impact"]["recent_impacts"] = sorted(
+        recent_impacts,
         key=lambda item: str(item.get("observed_at") or ""),
         reverse=True,
     )[:_RECENT_CORRELATION_LIMIT]
@@ -568,6 +655,29 @@ def render_autonomy_observation_markdown(summary: Dict[str, Any]) -> str:
                     task_id=str(item.get("task_id", "") or "")[:12],
                     error_class=item.get("error_class", "") or "unknown",
                     preview=(item.get("query_preview", "") or item.get("error", "") or "")[:120],
+                )
+            )
+
+    # C2: User-Impact-Block
+    ui = dict(summary.get("user_impact") or {})
+    lines.extend([
+        "",
+        "## Nutzerwirkung (C2)",
+        f"- response_never_delivered: `{int(ui.get('response_never_delivered_total') or 0)}`",
+        f"- silent_failure: `{int(ui.get('silent_failure_total') or 0)}`",
+        f"- user_visible_timeout: `{int(ui.get('user_visible_timeout_total') or 0)}`",
+        f"- misroute_recovered: `{int(ui.get('misroute_recovered_total') or 0)}`",
+    ])
+    if list(ui.get("recent_impacts") or []):
+        lines.append("")
+        lines.append("### Letzte User-Impact-Events")
+        for item in list(ui.get("recent_impacts") or [])[:6]:
+            lines.append(
+                "- `{event}` | req `{request_id}` | agent `{agent}` | `{preview}`".format(
+                    event=item.get("event_type", ""),
+                    request_id=str(item.get("request_id", "") or "")[:12],
+                    agent=item.get("agent", "") or "none",
+                    preview=str(item.get("query_preview", "") or "")[:120],
                 )
             )
     return "\n".join(lines).rstrip() + "\n"
@@ -731,3 +841,49 @@ def record_autonomy_observation(event_type: str, payload: Dict[str, Any], *, obs
 
 def build_autonomy_observation_summary(*, since: str = "", until: str = "") -> Dict[str, Any]:
     return get_autonomy_observation_store().build_summary(since=since, until=until)
+
+
+def record_user_impact_observation(
+    event_type: str,
+    *,
+    request_id: str = "",
+    session_id: str = "",
+    agent: str = "",
+    source: str = "",
+    error_class: str = "",
+    query_preview: str = "",
+) -> bool:
+    """Emittiert ein Nutzerwirkungs-Event. Nur bekannte Klassen werden akzeptiert.
+
+    Erhöht user_impact-Zähler, NICHT user_visible_failures_total in request_correlation.
+    Emitter sollten nur dort gesetzt werden, wo die Trigger-Semantik gesichert ist.
+    """
+    if _classify_user_impact_event(event_type) == "none":
+        return False
+    return record_autonomy_observation(
+        event_type,
+        {
+            "request_id": str(request_id or "").strip(),
+            "session_id": str(session_id or "").strip(),
+            "agent": str(agent or "").strip(),
+            "source": str(source or "").strip(),
+            "error_class": str(error_class or "").strip(),
+            "query_preview": str(query_preview or "")[:180],
+        },
+    )
+
+
+def get_incident_trace(
+    request_id: str,
+    *,
+    since: str = "",
+    until: str = "",
+) -> List[Dict[str, Any]]:
+    """IO-Wrapper: liest Events aus dem Store und delegiert an build_incident_trace.
+
+    Pure Logik liegt in build_incident_trace — dort sind Contracts und Tests angesiedelt.
+    """
+    if not str(request_id or "").strip():
+        return []
+    events = get_autonomy_observation_store().iter_events(since=since, until=until)
+    return build_incident_trace(events, request_id)

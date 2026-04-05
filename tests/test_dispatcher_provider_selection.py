@@ -277,11 +277,19 @@ async def test_get_agent_decision_falls_back_to_meta_on_dispatcher_error(monkeyp
         or True,
     )
 
-    result = await main_dispatcher.get_agent_decision("vage anfrage ohne keyword")
+    result = await main_dispatcher.get_agent_decision(
+        "vage anfrage ohne keyword",
+        session_id="c2-disp-exc",
+        request_id="req-c2-disp-exc",
+    )
 
     assert result == "meta"
     assert observed[0]["event_type"] == "dispatcher_meta_fallback"
     assert observed[0]["payload"]["reason"] == "dispatcher_exception"
+    assert observed[0]["payload"]["request_id"] == "req-c2-disp-exc"
+    assert observed[1]["event_type"] == "dispatcher_route_selected"
+    assert observed[1]["payload"]["decision_source"] == "fallback_dispatcher_exception"
+    assert observed[1]["payload"]["request_id"] == "req-c2-disp-exc"
 
 
 @pytest.mark.asyncio
@@ -313,11 +321,52 @@ async def test_get_agent_decision_records_meta_fallback_on_empty_dispatcher_deci
         or True,
     )
 
-    result = await main_dispatcher.get_agent_decision("welches land passt besser zu mir")
+    result = await main_dispatcher.get_agent_decision(
+        "welches land passt besser zu mir",
+        session_id="c2-disp-empty",
+        request_id="req-c2-disp-empty",
+    )
 
     assert result == "meta"
     assert observed[0]["event_type"] == "dispatcher_meta_fallback"
     assert observed[0]["payload"]["reason"] == "empty_decision"
+    assert observed[0]["payload"]["request_id"] == "req-c2-disp-empty"
+    assert observed[1]["event_type"] == "dispatcher_route_selected"
+    assert observed[1]["payload"]["decision_source"] == "fallback_empty_decision"
+    assert observed[1]["payload"]["request_id"] == "req-c2-disp-empty"
+
+
+@pytest.mark.asyncio
+async def test_get_agent_decision_records_route_on_uncertain_fallback(monkeypatch):
+    observed = []
+
+    async def _uncertain(_query: str, session_id: str = "") -> str:
+        return "Vielleicht koennte das was anderes sein"
+
+    monkeypatch.setattr(main_dispatcher, "_call_dispatcher_llm", _uncertain)
+    monkeypatch.setattr(main_dispatcher, "_extract_dispatcher_decision", lambda _raw: "vielleicht")
+    monkeypatch.setattr(
+        main_dispatcher,
+        "record_autonomy_observation",
+        lambda event_type, payload, observed_at="": observed.append(
+            {"event_type": event_type, "payload": dict(payload), "observed_at": observed_at}
+        )
+        or True,
+    )
+
+    result = await main_dispatcher.get_agent_decision(
+        "unklare routingfrage",
+        session_id="c2-disp-uncertain",
+        request_id="req-c2-disp-uncertain",
+    )
+
+    assert result == "meta"
+    assert observed[0]["event_type"] == "dispatcher_meta_fallback"
+    assert observed[0]["payload"]["reason"] == "uncertain_decision"
+    assert observed[0]["payload"]["request_id"] == "req-c2-disp-uncertain"
+    assert observed[1]["event_type"] == "dispatcher_route_selected"
+    assert observed[1]["payload"]["decision_source"] == "fallback_uncertain_decision"
+    assert observed[1]["payload"]["request_id"] == "req-c2-disp-uncertain"
 
 
 @pytest.mark.asyncio

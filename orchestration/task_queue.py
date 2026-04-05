@@ -23,6 +23,8 @@ from itertools import combinations
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional, Set
 
+from orchestration.request_correlation import get_current_request_correlation
+
 log = logging.getLogger("TaskQueue")
 
 DB_PATH = Path(__file__).parent.parent / "data" / "task_queue.db"
@@ -30,6 +32,41 @@ DB_PATH = Path(__file__).parent.parent / "data" / "task_queue.db"
 
 def _json_array_param(values: List[Any]) -> str:
     return json.dumps(list(values))
+
+
+def _merge_request_correlation_metadata(metadata: Optional[str]) -> Optional[str]:
+    """Ergaenzt Task-Metadaten um die laufende request_id, falls sie fehlt.
+
+    Nur JSON-Objekte werden erweitert. Andere Metadata-Formate bleiben bewusst
+    unveraendert, damit keine bestaehenden Producer stillschweigend umgedeutet
+    werden.
+    """
+    request_id = str(get_current_request_correlation().get("request_id") or "").strip()
+    if not request_id:
+        return metadata
+
+    if metadata is None:
+        return json.dumps({"request_id": request_id}, ensure_ascii=True)
+
+    if not isinstance(metadata, str):
+        return metadata
+
+    raw = metadata.strip()
+    if not raw:
+        return json.dumps({"request_id": request_id}, ensure_ascii=True)
+
+    try:
+        loaded = json.loads(raw)
+    except Exception:
+        return metadata
+
+    if not isinstance(loaded, dict):
+        return metadata
+    if str(loaded.get("request_id") or "").strip():
+        return metadata
+
+    loaded["request_id"] = request_id
+    return json.dumps(loaded, ensure_ascii=True)
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -4470,6 +4507,7 @@ class TaskQueue:
         if goal_id is None and _goals_feature_enabled():
             goal_id = self._ensure_goal_for_task(description)
 
+        metadata = _merge_request_correlation_metadata(metadata)
         task_id = str(uuid.uuid4())
         now = datetime.now().isoformat()
         with self._conn() as conn:

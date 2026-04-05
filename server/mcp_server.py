@@ -115,6 +115,7 @@ from server.conversation_qdrant import recall_chat_turns as _semantic_recall_cha
 from server.conversation_qdrant import store_chat_turn as _semantic_store_chat_turn
 from gateway.status_snapshot import collect_status_snapshot
 from orchestration.autonomy_observation import record_autonomy_observation
+from orchestration.request_correlation import bind_request_correlation
 from memory.semantic_backend_policy import normalize_semantic_memory_backend
 from utils.location_presence import (
     enrich_location_presence_snapshot,
@@ -3268,49 +3269,54 @@ async def canvas_chat(request: Request):
         # Tool-Beschreibungen — identisch zu /get_tool_descriptions
         tools_desc = await _build_tools_description()
 
-        route_source = (
-            "resolved_proposal"
-            if resolved_proposal_agent
-            else "followup_capsule"
-            if followup_agent
-            else "dispatcher"
-        )
-        agent = resolved_proposal_agent or followup_agent or await get_agent_decision(dispatcher_query, session_id=session_id)
-        _record_chat_observation(
-            "request_route_selected",
-            {
-                "request_id": request_id,
-                "session_id": session_id,
-                "source": "canvas_chat",
-                "agent": agent,
-                "route_source": route_source,
-                "dispatcher_query_kind": dispatcher_query_kind,
-                "followup_agent": followup_agent,
-                "resolved_proposal_agent": resolved_proposal_agent,
-            },
-        )
-        _set_agent_status(agent, "thinking", query)
-
-        query_for_agent = dispatcher_query
-        if location_decision.should_inject and isinstance(location_snapshot, dict):
-            query_for_agent = (
-                build_location_chat_context_block(location_snapshot)
-                + "\n\n"
-                + query_for_agent
+        with bind_request_correlation(request_id=request_id, session_id=session_id):
+            route_source = (
+                "resolved_proposal"
+                if resolved_proposal_agent
+                else "followup_capsule"
+                if followup_agent
+                else "dispatcher"
             )
-        if response_language in {"de", "deutsch", "german"} and agent not in {"visual", "visual_nemotron"}:
-            query_for_agent = (
-                "Antworte ausschließlich auf Deutsch. "
-                "Nutze nur dann englische Fachbegriffe, wenn sie technisch nötig sind.\n\n"
-                f"Nutzeranfrage:\n{query_for_agent}"
+            agent = resolved_proposal_agent or followup_agent or await get_agent_decision(
+                dispatcher_query,
+                session_id=session_id,
+                request_id=request_id,
             )
+            _record_chat_observation(
+                "request_route_selected",
+                {
+                    "request_id": request_id,
+                    "session_id": session_id,
+                    "source": "canvas_chat",
+                    "agent": agent,
+                    "route_source": route_source,
+                    "dispatcher_query_kind": dispatcher_query_kind,
+                    "followup_agent": followup_agent,
+                    "resolved_proposal_agent": resolved_proposal_agent,
+                },
+            )
+            _set_agent_status(agent, "thinking", query)
 
-        result = await run_agent(
-            agent_name=agent,
-            query=query_for_agent,
-            tools_description=tools_desc,
-            session_id=session_id,
-        )
+            query_for_agent = dispatcher_query
+            if location_decision.should_inject and isinstance(location_snapshot, dict):
+                query_for_agent = (
+                    build_location_chat_context_block(location_snapshot)
+                    + "\n\n"
+                    + query_for_agent
+                )
+            if response_language in {"de", "deutsch", "german"} and agent not in {"visual", "visual_nemotron"}:
+                query_for_agent = (
+                    "Antworte ausschließlich auf Deutsch. "
+                    "Nutze nur dann englische Fachbegriffe, wenn sie technisch nötig sind.\n\n"
+                    f"Nutzeranfrage:\n{query_for_agent}"
+                )
+
+            result = await run_agent(
+                agent_name=agent,
+                query=query_for_agent,
+                tools_description=tools_desc,
+                session_id=session_id,
+            )
 
         _set_agent_status(agent, "completed", query)
         reply = str(result) if result else "(keine Antwort)"
@@ -3569,6 +3575,42 @@ async def goals_tree_endpoint(root_id: str = ""):
         tree = get_goal_manager().get_goal_tree(root_id=root_id if root_id else None)
         return {"status": "success", "tree": tree}
     except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.get("/autonomy/observation", summary="Autonomy Observation Summary (C2)")
+async def autonomy_observation_endpoint(since: str = "", until: str = ""):
+    """Aggregierter Observation-Report: Request-Korrelation, Meta-Diagnostik, User-Impact."""
+    try:
+        from orchestration.autonomy_observation import (
+            build_autonomy_observation_summary,
+            render_autonomy_observation_markdown,
+        )
+        summary = build_autonomy_observation_summary(since=since, until=until)
+        markdown = render_autonomy_observation_markdown(summary)
+        return {"status": "success", "summary": summary, "markdown": markdown}
+    except Exception as e:
+        log.error(f"Autonomy observation Fehler: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.get("/autonomy/incident/{request_id}", summary="Incident-Trace für eine request_id (C2)")
+async def autonomy_incident_trace_endpoint(request_id: str, since: str = "", until: str = ""):
+    """Gibt alle für eine request_id aufgezeichneten Korrelations-Events zurück."""
+    try:
+        from orchestration.autonomy_observation import get_incident_trace
+        safe_id = str(request_id or "").strip()
+        if not safe_id:
+            return JSONResponse(status_code=400, content={"status": "error", "error": "request_id darf nicht leer sein"})
+        trace = get_incident_trace(safe_id, since=since, until=until)
+        return {
+            "status": "success",
+            "request_id": safe_id,
+            "event_count": len(trace),
+            "trace": trace,
+        }
+    except Exception as e:
+        log.error(f"Incident-Trace Fehler: {e}", exc_info=True)
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
 
