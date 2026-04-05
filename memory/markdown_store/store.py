@@ -30,6 +30,7 @@ AUTOR: Timus Development
 DATUM: Februar 2026
 """
 
+import hashlib
 import os
 import logging
 import sqlite3
@@ -472,6 +473,71 @@ Regeln, die das Verhalten steuern:
             log.error(f"Fehler beim Lesen von MEMORY.md: {e}")
             return []
 
+    # ------------------------------------------------------------------
+    # C5: Dedupe-Helpers (pure, CrossHair/Hypothesis-testbar)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _dedupe_key(entry: "MemoryEntry") -> str:
+        """Stabiler Dedupe-Schlüssel aus category + normalisiertem content + source."""
+        normalized = " ".join(str(entry.content or "").lower().split())
+        raw = f"{(entry.category or '').strip()}|{normalized}|{(entry.source or '').strip()}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _render_hash(memories: List["MemoryEntry"]) -> str:
+        """SHA-256 des gerenderten Inhalts — zum Unchanged-Check ohne File-IO.
+
+        Sortiert nach allen Hash-relevanten Feldern damit die Reihenfolge im Input
+        keine Rolle spielt (reihenfolgeunabhängig, stabil).
+        """
+        parts = []
+        for m in sorted(
+            memories,
+            key=lambda x: (x.category or "", x.content or "", f"{x.importance:.3f}", x.source or ""),
+        ):
+            parts.append(f"{m.category}|{m.content}|{m.importance:.3f}|{m.source}")
+        return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+    def replace_memories(self, entries: List["MemoryEntry"]) -> Tuple[bool, int, int]:
+        """Bulk-Ersatz aller MEMORY.md-Einträge — genau ein Write pro Sync.
+
+        Returns:
+            (written, items_written, deduped_count)
+            written=False wenn Inhalt unverändert (kein Write nötig).
+
+        Raises:
+            Exception wenn der Write selbst fehlschlägt — wird NICHT maskiert,
+            damit der Aufrufer Fehler von unchanged-Skips unterscheiden kann.
+        """
+        # Dedupe: letzter Eintrag pro Key gewinnt (neueste Werte behalten)
+        seen: dict[str, "MemoryEntry"] = {}
+        for e in entries:
+            e.created_at = e.created_at or datetime.now().isoformat()
+            seen[self._dedupe_key(e)] = e
+        deduped = list(seen.values())
+        deduped_count = len(entries) - len(deduped)
+
+        new_hash = self._render_hash(deduped)
+        if new_hash == getattr(self, "_last_memory_hash", None):
+            log.debug("MEMORY.md: Inhalt unverändert — kein Write (C5 unchanged-guard)")
+            return False, 0, deduped_count
+
+        # Datei schreiben + nachgelagerte Hooks müssen komplett erfolgreich sein,
+        # bevor der neue Hash bestätigt wird.
+        self._write_memory_file(deduped)
+        self._after_replace_memories(deduped)
+        self._last_memory_hash = new_hash
+        log.info(
+            f"MEMORY.md: Bulk-Write {len(deduped)} Einträge "
+            f"({deduped_count} Duplikate entfernt)"
+        )
+        return True, len(deduped), deduped_count
+
+    def _after_replace_memories(self, memories: List["MemoryEntry"]) -> None:
+        """Hook für Subklassen nach MEMORY.md-Write, vor Hash-Bestätigung."""
+        return None
+
     def add_memory(self, entry: MemoryEntry) -> bool:
         """Fügt eine neue Erinnerung hinzu."""
         try:
@@ -896,6 +962,11 @@ class MarkdownStoreWithSearch(MarkdownStore):
             content = self.memory_path.read_text(encoding="utf-8")
             self._search_index.index_document("memory", "Erinnerungen", content)
         return result
+
+    def _after_replace_memories(self, memories: List[MemoryEntry]) -> None:
+        if self.memory_path.exists():
+            content = self.memory_path.read_text(encoding="utf-8")
+            self._search_index.index_document("memory", "Erinnerungen", content)
 
     def write_daily_log(
         self, log_date: str, content: str, topics: List[str] = None

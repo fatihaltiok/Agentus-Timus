@@ -2209,19 +2209,34 @@ class MemoryManager:
                 hooks = [str(p.value) for p in patterns[:10]]
                 md_store.update_soul_profile({"behavior_hooks": hooks})
             
-            # Memory Items als MEMORY.md Einträge
+            # C5: Sammelphase — alle relevanten Items laden, normalisieren, deduplizieren
             from memory.markdown_store.store import MemoryEntry
+            from orchestration.autonomy_observation import _record_memory_sync_observation
             all_items = self.persistent.get_all_memory_items()
-            for item in all_items:
-                if item.importance >= 0.7:
-                    md_store.add_memory(MemoryEntry(
-                        category=item.category,
-                        content=str(item.value)[:500],
-                        importance=item.importance,
-                        source=item.source
-                    ))
-            
-            log.info("✅ Memory → Markdown Sync abgeschlossen")
+            entries = [
+                MemoryEntry(
+                    category=item.category,
+                    content=str(item.value)[:500],
+                    importance=item.importance,
+                    source=item.source,
+                )
+                for item in all_items
+                if item.importance >= 0.7
+            ]
+            # C5: Bulk-Write — genau ein Write statt N Voll-Rewrites
+            written, items_written, deduped_count = md_store.replace_memories(entries)
+            _record_memory_sync_observation(
+                items_written=items_written,
+                deduped_count=deduped_count,
+                written=written,
+            )
+            if written:
+                log.info(
+                    f"✅ Memory → Markdown Sync: {items_written} Einträge, "
+                    f"{deduped_count} Duplikate entfernt"
+                )
+            else:
+                log.debug("Memory → Markdown Sync: kein Write (unverändert)")
             return True
         except Exception as e:
             log.error(f"Markdown Sync fehlgeschlagen: {e}")

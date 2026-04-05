@@ -2,6 +2,53 @@
 
 ---
 
+## Fortschritt 2026-04-05 20:05 CEST - C5 abgeschlossen
+
+### Problemstellung
+
+Der urspruengliche C5-Block reduzierte die `MEMORY.md`-Write-Spikes bereits deutlich, hatte aber drei letzte Runtime-Luecken:
+
+- `replace_memories(...)` maskierte echte Write-Fehler noch als scheinbaren `unchanged`-Skip
+- `MarkdownStoreWithSearch` reindexierte nach dem neuen Bulk-Write-Pfad nicht atomar genug; Datei und FTS-Index konnten auseinanderlaufen
+- die neuen Scheduler-Regressionen testeten den Hash-Pfad noch zu indirekt ueber Mocks statt ueber den echten Codepfad
+
+### Umgesetzt
+
+- [memory/markdown_store/store.py](/home/fatih-ubuntu/dev/timus/memory/markdown_store/store.py)
+  - `replace_memories(...)` propagiert Write-/Hook-Fehler jetzt sauber statt sie als `written=False` zu maskieren
+  - neuer Hook `_after_replace_memories(...)` fuehrt nachgelagerte Schritte nach dem Dateischreiben, aber vor der Hash-Bestaetigung aus
+  - `_last_memory_hash` wird erst bestaetigt, wenn Datei-Write und nachgelagerter Reindex komplett erfolgreich waren
+- [memory/markdown_store/store.py](/home/fatih-ubuntu/dev/timus/memory/markdown_store/store.py)
+  - `MarkdownStoreWithSearch` nutzt den neuen Hook fuer den `memory`-FTS-Reindex
+  - bei Reindex-Fehlern bleibt der Hash absichtlich unbestaetigt, damit der naechste identische Lauf den Reindex erneut versucht
+- [orchestration/scheduler.py](/home/fatih-ubuntu/dev/timus/orchestration/scheduler.py)
+  - `_pending_sync_hash` wird jetzt explizit verwaltet
+  - `unchanged`-Faelle loeschen veraltete Pending-Werte
+  - nach erfolgreichem Sync wird der Pending-Hash nach `_last_sync_hash` uebernommen und anschliessend zurueckgesetzt
+
+### Regressionen
+
+- [tests/test_memory_markdown_sync.py](/home/fatih-ubuntu/dev/timus/tests/test_memory_markdown_sync.py)
+  - echter `MemoryManager.sync_to_markdown()`-Fehlerpfad statt nur `replace_memories(...)` isoliert
+  - Reindex-Failure-Regression: Hash darf bei stale-FTS-Fall nicht bestaetigt werden
+  - echter Scheduler-Pfad:
+    - fehlgeschlagener Sync promoted den Hash nicht
+    - erfolgreicher Sync uebernimmt den Pending-Hash korrekt
+- [tests/test_memory_markdown_sync_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_memory_markdown_sync_hypothesis.py)
+  - bleibt gruene Absicherung fuer Idempotenz, Dedupe und Reihenfolgenstabilitaet
+
+### Validierung
+
+- `python -m py_compile memory/markdown_store/store.py memory/memory_system.py orchestration/scheduler.py tests/test_memory_markdown_sync.py tests/test_memory_markdown_sync_hypothesis.py` gruen
+- `30 passed` in:
+  - `tests/test_memory_markdown_sync.py`
+  - `tests/test_memory_markdown_sync_hypothesis.py`
+- `64 passed` in:
+  - `tests/test_c2_observability.py`
+  - `tests/test_c2_entrypoints.py`
+  - `tests/test_memory_markdown_sync.py`
+  - `tests/test_memory_markdown_sync_hypothesis.py`
+
 ## Fortschritt 2026-04-05 13:59 CEST - C2 end-to-end geschlossen
 
 ### Problemstellung

@@ -887,3 +887,40 @@ def get_incident_trace(
         return []
     events = get_autonomy_observation_store().iter_events(since=since, until=until)
     return build_incident_trace(events, request_id)
+
+
+# ---------------------------------------------------------------------------
+# C5: Memory-Sync-Observability
+# ---------------------------------------------------------------------------
+
+def _record_memory_sync_observation(
+    *,
+    items_written: int,
+    deduped_count: int,
+    written: bool,
+) -> None:
+    """Emittiert ein Memory-Sync-Event für C5-Observability.
+
+    Kein Crash wenn Observation-System nicht verfügbar — best-effort.
+    """
+    try:
+        if written:
+            record_autonomy_observation(
+                "memory_sync_completed",
+                {
+                    "items_written": int(items_written),
+                    "deduped_count": int(deduped_count),
+                    "source": "sync_to_markdown",
+                },
+            )
+        else:
+            record_autonomy_observation(
+                "memory_sync_skipped_unchanged",
+                {
+                    "items_written": 0,
+                    "deduped_count": int(deduped_count),
+                    "source": "sync_to_markdown",
+                },
+            )
+    except Exception:
+        pass

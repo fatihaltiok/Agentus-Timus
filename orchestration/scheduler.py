@@ -88,6 +88,10 @@ class ProactiveScheduler:
         self.last_heartbeat: Optional[datetime] = None
         self.last_self_model_refresh: Optional[datetime] = None
         self._start_time: Optional[datetime] = None
+        # C5: Sync-Gating — kein Write wenn Inhalt unverändert
+        self._last_sync_hash: Optional[str] = None
+        self._pending_sync_hash: Optional[str] = None
+        self._last_sync_at: Optional[datetime] = None
     
     async def start(self) -> None:
         """Startet den Heartbeat-Loop."""
@@ -175,11 +179,13 @@ class ProactiveScheduler:
             if refreshed:
                 event.actions_taken.append("self_model_refresh")
         
-        # 3. Memory Sync (optional, alle 4 Heartbeats)
-        if self.heartbeat_count % 4 == 0:
+        # 3. Memory Sync (C5: nur bei echtem Bedarf — Dirty-Check vor dem Sync)
+        if self.heartbeat_count % 4 == 0 and self._memory_sync_needed():
             synced = await self._sync_memory()
             if synced:
                 event.actions_taken.append("memory_sync")
+            else:
+                event.actions_taken.append("memory_sync_skipped")
         
         # 4. Custom Callback
         if self.on_wake:
@@ -254,16 +260,54 @@ class ProactiveScheduler:
             log.warning(f"Self-Model Refresh fehlgeschlagen: {e}")
             return False
     
-    async def _sync_memory(self) -> bool:
-        """Synchronisiert Memory mit Markdown."""
+    def _memory_sync_needed(self) -> bool:
+        """C5: Dirty-Check — True wenn Sync sinnvoll ist.
+
+        Liest nur den aktuellen Hash — setzt ihn NICHT, damit ein fehlschlagender
+        Sync beim nächsten Heartbeat erneut versucht wird.
+        """
         try:
             from memory.memory_system import memory_manager
-            
+            from memory.markdown_store.store import MarkdownStore, MemoryEntry
+
+            all_items = memory_manager.persistent.get_all_memory_items()
+            entries = [
+                MemoryEntry(
+                    category=item.category,
+                    content=str(item.value)[:500],
+                    importance=item.importance,
+                    source=item.source,
+                )
+                for item in all_items
+                if item.importance >= 0.7
+            ]
+            current_hash = MarkdownStore._render_hash(entries)
+            if current_hash == self._last_sync_hash:
+                self._pending_sync_hash = None
+                log.debug("Memory Sync: Inhalt unverändert — Skip (C5)")
+                return False
+            # Hash wird erst nach erfolgreichem Sync in _sync_memory gesetzt
+            self._pending_sync_hash = current_hash
+            return True
+        except Exception:
+            return True  # Im Zweifel syncen
+
+    async def _sync_memory(self) -> bool:
+        """Synchronisiert Memory mit Markdown (C5: Bulk-Write via replace_memories)."""
+        try:
+            from memory.memory_system import memory_manager
+
             result = memory_manager.sync_to_markdown()
             if result:
+                # Hash erst jetzt setzen — nach bestätigtem Sync
+                pending = self._pending_sync_hash
+                if pending is not None:
+                    self._last_sync_hash = pending
+                    self._pending_sync_hash = None
+                self._last_sync_at = datetime.now()
                 log.info("📝 Memory → Markdown Sync via Heartbeat")
             return result
-            
+
         except ImportError:
             return False
         except Exception as e:
