@@ -36,6 +36,12 @@ def _sanitize_events(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 @deal.post(lambda r: int(r["request_correlation"]["task_started_total"]) >= 0)
 @deal.post(lambda r: int(r["request_correlation"]["task_completed_total"]) >= 0)
 @deal.post(lambda r: int(r["request_correlation"]["task_failed_total"]) >= 0)
+@deal.post(lambda r: isinstance(r["request_correlation"]["recent_requests"], list))
+@deal.post(lambda r: isinstance(r["request_correlation"]["recent_routes"], list))
+@deal.post(lambda r: isinstance(r["request_correlation"]["recent_outcomes"], list))
+@deal.post(lambda r: len(r["request_correlation"]["recent_requests"]) <= 8)
+@deal.post(lambda r: len(r["request_correlation"]["recent_routes"]) <= 8)
+@deal.post(lambda r: len(r["request_correlation"]["recent_outcomes"]) <= 8)
 @deal.post(
     lambda r: int(r["request_correlation"]["user_visible_failures_total"])
     <= int(r["request_correlation"]["chat_failed_total"])
@@ -100,3 +106,10 @@ def test_contract_summarize_autonomy_events_tracks_request_and_task_routes() -> 
     assert correlation["request_routes_total"] == 1
     assert correlation["task_routes_total"] == 1
     assert correlation["user_visible_failures_total"] == 1
+    assert correlation["recent_requests"][0]["event_type"] == "chat_request_received"
+    assert {item["event_type"] for item in correlation["recent_routes"]} == {
+        "dispatcher_route_selected",
+        "request_route_selected",
+        "task_route_selected",
+    }
+    assert correlation["recent_outcomes"][0]["event_type"] == "chat_request_failed"

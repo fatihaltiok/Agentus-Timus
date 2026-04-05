@@ -299,6 +299,75 @@ async def test_collect_status_snapshot_builds_agent_rows(monkeypatch):
     )
     monkeypatch.setattr(
         status_snapshot,
+        "build_autonomy_observation_summary",
+        lambda: {
+            "request_correlation": {
+                "chat_requests_total": 4,
+                "chat_completed_total": 3,
+                "chat_failed_total": 1,
+                "dispatcher_routes_total": 4,
+                "request_routes_total": 4,
+                "task_routes_total": 1,
+                "task_started_total": 1,
+                "task_completed_total": 0,
+                "task_failed_total": 1,
+                "user_visible_failures_total": 1,
+                "recent_requests": [
+                    {
+                        "event_type": "chat_request_received",
+                        "observed_at": "2026-03-10T15:09:00+01:00",
+                        "request_id": "req-4",
+                        "session_id": "canvas_demo",
+                        "source": "canvas_chat",
+                        "query_preview": "zeige mir den letzten fehler",
+                    }
+                ],
+                "recent_routes": [
+                    {
+                        "event_type": "request_route_selected",
+                        "observed_at": "2026-03-10T15:09:01+01:00",
+                        "request_id": "req-4",
+                        "session_id": "canvas_demo",
+                        "task_id": "",
+                        "source": "canvas_chat",
+                        "agent": "meta",
+                        "route_source": "dispatcher",
+                    }
+                ],
+                "recent_outcomes": [
+                    {
+                        "event_type": "chat_request_completed",
+                        "observed_at": "2026-03-10T15:09:05+01:00",
+                        "request_id": "req-4",
+                        "session_id": "canvas_demo",
+                        "task_id": "",
+                        "source": "canvas_chat",
+                        "agent": "meta",
+                        "error_class": "",
+                        "incident_key": "",
+                        "query_preview": "zeige mir den letzten fehler",
+                    }
+                ],
+                "recent_failures": [
+                    {
+                        "event_type": "task_execution_failed",
+                        "observed_at": "2026-03-10T15:08:55+01:00",
+                        "request_id": "",
+                        "session_id": "auto_1",
+                        "task_id": "task-9",
+                        "agent": "research",
+                        "source": "autonomous_runner",
+                        "incident_key": "m3_mcp_health_unavailable",
+                        "error_class": "task_exception",
+                        "error": "timeout",
+                        "query_preview": "incident followup",
+                    }
+                ],
+            }
+        },
+    )
+    monkeypatch.setattr(
+        status_snapshot,
         "build_ops_observability_summary",
         lambda **kwargs: {
             "state": "warn",
@@ -368,6 +437,10 @@ async def test_collect_status_snapshot_builds_agent_rows(monkeypatch):
     assert snapshot["mcp_runtime"]["incident_open"] is True
     assert snapshot["mcp_runtime"]["breaker_open"] is True
     assert snapshot["mcp_runtime"]["stability_gate_state"] == "blocked"
+    assert snapshot["request_runtime"]["state"] == "healthy"
+    assert snapshot["request_runtime"]["last_request"]["request_id"] == "req-4"
+    assert snapshot["request_runtime"]["last_route"]["agent"] == "meta"
+    assert snapshot["request_runtime"]["last_correlated_failure"]["task_id"] == "task-9"
     assert snapshot["api_control"]["active_provider_count"] >= 1
     assert snapshot["api_control"]["providers"][0]["api_env"] == "X"
 
@@ -531,6 +604,29 @@ def test_format_status_message_contains_core_provider_and_agent_sections():
             "incident_severity": "high",
             "stability_gate_state": "blocked",
         },
+        "request_runtime": {
+            "state": "warn",
+            "chat_requests_total": 4,
+            "chat_completed_total": 3,
+            "chat_failed_total": 1,
+            "task_failed_total": 1,
+            "last_request": {
+                "request_id": "req-4",
+                "source": "canvas_chat",
+                "query_preview": "zeige mir den letzten fehler",
+            },
+            "last_route": {
+                "event_type": "request_route_selected",
+                "agent": "meta",
+                "source": "canvas_chat",
+                "task_id": "",
+            },
+            "last_correlated_failure": {
+                "event_type": "task_execution_failed",
+                "error_class": "task_exception",
+                "query_preview": "incident followup",
+            },
+        },
         "thinking": True,
     }
 
@@ -539,6 +635,10 @@ def test_format_status_message_contains_core_provider_and_agent_sections():
     assert "🤖 Timus Status" in msg
     assert "Core" in msg
     assert "MCP Runtime: recovering | lifecycle ready | ready yes | restart completed/post_check | incident open high | gate blocked" in msg
+    assert "Request Runtime: State warn | Req 4 | Done 3 | Fail 1 | TaskFail 1" in msg
+    assert "Letzte Anfrage canvas_chat | req req-4 | zeige mir den letzten fehler" in msg
+    assert "Letzte Route request_route_selected -> meta | source canvas_chat | task -" in msg
+    assert "Letzter Fehler task_execution_failed | task_exception | incident followup" in msg
     assert "Self-Healing" in msg
     assert "Ops" in msg
     assert "LLM/API Health" in msg

@@ -14,6 +14,7 @@ DEFAULT_LOG_PATH = PROJECT_ROOT / "logs" / "autonomy_observation.jsonl"
 DEFAULT_STATE_PATH = PROJECT_ROOT / "logs" / "autonomy_observation_state.json"
 
 _AUTONOMY_OBSERVATION_STORE: Optional["AutonomyObservationStore"] = None
+_RECENT_CORRELATION_LIMIT = 8
 
 
 def _iso_now() -> str:
@@ -143,6 +144,9 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
             "by_agent": {},
             "by_source": {},
             "by_error_class": {},
+            "recent_requests": [],
+            "recent_routes": [],
+            "recent_outcomes": [],
             "recent_failures": [],
         },
         "top_goal_signatures": [],
@@ -152,6 +156,9 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
     goal_counts: Dict[str, Dict[str, int]] = {}
     meta_diag = summary["meta_diagnostics"]
     request_correlation = summary["request_correlation"]
+    recent_requests: List[Dict[str, Any]] = []
+    recent_routes: List[Dict[str, Any]] = []
+    recent_outcomes: List[Dict[str, Any]] = []
     recent_failures: List[Dict[str, Any]] = []
 
     def _bump(bucket: Dict[str, Any], key: Any, *, amount: int = 1, fallback: str = "unknown") -> None:
@@ -171,6 +178,51 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
                 "incident_key": str(payload.get("incident_key") or ""),
                 "error_class": str(payload.get("error_class") or ""),
                 "error": str(payload.get("error") or "")[:240],
+                "query_preview": str(payload.get("query_preview") or payload.get("description_preview") or "")[:180],
+            }
+        )
+
+    def _record_recent_request(event_type: str, observed_at: str, payload: Dict[str, Any]) -> None:
+        recent_requests.append(
+            {
+                "event_type": _normalize_counter_key(event_type),
+                "observed_at": str(observed_at or ""),
+                "request_id": str(payload.get("request_id") or ""),
+                "session_id": str(payload.get("session_id") or ""),
+                "source": str(payload.get("source") or ""),
+                "query_preview": str(payload.get("query_preview") or "")[:180],
+            }
+        )
+
+    def _record_recent_route(event_type: str, observed_at: str, payload: Dict[str, Any]) -> None:
+        recent_routes.append(
+            {
+                "event_type": _normalize_counter_key(event_type),
+                "observed_at": str(observed_at or ""),
+                "request_id": str(payload.get("request_id") or ""),
+                "session_id": str(payload.get("session_id") or ""),
+                "task_id": str(payload.get("task_id") or ""),
+                "source": str(payload.get("source") or ""),
+                "agent": str(payload.get("agent") or ""),
+                "route_source": str(payload.get("route_source") or ""),
+                "decision_source": str(payload.get("decision_source") or ""),
+                "incident_key": str(payload.get("incident_key") or ""),
+                "query_preview": str(payload.get("query_preview") or payload.get("description_preview") or "")[:180],
+            }
+        )
+
+    def _record_recent_outcome(event_type: str, observed_at: str, payload: Dict[str, Any]) -> None:
+        recent_outcomes.append(
+            {
+                "event_type": _normalize_counter_key(event_type),
+                "observed_at": str(observed_at or ""),
+                "request_id": str(payload.get("request_id") or ""),
+                "session_id": str(payload.get("session_id") or ""),
+                "task_id": str(payload.get("task_id") or ""),
+                "source": str(payload.get("source") or ""),
+                "agent": str(payload.get("agent") or ""),
+                "error_class": str(payload.get("error_class") or ""),
+                "incident_key": str(payload.get("incident_key") or ""),
                 "query_preview": str(payload.get("query_preview") or payload.get("description_preview") or "")[:180],
             }
         )
@@ -302,11 +354,13 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
         elif event_type == "chat_request_received":
             request_correlation["chat_requests_total"] += 1
             _bump(request_correlation["by_source"], payload.get("source"))
+            _record_recent_request(event_type, observed_at, payload)
 
         elif event_type == "chat_request_completed":
             request_correlation["chat_completed_total"] += 1
             _bump(request_correlation["by_source"], payload.get("source"))
             _bump(request_correlation["by_agent"], payload.get("agent"))
+            _record_recent_outcome(event_type, observed_at, payload)
 
         elif event_type == "chat_request_failed":
             request_correlation["chat_failed_total"] += 1
@@ -317,22 +371,26 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
                 request_correlation["by_error_class"],
                 payload.get("error_class") or "chat_request_failed",
             )
+            _record_recent_outcome(event_type, observed_at, payload)
             _record_recent_failure(event_type, observed_at, payload)
 
         elif event_type == "dispatcher_route_selected":
             request_correlation["dispatcher_routes_total"] += 1
             _bump(request_correlation["by_source"], payload.get("source") or "dispatcher")
             _bump(request_correlation["by_agent"], payload.get("agent"))
+            _record_recent_route(event_type, observed_at, payload)
 
         elif event_type == "request_route_selected":
             request_correlation["request_routes_total"] += 1
             _bump(request_correlation["by_source"], payload.get("source"))
             _bump(request_correlation["by_agent"], payload.get("agent"))
+            _record_recent_route(event_type, observed_at, payload)
 
         elif event_type == "task_route_selected":
             request_correlation["task_routes_total"] += 1
             _bump(request_correlation["by_source"], payload.get("source"))
             _bump(request_correlation["by_agent"], payload.get("agent"))
+            _record_recent_route(event_type, observed_at, payload)
 
         elif event_type == "task_execution_started":
             request_correlation["task_started_total"] += 1
@@ -342,6 +400,7 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
             request_correlation["task_completed_total"] += 1
             _bump(request_correlation["by_source"], payload.get("source"))
             _bump(request_correlation["by_agent"], payload.get("agent"))
+            _record_recent_outcome(event_type, observed_at, payload)
 
         elif event_type == "task_execution_failed":
             request_correlation["task_failed_total"] += 1
@@ -351,6 +410,7 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
                 request_correlation["by_error_class"],
                 payload.get("error_class") or "task_execution_failed",
             )
+            _record_recent_outcome(event_type, observed_at, payload)
             _record_recent_failure(event_type, observed_at, payload)
 
     recipe_total = int(summary["recipe_outcomes"]["total"] or 0)
@@ -370,11 +430,26 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
         key=lambda item: (-int(item["total"]), item["goal_signature"]),
     )
     summary["top_goal_signatures"] = top_goal_signatures[:8]
+    summary["request_correlation"]["recent_requests"] = sorted(
+        recent_requests,
+        key=lambda item: str(item.get("observed_at") or ""),
+        reverse=True,
+    )[:_RECENT_CORRELATION_LIMIT]
+    summary["request_correlation"]["recent_routes"] = sorted(
+        recent_routes,
+        key=lambda item: str(item.get("observed_at") or ""),
+        reverse=True,
+    )[:_RECENT_CORRELATION_LIMIT]
+    summary["request_correlation"]["recent_outcomes"] = sorted(
+        recent_outcomes,
+        key=lambda item: str(item.get("observed_at") or ""),
+        reverse=True,
+    )[:_RECENT_CORRELATION_LIMIT]
     summary["request_correlation"]["recent_failures"] = sorted(
         recent_failures,
         key=lambda item: str(item.get("observed_at") or ""),
         reverse=True,
-    )[:8]
+    )[:_RECENT_CORRELATION_LIMIT]
     return summary
 
 

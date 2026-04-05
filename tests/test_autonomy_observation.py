@@ -357,6 +357,12 @@ def test_autonomy_observation_summarizes_request_and_task_correlation(tmp_path: 
     assert correlation["by_source"]["autonomous_runner"] >= 1
     assert correlation["by_error_class"]["canvas_chat_exception"] == 1
     assert correlation["by_error_class"]["task_exception"] == 1
+    assert correlation["recent_requests"][0]["request_id"] == "req-1"
+    assert correlation["recent_requests"][0]["source"] == "canvas_chat"
+    assert correlation["recent_routes"][0]["event_type"] == "task_route_selected"
+    assert correlation["recent_routes"][0]["agent"] == "research"
+    assert correlation["recent_outcomes"][0]["event_type"] == "task_execution_failed"
+    assert correlation["recent_outcomes"][1]["event_type"] == "chat_request_failed"
     assert correlation["recent_failures"][0]["event_type"] == "task_execution_failed"
     assert correlation["recent_failures"][1]["event_type"] == "chat_request_failed"
 

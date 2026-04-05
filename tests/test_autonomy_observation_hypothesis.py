@@ -40,3 +40,6 @@ def test_hypothesis_autonomy_observation_request_correlation_is_bounded(events):
     assert correlation["task_completed_total"] >= 0
     assert correlation["task_failed_total"] >= 0
     assert correlation["user_visible_failures_total"] <= correlation["chat_failed_total"]
+    assert len(correlation["recent_requests"]) <= 8
+    assert len(correlation["recent_routes"]) <= 8
+    assert len(correlation["recent_outcomes"]) <= 8

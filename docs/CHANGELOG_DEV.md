@@ -2,6 +2,66 @@
 
 ---
 
+## Fortschritt 2026-04-04 23:20 CEST - C2 hebt letzte Requests, Routen und Fehler in den Status-Snapshot
+
+### Problemstellung
+
+Der erste C2-Block zaehlte Request-/Route-/Task-Korrelation bereits sauber im Beobachtungslog, aber der operative Diagnosepfad war noch zu schwach:
+
+- fuer einen akuten Fehlfall musste man weiter zwischen `autonomy_observation.jsonl`, Task-Logs und `/status` springen
+- der Snapshot zeigte MCP-/Service-Zustand, aber nicht den letzten korrelierten Nutzerpfad
+- damit war sichtbar, **dass** etwas schiefgeht, aber nicht direkt **welche Anfrage**, **welche Route** und **welcher letzte korrelierte Fehler** dazu gehoerten
+
+### Umgesetzt
+
+- [orchestration/autonomy_observation.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomy_observation.py)
+  - `request_correlation` fuehrt jetzt zusaetzlich:
+    - `recent_requests`
+    - `recent_routes`
+    - `recent_outcomes`
+  - kompakte Eintraege werden fuer:
+    - `chat_request_received`
+    - `dispatcher_route_selected`
+    - `request_route_selected`
+    - `task_route_selected`
+    - `chat_request_completed` / `chat_request_failed`
+    - `task_execution_completed` / `task_execution_failed`
+    gesammelt und auf einen kleinen festen Verlauf begrenzt
+- [gateway/status_snapshot.py](/home/fatih-ubuntu/dev/timus/gateway/status_snapshot.py)
+  - neuer Builder `_build_request_runtime_correlation(...)`
+  - Snapshot enthaelt jetzt `request_runtime` mit:
+    - `state`
+    - Zaehlern fuer Requests / Routen / Outcomes
+    - `last_request`
+    - `last_route`
+    - `last_outcome`
+    - `last_correlated_failure`
+  - `format_status_message(...)` zeigt diese Daten direkt im Core-Block
+
+### Regressionen, Contracts, Hypothesis, CrossHair, Lean
+
+- [tests/test_autonomy_observation.py](/home/fatih-ubuntu/dev/timus/tests/test_autonomy_observation.py)
+  - Regression fuer letzte Requests / Routen / Outcomes im C2-Korrelationspfad
+- [tests/test_autonomy_observation_contracts.py](/home/fatih-ubuntu/dev/timus/tests/test_autonomy_observation_contracts.py)
+  - Deal-Contracts fuer die neuen kompakten Listen und deren Begrenzung
+- [tests/test_autonomy_observation_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_autonomy_observation_hypothesis.py)
+  - boundedness fuer `recent_requests`, `recent_routes`, `recent_outcomes`
+- [tests/test_telegram_status_snapshot.py](/home/fatih-ubuntu/dev/timus/tests/test_telegram_status_snapshot.py)
+  - Snapshot-/Formatter-Regressionsfall fuer den neuen `request_runtime`-Block
+
+### Validierung
+
+- `python -m py_compile orchestration/autonomy_observation.py gateway/status_snapshot.py tests/test_autonomy_observation.py tests/test_autonomy_observation_contracts.py tests/test_autonomy_observation_hypothesis.py tests/test_telegram_status_snapshot.py` gruen
+- `15 passed` in:
+  - `tests/test_autonomy_observation.py`
+  - `tests/test_autonomy_observation_contracts.py`
+  - `tests/test_autonomy_observation_hypothesis.py`
+  - `tests/test_telegram_status_snapshot.py`
+- `python -m crosshair check tests/test_autonomy_observation_contracts.py` gruen
+- `python scripts/verify_pre_commit_lean.py` komplett gruen
+  - `CiSpecs.lean` gruen
+  - `Mathlib bundle (12 Specs)` gruen
+
 ## Fortschritt 2026-04-04 22:55 CEST - Meta klaert mehrdeutige Gespraechszuege zuerst selbst
 
 ### Problemstellung

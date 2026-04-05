@@ -15,6 +15,7 @@ import json
 import os
 import subprocess
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -22,6 +23,7 @@ import httpx
 
 from agent.providers import AgentModelConfig, ModelProvider, MultiProviderClient, get_provider_client
 from memory.qdrant_provider import normalize_qdrant_mode, resolve_qdrant_ready_url
+from orchestration.autonomy_observation import build_autonomy_observation_summary
 from orchestration.llm_budget_guard import get_public_budget_status
 from orchestration.ops_observability import build_ops_observability_summary
 from orchestration.ops_release_gate import evaluate_ops_release_gate
@@ -56,6 +58,16 @@ _AGENT_STATUS_ORDER: List[Tuple[str, str]] = [
     ("shell", "shell"),
     ("image", "image"),
 ]
+
+
+def _parse_snapshot_iso(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
 
 
 def _service_state(service_name: str) -> Dict[str, Any]:
@@ -255,6 +267,63 @@ def _build_mcp_runtime_correlation(
         "breaker_open": bool(breaker),
         "breaker_until": str(breaker.get("opened_until") or ""),
         "stability_gate_state": str((stability_gate or {}).get("state") or ""),
+    }
+
+
+def _build_request_runtime_correlation(observation_summary: Dict[str, Any]) -> Dict[str, Any]:
+    correlation = dict((observation_summary or {}).get("request_correlation") or {})
+    recent_requests = list(correlation.get("recent_requests") or [])
+    recent_routes = list(correlation.get("recent_routes") or [])
+    recent_outcomes = list(correlation.get("recent_outcomes") or [])
+    recent_failures = list(correlation.get("recent_failures") or [])
+
+    last_request = dict(recent_requests[0]) if recent_requests else {}
+    last_route = dict(recent_routes[0]) if recent_routes else {}
+    last_outcome = dict(recent_outcomes[0]) if recent_outcomes else {}
+    last_failure = dict(recent_failures[0]) if recent_failures else {}
+
+    last_outcome_at = _parse_snapshot_iso(last_outcome.get("observed_at"))
+    last_failure_at = _parse_snapshot_iso(last_failure.get("observed_at"))
+    last_outcome_type = str(last_outcome.get("event_type") or "").strip().lower()
+    last_failure_newer = bool(
+        last_failure
+        and (
+            last_outcome_at is None
+            or last_failure_at is None
+            or last_failure_at >= last_outcome_at
+            or last_outcome_type in {"chat_request_failed", "task_execution_failed"}
+        )
+    )
+
+    state = "idle"
+    reason = "no_recent_activity"
+    if last_failure_newer:
+        state = "warn"
+        reason = str(last_failure.get("error_class") or last_failure.get("event_type") or "recent_failure")
+    elif last_outcome:
+        state = "healthy"
+        reason = str(last_outcome.get("event_type") or "recent_success")
+    elif last_request or last_route:
+        state = "active"
+        reason = "request_in_flight"
+
+    return {
+        "state": state,
+        "reason": reason,
+        "chat_requests_total": int(correlation.get("chat_requests_total", 0) or 0),
+        "chat_completed_total": int(correlation.get("chat_completed_total", 0) or 0),
+        "chat_failed_total": int(correlation.get("chat_failed_total", 0) or 0),
+        "dispatcher_routes_total": int(correlation.get("dispatcher_routes_total", 0) or 0),
+        "request_routes_total": int(correlation.get("request_routes_total", 0) or 0),
+        "task_routes_total": int(correlation.get("task_routes_total", 0) or 0),
+        "task_started_total": int(correlation.get("task_started_total", 0) or 0),
+        "task_completed_total": int(correlation.get("task_completed_total", 0) or 0),
+        "task_failed_total": int(correlation.get("task_failed_total", 0) or 0),
+        "user_visible_failures_total": int(correlation.get("user_visible_failures_total", 0) or 0),
+        "last_request": last_request,
+        "last_route": last_route,
+        "last_outcome": last_outcome,
+        "last_correlated_failure": last_failure,
     }
 
 
@@ -728,6 +797,28 @@ async def collect_status_snapshot(mcp_base_url: str | None = None) -> Dict[str, 
         self_healing=self_healing_summary,
         stability_gate=stability_gate,
     )
+    try:
+        observation_summary = build_autonomy_observation_summary()
+        request_runtime = _build_request_runtime_correlation(observation_summary)
+    except Exception:
+        request_runtime = {
+            "state": "unknown",
+            "reason": "observation_unavailable",
+            "chat_requests_total": 0,
+            "chat_completed_total": 0,
+            "chat_failed_total": 0,
+            "dispatcher_routes_total": 0,
+            "request_routes_total": 0,
+            "task_routes_total": 0,
+            "task_started_total": 0,
+            "task_completed_total": 0,
+            "task_failed_total": 0,
+            "user_visible_failures_total": 0,
+            "last_request": {},
+            "last_route": {},
+            "last_outcome": {},
+            "last_correlated_failure": {},
+        }
 
     return {
         "services": services,
@@ -744,6 +835,7 @@ async def collect_status_snapshot(mcp_base_url: str | None = None) -> Dict[str, 
         "self_hardening": self_hardening_summary,
         "stability_gate": stability_gate,
         "mcp_runtime": mcp_runtime,
+        "request_runtime": request_runtime,
         "api_control": _build_api_control_summary(provider_results, usage_summary, budget_status),
         "thinking": bool((local_results["agent_status"].get("data", {}) or {}).get("thinking", False)),
     }
@@ -787,6 +879,17 @@ def _mcp_runtime_icon(state: str) -> str:
     }.get(normalized, "⚪")
 
 
+def _request_runtime_icon(state: str) -> str:
+    normalized = (state or "").strip().lower()
+    return {
+        "healthy": "🟢",
+        "active": "🟠",
+        "warn": "🟠",
+        "idle": "⚪",
+        "unknown": "⚪",
+    }.get(normalized, "⚪")
+
+
 def format_status_message(snapshot: Dict[str, Any], summary_lines: List[str]) -> str:
     services = snapshot.get("services", {}) or {}
     local = snapshot.get("local", {}) or {}
@@ -800,6 +903,7 @@ def format_status_message(snapshot: Dict[str, Any], summary_lines: List[str]) ->
     self_hardening = snapshot.get("self_hardening", {}) or {}
     stability_gate = snapshot.get("stability_gate", {}) or {}
     mcp_runtime = snapshot.get("mcp_runtime", {}) or {}
+    request_runtime = snapshot.get("request_runtime", {}) or {}
     thinking = snapshot.get("thinking", False)
 
     mcp_health = local.get("mcp_health", {}) or {}
@@ -857,6 +961,46 @@ def format_status_message(snapshot: Dict[str, Any], summary_lines: List[str]) ->
             f"Plans {autonomy_payload.get('planning', {}).get('active_plans', 0)} | "
             f"Healing {autonomy_payload.get('healing', {}).get('degrade_mode', 'normal')}"
         )
+    if request_runtime:
+        request_bits = [
+            f"State {request_runtime.get('state', 'unknown')}",
+            f"Req {request_runtime.get('chat_requests_total', 0)}",
+            f"Done {request_runtime.get('chat_completed_total', 0)}",
+            f"Fail {request_runtime.get('chat_failed_total', 0)}",
+            f"TaskFail {request_runtime.get('task_failed_total', 0)}",
+        ]
+        core_lines.append(
+            f"{_request_runtime_icon(str(request_runtime.get('state', 'unknown') or 'unknown'))} Request Runtime: "
+            + " | ".join(request_bits)
+        )
+        last_request = dict(request_runtime.get("last_request") or {})
+        if last_request:
+            core_lines.append(
+                "• Letzte Anfrage {source} | req {request_id} | {preview}".format(
+                    source=last_request.get("source", "") or "unknown",
+                    request_id=str(last_request.get("request_id", "") or "")[:12],
+                    preview=(last_request.get("query_preview", "") or "")[:120],
+                )
+            )
+        last_route = dict(request_runtime.get("last_route") or {})
+        if last_route:
+            core_lines.append(
+                "• Letzte Route {event} -> {agent} | source {source} | task {task_id}".format(
+                    event=last_route.get("event_type", "") or "route",
+                    agent=last_route.get("agent", "") or "none",
+                    source=last_route.get("source", "") or "unknown",
+                    task_id=str(last_route.get("task_id", "") or "")[:12] or "-",
+                )
+            )
+        last_failure = dict(request_runtime.get("last_correlated_failure") or {})
+        if last_failure:
+            core_lines.append(
+                "• Letzter Fehler {event} | {error_class} | {preview}".format(
+                    event=last_failure.get("event_type", "") or "failure",
+                    error_class=last_failure.get("error_class", "") or "unknown",
+                    preview=(last_failure.get("query_preview", "") or last_failure.get("error", "") or "")[:120],
+                )
+            )
 
     healing_lines = ["", "Self-Healing"]
     healing_lines.append(
