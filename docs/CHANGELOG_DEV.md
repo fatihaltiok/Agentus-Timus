@@ -2,6 +2,127 @@
 
 ---
 
+## Fortschritt 2026-04-05 20:55 CEST - ScrapingAnt Architektur gehaertet
+
+### Problemstellung
+
+Der neue ScrapingAnt-/Social-Media-Block war bereits beschrieben, hatte aber noch drei echte Integrationsluecken:
+
+- das neue `social_media_tool` wurde im MCP-Server noch nicht geladen
+- die ScrapingAnt-Logik war doppelt implementiert: einmal im neuen Tool, einmal separat in `deep_research`
+- fuer Tool-Loading, Executor-Sichtbarkeit und Deep-Research-Fallback gab es noch keine Regressionen
+
+### Umgesetzt
+
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - `tools.social_media_tool.tool` zu `TOOL_MODULES` hinzugefuegt
+- [tools/social_media_tool/client.py](/home/fatih-ubuntu/dev/timus/tools/social_media_tool/client.py) (neu)
+  - gemeinsamer ScrapingAnt-Adapter fuer:
+    - Plattform-Erkennung
+    - Domain-Guard (`needs_scrapingant`)
+    - API-Key-Zugriff
+    - HTML→Text
+    - standardisiertes Fetch-Payload
+  - nach Doku-Abgleich auf den offiziellen v2-Request-Contract gehaertet:
+    - `browser=true/false` statt undokumentiertem `render_js`
+    - kein pauschales `return_page_source=true`, damit JS-Rendering nicht unbeabsichtigt deaktiviert wird
+    - Remote-`timeout` jetzt als Query-Parameter im erlaubten 5-60s-Bereich
+- [tools/social_media_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/social_media_tool/tool.py)
+  - nutzt jetzt den gemeinsamen Adapter statt eigener Vendor-Logik
+  - Rueckwaertskompatibilitaet fuer `_detect_platform(...)` bleibt erhalten
+- [tools/deep_research/tool.py](/home/fatih-ubuntu/dev/timus/tools/deep_research/tool.py)
+  - nutzt jetzt denselben gemeinsamen ScrapingAnt-Adapter
+  - lokale Wrapper `_needs_scrapingant(...)` / `_fetch_via_scrapingant(...)` bleiben erhalten, delegieren aber zentral
+- [requirements.txt](/home/fatih-ubuntu/dev/timus/requirements.txt)
+  - ungenutztes `scrapingant-client` entfernt, da der gemeinsame Adapter konsistent ueber `httpx` laeuft
+
+### Regressionen
+
+- [tests/test_social_media_tool_integration.py](/home/fatih-ubuntu/dev/timus/tests/test_social_media_tool_integration.py)
+  - MCP-Loader registriert `tools.social_media_tool.tool`
+  - Executor sieht `fetch_social_media` und `fetch_page_with_js` ueber seine Capabilities
+  - `deep_research` nutzt fuer Social-Media-Domains den gemeinsamen Adapter direkt
+  - `deep_research` nutzt bei `HTTP 403` den gemeinsamen ScrapingAnt-Fallback
+  - gemeinsamer Adapter baut jetzt den dokumentierten v2-Query-Parameter-Satz
+
+### Validierung
+
+- `python -m py_compile tools/social_media_tool/client.py tools/social_media_tool/tool.py tools/deep_research/tool.py server/mcp_server.py tests/test_social_media_tool_integration.py` gruen
+- `5 passed` in `tests/test_social_media_tool_integration.py`
+- Live-Manifest auf `GET /get_tool_descriptions` zeigt `fetch_social_media` und `fetch_page_with_js`
+
+## Fortschritt 2026-04-05 - ScrapingAnt Integration + Social Media Tool
+
+### Problemstellung
+
+Timus konnte Social-Media-Seiten (Twitter/X, LinkedIn, Instagram, TikTok) nicht
+abrufen, weil diese Plattformen direktes HTTP-Scraping mit 403/429 blockieren und
+vollstaendiges JS-Rendering benoetigen. Auch bei normalen Seiten mit Anti-Bot-Schutz
+scheiterte die Deep-Research-Pipeline kommentarlos.
+
+### Umgesetzt
+
+- [tools/deep_research/tool.py](/home/fatih-ubuntu/dev/timus/tools/deep_research/tool.py)
+  - `_fetch_page_content` hat jetzt eine dreistufige Fallback-Kette:
+    1. PDF-URLs → `extract_text_from_pdf` Tool (unveraendert)
+    2. Social-Media-Domains → direkt ScrapingAnt (JS-Rendering + Residential Proxy)
+    3. Normale HTML-Seiten → direktes httpx; bei 403/429/503 oder Timeout → ScrapingAnt-Fallback
+  - `_needs_scrapingant(url)` erkennt bekannte Social-Media-Domains automatisch
+  - `_fetch_via_scrapingant(url)` kapselt den API-Call sauber; kein Crash wenn API-Key fehlt
+  - `_SCRAPINGANT_DOMAINS`: twitter.com, x.com, linkedin.com, instagram.com, tiktok.com, facebook.com, reddit.com
+
+- [tools/social_media_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/social_media_tool/tool.py) (neu)
+  - `fetch_social_media(url, render_js)` — abrufen von Social-Media-Profilen und Posts
+  - `fetch_page_with_js(url, render_js)` — beliebige JS-heavy Seiten (SPAs, 403-Blockierungen)
+  - Capabilities: `social_media`, `web`, `fetch`
+  - Platform-Erkennung fuer 11 Plattformen (Twitter, LinkedIn, Instagram, TikTok, YouTube, Facebook, Reddit, Threads, Mastodon, Bluesky, unknown)
+
+- [agent/base_agent.py](/home/fatih-ubuntu/dev/timus/agent/base_agent.py)
+  - Executor-Agent bekommt Capabilities `"social_media"` und `"fetch"` — sieht die neuen Tools im Tool-Sichtfeld
+
+- [agent/agents/meta.py](/home/fatih-ubuntu/dev/timus/agent/agents/meta.py)
+  - `_SPECIALIST_TOOL_AGENT_MAP`: `fetch_social_media` und `fetch_page_with_js` → `executor`
+  - Meta-Agent delegiert Social-Media-Anfragen automatisch an den Executor
+
+- [requirements.txt](/home/fatih-ubuntu/dev/timus/requirements.txt)
+  - `scrapingant-client==2.2.0` ergaenzt
+
+- [.env.example](/home/fatih-ubuntu/dev/timus/.env.example), [.env](/home/fatih-ubuntu/dev/timus/.env)
+  - `SCRAPINGANT_API_KEY=` als Platzhalter eingetragen
+
+### Architektur
+
+```
+Deep Research Pipeline
+  _fetch_page_content(url)
+    ├── PDF?  → extract_text_from_pdf
+    ├── Social Media / JS-Domain? → ScrapingAnt direkt
+    └── Normal HTML
+          httpx.get()
+            ├── OK → Text
+            └── 403/429/503/Timeout → ScrapingAnt-Fallback
+
+Meta Agent
+  Anfrage mit "linkedin profil abrufen"
+    → _SPECIALIST_TOOL_AGENT_MAP: fetch_social_media → executor
+    → Executor ruft fetch_social_media(url) auf
+```
+
+### Setup
+
+`SCRAPINGANT_API_KEY=<key>` in `.env` eintragen.
+Free-Tier: 10.000 Credits/Monat (scrapingant.com).
+
+### Validierung
+
+- `python -c "from tools.social_media_tool.tool import fetch_social_media, _detect_platform"` gruen
+- Platform-Erkennung fuer 5 Plattformen verifiziert
+- `_needs_scrapingant` korrekt (Social-Media: True, arxiv: False)
+- AGENT_CAPABILITY_MAP executor: social_media + fetch vorhanden
+- Meta Agent _SPECIALIST_TOOL_AGENT_MAP: fetch_social_media → executor, fetch_page_with_js → executor
+
+---
+
 ## Fortschritt 2026-04-05 20:05 CEST - C5 abgeschlossen
 
 ### Problemstellung

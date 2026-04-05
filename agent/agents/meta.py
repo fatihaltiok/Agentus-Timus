@@ -94,6 +94,9 @@ class MetaAgent(BaseAgent):
         "execute_action_plan": "visual",
         "execute_visual_task": "visual",
         "execute_visual_task_quick": "visual",
+        # Social Media + JS-Seiten → Executor
+        "fetch_social_media": "executor",
+        "fetch_page_with_js": "executor",
     }
 
     # Koordinator darf Spezialisten-Tools NIE direkt aufrufen — nur per Delegation.

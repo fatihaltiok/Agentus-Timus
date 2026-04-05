@@ -67,6 +67,11 @@ from tools.deep_research.research_contracts import (
     sort_claims_for_report,
     summarize_claims,
 )
+from tools.social_media_tool.client import (
+    fetch_page_text_via_scrapingant,
+    get_scrapingant_api_key,
+    needs_scrapingant as social_media_needs_scrapingant,
+)
 
 # Numpy für Embeddings - optional
 try:
@@ -3773,12 +3778,26 @@ def _html_to_text(html: str) -> str:
     return " ".join(text.split())
 
 
+def _needs_scrapingant(url: str) -> bool:
+    """Rueckwaertskompatibler Wrapper fuer den gemeinsamen Domain-Guard."""
+    return social_media_needs_scrapingant(url)
+
+
+async def _fetch_via_scrapingant(url: str) -> str:
+    """Holt Seiteninhalt ueber den gemeinsamen ScrapingAnt-Adapter."""
+    result = await fetch_page_text_via_scrapingant(url, render_js=True, max_chars=12000)
+    return str(result.get("content") or "")
+
+
 async def _fetch_page_content(url: str) -> str:
     """
     Holt Seiteninhalt via direktem HTTP-Request (kein Browser nötig).
 
-    Früher: call_tool_internal("open_url") + call_tool_internal("get_text")
-    Jetzt:  httpx direkt — funktioniert zuverlässig im Background-Kontext.
+    Fallback-Kette:
+    1. PDF-URLs  → extract_text_from_pdf Tool
+    2. Social-Media / JS-heavy → ScrapingAnt (wenn API-Key vorhanden)
+    3. Normale HTML-Seiten → direktes httpx
+    4. Bei 403/429/Timeout → ScrapingAnt-Fallback
     """
     try:
         url_lower = url.lower()
@@ -3793,6 +3812,10 @@ async def _fetch_page_content(url: str) -> str:
             elif isinstance(result, str):
                 return result
             return ""
+
+        # Social Media / JS-heavy Domains: direkt ScrapingAnt
+        if _needs_scrapingant(url):
+            return await _fetch_via_scrapingant(url)
 
         # HTML-Seiten: direkt via httpx
         async with httpx.AsyncClient(
@@ -3813,10 +3836,18 @@ async def _fetch_page_content(url: str) -> str:
             return text[:12000]  # Max 12k Zeichen pro Seite
 
     except httpx.HTTPStatusError as e:
-        logger.warning(f"HTTP {e.response.status_code} für {url}")
+        status = e.response.status_code
+        logger.warning(f"HTTP {status} für {url}")
+        # Bei Blockierung: ScrapingAnt-Fallback versuchen
+        if status in (403, 429, 503) and get_scrapingant_api_key():
+            logger.info(f"ScrapingAnt-Fallback nach HTTP {status}: {url}")
+            return await _fetch_via_scrapingant(url)
         return ""
     except httpx.TimeoutException:
         logger.warning(f"Timeout beim Abrufen von {url}")
+        if get_scrapingant_api_key():
+            logger.info(f"ScrapingAnt-Fallback nach Timeout: {url}")
+            return await _fetch_via_scrapingant(url)
         return ""
     except Exception as e:
         logger.error(f"Fehler beim Abrufen von {url}: {e}")

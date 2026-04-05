@@ -1992,6 +1992,8 @@ TOOL_MODULES = [
     "tools.email_tool.tool",
     # Web-Fetch: URL-Inhalte abrufen (requests → Playwright-Fallback, v3.3)
     "tools.web_fetch_tool.tool",
+    # Social Media / JS-Rendering via ScrapingAnt
+    "tools.social_media_tool.tool",
     # M9: Agent Blackboard
     "tools.blackboard_tool.tool",
     # M10: Proactive Triggers

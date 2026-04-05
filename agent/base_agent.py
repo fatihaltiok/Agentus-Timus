@@ -90,6 +90,7 @@ AGENT_CAPABILITY_MAP = {
     # ── Bestehende Agenten (praezisiert) ─────────────────────────────
     "executor": [
         "search", "web",                         # Websuche
+        "social_media", "fetch",                 # Social-Media + JS-Seiten (ScrapingAnt)
         "file", "filesystem", "results",         # Dateien + Speichern
         "memory",                                # Kontext
         "voice", "speech",                       # Sprachausgabe
