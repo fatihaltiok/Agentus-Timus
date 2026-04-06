@@ -2,6 +2,50 @@
 
 ---
 
+## Fortschritt 2026-04-06 - C4 und Phase-D-Vorlauf vorbereitet
+
+Der naechste offene Runtime-Block nach C3 ist `C4 Langlaeufer-/Antwortpfade`. Parallel dazu braucht der spaetere Phase-D-Start einen sauberen Approval-/Auth-/Handover-Rahmen.
+
+Neu angelegt:
+
+- [docs/C4_LONGRUNNER_RESPONSE_PREP.md](/home/fatih-ubuntu/dev/timus/docs/C4_LONGRUNNER_RESPONSE_PREP.md)
+  - konkreter Arbeitsplan fuer:
+    - Progress-/Blocker-/Partial-Transport
+    - Nutzung des bestehenden Delegation-Progress im `agent_registry`
+    - Canvas/SSE als erster Zielpfad
+    - Einbindung von `executor`, `research`, `visual_nemotron`
+- [docs/PHASE_D_APPROVAL_AUTH_PREP.md](/home/fatih-ubuntu/dev/timus/docs/PHASE_D_APPROVAL_AUTH_PREP.md)
+  - konkreter Vorlauf fuer:
+    - `D1 Auth Need Detection`
+    - `D2 Approval + Consent Gate`
+    - `D3 User-mediated Login`
+    - `D4 Auth Session Reuse`
+    - `D5 Challenge Handover`
+  - vereinheitlichte Ziel-Payloads fuer:
+    - `approval_required`
+    - `auth_required`
+    - `awaiting_user`
+    - `challenge_required`
+- [orchestration/longrunner_transport.py](/home/fatih-ubuntu/dev/timus/orchestration/longrunner_transport.py)
+  - konkreter Code-Vertrag fuer:
+    - gemeinsames Envelope
+    - feste C4-Event-Typen
+    - Builder-Helper
+    - Validierung
+- [tests/test_longrunner_transport_contract.py](/home/fatih-ubuntu/dev/timus/tests/test_longrunner_transport_contract.py)
+  - Regression fuer:
+    - stabiles Envelope
+    - unbekannte Event-Typen
+    - Blocker-/Partial-/Failure-Invarianten
+
+Wichtige Setzung:
+
+- `C4` bleibt der letzte echte offene Block in Phase C
+- Phase D wird vorbereitet, aber nicht vorgezogen
+- Approval-/Auth-/Challenge-Logik soll auf den spaeteren C4-Transport aufsetzen, nicht als paralleles Sonderprotokoll daneben entstehen
+
+---
+
 ## Fortschritt 2026-04-06 - C3 Vision/OCR Hot-Path gehaertet
 
 ### Problemstellung
