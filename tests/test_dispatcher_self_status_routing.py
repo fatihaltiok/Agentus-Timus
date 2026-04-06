@@ -41,6 +41,13 @@ def test_quick_intent_routes_trivial_colloquial_lookups_to_executor():
     assert main_dispatcher.quick_intent_check("was denkst du wird es morgen regnen") == "executor"
     assert main_dispatcher.quick_intent_check("kannst du mir sagen wie spaet es ist") == "executor"
     assert main_dispatcher.quick_intent_check("weisst du wann heute sonnenuntergang ist") == "executor"
+    assert main_dispatcher.quick_intent_check("hi timus wie spaet ist es") == "executor"
+
+
+def test_quick_intent_routes_greeting_prefixed_substantive_questions_to_meta():
+    import main_dispatcher
+
+    assert main_dispatcher.quick_intent_check("hi timus wie stehts um die aktuelle weltlage") == "meta"
 
 
 def test_quick_intent_keeps_colloquial_nontrivial_strategy_question_out_of_executor():

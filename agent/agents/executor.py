@@ -12,14 +12,9 @@ from utils.location_local_intent import analyze_location_local_intent, analyze_l
 from utils.location_route import build_google_maps_directions_url, normalize_route_travel_mode
 
 _SMALLTALK_PATTERNS = (
-    r"\bhey\b",
-    r"\bhi\b",
-    r"\bhallo\b",
-    r"\bservus\b",
-    r"\bmoin\b",
-    r"\bwie geht'?s\b",
-    r"\bwas geht\b",
-    r"\bna\b",
+    r"^\s*(?:hey|hi|hallo|servus|moin|guten\s+tag|guten\s+morgen|guten\s+abend)(?:\s+timus)?[\s,!\.?]*$",
+    r"^\s*(?:timus[\s,!\.?]*)?(?:wie geht'?s|was geht|na)[\s,!\.?]*$",
+    r"^\s*(?:hey|hi|hallo|servus|moin)(?:\s+timus)?[\s,!\.?]+(?:wie geht'?s|was geht|na)[\s,!\.?]*$",
 )
 
 _SELF_STATUS_PATTERNS = (
@@ -278,6 +273,39 @@ _LOOKUP_PRICING_OUTPUT_NOISE_PATTERNS = (
     r"\btabelle\b",
     r"\bliste\b",
 )
+
+_LLM_PRICING_MARKERS = (
+    "llm",
+    "llms",
+    "api",
+    "token",
+    "tokens",
+    "input",
+    "output",
+    "cached",
+    "sprachmodell",
+    "sprachmodelle",
+    "ki-modell",
+    "ki-modelle",
+    "ki modell",
+    "ki modelle",
+    "language model",
+    "language models",
+    "foundation model",
+    "foundation models",
+    "openai",
+    "anthropic",
+    "claude",
+    "gpt",
+    "gemini",
+    "deepseek",
+    "qwen",
+    "grok",
+    "kimi",
+    "glm",
+    "mistral",
+    "openrouter",
+)
 _LOOKUP_PRICE_VALUE_MARKERS = (
     "preis-leistung",
     "preis leistung",
@@ -387,6 +415,27 @@ class ExecutorAgent(BaseAgent):
         except Exception:
             return
 
+    def _emit_user_action_blocker(self, payload: Any, *, stage: str = "user_action_required") -> None:
+        if not isinstance(payload, dict):
+            return
+        if not (payload.get("auth_required") or payload.get("user_action_required")):
+            return
+        blocker_reason = (
+            "auth_required"
+            if payload.get("auth_required") or str(payload.get("status") or "").strip().lower() == "auth_required"
+            else "user_action_required"
+        )
+        self._notify_delegation_progress(
+            stage,
+            kind="blocker",
+            blocker_reason=blocker_reason,
+            message=str(payload.get("error") or payload.get("message") or "Nutzeraktion erforderlich.").strip(),
+            user_action_required=str(payload.get("user_action_required") or "").strip(),
+            platform=str(payload.get("platform") or "").strip(),
+            url=str(payload.get("url") or "").strip(),
+            tool_status=str(payload.get("status") or "").strip(),
+        )
+
     @staticmethod
     def _recover_user_query(task_text: str) -> str:
         text = str(task_text or "").strip()
@@ -472,8 +521,8 @@ class ExecutorAgent(BaseAgent):
             marker in normalized for marker in lookup_markers
         )
 
-    @staticmethod
-    def _infer_simple_live_lookup_category(task: str) -> str:
+    @classmethod
+    def _infer_simple_live_lookup_category(cls, task: str, *, context_seed: str = "") -> str:
         normalized = str(task or "").strip().lower()
         if any(marker in normalized for marker in _SIMPLE_LOOKUP_WEATHER_MARKERS):
             return "weather"
@@ -485,7 +534,7 @@ class ExecutorAgent(BaseAgent):
             return "science_news"
         if any(marker in normalized for marker in _SIMPLE_LOOKUP_NEWS_MARKERS):
             return "news"
-        if any(marker in normalized for marker in _SIMPLE_LOOKUP_PRICING_MARKERS):
+        if cls._is_llm_pricing_query(normalized, context_seed=context_seed):
             return "pricing"
         if any(marker in normalized for marker in _SIMPLE_LOOKUP_PERSON_MARKERS):
             return "person_lookup"
@@ -601,6 +650,15 @@ class ExecutorAgent(BaseAgent):
                 providers.append(provider)
                 seen.add(provider)
         return providers
+
+    @classmethod
+    def _is_llm_pricing_query(cls, task: str, *, context_seed: str = "") -> bool:
+        normalized = f"{task or ''} {context_seed or ''}".lower()
+        if not any(marker in normalized for marker in _SIMPLE_LOOKUP_PRICING_MARKERS):
+            return False
+        if any(marker in normalized for marker in _LLM_PRICING_MARKERS):
+            return True
+        return any(re.search(pattern, normalized) for pattern in _LOOKUP_MODEL_SIGNAL_PATTERNS)
 
     @classmethod
     def _extract_pricing_lines_from_text(cls, text: str) -> list[str]:
@@ -2137,12 +2195,12 @@ class ExecutorAgent(BaseAgent):
             else ""
         ) or task_text
         user_task = self._recover_user_query(source_task)
-        category = self._infer_simple_live_lookup_category(user_task)
         context_text = task_text or source_task
         topic_recall = self._recover_topic_recall(context_text)
         recent_assistant_replies = self._recover_recent_assistant_replies(context_text)
         extraction_followup = self._is_lookup_result_extraction_query(user_task)
         context_seed = self._contextual_lookup_seed(topic_recall, recent_assistant_replies)
+        category = self._infer_simple_live_lookup_category(user_task, context_seed=context_seed)
         contextual_urls = self._extract_urls_from_context(context_text)
 
         if category == "local_places":
@@ -2184,6 +2242,7 @@ class ExecutorAgent(BaseAgent):
             )
             if not (isinstance(fetched, dict) and fetched.get("error")):
                 fetched_payload = self._tool_payload(fetched)
+                self._emit_user_action_blocker(fetched_payload, stage="fetch_contextual_source_blocked")
                 pricing_response = await self._finalize_pricing_lookup(
                     user_task=user_task,
                     source_title=str(fetched_payload.get("title") or "").strip(),
@@ -2203,6 +2262,7 @@ class ExecutorAgent(BaseAgent):
             )
             if not (isinstance(fetched, dict) and fetched.get("error")):
                 fetched_payload = self._tool_payload(fetched)
+                self._emit_user_action_blocker(fetched_payload, stage="fetch_contextual_source_blocked")
 
         search_query = self._build_simple_live_lookup_query(
             user_task=user_task,
@@ -2247,6 +2307,7 @@ class ExecutorAgent(BaseAgent):
                 )
                 if not (isinstance(fetched, dict) and fetched.get("error")):
                     fetched_payload = self._tool_payload(fetched)
+                    self._emit_user_action_blocker(fetched_payload, stage="fetch_primary_source_blocked")
                     if category == "pricing":
                         pricing_response = await self._finalize_pricing_lookup(
                             user_task=user_task,

@@ -46,7 +46,7 @@ import json
 import uuid
 import time
 from pathlib import Path
-from typing import Any, Optional, List
+from typing import Any, Callable, Optional, List
 
 import httpx
 from dotenv import load_dotenv
@@ -81,6 +81,63 @@ from utils.meta_handoff_wrappers import strip_meta_canvas_wrappers
 
 # Logger frueh definieren, damit Import-Fallbacks sicher loggen koennen.
 log = logging.getLogger("MainDispatcher")
+_agent_progress_hook: Optional[Callable[[dict[str, Any]], None]] = None
+
+
+def _emit_top_level_agent_progress(
+    *,
+    agent_name: str,
+    session_id: str,
+    stage: str,
+    payload: Optional[dict[str, Any]] = None,
+) -> None:
+    hook = _agent_progress_hook
+    if hook is None:
+        return
+    try:
+        hook(
+            {
+                "agent": str(agent_name or "").strip(),
+                "session_id": str(session_id or "").strip(),
+                "stage": str(stage or "").strip(),
+                "payload": dict(payload or {}),
+            }
+        )
+    except Exception:
+        pass
+
+
+def _build_agent_progress_callback(
+    *,
+    agent_name: str,
+    session_id: str,
+    previous_callback: Any = None,
+) -> Callable[..., None]:
+    def _callback(*args: Any, **kwargs: Any) -> None:
+        stage = str(kwargs.get("stage") or (args[0] if args else "") or "").strip()
+        payload = kwargs.get("payload")
+        if not isinstance(payload, dict):
+            payload = {}
+
+        if callable(previous_callback):
+            try:
+                previous_callback(*args, **kwargs)
+            except TypeError:
+                try:
+                    previous_callback(stage=stage, payload=payload)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        _emit_top_level_agent_progress(
+            agent_name=agent_name,
+            session_id=session_id,
+            stage=stage,
+            payload=payload,
+        )
+
+    return _callback
 
 # --- Modulpfad-Korrektur ---
 try:
@@ -1572,6 +1629,12 @@ _DISPATCHER_COLLOQUIAL_PREFIX_PATTERNS = (
     r"^\s*(?:bitte|mal\s+ehrlich|sag\s+mal|nur\s+mal)\b[\s,:\-]*",
 )
 
+_DISPATCHER_GREETING_PREFIX_PATTERNS = (
+    r"^\s*(?:hey|hi|hallo|servus|moin|guten\s+tag|guten\s+morgen|guten\s+abend)\b",
+    r"^\s*(?:hey|hi|hallo|servus|moin)\s+timus\b",
+    r"^\s*timus\b",
+)
+
 _DISPATCHER_COLLOQUIAL_SHELL_PATTERNS = (
     r"^\s*was\s+denkst\s+du(?:\s+dazu|\s+denn|\s+so)?\s+",
     r"^\s*was\s+meinst\s+du(?:\s+dazu|\s+denn|\s+so)?\s+",
@@ -1835,6 +1898,19 @@ def _looks_like_dispatcher_trivial_lookup(query: str) -> bool:
     starts_like_question = normalized.startswith(_DISPATCHER_TRIVIAL_QUESTION_STARTS)
     has_lookup_hint = any(token in normalized for token in _DISPATCHER_TRIVIAL_LOOKUP_HINTS)
     return starts_like_question and has_lookup_hint
+
+
+def _has_dispatcher_greeting_prefixed_semantic_query(
+    focus_query: str,
+    core_query: str,
+) -> bool:
+    normalized_focus = str(focus_query or "").strip().lower()
+    normalized_core = str(core_query or "").strip().lower()
+    if not normalized_focus or not normalized_core:
+        return False
+    if normalized_focus == normalized_core:
+        return False
+    return any(re.search(pattern, normalized_focus) for pattern in _DISPATCHER_GREETING_PREFIX_PATTERNS)
 
 
 def _has_dispatcher_technical_review_evidence(query: str) -> bool:
@@ -2123,7 +2199,7 @@ def quick_intent_check(query: str) -> Optional[str]:
 
     # Executor-Keywords (einfache Fragen)
     for keyword in EXECUTOR_KEYWORDS:
-        if keyword in focus_lower:
+        if keyword in analysis_query:
             return "executor"
 
     # Data-Keywords
@@ -2145,6 +2221,9 @@ def quick_intent_check(query: str) -> Optional[str]:
     for keyword in SYSTEM_KEYWORDS:
         if keyword in focus_lower:
             return "system"
+
+    if _has_dispatcher_greeting_prefixed_semantic_query(focus_lower, core_lower):
+        return "meta"
 
     return None  # LLM entscheiden lassen
 
@@ -2810,8 +2889,15 @@ async def run_agent(
 
             try:
                 log.info("   🚀 Starte v4 (Desktop Edition mit PyAutoGUI)")
+                visual_progress_callback = _build_agent_progress_callback(
+                    agent_name=agent_name,
+                    session_id=effective_session_id,
+                )
                 result = await run_desktop_task(
-                    task_list=task_list, url=url if url else None, max_steps=15
+                    task_list=task_list,
+                    url=url if url else None,
+                    max_steps=15,
+                    progress_callback=visual_progress_callback,
                 )
                 version = "v4"
 
@@ -2914,6 +3000,19 @@ Schritte: {steps_executed} ausgeführt{f" von {steps_planned} geplant" if steps_
             setattr(agent_instance, "conversation_session_id", effective_session_id)
         except Exception as e:
             log.warning(f"Konnte conversation_session_id nicht setzen: {e}")
+        try:
+            previous_progress_callback = getattr(agent_instance, "_delegation_progress_callback", None)
+            setattr(
+                agent_instance,
+                "_delegation_progress_callback",
+                _build_agent_progress_callback(
+                    agent_name=agent_name,
+                    session_id=effective_session_id,
+                    previous_callback=previous_progress_callback,
+                ),
+            )
+        except Exception as e:
+            log.debug(f"Agent-Progress-Hook konnte nicht gesetzt werden: {e}")
         try:
             if hasattr(agent_instance, "set_audit_step_logger"):
                 agent_instance.set_audit_step_logger(audit.log_step)

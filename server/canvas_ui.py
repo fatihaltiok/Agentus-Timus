@@ -261,6 +261,27 @@ _TEMPLATE = r"""<!doctype html>
       box-shadow: 0 0 12px var(--think-glow), 0 0 24px rgba(167,139,250,0.1);
       animation: think-pulse 0.9s ease-in-out infinite;
     }
+    .thinking-led.state-running {
+      background: var(--cyan);
+      border-color: var(--cyan);
+      box-shadow: 0 0 12px var(--cyan-glow), 0 0 22px rgba(0,212,240,0.12);
+    }
+    .thinking-led.state-partial,
+    .thinking-led.state-blocked {
+      background: var(--warn);
+      border-color: var(--warn);
+      box-shadow: 0 0 12px var(--warn-glow), 0 0 22px rgba(251,191,36,0.10);
+    }
+    .thinking-led.state-completed {
+      background: var(--ok);
+      border-color: var(--ok);
+      box-shadow: 0 0 10px var(--ok-glow), 0 0 20px rgba(0,224,154,0.10);
+    }
+    .thinking-led.state-error {
+      background: var(--err);
+      border-color: var(--err);
+      box-shadow: 0 0 12px var(--err-glow), 0 0 22px rgba(244,63,94,0.10);
+    }
     @keyframes think-pulse {
       0%, 100% { opacity: 1;    box-shadow: 0 0 8px  var(--think-glow); }
       50%       { opacity: 0.3; box-shadow: 0 0 20px var(--think-glow); }
@@ -270,7 +291,13 @@ _TEMPLATE = r"""<!doctype html>
       color: var(--think);
       letter-spacing: 0.8px;
       min-width: 70px;
+      transition: color 0.2s ease;
     }
+    #thinkingLabel.running { color: var(--cyan); }
+    #thinkingLabel.partial,
+    #thinkingLabel.blocked { color: var(--warn); }
+    #thinkingLabel.completed { color: var(--brand); }
+    #thinkingLabel.error { color: var(--err); }
 
     /* ── 3-SPALTEN SHELL ─────────────────────────────────────────── */
     .shell {
@@ -393,6 +420,16 @@ _TEMPLATE = r"""<!doctype html>
       background: var(--ok);
       box-shadow: 0 0 6px var(--ok-glow);
     }
+    .led.running {
+      background: var(--cyan);
+      box-shadow: 0 0 8px var(--cyan-glow);
+      animation: led-think 0.9s ease-in-out infinite;
+    }
+    .led.partial,
+    .led.blocked {
+      background: var(--warn);
+      box-shadow: 0 0 8px var(--warn-glow);
+    }
     .led.error {
       background: var(--err);
       box-shadow: 0 0 6px var(--err-glow);
@@ -406,6 +443,15 @@ _TEMPLATE = r"""<!doctype html>
       border-color: var(--think);
       animation: led-ring 1.2s cubic-bezier(0,0.5,0.8,1) infinite;
     }
+    .led.running::after,
+    .led.partial::after,
+    .led.blocked::after {
+      animation: led-ring 1.2s cubic-bezier(0,0.5,0.8,1) infinite;
+      opacity: 0.55;
+    }
+    .led.running::after { border-color: var(--cyan); }
+    .led.partial::after,
+    .led.blocked::after { border-color: var(--warn); }
     @keyframes led-think {
       0%,100% { opacity: 1; }
       50%      { opacity: 0.25; }
@@ -1045,6 +1091,105 @@ _TEMPLATE = r"""<!doctype html>
       flex-direction: column;
       gap: 10px;
       min-height: 0;
+    }
+
+    .runtime-strip {
+      margin: 12px 12px 0;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: linear-gradient(135deg, rgba(9,16,24,0.96) 0%, rgba(7,12,18,0.98) 100%);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.02);
+      flex-shrink: 0;
+    }
+    .runtime-strip.running {
+      border-color: rgba(0,212,240,0.18);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.25), 0 0 0 1px rgba(0,212,240,0.06), inset 0 1px 0 rgba(255,255,255,0.02);
+    }
+    .runtime-strip.partial,
+    .runtime-strip.blocked {
+      border-color: rgba(251,191,36,0.22);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.25), 0 0 0 1px rgba(251,191,36,0.07), inset 0 1px 0 rgba(255,255,255,0.02);
+    }
+    .runtime-strip.completed {
+      border-color: rgba(0,224,154,0.18);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.25), 0 0 0 1px rgba(0,224,154,0.06), inset 0 1px 0 rgba(255,255,255,0.02);
+    }
+    .runtime-strip.error {
+      border-color: rgba(244,63,94,0.22);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.25), 0 0 0 1px rgba(244,63,94,0.08), inset 0 1px 0 rgba(255,255,255,0.02);
+    }
+    .runtime-strip-head {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
+    .runtime-state-badge {
+      min-width: 82px;
+      padding: 5px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.03);
+      color: var(--text2);
+      font-size: 9px;
+      letter-spacing: 1.1px;
+      text-transform: uppercase;
+      text-align: center;
+      flex-shrink: 0;
+    }
+    .runtime-state-badge.running {
+      color: var(--cyan);
+      border-color: rgba(0,212,240,0.24);
+      background: rgba(0,212,240,0.08);
+    }
+    .runtime-state-badge.partial,
+    .runtime-state-badge.blocked {
+      color: var(--warn);
+      border-color: rgba(251,191,36,0.28);
+      background: rgba(251,191,36,0.09);
+    }
+    .runtime-state-badge.completed {
+      color: var(--brand);
+      border-color: rgba(0,224,154,0.24);
+      background: rgba(0,224,154,0.07);
+    }
+    .runtime-state-badge.error {
+      color: var(--err);
+      border-color: rgba(244,63,94,0.28);
+      background: rgba(244,63,94,0.08);
+    }
+    .runtime-headline-wrap {
+      min-width: 0;
+      flex: 1;
+    }
+    .runtime-headline {
+      color: var(--text);
+      font-size: 11.5px;
+      line-height: 1.45;
+      font-weight: 600;
+    }
+    .runtime-meta {
+      margin-top: 4px;
+      color: var(--text3);
+      font-size: 9px;
+      letter-spacing: 0.4px;
+      word-break: break-word;
+    }
+    .runtime-preview {
+      margin-top: 9px;
+      padding-top: 9px;
+      border-top: 1px solid rgba(255,255,255,0.04);
+      color: var(--text2);
+      font-size: 10.5px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 92px;
+      overflow: auto;
+    }
+    .runtime-preview.empty {
+      color: var(--text3);
+      font-style: italic;
     }
 
     /* Chat-Nachrichten-Bubbles */
@@ -3167,6 +3312,16 @@ _TEMPLATE = r"""<!doctype html>
           </button>
         </div>
       </div>
+      <div id="chatRuntimeStrip" class="runtime-strip idle">
+        <div class="runtime-strip-head">
+          <div id="chatRuntimeBadge" class="runtime-state-badge idle">bereit</div>
+          <div class="runtime-headline-wrap">
+            <div id="chatRuntimeHeadline" class="runtime-headline">Canvas bereit. Laufende Arbeit von Timus erscheint hier.</div>
+            <div id="chatRuntimeMeta" class="runtime-meta">Noch kein aktiver Langlaeufer.</div>
+          </div>
+        </div>
+        <div id="chatRuntimePreview" class="runtime-preview empty">Zwischenstaende, Blocker und Teilergebnisse werden hier live angezeigt.</div>
+      </div>
       <div id="chatMessages" class="chat-messages">
         <div class="empty">Stelle Timus eine Frage…</div>
       </div>
@@ -3271,6 +3426,19 @@ let lastVoiceReplyText = "";
 let lastVoiceAudioUrl  = "";
 let sseConnected       = false;
 let sseReconnectTimer  = null;
+let thinkingActive     = false;
+let longrunState       = {
+  status: "idle",
+  requestId: "",
+  runId: "",
+  agent: "",
+  stage: "",
+  message: "",
+  preview: "",
+  userActionRequired: "",
+  blockerReason: "",
+  ts: "",
+};
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function esc(v) {
@@ -3287,6 +3455,12 @@ async function api(url, opts) {
 
 function isMobileLayout() {
   return window.matchMedia("(max-width: 960px)").matches;
+}
+
+function shortenText(value, maxLen = 220) {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  return text.length > maxLen ? text.slice(0, maxLen - 1) + "…" : text;
 }
 
 function setMobilePill(id, label, value, state) {
@@ -4759,12 +4933,137 @@ function updateAgentLed(agent, status) {
   updateGraphNodeColor(agent, status);
 }
 
-// ── Thinking LED ──────────────────────────────────────────────────────────────
-function setThinking(active) {
+function runtimeDisplayLabel(state) {
+  const status = String((state && state.status) || "idle").toLowerCase();
+  if (status === "running") return shortenText(state.message || `Aktiv: ${state.agent || "Timus"}`, 64);
+  if (status === "partial") return shortenText(state.message || "Teilergebnis verfuegbar", 64);
+  if (status === "blocked") return shortenText(state.message || "Nutzeraktion erforderlich", 64);
+  if (status === "completed") return shortenText(state.message || "Abgeschlossen", 64);
+  if (status === "error") return shortenText(state.message || "Fehlgeschlagen", 64);
+  return "";
+}
+
+function runtimeBadgeLabel(status) {
+  if (status === "running") return "aktiv";
+  if (status === "partial") return "teilweise";
+  if (status === "blocked") return "blockiert";
+  if (status === "completed") return "fertig";
+  if (status === "error") return "fehler";
+  return "bereit";
+}
+
+function runtimeMetaText(state) {
+  const parts = [];
+  if (state.agent) parts.push(state.agent);
+  if (state.stage) parts.push(String(state.stage).replace(/_/g, " "));
+  if (state.requestId) parts.push(state.requestId);
+  if (state.ts) {
+    const dt = new Date(state.ts);
+    if (!Number.isNaN(dt.getTime())) parts.push(dt.toLocaleTimeString());
+  }
+  return parts.join(" · ");
+}
+
+function renderRuntimeStatus() {
   const led   = document.getElementById("thinkingLed");
   const label = document.getElementById("thinkingLabel");
-  if (active) { led.classList.add("active");    label.textContent = "Denkt…"; }
-  else         { led.classList.remove("active"); label.textContent = "";       }
+  const strip = document.getElementById("chatRuntimeStrip");
+  const badge = document.getElementById("chatRuntimeBadge");
+  const headline = document.getElementById("chatRuntimeHeadline");
+  const meta = document.getElementById("chatRuntimeMeta");
+  const preview = document.getElementById("chatRuntimePreview");
+  const status = String(longrunState.status || "idle").toLowerCase();
+
+  if (led) led.classList.remove("active", "state-running", "state-partial", "state-blocked", "state-completed", "state-error");
+  if (label) label.className = "";
+
+  if (status !== "idle") {
+    if (led) led.classList.add(`state-${status === "partial" ? "partial" : status}`);
+    if (label) {
+      label.textContent = runtimeDisplayLabel(longrunState);
+      label.classList.add(status);
+    }
+  } else if (thinkingActive) {
+    if (led) led.classList.add("active");
+    if (label) label.textContent = "Denkt…";
+  } else if (label) {
+    label.textContent = "";
+  }
+
+  if (!strip || !badge || !headline || !meta || !preview) return;
+
+  strip.className = "runtime-strip " + status;
+  badge.className = "runtime-state-badge " + status;
+  badge.textContent = runtimeBadgeLabel(status);
+
+  if (status === "idle") {
+    headline.textContent = "Canvas bereit. Laufende Arbeit von Timus erscheint hier.";
+    meta.textContent = thinkingActive ? "Timus denkt gerade." : "Noch kein aktiver Langlaeufer.";
+    preview.textContent = "Zwischenstaende, Blocker und Teilergebnisse werden hier live angezeigt.";
+    preview.classList.add("empty");
+    return;
+  }
+
+  headline.textContent = longrunState.message || runtimeDisplayLabel(longrunState);
+  meta.textContent = runtimeMetaText(longrunState) || "Aktualisiert";
+  const previewText = shortenText(
+    longrunState.userActionRequired || longrunState.preview || "",
+    420
+  );
+  preview.textContent =
+    previewText ||
+    (status === "blocked"
+      ? "Timus braucht eine Nutzeraktion, um weiterzumachen."
+      : status === "partial"
+      ? "Ein erstes Teilergebnis ist verfuegbar."
+      : status === "completed"
+      ? "Der Lauf wurde sauber abgeschlossen."
+      : status === "error"
+      ? "Der Lauf ist fehlgeschlagen."
+      : "Timus arbeitet an der Anfrage.");
+  preview.classList.toggle("empty", !previewText);
+}
+
+// ── Thinking LED ──────────────────────────────────────────────────────────────
+function setThinking(active) {
+  thinkingActive = !!active;
+  renderRuntimeStatus();
+}
+
+function normalizeLongrunStatusFromEvent(d) {
+  if (!d || !d.type) return "idle";
+  if (d.type === "run_started" || d.type === "progress") return "running";
+  if (d.type === "partial_result") return "partial";
+  if (d.type === "blocker") return "blocked";
+  if (d.type === "run_completed") return "completed";
+  if (d.type === "run_failed") return "error";
+  return "idle";
+}
+
+function updateLongrunState(d) {
+  const status = normalizeLongrunStatusFromEvent(d);
+  if (status === "idle") return;
+  longrunState = {
+    status,
+    requestId: String(d.request_id || longrunState.requestId || ""),
+    runId: String(d.run_id || longrunState.runId || ""),
+    agent: String(d.agent || longrunState.agent || ""),
+    stage: String(d.stage || ""),
+    message: String(d.message || ""),
+    preview: String(d.content_preview || ""),
+    userActionRequired: String(d.user_action_required || ""),
+    blockerReason: String(d.blocker_reason || ""),
+    ts: String(d.ts || new Date().toISOString()),
+  };
+  renderRuntimeStatus();
+  if (d.agent) {
+    const ledStatus =
+      status === "running" ? "running" :
+      status === "completed" ? "completed" :
+      status === "error" ? "error" :
+      status === "blocked" ? "blocked" : "partial";
+    updateAgentLed(d.agent, ledStatus);
+  }
 }
 
 // ── Tool Activity ─────────────────────────────────────────────────────────────
@@ -4810,6 +5109,10 @@ function handleSSE(d) {
   if (d.type === "init")         { renderAgentLeds(d.agents || {}); setThinking(!!d.thinking); return; }
   if (d.type === "thinking")     { setThinking(!!d.active); return; }
   if (d.type === "agent_status") { updateAgentLed(d.agent, d.status); return; }
+  if (["run_started","progress","partial_result","blocker","run_completed","run_failed"].includes(d.type)) {
+    updateLongrunState(d);
+    return;
+  }
   if (d.type === "chat_reply") {
     removeChatThinking();
     appendChatMsg("assistant", d.agent || "Timus", d.text || "");
@@ -4819,6 +5122,21 @@ function handleSSE(d) {
   }
   if (d.type === "chat_error") {
     removeChatThinking();
+    if (longrunState.status !== "error") {
+      longrunState = {
+        status: "error",
+        requestId: String(d.request_id || longrunState.requestId || ""),
+        runId: String(longrunState.runId || ""),
+        agent: String(longrunState.agent || ""),
+        stage: "chat_error",
+        message: "Chat-Lauf fehlgeschlagen.",
+        preview: String(d.error || ""),
+        userActionRequired: "",
+        blockerReason: "",
+        ts: new Date().toISOString(),
+      };
+      renderRuntimeStatus();
+    }
     appendChatMsg("assistant", "⚠ Fehler", d.error || "Unbekannter Fehler");
     isSending = false;
     document.getElementById("sendBtn").disabled = false;
@@ -4903,6 +5221,19 @@ async function sendChat() {
   input.value = "";
   input.style.height = "auto";
   appendChatMsg("user", "", query);
+  longrunState = {
+    status: "running",
+    requestId: "",
+    runId: "",
+    agent: "",
+    stage: "queued",
+    message: "Anfrage gesendet. Warte auf Startsignal von Timus.",
+    preview: shortenText(query, 220),
+    userActionRequired: "",
+    blockerReason: "",
+    ts: new Date().toISOString(),
+  };
+  renderRuntimeStatus();
   addChatThinking();
   try {
     await fetch("/chat", {
@@ -4911,6 +5242,19 @@ async function sendChat() {
     });
   } catch (err) {
     removeChatThinking();
+    longrunState = {
+      status: "error",
+      requestId: "",
+      runId: "",
+      agent: "",
+      stage: "send_error",
+      message: "Verbindungsfehler beim Senden.",
+      preview: String(err.message || ""),
+      userActionRequired: "",
+      blockerReason: "",
+      ts: new Date().toISOString(),
+    };
+    renderRuntimeStatus();
     appendChatMsg("assistant", "⚠ Fehler", "Verbindungsfehler: " + err.message);
     isSending = false;
     document.getElementById("sendBtn").disabled = false;
@@ -5288,6 +5632,8 @@ const STATUS_COLOR = {
   completed: "#00e09a",
   error:     "#f43f5e",
   running:   "#00e09a",
+  partial:   "#fbbf24",
+  blocked:   "#fbbf24",
 };
 const STATUS_BORDER = {
   idle:      "#243748",
@@ -5295,6 +5641,8 @@ const STATUS_BORDER = {
   completed: "#00e09a",
   error:     "#f43f5e",
   running:   "#00e09a",
+  partial:   "#fbbf24",
+  blocked:   "#fbbf24",
 };
 
 // Strahlfarben nach Delegations-Status
@@ -5381,7 +5729,7 @@ function fitGraph() { if (cy) cy.fit(40); }
 function _agentStatusFromLed(name) {
   const led = document.getElementById("led-" + name);
   if (!led) return "idle";
-  for (const c of ["thinking","completed","error","running"]) if (led.classList.contains(c)) return c;
+  for (const c of ["thinking","completed","error","running","partial","blocked"]) if (led.classList.contains(c)) return c;
   return "idle";
 }
 
@@ -6951,7 +7299,17 @@ async function reloadFlowRuntime() {
 
 function handleFlowRuntimeEvent(d) {
   if (!flowCy || !d || d.type === "ping" || d.type === "init") return;
-  const status = d.status || (d.type === "chat_error" ? "error" : d.type === "tool_done" ? "completed" : "running");
+  const status =
+    d.status ||
+    (d.type === "chat_error" || d.type === "run_failed"
+      ? "error"
+      : d.type === "tool_done" || d.type === "run_completed"
+      ? "completed"
+      : d.type === "blocker"
+      ? "warning"
+      : d.type === "partial_result"
+      ? "warning"
+      : "running");
   const message = d.error || d.message || d.text || d.tool || d.type || "";
   const mapped = resolveFlowNodeIds({
     type: d.type,
@@ -7059,6 +7417,7 @@ async function init() {
   routeMapViewportPinned = !routeMapFollowEnabled;
   updateLiveConnectionState(navigator.onLine ? "warn" : "error", navigator.onLine ? "bereit" : "offline");
   renderAgentLeds({});
+  renderRuntimeStatus();
   renderToolActivity();
   initCytoscape();
   initAgentCircle();

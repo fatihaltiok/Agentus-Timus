@@ -28,6 +28,9 @@ log = logging.getLogger("AgentRegistry")
 # Externer SSE-Hook — wird von mcp_server.py beim Start gesetzt.
 # Signatur: (from_agent: str, to_agent: str, status: str) -> None
 _delegation_sse_hook: Optional[Callable] = None
+# Externer C4-Hook — wird von mcp_server.py gesetzt.
+# Signatur: (payload: Dict[str, Any]) -> None
+_delegation_transport_hook: Optional[Callable[[Dict[str, Any]], None]] = None
 
 
 @dataclass
@@ -295,13 +298,56 @@ class AgentRegistry:
         return meta
 
     @staticmethod
-    def _make_progress_callback(progress_event: asyncio.Event, progress_state: Dict[str, Any]) -> Callable[..., None]:
+    def _emit_transport_progress(
+        *,
+        from_agent: str,
+        to_agent: str,
+        session_id: str,
+        stage: str,
+        payload: Dict[str, Any],
+    ) -> None:
+        if _delegation_transport_hook is None:
+            return
+        try:
+            _delegation_transport_hook(
+                {
+                    "kind": str(payload.get("kind") or "progress").strip().lower() or "progress",
+                    "from_agent": from_agent,
+                    "to_agent": to_agent,
+                    "session_id": session_id,
+                    "stage": stage,
+                    "payload": dict(payload),
+                }
+            )
+        except Exception:
+            pass
+
+    @classmethod
+    def _make_progress_callback(
+        cls,
+        progress_event: asyncio.Event,
+        progress_state: Dict[str, Any],
+        *,
+        from_agent: str,
+        to_agent: str,
+        session_id: str,
+    ) -> Callable[..., None]:
         def _callback(*args: Any, **kwargs: Any) -> None:
             stage = str(kwargs.get("stage") or (args[0] if args else "") or "").strip()
+            payload = kwargs.get("payload")
+            if not isinstance(payload, dict):
+                payload = {}
             if stage:
                 progress_state["stage"] = stage
             progress_state["updated_at"] = time.monotonic()
             progress_event.set()
+            cls._emit_transport_progress(
+                from_agent=from_agent,
+                to_agent=to_agent,
+                session_id=session_id,
+                stage=stage,
+                payload=payload,
+            )
 
         return _callback
 
@@ -490,7 +536,13 @@ class AgentRegistry:
                 setattr(
                     agent,
                     "_delegation_progress_callback",
-                    self._make_progress_callback(progress_event, progress_state),
+                    self._make_progress_callback(
+                        progress_event,
+                        progress_state,
+                        from_agent=from_agent,
+                        to_agent=to_agent,
+                        session_id=effective_session_id or "",
+                    ),
                 )
                 had_delegation_context = hasattr(agent, "_delegation_context")
                 previous_delegation_context = getattr(agent, "_delegation_context", None)
@@ -563,6 +615,18 @@ class AgentRegistry:
 
             # Partial-Result-Erkennung
             if outcome_status == "partial":
+                self._emit_transport_progress(
+                    from_agent=from_agent,
+                    to_agent=to_agent,
+                    session_id=effective_session_id or "",
+                    stage="delegation_partial",
+                    payload={
+                        "kind": "partial_result",
+                        "message": f"{to_agent} liefert ein partielles Ergebnis.",
+                        "content_preview": result_str[:400],
+                        "note": "Aufgabe nicht vollstaendig abgeschlossen",
+                    },
+                )
                 status = "partial"
                 self._log_canvas_delegation(
                     from_agent=from_agent,
@@ -736,6 +800,19 @@ class AgentRegistry:
                 artifacts=[],
             )
             if timeout_status == "partial":
+                self._emit_transport_progress(
+                    from_agent=from_agent,
+                    to_agent=to_agent,
+                    session_id=effective_session_id or "",
+                    stage="delegation_partial_timeout",
+                    payload={
+                        "kind": "partial_result",
+                        "message": f"{to_agent} hat nur ein partielles Ergebnis geliefert.",
+                        "content_preview": str(e)[:400],
+                        "timeout_seconds": timeout,
+                        "last_progress_stage": str(progress_state.get("stage") or ""),
+                    },
+                )
                 return {
                     "status": "partial",
                     "agent": to_agent,
@@ -1350,7 +1427,13 @@ class AgentRegistry:
                         setattr(
                             fresh_agent,
                             "_delegation_progress_callback",
-                            AgentRegistry._make_progress_callback(progress_event, {}),
+                            AgentRegistry._make_progress_callback(
+                                progress_event,
+                                {},
+                                from_agent=from_agent,
+                                to_agent=agent_name,
+                                session_id=effective_session_id or "",
+                            ),
                         )
 
                     # Schritt 3: read-only fuer diesen Task setzen (ContextVar — nur dieser Task)

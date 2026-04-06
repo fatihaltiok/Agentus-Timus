@@ -16,6 +16,10 @@ from orchestration.diagnosis_records import (
 )
 from orchestration.goal_spec import derive_goal_spec
 from orchestration.root_cause_tasks import build_root_cause_task_payload
+from orchestration.turn_understanding import (
+    build_turn_understanding_input,
+    interpret_turn,
+)
 from utils.location_local_intent import is_location_local_query, is_location_route_query
 
 
@@ -133,8 +137,8 @@ _ORCHESTRATION_RECIPES: Dict[str, Tuple[OrchestrationRecipeStage, ...]] = {
             agent="executor",
             goal=(
                 "Fuehre eine kompakte aktuelle Live-Recherche mit direkten Suchtools aus, "
-                "nutze vorhandenen Standortkontext automatisch fuer lokale Anfragen und "
-                "bleibe auf schnelle verifizierbare Treffer fokussiert."
+                "bleibe auf schnelle verifizierbare Treffer fokussiert und "
+                "ziehe Standortkontext nur dann heran, wenn die aktuelle Anfrage klar lokal ist."
             ),
             expected_output="quick_summary, top_results, source_urls",
             handoff_fields=("goal", "expected_output", "success_signal", "query", "preferred_search_tool"),
@@ -741,6 +745,32 @@ _SEMANTIC_LOCATION_STATE_UPDATE_HINTS = (
     "aktualisiert",
 )
 
+_SEMANTIC_BEHAVIOR_ALIGNMENT_FUTURE_HINTS = (
+    "in zukunft",
+    "künftig",
+    "kuenftig",
+    "ab jetzt",
+    "von jetzt an",
+)
+
+_SEMANTIC_BEHAVIOR_ALIGNMENT_DIRECTIVE_HINTS = (
+    "mach das",
+    "mach es",
+    "greif",
+    "nutze",
+    "verwende",
+    "bevorzuge",
+    "berücksichtige",
+    "beruecksichtige",
+    "achte darauf",
+    "stell sicher",
+    "sorge dafür",
+    "sorge dafuer",
+    "merk dir",
+    "merke dir",
+    "behalte im kopf",
+)
+
 _SEMANTIC_DIALOGUE_CLARIFICATION_PATTERNS = (
     r"^\s*(?:(?:ich\s+)?muss|muss\s+ich)\s+(?:mir\s+)?(?:das\s+)?noch\s+(?:überlegen|ueberlegen|uberlegen)\s*[.!]?\s*$",
     r"^\s*(?:ich\s+)?(?:überlege|ueberlege|uberlege)\s+(?:mir\s+)?(?:das\s+)?noch\s*[.!]?\s*$",
@@ -1231,6 +1261,22 @@ def looks_like_meta_clarification_turn(text: str) -> bool:
     return any(re.search(pattern, normalized) for pattern in _SEMANTIC_DIALOGUE_CLARIFICATION_PATTERNS)
 
 
+def _looks_like_meta_behavior_alignment_turn(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", str(text or "").strip().lower())
+    if not normalized:
+        return False
+    has_future_hint = any(token in normalized for token in _SEMANTIC_BEHAVIOR_ALIGNMENT_FUTURE_HINTS)
+    has_directive_hint = any(token in normalized for token in _SEMANTIC_BEHAVIOR_ALIGNMENT_DIRECTIVE_HINTS)
+    if has_future_hint and has_directive_hint:
+        return True
+    return bool(
+        re.search(
+            r"^\s*(?:dann\s+)?mach\s*das\b.*\bso\b.*\bdass?\s+du\b",
+            normalized,
+        )
+    )
+
+
 def _site_kind(text: str) -> str | None:
     if "youtube" in text or "youtu.be" in text:
         return "youtube"
@@ -1284,6 +1330,9 @@ def _derive_semantic_review_payload(
     ):
         hints.append("user_reported_location_state_update")
 
+    if _looks_like_meta_behavior_alignment_turn(text):
+        hints.append("behavior_preference_alignment")
+
     if looks_like_meta_clarification_turn(text):
         hints.append("conversational_clarification_needed")
 
@@ -1304,6 +1353,8 @@ def _apply_semantic_review_override(
     override_reason = ""
     if "user_reported_location_state_update" in hints:
         override_reason = "semantic_state_update_review"
+    elif "behavior_preference_alignment" in hints:
+        override_reason = "semantic_preference_alignment"
     elif "business_strategy_vs_local_lookup" in hints:
         override_reason = "semantic_business_strategy_review"
     elif "mixed_personal_preference_and_wealth_strategy" in hints:
@@ -1321,6 +1372,48 @@ def _apply_semantic_review_override(
         "recommended_agent_chain": ["meta"],
         "needs_structured_handoff": False,
         "reason": override_reason,
+        "recommended_recipe_id": None,
+        "recipe_stages": [],
+        "recipe_recoveries": [],
+        "alternative_recipes": [],
+    }
+
+
+def _apply_turn_understanding_override(
+    classification: Dict[str, Any],
+    turn_interpretation: Any,
+) -> Dict[str, Any]:
+    route_bias = str(getattr(turn_interpretation, "route_bias", "") or "").strip().lower()
+    dominant_turn_type = str(getattr(turn_interpretation, "dominant_turn_type", "") or "").strip().lower()
+    if route_bias != "meta_only":
+        return classification
+    if dominant_turn_type not in {
+        "approval_response",
+        "auth_response",
+        "handover_resume",
+        "correction",
+        "behavior_instruction",
+        "preference_update",
+        "complaint_about_last_answer",
+        "clarification",
+    }:
+        return classification
+
+    if (
+        str(classification.get("task_type") or "").strip().lower() == "single_lane"
+        and list(classification.get("recommended_agent_chain") or []) == ["meta"]
+        and not bool(classification.get("needs_structured_handoff"))
+    ):
+        return classification
+
+    return {
+        **classification,
+        "task_type": "single_lane",
+        "required_capabilities": ["workflow_orchestration"],
+        "recommended_entry_agent": "meta",
+        "recommended_agent_chain": ["meta"],
+        "needs_structured_handoff": False,
+        "reason": f"turn_understanding:{dominant_turn_type}",
         "recommended_recipe_id": None,
         "recipe_stages": [],
         "recipe_recoveries": [],
@@ -1675,6 +1768,19 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
         or has_login
         or any(token in current_normalized for token in ("und dann", "danach", "anschließend", "anschliessend"))
     )
+    semantic_review = _derive_semantic_review_payload(
+        current_normalized,
+        has_simple_live_lookup=has_simple_live_lookup,
+        has_local_search=has_local_search,
+    )
+    turn_input = build_turn_understanding_input(
+        raw_query=query,
+        effective_query=effective_query,
+        dialog_state=dialog_state,
+        semantic_review_hints=semantic_review.get("semantic_ambiguity_hints") or [],
+        context_anchor_applied=context_anchor_applied,
+    )
+    turn_interpretation = interpret_turn(turn_input)
 
     required_capabilities: List[str] = []
     recommended_chain: List[str] = []
@@ -1819,11 +1925,6 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
                 payload = _build_recipe_payload(candidate_id)
                 if payload and payload["recipe_id"] != preferred_recipe["recipe_id"]:
                     alternatives.append(payload)
-    semantic_review = _derive_semantic_review_payload(
-        current_normalized,
-        has_simple_live_lookup=has_simple_live_lookup,
-        has_local_search=has_local_search,
-    )
     classification = {
         "task_type": task_type,
         "site_kind": site_kind,
@@ -1845,8 +1946,14 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
         "next_step": dialog_state.get("next_step"),
         "active_topic_reused": active_topic_reused,
         "compressed_followup_parsed": compressed_followup_parsed,
+        "dominant_turn_type": turn_interpretation.dominant_turn_type,
+        "turn_signals": list(turn_interpretation.turn_signals),
+        "response_mode": turn_interpretation.response_mode,
+        "state_effects": turn_interpretation.state_effects.to_dict(),
+        "turn_understanding": turn_interpretation.to_dict(),
     }
     classification = _apply_semantic_review_override(classification, semantic_review)
+    classification = _apply_turn_understanding_override(classification, turn_interpretation)
     classification.update(semantic_review)
     goal_spec = derive_goal_spec(query, classification)
     capability_graph = build_capability_graph(

@@ -193,6 +193,67 @@ def test_classify_meta_task_routes_simple_live_science_lookup_to_meta_executor()
     assert [stage["stage_id"] for stage in result["recipe_stages"]] == ["live_lookup_scan"]
 
 
+def test_classify_meta_task_routes_future_behavior_alignment_turn_to_meta_review():
+    result = classify_meta_task(
+        "dann mach das in zukunft so dass du auf echtzeit agenturmeldungen zugreifst bei news und aktuellem geschehen",
+        action_count=0,
+    )
+
+    assert result["task_type"] == "single_lane"
+    assert result["recommended_entry_agent"] == "meta"
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["recommended_recipe_id"] is None
+    assert result["reason"] == "semantic_preference_alignment"
+    assert "behavior_preference_alignment" in result["semantic_ambiguity_hints"]
+    assert result["dominant_turn_type"] == "behavior_instruction"
+    assert result["response_mode"] == "acknowledge_and_store"
+    assert result["state_effects"]["update_preferences"] is True
+
+
+def test_classify_meta_task_routes_followup_capsule_behavior_alignment_to_meta_review():
+    result = classify_meta_task(
+        "# FOLLOW-UP CONTEXT\n"
+        "last_agent: meta\n"
+        "session_id: canvas_test\n"
+        "last_user: wie stehts um die aktuelle weltlage\n"
+        "last_assistant: Ehrliches Ergebnis: Die Recherche hat keine belastbaren Live-News gefunden.\n"
+        "recent_assistant_replies: Ehrliches Ergebnis: Die Recherche hat keine belastbaren Live-News gefunden.\n"
+        "\n"
+        "# CURRENT USER QUERY\n"
+        "dann mach das in zukunft so dass du auf echtzeit agenturmeldungen zugreifst bei news und aktuellem geschehen",
+        action_count=0,
+    )
+
+    assert result["task_type"] == "single_lane"
+    assert result["recommended_entry_agent"] == "meta"
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["recommended_recipe_id"] is None
+    assert result["reason"] == "semantic_preference_alignment"
+    assert "behavior_preference_alignment" in result["semantic_ambiguity_hints"]
+    assert result["turn_understanding"]["dominant_turn_type"] == "behavior_instruction"
+    assert result["turn_understanding"]["route_bias"] == "meta_only"
+
+
+def test_classify_meta_task_routes_correction_turn_to_meta_only():
+    result = classify_meta_task(
+        "# FOLLOW-UP CONTEXT\n"
+        "last_agent: meta\n"
+        "session_id: canvas_test\n"
+        "last_user: wie stehts um die weltlage\n"
+        "pending_followup_prompt: Soll ich aktuelle News oder eine tiefere Analyse priorisieren?\n"
+        "\n"
+        "# CURRENT USER QUERY\n"
+        "nein, ich meinte aktuelle news und nicht wieder lokale nearby treffer",
+        action_count=0,
+    )
+
+    assert result["task_type"] == "single_lane"
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["dominant_turn_type"] == "correction"
+    assert result["response_mode"] == "correct_previous_path"
+    assert result["reason"] == "turn_understanding:correction"
+
+
 def test_meta_recipe_stage_delegation_uses_source_aware_handoff_for_x_lookup():
     handoff = {
         "task_type": "simple_live_lookup",
@@ -255,6 +316,7 @@ def test_meta_recipe_stage_delegation_keeps_structured_lookup_for_generic_scienc
         "task_type": "simple_live_lookup",
         "recommended_recipe_id": "simple_live_lookup",
         "site_kind": "",
+        "goal_spec": {"uses_location": False},
     }
     stage = {
         "agent": "executor",
@@ -272,7 +334,9 @@ def test_meta_recipe_stage_delegation_keeps_structured_lookup_for_generic_scienc
     )
 
     assert "- task_type: simple_live_lookup" in task
-    assert "fallback_tools: search_news, fetch_url, search_google_maps_places" in task
+    assert "fallback_tools: search_news, fetch_url" in task
+    assert "search_google_maps_places" not in task
+    assert "get_current_location_context" not in task
     assert "source_hint:" not in task
 
 
@@ -554,6 +618,8 @@ def test_classify_meta_task_routes_compact_budget_followup_to_meta():
     assert result["reason"] == "compressed_advisory_followup"
     assert "2 stunden" in result["dialog_constraints"]
     assert "budget 0" in result["dialog_constraints"]
+    assert result["dominant_turn_type"] == "followup"
+    assert result["response_mode"] == "resume_open_loop"
 
 
 def test_classify_meta_task_reuses_brazil_topic_for_short_followup():

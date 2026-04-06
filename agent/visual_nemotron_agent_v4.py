@@ -27,7 +27,7 @@ import subprocess
 import base64
 import tempfile
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from dataclasses import dataclass, field
 from io import BytesIO
 from PIL import Image
@@ -1224,13 +1224,37 @@ class VisualNemotronAgentV4:
     Nutzt echte Maus/Klick-Tools statt Playwright.
     """
     
-    def __init__(self, mcp_url: str = MCP_URL):
+    def __init__(
+        self,
+        mcp_url: str = MCP_URL,
+        progress_callback: Optional[Callable[..., None]] = None,
+    ):
         self.mcp = MCPToolClient(mcp_url)
         self.vision = VisionClient(mcp_url)
         self.nemotron = NemotronClient()
         self.desktop = DesktopController(self.mcp)
         self.loop_detector = LoopDetector()
         self.history: List[StepResult] = []
+        self._progress_callback = progress_callback
+
+    def _notify_progress(self, stage: str, **payload: Any) -> None:
+        callback = self._progress_callback
+        if not callable(callback):
+            return
+        try:
+            callback(stage=stage, payload=payload)
+            return
+        except TypeError:
+            pass
+        try:
+            callback(stage, payload)
+            return
+        except TypeError:
+            pass
+        try:
+            callback(stage)
+        except Exception:
+            return
     
     async def execute_task(
         self,
@@ -1254,12 +1278,23 @@ class VisualNemotronAgentV4:
         log.info("="*60)
         log.info(f"   Task: {task_description[:60]}{'...' if len(task_description) > 60 else ''}")
         log.info(f"   Max Steps: {max_steps}")
+        self._notify_progress(
+            "visual_task_started",
+            message="Visual-Automation gestartet.",
+            mode="plan" if task_list else "freeform",
+            has_url=bool(url),
+        )
         
         await self.desktop.start()
         
         try:
             # Optional: URL öffnen
             if url:
+                self._notify_progress(
+                    "visual_navigation_start",
+                    message=f"Öffne Zielseite: {url[:120]}",
+                    url=url,
+                )
                 log.info(f"\n🌐 Öffne URL: {url}")
                 await self.desktop.execute_action({
                     "action": "navigate",
@@ -1527,6 +1562,15 @@ class VisualNemotronAgentV4:
                 log.info("   ✅ Nemotron: Schritt kein Handlungsbedarf → erledigt")
                 return True
             if status == "step_blocked":
+                self._notify_progress(
+                    "visual_step_blocked",
+                    kind="blocker",
+                    blocker_reason="step_blocked",
+                    message=f"Schritt ist aktuell nicht ausführbar: {step[:120]}",
+                    step=step[:160],
+                    step_index=step_num,
+                    user_action_required="Bitte präzisiere den Schritt oder ändere den sichtbaren UI-Zustand.",
+                )
                 log.warning("   🚫 Nemotron: Schritt nicht ausführbar → überspringe")
                 return False
 
@@ -1616,6 +1660,13 @@ class VisualNemotronAgentV4:
             log.info(f"   {i + 1:2d}. {step}")
 
         for step_idx, step in enumerate(task_list):
+            self._notify_progress(
+                "visual_plan_step_started",
+                message=f"Bearbeite Visual-Schritt {step_idx + 1} von {total}.",
+                step=step[:160],
+                step_index=step_idx + 1,
+                total_steps=total,
+            )
             log.info(f"\n{'=' * 50}")
             log.info(f"📌 SCHRITT {step_idx + 1}/{total}: {step}")
             log.info(f"{'=' * 50}")
@@ -1664,6 +1715,7 @@ async def run_desktop_task(
     url: Optional[str] = None,
     max_steps: int = 15,
     task_list: Optional[List[str]] = None,
+    progress_callback: Optional[Callable[..., None]] = None,
 ) -> Dict[str, Any]:
     """
     Haupt-API für Desktop-Tasks.
@@ -1680,7 +1732,7 @@ async def run_desktop_task(
             url="https://amazon.de"
         )
     """
-    agent = VisualNemotronAgentV4()
+    agent = VisualNemotronAgentV4(progress_callback=progress_callback)
     return await agent.execute_task(
         url, task, max_steps=max_steps, task_list=task_list
     )

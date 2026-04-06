@@ -2,6 +2,149 @@
 
 ---
 
+## Fortschritt 2026-04-06 - Telegram-Observability parity und generische Preisfragen entkoppelt
+
+Zwei Telegram-/Lookup-Probleme sind jetzt geschlossen:
+
+- Telegram-Chatlaeufe hatten im Observation-Log nur Dispatcher-Eintraege ohne volle Request-Kette
+- generische Preisfragen wie Benzin-, Zug- oder Marktpreise kippten im Executor in den spezialisierten LLM-Preis-Pfad und erzeugten dadurch kontextfremde Antworten
+
+Umgesetzt:
+
+- [gateway/telegram_gateway.py](/home/fatih-ubuntu/dev/timus/gateway/telegram_gateway.py)
+  - Telegram-Text- und Voice-Queries erzeugen jetzt eigene `request_id`
+  - Telegram loggt jetzt dieselben Kernereignisse wie Canvas:
+    - `chat_request_received`
+    - `request_route_selected`
+    - `chat_request_completed`
+    - `chat_request_failed`
+  - die Request-Korrelation wird per `bind_request_correlation(...)` in den Dispatcher-Lauf gebunden
+  - dadurch tragen auch Telegram-Dispatcher-Events jetzt `request_id` statt leerer Korrelation
+- [agent/agents/executor.py](/home/fatih-ubuntu/dev/timus/agent/agents/executor.py)
+  - generische Preisfragen bleiben `web_lookup`
+  - nur echte Modell-/API-Preisfragen mit LLM-/Token-/Provider-Signalen gehen in den spezialisierten `pricing`-Pfad
+  - Kontext-Follow-ups zu bereits gefundenen LLM-Preisquellen bleiben weiterhin korrekt im Pricing-Pfad
+- [tests/test_telegram_feedback_gateway.py](/home/fatih-ubuntu/dev/timus/tests/test_telegram_feedback_gateway.py)
+  - Regression fuer Telegram-Request-Lifecycle mit stabiler `request_id`
+- [tests/test_executor_live_lookup.py](/home/fatih-ubuntu/dev/timus/tests/test_executor_live_lookup.py)
+  - Regression dafuer, dass generische Preisfragen nicht mehr in LLM-Pricing kippen
+  - Regression dafuer, dass Pricing-Follow-ups aus vorhandenem LLM-Kontext weiter funktionieren
+
+Verifikation:
+
+- `python -m py_compile gateway/telegram_gateway.py agent/agents/executor.py tests/test_telegram_feedback_gateway.py tests/test_executor_live_lookup.py`
+- `pytest -q tests/test_telegram_feedback_gateway.py tests/test_executor_live_lookup.py`
+
+Ergebnis:
+
+- Telegram-Chats sind jetzt im Observation-Log request-korreliert nachvollziehbar
+- Preisfragen bleiben thematisch beim Nutzerkontext statt in LLM-Preisvergleichen zu landen
+
+---
+
+## Fortschritt 2026-04-06 - Meta-first Greeting Routing fuer substantielle Fragen
+
+Ein Gruess-/Anredepraefix darf nicht mehr dazu fuehren, dass eine echte inhaltliche Frage vorzeitig in `executor`-Smalltalk endet. Der semantische Kern soll erst von `meta` bewertet werden, wenn nach dem Praefix mehr als nur phatischer Smalltalk uebrig bleibt.
+
+Umgesetzt:
+
+- [main_dispatcher.py](/home/fatih-ubuntu/dev/timus/main_dispatcher.py)
+  - `EXECUTOR_KEYWORDS` werden im Quick-Intent jetzt gegen den analysierten Kern (`analysis_query`) statt blind gegen die volle Eingabe geprueft
+  - neuer Guard fuer greeting-prefixed, aber nicht-triviale Kernfragen:
+    - Beispiel: `hi timus wie stehts um die aktuelle weltlage`
+    - Ergebnis: nicht mehr frueher `executor`, sondern `meta`
+  - triviale Lookups mit Gruesspraefix bleiben direkt auf `executor`
+    - Beispiel: `hi timus wie spaet ist es`
+- [agent/agents/executor.py](/home/fatih-ubuntu/dev/timus/agent/agents/executor.py)
+  - Smalltalk-Muster sind jetzt auf echte phatische Kurzaeusserungen begrenzt
+  - ein bloesser Treffer auf `hi` oder `hallo` irgendwo in einer kurzen Frage reicht nicht mehr
+  - greeting-prefixed Sachfragen fallen dadurch nicht mehr in `Ich bin da. Sag direkt, was du brauchst.`
+- [tests/test_dispatcher_self_status_routing.py](/home/fatih-ubuntu/dev/timus/tests/test_dispatcher_self_status_routing.py)
+  - neue Regression:
+    - `hi timus wie stehts um die aktuelle weltlage` -> `meta`
+  - bestaetigt weiter:
+    - `hi timus wie spaet ist es` -> `executor`
+- [tests/test_executor_smalltalk.py](/home/fatih-ubuntu/dev/timus/tests/test_executor_smalltalk.py)
+  - neue Regression:
+    - greeting-prefixed Sachfrage wird nicht als Smalltalk verschluckt
+
+Verifikation:
+
+- `python -m py_compile main_dispatcher.py agent/agents/executor.py tests/test_dispatcher_self_status_routing.py tests/test_executor_smalltalk.py`
+- `pytest -q tests/test_dispatcher_self_status_routing.py tests/test_executor_smalltalk.py`
+
+Ergebnis:
+
+- `meta` sieht jetzt den semantischen Kern solcher Anfragen
+- `executor` beantwortet nur noch echte Kurzgruesse/Social-Smalltalk direkt
+- der konkrete Fehlfall aus dem Canvas-Lauf ist damit auf Code- und Testebene geschlossen
+
+---
+
+## Fortschritt 2026-04-06 - C4 Langlaeufer-/Antwortpfade abgeschlossen
+
+`C4` ist jetzt nicht mehr nur vorbereitet, sondern im Canvas-/SSE-Runtime-Pfad aktiv.
+
+Umgesetzt:
+
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - `/chat` bindet jetzt einen echten `run_id`-Kontext
+  - emittiert strukturierte C4-Transportevents:
+    - `run_started`
+    - `progress`
+    - `partial_result`
+    - `blocker`
+    - `run_completed`
+    - `run_failed`
+  - Delegations- und Top-Level-Agent-Progress werden in denselben SSE-Vertrag ueberfuehrt
+  - alte Test-Callsites ohne `request_id` in `get_agent_decision(...)` bleiben kompatibel
+- [orchestration/longrunner_transport.py](/home/fatih-ubuntu/dev/timus/orchestration/longrunner_transport.py)
+  - Runtime-Bindung fuer `run_id`
+  - monotone `seq`-Vergabe pro Nutzerlauf
+- [agent/agent_registry.py](/home/fatih-ubuntu/dev/timus/agent/agent_registry.py)
+  - delegierter `executor`-Progress laeuft nicht mehr nur in den Watchdog
+  - partielle Research-Outcomes werden als `partial_result` weitergegeben
+  - Blocker-Payloads koennen jetzt aus Delegation nach aussen emittiert werden
+- [main_dispatcher.py](/home/fatih-ubuntu/dev/timus/main_dispatcher.py)
+  - Top-Level-Agenten koennen ueber denselben Callback strukturierte C4-Progress-Signale liefern
+- [agent/agents/executor.py](/home/fatih-ubuntu/dev/timus/agent/agents/executor.py)
+  - `auth_required` / `user_action_required` werden als Blocker-Signal nach aussen gemeldet
+- [agent/visual_nemotron_agent_v4.py](/home/fatih-ubuntu/dev/timus/agent/visual_nemotron_agent_v4.py)
+  - Visual-Planpfad meldet jetzt Start-/Schritt-/Blocker-Progress ueber denselben C4-Kanal
+- [tests/test_longrunner_transport_contract.py](/home/fatih-ubuntu/dev/timus/tests/test_longrunner_transport_contract.py)
+  - Sequenz-/Bindungs-Regressionsfall fuer `run_id`/`seq`
+- [tests/test_c4_longrunner_runtime.py](/home/fatih-ubuntu/dev/timus/tests/test_c4_longrunner_runtime.py)
+  - Runtime-Regressionen fuer:
+    - `/chat` Start/Progress/Completion
+    - `/chat` Failure
+    - Delegations-Blocker
+    - Delegations-Partial
+    - Visual-Step-Blocker
+- [server/canvas_ui.py](/home/fatih-ubuntu/dev/timus/server/canvas_ui.py)
+  - Canvas zeigt C4 jetzt auch sichtbar:
+    - Runtime-Statuskarte im Chat-Panel
+    - klarere Topbar-LED fuer laufend / partiell / blockiert / fertig / Fehler
+    - Fortschrittstexte, Blocker-Hinweise und Teilergebnis-Vorschau direkt im Canvas
+- [tests/test_canvas_ui_c4_runtime.py](/home/fatih-ubuntu/dev/timus/tests/test_canvas_ui_c4_runtime.py)
+  - UI-Regression fuer:
+    - Runtime-Strip
+    - C4-Event-Handler im Canvas
+
+Verifikation:
+
+- `python -m py_compile orchestration/longrunner_transport.py agent/agent_registry.py main_dispatcher.py agent/agents/executor.py agent/visual_nemotron_agent_v4.py server/mcp_server.py tests/test_longrunner_transport_contract.py tests/test_c4_longrunner_runtime.py`
+- `pytest -q tests/test_longrunner_transport_contract.py tests/test_c4_longrunner_runtime.py`
+- `pytest -q tests/test_android_chat_language.py tests/test_executor_delegation_stability.py tests/test_delegation_hardening.py tests/test_longrunner_transport_contract.py tests/test_c4_longrunner_runtime.py`
+- `pytest -q tests/test_c2_entrypoints.py`
+
+Ergebnis:
+
+- Phase C ist damit funktional geschlossen
+- der naechste groessere Block ist Phase D
+- C4-Transport ist bewusst als gemeinsamer Vertrag angelegt, damit Approval-/Auth-/Handover spaeter nicht als Sonderpfad daneben entstehen
+
+---
+
 ## Fortschritt 2026-04-06 - C4 und Phase-D-Vorlauf vorbereitet
 
 Der naechste offene Runtime-Block nach C3 ist `C4 Langlaeufer-/Antwortpfade`. Parallel dazu braucht der spaetere Phase-D-Start einen sauberen Approval-/Auth-/Handover-Rahmen.
@@ -2732,6 +2875,15 @@ Wichtig:
 
 ## Spaetere Phase D - Assistive Action Workflows mit Approval Gate
 
+Wichtiger Vorlauf:
+
+- vor D1-D5 sollte ein eigener Fundament-Block `D0 Meta Context State` laufen
+- Begruendung:
+  - Timus muss laufende Themen, offene Ziele, Nutzerkorrekturen und Praeferenzen stabil tragen koennen
+  - sonst bleiben Approval-, Auth- und Handover-Workflows semantisch fragil
+- Plan dokumentiert in:
+  - [PHASE_D0_META_CONTEXT_STATE_PLAN.md](/home/fatih-ubuntu/dev/timus/docs/PHASE_D0_META_CONTEXT_STATE_PLAN.md)
+
 Der Fall `reserviere mir ein hotel in portugal lissabon` zeigt eine eigene, spaetere Ausbauphase:
 
 - Ziel ist nicht nur Suche oder Vergleich
@@ -3138,3 +3290,171 @@ Die verbleibenden `visual`-Timeouts im Beobachtungslog stammten aus Meta-Delegat
   - weniger `meta_specialist_delegation`-Timeouts fuer `visual`
   - schnellere, robustere OCR-/Screentext-Reads
   - der `visual`-Agent bleibt fuer echte UI-Interaktion reserviert
+
+## Nachtrag 2026-04-06 16:40 CEST - Meta versteht Verhaltensanweisungen semantisch statt sie als Lookup auszufuehren
+
+Im Canvas trat ein Follow-up-Fehler auf: Nach einer fehlgeschlagenen News-Recherche wurden Anweisungen wie `dann mach das in zukunft so dass du auf echtzeit agenturmeldungen zugreifst` erneut als `simple_live_lookup` behandelt. Dadurch antwortete Timus einmal nur mit `keine brauchbaren News-Treffer` und einmal sogar mit einem aus dem Kontext gerissenen Standort-Hinweis.
+
+- Umsetzung:
+  - `orchestration/meta_orchestration.py`
+    - semantische Verhaltens-/Praeferenzanweisungen werden jetzt als eigener Alignment-Fall erkannt
+    - solche Turns bleiben bei `meta` als `single_lane` statt in ein Lookup-Rezept zu kippen
+    - das gilt auch fuer echte Follow-up-Capsules mit Sitzungsverlauf und `# CURRENT USER QUERY`
+  - `agent/agents/meta.py`
+    - generische `simple_live_lookup`-Handoffs tragen Standort-/Maps-Tools nicht mehr implizit mit, wenn der aktuelle Auftrag nicht lokal ist
+    - damit driftet der Executor bei nicht-lokalen News-/Policy-Follow-ups nicht mehr in Nearby-/Location-Antworten ab
+
+- Neue Regressionen:
+  - `tests/test_meta_orchestration.py`
+    - nackte Verhaltensanweisung bleibt bei `meta`
+    - dieselbe Anweisung im echten Follow-up-Capsule-Format bleibt ebenfalls bei `meta`
+    - generischer Wissenschafts-Lookup ohne Ortsbezug erwaehnt keine Maps-/Location-Tools mehr im Delegationstext
+
+- Verifikation:
+  - `python -m py_compile orchestration/meta_orchestration.py agent/agents/meta.py tests/test_meta_orchestration.py` gruen
+  - fokussierte Meta-Suite gruen (`44 passed`)
+
+## Nachtrag 2026-04-06 16:55 CEST - D0.1 Conversation-State-Schema als offizielles Session-Modell gestartet
+
+Der naechste Ausbau fuer Timus ist nicht noch mehr lokale Guard-Logik, sondern ein expliziter Gespraechszustand pro Session. D0.1 zieht dafuer das erste echte Fundament ein: ein offizielles `ConversationState`-Schema statt loser Capsule-Felder.
+
+- Umsetzung:
+  - neues Modul [orchestration/conversation_state.py](/home/fatih-ubuntu/dev/timus/orchestration/conversation_state.py)
+    - offizielles Schema mit:
+      - `active_topic`
+      - `active_goal`
+      - `open_loop`
+      - `next_expected_step`
+      - `turn_type_hint`
+      - `preferences`
+      - `recent_corrections`
+      - `constraints`
+      - `open_questions`
+      - `state_source`
+      - `topic_confidence`
+      - `updated_at`
+    - Normalisierung, Serialisierung und konservative Seeds aus `pending_followup_prompt`
+  - [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+    - Session-Capsules werden jetzt beim Laden/Speichern auf ein offizielles `conversation_state` normalisiert
+    - `pending_followup_prompt` wird in den Conversation State gespiegelt
+    - Follow-up-Capsules tragen den normalisierten `conversation_state` bereits mit
+
+- Neue Regressionen:
+  - [tests/test_conversation_state.py](/home/fatih-ubuntu/dev/timus/tests/test_conversation_state.py)
+    - Defaults, Normalisierung, Follow-up-Prompt-Sync, Timestamp-Touch
+  - [tests/test_android_chat_language.py](/home/fatih-ubuntu/dev/timus/tests/test_android_chat_language.py)
+    - Session-Capsule enthaelt `conversation_state`
+    - Pending-Follow-up wird im Session-State sauber gesetzt und geloescht
+
+- Verifikation:
+  - `python -m py_compile orchestration/conversation_state.py server/mcp_server.py tests/test_conversation_state.py tests/test_android_chat_language.py` gruen
+  - fokussierte Suite gruen (`20 passed`)
+
+## Nachtrag 2026-04-06 17:45 CEST - D0.2 Turn-Understanding-Layer vorbereitet
+
+Nach D0.1 ist klar: das neue `conversation_state`-Schema allein reicht noch nicht. `meta` braucht als naechsten Block eine eigene Turn-Verstehensschicht, die vor Routing und Rezeptwahl entscheidet, ob ein Turn eine Aufgabe, Korrektur, Beschwerde, Praeferenz, Verhaltensanweisung oder Resume ist.
+
+- Vorbereitung:
+  - neues Plan-Dokument [D0_2_TURN_UNDERSTANDING_PREP.md](/home/fatih-ubuntu/dev/timus/docs/D0_2_TURN_UNDERSTANDING_PREP.md)
+  - darin festgezogen:
+    - `TurnUnderstandingInput`
+    - `TurnInterpretation`
+    - dominante Turn-Typen
+    - `response_mode`
+    - `state_effects`
+    - Observability- und Teststrategie
+  - D0-Hauptplan in [PHASE_D0_META_CONTEXT_STATE_PLAN.md](/home/fatih-ubuntu/dev/timus/docs/PHASE_D0_META_CONTEXT_STATE_PLAN.md) auf den neuen D0.2-Vorbereitungsblock verlinkt
+
+- Wichtig:
+  - D0.2 ist damit **vorbereitet, aber noch nicht implementiert**
+  - keine Laufzeitlogik geaendert, nur der konkrete Ausbauvertrag festgezogen
+
+## Nachtrag 2026-04-06 18:00 CEST - D0.2 erster Turn-Understanding-Slice implementiert
+
+Der erste lauffaehige D0.2-Schnitt ist jetzt im Code. `meta` arbeitet damit zwar noch nicht komplett auf einem neuen Routing-Backbone, aber es gibt erstmals eine explizite Turn-Interpretation vor der eigentlichen Meta-Klassifikation.
+
+- Umsetzung:
+  - neues Modul [orchestration/turn_understanding.py](/home/fatih-ubuntu/dev/timus/orchestration/turn_understanding.py)
+    - `TurnUnderstandingInput`
+    - `TurnStateEffects`
+    - `TurnInterpretation`
+    - `build_turn_understanding_input(...)`
+    - `detect_turn_signals(...)`
+    - `resolve_dominant_turn_type(...)`
+    - `resolve_response_mode(...)`
+    - `derive_state_effects(...)`
+    - `interpret_turn(...)`
+  - [orchestration/meta_orchestration.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_orchestration.py)
+    - `classify_meta_task(...)` baut jetzt ein explizites Turn-Understanding-Objekt
+    - neue Felder im Klassifikationsergebnis:
+      - `dominant_turn_type`
+      - `turn_signals`
+      - `response_mode`
+      - `state_effects`
+      - `turn_understanding`
+
+- Fokus dieses ersten Slices:
+  - Verhaltensanweisung
+  - Praeferenz-Update
+  - Korrektur
+  - Complaint ueber die letzte Antwort
+  - Result-Extraction-Follow-up
+  - Resume-/Follow-up-Signale
+
+- Neue Regressionen:
+  - [tests/test_turn_understanding.py](/home/fatih-ubuntu/dev/timus/tests/test_turn_understanding.py)
+    - behavior instruction
+    - correction + complaint
+    - result extraction
+    - handover resume
+  - [tests/test_meta_orchestration.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_orchestration.py)
+    - D0.2-Felder in Behavior-Alignment- und Compact-Follow-up-Faellen
+
+- Verifikation:
+  - `python -m py_compile orchestration/turn_understanding.py orchestration/meta_orchestration.py tests/test_turn_understanding.py tests/test_meta_orchestration.py` gruen
+  - fokussierte Suite gruen (`48 passed`)
+
+- Noch nicht Teil dieses Slices:
+  - keine vollstaendige Routing-Ablosung durch D0.2
+  - keine neuen Observability-Events
+  - noch keine Session-State-Updates direkt aus `TurnInterpretation`
+
+## Nachtrag 2026-04-06 18:20 CEST - D0.2 in Routing, Conversation State und Observability integriert
+
+Der erste Turn-Understanding-Slice haengt jetzt nicht mehr nur lose neben der Meta-Klassifikation, sondern wirkt auf echte Routing-, State- und Beobachtungspfade.
+
+- Umsetzung:
+  - [orchestration/conversation_state.py](/home/fatih-ubuntu/dev/timus/orchestration/conversation_state.py)
+    - neues `apply_turn_interpretation(...)`
+    - uebernimmt `TurnStateEffects` in den offiziellen `ConversationState`
+    - schreibt unter anderem `turn_type_hint`, `preferences`, `recent_corrections`, `active_topic`, `active_goal`, `next_expected_step`, `constraints`, `topic_confidence` und `state_source`
+  - [orchestration/meta_orchestration.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_orchestration.py)
+    - Turn-Understanding kann Routing jetzt gezielt auf `meta` zurueckziehen, wenn der Turn wirklich ein laufender Dialogzug ist
+    - bestehende semantische Gruende wie `semantic_preference_alignment`, `semantic_clarification_turn` oder `context_anchored_followup` bleiben erhalten und werden nicht blind ueberschrieben
+    - reine Fakten-/Research-Fragen werden nicht mehr allein wegen eines lose vorgeschalteten `falsch` aus dem Research-Pfad gezogen
+  - [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+    - Meta-Turns persistieren ihre Interpretation jetzt direkt in die Session-Capsule
+    - neue C2/D0-Beobachtungen:
+      - `meta_turn_type_selected`
+      - `meta_response_mode_selected`
+      - `conversation_state_effects_derived`
+    - `chat_request_completed` und Chat-Metadaten tragen jetzt auch `dominant_turn_type` und `response_mode`
+
+- Neue Regressionen:
+  - [tests/test_conversation_state.py](/home/fatih-ubuntu/dev/timus/tests/test_conversation_state.py)
+    - `apply_turn_interpretation(...)` aktualisiert Preferences und Turn-Hints korrekt
+  - [tests/test_meta_orchestration.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_orchestration.py)
+    - semantische Gruende bleiben trotz Turn-Understanding stabil
+    - Korrekturturns ziehen nur dann hart auf `meta`, wenn echter Dialogkontext vorliegt
+  - [tests/test_android_chat_language.py](/home/fatih-ubuntu/dev/timus/tests/test_android_chat_language.py)
+    - Canvas-Chat persistiert `conversation_state`
+    - neue Meta-Turn-Observations werden emittiert
+
+- Verifikation:
+  - `python -m py_compile orchestration/conversation_state.py orchestration/turn_understanding.py orchestration/meta_orchestration.py server/mcp_server.py tests/test_conversation_state.py tests/test_turn_understanding.py tests/test_meta_orchestration.py tests/test_android_chat_language.py` gruen
+  - fokussierte D0.2-Suite gruen (`71 passed`)
+
+- Wirkung:
+  - `meta` bewertet spontane Folgeanweisungen jetzt nicht mehr nur als Prompttext, sondern als expliziten Dialogzustand
+  - Session-Capsules tragen den abgeleiteten Turn-Kontext weiter
+  - der neue D0-Unterbau ist im Beobachtungslog sichtbar statt wieder nur implizite Promptlogik zu bleiben

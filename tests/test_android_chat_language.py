@@ -388,16 +388,40 @@ def test_session_capsule_rolls_old_entries_into_summary(tmp_path, monkeypatch):
     assert len(capsule["entries"]) <= 4
     assert "Nachricht 0" in capsule["summary"]
     assert "Nachricht 1" in capsule["summary"]
+    assert capsule["conversation_state"]["schema_version"] == 1
+    assert capsule["conversation_state"]["session_id"] == session_id
 
     followup_capsule = mcp_server._build_followup_capsule(session_id)
     assert followup_capsule["last_agent"] == "executor"
     assert "Nachricht 6" in followup_capsule["recent_user_queries"][-1]
     assert "Nachricht 7" in followup_capsule["recent_assistant_replies"][-1]
     assert "Nachricht 0" in followup_capsule["session_summary"]
+    assert followup_capsule["conversation_state"]["session_id"] == session_id
 
     augmented = mcp_server._augment_query_with_followup_capsule("und was jetzt", followup_capsule)
     assert "session_summary:" in augmented
     assert "recent_user_queries:" in augmented
+
+
+def test_session_capsule_conversation_state_tracks_pending_followup_prompt(tmp_path, monkeypatch):
+    mcp_server._chat_history.clear()
+    monkeypatch.setenv("TIMUS_SESSION_STORAGE_ROOT", str(tmp_path))
+
+    session_id = "capsule_state_sync"
+    mcp_server._store_pending_followup_prompt_in_capsule(session_id, "Welche Option soll ich zuerst angehen?")
+
+    capsule = mcp_server._load_session_capsule(session_id)
+    state = capsule["conversation_state"]
+    assert state["open_loop"] == "Welche Option soll ich zuerst angehen?"
+    assert state["next_expected_step"] == "Welche Option soll ich zuerst angehen?"
+    assert "pending_followup_prompt" in state["state_source"]
+
+    mcp_server._store_pending_followup_prompt_in_capsule(session_id, "")
+    capsule = mcp_server._load_session_capsule(session_id)
+    state = capsule["conversation_state"]
+    assert state["open_loop"] == ""
+    assert state["next_expected_step"] == ""
+    assert "pending_followup_prompt" not in state["state_source"]
 
 
 def test_followup_capsule_includes_semantic_recall(tmp_path, monkeypatch):
@@ -752,6 +776,59 @@ async def test_canvas_chat_routes_deferred_contextual_reply_to_same_meta_lane(mo
     assert "pending_followup_prompt:" in followup_query
     assert "Was willst du?" in followup_query
     assert "muss ich mir noch überlegen" in followup_query
+
+
+async def test_canvas_chat_persists_meta_turn_understanding_to_conversation_state(monkeypatch, tmp_path):
+    captured = {"events": []}
+    mcp_server._chat_history.clear()
+    monkeypatch.setenv("TIMUS_SESSION_STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setattr(mcp_server, "_semantic_store_chat_turn", lambda **kwargs: None)
+    monkeypatch.setattr(mcp_server, "_semantic_recall_chat_turns", lambda **kwargs: [])
+    monkeypatch.setattr(
+        mcp_server,
+        "_record_chat_observation",
+        lambda event_type, payload: captured["events"].append((event_type, payload)),
+    )
+
+    async def fake_build_tools_description():
+        return "tools"
+
+    async def fake_get_agent_decision(query, session_id=None, request_id=None):
+        return "meta"
+
+    async def fake_run_agent(agent_name, query, tools_description, session_id=None):
+        return "Verstanden. Ich priorisiere kuenftig Agenturquellen fuer aktuelle News."
+
+    fake_dispatcher = SimpleNamespace(
+        get_agent_decision=fake_get_agent_decision,
+        run_agent=fake_run_agent,
+    )
+
+    monkeypatch.setattr(mcp_server, "_build_tools_description", fake_build_tools_description)
+    monkeypatch.setitem(sys.modules, "main_dispatcher", fake_dispatcher)
+
+    response = await mcp_server.canvas_chat(
+        _FakeRequest(
+            {
+                "query": "dann mach das in zukunft so dass du auf echtzeit agenturmeldungen zugreifst",
+                "session_id": "turn_state_lane",
+            }
+        )
+    )
+
+    assert response["status"] == "success"
+    assert response["agent"] == "meta"
+
+    capsule = mcp_server._load_session_capsule("turn_state_lane")
+    state = capsule["conversation_state"]
+    assert state["turn_type_hint"] == "behavior_instruction"
+    assert any("agenturmeldungen" in item.lower() for item in state["preferences"])
+    assert state["topic_confidence"] > 0
+
+    event_types = [event_type for event_type, _ in captured["events"]]
+    assert "meta_turn_type_selected" in event_types
+    assert "meta_response_mode_selected" in event_types
+    assert "conversation_state_effects_derived" in event_types
 
 
 async def test_canvas_chat_logs_completed_interaction_to_memory(monkeypatch, tmp_path):

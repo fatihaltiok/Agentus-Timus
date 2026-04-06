@@ -44,6 +44,8 @@ from telegram.ext import (
 )
 
 from gateway.status_snapshot import collect_status_snapshot, format_status_message
+from orchestration.autonomy_observation import record_autonomy_observation
+from orchestration.request_correlation import bind_request_correlation
 from utils.telegram_notify import build_feedback_markup, decode_feedback_signal
 
 log = logging.getLogger("TelegramGateway")
@@ -77,6 +79,116 @@ def _is_allowed(user_id: int) -> bool:
 
 
 _PROJECT_ROOT = Path(__file__).parent.parent
+
+
+def _new_telegram_request_id() -> str:
+    return f"req_{uuid.uuid4().hex[:12]}"
+
+
+def _record_telegram_chat_observation(event_type: str, payload: dict) -> None:
+    try:
+        record_autonomy_observation(event_type, payload)
+    except Exception as exc:
+        log.debug("Telegram chat observation failed (%s): %s", event_type, exc)
+
+
+async def _select_agent_with_request_id(query: str, session_id: str, request_id: str) -> str:
+    from main_dispatcher import get_agent_decision
+
+    try:
+        return await get_agent_decision(query, session_id=session_id, request_id=request_id)
+    except TypeError as decision_error:
+        if "request_id" not in str(decision_error):
+            raise
+        return await get_agent_decision(query, session_id=session_id)
+
+
+async def _run_telegram_chat_query(
+    *,
+    query: str,
+    session_id: str,
+    tools_desc: str,
+    source: str,
+) -> tuple[str, str, str]:
+    from main_dispatcher import run_agent
+
+    request_id = _new_telegram_request_id()
+    dispatcher_query_kind = "plain"
+    followup_agent = ""
+    resolved_proposal_agent = ""
+    route_source = "dispatcher"
+    agent = "executor"
+
+    _record_telegram_chat_observation(
+        "chat_request_received",
+        {
+            "request_id": request_id,
+            "session_id": session_id,
+            "source": source,
+            "query_preview": query[:180],
+            "response_language": "",
+            "dispatcher_query_kind": dispatcher_query_kind,
+            "followup_agent": followup_agent,
+            "resolved_proposal_agent": resolved_proposal_agent,
+        },
+    )
+
+    try:
+        with bind_request_correlation(request_id=request_id, session_id=session_id):
+            agent = await _select_agent_with_request_id(query, session_id, request_id)
+            _record_telegram_chat_observation(
+                "request_route_selected",
+                {
+                    "request_id": request_id,
+                    "session_id": session_id,
+                    "source": source,
+                    "agent": agent,
+                    "route_source": route_source,
+                    "dispatcher_query_kind": dispatcher_query_kind,
+                    "followup_agent": followup_agent,
+                    "resolved_proposal_agent": resolved_proposal_agent,
+                },
+            )
+            result = await run_agent(
+                agent_name=agent,
+                query=query,
+                tools_description=tools_desc,
+                session_id=session_id,
+            )
+    except Exception as exc:
+        _record_telegram_chat_observation(
+            "chat_request_failed",
+            {
+                "request_id": request_id,
+                "session_id": session_id,
+                "source": source,
+                "agent": agent,
+                "dispatcher_query_kind": dispatcher_query_kind,
+                "followup_agent": followup_agent,
+                "resolved_proposal_agent": resolved_proposal_agent,
+                "query_preview": query[:180],
+                "error_class": "telegram_chat_exception",
+                "error": str(exc)[:240],
+            },
+        )
+        raise
+
+    response = str(result) if result else "_(kein Ergebnis)_"
+    _record_telegram_chat_observation(
+        "chat_request_completed",
+        {
+            "request_id": request_id,
+            "session_id": session_id,
+            "source": source,
+            "agent": agent,
+            "route_source": route_source,
+            "dispatcher_query_kind": dispatcher_query_kind,
+            "reply_length": len(response),
+            "location_context_injected": False,
+            "pending_followup_prompt": "",
+        },
+    )
+    return agent, response, request_id
 
 
 async def _send_long(update: Update, text: str, parse_mode: Optional[str] = None) -> None:
@@ -933,31 +1045,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     thinking_msg = await update.message.reply_text("🤔 Timus denkt...")
 
     try:
-        from main_dispatcher import run_agent, get_agent_decision
-
         tools_desc = context.bot_data.get("tools_desc", "")
-        agent = await get_agent_decision(text, session_id=session_id)
-        log.info(f"  Agent gewählt: {agent.upper()}")
-
-        # Multi-Step-Tasks (META) brauchen mehr Zeit — Status-Update senden
-        if agent == "meta":
-            try:
-                await thinking_msg.edit_text(
-                    "🧠 Timus plant & koordiniert… (mehrstufiger Auftrag, bitte warten)"
-                )
-            except Exception:
-                pass
 
         typing_task = asyncio.create_task(_keep_typing(update))
         try:
-            result = await run_agent(
-                agent_name=agent,
+            agent, response, _request_id = await _run_telegram_chat_query(
                 query=text,
-                tools_description=tools_desc,
                 session_id=session_id,
+                tools_desc=tools_desc,
+                source="telegram_chat",
             )
         finally:
             typing_task.cancel()
+
+        log.info(f"  Agent gewählt: {agent.upper()}")
 
         # Thinking-Nachricht löschen
         try:
@@ -965,7 +1066,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except Exception:
             pass
 
-        response = str(result) if result else "_(kein Ergebnis)_"
         feedback_targets = _build_feedback_targets(text, agent)
         feedback_context = _build_reply_feedback_context(
             user_id=user.id,
@@ -1047,39 +1147,26 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
             parse_mode=ParseMode.MARKDOWN,
         )
 
-        # 3. Agent-Pipeline (gleiche Logik wie handle_message)
-        from main_dispatcher import run_agent, get_agent_decision
         tools_desc = context.bot_data.get("tools_desc", "")
-        agent = await get_agent_decision(user_text, session_id=session_id)
-        log.info(f"  Voice-Agent: {agent.upper()}")
-
-        # Meta braucht länger — Status-Update
-        if agent == "meta":
-            try:
-                await thinking_msg.edit_text(
-                    f"🎤 _{user_text}_\n\n🧠 Timus plant & koordiniert… (bitte warten)",
-                    parse_mode=ParseMode.MARKDOWN,
-                )
-            except Exception:
-                pass
 
         typing_task = asyncio.create_task(_keep_typing(update))
         try:
-            result = await run_agent(
-                agent_name=agent,
+            agent, response, _request_id = await _run_telegram_chat_query(
                 query=user_text,
-                tools_description=tools_desc,
                 session_id=session_id,
+                tools_desc=tools_desc,
+                source="telegram_voice_chat",
             )
         finally:
             typing_task.cancel()
+
+        log.info(f"  Voice-Agent: {agent.upper()}")
 
         try:
             await thinking_msg.delete()
         except Exception:
             pass
 
-        response = str(result) if result else "Ich konnte keine Antwort generieren."
         feedback_targets = _build_feedback_targets(user_text, agent)
         feedback_context = _build_reply_feedback_context(
             user_id=user.id,

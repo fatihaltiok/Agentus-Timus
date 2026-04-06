@@ -7,9 +7,11 @@ channels. It intentionally does not perform any transport by itself.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Literal, Mapping, TypedDict
+from typing import Any, Dict, Iterator, Literal, Mapping, TypedDict
 import uuid
 
 
@@ -33,6 +35,8 @@ _ALLOWED_EVENT_TYPES = {
     "run_failed",
 }
 _TERMINAL_EVENT_TYPES = {"run_completed", "run_failed"}
+_RUN_ID_VAR: ContextVar[str] = ContextVar("timus_longrun_run_id", default="")
+_RUN_SEQ_VAR: ContextVar[int] = ContextVar("timus_longrun_seq", default=0)
 
 
 class LongRunTransportEventDict(TypedDict, total=False):
@@ -58,6 +62,29 @@ class LongRunTransportEventDict(TypedDict, total=False):
 
 def new_run_id() -> str:
     return f"run_{uuid.uuid4().hex[:12]}"
+
+
+def get_current_run_id() -> str:
+    return str(_RUN_ID_VAR.get("") or "").strip()
+
+
+def next_event_seq() -> int:
+    current = max(0, int(_RUN_SEQ_VAR.get(0)))
+    current += 1
+    _RUN_SEQ_VAR.set(current)
+    return current
+
+
+@contextmanager
+def bind_longrun_context(*, run_id: str = "") -> Iterator[dict[str, Any]]:
+    clean_run_id = str(run_id or new_run_id()).strip()
+    run_token = _RUN_ID_VAR.set(clean_run_id)
+    seq_token = _RUN_SEQ_VAR.set(0)
+    try:
+        yield {"run_id": clean_run_id}
+    finally:
+        _RUN_ID_VAR.reset(run_token)
+        _RUN_SEQ_VAR.reset(seq_token)
 
 
 def utc_now_iso() -> str:

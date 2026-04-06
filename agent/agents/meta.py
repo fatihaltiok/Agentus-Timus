@@ -33,6 +33,7 @@ from orchestration.meta_orchestration import (
     resolve_orchestration_recipe,
 )
 from orchestration.self_selected_strategy import classify_strategy_error
+from utils.location_local_intent import is_location_local_query, is_location_route_query
 
 log = logging.getLogger("TimusAgent-v4.4")
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -97,6 +98,11 @@ class MetaAgent(BaseAgent):
         # Social Media + JS-Seiten → Executor
         "fetch_social_media": "executor",
         "fetch_page_with_js": "executor",
+    }
+    _LIVE_LOOKUP_LOCATION_TOOLS = {
+        "get_current_location_context",
+        "search_google_maps_places",
+        "get_google_maps_place",
     }
 
     # Koordinator darf Spezialisten-Tools NIE direkt aufrufen — nur per Delegation.
@@ -1854,6 +1860,11 @@ class MetaAgent(BaseAgent):
         )
         source_aware_live_lookup = bool(source_hint)
         effective_task_type = "single_lane" if source_aware_live_lookup else raw_task_type
+        goal_spec = dict(handoff.get("goal_spec") or {})
+        normalized_original_task = str(original_user_task or "").lower()
+        location_allowed_for_lookup = bool(goal_spec.get("uses_location")) or is_location_local_query(
+            normalized_original_task
+        ) or is_location_route_query(normalized_original_task)
         stage_goal = (
             cls._build_source_aware_live_lookup_executor_goal(
                 original_user_task=original_user_task,
@@ -1882,13 +1893,25 @@ class MetaAgent(BaseAgent):
             payload_lines.append(f"- strategy_mode: {selected_strategy['strategy_mode']}")
         if selected_strategy.get("error_strategy"):
             payload_lines.append(f"- error_strategy: {selected_strategy['error_strategy']}")
-        preferred_tools = selected_strategy.get("preferred_tools") or []
+        preferred_tools = list(selected_strategy.get("preferred_tools") or [])
+        fallback_tools = list(selected_strategy.get("fallback_tools") or [])
+        avoid_tools = list(selected_strategy.get("avoid_tools") or [])
+        if (
+            stage_agent == "executor"
+            and raw_task_type in {"simple_live_lookup", "simple_live_lookup_document"}
+            and not source_aware_live_lookup
+            and not location_allowed_for_lookup
+        ):
+            preferred_tools = [
+                item for item in preferred_tools if str(item or "").strip() not in cls._LIVE_LOOKUP_LOCATION_TOOLS
+            ]
+            fallback_tools = [
+                item for item in fallback_tools if str(item or "").strip() not in cls._LIVE_LOOKUP_LOCATION_TOOLS
+            ]
         if preferred_tools:
             payload_lines.append("- preferred_tools: " + ", ".join(str(item) for item in preferred_tools))
-        fallback_tools = selected_strategy.get("fallback_tools") or []
         if fallback_tools:
             payload_lines.append("- fallback_tools: " + ", ".join(str(item) for item in fallback_tools))
-        avoid_tools = selected_strategy.get("avoid_tools") or []
         if avoid_tools:
             payload_lines.append("- avoid_tools: " + ", ".join(str(item) for item in avoid_tools))
         if site_kind:
@@ -1916,7 +1939,10 @@ class MetaAgent(BaseAgent):
             and not source_aware_live_lookup
         ):
             payload_lines.append("- preferred_search_tool: search_web")
-            payload_lines.append("- fallback_tools: search_news, fetch_url, search_google_maps_places")
+            fallback_tool_line = ["search_news", "fetch_url"]
+            if location_allowed_for_lookup:
+                fallback_tool_line.append("search_google_maps_places")
+            payload_lines.append("- fallback_tools: " + ", ".join(fallback_tool_line))
             payload_lines.append("- avoid_deep_research: yes")
             payload_lines.append("- max_results: 5")
         if (
@@ -1925,7 +1951,10 @@ class MetaAgent(BaseAgent):
             and not source_aware_live_lookup
         ):
             payload_lines.append("- preferred_search_tool: search_web")
-            payload_lines.append("- fallback_tools: search_news, fetch_url, search_google_maps_places")
+            fallback_tool_line = ["search_news", "fetch_url"]
+            if location_allowed_for_lookup:
+                fallback_tool_line.append("search_google_maps_places")
+            payload_lines.append("- fallback_tools: " + ", ".join(fallback_tool_line))
             payload_lines.append("- avoid_deep_research: yes")
             payload_lines.append("- max_results: 5")
         if source_aware_live_lookup:

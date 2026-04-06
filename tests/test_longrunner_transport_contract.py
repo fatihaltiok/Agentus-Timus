@@ -120,3 +120,18 @@ def test_run_ids_use_stable_prefix():
     run_id = new_run_id()
     assert run_id.startswith("run_")
     assert len(run_id) > 8
+
+
+def test_bind_longrun_context_resets_and_increments_seq():
+    from orchestration.longrunner_transport import (
+        bind_longrun_context,
+        get_current_run_id,
+        next_event_seq,
+    )
+
+    assert get_current_run_id() == ""
+    with bind_longrun_context(run_id="run-test"):
+        assert get_current_run_id() == "run-test"
+        assert next_event_seq() == 1
+        assert next_event_seq() == 2
+    assert get_current_run_id() == ""

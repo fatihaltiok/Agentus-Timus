@@ -41,6 +41,22 @@ async def test_executor_does_not_swallow_regular_queries(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_executor_does_not_swallow_greeting_prefixed_substantive_queries(monkeypatch):
+    from agent.agents.executor import ExecutorAgent
+    from agent.base_agent import BaseAgent
+
+    async def _fake_run(self, task: str):
+        return "delegated-llm-path"
+
+    monkeypatch.setattr(BaseAgent, "run", _fake_run)
+
+    agent = ExecutorAgent.__new__(ExecutorAgent)
+    result = await ExecutorAgent.run(agent, "hi timus wie stehts um die aktuelle weltlage")
+
+    assert result == "delegated-llm-path"
+
+
+@pytest.mark.asyncio
 async def test_executor_handles_self_status_without_llm(monkeypatch):
     from agent.agents.executor import ExecutorAgent
     from agent.base_agent import BaseAgent

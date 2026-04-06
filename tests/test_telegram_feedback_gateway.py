@@ -97,6 +97,52 @@ async def test_handle_message_uses_feedback_reply(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_handle_message_records_request_lifecycle_with_request_id(monkeypatch):
+    update = _FakeUpdate(text="was kostet benzin heute")
+    context = SimpleNamespace(bot_data={"tools_desc": ""})
+    observed = []
+
+    async def _fake_reply_with_feedback(update_obj, **kwargs):
+        return None
+
+    async def _fake_run_agent(agent_name, query, tools_description, session_id=None):
+        assert agent_name == "meta"
+        assert session_id == "tg_42_test"
+        return "Antwort von Timus"
+
+    async def _fake_keep_typing(update_obj):
+        await asyncio.sleep(0)
+
+    async def _fake_get_agent_decision(_text, session_id=None, request_id=None):
+        assert session_id == "tg_42_test"
+        assert str(request_id).startswith("req_")
+        return "meta"
+
+    monkeypatch.setattr(telegram_gateway, "_is_allowed", lambda _: True)
+    monkeypatch.setattr(telegram_gateway, "_get_session", lambda _: "tg_42_test")
+    monkeypatch.setattr(telegram_gateway, "_reply_with_feedback", _fake_reply_with_feedback)
+    monkeypatch.setattr(telegram_gateway, "_try_send_image", lambda *args, **kwargs: asyncio.sleep(0, result=False))
+    monkeypatch.setattr(telegram_gateway, "_try_send_document", lambda *args, **kwargs: asyncio.sleep(0, result=False))
+    monkeypatch.setattr(telegram_gateway, "_keep_typing", _fake_keep_typing)
+    monkeypatch.setattr(telegram_gateway, "record_autonomy_observation", lambda event, payload: observed.append((event, dict(payload))))
+    monkeypatch.setattr("main_dispatcher.get_agent_decision", _fake_get_agent_decision)
+    monkeypatch.setattr("main_dispatcher.run_agent", _fake_run_agent)
+
+    await telegram_gateway.handle_message(update, context)
+
+    assert [event for event, _payload in observed] == [
+        "chat_request_received",
+        "request_route_selected",
+        "chat_request_completed",
+    ]
+    request_ids = {payload["request_id"] for _event, payload in observed}
+    assert len(request_ids) == 1
+    assert next(iter(request_ids)).startswith("req_")
+    assert all(payload["session_id"] == "tg_42_test" for _event, payload in observed)
+    assert all(payload["source"] == "telegram_chat" for _event, payload in observed)
+
+
+@pytest.mark.asyncio
 async def test_callback_query_short_token_records_feedback(monkeypatch, tmp_path):
     engine = FeedbackEngine(db_path=tmp_path / "feedback.db")
     token = engine.register_feedback_request(

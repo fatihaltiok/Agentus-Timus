@@ -115,7 +115,29 @@ from server.conversation_qdrant import recall_chat_turns as _semantic_recall_cha
 from server.conversation_qdrant import store_chat_turn as _semantic_store_chat_turn
 from gateway.status_snapshot import collect_status_snapshot
 from orchestration.autonomy_observation import record_autonomy_observation
-from orchestration.request_correlation import bind_request_correlation
+from orchestration.conversation_state import (
+    apply_turn_interpretation,
+    apply_pending_followup_prompt,
+    conversation_state_to_dict,
+    touch_conversation_state,
+)
+from orchestration.longrunner_transport import (
+    bind_longrun_context,
+    get_current_run_id,
+    make_blocker_event,
+    make_partial_result_event,
+    make_progress_event,
+    make_run_completed_event,
+    make_run_failed_event,
+    make_run_started_event,
+    next_event_seq,
+    new_run_id,
+)
+from orchestration.request_correlation import (
+    bind_request_correlation,
+    get_current_request_id,
+    get_current_session_id,
+)
 from memory.semantic_backend_policy import normalize_semantic_memory_backend
 from utils.location_presence import (
     enrich_location_presence_snapshot,
@@ -510,10 +532,28 @@ def _session_capsule_path(session_id: str) -> Path:
     return _session_storage_root() / f"{safe}.json"
 
 
+def _normalize_session_capsule_payload(capsule: dict | None) -> dict:
+    payload = dict(capsule or {})
+    session_id = str(payload.get("session_id") or "default").strip() or "default"
+    payload["session_id"] = session_id
+    payload["summary"] = str(payload.get("summary") or "").strip()
+    entries = payload.get("entries")
+    if not isinstance(entries, list):
+        entries = []
+    payload["entries"] = [entry for entry in entries if isinstance(entry, dict)]
+    payload["conversation_state"] = conversation_state_to_dict(
+        payload.get("conversation_state"),
+        session_id=session_id,
+        last_updated=str(payload.get("last_updated") or ""),
+        pending_followup_prompt=str(payload.get("pending_followup_prompt") or ""),
+    )
+    return payload
+
+
 def _load_session_capsule(session_id: str) -> dict:
     path = _session_capsule_path(session_id)
     if not path.exists():
-        return {"session_id": session_id, "summary": "", "entries": []}
+        return _normalize_session_capsule_payload({"session_id": session_id, "summary": "", "entries": []})
     try:
         with open(path, encoding="utf-8") as handle:
             payload = _json.load(handle)
@@ -525,10 +565,10 @@ def _load_session_capsule(session_id: str) -> dict:
         payload["entries"] = [entry for entry in entries if isinstance(entry, dict)]
         payload["summary"] = str(payload.get("summary") or "").strip()
         payload["session_id"] = str(payload.get("session_id") or session_id)
-        return payload
+        return _normalize_session_capsule_payload(payload)
     except Exception as exc:
         log.warning(f"⚠️ Session-Capsule konnte nicht geladen werden ({session_id}): {exc}")
-        return {"session_id": session_id, "summary": "", "entries": []}
+        return _normalize_session_capsule_payload({"session_id": session_id, "summary": "", "entries": []})
 
 
 def _trim_summary_text(summary: str) -> str:
@@ -558,10 +598,11 @@ def _merge_session_summary(existing_summary: str, folded_entries: list[dict]) ->
 
 
 def _store_session_capsule(capsule: dict) -> None:
-    path = _session_capsule_path(str(capsule.get("session_id") or "default"))
+    normalized = _normalize_session_capsule_payload(capsule)
+    path = _session_capsule_path(str(normalized.get("session_id") or "default"))
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:
-        _json.dump(capsule, handle, ensure_ascii=False, indent=2)
+        _json.dump(normalized, handle, ensure_ascii=False, indent=2)
 
 
 def _append_session_capsule_entry(session_id: str, entry: dict) -> None:
@@ -575,6 +616,12 @@ def _append_session_capsule_entry(session_id: str, entry: dict) -> None:
     capsule["session_id"] = session_id
     capsule["entries"] = entries
     capsule["last_updated"] = str(entry.get("ts") or datetime.utcnow().isoformat() + "Z")
+    capsule["conversation_state"] = touch_conversation_state(
+        capsule.get("conversation_state"),
+        session_id=session_id,
+        updated_at=str(capsule.get("last_updated") or ""),
+        pending_followup_prompt=str(capsule.get("pending_followup_prompt") or ""),
+    ).to_dict()
     _store_session_capsule(capsule)
 
 
@@ -600,6 +647,185 @@ def _broadcast_sse(event: dict) -> None:
                 _sse_queues.remove(q)
             except ValueError:
                 pass
+
+
+def _longrun_default_message(
+    *,
+    kind: str,
+    agent: str,
+    stage: str,
+    payload: dict | None = None,
+) -> str:
+    info = payload or {}
+    explicit = str(info.get("message") or "").strip()
+    if explicit:
+        return explicit
+
+    query = str(info.get("query") or "").strip()
+    url = str(info.get("url") or "").strip()
+    stage_map = {
+        "executor_run_started": "Executor-Bearbeitung gestartet.",
+        "simple_live_lookup_start": "Live-Suche gestartet.",
+        "location_context_lookup": "Prüfe Live-Standortkontext.",
+        "news_lookup": f"Suche aktuelle Nachrichten{' zu ' + query if query else ''}.",
+        "web_lookup": f"Suche aktuelle Web-Treffer{' zu ' + query if query else ''}.",
+        "fetch_contextual_source": f"Lese Bezugquelle{' ' + url if url else ''}.",
+        "fetch_primary_source": f"Lese Hauptquelle{' ' + url if url else ''}.",
+        "maps_places_lookup": f"Frage Karten-/Ortsdaten ab{' für ' + query if query else ''}.",
+        "maps_route_lookup": f"Berechne Route{' nach ' + query if query else ''}.",
+        "visual_task_started": "Visual-Automation gestartet.",
+        "visual_navigation_start": f"Öffne Zielseite{' ' + url if url else ''}.",
+        "visual_plan_step_started": "Bearbeite den nächsten Visual-Schritt.",
+        "visual_step_blocked": "Ein Visual-Schritt ist aktuell blockiert.",
+        "delegation_partial": f"{agent} liefert ein partielles Ergebnis.",
+        "delegation_partial_timeout": f"{agent} hat den Lauf nur teilweise abgeschlossen.",
+    }
+    if stage in stage_map:
+        return stage_map[stage]
+    if kind == "blocker":
+        return f"{agent} wartet auf Nutzeraktion."
+    if kind == "partial_result":
+        return f"{agent} hat erste Teilergebnisse."
+    if kind == "run_started":
+        return f"{agent} hat die Bearbeitung gestartet."
+    if kind == "run_completed":
+        return f"{agent} hat die Bearbeitung abgeschlossen."
+    if kind == "run_failed":
+        return f"{agent} ist fehlgeschlagen."
+    return f"{agent}: {stage.replace('_', ' ')}"
+
+
+def _emit_longrun_event(
+    event_type: str,
+    *,
+    agent: str,
+    stage: str = "",
+    message: str = "",
+    progress_hint: str = "working",
+    next_expected_update_s: int = 15,
+    content_preview: str = "",
+    blocker_reason: str = "",
+    user_action_required: str = "",
+    error_class: str = "",
+    error_code: str = "",
+    request_id: str = "",
+    session_id: str = "",
+    run_id: str = "",
+) -> dict | None:
+    effective_request_id = str(request_id or get_current_request_id()).strip()
+    effective_session_id = str(session_id or get_current_session_id()).strip()
+    effective_run_id = str(run_id or get_current_run_id()).strip()
+    effective_agent = str(agent or "").strip()
+    if not effective_request_id or not effective_run_id or not effective_agent:
+        return None
+
+    seq = next_event_seq()
+    text = str(message or "").strip()
+    if event_type == "run_started":
+        event = make_run_started_event(
+            request_id=effective_request_id,
+            run_id=effective_run_id,
+            session_id=effective_session_id,
+            agent=effective_agent,
+            seq=seq,
+            message=text or _longrun_default_message(kind=event_type, agent=effective_agent, stage="started"),
+        )
+    elif event_type == "progress":
+        event = make_progress_event(
+            request_id=effective_request_id,
+            run_id=effective_run_id,
+            session_id=effective_session_id,
+            agent=effective_agent,
+            stage=str(stage or "working").strip(),
+            seq=seq,
+            message=text or _longrun_default_message(kind=event_type, agent=effective_agent, stage=str(stage or "working").strip()),
+            progress_hint=progress_hint,
+            next_expected_update_s=next_expected_update_s,
+        )
+    elif event_type == "partial_result":
+        event = make_partial_result_event(
+            request_id=effective_request_id,
+            run_id=effective_run_id,
+            session_id=effective_session_id,
+            agent=effective_agent,
+            stage=str(stage or "partial_result").strip(),
+            seq=seq,
+            message=text or _longrun_default_message(kind=event_type, agent=effective_agent, stage=str(stage or "partial_result").strip()),
+            content_preview=str(content_preview or "").strip(),
+        )
+    elif event_type == "blocker":
+        event = make_blocker_event(
+            request_id=effective_request_id,
+            run_id=effective_run_id,
+            session_id=effective_session_id,
+            agent=effective_agent,
+            stage=str(stage or "blocked").strip(),
+            seq=seq,
+            message=text or _longrun_default_message(kind=event_type, agent=effective_agent, stage=str(stage or "blocked").strip()),
+            blocker_reason=str(blocker_reason or "blocked").strip(),
+            user_action_required=str(user_action_required or "").strip(),
+        )
+    elif event_type == "run_completed":
+        event = make_run_completed_event(
+            request_id=effective_request_id,
+            run_id=effective_run_id,
+            session_id=effective_session_id,
+            agent=effective_agent,
+            seq=seq,
+            message=text or _longrun_default_message(kind=event_type, agent=effective_agent, stage="done"),
+        )
+    elif event_type == "run_failed":
+        event = make_run_failed_event(
+            request_id=effective_request_id,
+            run_id=effective_run_id,
+            session_id=effective_session_id,
+            agent=effective_agent,
+            stage=str(stage or "failed").strip(),
+            seq=seq,
+            message=text or _longrun_default_message(kind=event_type, agent=effective_agent, stage=str(stage or "failed").strip()),
+            error_class=str(error_class or "").strip(),
+            error_code=str(error_code or "").strip(),
+        )
+    else:
+        return None
+
+    payload = event.to_dict()
+    _broadcast_sse(payload)
+    return payload
+
+
+def _emit_longrun_progress_from_payload(agent: str, stage: str, payload: dict | None = None) -> dict | None:
+    info = dict(payload or {})
+    kind = str(info.get("kind") or "progress").strip().lower() or "progress"
+    message = _longrun_default_message(kind=kind, agent=agent, stage=stage, payload=info)
+    if kind == "blocker":
+        return _emit_longrun_event(
+            "blocker",
+            agent=agent,
+            stage=stage,
+            message=message,
+            blocker_reason=str(info.get("blocker_reason") or "blocked").strip(),
+            user_action_required=str(info.get("user_action_required") or "").strip(),
+        )
+    if kind == "partial_result":
+        preview = str(info.get("content_preview") or info.get("preview") or "").strip()
+        if not preview:
+            return None
+        return _emit_longrun_event(
+            "partial_result",
+            agent=agent,
+            stage=stage,
+            message=message,
+            content_preview=preview,
+        )
+    return _emit_longrun_event(
+        "progress",
+        agent=agent,
+        stage=stage,
+        message=message,
+        progress_hint=str(info.get("progress_hint") or "working").strip() or "working",
+        next_expected_update_s=int(info.get("next_expected_update_s") or 15),
+    )
 
 
 def _append_chat_entry(*, session_id: str, role: str, text: str, ts: str, agent: str = "") -> None:
@@ -891,6 +1117,13 @@ def _store_pending_followup_prompt_in_capsule(session_id: str, prompt: str) -> N
         capsule["pending_followup_prompt"] = cleaned[:280]
     else:
         capsule.pop("pending_followup_prompt", None)
+    updated_at = str(capsule.get("last_updated") or datetime.utcnow().isoformat() + "Z")
+    capsule["conversation_state"] = apply_pending_followup_prompt(
+        capsule.get("conversation_state"),
+        session_id=session_id,
+        prompt=cleaned,
+        updated_at=updated_at,
+    ).to_dict()
     _store_session_capsule(capsule)
 
 
@@ -927,6 +1160,81 @@ def _record_chat_observation(event_type: str, payload: dict) -> None:
         record_autonomy_observation(event_type, payload)
     except Exception as exc:
         log.debug("Chat observation logging failed (%s): %s", event_type, exc)
+
+
+def _persist_meta_turn_understanding(
+    *,
+    session_id: str,
+    classification: dict,
+    updated_at: str,
+) -> None:
+    if not session_id or not isinstance(classification, dict):
+        return
+    capsule = _load_session_capsule(session_id)
+    turn_understanding = dict(classification.get("turn_understanding") or {})
+    capsule["conversation_state"] = apply_turn_interpretation(
+        capsule.get("conversation_state"),
+        session_id=session_id,
+        dominant_turn_type=str(classification.get("dominant_turn_type") or ""),
+        response_mode=str(classification.get("response_mode") or ""),
+        state_effects=turn_understanding.get("state_effects") or classification.get("state_effects") or {},
+        effective_query=str(classification.get("effective_query") or ""),
+        active_topic=str(classification.get("active_topic") or ""),
+        active_goal=str(classification.get("open_goal") or ""),
+        dialog_constraints=classification.get("dialog_constraints") or [],
+        next_step=str(classification.get("next_step") or ""),
+        confidence=float(turn_understanding.get("confidence") or 0.0),
+        updated_at=updated_at,
+    ).to_dict()
+    _store_session_capsule(capsule)
+
+
+def _record_meta_turn_understanding_observations(
+    *,
+    request_id: str,
+    session_id: str,
+    classification: dict,
+) -> None:
+    turn_understanding = dict(classification.get("turn_understanding") or {})
+    dominant_turn_type = str(classification.get("dominant_turn_type") or "")
+    response_mode = str(classification.get("response_mode") or "")
+    state_effects = dict(turn_understanding.get("state_effects") or classification.get("state_effects") or {})
+
+    _record_chat_observation(
+        "meta_turn_type_selected",
+        {
+            "request_id": request_id,
+            "session_id": session_id,
+            "source": "canvas_chat",
+            "dominant_turn_type": dominant_turn_type,
+            "turn_signals": list(turn_understanding.get("turn_signals") or classification.get("turn_signals") or []),
+            "route_bias": str(turn_understanding.get("route_bias") or ""),
+            "confidence": float(turn_understanding.get("confidence") or 0.0),
+            "effective_query_preview": str(classification.get("effective_query") or "")[:180],
+        },
+    )
+    _record_chat_observation(
+        "meta_response_mode_selected",
+        {
+            "request_id": request_id,
+            "session_id": session_id,
+            "source": "canvas_chat",
+            "dominant_turn_type": dominant_turn_type,
+            "response_mode": response_mode,
+            "reason": str(classification.get("reason") or ""),
+        },
+    )
+    _record_chat_observation(
+        "conversation_state_effects_derived",
+        {
+            "request_id": request_id,
+            "session_id": session_id,
+            "source": "canvas_chat",
+            "dominant_turn_type": dominant_turn_type,
+            "response_mode": response_mode,
+            "state_effects": state_effects,
+        },
+    )
 
 
 def _tokenize_followup_focus(text: str) -> list[str]:
@@ -1140,6 +1448,12 @@ def _build_followup_capsule(session_id: str, query: str = "") -> dict:
     pending_followup_prompt = str(capsule.get("pending_followup_prompt") or "").strip()
     if not pending_followup_prompt and last_assistant:
         pending_followup_prompt = _extract_pending_followup_prompt(last_assistant)
+    conversation_state = conversation_state_to_dict(
+        capsule.get("conversation_state"),
+        session_id=session_id,
+        last_updated=str(capsule.get("last_updated") or ""),
+        pending_followup_prompt=pending_followup_prompt,
+    )
 
     return {
         "session_id": session_id,
@@ -1155,6 +1469,7 @@ def _build_followup_capsule(session_id: str, query: str = "") -> dict:
         "pending_followup_prompt": pending_followup_prompt,
         "last_proposed_action": last_proposed_action,
         "semantic_recall": semantic_recall,
+        "conversation_state": conversation_state,
     }
 
 
@@ -2631,8 +2946,18 @@ async def lifespan(app: FastAPI):
         def _delegation_sse_event(from_agent: str, to_agent: str, status: str) -> None:
             _broadcast_sse({"type": "delegation", "from": from_agent, "to": to_agent, "status": status})
 
+        def _delegation_transport_event(payload: dict) -> None:
+            if not isinstance(payload, dict):
+                return
+            _emit_longrun_progress_from_payload(
+                agent=str(payload.get("to_agent") or "").strip(),
+                stage=str(payload.get("stage") or "").strip(),
+                payload=payload.get("payload") if isinstance(payload.get("payload"), dict) else {},
+            )
+
         _agent_reg_mod._delegation_sse_hook = _delegation_sse_event
-        log.info("✅ Agent-Registry: Alle Agenten-Specs registriert. Delegation-SSE-Hook aktiv.")
+        _agent_reg_mod._delegation_transport_hook = _delegation_transport_event
+        log.info("✅ Agent-Registry: Alle Agenten-Specs registriert. Delegation-SSE- und C4-Hooks aktiv.")
     except Exception as e:
         log.warning(f"⚠️ Agent-Registry konnte nicht initialisiert werden: {e}")
 
@@ -3265,60 +3590,139 @@ async def canvas_chat(request: Request):
     _broadcast_sse({"type": "chat_user", "request_id": request_id, "text": query, "ts": ts})
 
     agent = "executor"
+    run_id = new_run_id()
+    longrun_terminal_emitted = False
+    meta_classification: dict | None = None
     try:
+        import main_dispatcher as _dispatcher_mod
         from main_dispatcher import run_agent, get_agent_decision
 
         # Tool-Beschreibungen — identisch zu /get_tool_descriptions
         tools_desc = await _build_tools_description()
 
-        with bind_request_correlation(request_id=request_id, session_id=session_id):
-            route_source = (
-                "resolved_proposal"
-                if resolved_proposal_agent
-                else "followup_capsule"
-                if followup_agent
-                else "dispatcher"
-            )
-            agent = resolved_proposal_agent or followup_agent or await get_agent_decision(
-                dispatcher_query,
-                session_id=session_id,
-                request_id=request_id,
-            )
-            _record_chat_observation(
-                "request_route_selected",
-                {
-                    "request_id": request_id,
-                    "session_id": session_id,
-                    "source": "canvas_chat",
-                    "agent": agent,
-                    "route_source": route_source,
-                    "dispatcher_query_kind": dispatcher_query_kind,
-                    "followup_agent": followup_agent,
-                    "resolved_proposal_agent": resolved_proposal_agent,
-                },
-            )
-            _set_agent_status(agent, "thinking", query)
+        with bind_request_correlation(request_id=request_id, session_id=session_id), bind_longrun_context(run_id=run_id):
+            previous_agent_progress_hook = getattr(_dispatcher_mod, "_agent_progress_hook", None)
 
-            query_for_agent = dispatcher_query
-            if location_decision.should_inject and isinstance(location_snapshot, dict):
-                query_for_agent = (
-                    build_location_chat_context_block(location_snapshot)
-                    + "\n\n"
-                    + query_for_agent
-                )
-            if response_language in {"de", "deutsch", "german"} and agent not in {"visual", "visual_nemotron"}:
-                query_for_agent = (
-                    "Antworte ausschließlich auf Deutsch. "
-                    "Nutze nur dann englische Fachbegriffe, wenn sie technisch nötig sind.\n\n"
-                    f"Nutzeranfrage:\n{query_for_agent}"
+            def _dispatcher_progress_event(payload: dict) -> None:
+                if not isinstance(payload, dict):
+                    return
+                _emit_longrun_progress_from_payload(
+                    agent=str(payload.get("agent") or "").strip(),
+                    stage=str(payload.get("stage") or "").strip(),
+                    payload=payload.get("payload") if isinstance(payload.get("payload"), dict) else {},
                 )
 
-            result = await run_agent(
-                agent_name=agent,
-                query=query_for_agent,
-                tools_description=tools_desc,
-                session_id=session_id,
-            )
+            _dispatcher_mod._agent_progress_hook = _dispatcher_progress_event
+            try:
+                route_source = (
+                    "resolved_proposal"
+                    if resolved_proposal_agent
+                    else "followup_capsule"
+                    if followup_agent
+                    else "dispatcher"
+                )
+                preselected_agent = resolved_proposal_agent or followup_agent
+                if preselected_agent:
+                    agent = preselected_agent
+                else:
+                    try:
+                        agent = await get_agent_decision(
+                            dispatcher_query,
+                            session_id=session_id,
+                            request_id=request_id,
+                        )
+                    except TypeError as decision_error:
+                        if "request_id" not in str(decision_error):
+                            raise
+                        agent = await get_agent_decision(
+                            dispatcher_query,
+                            session_id=session_id,
+                        )
+                _record_chat_observation(
+                    "request_route_selected",
+                    {
+                        "request_id": request_id,
+                        "session_id": session_id,
+                        "source": "canvas_chat",
+                        "agent": agent,
+                        "route_source": route_source,
+                        "dispatcher_query_kind": dispatcher_query_kind,
+                        "followup_agent": followup_agent,
+                        "resolved_proposal_agent": resolved_proposal_agent,
+                    },
+                )
+                if agent == "meta":
+                    try:
+                        from orchestration.meta_orchestration import classify_meta_task
+
+                        meta_classification = classify_meta_task(dispatcher_query, action_count=0)
+                        _record_meta_turn_understanding_observations(
+                            request_id=request_id,
+                            session_id=session_id,
+                            classification=meta_classification,
+                        )
+                        _persist_meta_turn_understanding(
+                            session_id=session_id,
+                            classification=meta_classification,
+                            updated_at=ts,
+                        )
+                    except Exception as turn_exc:
+                        log.debug("Meta turn-understanding konnte nicht persistiert werden: %s", turn_exc)
+                _emit_longrun_event(
+                    "run_started",
+                    request_id=request_id,
+                    session_id=session_id,
+                    run_id=run_id,
+                    agent=agent,
+                    message=f"{agent} bearbeitet die Anfrage jetzt.",
+                )
+                _set_agent_status(agent, "thinking", query)
+
+                query_for_agent = dispatcher_query
+                if location_decision.should_inject and isinstance(location_snapshot, dict):
+                    query_for_agent = (
+                        build_location_chat_context_block(location_snapshot)
+                        + "\n\n"
+                        + query_for_agent
+                    )
+                if response_language in {"de", "deutsch", "german"} and agent not in {"visual", "visual_nemotron"}:
+                    query_for_agent = (
+                        "Antworte ausschließlich auf Deutsch. "
+                        "Nutze nur dann englische Fachbegriffe, wenn sie technisch nötig sind.\n\n"
+                        f"Nutzeranfrage:\n{query_for_agent}"
+                    )
+
+                result = await run_agent(
+                    agent_name=agent,
+                    query=query_for_agent,
+                    tools_description=tools_desc,
+                    session_id=session_id,
+                )
+                _emit_longrun_event(
+                    "run_completed",
+                    request_id=request_id,
+                    session_id=session_id,
+                    run_id=run_id,
+                    agent=agent,
+                    message=f"{agent} hat die Anfrage abgeschlossen.",
+                )
+                longrun_terminal_emitted = True
+            except Exception as run_error:
+                _emit_longrun_event(
+                    "run_failed",
+                    request_id=request_id,
+                    session_id=session_id,
+                    run_id=run_id,
+                    agent=agent or "dispatcher",
+                    stage="failed",
+                    message=f"{agent or 'dispatcher'} ist fehlgeschlagen.",
+                    error_class=run_error.__class__.__name__,
+                    error_code="canvas_chat_exception",
+                )
+                longrun_terminal_emitted = True
+                raise
+            finally:
+                _dispatcher_mod._agent_progress_hook = previous_agent_progress_hook
 
         _set_agent_status(agent, "completed", query)
         reply = str(result) if result else "(keine Antwort)"
@@ -3352,6 +3756,8 @@ async def canvas_chat(request: Request):
                 ),
                 "pending_followup_prompt": pending_followup_prompt,
                 "response_language": response_language,
+                "dominant_turn_type": str((meta_classification or {}).get("dominant_turn_type") or ""),
+                "response_mode": str((meta_classification or {}).get("response_mode") or ""),
             },
         )
 
@@ -3369,6 +3775,8 @@ async def canvas_chat(request: Request):
                     location_decision.should_inject and isinstance(location_snapshot, dict)
                 ),
                 "pending_followup_prompt": pending_followup_prompt,
+                "dominant_turn_type": str((meta_classification or {}).get("dominant_turn_type") or ""),
+                "response_mode": str((meta_classification or {}).get("response_mode") or ""),
             },
         )
 
@@ -3377,6 +3785,19 @@ async def canvas_chat(request: Request):
 
     except Exception as e:
         log.error(f"Canvas-Chat Fehler: {e}", exc_info=True)
+        if not longrun_terminal_emitted:
+            with bind_request_correlation(request_id=request_id, session_id=session_id), bind_longrun_context(run_id=run_id):
+                _emit_longrun_event(
+                    "run_failed",
+                    request_id=request_id,
+                    session_id=session_id,
+                    run_id=run_id,
+                    agent=agent or "dispatcher",
+                    stage="failed",
+                    message=f"{agent or 'dispatcher'} ist fehlgeschlagen.",
+                    error_class=e.__class__.__name__,
+                    error_code="canvas_chat_exception",
+                )
         _set_agent_status(agent, "error", query)
         _record_chat_observation(
             "chat_request_failed",
