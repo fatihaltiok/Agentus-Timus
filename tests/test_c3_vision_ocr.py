@@ -422,3 +422,185 @@ class TestIsOOMError:
     def test_import_error_not_oom(self):
         exc = ImportError("cannot import")
         assert is_oom_error(exc) is False
+
+
+# ---------------------------------------------------------------------------
+# 8. C3 Integrations-Regressionen
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    ("strategy", "expected_helper"),
+    [
+        ("ocr_only", "ocr_only"),
+        ("cpu_fallback_only", "ocr_only"),
+        ("florence2_primary", "full"),
+        ("florence2_hybrid", "hybrid"),
+    ],
+)
+def test_florence_hot_path_respects_c3_router(monkeypatch, strategy, expected_helper):
+    from PIL import Image as PILImage
+    import tools.florence2_tool.tool as florence_tool
+
+    image = PILImage.new("RGB", (1280, 720))
+    strategy_enum = florence_tool.VisionStrategy(strategy)
+    called = []
+
+    monkeypatch.setattr(florence_tool, "select_vision_strategy", lambda **_: strategy_enum)
+    monkeypatch.setattr(florence_tool, "get_vram_available_mb", lambda: 4096)
+    monkeypatch.setattr(florence_tool, "routing_summary", lambda *args, **kwargs: "C3-Route: test")
+    monkeypatch.setattr(
+        florence_tool,
+        "_full_analysis",
+        lambda img: called.append("full") or {
+            "summary_prompt": "full",
+            "element_count": 1,
+            "text_count": 0,
+            "device": "cuda",
+        },
+    )
+    monkeypatch.setattr(
+        florence_tool,
+        "_hybrid_analysis",
+        lambda img: called.append("hybrid") or {
+            "summary_prompt": "hybrid",
+            "element_count": 1,
+            "text_count": 1,
+            "device": "cuda",
+            "ocr_backend": "paddleocr",
+        },
+    )
+    monkeypatch.setattr(
+        florence_tool,
+        "_paddle_ocr_texts",
+        lambda img: (
+            [{"text": "Hallo", "center": [10, 10], "bbox": [0, 0, 20, 20], "confidence": 0.99}],
+            "paddleocr",
+        ),
+    )
+
+    result = florence_tool._analyze_with_c3_routing(image)
+
+    assert result["vision_strategy"] == strategy
+    assert result["route_summary"] == "C3-Route: test"
+    if expected_helper == "ocr_only":
+        assert called == []
+        assert result["device"] == "cpu"
+        assert result["ocr_backend"] == "paddleocr"
+    else:
+        assert called == [expected_helper]
+
+
+def test_vision_fallback_observability_includes_reason(monkeypatch):
+    rec = _fresh_recorder()
+    calls = []
+
+    def _capture(event_type, payload):
+        calls.append((event_type, payload))
+
+    monkeypatch.setattr("orchestration.autonomy_observation.record_autonomy_observation", _capture)
+
+    rec.fallback("florence2", "cuda", "cpu", "oom during load", model="Florence-2")
+
+    assert calls
+    event_type, payload = calls[-1]
+    assert event_type == "vision_fallback"
+    assert payload["fallback_reason"] == "oom during load"
+    assert payload["fallback_from"] == "cuda"
+    assert payload["fallback_to"] == "cpu"
+
+
+def test_ocr_initialize_emits_init_telemetry(monkeypatch):
+    import tools.engines.ocr_engine as ocr_mod
+
+    engine = object.__new__(ocr_mod.OCREngine)
+    engine.initialized = False
+    engine.backend = "easyocr"
+    engine.use_gpu = False
+    engine.languages = ["en"]
+    engine.easyocr_reader = None
+    engine.paddleocr_reader = None
+    engine.trocr_processor = None
+    engine.trocr_model = None
+    engine.device = "cpu"
+    engine.active_backend = None
+
+    telemetry = MagicMock()
+    monkeypatch.setattr(ocr_mod, "_C3_TELEMETRY", True)
+    monkeypatch.setattr(ocr_mod, "vision_telemetry", telemetry)
+    monkeypatch.setattr(ocr_mod, "EASYOCR_AVAILABLE", True)
+    monkeypatch.setattr(engine, "_init_easyocr", lambda: None)
+
+    engine.initialize()
+
+    telemetry.init_start.assert_called_once()
+    telemetry.init_done.assert_called_once()
+    assert engine.initialized is True
+    assert engine.active_backend == "easyocr"
+
+
+def test_ocr_generic_error_emits_error_telemetry(monkeypatch):
+    import tools.engines.ocr_engine as ocr_mod
+    from PIL import Image as PILImage
+
+    telemetry = MagicMock()
+    monkeypatch.setattr(ocr_mod, "_C3_TELEMETRY", True)
+    monkeypatch.setattr(ocr_mod, "vision_telemetry", telemetry)
+
+    engine = TestOCREngineOOMGuard()._make_engine()
+    image = PILImage.new("RGB", (100, 100))
+
+    with patch.object(engine, "_process_easyocr", side_effect=ValueError("boom")):
+        result = engine.process(image, with_boxes=False)
+
+    assert result["error"] == "boom"
+    telemetry.error.assert_called_once()
+
+
+def test_segmentation_no_masks_still_emits_infer_done(monkeypatch):
+    import tools.engines.segmentation_engine as seg_mod
+    from PIL import Image as PILImage
+
+    class _CpuValue:
+        def cpu(self):
+            return self
+
+    class _Inputs(dict):
+        def to(self, device):
+            return self
+
+    class _Score:
+        def __init__(self, value):
+            self._value = value
+
+        def item(self):
+            return self._value
+
+    class _Outputs:
+        pred_masks = _CpuValue()
+        iou_scores = _CpuValue()
+
+    telemetry = MagicMock()
+    monkeypatch.setattr(seg_mod, "_C3_TELEMETRY", True)
+    monkeypatch.setattr(seg_mod, "vision_telemetry", telemetry)
+
+    engine = object.__new__(seg_mod.SegmentationEngine)
+    engine.initialized = True
+    engine.device = "cpu"
+    engine.sam_model = MagicMock(return_value=_Outputs())
+    engine.sam_processor = MagicMock()
+    engine.sam_processor.return_value = _Inputs(
+        original_sizes=_CpuValue(),
+        reshaped_input_sizes=_CpuValue(),
+    )
+    engine.sam_processor.image_processor = MagicMock()
+    engine.sam_processor.image_processor.post_process_masks.return_value = [[[]]]
+    engine.clip_model = MagicMock()
+    engine.clip_processor = MagicMock()
+
+    outputs = engine.sam_model.return_value
+    outputs.iou_scores.cpu = lambda: [[[ _Score(0.1) ]]]
+
+    result = engine.get_ui_elements_from_image(PILImage.new("RGB", (200, 200)))
+
+    assert result == []
+    telemetry.infer_done.assert_called_once()

@@ -73,13 +73,29 @@ class ObjectDetectionEngine:
         try:
             # Lade das Modell und den Prozessor
             model_name = os.getenv("YOLOS_MODEL", "hustvl/yolos-tiny")
+            _t0 = 0.0
+            if _C3_TELEMETRY and vision_telemetry:
+                _t0 = vision_telemetry.init_start("object_detection", model_name, self.device)
             revision = resolve_pinned_revision(model_name, "YOLOS_MODEL_REVISION")
             self.model = YolosForObjectDetection.from_pretrained(model_name, revision=revision).to(self.device)
             self.image_processor = YolosImageProcessor.from_pretrained(model_name, revision=revision)
             self.initialized = True
+            if _C3_TELEMETRY and vision_telemetry:
+                vision_telemetry.init_done("object_detection", model_name, self.device, _t0, success=True)
             log.info(f"✅ ObjectDetectionEngine (YOLOS) '{model_name}' erfolgreich initialisiert.")
         except Exception as e:
             self.initialized = False
+            if _C3_TELEMETRY and vision_telemetry:
+                vision_telemetry.init_done(
+                    "object_detection",
+                    os.getenv("YOLOS_MODEL", "hustvl/yolos-tiny"),
+                    self.device,
+                    _t0,
+                    success=False,
+                    error_class=type(e).__name__,
+                    error_msg=str(e),
+                )
+                vision_telemetry.error("object_detection", os.getenv("YOLOS_MODEL", "hustvl/yolos-tiny"), self.device, e)
             log.error(f"Konnte YOLOS-Modell nicht laden: {e}", exc_info=True)
             # Wir werfen hier keinen Fehler mehr, damit der Server auch ohne diese Engine starten kann.
             # Der `initialized`-Status reicht aus, um die Funktion zu blockieren.
@@ -140,6 +156,7 @@ class ObjectDetectionEngine:
                 vision_telemetry.infer_done("object_detection", _model_name, self.device,
                                             _t0, image_w=img_w, image_h=img_h, success=False,
                                             error_class=type(e).__name__, error_msg=str(e))
+                vision_telemetry.error("object_detection", _model_name, self.device, e)
             return []
 
         except Exception as e:
@@ -148,6 +165,7 @@ class ObjectDetectionEngine:
                 vision_telemetry.infer_done("object_detection", _model_name, self.device,
                                             _t0, image_w=img_w, image_h=img_h, success=False,
                                             error_class=type(e).__name__, error_msg=str(e))
+                vision_telemetry.error("object_detection", _model_name, self.device, e)
             return []
 
 # Erstelle die globale Singleton-Instanz.

@@ -36,27 +36,47 @@ Drei Engines (OCR, ObjectDetection, Segmentation) hatten:
   - Schwellenwerte konfigurierbar per .env: VISION_VRAM_MIN_MB, VISION_VRAM_LO_MB, VISION_VRAM_HI_MB
   - Router wirft nie — Exception im Router → OCR_ONLY als sicherster Fallback
 
+- [tools/florence2_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/florence2_tool/tool.py)
+  - `florence2_full_analysis` und `florence2_hybrid_analysis` laufen jetzt ueber `_analyze_with_c3_routing(...)`
+  - der produktive Screenshot-Hot-Path respektiert damit nun `VisionStrategy` statt Florence-2 blind zu erzwingen
+  - `OCR_ONLY` und `CPU_FALLBACK_ONLY` erzeugen einen CPU-OCR-only Pfad ohne Florence-2-Load
+  - Florence-2-Init emittiert jetzt `init_start/init_done`
+  - CUDA→CPU-Fallback bei Florence-2 emittiert jetzt `vision_fallback` + `vision_device_change`
+
 - [tools/engines/ocr_engine.py](/home/fatih-ubuntu/dev/timus/tools/engines/ocr_engine.py)
   - OOM-Guard in `process()`: RuntimeError mit OOM-Keyword → torch.cuda.empty_cache(), Telemetrie-Event, Error-Dict mit oom=True
   - Inferenz-Timing via C3-Telemetrie (infer_start/infer_done)
+  - Init-Telemetrie in `initialize()`
+  - normale Laufzeitfehler emittieren jetzt zusaetzlich `vision_error`
   - Best-effort Import der Telemetrie: kein Crash wenn vision_telemetry nicht verfuegbar
 
 - [tools/engines/object_detection_engine.py](/home/fatih-ubuntu/dev/timus/tools/engines/object_detection_engine.py)
   - OOM-Guard in `find_ui_elements()`: RuntimeError OOM → empty_cache(), Telemetrie, leere Liste
   - Inferenz-Timing via C3-Telemetrie
+  - Init-Telemetrie in `initialize()`
+  - normale Laufzeitfehler emittieren jetzt zusaetzlich `vision_error`
 
 - [tools/engines/segmentation_engine.py](/home/fatih-ubuntu/dev/timus/tools/engines/segmentation_engine.py)
   - OOM-Guard in `get_ui_elements_from_image()`: RuntimeError OOM → empty_cache(), Telemetrie, leere Liste
   - Inferenz-Timing via C3-Telemetrie
+  - Init-Telemetrie in `initialize()`
+  - normaler `no masks`-Exit schliesst jetzt korrekt mit `infer_done`
+  - normale Laufzeitfehler emittieren jetzt zusaetzlich `vision_error`
+
+- [agent/visual_nemotron_agent_v4.py](/home/fatih-ubuntu/dev/timus/agent/visual_nemotron_agent_v4.py)
+  - Live-Logs des Florence-Pfads zeigen jetzt auch die gewaehlte `vision_strategy`
 
 ### Tests
 
-- [tests/test_c3_vision_ocr.py](/home/fatih-ubuntu/dev/timus/tests/test_c3_vision_ocr.py) — 38 Tests
+- [tests/test_c3_vision_ocr.py](/home/fatih-ubuntu/dev/timus/tests/test_c3_vision_ocr.py) — 45 Tests
   - 7 Router-Regelklassen (alle Routing-Regeln einzeln getestet)
   - Telemetrie: Ring-Puffer, Counter, Thread-Safety, Convenience-Methoden
   - OOM-Guard: OCR, ObjectDetection, Segmentation (OOM → keine Exception, korrekte Rueckgabe)
   - Degradationsfall ohne GPU
   - is_oom_error Erkennung
+  - Florence-Hot-Path respektiert jetzt die Router-Strategie im echten Tool-Pfad
+  - Fallback-Observability enthaelt jetzt `fallback_reason`
+  - Init-/Error-Telemetrie in OCR und der normale `no masks`-Segmentation-Exit sind regressionsgesichert
 
 - [tests/test_c3_vision_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_c3_vision_hypothesis.py) — 9 Hypothesis-Tests
   - Router total (300 Beispiele): wirft nie, gibt immer VisionStrategy zurueck
@@ -65,7 +85,7 @@ Drei Engines (OCR, ObjectDetection, Segmentation) hatten:
   - is_oom_error: OOM-Keyword erkannt, non-OOM nicht erkannt
   - _pixel_count nie negativ, _clamp_vram in [0, 80000]
 
-- [tests/test_c3_vision_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_c3_vision_crosshair.py) — 24 Tests + deal-Contracts
+- [tests/test_c3_vision_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_c3_vision_crosshair.py) — 25 Tests + deal-Contracts
   - `@deal.post`-Contracts auf: _clamp_scrapingant_timeout [5,60], _clamp_vram [0,80000], _pixel_count >= 0
   - Contract auf select_vision_strategy: Ergebnis immer in VisionStrategy
   - `crosshair check --analysis_kind=deal`: 0 Gegenbeispiele
@@ -85,7 +105,7 @@ Drei Engines (OCR, ObjectDetection, Segmentation) hatten:
 ### Validierung
 
 - `lean CiSpecs.lean` → 0 Fehler, 0 Warnungen
-- `pytest tests/test_c3_vision_ocr.py tests/test_c3_vision_hypothesis.py tests/test_c3_vision_crosshair.py` → **71/71 passed**
+- `pytest tests/test_c3_vision_ocr.py tests/test_c3_vision_hypothesis.py tests/test_c3_vision_crosshair.py` → **79/79 passed**
 - `crosshair check --analysis_kind=deal tests/test_c3_vision_crosshair.py` → 0 Gegenbeispiele
 
 ---

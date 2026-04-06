@@ -177,6 +177,26 @@ class VisionTelemetryRecorder:
                                 device=to_device, fallback_from=from_device, fallback_to=to_device,
                                 fallback_reason=reason[:200]))
 
+    def device_change(
+        self,
+        engine: str,
+        model: str,
+        from_device: str,
+        to_device: str,
+        reason: str = "",
+    ) -> None:
+        self.record(
+            VisionEvent(
+                engine=engine,
+                phase=VisionPhase.DEVICE_CHANGE,
+                model=model,
+                device=to_device,
+                fallback_from=from_device,
+                fallback_to=to_device,
+                fallback_reason=reason[:200],
+            )
+        )
+
     def oom(self, engine: str, model: str, device: str, msg: str = "") -> None:
         self.record(VisionEvent(engine=engine, phase=VisionPhase.OOM, model=model, device=device,
                                 success=False, error_class="OutOfMemoryError", error_msg=msg[:200]))
@@ -201,7 +221,13 @@ class VisionTelemetryRecorder:
 
     def _emit_observability(self, event: VisionEvent) -> None:
         """Fire-and-forget C2-Observability fuer relevante Events."""
-        if event.phase not in (VisionPhase.OOM, VisionPhase.FALLBACK, VisionPhase.INIT_DONE, VisionPhase.ERROR):
+        if event.phase not in (
+            VisionPhase.OOM,
+            VisionPhase.FALLBACK,
+            VisionPhase.DEVICE_CHANGE,
+            VisionPhase.INIT_DONE,
+            VisionPhase.ERROR,
+        ):
             return
         try:
             from orchestration.autonomy_observation import record_autonomy_observation
@@ -213,8 +239,10 @@ class VisionTelemetryRecorder:
                     "device": event.device,
                     "success": event.success,
                     "error_class": event.error_class,
+                    "error_msg": event.error_msg,
                     "fallback_from": event.fallback_from,
                     "fallback_to": event.fallback_to,
+                    "fallback_reason": event.fallback_reason,
                     "duration_ms": round(event.duration_ms, 1),
                 },
             )

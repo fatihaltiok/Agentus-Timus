@@ -142,6 +142,9 @@ class OCREngine:
                 return
 
         # Backend initialisieren
+        _t0 = 0.0
+        if _C3_TELEMETRY and vision_telemetry:
+            _t0 = vision_telemetry.init_start("ocr", self.backend, self.device)
         try:
             if self.backend == "easyocr" and EASYOCR_AVAILABLE:
                 self._init_easyocr()
@@ -157,9 +160,22 @@ class OCREngine:
 
             self.initialized = True
             self.active_backend = self.backend
+            if _C3_TELEMETRY and vision_telemetry:
+                vision_telemetry.init_done("ocr", self.active_backend or self.backend, self.device, _t0, success=True)
             log.info(f"✅ OCREngine initialisiert mit Backend: {self.active_backend} (Device: {self.device})")
 
         except Exception as e:
+            if _C3_TELEMETRY and vision_telemetry:
+                vision_telemetry.init_done(
+                    "ocr",
+                    self.backend,
+                    self.device,
+                    _t0,
+                    success=False,
+                    error_class=type(e).__name__,
+                    error_msg=str(e),
+                )
+                vision_telemetry.error("ocr", self.backend, self.device, e)
             log.error(f"❌ Fehler bei Initialisierung von {self.backend}: {e}", exc_info=True)
             self.initialized = False
 
@@ -270,6 +286,7 @@ class OCREngine:
                 vision_telemetry.infer_done("ocr", self.active_backend or "", self.device,
                                             _t0, image_w=img_w, image_h=img_h, success=False,
                                             error_class=type(e).__name__, error_msg=str(e))
+                vision_telemetry.error("ocr", self.active_backend or "", self.device, e)
             return {"error": str(e), "extracted_text": [], "full_text": ""}
 
         except Exception as e:
@@ -278,6 +295,7 @@ class OCREngine:
                 vision_telemetry.infer_done("ocr", self.active_backend or "", self.device,
                                             _t0, image_w=img_w, image_h=img_h, success=False,
                                             error_class=type(e).__name__, error_msg=str(e))
+                vision_telemetry.error("ocr", self.active_backend or "", self.device, e)
             return {"error": str(e), "extracted_text": [], "full_text": ""}
 
     def _process_easyocr(self, image: Image.Image, with_boxes: bool) -> Dict[str, Any]:

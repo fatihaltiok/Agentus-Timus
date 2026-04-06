@@ -1011,7 +1011,7 @@ class VisionClient:
                     log.info(
                         f"   🌸 Florence-2 ({used_method}): {r.get('element_count', 0)} UI-Elemente, "
                         f"text={r.get('text_count', '?')}, ocr={r.get('ocr_backend', 'florence2')}, "
-                        f"device={r.get('device', '?')}"
+                        f"device={r.get('device', '?')}, strategy={r.get('vision_strategy', '?')}"
                     )
                     return summary
                 return "[Florence-2: leerer summary_prompt]"

@@ -90,6 +90,9 @@ class SegmentationEngine:
 
         try:
             sam_model_name = os.getenv("SAM_MODEL", "facebook/sam-vit-base")
+            _t0 = 0.0
+            if _C3_TELEMETRY and vision_telemetry:
+                _t0 = vision_telemetry.init_start("segmentation", sam_model_name, self.device)
             sam_revision = resolve_pinned_revision(sam_model_name, "SAM_MODEL_REVISION")
             log.info("📥 Lade SAM-Modell...")
             self.sam_model = SamModel.from_pretrained(sam_model_name, revision=sam_revision).to(self.device)
@@ -108,9 +111,22 @@ class SegmentationEngine:
             )
 
             self.initialized = True
+            if _C3_TELEMETRY and vision_telemetry:
+                vision_telemetry.init_done("segmentation", sam_model_name, self.device, _t0, success=True)
             log.info("✅ SegmentationEngine (SAM+CLIP) erfolgreich initialisiert.")
         except Exception as e:
             self.initialized = False
+            if _C3_TELEMETRY and vision_telemetry:
+                vision_telemetry.init_done(
+                    "segmentation",
+                    os.getenv("SAM_MODEL", "facebook/sam-vit-base"),
+                    self.device,
+                    _t0,
+                    success=False,
+                    error_class=type(e).__name__,
+                    error_msg=str(e),
+                )
+                vision_telemetry.error("segmentation", os.getenv("SAM_MODEL", "facebook/sam-vit-base"), self.device, e)
             log.error(f"❌ Fehler beim Laden der Segmentierungs-Modelle: {e}", exc_info=True)
 
     def get_ui_elements_from_image(self, image: Image.Image) -> List[Dict[str, Any]]:
@@ -155,6 +171,9 @@ class SegmentationEngine:
             
             if not high_quality_masks:
                 log.warning("SAM hat keine hochwertigen Segmente gefunden.")
+                if _C3_TELEMETRY and vision_telemetry:
+                    vision_telemetry.infer_done("segmentation", _sam_name, self.device,
+                                                _t0, image_w=img_w, image_h=img_h, success=True)
                 return []
 
             # Schritt 3: Jede hochwertige Maske mit CLIP klassifizieren
@@ -213,6 +232,7 @@ class SegmentationEngine:
                 vision_telemetry.infer_done("segmentation", _sam_name, self.device,
                                             _t0, image_w=img_w, image_h=img_h, success=False,
                                             error_class=type(e).__name__, error_msg=str(e))
+                vision_telemetry.error("segmentation", _sam_name, self.device, e)
             return []
 
         except Exception as e:
@@ -221,6 +241,7 @@ class SegmentationEngine:
                 vision_telemetry.infer_done("segmentation", _sam_name, self.device,
                                             _t0, image_w=img_w, image_h=img_h, success=False,
                                             error_class=type(e).__name__, error_msg=str(e))
+                vision_telemetry.error("segmentation", _sam_name, self.device, e)
             return []
 
 # Erstelle eine globale Instanz der SegmentationEngine

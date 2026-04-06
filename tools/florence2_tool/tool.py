@@ -24,7 +24,7 @@ import os
 import time
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 from io import BytesIO
 
 log = logging.getLogger("timus.florence2")
@@ -35,6 +35,25 @@ log.setLevel(logging.INFO)
 # ---------------------------------------------------------------------------
 from tools.tool_registry_v2 import tool, P, C, ToolCategory
 from utils.hf_model_pinning import resolve_pinned_revision
+
+try:
+    from tools.engines.vision_router import (
+        VisionStrategy,
+        get_vram_available_mb,
+        routing_summary,
+        select_vision_strategy,
+    )
+    _C3_ROUTER_AVAILABLE = True
+except Exception:
+    VisionStrategy = None  # type: ignore[assignment]
+    _C3_ROUTER_AVAILABLE = False
+
+try:
+    from tools.engines.vision_telemetry import vision_telemetry
+    _C3_TELEMETRY = True
+except Exception:
+    vision_telemetry = None  # type: ignore[assignment]
+    _C3_TELEMETRY = False
 
 # ---------------------------------------------------------------------------
 # Singleton: Modell nur einmal laden
@@ -78,40 +97,73 @@ def _load_model():
         _device = "cuda" if torch.cuda.is_available() else "cpu"
     log.info(f"Florence-2 Device: {_device} (override={_device_override})")
     revision = resolve_pinned_revision(_model_path, "FLORENCE2_MODEL_REVISION")
-
-    _processor = AutoProcessor.from_pretrained(
-        _model_path,
-        revision=revision,
-        trust_remote_code=True,
-    )
-
-    def _load_on_device(target_device: str):
-        dtype = torch.float16 if target_device == "cuda" else torch.float32
-        return AutoModelForCausalLM.from_pretrained(
+    _t0 = 0.0
+    if _C3_TELEMETRY and vision_telemetry:
+        _t0 = vision_telemetry.init_start("florence2", _model_path, _device)
+    try:
+        _processor = AutoProcessor.from_pretrained(
             _model_path,
             revision=revision,
-            torch_dtype=dtype,
             trust_remote_code=True,
-        ).to(target_device)
+        )
 
-    # CUDA→CPU Fallback: wenn GPU busy/unavailable → automatisch CPU
-    if _device == "cuda":
-        try:
-            _model = _load_on_device("cuda")
-        except Exception as cuda_err:
-            log.warning(
-                f"Florence-2 CUDA fehlgeschlagen ({cuda_err.__class__.__name__})"
-                f" → CPU-Fallback"
+        def _load_on_device(target_device: str):
+            dtype = torch.float16 if target_device == "cuda" else torch.float32
+            return AutoModelForCausalLM.from_pretrained(
+                _model_path,
+                revision=revision,
+                torch_dtype=dtype,
+                trust_remote_code=True,
+            ).to(target_device)
+
+        # CUDA→CPU Fallback: wenn GPU busy/unavailable → automatisch CPU
+        if _device == "cuda":
+            try:
+                _model = _load_on_device("cuda")
+            except Exception as cuda_err:
+                log.warning(
+                    f"Florence-2 CUDA fehlgeschlagen ({cuda_err.__class__.__name__})"
+                    f" → CPU-Fallback"
+                )
+                if _C3_TELEMETRY and vision_telemetry:
+                    vision_telemetry.fallback(
+                        "florence2",
+                        "cuda",
+                        "cpu",
+                        f"{cuda_err.__class__.__name__}: {cuda_err}",
+                        model=_model_path,
+                    )
+                    vision_telemetry.device_change(
+                        "florence2",
+                        _model_path,
+                        "cuda",
+                        "cpu",
+                        reason=f"{cuda_err.__class__.__name__}: {cuda_err}",
+                    )
+                _device = "cpu"
+                _model = _load_on_device("cpu")
+        else:
+            _model = _load_on_device(_device)
+
+        _model.eval()
+        elapsed = time.time() - t0
+        if _C3_TELEMETRY and vision_telemetry:
+            vision_telemetry.init_done("florence2", _model_path, _device, _t0, success=True)
+        log.info(f"Florence-2 geladen auf {_device} in {elapsed:.1f}s")
+        return _model, _processor
+    except Exception as exc:
+        if _C3_TELEMETRY and vision_telemetry:
+            vision_telemetry.init_done(
+                "florence2",
+                _model_path,
+                _device,
+                _t0,
+                success=False,
+                error_class=type(exc).__name__,
+                error_msg=str(exc),
             )
-            _device = "cpu"
-            _model = _load_on_device("cpu")
-    else:
-        _model = _load_on_device(_device)
-
-    _model.eval()
-    elapsed = time.time() - t0
-    log.info(f"Florence-2 geladen auf {_device} in {elapsed:.1f}s")
-    return _model, _processor
+            vision_telemetry.error("florence2", _model_path, _device, exc)
+        raise
 
 
 def _unload_model():
@@ -148,6 +200,9 @@ def _get_paddle_ocr():
         return None
 
     # Unterstützt alte und neue PaddleOCR-API-Varianten.
+    _t0 = 0.0
+    if _C3_TELEMETRY and vision_telemetry:
+        _t0 = vision_telemetry.init_start("paddleocr", "PaddleOCR", "cpu")
     configs = [
         {
             "use_angle_cls": True,
@@ -177,12 +232,25 @@ def _get_paddle_ocr():
     for cfg in configs:
         try:
             _paddle_ocr = PaddleOCR(**cfg)
+            if _C3_TELEMETRY and vision_telemetry:
+                vision_telemetry.init_done("paddleocr", "PaddleOCR", "cpu", _t0, success=True)
             log.info(f"PaddleOCR geladen (CPU) mit Config: {sorted(cfg.keys())}")
             return _paddle_ocr
         except Exception as e:
             last_err = e
 
     _paddle_ocr_init_failed = True
+    if _C3_TELEMETRY and vision_telemetry and last_err is not None:
+        vision_telemetry.init_done(
+            "paddleocr",
+            "PaddleOCR",
+            "cpu",
+            _t0,
+            success=False,
+            error_class=type(last_err).__name__,
+            error_msg=str(last_err),
+        )
+        vision_telemetry.error("paddleocr", "PaddleOCR", "cpu", last_err)
     log.warning(f"PaddleOCR nicht verfügbar: {last_err}")
     return _paddle_ocr
 
@@ -423,6 +491,67 @@ def _hybrid_analysis(image) -> dict:
     }
 
 
+def _attach_route_metadata(result: Dict[str, Any], strategy: Any, route_summary_text: str, vram_mb: int) -> Dict[str, Any]:
+    payload = dict(result or {})
+    strategy_value = getattr(strategy, "value", str(strategy or "unknown"))
+    payload["vision_strategy"] = strategy_value
+    payload["route_summary"] = route_summary_text
+    payload["vram_available_mb"] = int(vram_mb or 0)
+    return payload
+
+
+def _ocr_only_analysis(image, strategy: Any, route_summary_text: str, vram_mb: int) -> dict:
+    texts, ocr_backend = _paddle_ocr_texts(image)
+    txt_lines = [
+        f"[{chr(65 + i)}] \"{t['text']}\" @ ({t['center'][0]},{t['center'][1]}) conf={t.get('confidence', 0)}"
+        for i, t in enumerate(texts)
+    ]
+    summary_prompt = (
+        f"Auflösung: {image.width}x{image.height}px\n"
+        f"C3-Route: {getattr(strategy, 'value', strategy)}\n\n"
+        f"TEXT AUF DEM BILDSCHIRM ({len(texts)}):\n"
+        + ("\n".join(txt_lines) if txt_lines else "(kein Text erkannt)")
+    )
+    return _attach_route_metadata(
+        {
+            "caption": "",
+            "ui_elements": [],
+            "text_elements": texts,
+            "element_count": 0,
+            "text_count": len(texts),
+            "summary_prompt": summary_prompt,
+            "image_size": [image.width, image.height],
+            "model": _model_path,
+            "device": "cpu",
+            "ocr_backend": ocr_backend,
+        },
+        strategy,
+        route_summary_text,
+        vram_mb,
+    )
+
+
+def _analyze_with_c3_routing(image, task_type: str = "") -> dict:
+    if not _C3_ROUTER_AVAILABLE or VisionStrategy is None:
+        return _hybrid_analysis(image)
+
+    strategy = select_vision_strategy(
+        image_w=image.width,
+        image_h=image.height,
+        task_type=task_type,
+    )
+    vram_mb = get_vram_available_mb()
+    route_summary_text = routing_summary(strategy, image.width, image.height, vram_mb, task_type)
+
+    if strategy in (VisionStrategy.OCR_ONLY, VisionStrategy.CPU_FALLBACK_ONLY):
+        return _ocr_only_analysis(image, strategy, route_summary_text, vram_mb)
+    if strategy == VisionStrategy.FLORENCE2_PRIMARY:
+        return _attach_route_metadata(_full_analysis(image), strategy, route_summary_text, vram_mb)
+    if strategy == VisionStrategy.FLORENCE2_HYBRID:
+        return _attach_route_metadata(_hybrid_analysis(image), strategy, route_summary_text, vram_mb)
+    return _attach_route_metadata(_hybrid_analysis(image), strategy, route_summary_text, vram_mb)
+
+
 # ---------------------------------------------------------------------------
 # MCP-Tools (@tool Decorator → registry_v2 + jsonrpcserver global_methods)
 # ---------------------------------------------------------------------------
@@ -469,7 +598,7 @@ async def florence2_full_analysis(image_path: str) -> dict:
     """Vollanalyse eines Screenshots für Nemotron-Pipeline."""
     try:
         image = await asyncio.to_thread(_load_image, image_path)
-        return await asyncio.to_thread(_full_analysis, image)
+        return await asyncio.to_thread(_analyze_with_c3_routing, image, "")
     except Exception as e:
         log.error(f"florence2_full_analysis Fehler: {e}")
         return {"error": str(e), "success": False}
@@ -493,7 +622,7 @@ async def florence2_hybrid_analysis(image_path: str) -> dict:
     """Hybridanalyse: UI via Florence-2, OCR via PaddleOCR."""
     try:
         image = await asyncio.to_thread(_load_image, image_path)
-        return await asyncio.to_thread(_hybrid_analysis, image)
+        return await asyncio.to_thread(_analyze_with_c3_routing, image, "")
     except Exception as e:
         log.error(f"florence2_hybrid_analysis Fehler: {e}")
         return {"error": str(e), "success": False}
