@@ -14,6 +14,7 @@ Konfiguration per .env:
 
 import logging
 import os
+import time
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import cv2
@@ -23,6 +24,18 @@ from PIL import Image
 
 # Importiere den zentralen Logger
 from tools.shared_context import log
+
+# C3 Telemetrie (best-effort import)
+try:
+    from tools.engines.vision_telemetry import vision_telemetry, is_oom_error
+    _C3_TELEMETRY = True
+except Exception:
+    vision_telemetry = None  # type: ignore[assignment]
+    _C3_TELEMETRY = False
+
+    def is_oom_error(exc: BaseException) -> bool:  # type: ignore[misc]
+        msg = str(exc).lower()
+        return isinstance(exc, RuntimeError) and "out of memory" in msg
 from utils.hf_model_pinning import resolve_pinned_revision
 
 # ===== BACKEND IMPORTS =====
@@ -216,20 +229,55 @@ class OCREngine:
             log.warning("OCREngine nicht initialisiert!")
             return {"error": "OCR Engine nicht initialisiert", "extracted_text": [], "full_text": ""}
 
+        # C3 Telemetrie: Inferenz-Timing + OOM-Guard
+        img_w, img_h = (image.size if hasattr(image, "size") else (0, 0))
+        _t0 = time.monotonic() if _C3_TELEMETRY else 0.0
+        if _C3_TELEMETRY and vision_telemetry:
+            vision_telemetry.infer_start("ocr", self.active_backend or "", self.device,
+                                         image_w=img_w, image_h=img_h)
+
         try:
             if self.active_backend == "easyocr":
-                return self._process_easyocr(image, with_boxes)
+                result = self._process_easyocr(image, with_boxes)
             elif self.active_backend == "tesseract":
-                return self._process_tesseract(image, with_boxes)
+                result = self._process_tesseract(image, with_boxes)
             elif self.active_backend == "trocr":
-                return self._process_trocr(image, with_boxes)
+                result = self._process_trocr(image, with_boxes)
             elif self.active_backend == "paddleocr":
-                return self._process_paddleocr(image, with_boxes)
+                result = self._process_paddleocr(image, with_boxes)
             else:
-                return {"error": f"Unbekanntes Backend: {self.active_backend}", "extracted_text": [], "full_text": ""}
+                result = {"error": f"Unbekanntes Backend: {self.active_backend}",
+                          "extracted_text": [], "full_text": ""}
+            if _C3_TELEMETRY and vision_telemetry:
+                vision_telemetry.infer_done("ocr", self.active_backend or "", self.device,
+                                            _t0, image_w=img_w, image_h=img_h, success=True)
+            return result
+
+        except RuntimeError as e:
+            if is_oom_error(e):
+                log.error(f"❌ OCR OOM auf {self.device}: {e}")
+                if _C3_TELEMETRY and vision_telemetry:
+                    vision_telemetry.oom("ocr", self.active_backend or "", self.device, str(e))
+                try:
+                    if self.device == "cuda":
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                return {"error": "OOM — GPU-Speicher erschoepft", "extracted_text": [], "full_text": "",
+                        "oom": True, "backend": self.active_backend}
+            log.error(f"Fehler bei OCR-Verarbeitung: {e}", exc_info=True)
+            if _C3_TELEMETRY and vision_telemetry:
+                vision_telemetry.infer_done("ocr", self.active_backend or "", self.device,
+                                            _t0, image_w=img_w, image_h=img_h, success=False,
+                                            error_class=type(e).__name__, error_msg=str(e))
+            return {"error": str(e), "extracted_text": [], "full_text": ""}
 
         except Exception as e:
             log.error(f"Fehler bei OCR-Verarbeitung: {e}", exc_info=True)
+            if _C3_TELEMETRY and vision_telemetry:
+                vision_telemetry.infer_done("ocr", self.active_backend or "", self.device,
+                                            _t0, image_w=img_w, image_h=img_h, success=False,
+                                            error_class=type(e).__name__, error_msg=str(e))
             return {"error": str(e), "extracted_text": [], "full_text": ""}
 
     def _process_easyocr(self, image: Image.Image, with_boxes: bool) -> Dict[str, Any]:

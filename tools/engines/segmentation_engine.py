@@ -2,6 +2,7 @@
 
 import logging
 import os
+import time
 from typing import Any, List, Dict
 
 import torch
@@ -10,6 +11,18 @@ from PIL import Image
 
 # Importiere den zentralen Logger
 from tools.shared_context import log
+
+# C3 Telemetrie (best-effort import)
+try:
+    from tools.engines.vision_telemetry import vision_telemetry, is_oom_error
+    _C3_TELEMETRY = True
+except Exception:
+    vision_telemetry = None  # type: ignore[assignment]
+    _C3_TELEMETRY = False
+
+    def is_oom_error(exc: BaseException) -> bool:  # type: ignore[misc]
+        msg = str(exc).lower()
+        return isinstance(exc, RuntimeError) and "out of memory" in msg
 from utils.hf_model_pinning import resolve_pinned_revision
 
 # Fange Import-Fehler ab, um den Serverstart nicht zu blockieren
@@ -109,7 +122,15 @@ class SegmentationEngine:
             return []
 
         log.info(f"Segmentiere Bild der Größe {image.size} mit SAM...")
-        
+
+        # C3 Telemetrie: Timing + OOM-Guard
+        img_w, img_h = (image.size if hasattr(image, "size") else (0, 0))
+        _sam_name = os.getenv("SAM_MODEL", "facebook/sam-vit-base")
+        _t0 = time.monotonic() if _C3_TELEMETRY else 0.0
+        if _C3_TELEMETRY and vision_telemetry:
+            vision_telemetry.infer_start("segmentation", _sam_name, self.device,
+                                         image_w=img_w, image_h=img_h)
+
         try:
             if not all([self.sam_model, self.sam_processor, self.clip_model, self.clip_processor]):
                 raise RuntimeError("Ein oder mehrere Modelle der SegmentationEngine sind nicht geladen.")
@@ -171,11 +192,35 @@ class SegmentationEngine:
                             final_elements.append(element)
             
             # KORREKTUR: Log-Ausgabe und return gehören NACH die Schleife.
+            if _C3_TELEMETRY and vision_telemetry:
+                vision_telemetry.infer_done("segmentation", _sam_name, self.device,
+                                            _t0, image_w=img_w, image_h=img_h, success=True)
             log.info(f"✅ {len(final_elements)} UI-Elemente nach Segmentierung und Filterung gefunden.")
             return final_elements
-            
+
+        except RuntimeError as e:
+            if is_oom_error(e):
+                log.error(f"❌ Segmentation OOM auf {self.device}: {e}")
+                if _C3_TELEMETRY and vision_telemetry:
+                    vision_telemetry.oom("segmentation", _sam_name, self.device, str(e))
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                return []
+            log.error(f"Fehler während der Segmentierung/Klassifizierung: {e}", exc_info=True)
+            if _C3_TELEMETRY and vision_telemetry:
+                vision_telemetry.infer_done("segmentation", _sam_name, self.device,
+                                            _t0, image_w=img_w, image_h=img_h, success=False,
+                                            error_class=type(e).__name__, error_msg=str(e))
+            return []
+
         except Exception as e:
             log.error(f"Fehler während der Segmentierung/Klassifizierung: {e}", exc_info=True)
+            if _C3_TELEMETRY and vision_telemetry:
+                vision_telemetry.infer_done("segmentation", _sam_name, self.device,
+                                            _t0, image_w=img_w, image_h=img_h, success=False,
+                                            error_class=type(e).__name__, error_msg=str(e))
             return []
 
 # Erstelle eine globale Instanz der SegmentationEngine

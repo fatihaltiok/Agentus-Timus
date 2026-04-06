@@ -2,12 +2,25 @@
 
 import logging
 import os
+import time
 from PIL import Image
 import torch
 from typing import List, Dict, Any
 
 # Importiere den zentralen Logger.
 from tools.shared_context import log
+
+# C3 Telemetrie (best-effort import)
+try:
+    from tools.engines.vision_telemetry import vision_telemetry, is_oom_error
+    _C3_TELEMETRY = True
+except Exception:
+    vision_telemetry = None  # type: ignore[assignment]
+    _C3_TELEMETRY = False
+
+    def is_oom_error(exc: BaseException) -> bool:  # type: ignore[misc]
+        msg = str(exc).lower()
+        return isinstance(exc, RuntimeError) and "out of memory" in msg
 from utils.hf_model_pinning import resolve_pinned_revision
 
 # Fange den Import-Fehler ab, damit der Server nicht abstürzt, wenn Pakete fehlen.
@@ -79,15 +92,23 @@ class ObjectDetectionEngine:
             log.warning("Aufruf von find_ui_elements, aber die Engine ist nicht initialisiert.")
             return []
         
-        # Die Kernlogik der Inferenz bleibt unverändert.
+        # C3 Telemetrie: Timing + OOM-Guard
+        img_w, img_h = (image.size if hasattr(image, "size") else (0, 0))
+        _model_name = os.getenv("YOLOS_MODEL", "hustvl/yolos-tiny")
+        _t0 = time.monotonic() if _C3_TELEMETRY else 0.0
+        if _C3_TELEMETRY and vision_telemetry:
+            vision_telemetry.infer_start("object_detection", _model_name, self.device,
+                                         image_w=img_w, image_h=img_h)
+
         try:
             inputs = self.image_processor(images=image, return_tensors="pt").to(self.device)
             with torch.no_grad():
                 outputs = self.model(**inputs)
 
             target_sizes = torch.tensor([image.size[::-1]])
-            results = self.image_processor.post_process_object_detection(outputs, threshold=confidence_threshold, target_sizes=target_sizes)[0]
-            
+            results = self.image_processor.post_process_object_detection(
+                outputs, threshold=confidence_threshold, target_sizes=target_sizes)[0]
+
             elements = []
             for score, label_idx, box in zip(results["scores"], results["labels"], results["boxes"]):
                 label = self.model.config.id2label[label_idx.item()]
@@ -97,11 +118,36 @@ class ObjectDetectionEngine:
                     "confidence": round(score.item(), 4),
                     "bbox": box_coords
                 })
-            
+
+            if _C3_TELEMETRY and vision_telemetry:
+                vision_telemetry.infer_done("object_detection", _model_name, self.device,
+                                            _t0, image_w=img_w, image_h=img_h, success=True)
             log.info(f"✅ {len(elements)} UI-Elemente durch Objekterkennung gefunden.")
             return elements
+
+        except RuntimeError as e:
+            if is_oom_error(e):
+                log.error(f"❌ ObjectDetection OOM auf {self.device}: {e}")
+                if _C3_TELEMETRY and vision_telemetry:
+                    vision_telemetry.oom("object_detection", _model_name, self.device, str(e))
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                return []
+            log.error(f"Fehler während der YOLOS-Inferenz: {e}", exc_info=True)
+            if _C3_TELEMETRY and vision_telemetry:
+                vision_telemetry.infer_done("object_detection", _model_name, self.device,
+                                            _t0, image_w=img_w, image_h=img_h, success=False,
+                                            error_class=type(e).__name__, error_msg=str(e))
+            return []
+
         except Exception as e:
             log.error(f"Fehler während der YOLOS-Inferenz: {e}", exc_info=True)
+            if _C3_TELEMETRY and vision_telemetry:
+                vision_telemetry.infer_done("object_detection", _model_name, self.device,
+                                            _t0, image_w=img_w, image_h=img_h, success=False,
+                                            error_class=type(e).__name__, error_msg=str(e))
             return []
 
 # Erstelle die globale Singleton-Instanz.

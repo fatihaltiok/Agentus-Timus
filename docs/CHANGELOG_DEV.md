@@ -2,6 +2,94 @@
 
 ---
 
+## Fortschritt 2026-04-06 - C3 Vision/OCR Hot-Path gehaertet
+
+### Problemstellung
+
+Drei Engines (OCR, ObjectDetection, Segmentation) hatten:
+- Kein OOM-Recovery: CUDA-out-of-memory schlug still fehl, kein Logging, kein Cleanup
+- Kein Timing: Inferenz-Dauer war nicht messbar
+- Keine Telemetrie: Device, Modell, Fallback-Grund waren nicht nachvollziehbar
+- Keine expliziten Routing-Regeln: Florence-2 vs. OCR-allein wurde implizit entschieden
+
+### Umgesetzt
+
+- [tools/engines/vision_telemetry.py](/home/fatih-ubuntu/dev/timus/tools/engines/vision_telemetry.py) (neu)
+  - `VisionTelemetryRecorder` Singleton — thread-sicherer Ring-Puffer (MAX_EVENTS=500)
+  - Phases: INIT_START, INIT_DONE, INFER_START, INFER_DONE, DEVICE_CHANGE, FALLBACK, OOM, ERROR
+  - Convenience-Methoden: `init_start/done`, `infer_start/done`, `fallback`, `oom`, `error`
+  - `get_summary()` gibt per-Engine-Stats zurueck (Inferenz-Count, Fehler, OOM-Zaehler)
+  - Emittiert C2-Observability fuer INIT_DONE, OOM, FALLBACK, ERROR (best-effort)
+  - `is_oom_error(exc)` erkennt CUDA-OOM-RuntimeError zuverlaessig
+
+- [tools/engines/vision_router.py](/home/fatih-ubuntu/dev/timus/tools/engines/vision_router.py) (neu)
+  - `VisionStrategy` Enum: OCR_ONLY, FLORENCE2_PRIMARY, FLORENCE2_HYBRID, CPU_FALLBACK_ONLY
+  - `select_vision_strategy(image_w, image_h, task_type, vram_available_mb)` — 7 priorisierte Regeln:
+    1. VRAM < VRAM_MIN (default 1500MB) → CPU_FALLBACK_ONLY
+    2. task=ui_detection → FLORENCE2_PRIMARY
+    3. Bild > 2MP + VRAM >= 3000MB → FLORENCE2_PRIMARY
+    4. Bild <= 0.5MP → OCR_ONLY
+    5. Bild > 0.5MP + VRAM >= 2000MB → FLORENCE2_HYBRID
+    6. VRAM >= 2000MB, Bild unbekannt → FLORENCE2_PRIMARY
+    7. Default → OCR_ONLY
+  - `get_vram_available_mb()` — CUDA mem_get_info, gibt 0 zurueck wenn kein GPU
+  - Schwellenwerte konfigurierbar per .env: VISION_VRAM_MIN_MB, VISION_VRAM_LO_MB, VISION_VRAM_HI_MB
+  - Router wirft nie — Exception im Router → OCR_ONLY als sicherster Fallback
+
+- [tools/engines/ocr_engine.py](/home/fatih-ubuntu/dev/timus/tools/engines/ocr_engine.py)
+  - OOM-Guard in `process()`: RuntimeError mit OOM-Keyword → torch.cuda.empty_cache(), Telemetrie-Event, Error-Dict mit oom=True
+  - Inferenz-Timing via C3-Telemetrie (infer_start/infer_done)
+  - Best-effort Import der Telemetrie: kein Crash wenn vision_telemetry nicht verfuegbar
+
+- [tools/engines/object_detection_engine.py](/home/fatih-ubuntu/dev/timus/tools/engines/object_detection_engine.py)
+  - OOM-Guard in `find_ui_elements()`: RuntimeError OOM → empty_cache(), Telemetrie, leere Liste
+  - Inferenz-Timing via C3-Telemetrie
+
+- [tools/engines/segmentation_engine.py](/home/fatih-ubuntu/dev/timus/tools/engines/segmentation_engine.py)
+  - OOM-Guard in `get_ui_elements_from_image()`: RuntimeError OOM → empty_cache(), Telemetrie, leere Liste
+  - Inferenz-Timing via C3-Telemetrie
+
+### Tests
+
+- [tests/test_c3_vision_ocr.py](/home/fatih-ubuntu/dev/timus/tests/test_c3_vision_ocr.py) — 38 Tests
+  - 7 Router-Regelklassen (alle Routing-Regeln einzeln getestet)
+  - Telemetrie: Ring-Puffer, Counter, Thread-Safety, Convenience-Methoden
+  - OOM-Guard: OCR, ObjectDetection, Segmentation (OOM → keine Exception, korrekte Rueckgabe)
+  - Degradationsfall ohne GPU
+  - is_oom_error Erkennung
+
+- [tests/test_c3_vision_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_c3_vision_hypothesis.py) — 9 Hypothesis-Tests
+  - Router total (300 Beispiele): wirft nie, gibt immer VisionStrategy zurueck
+  - VRAM=0 → immer CPU_FALLBACK_ONLY (200 Beispiele)
+  - Telemetrie-Count monoton, Ring <= MAX_EVENTS
+  - is_oom_error: OOM-Keyword erkannt, non-OOM nicht erkannt
+  - _pixel_count nie negativ, _clamp_vram in [0, 80000]
+
+- [tests/test_c3_vision_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_c3_vision_crosshair.py) — 24 Tests + deal-Contracts
+  - `@deal.post`-Contracts auf: _clamp_scrapingant_timeout [5,60], _clamp_vram [0,80000], _pixel_count >= 0
+  - Contract auf select_vision_strategy: Ergebnis immer in VisionStrategy
+  - `crosshair check --analysis_kind=deal`: 0 Gegenbeispiele
+
+### Lean4-Theoreme (CiSpecs.lean)
+
+8 neue Theoreme C3.1–C3.8:
+  - C3.1: VRAM-Klemme non-negative
+  - C3.2: CPU-Fallback-Schwelle konsistent
+  - C3.3: OOM-Error-Count monoton
+  - C3.4: Ring-Puffer-Schranke (min(len+1, MAX) <= MAX)
+  - C3.5: VRAM-Klemme in [0, 80000]
+  - C3.6: ScrapingAnt Timeout in [5, 60]
+  - C3.7: Pixel-Count non-negative
+  - C3.8: Routing-Monotonie (mehr VRAM verbessert nie die Strategie nach unten)
+
+### Validierung
+
+- `lean CiSpecs.lean` → 0 Fehler, 0 Warnungen
+- `pytest tests/test_c3_vision_ocr.py tests/test_c3_vision_hypothesis.py tests/test_c3_vision_crosshair.py` → **71/71 passed**
+- `crosshair check --analysis_kind=deal tests/test_c3_vision_crosshair.py` → 0 Gegenbeispiele
+
+---
+
 ## Fortschritt 2026-04-05 20:55 CEST - ScrapingAnt Architektur gehaertet
 
 ### Problemstellung
