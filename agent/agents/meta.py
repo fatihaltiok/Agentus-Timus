@@ -1130,6 +1130,11 @@ class MetaAgent(BaseAgent):
                     payload["meta_self_state"] = json.loads(normalized_value)
                 except json.JSONDecodeError:
                     payload["meta_self_state"] = {"raw": normalized_value}
+            elif normalized_key == "meta_context_bundle_json":
+                try:
+                    payload["meta_context_bundle"] = json.loads(normalized_value)
+                except json.JSONDecodeError:
+                    payload["meta_context_bundle"] = {"raw": normalized_value}
             elif normalized_key == "goal_spec_json":
                 try:
                     payload["goal_spec"] = json.loads(normalized_value)

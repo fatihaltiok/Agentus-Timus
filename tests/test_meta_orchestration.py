@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
+
 from orchestration.meta_orchestration import (
     build_meta_feedback_targets,
     classify_meta_task,
@@ -701,6 +704,237 @@ def test_classify_meta_task_applies_context_anchor_for_deferred_decision_followu
     assert result["reason"] == "semantic_clarification_turn"
     assert "telefonfunktion" in (result["active_topic"] or "").lower()
     assert "was willst du" in (result["open_goal"] or "").lower()
+
+
+def test_classify_meta_task_builds_meta_context_bundle_with_state_priority_and_suppression():
+    query = (
+        "# FOLLOW-UP CONTEXT "
+        "last_agent: meta session_id: canvas_d03 "
+        "last_assistant: Dein letzter bekannter Standort war in Offenbach am Main. "
+        "pending_followup_prompt: Soll ich Reuters und AP kuenftig priorisieren? "
+        "# CURRENT USER QUERY dann mach das in zukunft so dass du fuer news agenturmeldungen priorisierst"
+    )
+
+    result = classify_meta_task(
+        query,
+        action_count=0,
+        conversation_state={
+            "active_topic": "Weltlage und News-Qualitaet",
+            "active_goal": "Echtzeit-Agenturmeldungen priorisieren",
+            "open_loop": "Reuters und AP priorisieren",
+            "next_expected_step": "Praeferenz bestaetigen",
+            "turn_type_hint": "behavior_instruction",
+            "preferences": ["Reuters zuerst", "AP zuerst"],
+            "recent_corrections": ["Nicht auf Standort abdriften"],
+            "topic_confidence": 0.72,
+        },
+        recent_user_turns=["wie stehts um die aktuelle weltlage"],
+        recent_assistant_turns=["Dein letzter bekannter Standort war in Offenbach am Main."],
+        session_summary="Wir sprachen ueber bessere News-Quellen fuer aktuelle Weltlage.",
+        semantic_recall_hits=[
+            {
+                "role": "assistant",
+                "agent": "meta",
+                "text": "Du wolltest bei News belastbare Agenturquellen statt langsamer Analysen.",
+            }
+        ],
+    )
+
+    bundle = result["meta_context_bundle"]
+    slot_types = [slot["slot"] for slot in bundle["context_slots"]]
+
+    assert result["reason"] == "semantic_preference_alignment"
+    assert result["active_topic"] == "Weltlage und News-Qualitaet"
+    assert result["open_goal"] == "Echtzeit-Agenturmeldungen priorisieren"
+    assert bundle["active_topic"] == "Weltlage und News-Qualitaet"
+    assert bundle["open_loop"] == "Reuters und AP priorisieren"
+    assert slot_types[:4] == [
+        "current_query",
+        "conversation_state",
+        "open_loop",
+        "recent_user_turn",
+    ]
+    assert any(
+        item["reason"] == "location_context_without_current_evidence"
+        for item in bundle["suppressed_context"]
+    )
+
+
+def test_classify_meta_task_normalizes_semantic_recall_into_bundle_slot():
+    result = classify_meta_task(
+        "wie war nochmal dein plan fuer visual",
+        action_count=0,
+        semantic_recall_hits=[
+            {
+                "role": "assistant",
+                "agent": "executor",
+                "text": "Frueher habe ich den Visual-Pfad bereits als Hauptproblem markiert.",
+            }
+        ],
+    )
+
+    bundle = result["meta_context_bundle"]
+    semantic_slots = [slot for slot in bundle["context_slots"] if slot["slot"] == "semantic_recall"]
+
+    assert semantic_slots
+    assert "assistant:executor => Frueher habe ich den Visual-Pfad" in semantic_slots[0]["content"]
+
+
+def test_classify_meta_task_loads_topic_and_preference_memory_from_memory_system(monkeypatch):
+    fake_memory_manager = SimpleNamespace(
+        find_related_memories=lambda query, n_results=6: [
+            {
+                "content": "Reuters meldete neue Entwicklungen zur Weltlage und zu KI-Politik.",
+                "category": "news_archive",
+                "relevance": 0.91,
+            },
+            {
+                "content": "Ich trinke gerne Tee.",
+                "category": "user_profile",
+                "relevance": 0.99,
+            },
+        ],
+        get_behavior_hooks=lambda: [
+            "Wichtige Aussagen mit Quellen belegen.",
+            "Antworten kurz und präzise.",
+        ],
+        get_self_model_prompt=lambda: "Präferenzen: Wichtige Aussagen mit Quellen belegen.\nZiele: Belastbare News zuerst.",
+        persistent=SimpleNamespace(
+            get_memory_items=lambda category: [
+                SimpleNamespace(key="preference", value="Fakten und Quellen zuerst"),
+                SimpleNamespace(key="preference", value="Ich trinke gerne Tee"),
+            ]
+            if category == "user_profile"
+            else []
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "memory.memory_system",
+        SimpleNamespace(memory_manager=fake_memory_manager),
+    )
+
+    result = classify_meta_task(
+        "dann mach das in zukunft so dass du fuer aktuelle news agenturmeldungen und belastbare quellen priorisierst",
+        action_count=0,
+    )
+
+    bundle = result["meta_context_bundle"]
+    topic_slots = [slot for slot in bundle["context_slots"] if slot["slot"] == "topic_memory"]
+    preference_slots = [slot for slot in bundle["context_slots"] if slot["slot"] == "preference_memory"]
+
+    assert topic_slots
+    assert "news_archive => Reuters meldete neue Entwicklungen" in topic_slots[0]["content"]
+    assert preference_slots
+    assert any(
+        any(token in slot["content"].lower() for token in ("quellen", "news zuerst", "fakten"))
+        for slot in preference_slots
+    )
+    assert all("tee" not in slot["content"].lower() for slot in preference_slots)
+
+
+def test_classify_meta_task_suppresses_topic_mismatched_assistant_context():
+    result = classify_meta_task(
+        "# FOLLOW-UP CONTEXT "
+        "last_assistant: Systemstatus gruen. MCP Health 200 OK. "
+        "recent_user_queries: wie stehts um die aktuelle weltlage || nein ich meinte aktuelle news "
+        "# CURRENT USER QUERY nein ich meinte aktuelle news",
+        action_count=0,
+        recent_user_turns=["wie stehts um die aktuelle weltlage", "nein ich meinte aktuelle news"],
+        recent_assistant_turns=["Systemstatus gruen. MCP Health 200 OK."],
+    )
+
+    suppressed = result["meta_context_bundle"]["suppressed_context"]
+
+    assert any(item["reason"] == "topic_mismatch_with_current_query" for item in suppressed)
+
+
+def test_classify_meta_task_marks_topic_shift_for_new_unrelated_task():
+    result = classify_meta_task(
+        "lass uns jetzt ueber browser automation reden",
+        action_count=0,
+        conversation_state={
+            "session_id": "canvas_d04",
+            "active_topic": "aktuelle Weltlage und News-Qualitaet",
+            "active_goal": "Live-News besser einschaetzen",
+            "open_loop": "Reuters zuerst pruefen",
+        },
+    )
+
+    assert result["topic_shift_detected"] is True
+    transition = result["topic_state_transition"]
+    assert transition["previous_topic"] == "aktuelle Weltlage und News-Qualitaet"
+    assert "browser automation" in transition["next_topic"].lower()
+
+
+def test_classify_meta_task_resumes_open_loop_for_first_option_followup():
+    query = (
+        "# FOLLOW-UP CONTEXT last_agent: meta session_id: canvas_d04_options "
+        "last_user: soll ich fuer amsterdam lieber mit dem zug oder mit dem auto fahren "
+        "pending_followup_prompt: Waehle eine der zwei Optionen und ich arbeite sie aus "
+        "# CURRENT USER QUERY die erste option"
+    )
+
+    result = classify_meta_task(
+        query,
+        action_count=0,
+        conversation_state={
+            "session_id": "canvas_d04_options",
+            "active_topic": "Amsterdam Reisevergleich",
+            "active_goal": "Beste Reiseoption zwischen Zug und Auto finden",
+            "open_loop": "Waehle eine der zwei Optionen und ich arbeite sie aus",
+            "next_expected_step": "Waehle eine Option",
+        },
+    )
+
+    assert result["dominant_turn_type"] == "handover_resume"
+    assert result["response_mode"] == "resume_open_loop"
+    assert result["topic_shift_detected"] is False
+    assert result["topic_state_transition"]["open_loop_state"] == "resumed"
+
+
+def test_classify_meta_task_keeps_topic_for_live_news_reframing_followup():
+    query = (
+        "# FOLLOW-UP CONTEXT last_agent: meta session_id: canvas_d04_news "
+        "last_user: wie stehts um die aktuelle weltlage "
+        "pending_followup_prompt: Soll ich fuer aktuelle Nachrichten Reuters und AP zuerst pruefen? "
+        "# CURRENT USER QUERY so aber mit live-news"
+    )
+
+    result = classify_meta_task(
+        query,
+        action_count=0,
+        conversation_state={
+            "session_id": "canvas_d04_news",
+            "active_topic": "aktuelle Weltlage und News-Qualitaet",
+            "active_goal": "belastbare aktuelle Nachrichten",
+            "open_loop": "Reuters und AP zuerst pruefen",
+            "next_expected_step": "schnelle Live-Recherche mit Agenturquellen",
+        },
+    )
+
+    assert result["dominant_turn_type"] == "followup"
+    assert result["response_mode"] == "resume_open_loop"
+    assert result["topic_shift_detected"] is False
+    assert result["topic_state_transition"]["next_topic"] == "aktuelle Weltlage und News-Qualitaet"
+
+
+def test_classify_meta_task_treats_short_contextual_reframe_as_followup_from_state():
+    result = classify_meta_task(
+        "so aber mit live-news",
+        action_count=0,
+        conversation_state={
+            "session_id": "canvas_d04_reframe",
+            "active_topic": "bei news bitte zuerst agenturquellen",
+            "active_goal": "bei news bitte zuerst agenturquellen",
+            "next_expected_step": "bei news bitte zuerst agenturquellen",
+            "turn_type_hint": "preference_update",
+        },
+        recent_user_turns=["bei news bitte zuerst agenturquellen"],
+    )
+
+    assert result["dominant_turn_type"] == "followup"
+    assert result["response_mode"] == "resume_open_loop"
 
 
 def test_build_meta_feedback_targets_emits_task_recipe_and_chain_targets():

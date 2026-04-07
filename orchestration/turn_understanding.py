@@ -90,6 +90,15 @@ _HANDOVER_RESUME_PATTERNS = (
     r"^\s*die\s+zweite\s+option\b",
     r"^\s*die\s+dritte\s+option\b",
 )
+_SHORT_CONTEXTUAL_FOLLOWUP_PREFIXES = (
+    "so aber",
+    "aber mit",
+    "und jetzt",
+    "und dann",
+    "nur mit",
+    "diesmal mit",
+    "so nur",
+)
 
 
 def _normalize_text(value: Any, *, limit: int = 400) -> str:
@@ -252,6 +261,13 @@ def detect_turn_signals(turn_input: TurnUnderstandingInput) -> tuple[str, ...]:
         signals.append("result_extraction_language")
     if _matches_any(query, _HANDOVER_RESUME_PATTERNS):
         signals.append("handover_resume_language")
+    lowered_query = query.lower().strip()
+    if (
+        len(lowered_query.split()) <= 6
+        and (turn_input.active_topic or turn_input.open_goal or turn_input.next_step)
+        and any(lowered_query.startswith(prefix) for prefix in _SHORT_CONTEXTUAL_FOLLOWUP_PREFIXES)
+    ):
+        signals.append("short_contextual_followup_language")
 
     if "behavior_instruction" not in signals and "directive_language" in signals and "future_preference_language" in signals:
         signals.append("behavior_instruction")
@@ -288,6 +304,8 @@ def resolve_dominant_turn_type(turn_input: TurnUnderstandingInput, signals: Iter
         return "result_extraction"
     if "clarification_language" in signal_set:
         return "clarification"
+    if "short_contextual_followup_language" in signal_set:
+        return "followup"
     if (
         turn_input.has_followup_context
         or "compressed_followup" in signal_set

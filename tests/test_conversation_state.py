@@ -2,6 +2,7 @@ from orchestration.conversation_state import (
     apply_turn_interpretation,
     apply_pending_followup_prompt,
     conversation_state_to_dict,
+    derive_topic_state_transition,
     normalize_conversation_state,
     touch_conversation_state,
 )
@@ -114,3 +115,102 @@ def test_apply_turn_interpretation_updates_preferences_and_turn_hint():
     assert updated.next_expected_step == "bei News Agenturquellen zuerst nutzen"
     assert "turn_understanding" in updated.state_source
     assert updated.topic_confidence == 0.86
+
+
+def test_derive_topic_state_transition_detects_clean_topic_shift():
+    transition = derive_topic_state_transition(
+        {
+            "active_topic": "aktuelle Weltlage und News-Qualitaet",
+            "active_goal": "belastbare Live-News",
+            "open_loop": "Reuters zuerst pruefen",
+        },
+        session_id="canvas_demo",
+        dominant_turn_type="new_task",
+        response_mode="execute",
+        state_effects={"shift_active_topic": True},
+        effective_query="lass uns ueber browser automation reden",
+        active_topic="browser automation und ui-workflows",
+        active_goal="browser automation analysieren",
+        next_step="welche sites zuerst pruefen",
+    )
+
+    assert transition.topic_shift_detected is True
+    assert transition.previous_topic == "aktuelle Weltlage und News-Qualitaet"
+    assert transition.next_topic == "browser automation und ui-workflows"
+    assert transition.next_goal == "browser automation analysieren"
+    assert transition.open_loop_state == "cleared"
+    assert transition.next_open_loop == ""
+
+
+def test_apply_turn_interpretation_adds_open_question_for_clarification():
+    updated = apply_turn_interpretation(
+        {
+            "active_topic": "aktuelle Weltlage",
+            "active_goal": "brauchbare Live-News",
+        },
+        session_id="canvas_demo",
+        dominant_turn_type="clarification",
+        response_mode="clarify_before_execute",
+        state_effects={"keep_active_topic": True},
+        effective_query="was genau meinst du mit agenturmeldungen?",
+        active_topic="aktuelle Weltlage",
+        active_goal="brauchbare Live-News",
+        next_step="was genau meinst du mit agenturmeldungen?",
+        confidence=0.8,
+        updated_at="2026-04-07T11:30:00Z",
+    )
+
+    assert "was genau meinst du mit agenturmeldungen?" in updated.open_questions
+
+
+def test_apply_turn_interpretation_clears_old_open_questions_on_topic_shift():
+    updated = apply_turn_interpretation(
+        {
+            "active_topic": "aktuelle Weltlage",
+            "active_goal": "Live-News",
+            "open_loop": "Reuters zuerst pruefen",
+            "next_expected_step": "Reuters zuerst pruefen",
+            "open_questions": ["Welche Agentur zuerst?"],
+        },
+        session_id="canvas_demo",
+        dominant_turn_type="new_task",
+        response_mode="execute",
+        state_effects={"shift_active_topic": True},
+        effective_query="lass uns jetzt ueber browser automation reden",
+        active_topic="browser automation",
+        active_goal="browser-workflow verstehen",
+        next_step="",
+        confidence=0.77,
+        updated_at="2026-04-07T11:31:00Z",
+    )
+
+    assert updated.active_topic == "browser automation"
+    assert updated.active_goal == "browser-workflow verstehen"
+    assert updated.open_loop == ""
+    assert updated.next_expected_step == ""
+    assert updated.open_questions == ()
+    assert "topic_shift" in updated.state_source
+
+
+def test_apply_turn_interpretation_seeds_topic_from_preference_update_query_when_empty():
+    updated = apply_turn_interpretation(
+        {},
+        session_id="canvas_d04_pref",
+        dominant_turn_type="preference_update",
+        response_mode="acknowledge_and_store",
+        state_effects={
+            "update_preferences": True,
+            "set_next_expected_step": True,
+            "keep_active_topic": True,
+        },
+        effective_query="bei news bitte zuerst agenturquellen",
+        active_topic="",
+        active_goal="",
+        next_step="bei news bitte zuerst agenturquellen",
+        confidence=0.86,
+        updated_at="2026-04-07T14:10:00Z",
+    )
+
+    assert updated.active_topic == "bei news bitte zuerst agenturquellen"
+    assert updated.active_goal == "bei news bitte zuerst agenturquellen"
+    assert updated.next_expected_step == "bei news bitte zuerst agenturquellen"

@@ -274,6 +274,10 @@ Lieferobjekte:
   - topic memory
   - preference memory
 
+Vorbereitung dokumentiert in:
+
+- [D0_3_CONTEXT_REHYDRATION_PREP.md](/home/fatih-ubuntu/dev/timus/docs/D0_3_CONTEXT_REHYDRATION_PREP.md)
+
 ### D0.4 Topic-State und Open-Loops
 
 Ziel:
@@ -339,6 +343,44 @@ Beispiel:
   - nicht `execute lookup`
   - sondern `acknowledge_and_store`
 
+#### D0.6a Meta Self-Model Calibration
+
+Ziel:
+
+- `meta` soll seine aktuelle Faehigkeit, seine Grenzen und den Unterschied zwischen Zielbild und Ist-Zustand sauber benennen koennen
+
+Warum das gebraucht wird:
+
+- sonst antwortet `meta` zu selbstsicher
+- Zielarchitektur und aktueller Reifegrad werden vermischt
+- Faehigkeiten werden behauptet, obwohl sie erst vorbereitet oder nur teilweise umgesetzt sind
+
+Lieferobjekte:
+
+- explizites operatives Selbstmodell fuer `meta`, z. B.:
+  - `current_capabilities`
+  - `partial_capabilities`
+  - `planned_capabilities`
+  - `blocked_capabilities`
+  - `confidence_bounds`
+  - `autonomy_limits`
+- Antwortregeln, die unterscheiden zwischen:
+  - `kann ich jetzt`
+  - `kann ich teilweise`
+  - `ist vorbereitet`
+  - `ist geplant`
+- Meta darf Zielbilder nicht als aktuelle Realitaet darstellen
+
+Beispiel:
+
+- auf Fragen wie:
+  - `ist das schon deine philosophie`
+  - `kannst du das schon`
+  - `bist du schon so weit`
+- soll `meta` nicht pauschal sagen:
+  - `das bin ich schon`
+- sondern den aktuellen Stand kalibriert einordnen
+
 ### D0.7 Observability und Evaluation
 
 Ziel:
@@ -376,6 +418,39 @@ Regeln:
 - globale Preferences nur bei wiederholter Evidenz
 - veraltete offene Schleifen muessen sauber geschlossen werden
 
+### D0.9 Specialist Context Propagation
+
+Ziel:
+
+- die neue Meta-Kontextbasis kontrolliert in die Spezialistenpfade ausrollen
+
+Lieferobjekte:
+
+- Handoff-Erweiterung fuer:
+  - `executor`
+  - `research`
+  - `visual`
+  - `system`
+- minimaler Spezialistenkontext:
+  - `current_topic`
+  - `active_goal`
+  - `open_loop`
+  - `turn_type`
+  - `response_mode`
+  - `user_preferences`
+  - `recent_corrections`
+- Ruecksignale aus Spezialisten:
+  - `partial_result`
+  - `blocker`
+  - `context_mismatch`
+  - `needs_meta_reframe`
+
+Wichtig:
+
+- dieser Block kommt bewusst erst nach D0.8
+- erst dann ist die Meta-Seite stabil genug, um ihren Kontext sauber in andere Agenten zu propagieren
+- Ziel ist nicht, jeden Spezialisten wie `meta` zu machen, sondern den laufenden Arbeitskontext mitzutragen
+
 ## Empfohlene Reihenfolge
 
 1. D0.1 Conversation-State-Schema
@@ -384,8 +459,10 @@ Regeln:
 4. D0.4 Topic-State und Open-Loops
 5. D0.5 Preference-/Instruction-Memory
 6. D0.6 Meta-Policy fuer Antwortmodus
+   D0.6a Meta Self-Model Calibration
 7. D0.7 Observability und Eval
 8. D0.8 State-Decay und Cleanup
+9. D0.9 Specialist Context Propagation
 
 ## Dateien, die voraussichtlich Kernrollen spielen
 

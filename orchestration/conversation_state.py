@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Iterable, Mapping
 
 
@@ -21,6 +22,53 @@ _ALLOWED_TURN_TYPE_HINTS = {
     "auth_response",
     "result_extraction",
     "handover_resume",
+}
+_TOPIC_STOPWORDS = {
+    "aber",
+    "als",
+    "auch",
+    "bei",
+    "das",
+    "dass",
+    "dem",
+    "den",
+    "der",
+    "des",
+    "die",
+    "ein",
+    "eine",
+    "einer",
+    "eines",
+    "einen",
+    "für",
+    "fuer",
+    "hat",
+    "hier",
+    "ich",
+    "ist",
+    "jetzt",
+    "lass",
+    "lasst",
+    "letzte",
+    "mehr",
+    "mit",
+    "nach",
+    "noch",
+    "oder",
+    "reden",
+    "schon",
+    "soll",
+    "sowie",
+    "the",
+    "uber",
+    "ueber",
+    "und",
+    "uns",
+    "von",
+    "was",
+    "wie",
+    "wir",
+    "zu",
 }
 
 
@@ -76,6 +124,29 @@ def _append_source(sources: tuple[str, ...], value: str) -> tuple[str, ...]:
     return tuple(merged[:_MAX_SOURCE_ITEMS])
 
 
+def _topic_terms(text: str) -> set[str]:
+    normalized = str(text or "").lower()
+    return {
+        token.strip("_-")
+        for token in re.findall(r"[a-zA-Z0-9äöüÄÖÜß_-]+", normalized)
+        if len(token.strip("_-")) >= 3 and token.strip("_-") not in _TOPIC_STOPWORDS
+    }
+
+
+def _topic_overlap(left: str, right: str) -> int:
+    return len(_topic_terms(left).intersection(_topic_terms(right)))
+
+
+def _looks_like_question(text: str) -> bool:
+    cleaned = _normalize_text(text)
+    lowered = cleaned.lower()
+    if not cleaned:
+        return False
+    if "?" in cleaned:
+        return True
+    return bool(re.search(r"\b(wie|was|welche|welcher|welches|warum|wieso|ob|soll ich|magst du|willst du)\b", lowered))
+
+
 @dataclass(frozen=True, slots=True)
 class ConversationState:
     schema_version: int
@@ -109,6 +180,32 @@ class ConversationState:
             "state_source": list(self.state_source),
             "topic_confidence": self.topic_confidence,
             "updated_at": self.updated_at,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class TopicStateTransition:
+    previous_topic: str
+    next_topic: str
+    previous_goal: str
+    next_goal: str
+    previous_open_loop: str
+    next_open_loop: str
+    topic_shift_detected: bool
+    active_goal_changed: bool
+    open_loop_state: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "previous_topic": self.previous_topic,
+            "next_topic": self.next_topic,
+            "previous_goal": self.previous_goal,
+            "next_goal": self.next_goal,
+            "previous_open_loop": self.previous_open_loop,
+            "next_open_loop": self.next_open_loop,
+            "topic_shift_detected": self.topic_shift_detected,
+            "active_goal_changed": self.active_goal_changed,
+            "open_loop_state": self.open_loop_state,
         }
 
 
@@ -242,6 +339,106 @@ def conversation_state_to_dict(
     return state.to_dict()
 
 
+def derive_topic_state_transition(
+    payload: ConversationState | Mapping[str, Any] | None,
+    *,
+    session_id: str,
+    dominant_turn_type: str,
+    response_mode: str,
+    state_effects: Mapping[str, Any] | None,
+    effective_query: str,
+    active_topic: str = "",
+    active_goal: str = "",
+    next_step: str = "",
+) -> TopicStateTransition:
+    current = normalize_conversation_state(
+        payload.to_dict() if isinstance(payload, ConversationState) else payload,
+        session_id=session_id,
+    )
+    effects = dict(state_effects or {})
+    cleaned_query = _normalize_text(effective_query)
+    cleaned_topic = _normalize_text(active_topic)
+    cleaned_goal = _normalize_text(active_goal)
+    cleaned_next_step = _normalize_text(next_step)
+
+    next_topic_candidate = cleaned_topic
+    if (
+        effects.get("shift_active_topic")
+        and cleaned_query
+        and current.active_topic
+        and (
+            not cleaned_topic
+            or cleaned_topic == current.active_topic
+            or _topic_overlap(cleaned_topic, current.active_topic) > _topic_overlap(cleaned_query, current.active_topic)
+        )
+        and _topic_overlap(cleaned_query, current.active_topic) == 0
+    ):
+        next_topic_candidate = cleaned_query
+    next_goal_candidate = cleaned_goal
+    if (
+        effects.get("shift_active_topic")
+        and cleaned_query
+        and current.active_goal
+        and (
+            not cleaned_goal
+            or cleaned_goal == current.active_goal
+            or _topic_overlap(cleaned_goal, current.active_goal) > _topic_overlap(cleaned_query, current.active_goal)
+        )
+        and _topic_overlap(cleaned_query, current.active_goal) == 0
+    ):
+        next_goal_candidate = cleaned_query
+
+    if effects.get("shift_active_topic"):
+        next_topic = next_topic_candidate or cleaned_query or current.active_topic
+        next_goal = next_goal_candidate or cleaned_query or current.active_goal
+    elif effects.get("keep_active_topic"):
+        next_topic = current.active_topic or cleaned_topic
+        next_goal = current.active_goal or cleaned_goal
+    else:
+        next_topic = current.active_topic or cleaned_topic
+        next_goal = current.active_goal or cleaned_goal
+
+    next_open_loop = current.open_loop
+    if effects.get("set_open_loop"):
+        next_open_loop = cleaned_next_step or cleaned_goal or cleaned_query
+    elif effects.get("clear_open_loop"):
+        next_open_loop = ""
+    elif response_mode == "resume_open_loop" and current.open_loop:
+        next_open_loop = current.open_loop
+
+    topic_shift_detected = False
+    if current.active_topic and next_topic and current.active_topic != next_topic:
+        topic_shift_detected = _topic_overlap(current.active_topic, next_topic) == 0
+    if topic_shift_detected:
+        next_open_loop = ""
+
+    active_goal_changed = bool(current.active_goal and next_goal and current.active_goal != next_goal)
+
+    open_loop_state = "unchanged"
+    if topic_shift_detected and current.open_loop:
+        open_loop_state = "cleared"
+    elif effects.get("clear_open_loop"):
+        open_loop_state = "cleared"
+    elif effects.get("set_open_loop") or effects.get("set_next_expected_step"):
+        open_loop_state = "set"
+    elif response_mode == "resume_open_loop" and current.open_loop:
+        open_loop_state = "resumed"
+    elif not current.open_loop and next_open_loop:
+        open_loop_state = "set"
+
+    return TopicStateTransition(
+        previous_topic=current.active_topic,
+        next_topic=next_topic,
+        previous_goal=current.active_goal,
+        next_goal=next_goal,
+        previous_open_loop=current.open_loop,
+        next_open_loop=next_open_loop,
+        topic_shift_detected=topic_shift_detected,
+        active_goal_changed=active_goal_changed,
+        open_loop_state=open_loop_state,
+    )
+
+
 def apply_turn_interpretation(
     payload: ConversationState | Mapping[str, Any] | None,
     *,
@@ -273,9 +470,21 @@ def apply_turn_interpretation(
     )
     preferences = list(current.preferences)
     corrections = list(current.recent_corrections)
+    open_questions = list(current.open_questions)
     sources = _append_source(current.state_source, "turn_understanding")
     if cleaned_topic:
         sources = _append_source(sources, "meta_dialog_state")
+    transition = derive_topic_state_transition(
+        current,
+        session_id=session_id,
+        dominant_turn_type=dominant_turn_type,
+        response_mode=response_mode,
+        state_effects=effects,
+        effective_query=cleaned_query,
+        active_topic=cleaned_topic,
+        active_goal=cleaned_goal,
+        next_step=cleaned_next_step,
+    )
 
     next_expected_step = current.next_expected_step
     open_loop = current.open_loop
@@ -290,8 +499,12 @@ def apply_turn_interpretation(
     elif effects.get("keep_active_topic"):
         if not active_topic_value and cleaned_topic:
             active_topic_value = cleaned_topic
+        elif not active_topic_value and cleaned_query:
+            active_topic_value = cleaned_query
         if not active_goal_value and cleaned_goal:
             active_goal_value = cleaned_goal
+        elif not active_goal_value and cleaned_query:
+            active_goal_value = cleaned_query
     else:
         if not active_topic_value and cleaned_topic:
             active_topic_value = cleaned_topic
@@ -312,6 +525,35 @@ def apply_turn_interpretation(
     elif response_mode == "resume_open_loop" and not next_expected_step and current.open_loop:
         next_expected_step = current.open_loop
 
+    if transition.topic_shift_detected:
+        active_topic_value = transition.next_topic or cleaned_query or active_topic_value
+        active_goal_value = transition.next_goal or cleaned_query or active_goal_value
+        open_loop = ""
+        next_expected_step = ""
+        open_questions = []
+        sources = _append_source(sources, "topic_shift")
+
+    if dominant_turn_type == "clarification":
+        candidate_question = cleaned_query or cleaned_next_step or next_expected_step or open_loop
+        if _looks_like_question(candidate_question):
+            open_questions = list(
+                _normalize_text_list([candidate_question, *open_questions], limit_items=_MAX_LIST_ITEMS)
+            )
+    elif response_mode == "resume_open_loop" and (current.open_loop or current.next_expected_step):
+        resolved = {
+            _normalize_text(current.open_loop),
+            _normalize_text(current.next_expected_step),
+        }
+        open_questions = [
+            item for item in open_questions if _normalize_text(item) not in resolved
+        ]
+    elif effects.get("set_open_loop") or effects.get("set_next_expected_step"):
+        candidate_question = cleaned_next_step or cleaned_query
+        if _looks_like_question(candidate_question):
+            open_questions = list(
+                _normalize_text_list([candidate_question, *open_questions], limit_items=_MAX_LIST_ITEMS)
+            )
+
     return ConversationState(
         schema_version=current.schema_version,
         session_id=current.session_id,
@@ -323,7 +565,7 @@ def apply_turn_interpretation(
         preferences=tuple(preferences),
         recent_corrections=tuple(corrections),
         constraints=merged_constraints,
-        open_questions=current.open_questions,
+        open_questions=tuple(open_questions),
         state_source=sources,
         topic_confidence=max(current.topic_confidence, _normalize_confidence(confidence)),
         updated_at=_normalize_text(updated_at or current.updated_at, limit=64),

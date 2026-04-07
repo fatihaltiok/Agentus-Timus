@@ -86,3 +86,62 @@ def test_detect_turn_signals_exposes_followup_state_and_resume_language():
     assert "handover_resume_language" in signals
     assert interpretation.dominant_turn_type == "handover_resume"
     assert interpretation.response_mode == "resume_open_loop"
+
+
+def test_interpret_turn_handles_first_option_as_open_loop_resume():
+    turn_input = build_turn_understanding_input(
+        raw_query="# FOLLOW-UP CONTEXT\n# CURRENT USER QUERY\ndie erste option",
+        effective_query="die erste option",
+        dialog_state={
+            "active_topic": "Reise nach Amsterdam",
+            "open_goal": "Zwischen Zug und Auto entscheiden",
+            "next_step": "Waehle eine der zwei Optionen",
+        },
+        semantic_review_hints=[],
+        context_anchor_applied=True,
+    )
+
+    interpretation = interpret_turn(turn_input)
+
+    assert interpretation.dominant_turn_type == "handover_resume"
+    assert interpretation.response_mode == "resume_open_loop"
+    assert interpretation.route_bias == "meta_only"
+
+
+def test_interpret_turn_keeps_followup_with_live_news_reframing_on_current_topic():
+    turn_input = build_turn_understanding_input(
+        raw_query="# FOLLOW-UP CONTEXT\n# CURRENT USER QUERY\nso aber mit live-news",
+        effective_query="so aber mit live-news",
+        dialog_state={
+            "active_topic": "aktuelle Weltlage und News-Qualitaet",
+            "open_goal": "belastbare aktuelle Nachrichten",
+            "next_step": "schnelle Live-Recherche mit Agenturquellen",
+        },
+        semantic_review_hints=[],
+        context_anchor_applied=True,
+    )
+
+    interpretation = interpret_turn(turn_input)
+
+    assert interpretation.dominant_turn_type == "followup"
+    assert interpretation.response_mode == "resume_open_loop"
+    assert interpretation.route_bias == "follow_existing_lane"
+
+
+def test_interpret_turn_treats_short_contextual_reframe_as_followup_without_capsule():
+    turn_input = build_turn_understanding_input(
+        raw_query="so aber mit live-news",
+        effective_query="so aber mit live-news",
+        dialog_state={
+            "active_topic": "aktuelle Weltlage und News-Qualitaet",
+            "open_goal": "belastbare aktuelle Nachrichten",
+            "next_step": "Agenturquellen zuerst pruefen",
+        },
+        semantic_review_hints=[],
+        context_anchor_applied=False,
+    )
+
+    interpretation = interpret_turn(turn_input)
+
+    assert interpretation.dominant_turn_type == "followup"
+    assert interpretation.response_mode == "resume_open_loop"

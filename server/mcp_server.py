@@ -121,6 +121,7 @@ from orchestration.conversation_state import (
     conversation_state_to_dict,
     touch_conversation_state,
 )
+from orchestration.meta_context_eval import detect_context_misread_risk
 from orchestration.longrunner_transport import (
     bind_longrun_context,
     get_current_run_id,
@@ -1167,12 +1168,12 @@ def _persist_meta_turn_understanding(
     session_id: str,
     classification: dict,
     updated_at: str,
-) -> None:
+) -> dict | None:
     if not session_id or not isinstance(classification, dict):
-        return
+        return None
     capsule = _load_session_capsule(session_id)
     turn_understanding = dict(classification.get("turn_understanding") or {})
-    capsule["conversation_state"] = apply_turn_interpretation(
+    updated_state = apply_turn_interpretation(
         capsule.get("conversation_state"),
         session_id=session_id,
         dominant_turn_type=str(classification.get("dominant_turn_type") or ""),
@@ -1186,7 +1187,9 @@ def _persist_meta_turn_understanding(
         confidence=float(turn_understanding.get("confidence") or 0.0),
         updated_at=updated_at,
     ).to_dict()
+    capsule["conversation_state"] = updated_state
     _store_session_capsule(capsule)
+    return updated_state
 
 
 def _record_meta_turn_understanding_observations(
@@ -1194,11 +1197,21 @@ def _record_meta_turn_understanding_observations(
     request_id: str,
     session_id: str,
     classification: dict,
+    updated_state: dict | None = None,
 ) -> None:
     turn_understanding = dict(classification.get("turn_understanding") or {})
     dominant_turn_type = str(classification.get("dominant_turn_type") or "")
     response_mode = str(classification.get("response_mode") or "")
     state_effects = dict(turn_understanding.get("state_effects") or classification.get("state_effects") or {})
+    meta_context_bundle = dict(classification.get("meta_context_bundle") or {})
+    context_slots = meta_context_bundle.get("context_slots") or []
+    slot_types: list[str] = []
+    for item in context_slots:
+        if not isinstance(item, dict):
+            continue
+        slot = str(item.get("slot") or "").strip()
+        if slot and slot not in slot_types:
+            slot_types.append(slot)
 
     _record_chat_observation(
         "meta_turn_type_selected",
@@ -1235,6 +1248,135 @@ def _record_meta_turn_understanding_observations(
             "state_effects": state_effects,
         },
     )
+    _record_chat_observation(
+        "context_rehydration_bundle_built",
+        {
+            "request_id": request_id,
+            "session_id": session_id,
+            "source": "canvas_chat",
+            "dominant_turn_type": dominant_turn_type,
+            "response_mode": response_mode,
+            "bundle_reason": str(meta_context_bundle.get("bundle_reason") or ""),
+            "slot_types": slot_types,
+            "slot_count": len(slot_types),
+            "suppressed_count": int(classification.get("meta_context_suppressed_count") or 0),
+            "confidence": float(meta_context_bundle.get("confidence") or 0.0),
+            "active_topic": str(meta_context_bundle.get("active_topic") or "")[:180],
+            "open_loop": str(meta_context_bundle.get("open_loop") or "")[:180],
+        },
+    )
+    for item in context_slots:
+        if not isinstance(item, dict):
+            continue
+        _record_chat_observation(
+            "context_slot_selected",
+            {
+                "request_id": request_id,
+                "session_id": session_id,
+                "source": "canvas_chat",
+                "slot": str(item.get("slot") or ""),
+                "priority": int(item.get("priority") or 0),
+                "slot_source": str(item.get("source") or ""),
+                "content_preview": str(item.get("content") or "")[:180],
+            },
+        )
+    for item in meta_context_bundle.get("suppressed_context") or []:
+        if not isinstance(item, dict):
+            continue
+        _record_chat_observation(
+            "context_slot_suppressed",
+            {
+                "request_id": request_id,
+                "session_id": session_id,
+                "source": "canvas_chat",
+                "slot_source": str(item.get("source") or ""),
+                "reason": str(item.get("reason") or ""),
+                "content_preview": str(item.get("content_preview") or "")[:180],
+            },
+        )
+    if "open_loop" in slot_types:
+        _record_chat_observation(
+            "open_loop_attached",
+            {
+                "request_id": request_id,
+                "session_id": session_id,
+                "source": "canvas_chat",
+                "dominant_turn_type": dominant_turn_type,
+                "open_loop": str(meta_context_bundle.get("open_loop") or "")[:180],
+                "next_expected_step": str(meta_context_bundle.get("next_expected_step") or "")[:180],
+            },
+        )
+    if "topic_memory" in slot_types:
+        _record_chat_observation(
+            "topic_memory_attached",
+            {
+                "request_id": request_id,
+                "session_id": session_id,
+                "source": "canvas_chat",
+                "dominant_turn_type": dominant_turn_type,
+                "slot_count": slot_types.count("topic_memory"),
+            },
+        )
+    if "preference_memory" in slot_types:
+        _record_chat_observation(
+            "preference_memory_attached",
+            {
+                "request_id": request_id,
+                "session_id": session_id,
+                "source": "canvas_chat",
+                "dominant_turn_type": dominant_turn_type,
+                "slot_count": slot_types.count("preference_memory"),
+            },
+        )
+    risk = detect_context_misread_risk(
+        meta_context_bundle,
+        dominant_turn_type=dominant_turn_type,
+        response_mode=response_mode,
+    )
+    if risk.get("suspicious"):
+        _record_chat_observation(
+            "context_misread_suspected",
+            {
+                "request_id": request_id,
+                "session_id": session_id,
+                "source": "canvas_chat",
+                "dominant_turn_type": dominant_turn_type,
+                "response_mode": response_mode,
+                "risk_reasons": list(risk.get("reasons") or []),
+                "slot_types": list(risk.get("slot_types") or []),
+                "suppressed_reasons": list(risk.get("suppressed_reasons") or []),
+            },
+        )
+    topic_transition = dict(classification.get("topic_state_transition") or {})
+    if bool(classification.get("topic_shift_detected")):
+        _record_chat_observation(
+            "topic_shift_detected",
+            {
+                "request_id": request_id,
+                "session_id": session_id,
+                "source": "canvas_chat",
+                "previous_topic": str(topic_transition.get("previous_topic") or "")[:180],
+                "next_topic": str(topic_transition.get("next_topic") or "")[:180],
+                "previous_goal": str(topic_transition.get("previous_goal") or "")[:180],
+                "next_goal": str(topic_transition.get("next_goal") or "")[:180],
+                "open_loop_state": str(topic_transition.get("open_loop_state") or ""),
+            },
+        )
+    if isinstance(updated_state, dict):
+        _record_chat_observation(
+            "conversation_state_updated",
+            {
+                "request_id": request_id,
+                "session_id": session_id,
+                "source": "canvas_chat",
+                "active_topic": str(updated_state.get("active_topic") or "")[:180],
+                "active_goal": str(updated_state.get("active_goal") or "")[:180],
+                "open_loop": str(updated_state.get("open_loop") or "")[:180],
+                "next_expected_step": str(updated_state.get("next_expected_step") or "")[:180],
+                "open_questions_count": len(updated_state.get("open_questions") or []),
+                "turn_type_hint": str(updated_state.get("turn_type_hint") or ""),
+            },
+        )
 
 
 def _tokenize_followup_focus(text: str) -> list[str]:
@@ -1606,6 +1748,7 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
     matched_reply_points = capsule.get("matched_reply_points") or []
     inherited_topic_recall = capsule.get("inherited_topic_recall") or []
     semantic_recall = capsule.get("semantic_recall") or []
+    conversation_state = capsule.get("conversation_state") or {}
 
     if not (
         last_agent
@@ -1618,6 +1761,7 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
         or inherited_topic_recall
         or semantic_recall
         or pending_followup_prompt
+        or conversation_state
     ):
         return query
 
@@ -1664,6 +1808,42 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
             parts.append("semantic_recall: " + " || ".join(recall_lines))
     if pending_followup_prompt:
         parts.append(f"pending_followup_prompt: {pending_followup_prompt[:320]}")
+    if isinstance(conversation_state, dict):
+        active_topic = str(conversation_state.get("active_topic") or "").strip()
+        active_goal = str(conversation_state.get("active_goal") or "").strip()
+        open_loop = str(conversation_state.get("open_loop") or "").strip()
+        next_expected_step = str(conversation_state.get("next_expected_step") or "").strip()
+        turn_type_hint = str(conversation_state.get("turn_type_hint") or "").strip()
+        preferences = [
+            str(item).strip()
+            for item in (conversation_state.get("preferences") or [])
+            if str(item).strip()
+        ]
+        recent_corrections = [
+            str(item).strip()
+            for item in (conversation_state.get("recent_corrections") or [])
+            if str(item).strip()
+        ]
+        if active_topic:
+            parts.append(f"conversation_state_active_topic: {active_topic[:240]}")
+        if active_goal:
+            parts.append(f"conversation_state_active_goal: {active_goal[:240]}")
+        if open_loop:
+            parts.append(f"conversation_state_open_loop: {open_loop[:240]}")
+        if next_expected_step:
+            parts.append(f"conversation_state_next_expected_step: {next_expected_step[:240]}")
+        if turn_type_hint:
+            parts.append(f"conversation_state_turn_type_hint: {turn_type_hint[:64]}")
+        if preferences:
+            parts.append(
+                "conversation_state_preferences: "
+                + " || ".join(item[:140] for item in preferences[:4])
+            )
+        if recent_corrections:
+            parts.append(
+                "conversation_state_recent_corrections: "
+                + " || ".join(item[:140] for item in recent_corrections[:4])
+            )
     parts.extend(["", "# CURRENT USER QUERY", query])
     return "\n".join(parts)
 
@@ -3655,16 +3835,25 @@ async def canvas_chat(request: Request):
                     try:
                         from orchestration.meta_orchestration import classify_meta_task
 
-                        meta_classification = classify_meta_task(dispatcher_query, action_count=0)
+                        meta_classification = classify_meta_task(
+                            dispatcher_query,
+                            action_count=0,
+                            conversation_state=followup_capsule.get("conversation_state"),
+                            recent_user_turns=followup_capsule.get("recent_user_queries"),
+                            recent_assistant_turns=followup_capsule.get("recent_assistant_replies"),
+                            session_summary=str(followup_capsule.get("session_summary") or ""),
+                            semantic_recall_hits=followup_capsule.get("semantic_recall"),
+                        )
+                        updated_state = _persist_meta_turn_understanding(
+                            session_id=session_id,
+                            classification=meta_classification,
+                            updated_at=ts,
+                        )
                         _record_meta_turn_understanding_observations(
                             request_id=request_id,
                             session_id=session_id,
                             classification=meta_classification,
-                        )
-                        _persist_meta_turn_understanding(
-                            session_id=session_id,
-                            classification=meta_classification,
-                            updated_at=ts,
+                            updated_state=updated_state,
                         )
                     except Exception as turn_exc:
                         log.debug("Meta turn-understanding konnte nicht persistiert werden: %s", turn_exc)

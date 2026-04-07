@@ -2282,6 +2282,7 @@ def _build_meta_handoff_payload(query: str) -> dict:
         "goal_spec": dict(policy.get("goal_spec") or {}),
         "capability_graph": dict(policy.get("capability_graph") or {}),
         "adaptive_plan": dict(policy.get("adaptive_plan") or {}),
+        "meta_context_bundle": dict(policy.get("meta_context_bundle") or {}),
         "task_profile": dict(policy.get("task_profile") or {}),
         "tool_affordances": list(policy.get("tool_affordances") or []),
         "selected_strategy": dict(policy.get("selected_strategy") or {}),
@@ -2472,6 +2473,11 @@ def _render_meta_handoff_block(payload: dict) -> str:
         lines.append(
             "meta_self_state_json: "
             + json.dumps(payload["meta_self_state"], ensure_ascii=False, sort_keys=True)
+        )
+    if payload.get("meta_context_bundle"):
+        lines.append(
+            "meta_context_bundle_json: "
+            + json.dumps(payload["meta_context_bundle"], ensure_ascii=False, sort_keys=True)
         )
     if payload.get("goal_spec"):
         lines.append(

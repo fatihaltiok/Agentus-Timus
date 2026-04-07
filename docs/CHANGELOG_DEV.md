@@ -2884,6 +2884,31 @@ Wichtiger Vorlauf:
 - Plan dokumentiert in:
   - [PHASE_D0_META_CONTEXT_STATE_PLAN.md](/home/fatih-ubuntu/dev/timus/docs/PHASE_D0_META_CONTEXT_STATE_PLAN.md)
 
+Nach D0.8 braucht Timus einen Rollout-Block fuer die Spezialisten:
+
+- **D0.9 Specialist Context Propagation**
+- Begruendung:
+  - `meta` darf nicht der einzige Agent bleiben, der laufenden Gespraechssinn traegt
+  - aber erst nach Rehydration, Topic-State, Praeferenzspeicher, Antwortmodus und State-Decay ist die Meta-Basis stabil genug, um sie sauber in `executor`, `research`, `visual` und `system` auszurollen
+- Ziel:
+  - Spezialisten bekommen aus `conversation_state` mindestens:
+    - `current_topic`
+    - `active_goal`
+    - `open_loop`
+    - `turn_type`
+    - `response_mode`
+    - `user_preferences`
+    - `recent_corrections`
+  - Spezialisten melden darauf abgestimmt:
+    - `partial_result`
+    - `blocker`
+    - `context_mismatch`
+    - `needs_meta_reframe`
+- Erfolgskriterium:
+  - `meta` bleibt der beste Koordinator
+  - aber die restlichen Agenten verlieren den laufenden Bezug nicht mehr sofort, sobald der Handoff weniger explizit ist
+  - dadurch wird Timus weniger fragil in echten laengeren Unterhaltungen
+
 Der Fall `reserviere mir ein hotel in portugal lissabon` zeigt eine eigene, spaetere Ausbauphase:
 
 - Ziel ist nicht nur Suche oder Vergleich
@@ -3457,4 +3482,290 @@ Der erste Turn-Understanding-Slice haengt jetzt nicht mehr nur lose neben der Me
 - Wirkung:
   - `meta` bewertet spontane Folgeanweisungen jetzt nicht mehr nur als Prompttext, sondern als expliziten Dialogzustand
   - Session-Capsules tragen den abgeleiteten Turn-Kontext weiter
-  - der neue D0-Unterbau ist im Beobachtungslog sichtbar statt wieder nur implizite Promptlogik zu bleiben
+- der neue D0-Unterbau ist im Beobachtungslog sichtbar statt wieder nur implizite Promptlogik zu bleiben
+
+## Nachtrag 2026-04-06 18:35 CEST - Einordnung des naechsten Ausbaublocks nach D0.2
+
+Der aktuelle Stand zeigt klar: `meta` ist den uebrigen Agenten im Gespraechsverstaendnis deutlich voraus. Das ist als Zwischenstand akzeptabel, aber nicht als Zielarchitektur.
+
+- Befund:
+  - `meta` versteht bereits:
+    - Follow-ups
+    - Korrekturen
+    - Praeferenzanweisungen
+    - offene Loops
+    - turn-weise Kontextverschiebungen
+  - die uebrigen Agenten sind noch staerker reine Spezialisten
+  - dadurch wird `meta` zum Flaschenhals, und zu duenne Handoffs brechen spaeter in den Spezialistenpfaden
+
+- Entscheidung zur Einordnung:
+  - dieser Ausbau gehoert **nicht nach Phase E**
+  - er gehoert **nach dem Meta-Grundgeruest als D0.9 Specialist Context Propagation**
+  - erst danach sind D1-D5 Approval-/Auth-/Handover-Workflows semantisch stabil genug
+
+- Begruendung:
+  - wenn `executor`, `research`, `visual` und `system` den aktuellen Arbeitskontext nicht mittragen, muss `meta` jedes Mal den ganzen Sinn perfekt vorkauen
+  - das skaliert schlecht fuer laengere, menschliche Unterhaltungen
+  - Self-Improvement in Phase E baut besser auf, wenn die Spezialisten vorher schon kontextfaehiger geworden sind
+
+## Nachtrag 2026-04-06 18:50 CEST - D0.3 Context-Rehydration-Pipeline vorbereitet
+
+Der naechste D0-Block ist jetzt konkret vorbereitet, aber noch nicht implementiert. D0.3 soll vor jeder Meta-Entscheidung einen kleinen, priorisierten Kontextbundle bauen, statt Query, Session-State, Recall und alte Assistant-Texte weiter lose zu vermischen.
+
+- Umsetzung:
+  - neues Vorbereitungsdokument [D0_3_CONTEXT_REHYDRATION_PREP.md](/home/fatih-ubuntu/dev/timus/docs/D0_3_CONTEXT_REHYDRATION_PREP.md)
+    - Eingabe-/Ausgabevertrag fuer `MetaContextBundle`
+    - Slot-Reihenfolge fuer die erste Version
+    - Unterdrueckungsregeln fuer irrelevanten oder schaedlichen Kontext
+    - Integrationspunkte in `meta_orchestration`, `mcp_server`, `conversation_state`, spaeter `conversation_qdrant`
+    - Ziel-Observability und Eval-Faelle
+  - [PHASE_D0_META_CONTEXT_STATE_PLAN.md](/home/fatih-ubuntu/dev/timus/docs/PHASE_D0_META_CONTEXT_STATE_PLAN.md)
+    - D0.3-Abschnitt jetzt auf das neue Prep-Dokument verlinkt
+
+- Ziel von D0.3:
+  - `meta` bekommt vor dem Routing einen expliziten, priorisierten Kontextbundle
+  - `conversation_state` und offene Schleifen werden staerker als lose Recall-Fragmente
+  - alte Assistant-Texte koennen bewusst unterdrueckt werden, statt implizit weiterzuwirken
+
+- Noch nicht Teil dieses Schritts:
+  - keine Laufzeitlogik geaendert
+  - kein neuer Builder im Code
+  - keine Tests noetig, weil nur Roadmap-/Vorbereitungsdokumentation
+
+## Nachtrag 2026-04-07 09:30 CEST - D0.3 Context-Rehydration-Pipeline erster Runtime-Slice umgesetzt
+
+D0.3 ist jetzt nicht mehr nur vorbereitet, sondern im ersten echten Runtime-Pfad verdrahtet.
+
+- Umsetzung:
+  - `classify_meta_task(...)` baut jetzt vor der finalen Klassifikation ein explizites `meta_context_bundle`
+  - das Bundle priorisiert aktuell:
+    - `current_query`
+    - `conversation_state`
+    - `open_loop`
+    - relevante `recent_user_turns`
+    - spaerliche `semantic_recall`-/Memory-Slots
+  - `conversation_state`-Felder werden im Follow-up-Serializer jetzt explizit in den `# FOLLOW-UP CONTEXT` geschrieben
+  - `canvas_chat` uebergibt den expliziten Session-State, letzte User-/Assistant-Turns, `session_summary` und `semantic_recall` direkt in die Meta-Klassifikation
+  - Dispatcher-/Meta-Handoff tragen das `meta_context_bundle` jetzt als JSON weiter
+
+- Schutzwirkung:
+  - alte Assistant-Antworten koennen jetzt bewusst unterdrueckt werden, wenn aktuelle User-Turns prioritaer sind
+  - Standort-/Maps-Drift aus altem Assistant-Kontext wird bei nicht-lokalen Queries als `suppressed_context` markiert
+  - Follow-up-Klassifikation kann `active_topic`, `open_goal` und `next_expected_step` jetzt staerker aus dem Session-State statt nur aus losem Text ableiten
+
+- Observability:
+  - neues Event `context_rehydration_bundle_built`
+  - Payload enthaelt Slot-Typen, Anzahl unterdrueckter Kontexte, Bundle-Confidence sowie `active_topic`/`open_loop`-Preview
+
+- Verifikation:
+  - neue und erweiterte Regressionen in `tests/test_meta_orchestration.py` und `tests/test_android_chat_language.py`
+  - Fokus: Bundle-Prioritaet, Suppression von falschem Alt-Kontext, `conversation_state`-Serialisierung und MCP-Observability
+
+## Nachtrag 2026-04-07 10:10 CEST - D0.3 Memory-Attach fuer Topic und Preference Context
+
+Der naechste D0.3-Slice haengt jetzt erste echte Langzeitquellen in den `meta_context_bundle` ein, statt nur Session-/Follow-up-Daten zu verwenden.
+
+- Umsetzung:
+  - `topic_memory` wird jetzt aus dem bestehenden hybriden Memory-Recall von `memory_manager.find_related_memories(...)` gezogen
+  - `preference_memory` wird jetzt aus `behavior_hooks`, `self_model` und `user_profile`-Eintraegen abgeleitet
+  - die Auswahl ist bewusst konservativ:
+    - Query-/Topic-Bezug zuerst
+    - irrelevante oder thematisch schwache Erinnerungen bleiben draussen
+    - `user_profile`-Reste wie reine Vorlieben ohne Themenbezug sollen nicht blind in News-/Research-Kontexte hineinlaufen
+
+- Runtime-Wirkung:
+  - der echte Dispatcher-/Meta-Pfad bekommt jetzt nicht nur `conversation_state`, sondern erste persistente Topic-/Preference-Hinweise
+  - der Bundle bleibt trotzdem kompakt und priorisiert
+
+- Observability:
+  - neue Signale `topic_memory_attached`, `preference_memory_attached`, `open_loop_attached`
+
+- Verifikation:
+  - neue Regressionen fuer Memory-Attach im `meta_context_bundle`
+  - neue Regression fuer die MCP-Observation-Signale im Canvas-Pfad
+
+## Nachtrag 2026-04-07 10:35 CEST - D0.3 Suppression-Logik und Slot-Observability erweitert
+
+Der naechste D0.3-Slice macht den Bundle nicht nur reicher, sondern auch strenger.
+
+- Umsetzung:
+  - Assistant-Alt-Kontext wird jetzt zusaetzlich unterdrueckt, wenn er thematisch nicht mehr zur aktuellen Query passt
+  - bestehende Standort-/Maps-Drift-Suppression bleibt erhalten
+  - Preference-Memory kann jetzt auch explizit als unpassend fuer das aktuelle Thema markiert werden, statt still mitzuschwingen
+  - `context_slot_selected` und `context_slot_suppressed` werden jetzt einzeln emittiert
+
+- Wirkung:
+  - Follow-ups wie `nein ich meinte aktuelle news` sollen weniger leicht auf altem System-/Location-Nachhall ausrutschen
+  - die Rehydration wird debugbarer, weil sichtbar wird:
+    - welche Slots wirklich in den Bundle gegangen sind
+    - welche Kontexte bewusst draussen geblieben sind
+
+- Verifikation:
+  - neue Regression fuer thematischen Assistant-Mismatch
+  - neue Regression fuer `context_slot_selected` und `context_slot_suppressed`
+  - angrenzender D0-/Meta-/Handoff-Block weiter gruen
+
+## Nachtrag 2026-04-07 11:05 CEST - D0.3 Bundle-Qualitaet und Misread-Risiko messbar gemacht
+
+Der naechste D0.3-Slice schliesst die bisher offene Qualitaetsluecke zwischen Bundle-Bau und echter Fehlgriff-Warnung.
+
+- Umsetzung:
+  - neues Modul `orchestration/meta_context_eval.py`
+  - darin:
+    - Runtime-Risikoerkennung fuer zu duenne oder falsch verankerte Context-Bundles
+    - kleine Eval-Helfer fuer D0.3-Faelle
+  - neues Runtime-Signal `context_misread_suspected`
+    - wird emittiert, wenn der Bundle fuer riskante Turn-Typen zu schwach, zu assistant-lastig oder ohne brauchbare Ersatzanker bleibt
+
+- Typische Risikofaelle:
+  - `assistant_fallback_context` ohne User-/State-Anker
+  - `resume_open_loop` ohne echtes `open_loop`
+  - riskanter Follow-up-/Korrektur-Turn mit zu wenig hochwertigen Kontext-Slots
+  - unterdrueckter Alt-Kontext ohne brauchbaren Ersatzanker
+
+- Verifikation:
+  - neue Tests in `tests/test_meta_context_eval.py`
+  - neue Runtime-Regression fuer `context_misread_suspected`
+  - erweiterter D0-/Meta-/Handoff-Block gruen: `89 passed`
+
+## Nachtrag 2026-04-07 13:40 CEST - Meta-Selbstbild als eigener D0.6-Unterblock eingeordnet
+
+Aus den letzten Meta-Antworten ist klar geworden, dass nicht nur Nutzerkontext, sondern auch das operative Selbstbild von `meta` kalibriert werden muss.
+
+- Problem:
+  - `meta` versteht teils die Richtung richtig, formuliert aber den eigenen Stand zu selbstsicher
+  - Zielbild und aktueller Reifegrad werden vermischt
+  - dadurch entstehen Aussagen wie `das mache ich schon`, obwohl etwas real erst vorbereitet oder nur teilweise umgesetzt ist
+
+- Entscheidung:
+  - das Thema wird nicht als loses Spaeter-Thema behandelt
+  - es wird als **D0.6a Meta Self-Model Calibration** direkt unter `D0.6 Meta-Policy fuer Antwortmodus` gefuehrt
+
+- Inhalt von D0.6a:
+  - Trennung von:
+    - `current_capabilities`
+    - `partial_capabilities`
+    - `planned_capabilities`
+    - `blocked_capabilities`
+    - `confidence_bounds`
+    - `autonomy_limits`
+  - `meta` soll sauber unterscheiden zwischen:
+    - `kann ich jetzt`
+    - `kann ich teilweise`
+    - `ist vorbereitet`
+    - `ist geplant`
+
+- Ziel:
+  - ehrlichere, praezisere Meta-Selbsteinordnung
+  - weniger ueberzogenes Selbstbild
+  - bessere Antworten auf Fragen zu Philosophie, Grenzen und aktuellem Reifegrad
+
+## Nachtrag 2026-04-06 19:10 CEST - Externe Impulse aus `claw-code` zeitlich hinter D/E eingeordnet
+
+Das Repo `ultraworkers/claw-code` wurde als externe Vergleichsquelle auf nuetzliche Architektur- und Betriebsimpulse fuer Timus geprueft.
+
+- Ergebnis:
+  - mehrere Ideen sind fuer Timus fachlich interessant
+  - aber **keine groessere Uebernahme vor Abschluss von D0 und Phase D**
+  - einzelne Runtime-/Vertragsideen sind sinnvoll **nach Phase D**
+  - der groessere Harness-/Parity-/Contract-Driven-Teil ist sinnvoller **nach Phase E**
+
+- Relevante Impulse fuer spaeter:
+  - `timus doctor`
+  - MCP-/Tool-Lifecycle-Vertraege
+  - typed task packets statt freier Handoff-Texte
+  - Context-/Request-Preflight
+  - deterministische Mock-/Parity-Harnesses
+  - ausfuehrbare Architektur- und Verhaltensvertraege
+  - maschinenlesbares Runtime-/Lane-Board
+
+- Dokumentation:
+  - neue Detailnotiz [EXTERNE_IMPULSE_CLAW_CODE_POST_D_E.md](/home/fatih-ubuntu/dev/timus/docs/EXTERNE_IMPULSE_CLAW_CODE_POST_D_E.md)
+
+- Begruendung:
+  - Timus muss zuerst sein eigenes semantisches Fundament stabilisieren
+  - danach Approval/Auth/Handover sauber abschliessen
+  - erst dann lohnen sich groessere Betriebs- und Harness-Uebernahmen aus externen Agentensystemen
+
+## Nachtrag 2026-04-07 14:25 CEST - D0.4 Topic-State und Open-Loops als erster Runtime-Slice
+
+Der erste D0.4-Slice zieht Topic-State und offene Faden erstmals sichtbar in den echten Meta-Laufzeitpfad.
+
+- Umsetzung:
+  - `orchestration/conversation_state.py`
+    - neues `TopicStateTransition`-Modell
+    - neue Ableitung `derive_topic_state_transition(...)`
+    - `apply_turn_interpretation(...)` fuehrt jetzt:
+      - `topic_shift_detected`
+      - `open_loop_state`
+      - `active_goal_changed`
+      - `open_questions` bei Klaerungs- oder Shift-Faellen
+    - Topic-Shift ignoriert jetzt generische Token wie `und`, damit echte Themenwechsel nicht an Rauschen haengen bleiben
+    - wenn ein neuer Query-Kern klar vom alten Thema abweicht, darf er den alten `active_topic` beim Shift ueberschreiben
+  - `orchestration/meta_orchestration.py`
+    - `classify_meta_task(...)` liefert jetzt `topic_shift_detected` und `topic_state_transition`
+  - `server/mcp_server.py`
+    - neue Observation-Signale:
+      - `topic_shift_detected`
+      - `conversation_state_updated`
+
+- Wirkung:
+  - kurze Anschluss-Turns wie
+    - `die erste option`
+    - `dann mach weiter`
+    - `so aber mit live-news`
+    bleiben sauber am offenen Faden
+  - echte Themenwechsel wie `lass uns jetzt ueber browser automation reden` werden nicht mehr vom alten News-/Weltlage-Kontext verschluckt
+  - `open_questions` werden bei einem harten Topic-Shift nicht blind in das neue Thema mitgeschleppt
+
+- Neue Regressionen:
+  - `tests/test_conversation_state.py`
+    - Topic-Shift-Erkennung
+    - Open-Question-Pflege bei Clarification und Topic-Shift
+  - `tests/test_turn_understanding.py`
+    - `die erste option`
+    - `so aber mit live-news`
+  - `tests/test_meta_orchestration.py`
+    - Topic-Shift fuer neue Aufgabe
+    - `handover_resume` fuer `die erste option`
+    - Follow-up-Reframing fuer `so aber mit live-news`
+  - `tests/test_android_chat_language.py`
+    - `topic_shift_detected`
+    - `conversation_state_updated`
+
+- Verifikation:
+  - fokussierte D0.4-Fixes gruen (`2 passed`)
+  - erweiterter D0-/Meta-/Handoff-Block gruen (`94 passed`)
+
+## Nachtrag 2026-04-07 14:30 CEST - D0.4 Live-Kanten fuer Reframe und Topic-Shift geschlossen
+
+Die erste Live-Pruefung von D0.4 hat noch zwei Restkanten gezeigt:
+
+- eine kurze Praeferenzanweisung setzte zwar `next_expected_step`, aber noch keinen brauchbaren `active_topic`
+- ein harter Topic-Shift wurde bereits erkannt, aber der persistierte `conversation_state` blieb noch auf dem alten Thema stehen
+
+- Umsetzung:
+  - `orchestration/turn_understanding.py`
+    - kurze kontextuelle Reframes wie `so aber mit live-news` werden jetzt bei vorhandenem Thema/Open-Loop als `followup` erkannt
+  - `orchestration/meta_orchestration.py`
+    - `build_turn_understanding_input(...)` bekommt jetzt auch den echten `conversation_state`
+  - `orchestration/conversation_state.py`
+    - Preference-Updates ohne bestehendes Thema seeden jetzt einen minimalen Themenanker aus der Query
+    - bei einem harten Topic-Shift werden `active_topic` und `active_goal` auf das neue Thema gesetzt
+    - alte `open_loop`-/`next_expected_step`-Reste werden dabei gekappt
+    - `open_loop_state` wechselt dann korrekt auf `cleared`
+
+- Live bestaetigt:
+  - Praeferenzturn `bei news bitte zuerst agenturquellen`
+    - schreibt jetzt `active_topic` und `active_goal`
+  - Follow-up `so aber mit live-news`
+    - wird jetzt live als `followup` mit `resume_open_loop` beobachtet
+  - Themenwechsel `lass uns jetzt ueber browser automation reden`
+    - emittiert `topic_shift_detected`
+    - persistiert jetzt auch wirklich den neuen Topic-State statt am alten News-Kontext haengen zu bleiben
+
+- Verifikation:
+  - neue fokussierte Regressionen gruen (`3 passed`)
+  - erweiterter D0-/Meta-/Handoff-Block erneut gruen (`101 passed`)
+  - `timus-mcp` und `timus-dispatcher` neu gestartet
+  - Live-Observation fuer die Session `d03d04_live_final2_20260407` bestaetigt Reframe + Topic-Shift-Ende-zu-Ende

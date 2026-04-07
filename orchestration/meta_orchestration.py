@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Tuple
 
 from orchestration.adaptive_plan_memory import get_adaptive_plan_memory
 from orchestration.adaptive_planner import build_adaptive_plan
 from orchestration.capability_graph import build_capability_graph
+from orchestration.conversation_state import derive_topic_state_transition
 from orchestration.diagnosis_records import (
     build_diagnosis_records,
     compile_developer_task_brief,
@@ -68,6 +69,54 @@ class OrchestrationRecipeRecovery:
         payload = asdict(self)
         payload["handoff_fields"] = list(self.handoff_fields)
         return payload
+
+
+@dataclass(frozen=True)
+class MetaContextSlot:
+    slot: str
+    priority: int
+    content: str
+    source: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "slot": self.slot,
+            "priority": self.priority,
+            "content": self.content,
+            "source": self.source,
+        }
+
+
+@dataclass(frozen=True)
+class MetaContextBundle:
+    schema_version: int
+    current_query: str
+    bundle_reason: str
+    active_topic: str
+    active_goal: str
+    open_loop: str
+    next_expected_step: str
+    turn_type: str
+    response_mode: str
+    context_slots: Tuple[MetaContextSlot, ...]
+    suppressed_context: Tuple[Dict[str, str], ...]
+    confidence: float
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "current_query": self.current_query,
+            "bundle_reason": self.bundle_reason,
+            "active_topic": self.active_topic,
+            "active_goal": self.active_goal,
+            "open_loop": self.open_loop,
+            "next_expected_step": self.next_expected_step,
+            "turn_type": self.turn_type,
+            "response_mode": self.response_mode,
+            "context_slots": [slot.to_dict() for slot in self.context_slots],
+            "suppressed_context": [dict(item) for item in self.suppressed_context],
+            "confidence": self.confidence,
+        }
 
 
 _AGENT_PROFILES: Dict[str, AgentCapabilityProfile] = {
@@ -797,6 +846,13 @@ _FOLLOWUP_CONTEXT_FIELD_NAMES = (
     "inherited_topic_recall",
     "semantic_recall",
     "pending_followup_prompt",
+    "conversation_state_active_topic",
+    "conversation_state_active_goal",
+    "conversation_state_open_loop",
+    "conversation_state_next_expected_step",
+    "conversation_state_turn_type_hint",
+    "conversation_state_preferences",
+    "conversation_state_recent_corrections",
 )
 
 _CONTEXT_ANCHORED_FOLLOWUP_HINTS = (
@@ -880,6 +936,8 @@ _META_COMPRESSED_FOLLOWUP_HINTS = (
     "beratung",
     "brasilien",
 )
+
+_META_CONTEXT_SCHEMA_VERSION = 1
 
 
 def get_agent_capability_map() -> Dict[str, Dict[str, Any]]:
@@ -1513,6 +1571,641 @@ def _looks_like_compressed_meta_followup(text: str) -> bool:
     return (has_compact_separator or has_constraint) and has_hint
 
 
+def _extract_meta_followup_list(raw: str, field_name: str, *, limit: int = 3) -> List[str]:
+    value = _extract_meta_followup_field(raw, field_name)
+    if not value:
+        return []
+    delimiter = "||" if "||" in value else "|"
+    items = [item.strip() for item in value.split(delimiter) if item.strip()]
+    return _dedupe_meta_state_fragments(items, limit=limit, max_chars=220)
+
+
+def _extract_meta_followup_conversation_state(raw: str) -> Dict[str, Any]:
+    active_topic = _extract_meta_followup_field(raw, "conversation_state_active_topic")
+    active_goal = _extract_meta_followup_field(raw, "conversation_state_active_goal")
+    open_loop = _extract_meta_followup_field(raw, "conversation_state_open_loop")
+    next_expected_step = _extract_meta_followup_field(raw, "conversation_state_next_expected_step")
+    turn_type_hint = _extract_meta_followup_field(raw, "conversation_state_turn_type_hint")
+    preferences = _extract_meta_followup_list(raw, "conversation_state_preferences", limit=4)
+    recent_corrections = _extract_meta_followup_list(raw, "conversation_state_recent_corrections", limit=4)
+    payload = {
+        "active_topic": _clean_meta_state_fragment(active_topic, max_chars=220),
+        "active_goal": _clean_meta_state_fragment(active_goal, max_chars=220),
+        "open_loop": _clean_meta_state_fragment(open_loop, max_chars=220),
+        "next_expected_step": _clean_meta_state_fragment(next_expected_step, max_chars=220),
+        "turn_type_hint": _clean_meta_state_fragment(turn_type_hint, max_chars=64).lower(),
+        "preferences": preferences,
+        "recent_corrections": recent_corrections,
+    }
+    return {key: value for key, value in payload.items() if value}
+
+
+def _meta_context_slot_text(label: str, parts: Iterable[str]) -> str:
+    cleaned = [str(item or "").strip() for item in parts if str(item or "").strip()]
+    if not cleaned:
+        return ""
+    return f"{label}: " + " | ".join(cleaned[:4])
+
+
+def _append_meta_context_slot(
+    slots: List[MetaContextSlot],
+    *,
+    slot: str,
+    priority: int,
+    content: str,
+    source: str,
+) -> None:
+    cleaned = _clean_meta_state_fragment(content, max_chars=320)
+    if not cleaned:
+        return
+    slots.append(
+        MetaContextSlot(
+            slot=slot,
+            priority=priority,
+            content=cleaned,
+            source=_clean_meta_state_fragment(source, max_chars=64),
+        )
+    )
+
+
+def _tokenize_meta_context_terms(text: str) -> List[str]:
+    normalized = str(text or "").lower()
+    tokens = re.findall(r"[a-zA-Z0-9äöüÄÖÜß_-]+", normalized)
+    cleaned: List[str] = []
+    for token in tokens:
+        stripped = token.strip("_-")
+        if len(stripped) < 3:
+            continue
+        cleaned.append(stripped)
+    return cleaned
+
+
+def _meta_context_overlap_size(left: str, right: str) -> int:
+    left_terms = set(_tokenize_meta_context_terms(left))
+    right_terms = set(_tokenize_meta_context_terms(right))
+    if not left_terms or not right_terms:
+        return 0
+    return len(left_terms.intersection(right_terms))
+
+
+def _normalize_meta_context_fragments(
+    items: Iterable[Any] | None,
+    *,
+    limit: int = 2,
+    max_chars: int = 220,
+) -> List[str]:
+    normalized: List[str] = []
+    for item in items or ():
+        rendered = ""
+        if isinstance(item, Mapping):
+            text = _clean_meta_state_fragment(
+                item.get("text") or item.get("content") or item.get("value"),
+                max_chars=max_chars,
+            )
+            if not text:
+                continue
+            role = _clean_meta_state_fragment(item.get("role"), max_chars=32).lower()
+            agent = _clean_meta_state_fragment(item.get("agent"), max_chars=32).lower()
+            label = ""
+            if role and agent:
+                label = f"{role}:{agent}"
+            elif role:
+                label = role
+            elif agent:
+                label = agent
+            rendered = f"{label} => {text}" if label else text
+        else:
+            rendered = _clean_meta_state_fragment(item, max_chars=max_chars)
+        if not rendered or rendered in normalized:
+            continue
+        normalized.append(rendered)
+        if len(normalized) >= limit:
+            break
+    return normalized
+
+
+def _select_relevant_topic_memory(
+    *,
+    raw_query: str,
+    effective_query: str,
+    dialog_state: Mapping[str, Any],
+    conversation_state: Mapping[str, Any],
+    provided_hits: Iterable[Any] | None,
+) -> List[str]:
+    if provided_hits is not None:
+        return _normalize_meta_context_fragments(provided_hits, limit=2)
+
+    try:
+        from memory.memory_system import memory_manager
+    except Exception:
+        return []
+
+    focus_parts = [
+        effective_query,
+        str(conversation_state.get("active_topic") or ""),
+        str(conversation_state.get("active_goal") or ""),
+        str(conversation_state.get("open_loop") or ""),
+        str(dialog_state.get("active_topic") or ""),
+        str(dialog_state.get("open_goal") or ""),
+        _extract_meta_followup_field(raw_query, "topic_recall"),
+    ]
+    recall_query = " | ".join(
+        item for item in _dedupe_meta_state_fragments(focus_parts, limit=5, max_chars=160) if item
+    ).strip()
+    if not recall_query:
+        recall_query = effective_query
+
+    focus_terms = set(_tokenize_meta_context_terms(recall_query))
+    if not focus_terms:
+        focus_terms = set(_tokenize_meta_context_terms(effective_query))
+
+    try:
+        related = memory_manager.find_related_memories(recall_query, n_results=6)
+    except Exception:
+        return []
+
+    scored: List[Tuple[int, float, str]] = []
+    for item in related:
+        if not isinstance(item, Mapping):
+            continue
+        category = _clean_meta_state_fragment(item.get("category"), max_chars=64).lower()
+        if category in {"self_model", "user_profile"}:
+            continue
+        content = _clean_meta_state_fragment(item.get("content"), max_chars=220)
+        if not content:
+            continue
+        rendered = f"{category or 'memory'} => {content}"
+        overlap = len(focus_terms.intersection(_tokenize_meta_context_terms(content)))
+        relevance = float(item.get("relevance") or 0.0)
+        if overlap <= 0 and relevance < 0.45:
+            continue
+        scored.append((overlap, relevance, rendered))
+
+    scored.sort(key=lambda row: (-row[0], -row[1], len(row[2])))
+    return _normalize_meta_context_fragments((row[2] for row in scored), limit=2)
+
+
+def _select_relevant_preference_memory(
+    *,
+    effective_query: str,
+    conversation_state: Mapping[str, Any],
+    turn_type: str,
+    provided_hits: Iterable[Any] | None,
+) -> List[str]:
+    if provided_hits is not None:
+        return _normalize_meta_context_fragments(provided_hits, limit=2)
+
+    try:
+        from memory.memory_system import memory_manager
+    except Exception:
+        return []
+
+    focus_parts = [
+        effective_query,
+        str(conversation_state.get("active_topic") or ""),
+        str(conversation_state.get("active_goal") or ""),
+        str(conversation_state.get("open_loop") or ""),
+    ]
+    focus_text = " | ".join(item for item in _dedupe_meta_state_fragments(focus_parts, limit=4, max_chars=120) if item)
+    focus_terms = set(_tokenize_meta_context_terms(focus_text))
+    normalized_query = focus_text.lower()
+    preference_mode = turn_type in {"behavior_instruction", "preference_update", "complaint_about_last_answer"}
+
+    candidates: List[str] = []
+    try:
+        for hook in memory_manager.get_behavior_hooks()[:6]:
+            candidates.append(f"hook => {hook}")
+    except Exception:
+        pass
+    try:
+        self_model = str(memory_manager.get_self_model_prompt() or "").strip()
+        for line in self_model.splitlines():
+            cleaned = _clean_meta_state_fragment(line, max_chars=200)
+            if cleaned:
+                candidates.append(f"self_model => {cleaned}")
+    except Exception:
+        pass
+    try:
+        profile_items = memory_manager.persistent.get_memory_items("user_profile")
+        for item in profile_items[:10]:
+            key = _clean_meta_state_fragment(getattr(item, "key", ""), max_chars=48).lower()
+            value = _clean_meta_state_fragment(getattr(item, "value", ""), max_chars=180)
+            if not value:
+                continue
+            if key in {"preference", "goal"} or "preference" in key or "goal" in key:
+                candidates.append(f"user_profile:{key or 'memory'} => {value}")
+    except Exception:
+        pass
+
+    scored: List[Tuple[int, float, str]] = []
+    for candidate in candidates:
+        cleaned = _clean_meta_state_fragment(candidate, max_chars=220)
+        if not cleaned:
+            continue
+        lowered = cleaned.lower()
+        overlap = len(focus_terms.intersection(_tokenize_meta_context_terms(cleaned)))
+        bonus = 0.0
+        if any(token in normalized_query for token in ("news", "nachrichten", "weltlage", "agentur", "quelle", "beleg", "aktuell")):
+            if any(token in lowered for token in ("quelle", "beleg", "verifiz", "agentur", "halluz", "fakten")):
+                bonus += 1.5
+        if any(token in normalized_query for token in ("kurz", "knapp", "struktur", "json", "deutsch")):
+            if any(token in lowered for token in ("kurz", "präzise", "praezise", "struktur", "json", "deutsch")):
+                bonus += 1.0
+        if preference_mode and any(token in lowered for token in ("hook =>", "self_model =>", "user_profile:preference")):
+            bonus += 0.5
+        if overlap <= 0 and bonus <= 0:
+            continue
+        scored.append((overlap, bonus, cleaned))
+
+    scored.sort(key=lambda row: (-row[0], -row[1], len(row[2])))
+    return _normalize_meta_context_fragments((row[2] for row in scored), limit=2)
+
+
+def _select_relevant_recent_user_turns(
+    raw_query: str,
+    *,
+    effective_query: str,
+    recent_user_turns: Iterable[str] | None = None,
+) -> List[str]:
+    candidates = list(recent_user_turns or [])
+    if not candidates:
+        candidates = _extract_meta_followup_list(raw_query, "recent_user_queries", limit=3)
+    last_user = _extract_meta_followup_field(raw_query, "last_user")
+    if last_user:
+        candidates.append(last_user)
+    effective_clean = _clean_meta_state_fragment(effective_query, max_chars=220).lower()
+    selected: List[str] = []
+    for item in reversed(candidates):
+        cleaned = _clean_meta_state_fragment(item, max_chars=220)
+        if not cleaned:
+            continue
+        if cleaned.lower() == effective_clean:
+            continue
+        if cleaned in selected:
+            continue
+        selected.append(cleaned)
+        if len(selected) >= 3:
+            break
+    return selected
+
+
+def _select_relevant_recent_assistant_turns(
+    raw_query: str,
+    *,
+    recent_assistant_turns: Iterable[str] | None = None,
+) -> List[str]:
+    candidates = list(recent_assistant_turns or [])
+    if not candidates:
+        candidates = _extract_meta_followup_list(raw_query, "recent_assistant_replies", limit=3)
+    last_assistant = _extract_meta_followup_field(raw_query, "last_assistant")
+    if last_assistant:
+        candidates.append(last_assistant)
+    selected: List[str] = []
+    for item in reversed(candidates):
+        cleaned = _clean_meta_state_fragment(item, max_chars=220)
+        if not cleaned or cleaned in selected:
+            continue
+        selected.append(cleaned)
+        if len(selected) >= 3:
+            break
+    return selected
+
+
+def _select_open_loop_payload(
+    *,
+    conversation_state: Mapping[str, Any],
+    dialog_state: Mapping[str, Any],
+    turn_type: str,
+    response_mode: str,
+) -> str:
+    open_loop = _clean_meta_state_fragment(
+        conversation_state.get("open_loop") or dialog_state.get("open_goal"),
+        max_chars=220,
+    )
+    next_step = _clean_meta_state_fragment(
+        conversation_state.get("next_expected_step") or dialog_state.get("next_step"),
+        max_chars=220,
+    )
+    if turn_type in {"followup", "handover_resume", "approval_response", "auth_response", "clarification"}:
+        return next_step or open_loop
+    if response_mode in {"resume_open_loop", "acknowledge_and_store"}:
+        return next_step or open_loop
+    return open_loop if len(open_loop.split()) <= 12 else next_step
+
+
+def _suppress_low_priority_context(
+    *,
+    current_query: str,
+    recent_user_turns: Iterable[str],
+    recent_assistant_turns: Iterable[str],
+    topic_memory: Iterable[str] = (),
+    preference_memory: Iterable[str] = (),
+) -> List[Dict[str, str]]:
+    suppressed: List[Dict[str, str]] = []
+    user_turns = [str(item or "").strip() for item in recent_user_turns if str(item or "").strip()]
+    assistant_turns = [str(item or "").strip() for item in recent_assistant_turns if str(item or "").strip()]
+    topic_items = [str(item or "").strip() for item in topic_memory if str(item or "").strip()]
+    preference_items = [str(item or "").strip() for item in preference_memory if str(item or "").strip()]
+    normalized_query = str(current_query or "").strip().lower()
+    if user_turns and assistant_turns:
+        suppressed.append(
+            {
+                "source": "assistant_reply",
+                "reason": "lower_priority_than_recent_user_turn",
+                "content_preview": assistant_turns[0][:140],
+            }
+        )
+    if not is_location_local_query(normalized_query) and not is_location_route_query(normalized_query):
+        for item in assistant_turns[:2]:
+            lowered = item.lower()
+            if any(token in lowered for token in ("maps", "standort", "route", "naehe", "nähe", "offenbach")):
+                suppressed.append(
+                    {
+                        "source": "assistant_reply",
+                        "reason": "location_context_without_current_evidence",
+                        "content_preview": item[:140],
+                    }
+                )
+                break
+    if assistant_turns:
+        reference_topics = [current_query, *user_turns[:2], *topic_items[:1]]
+        for item in assistant_turns[:2]:
+            best_overlap = max((_meta_context_overlap_size(item, ref) for ref in reference_topics if ref), default=0)
+            if best_overlap > 0:
+                continue
+            suppressed.append(
+                {
+                    "source": "assistant_reply",
+                    "reason": "topic_mismatch_with_current_query",
+                    "content_preview": item[:140],
+                }
+            )
+            break
+    if preference_items and not any(
+        token in normalized_query
+        for token in (
+            "bevorzug",
+            "präferenz",
+            "praeferenz",
+            "merk dir",
+            "merke dir",
+            "in zukunft",
+            "kuenftig",
+            "künftig",
+            "antwort",
+            "news",
+            "nachrichten",
+            "weltlage",
+            "quelle",
+            "quellen",
+            "fakten",
+            "beleg",
+        )
+    ):
+        for item in preference_items[:2]:
+            if _meta_context_overlap_size(item, current_query) > 0:
+                continue
+            suppressed.append(
+                {
+                    "source": "preference_memory",
+                    "reason": "preference_not_relevant_for_current_topic",
+                    "content_preview": item[:140],
+                }
+            )
+            break
+    unique: List[Dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for item in suppressed:
+        key = (
+            str(item.get("source") or ""),
+            str(item.get("reason") or ""),
+            str(item.get("content_preview") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique[:4]
+
+
+def build_meta_context_bundle(
+    *,
+    raw_query: str,
+    effective_query: str,
+    dialog_state: Mapping[str, Any] | None = None,
+    conversation_state: Mapping[str, Any] | None = None,
+    turn_understanding: Mapping[str, Any] | None = None,
+    session_summary: str = "",
+    recent_user_turns: Iterable[str] | None = None,
+    recent_assistant_turns: Iterable[str] | None = None,
+    topic_memory_hits: Iterable[Any] | None = None,
+    preference_memory_hits: Iterable[Any] | None = None,
+    semantic_recall_hits: Iterable[Any] | None = None,
+) -> MetaContextBundle:
+    raw = str(raw_query or "")
+    dialog = dict(dialog_state or {})
+    explicit_state = dict(conversation_state or {})
+    followup_state = _extract_meta_followup_conversation_state(raw)
+    merged_state = {
+        "active_topic": explicit_state.get("active_topic")
+        or followup_state.get("active_topic")
+        or dialog.get("active_topic")
+        or "",
+        "active_goal": explicit_state.get("active_goal")
+        or followup_state.get("active_goal")
+        or dialog.get("open_goal")
+        or "",
+        "open_loop": explicit_state.get("open_loop")
+        or followup_state.get("open_loop")
+        or "",
+        "next_expected_step": explicit_state.get("next_expected_step")
+        or followup_state.get("next_expected_step")
+        or dialog.get("next_step")
+        or "",
+        "turn_type_hint": explicit_state.get("turn_type_hint")
+        or followup_state.get("turn_type_hint")
+        or "",
+        "preferences": explicit_state.get("preferences")
+        or followup_state.get("preferences")
+        or (),
+        "recent_corrections": explicit_state.get("recent_corrections")
+        or followup_state.get("recent_corrections")
+        or (),
+        "topic_confidence": explicit_state.get("topic_confidence") or 0.0,
+    }
+    turn = dict(turn_understanding or {})
+    turn_type = str(turn.get("dominant_turn_type") or "").strip().lower() or str(
+        merged_state.get("turn_type_hint") or ""
+    ).strip().lower()
+    response_mode = str(turn.get("response_mode") or "").strip().lower()
+    recent_users = _select_relevant_recent_user_turns(
+        raw,
+        effective_query=effective_query,
+        recent_user_turns=recent_user_turns,
+    )
+    recent_assistant = _select_relevant_recent_assistant_turns(
+        raw,
+        recent_assistant_turns=recent_assistant_turns,
+    )
+    semantic_recall = _normalize_meta_context_fragments(semantic_recall_hits, limit=2)
+    topic_memory = _select_relevant_topic_memory(
+        raw_query=raw,
+        effective_query=effective_query,
+        dialog_state=dialog,
+        conversation_state=merged_state,
+        provided_hits=topic_memory_hits,
+    )
+    preference_memory = _select_relevant_preference_memory(
+        effective_query=effective_query,
+        conversation_state=merged_state,
+        turn_type=turn_type,
+        provided_hits=preference_memory_hits,
+    )
+    selected_open_loop = _select_open_loop_payload(
+        conversation_state=merged_state,
+        dialog_state=dialog,
+        turn_type=turn_type,
+        response_mode=response_mode,
+    )
+    slots: List[MetaContextSlot] = []
+    _append_meta_context_slot(
+        slots,
+        slot="current_query",
+        priority=1,
+        content=_clean_meta_state_fragment(effective_query, max_chars=240),
+        source="current_user_query",
+    )
+    state_slot = _meta_context_slot_text(
+        "conversation_state",
+        [
+            merged_state.get("active_topic"),
+            merged_state.get("active_goal"),
+            merged_state.get("turn_type_hint"),
+            *list(merged_state.get("preferences") or ())[:2],
+            *list(merged_state.get("recent_corrections") or ())[:2],
+        ],
+    )
+    _append_meta_context_slot(
+        slots,
+        slot="conversation_state",
+        priority=2,
+        content=state_slot,
+        source="conversation_state",
+    )
+    _append_meta_context_slot(
+        slots,
+        slot="open_loop",
+        priority=3,
+        content=_meta_context_slot_text(
+            "open_loop",
+            [selected_open_loop, merged_state.get("next_expected_step")],
+        ),
+        source="open_loop",
+    )
+    for idx, item in enumerate(recent_users[:2], start=4):
+        _append_meta_context_slot(
+            slots,
+            slot="recent_user_turn",
+            priority=idx,
+            content=item,
+            source="recent_user_queries",
+        )
+    for idx, item in enumerate(topic_memory, start=6):
+        _append_meta_context_slot(
+            slots,
+            slot="topic_memory",
+            priority=idx,
+            content=item,
+            source="topic_memory",
+        )
+    for idx, item in enumerate(preference_memory, start=8):
+        _append_meta_context_slot(
+            slots,
+            slot="preference_memory",
+            priority=idx,
+            content=item,
+            source="preference_memory",
+        )
+    if not recent_users and recent_assistant:
+        _append_meta_context_slot(
+            slots,
+            slot="assistant_fallback_context",
+            priority=max(len(slots) + 1, 4),
+            content=recent_assistant[0],
+            source="recent_assistant_replies",
+        )
+    if session_summary and len(slots) < 4:
+        _append_meta_context_slot(
+            slots,
+            slot="session_summary",
+            priority=max(len(slots) + 1, 4),
+            content=session_summary,
+            source="session_summary",
+        )
+    if semantic_recall and len(slots) < 5:
+        _append_meta_context_slot(
+            slots,
+            slot="semantic_recall",
+            priority=max(len(slots) + 1, 5),
+            content=semantic_recall[0],
+            source="semantic_recall",
+        )
+    suppressed_context = _suppress_low_priority_context(
+        current_query=effective_query,
+        recent_user_turns=recent_users,
+        recent_assistant_turns=recent_assistant,
+        topic_memory=topic_memory,
+        preference_memory=preference_memory,
+    )
+    confidence = max(
+        float(turn.get("confidence") or 0.0),
+        float(merged_state.get("topic_confidence") or 0.0),
+    )
+    return MetaContextBundle(
+        schema_version=_META_CONTEXT_SCHEMA_VERSION,
+        current_query=_clean_meta_state_fragment(effective_query, max_chars=240),
+        bundle_reason="meta_context_rehydration",
+        active_topic=_clean_meta_state_fragment(merged_state.get("active_topic"), max_chars=220),
+        active_goal=_clean_meta_state_fragment(merged_state.get("active_goal"), max_chars=220),
+        open_loop=_clean_meta_state_fragment(merged_state.get("open_loop") or selected_open_loop, max_chars=220),
+        next_expected_step=_clean_meta_state_fragment(merged_state.get("next_expected_step"), max_chars=220),
+        turn_type=turn_type,
+        response_mode=response_mode,
+        context_slots=tuple(sorted(slots, key=lambda item: item.priority)),
+        suppressed_context=tuple(suppressed_context),
+        confidence=round(max(0.0, min(confidence or 0.0, 1.0)), 2),
+    )
+
+
+def render_meta_context_bundle(bundle: MetaContextBundle | Mapping[str, Any] | None) -> str:
+    payload = bundle.to_dict() if isinstance(bundle, MetaContextBundle) else dict(bundle or {})
+    slots = payload.get("context_slots") or []
+    lines = ["# META CONTEXT BUNDLE"]
+    lines.append(f"current_query: {str(payload.get('current_query') or '').strip()}")
+    if payload.get("turn_type"):
+        lines.append(f"turn_type: {payload['turn_type']}")
+    if payload.get("response_mode"):
+        lines.append(f"response_mode: {payload['response_mode']}")
+    if payload.get("active_topic"):
+        lines.append(f"active_topic: {payload['active_topic']}")
+    if payload.get("active_goal"):
+        lines.append(f"active_goal: {payload['active_goal']}")
+    if payload.get("open_loop"):
+        lines.append(f"open_loop: {payload['open_loop']}")
+    if payload.get("next_expected_step"):
+        lines.append(f"next_expected_step: {payload['next_expected_step']}")
+    if slots:
+        lines.append("context_slots:")
+        for item in slots[:6]:
+            if not isinstance(item, Mapping):
+                continue
+            lines.append(
+                f"- {str(item.get('priority') or '')}:{str(item.get('slot') or '').strip()} => "
+                f"{str(item.get('content') or '').strip()}"
+            )
+    return "\n".join(lines)
+
+
 def extract_effective_meta_query(query: str) -> str:
     """Bewertet bei Follow-up-Kapseln nur die eigentliche Nutzerfrage.
 
@@ -1686,7 +2379,18 @@ def _should_apply_meta_context_anchor(current_query: str, context_anchor: str) -
     return False
 
 
-def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
+def classify_meta_task(
+    query: str,
+    *,
+    action_count: int = 0,
+    conversation_state: Mapping[str, Any] | None = None,
+    recent_user_turns: Iterable[str] | None = None,
+    recent_assistant_turns: Iterable[str] | None = None,
+    session_summary: str = "",
+    topic_memory_hits: Iterable[Any] | None = None,
+    preference_memory_hits: Iterable[Any] | None = None,
+    semantic_recall_hits: Iterable[Any] | None = None,
+) -> Dict[str, Any]:
     effective_query = extract_effective_meta_query(query)
     context_anchor = extract_meta_context_anchor(query)
     dialog_state = extract_meta_dialog_state(query)
@@ -1778,9 +2482,37 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
         effective_query=effective_query,
         dialog_state=dialog_state,
         semantic_review_hints=semantic_review.get("semantic_ambiguity_hints") or [],
+        conversation_state=conversation_state,
         context_anchor_applied=context_anchor_applied,
     )
     turn_interpretation = interpret_turn(turn_input)
+    meta_context_bundle = build_meta_context_bundle(
+        raw_query=query,
+        effective_query=effective_query,
+        dialog_state=dialog_state,
+        conversation_state=conversation_state,
+        turn_understanding=turn_interpretation.to_dict(),
+        session_summary=session_summary,
+        recent_user_turns=recent_user_turns,
+        recent_assistant_turns=recent_assistant_turns,
+        topic_memory_hits=topic_memory_hits,
+        preference_memory_hits=preference_memory_hits,
+        semantic_recall_hits=semantic_recall_hits,
+    )
+    active_topic = meta_context_bundle.active_topic or active_topic
+    open_goal = meta_context_bundle.active_goal or open_goal or meta_context_bundle.open_loop
+    next_step = meta_context_bundle.next_expected_step or dialog_state.get("next_step")
+    topic_transition = derive_topic_state_transition(
+        conversation_state,
+        session_id=str((conversation_state or {}).get("session_id") or "default"),
+        dominant_turn_type=turn_interpretation.dominant_turn_type,
+        response_mode=turn_interpretation.response_mode,
+        state_effects=turn_interpretation.state_effects.to_dict(),
+        effective_query=effective_query,
+        active_topic=active_topic,
+        active_goal=open_goal,
+        next_step=str(next_step or ""),
+    )
 
     required_capabilities: List[str] = []
     recommended_chain: List[str] = []
@@ -1943,7 +2675,7 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
         "active_topic": active_topic or None,
         "open_goal": open_goal or None,
         "dialog_constraints": dialog_constraints,
-        "next_step": dialog_state.get("next_step"),
+        "next_step": next_step,
         "active_topic_reused": active_topic_reused,
         "compressed_followup_parsed": compressed_followup_parsed,
         "dominant_turn_type": turn_interpretation.dominant_turn_type,
@@ -1951,6 +2683,11 @@ def classify_meta_task(query: str, *, action_count: int = 0) -> Dict[str, Any]:
         "response_mode": turn_interpretation.response_mode,
         "state_effects": turn_interpretation.state_effects.to_dict(),
         "turn_understanding": turn_interpretation.to_dict(),
+        "topic_shift_detected": topic_transition.topic_shift_detected,
+        "topic_state_transition": topic_transition.to_dict(),
+        "meta_context_bundle": meta_context_bundle.to_dict(),
+        "meta_context_slot_types": [slot.slot for slot in meta_context_bundle.context_slots],
+        "meta_context_suppressed_count": len(meta_context_bundle.suppressed_context),
     }
     classification = _apply_semantic_review_override(classification, semantic_review)
     classification = _apply_turn_understanding_override(classification, turn_interpretation)

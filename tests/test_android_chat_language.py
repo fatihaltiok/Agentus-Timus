@@ -465,6 +465,130 @@ def test_followup_capsule_includes_semantic_recall(tmp_path, monkeypatch):
     assert "executor =>" in augmented
 
 
+def test_followup_capsule_serializes_conversation_state_into_query_block(tmp_path, monkeypatch):
+    mcp_server._chat_history.clear()
+    monkeypatch.setenv("TIMUS_SESSION_STORAGE_ROOT", str(tmp_path))
+
+    session_id = "conversation_state_followup"
+    capsule = mcp_server._load_session_capsule(session_id)
+    capsule["conversation_state"] = {
+        "active_topic": "Weltlage und News-Qualitaet",
+        "active_goal": "Echtzeit-Agenturmeldungen priorisieren",
+        "open_loop": "Reuters und AP priorisieren",
+        "next_expected_step": "Praeferenz bestaetigen",
+        "turn_type_hint": "behavior_instruction",
+        "preferences": ["Reuters zuerst", "AP zuerst"],
+        "recent_corrections": ["Nicht auf Standort abdriften"],
+    }
+    mcp_server._store_session_capsule(capsule)
+
+    followup_capsule = mcp_server._build_followup_capsule(session_id, query="und was jetzt")
+    augmented = mcp_server._augment_query_with_followup_capsule("und was jetzt", followup_capsule)
+
+    assert "conversation_state_active_topic: Weltlage und News-Qualitaet" in augmented
+    assert "conversation_state_active_goal: Echtzeit-Agenturmeldungen priorisieren" in augmented
+    assert "conversation_state_open_loop: Reuters und AP priorisieren" in augmented
+    assert "conversation_state_turn_type_hint: behavior_instruction" in augmented
+    assert "conversation_state_preferences: Reuters zuerst || AP zuerst" in augmented
+    assert "conversation_state_recent_corrections: Nicht auf Standort abdriften" in augmented
+
+
+def test_record_meta_turn_understanding_observations_emits_context_misread_suspected(monkeypatch):
+    captured: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        mcp_server,
+        "_record_chat_observation",
+        lambda event_type, payload: captured.append((event_type, payload)),
+    )
+
+    mcp_server._record_meta_turn_understanding_observations(
+        request_id="req_meta_risk",
+        session_id="sess_meta_risk",
+        classification={
+            "dominant_turn_type": "followup",
+            "response_mode": "resume_open_loop",
+            "reason": "context_anchored_followup",
+            "turn_understanding": {
+                "turn_signals": ["followup"],
+                "route_bias": "meta_only",
+                "confidence": 0.41,
+                "state_effects": {},
+            },
+            "meta_context_bundle": {
+                "bundle_reason": "meta_context_rehydration",
+                "context_slots": [
+                    {"slot": "current_query", "priority": 1, "content": "ok fang an", "source": "current_user_query"},
+                    {
+                        "slot": "assistant_fallback_context",
+                        "priority": 2,
+                        "content": "Soll ich mit dem ersten Schritt anfangen?",
+                        "source": "recent_assistant_replies",
+                    },
+                ],
+                "suppressed_context": [],
+                "confidence": 0.41,
+            },
+        },
+    )
+
+    assert any(event_type == "context_misread_suspected" for event_type, _ in captured)
+    risk_payloads = [payload for event_type, payload in captured if event_type == "context_misread_suspected"]
+    assert any("resume_mode_without_open_loop" in (payload.get("risk_reasons") or []) for payload in risk_payloads)
+
+
+def test_record_meta_turn_understanding_observations_emits_topic_shift_and_state_update(monkeypatch):
+    captured: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        mcp_server,
+        "_record_chat_observation",
+        lambda event_type, payload: captured.append((event_type, payload)),
+    )
+
+    mcp_server._record_meta_turn_understanding_observations(
+        request_id="req_topic_shift",
+        session_id="sess_topic_shift",
+        classification={
+            "dominant_turn_type": "new_task",
+            "response_mode": "execute",
+            "reason": "single_lane",
+            "turn_understanding": {
+                "turn_signals": ["new_work_request"],
+                "route_bias": "route_normally",
+                "confidence": 0.7,
+                "state_effects": {"shift_active_topic": True},
+            },
+            "topic_shift_detected": True,
+            "topic_state_transition": {
+                "previous_topic": "aktuelle Weltlage und News-Qualitaet",
+                "next_topic": "browser automation",
+                "previous_goal": "Live-News",
+                "next_goal": "UI-Workflows verstehen",
+                "open_loop_state": "unchanged",
+            },
+            "meta_context_bundle": {
+                "bundle_reason": "meta_context_rehydration",
+                "context_slots": [
+                    {"slot": "current_query", "priority": 1, "content": "lass uns ueber browser automation reden", "source": "current_user_query"},
+                    {"slot": "conversation_state", "priority": 2, "content": "conversation_state: aktuelle Weltlage", "source": "conversation_state"},
+                ],
+                "suppressed_context": [],
+                "confidence": 0.7,
+            },
+        },
+        updated_state={
+            "active_topic": "browser automation",
+            "active_goal": "UI-Workflows verstehen",
+            "open_loop": "",
+            "next_expected_step": "",
+            "open_questions": [],
+            "turn_type_hint": "new_task",
+        },
+    )
+
+    assert any(event_type == "topic_shift_detected" for event_type, _ in captured)
+    assert any(event_type == "conversation_state_updated" for event_type, _ in captured)
+
+
 async def test_canvas_chat_routes_topic_followup_to_executor(monkeypatch, tmp_path):
     captured = {"decision_queries": [], "run_queries": []}
     mcp_server._chat_history.clear()
@@ -784,6 +908,27 @@ async def test_canvas_chat_persists_meta_turn_understanding_to_conversation_stat
     monkeypatch.setenv("TIMUS_SESSION_STORAGE_ROOT", str(tmp_path))
     monkeypatch.setattr(mcp_server, "_semantic_store_chat_turn", lambda **kwargs: None)
     monkeypatch.setattr(mcp_server, "_semantic_recall_chat_turns", lambda **kwargs: [])
+    fake_memory_manager = SimpleNamespace(
+        find_related_memories=lambda query, n_results=6: [
+            {
+                "content": "Reuters meldete neue Entwicklungen zur Weltlage.",
+                "category": "news_archive",
+                "relevance": 0.88,
+            }
+        ],
+        get_behavior_hooks=lambda: ["Wichtige Aussagen mit Quellen belegen."],
+        get_self_model_prompt=lambda: "Präferenzen: Wichtige Aussagen mit Quellen belegen.",
+        persistent=SimpleNamespace(
+            get_memory_items=lambda category: [SimpleNamespace(key="preference", value="Fakten und Quellen zuerst")]
+            if category == "user_profile"
+            else []
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "memory.memory_system",
+        SimpleNamespace(memory_manager=fake_memory_manager),
+    )
     monkeypatch.setattr(
         mcp_server,
         "_record_chat_observation",
@@ -829,6 +974,73 @@ async def test_canvas_chat_persists_meta_turn_understanding_to_conversation_stat
     assert "meta_turn_type_selected" in event_types
     assert "meta_response_mode_selected" in event_types
     assert "conversation_state_effects_derived" in event_types
+    assert "context_rehydration_bundle_built" in event_types
+    assert "topic_memory_attached" in event_types
+    assert "preference_memory_attached" in event_types
+
+
+async def test_canvas_chat_emits_context_slot_selection_and_suppression_events(monkeypatch, tmp_path):
+    captured = {"events": []}
+    mcp_server._chat_history.clear()
+    monkeypatch.setenv("TIMUS_SESSION_STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setattr(mcp_server, "_semantic_store_chat_turn", lambda **kwargs: None)
+    monkeypatch.setattr(mcp_server, "_semantic_recall_chat_turns", lambda **kwargs: [])
+    monkeypatch.setattr(
+        mcp_server,
+        "_record_chat_observation",
+        lambda event_type, payload: captured["events"].append((event_type, payload)),
+    )
+
+    session_id = "context_slot_obs_lane"
+    mcp_server._append_chat_entry(
+        session_id=session_id,
+        role="user",
+        text="wie stehts um die aktuelle weltlage",
+        ts="2026-04-07T09:50:00Z",
+    )
+    mcp_server._append_chat_entry(
+        session_id=session_id,
+        role="assistant",
+        text="Dein letzter bekannter Standort war in Offenbach am Main.",
+        ts="2026-04-07T09:50:05Z",
+        agent="executor",
+    )
+
+    async def fake_build_tools_description():
+        return "tools"
+
+    async def fake_get_agent_decision(query, session_id=None, request_id=None):
+        return "meta"
+
+    async def fake_run_agent(agent_name, query, tools_description, session_id=None):
+        return "Verstanden. Ich fokussiere aktuelle News statt Standortkontext."
+
+    fake_dispatcher = SimpleNamespace(
+        get_agent_decision=fake_get_agent_decision,
+        run_agent=fake_run_agent,
+    )
+
+    monkeypatch.setattr(mcp_server, "_build_tools_description", fake_build_tools_description)
+    monkeypatch.setitem(sys.modules, "main_dispatcher", fake_dispatcher)
+
+    response = await mcp_server.canvas_chat(
+        _FakeRequest(
+            {
+                "query": "nein ich meinte aktuelle news",
+                "session_id": session_id,
+            }
+        )
+    )
+
+    assert response["status"] == "success"
+    event_types = [event_type for event_type, _ in captured["events"]]
+    assert "context_slot_selected" in event_types
+    assert "context_slot_suppressed" in event_types
+    assert any(
+        payload.get("reason") == "location_context_without_current_evidence"
+        for event_type, payload in captured["events"]
+        if event_type == "context_slot_suppressed"
+    )
 
 
 async def test_canvas_chat_logs_completed_interaction_to_memory(monkeypatch, tmp_path):

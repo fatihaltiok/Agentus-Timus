@@ -190,7 +190,7 @@ def evaluate_query_orchestration(query: str) -> Dict[str, Any]:
         or has_login_workflow
         or has_interactive_browser_workflow
     )
-    meta_task = classify_meta_task(normalized, action_count=action_count)
+    meta_task = classify_meta_task(query, action_count=action_count)
     task_profile = build_task_profile(normalized, meta_task)
     tool_affordances = select_tool_affordances(meta_task, task_profile)
     selected_strategy = select_strategy(normalized, meta_task, task_profile, tool_affordances)
@@ -226,6 +226,7 @@ def evaluate_query_orchestration(query: str) -> Dict[str, Any]:
         "goal_spec": dict(meta_task.get("goal_spec") or {}),
         "capability_graph": dict(meta_task.get("capability_graph") or {}),
         "adaptive_plan": dict(meta_task.get("adaptive_plan") or {}),
+        "meta_context_bundle": dict(meta_task.get("meta_context_bundle") or {}),
         "task_profile": task_profile,
         "tool_affordances": tool_affordances,
         "selected_strategy": selected_strategy,
