@@ -15,6 +15,7 @@ from orchestration.diagnosis_records import (
     compile_developer_task_brief,
     select_lead_diagnosis,
 )
+from orchestration.preference_instruction_memory import select_stored_preference_memory_with_summary
 from orchestration.goal_spec import derive_goal_spec
 from orchestration.root_cause_tasks import build_root_cause_task_payload
 from orchestration.turn_understanding import (
@@ -1751,14 +1752,39 @@ def _select_relevant_preference_memory(
     conversation_state: Mapping[str, Any],
     turn_type: str,
     provided_hits: Iterable[Any] | None,
-) -> List[str]:
+) -> Tuple[List[str], Dict[str, Any]]:
     if provided_hits is not None:
-        return _normalize_meta_context_fragments(provided_hits, limit=2)
+        selected = _normalize_meta_context_fragments(provided_hits, limit=2)
+        return selected, {
+            "selected": list(selected),
+            "selected_details": [],
+            "ignored_low_stability": [],
+            "conflicts_resolved": [],
+        }
 
     try:
         from memory.memory_system import memory_manager
     except Exception:
-        return []
+        return [], {
+            "selected": [],
+            "selected_details": [],
+            "ignored_low_stability": [],
+            "conflicts_resolved": [],
+        }
+
+    stored_selection = select_stored_preference_memory_with_summary(
+        effective_query=effective_query,
+        conversation_state=conversation_state,
+        turn_type=turn_type,
+        memory_manager=memory_manager,
+        limit=2,
+    )
+    stored_candidates = list(stored_selection.selected)
+    selection_summary = stored_selection.to_dict()
+    prioritized = _normalize_meta_context_fragments(stored_candidates, limit=2)
+    if len(prioritized) >= 2:
+        selection_summary["selected"] = list(prioritized)
+        return prioritized, selection_summary
 
     focus_parts = [
         effective_query,
@@ -1811,6 +1837,8 @@ def _select_relevant_preference_memory(
         if any(token in normalized_query for token in ("kurz", "knapp", "struktur", "json", "deutsch")):
             if any(token in lowered for token in ("kurz", "präzise", "praezise", "struktur", "json", "deutsch")):
                 bonus += 1.0
+        if lowered.startswith("stored_preference:"):
+            bonus += 2.0
         if preference_mode and any(token in lowered for token in ("hook =>", "self_model =>", "user_profile:preference")):
             bonus += 0.5
         if overlap <= 0 and bonus <= 0:
@@ -1818,7 +1846,18 @@ def _select_relevant_preference_memory(
         scored.append((overlap, bonus, cleaned))
 
     scored.sort(key=lambda row: (-row[0], -row[1], len(row[2])))
-    return _normalize_meta_context_fragments((row[2] for row in scored), limit=2)
+    selected = list(prioritized)
+    seen = set(selected)
+    for _, _, cleaned in scored:
+        if cleaned in seen:
+            continue
+        selected.append(cleaned)
+        seen.add(cleaned)
+        if len(selected) >= 2:
+            break
+    normalized_selected = _normalize_meta_context_fragments(selected, limit=2)
+    selection_summary["selected"] = list(normalized_selected)
+    return normalized_selected, selection_summary
 
 
 def _select_relevant_recent_user_turns(
@@ -2005,7 +2044,7 @@ def build_meta_context_bundle(
     topic_memory_hits: Iterable[Any] | None = None,
     preference_memory_hits: Iterable[Any] | None = None,
     semantic_recall_hits: Iterable[Any] | None = None,
-) -> MetaContextBundle:
+) -> Tuple[MetaContextBundle, Dict[str, Any]]:
     raw = str(raw_query or "")
     dialog = dict(dialog_state or {})
     explicit_state = dict(conversation_state or {})
@@ -2059,7 +2098,7 @@ def build_meta_context_bundle(
         conversation_state=merged_state,
         provided_hits=topic_memory_hits,
     )
-    preference_memory = _select_relevant_preference_memory(
+    preference_memory, preference_selection = _select_relevant_preference_memory(
         effective_query=effective_query,
         conversation_state=merged_state,
         turn_type=turn_type,
@@ -2179,7 +2218,7 @@ def build_meta_context_bundle(
         context_slots=tuple(sorted(slots, key=lambda item: item.priority)),
         suppressed_context=tuple(suppressed_context),
         confidence=round(max(0.0, min(confidence or 0.0, 1.0)), 2),
-    )
+    ), preference_selection
 
 
 def render_meta_context_bundle(bundle: MetaContextBundle | Mapping[str, Any] | None) -> str:
@@ -2491,7 +2530,7 @@ def classify_meta_task(
         context_anchor_applied=context_anchor_applied,
     )
     turn_interpretation = interpret_turn(turn_input)
-    meta_context_bundle = build_meta_context_bundle(
+    meta_context_bundle, preference_memory_selection = build_meta_context_bundle(
         raw_query=query,
         effective_query=effective_query,
         dialog_state=dialog_state,
@@ -2691,6 +2730,7 @@ def classify_meta_task(
         "topic_shift_detected": topic_transition.topic_shift_detected,
         "topic_state_transition": topic_transition.to_dict(),
         "meta_context_bundle": meta_context_bundle.to_dict(),
+        "preference_memory_selection": preference_memory_selection,
         "meta_context_slot_types": [slot.slot for slot in meta_context_bundle.context_slots],
         "meta_context_suppressed_count": len(meta_context_bundle.suppressed_context),
     }

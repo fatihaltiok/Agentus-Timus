@@ -3787,3 +3787,72 @@ Ein letzter Live-Nachlauf zeigte noch eine D0.4-Hygienekante: Bei einem klaren `
 - Verifikation:
   - fokussierte Regression fuer den Topic-Shift-Bundle-Fall gruen (`1 passed`)
   - `py_compile` fuer `orchestration/meta_orchestration.py` gruen
+
+## Nachtrag 2026-04-07 15:35 CEST - D0.5 Preference-/Instruction-Memory als erster Runtime-Slice umgesetzt
+
+D0.5 zieht persistente Arbeitspraeferenzen jetzt erstmals in den echten Meta-Laufzeitpfad: spontane Verhaltens- und Praeferenzanweisungen bleiben nicht nur im aktuellen Turn, sondern koennen spaeter thematisch passend als `preference_memory` wieder rehydriert werden.
+
+- Umsetzung:
+  - `orchestration/preference_instruction_memory.py`
+    - neues D0.5-Modul fuer:
+      - Scope-Ableitung `global` / `topic` / `session`
+      - Normalisierung von Verhaltensanweisungen
+      - persistente Speicherung als `preference_memory`
+      - selektiven Abruf thematisch passender gespeicherter Praeferenzen
+  - `server/mcp_server.py`
+    - Meta-Turns mit `behavior_instruction` / `preference_update` und `acknowledge_and_store` werden jetzt direkt als Praeferenz gespeichert
+    - neue Beobachtungsereignisse:
+      - `preference_captured`
+      - `preference_applied`
+  - `orchestration/meta_orchestration.py`
+    - gespeicherte `stored_preference`-Eintraege werden im `meta_context_bundle` jetzt vor heuristischen Quellen wie Hooks oder `self_model` bevorzugt
+
+- Neue Regressionen:
+  - `tests/test_preference_instruction_memory.py`
+    - Scope-Unterscheidung fuer globale, thematische und session-lokale Praeferenzen
+    - Evidence-Count bei wiederholter Speicherung
+    - scope-/stabilitaetsbasierter Abruf
+  - `tests/test_meta_orchestration.py`
+    - `stored_preference` aus persistentem `preference_memory` landet im `preference_memory`-Slot des Bundles
+  - `tests/test_android_chat_language.py`
+    - Zwei-Turn-Canvas-Lauf prueft `preference_captured` und spaeteres `preference_applied`
+
+- Verifikation:
+  - `python -m py_compile orchestration/preference_instruction_memory.py orchestration/meta_orchestration.py server/mcp_server.py tests/test_preference_instruction_memory.py tests/test_meta_orchestration.py tests/test_android_chat_language.py` gruen
+  - fokussierte D0.5-Suite gruen (`78 passed`)
+  - breiter D0-/Meta-/Handoff-Block gruen (`105 passed`)
+
+## Nachtrag 2026-04-07 15:55 CEST - D0.5 Abschluss-Haertung fuer Scope, Konflikte und Observability
+
+Der erste D0.5-Slice war funktionsfaehig, aber noch nicht hart genug abgeschlossen. Der Abschluss-Nachblock zieht deshalb die naheliegenden Restkanten direkt in D0.5 selbst: konservativere globale Praeferenzen, Konfliktaufloesung zwischen `session` / `topic` / `global` und explizite Beobachtbarkeit dieser Entscheidungen.
+
+- Umsetzung:
+  - `orchestration/preference_instruction_memory.py`
+    - Praeferenzen tragen jetzt zusaetzlich:
+      - `explicit_global`
+      - `preference_family`
+    - globale Praeferenzen werden nur noch konservativ wiederverwendet:
+      - explizit global
+      - oder mehrfach bestaetigt
+      - oder sehr hohe Stabilitaet
+    - Konflikte werden ueber generische Praeferenz-Familien aufgeloest, nicht nur ueber themenspezifische News-Keywords
+    - `session` schlaegt `topic`, `topic` schlaegt `global`
+  - `orchestration/meta_orchestration.py`
+    - Meta bekommt jetzt eine strukturierte `preference_memory_selection`
+    - gespeicherte Praeferenzen bleiben weiterhin vor heuristischen Hooks, tragen aber jetzt auch Ignore-/Conflict-Metadaten
+  - `server/mcp_server.py`
+    - neue Beobachtungsereignisse:
+      - `preference_scope_selected`
+      - `preference_ignored_low_stability`
+      - `preference_conflict_resolved`
+
+- Neue Regressionen:
+  - `tests/test_preference_instruction_memory.py`
+    - schwache globale Praeferenz wird bis zur Bestaetigung ignoriert
+    - Konfliktauflosung bevorzugt den engeren Scope
+  - `tests/test_android_chat_language.py`
+    - Observation-Pfad emittiert die neuen D0.5-Ereignisse
+
+- Verifikation:
+  - fokussierte D0.5-Abschlusssuite gruen (`81 passed`)
+  - breiter D0-/Meta-/Handoff-Block erneut gruen (`108 passed`)

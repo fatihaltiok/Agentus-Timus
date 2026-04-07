@@ -589,6 +589,76 @@ def test_record_meta_turn_understanding_observations_emits_topic_shift_and_state
     assert any(event_type == "conversation_state_updated" for event_type, _ in captured)
 
 
+def test_record_meta_turn_understanding_observations_emits_preference_selection_events(monkeypatch):
+    captured: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        mcp_server,
+        "_record_chat_observation",
+        lambda event_type, payload: captured.append((event_type, payload)),
+    )
+
+    mcp_server._record_meta_turn_understanding_observations(
+        request_id="req_pref_sel",
+        session_id="sess_pref_sel",
+        classification={
+            "dominant_turn_type": "followup",
+            "response_mode": "resume_open_loop",
+            "reason": "simple_live_lookup",
+            "turn_understanding": {
+                "turn_signals": ["followup"],
+                "route_bias": "follow_existing_lane",
+                "confidence": 0.74,
+                "state_effects": {},
+            },
+            "preference_memory_selection": {
+                "selected_details": [
+                    {
+                        "scope": "topic",
+                        "family": "source_policy",
+                        "stability": 0.82,
+                        "evidence_count": 1,
+                        "rendered": "stored_preference:topic[news] => bei news bitte zuerst agenturquellen",
+                    }
+                ],
+                "ignored_low_stability": [
+                    {
+                        "scope": "global",
+                        "family": "response_style",
+                        "reason": "global_requires_repeat_or_explicit",
+                        "stability": 0.78,
+                        "evidence_count": 1,
+                        "rendered": "stored_preference:global => antworte kurz und praezise",
+                    }
+                ],
+                "conflicts_resolved": [
+                    {
+                        "family": "response_style",
+                        "kept_scope": "session",
+                        "discarded_scope": "global",
+                        "reason": "narrower_scope_wins",
+                        "kept_rendered": "stored_preference:session => fuer diesen chat antworte ausfuehrlich",
+                        "discarded_rendered": "stored_preference:global => antworte kurz und praezise",
+                    }
+                ],
+            },
+            "meta_context_bundle": {
+                "bundle_reason": "meta_context_rehydration",
+                "context_slots": [
+                    {"slot": "current_query", "priority": 1, "content": "und was gibt es bei news zur weltlage", "source": "current_user_query"},
+                    {"slot": "preference_memory", "priority": 8, "content": "stored_preference:topic[news] => bei news bitte zuerst agenturquellen", "source": "preference_memory"},
+                ],
+                "suppressed_context": [],
+                "confidence": 0.74,
+            },
+        },
+    )
+
+    event_types = [event_type for event_type, _ in captured]
+    assert "preference_scope_selected" in event_types
+    assert "preference_ignored_low_stability" in event_types
+    assert "preference_conflict_resolved" in event_types
+
+
 async def test_canvas_chat_routes_topic_followup_to_executor(monkeypatch, tmp_path):
     captured = {"decision_queries": [], "run_queries": []}
     mcp_server._chat_history.clear()
@@ -977,6 +1047,125 @@ async def test_canvas_chat_persists_meta_turn_understanding_to_conversation_stat
     assert "context_rehydration_bundle_built" in event_types
     assert "topic_memory_attached" in event_types
     assert "preference_memory_attached" in event_types
+
+
+async def test_canvas_chat_captures_and_reapplies_stored_preference_memory(monkeypatch, tmp_path):
+    captured = {"events": []}
+    mcp_server._chat_history.clear()
+    monkeypatch.setenv("TIMUS_SESSION_STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setattr(mcp_server, "_semantic_store_chat_turn", lambda **kwargs: None)
+    monkeypatch.setattr(mcp_server, "_semantic_recall_chat_turns", lambda **kwargs: [])
+    monkeypatch.setattr(
+        mcp_server,
+        "_record_chat_observation",
+        lambda event_type, payload: captured["events"].append((event_type, payload)),
+    )
+
+    class _FakeMemoryItem:
+        def __init__(
+            self,
+            *,
+            category,
+            key,
+            value,
+            importance=0.0,
+            confidence=0.0,
+            reason="",
+            source="",
+        ):
+            self.category = category
+            self.key = key
+            self.value = value
+            self.importance = importance
+            self.confidence = confidence
+            self.reason = reason
+            self.source = source
+
+    class _FakePersistentMemory:
+        def __init__(self):
+            self._items = {"preference_memory": [], "user_profile": []}
+
+        def get_memory_items(self, category):
+            return list(self._items.get(category, []))
+
+    class _FakeMemoryManager:
+        def __init__(self):
+            self.persistent = _FakePersistentMemory()
+
+        def store_with_embedding(self, item):
+            bucket = self.persistent._items.setdefault(item.category, [])
+            bucket = [existing for existing in bucket if getattr(existing, "key", None) != item.key]
+            bucket.append(item)
+            self.persistent._items[item.category] = bucket
+            return True
+
+        def find_related_memories(self, query, n_results=6):
+            return []
+
+        def get_behavior_hooks(self):
+            return []
+
+        def get_self_model_prompt(self):
+            return ""
+
+    fake_memory_manager = _FakeMemoryManager()
+    monkeypatch.setitem(
+        sys.modules,
+        "memory.memory_system",
+        SimpleNamespace(memory_manager=fake_memory_manager, MemoryItem=_FakeMemoryItem),
+    )
+
+    async def fake_build_tools_description():
+        return "tools"
+
+    async def fake_get_agent_decision(query, session_id=None, request_id=None):
+        return "meta"
+
+    async def fake_run_agent(agent_name, query, tools_description, session_id=None):
+        if "agenturquellen" in query.lower():
+            return "Verstanden. Ich priorisiere bei News kuenftig Agenturquellen."
+        return "Hier ist der News-Stand mit priorisierten Agenturquellen."
+
+    fake_dispatcher = SimpleNamespace(
+        get_agent_decision=fake_get_agent_decision,
+        run_agent=fake_run_agent,
+    )
+
+    monkeypatch.setattr(mcp_server, "_build_tools_description", fake_build_tools_description)
+    monkeypatch.setitem(sys.modules, "main_dispatcher", fake_dispatcher)
+
+    first = await mcp_server.canvas_chat(
+        _FakeRequest(
+            {
+                "query": "bei news bitte zuerst agenturquellen",
+                "session_id": "pref_memory_lane",
+            }
+        )
+    )
+    second = await mcp_server.canvas_chat(
+        _FakeRequest(
+            {
+                "query": "und was gibt es bei news zur weltlage",
+                "session_id": "pref_memory_lane",
+            }
+        )
+    )
+
+    assert first["status"] == "success"
+    assert second["status"] == "success"
+    stored_preferences = fake_memory_manager.persistent.get_memory_items("preference_memory")
+    assert stored_preferences
+    assert stored_preferences[0].value["scope"] == "topic"
+    assert stored_preferences[0].value["topic_anchor"] == "news"
+
+    event_types = [event_type for event_type, _ in captured["events"]]
+    assert "preference_captured" in event_types
+    assert "preference_applied" in event_types
+    applied_payloads = [
+        payload for event_type, payload in captured["events"] if event_type == "preference_applied"
+    ]
+    assert applied_payloads
+    assert "stored_preference:topic[news]" in applied_payloads[-1]["content_preview"].lower()
 
 
 async def test_canvas_chat_emits_context_slot_selection_and_suppression_events(monkeypatch, tmp_path):

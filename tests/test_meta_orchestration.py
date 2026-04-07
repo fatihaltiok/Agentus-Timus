@@ -747,7 +747,7 @@ def test_classify_meta_task_builds_meta_context_bundle_with_state_priority_and_s
     assert result["active_topic"] == "Weltlage und News-Qualitaet"
     assert result["open_goal"] == "Echtzeit-Agenturmeldungen priorisieren"
     assert bundle["active_topic"] == "Weltlage und News-Qualitaet"
-    assert bundle["open_loop"] == "Reuters und AP priorisieren"
+    assert bundle["open_loop"] == "Praeferenz bestaetigen"
     assert slot_types[:4] == [
         "current_query",
         "conversation_state",
@@ -781,6 +781,39 @@ def test_classify_meta_task_normalizes_semantic_recall_into_bundle_slot():
 
 
 def test_classify_meta_task_loads_topic_and_preference_memory_from_memory_system(monkeypatch):
+    def _get_memory_items(category):
+        if category == "preference_memory":
+            return [
+                SimpleNamespace(
+                    key="topic::news::agency",
+                    value={
+                        "scope": "topic",
+                        "instruction": "bei news bitte zuerst agenturquellen",
+                        "topic_anchor": "news",
+                        "session_id": "default",
+                        "stability": 0.91,
+                        "evidence_count": 2,
+                    },
+                ),
+                SimpleNamespace(
+                    key="global::weak",
+                    value={
+                        "scope": "global",
+                        "instruction": "sei nett",
+                        "topic_anchor": "",
+                        "session_id": "default",
+                        "stability": 0.4,
+                        "evidence_count": 1,
+                    },
+                ),
+            ]
+        if category == "user_profile":
+            return [
+                SimpleNamespace(key="preference", value="Fakten und Quellen zuerst"),
+                SimpleNamespace(key="preference", value="Ich trinke gerne Tee"),
+            ]
+        return []
+
     fake_memory_manager = SimpleNamespace(
         find_related_memories=lambda query, n_results=6: [
             {
@@ -799,14 +832,7 @@ def test_classify_meta_task_loads_topic_and_preference_memory_from_memory_system
             "Antworten kurz und präzise.",
         ],
         get_self_model_prompt=lambda: "Präferenzen: Wichtige Aussagen mit Quellen belegen.\nZiele: Belastbare News zuerst.",
-        persistent=SimpleNamespace(
-            get_memory_items=lambda category: [
-                SimpleNamespace(key="preference", value="Fakten und Quellen zuerst"),
-                SimpleNamespace(key="preference", value="Ich trinke gerne Tee"),
-            ]
-            if category == "user_profile"
-            else []
-        ),
+        persistent=SimpleNamespace(get_memory_items=_get_memory_items),
     )
     monkeypatch.setitem(
         sys.modules,
@@ -826,6 +852,7 @@ def test_classify_meta_task_loads_topic_and_preference_memory_from_memory_system
     assert topic_slots
     assert "news_archive => Reuters meldete neue Entwicklungen" in topic_slots[0]["content"]
     assert preference_slots
+    assert any(slot["content"].startswith("stored_preference:topic[news]") for slot in preference_slots)
     assert any(
         any(token in slot["content"].lower() for token in ("quellen", "news zuerst", "fakten"))
         for slot in preference_slots

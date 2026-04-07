@@ -18,6 +18,7 @@ import mimetypes
 import copy
 from collections import deque
 from datetime import datetime
+from typing import Any, Mapping
 from urllib.parse import urlencode
 import requests
 
@@ -122,6 +123,7 @@ from orchestration.conversation_state import (
     touch_conversation_state,
 )
 from orchestration.meta_context_eval import detect_context_misread_risk
+from orchestration.preference_instruction_memory import capture_preference_memory
 from orchestration.longrunner_transport import (
     bind_longrun_context,
     get_current_run_id,
@@ -1192,6 +1194,47 @@ def _persist_meta_turn_understanding(
     return updated_state
 
 
+def _capture_meta_preference_memory(
+    *,
+    request_id: str,
+    session_id: str,
+    classification: dict,
+    updated_state: Mapping[str, Any] | None,
+    updated_at: str,
+) -> dict | None:
+    if not session_id or not isinstance(classification, dict):
+        return None
+    try:
+        from memory.memory_system import memory_manager
+    except Exception:
+        return None
+
+    captured = capture_preference_memory(
+        effective_query=str(classification.get("effective_query") or ""),
+        session_id=session_id,
+        updated_state=updated_state,
+        dominant_turn_type=str(classification.get("dominant_turn_type") or ""),
+        response_mode=str(classification.get("response_mode") or ""),
+        memory_manager=memory_manager,
+        updated_at=updated_at,
+    )
+    if captured:
+        _record_chat_observation(
+            "preference_captured",
+            {
+                "request_id": request_id,
+                "session_id": session_id,
+                "source": "canvas_chat",
+                "scope": str(captured.get("scope") or ""),
+                "instruction": str(captured.get("instruction") or "")[:180],
+                "topic_anchor": str(captured.get("topic_anchor") or "")[:120],
+                "stability": float(captured.get("stability") or 0.0),
+                "evidence_count": int(captured.get("evidence_count") or 1),
+            },
+        )
+    return captured
+
+
 def _record_meta_turn_understanding_observations(
     *,
     request_id: str,
@@ -1204,6 +1247,7 @@ def _record_meta_turn_understanding_observations(
     response_mode = str(classification.get("response_mode") or "")
     state_effects = dict(turn_understanding.get("state_effects") or classification.get("state_effects") or {})
     meta_context_bundle = dict(classification.get("meta_context_bundle") or {})
+    preference_selection = dict(classification.get("preference_memory_selection") or {})
     context_slots = meta_context_bundle.get("context_slots") or []
     slot_types: list[str] = []
     for item in context_slots:
@@ -1326,8 +1370,77 @@ def _record_meta_turn_understanding_observations(
                 "source": "canvas_chat",
                 "dominant_turn_type": dominant_turn_type,
                 "slot_count": slot_types.count("preference_memory"),
-            },
-        )
+                },
+            )
+        for item in preference_selection.get("selected_details") or []:
+            if not isinstance(item, dict):
+                continue
+            _record_chat_observation(
+                "preference_scope_selected",
+                {
+                    "request_id": request_id,
+                    "session_id": session_id,
+                    "source": "canvas_chat",
+                    "scope": str(item.get("scope") or ""),
+                    "family": str(item.get("family") or ""),
+                    "stability": float(item.get("stability") or 0.0),
+                    "evidence_count": int(item.get("evidence_count") or 1),
+                    "content_preview": str(item.get("rendered") or "")[:180],
+                },
+            )
+        for item in preference_selection.get("ignored_low_stability") or []:
+            if not isinstance(item, dict):
+                continue
+            _record_chat_observation(
+                "preference_ignored_low_stability",
+                {
+                    "request_id": request_id,
+                    "session_id": session_id,
+                    "source": "canvas_chat",
+                    "scope": str(item.get("scope") or ""),
+                    "family": str(item.get("family") or ""),
+                    "reason": str(item.get("reason") or ""),
+                    "stability": float(item.get("stability") or 0.0),
+                    "evidence_count": int(item.get("evidence_count") or 1),
+                    "content_preview": str(item.get("rendered") or "")[:180],
+                },
+            )
+        for item in preference_selection.get("conflicts_resolved") or []:
+            if not isinstance(item, dict):
+                continue
+            _record_chat_observation(
+                "preference_conflict_resolved",
+                {
+                    "request_id": request_id,
+                    "session_id": session_id,
+                    "source": "canvas_chat",
+                    "family": str(item.get("family") or ""),
+                    "kept_scope": str(item.get("kept_scope") or ""),
+                    "discarded_scope": str(item.get("discarded_scope") or ""),
+                    "reason": str(item.get("reason") or ""),
+                    "kept_preview": str(item.get("kept_rendered") or "")[:180],
+                    "discarded_preview": str(item.get("discarded_rendered") or "")[:180],
+                },
+            )
+        stored_preference_slots = [
+            item
+            for item in context_slots
+            if isinstance(item, dict)
+            and str(item.get("slot") or "") == "preference_memory"
+            and str(item.get("content") or "").startswith("stored_preference:")
+        ]
+        if stored_preference_slots:
+            _record_chat_observation(
+                "preference_applied",
+                {
+                    "request_id": request_id,
+                    "session_id": session_id,
+                    "source": "canvas_chat",
+                    "dominant_turn_type": dominant_turn_type,
+                    "slot_count": len(stored_preference_slots),
+                    "content_preview": str(stored_preference_slots[0].get("content") or "")[:180],
+                },
+            )
     risk = detect_context_misread_risk(
         meta_context_bundle,
         dominant_turn_type=dominant_turn_type,
@@ -3847,6 +3960,13 @@ async def canvas_chat(request: Request):
                         updated_state = _persist_meta_turn_understanding(
                             session_id=session_id,
                             classification=meta_classification,
+                            updated_at=ts,
+                        )
+                        _capture_meta_preference_memory(
+                            request_id=request_id,
+                            session_id=session_id,
+                            classification=meta_classification,
+                            updated_state=updated_state,
                             updated_at=ts,
                         )
                         _record_meta_turn_understanding_observations(

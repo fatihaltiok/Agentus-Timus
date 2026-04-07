@@ -304,6 +304,26 @@ Ziel:
 
 - spontane Anweisungen werden nicht nur lokal beantwortet, sondern als Arbeitsweise konserviert
 
+Stand 2026-04-07:
+
+- erster Runtime-Slice umgesetzt
+- persistierte `preference_memory`-Eintraege mit Scopes:
+  - `global`
+  - `topic`
+  - `session`
+- Capture erfolgt nur fuer echte Verhaltens-/Praeferenzturns mit `acknowledge_and_store`
+- Rehydration bevorzugt gespeicherte `stored_preference`-Eintraege vor heuristischen Hooks
+- Beobachtbarkeit:
+  - `preference_captured`
+  - `preference_applied`
+- Abschluss-Haertung:
+  - globale Praeferenzen werden konservativer wiederverwendet
+  - Konflikte zwischen `session` / `topic` / `global` werden aufgeloest
+  - neue Beobachtbarkeit fuer:
+    - `preference_scope_selected`
+    - `preference_ignored_low_stability`
+    - `preference_conflict_resolved`
+
 Lieferobjekte:
 
 - topic-gebundene Praeferenzspeicherung
