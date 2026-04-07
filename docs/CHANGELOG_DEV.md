@@ -3856,3 +3856,109 @@ Der erste D0.5-Slice war funktionsfaehig, aber noch nicht hart genug abgeschloss
 - Verifikation:
   - fokussierte D0.5-Abschlusssuite gruen (`81 passed`)
   - breiter D0-/Meta-/Handoff-Block erneut gruen (`108 passed`)
+
+## Nachtrag 2026-04-07 16:05 CEST - D0.6 Meta-Policy fuer Antwortmodus vorbereitet
+
+Nach D0.5 ist der naechste sinnvolle Block nicht sofort neue Memory-Logik, sondern eine echte Policy-Schicht fuer `response_mode`. Der Vorbereitungsblock fuer D0.6 ist jetzt angelegt und am Ist-Stand von Timus ausgerichtet.
+
+- Neu:
+  - [D0_6_META_POLICY_PREP.md](/home/fatih-ubuntu/dev/timus/docs/D0_6_META_POLICY_PREP.md)
+
+- Inhalt:
+  - aktueller Ist-Stand:
+    - `response_mode` wird heute noch weitgehend in `turn_understanding.py` aus `dominant_turn_type` und wenigen Signalen abgeleitet
+  - Zielvertrag fuer:
+    - `MetaPolicyInput`
+    - `MetaPolicyDecision`
+    - eigenstaendige `response_mode`-Policy
+  - geplante Startmodi:
+    - `execute`
+    - `acknowledge_and_store`
+    - `clarify_before_execute`
+    - `correct_previous_path`
+    - `resume_open_loop`
+    - `summarize_state`
+  - Integrationspunkte:
+    - `turn_understanding.py`
+    - `meta_orchestration.py`
+    - `mcp_server.py`
+  - D0.6a-Grenze:
+    - Selbstmodell-Grenzen von `meta` werden als eigener Unterblock sauber mitgefuehrt
+
+- Status:
+  - vorbereitet
+  - noch keine Laufzeitlogik fuer D0.6 veraendert
+
+## Nachtrag 2026-04-07 - D0.6 erster Runtime-Slice gestartet
+
+Der erste echte D0.6-Laufzeitblock ist jetzt drin. Ziel war nicht sofort die komplette Antwortmodus-Policy, sondern ein belastbarer Einstieg, der drei Dinge sauber trennt:
+
+- breite `action hints`
+- eigentliche Task-Tiefe
+- Antwortmodus von `meta`
+
+Neu:
+
+- [meta_response_policy.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_response_policy.py)
+  - neues Policy-Modul mit:
+    - `MetaPolicyInput`
+    - `MetaPolicyDecision`
+    - `build_meta_policy_input(...)`
+    - `resolve_meta_response_policy(...)`
+
+Runtime-Wirkung:
+
+- `meta_orchestration.py`
+  - haengt jetzt eine explizite Policy-Entscheidung ueber den Turn-Understanding-Basismodus
+  - Override-Faelle koennen `response_mode`, Agentenkette und Task-Typ konservativ auf `meta`/`single_lane` zurueckziehen
+- `main_dispatcher.py`
+  - traegt `response_mode` und `meta_policy_decision` im Meta-Handoff mit
+- `agent/agents/meta.py`
+  - kann `meta_policy_decision_json` jetzt direkt aus dem strukturierten Handoff lesen
+- `server/mcp_server.py`
+  - emittiert jetzt:
+    - `meta_policy_mode_selected`
+    - `meta_policy_override_applied`
+
+Inhaltlich umgesetzt:
+
+- echte Statusfragen wie `wo stehen wir gerade`
+  - werden auf `summarize_state` gezogen
+  - ohne Lookup-Rezept
+- kontextschwache, handlungsorientierte leichte Follow-ups
+  - werden auf `clarify_before_execute` gezogen
+  - statt blindem Fortsetzen
+- einfache Suche bleibt leichtgewichtig
+  - breite Action-Hints fuehren nicht automatisch zu Deep Research
+  - `simple_live_lookup` bleibt `simple_live_lookup`, solange die Lage klar genug ist
+- explizite Spezialanfragen bleiben ausfuehrbar
+  - z. B. `pruefe bitte den systemstatus und die logs`
+  - werden durch den Low-Confidence-Guard nicht pauschal auf `single_lane` zurückgedrueckt
+
+Neue Regressionen:
+
+- [test_meta_response_policy.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_response_policy.py)
+  - Statusfrage -> `summarize_state`
+  - breite Action-Hints bei duennem Kontext -> `clarify_before_execute`
+  - einfache Live-Suche bleibt `execute`
+  - explizite Systemdiagnose bleibt `execute`
+- [test_meta_orchestration.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_orchestration.py)
+  - Policy-Override im echten Meta-Klassifikationspfad
+- [test_android_chat_language.py](/home/fatih-ubuntu/dev/timus/tests/test_android_chat_language.py)
+  - D0.6-Observation-Events
+- [test_orchestration_policy.py](/home/fatih-ubuntu/dev/timus/tests/test_orchestration_policy.py)
+  - `response_mode`/`meta_policy_decision` im Orchestrierungs-Passthrough
+- [test_meta_handoff.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_handoff.py)
+  - `meta_policy_decision_json` im Handoff
+
+Verifikation:
+
+- `python -m py_compile ...` gruen
+- fokussierte D0.6-/Meta-/Handoff-/Observability-Suite gruen (`111 passed`)
+
+Status:
+
+- D0.6 gestartet
+- erster Runtime-Slice sauber integriert
+- D0.6 noch nicht abgeschlossen
+- D0.6a weiter bewusst offen

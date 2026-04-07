@@ -1248,6 +1248,8 @@ def _record_meta_turn_understanding_observations(
     state_effects = dict(turn_understanding.get("state_effects") or classification.get("state_effects") or {})
     meta_context_bundle = dict(classification.get("meta_context_bundle") or {})
     preference_selection = dict(classification.get("preference_memory_selection") or {})
+    meta_policy_decision = dict(classification.get("meta_policy_decision") or {})
+    baseline_response_mode = str(turn_understanding.get("response_mode") or "")
     context_slots = meta_context_bundle.get("context_slots") or []
     slot_types: list[str] = []
     for item in context_slots:
@@ -1281,6 +1283,39 @@ def _record_meta_turn_understanding_observations(
             "reason": str(classification.get("reason") or ""),
         },
     )
+    if meta_policy_decision:
+        _record_chat_observation(
+            "meta_policy_mode_selected",
+            {
+                "request_id": request_id,
+                "session_id": session_id,
+                "source": "canvas_chat",
+                "response_mode": str(meta_policy_decision.get("response_mode") or response_mode),
+                "policy_reason": str(meta_policy_decision.get("policy_reason") or ""),
+                "policy_confidence": float(meta_policy_decision.get("policy_confidence") or 0.0),
+                "answer_shape": str(meta_policy_decision.get("answer_shape") or ""),
+                "should_delegate": bool(meta_policy_decision.get("should_delegate")),
+                "should_store_preference": bool(meta_policy_decision.get("should_store_preference")),
+                "should_resume_open_loop": bool(meta_policy_decision.get("should_resume_open_loop")),
+                "should_summarize_state": bool(meta_policy_decision.get("should_summarize_state")),
+                "override_applied": bool(meta_policy_decision.get("override_applied")),
+                "policy_signals": list(meta_policy_decision.get("policy_signals") or []),
+            },
+        )
+        if bool(meta_policy_decision.get("override_applied")):
+            _record_chat_observation(
+                "meta_policy_override_applied",
+                {
+                    "request_id": request_id,
+                    "session_id": session_id,
+                    "source": "canvas_chat",
+                    "baseline_response_mode": baseline_response_mode,
+                    "final_response_mode": str(meta_policy_decision.get("response_mode") or response_mode),
+                    "policy_reason": str(meta_policy_decision.get("policy_reason") or ""),
+                    "task_type_override": str(meta_policy_decision.get("task_type_override") or ""),
+                    "agent_chain_override": list(meta_policy_decision.get("agent_chain_override") or []),
+                },
+            )
     _record_chat_observation(
         "conversation_state_effects_derived",
         {

@@ -194,6 +194,52 @@ def test_classify_meta_task_routes_simple_live_science_lookup_to_meta_executor()
     assert result["recommended_agent_chain"] == ["meta", "executor"]
     assert result["recommended_recipe_id"] == "simple_live_lookup"
     assert [stage["stage_id"] for stage in result["recipe_stages"]] == ["live_lookup_scan"]
+    assert result["response_mode"] == "execute"
+    assert result["meta_policy_decision"]["override_applied"] is False
+
+
+def test_classify_meta_task_uses_state_summary_policy_for_status_question():
+    result = classify_meta_task(
+        "wo stehen wir gerade",
+        action_count=0,
+        conversation_state={
+            "session_id": "canvas_d06_summary",
+            "active_topic": "D0.6 Meta-Policy",
+            "active_goal": "Antwortmodus sauber vom Turn-Typ trennen",
+            "open_loop": "Naechsten Runtime-Slice und Tests fertigziehen",
+            "next_expected_step": "Policy-Events und Handoff final verdrahten",
+        },
+    )
+
+    assert result["task_type"] == "single_lane"
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["recommended_recipe_id"] is None
+    assert result["response_mode"] == "summarize_state"
+    assert result["reason"] == "meta_policy:state_summary_request"
+    assert result["meta_policy_decision"]["override_applied"] is True
+    assert result["meta_policy_decision"]["should_summarize_state"] is True
+
+
+def test_classify_meta_task_clarifies_low_confidence_action_followup_before_execution():
+    result = classify_meta_task(
+        "# FOLLOW-UP CONTEXT\n"
+        "last_agent: meta\n"
+        "session_id: canvas_d06_clarify\n"
+        "last_assistant: Soll ich mit dem ersten Schritt anfangen?\n"
+        "recent_assistant_replies: Soll ich mit dem ersten Schritt anfangen?\n"
+        "\n"
+        "# CURRENT USER QUERY\n"
+        "ok fang an und such aktuelle live-news",
+        action_count=0,
+    )
+
+    assert result["task_type"] == "single_lane"
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["recommended_recipe_id"] is None
+    assert result["response_mode"] == "clarify_before_execute"
+    assert result["reason"].startswith("meta_policy:")
+    assert result["meta_policy_decision"]["override_applied"] is True
+    assert result["meta_policy_decision"]["should_delegate"] is False
 
 
 def test_classify_meta_task_routes_future_behavior_alignment_turn_to_meta_review():

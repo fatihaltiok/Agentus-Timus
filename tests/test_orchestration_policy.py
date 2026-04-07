@@ -185,6 +185,8 @@ def test_evaluate_query_orchestration_routes_simple_live_lookup_to_meta_executor
     assert any(item["name"] == "fetch_url" for item in decision["tool_affordances"])
     assert decision["goal_spec"]["freshness"] == "live"
     assert decision["adaptive_plan"]["recommended_chain"] == ["meta", "executor"]
+    assert decision["response_mode"] == "execute"
+    assert decision["meta_policy_decision"]["override_applied"] is False
 
 
 def test_evaluate_query_orchestration_exposes_advisory_plan_for_live_lookup_document():

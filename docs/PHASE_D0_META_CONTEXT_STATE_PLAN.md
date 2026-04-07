@@ -348,6 +348,23 @@ Ziel:
 
 - `meta` entscheidet nicht nur den Agentenpfad, sondern auch den Antwortmodus
 
+Stand 2026-04-07:
+
+- gestartet, erster Runtime-Slice umgesetzt
+- eigener Vorbereitungsblock liegt in:
+  - [D0_6_META_POLICY_PREP.md](/home/fatih-ubuntu/dev/timus/docs/D0_6_META_POLICY_PREP.md)
+- aktueller Ist-Stand:
+  - `response_mode` startet weiter in `turn_understanding.py`
+  - D0.6 zieht darueber jetzt bereits eine eigenstaendige Policy-Schicht fuer erste Override-Faelle
+  - umgesetzt:
+    - Statusfragen -> `summarize_state`
+    - kontextschwache handlungsorientierte leichte Follow-ups -> `clarify_before_execute`
+    - `meta_policy_decision` in Klassifikation, Handoff und Observability
+  - bewusst noch offen:
+    - Self-Model-Bounds aus D0.6a
+    - weitere Antwortform-Policies
+    - groessere Live-Eval-Schicht
+
 Startmodi:
 
 - `execute`

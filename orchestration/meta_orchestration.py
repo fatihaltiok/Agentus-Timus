@@ -16,6 +16,7 @@ from orchestration.diagnosis_records import (
     select_lead_diagnosis,
 )
 from orchestration.preference_instruction_memory import select_stored_preference_memory_with_summary
+from orchestration.meta_response_policy import build_meta_policy_input, resolve_meta_response_policy
 from orchestration.goal_spec import derive_goal_spec
 from orchestration.root_cause_tasks import build_root_cause_task_payload
 from orchestration.turn_understanding import (
@@ -2684,14 +2685,46 @@ def classify_meta_task(
         if agent not in deduped_chain:
             deduped_chain.append(agent)
 
+    policy_input = build_meta_policy_input(
+        effective_query=effective_query,
+        dominant_turn_type=turn_interpretation.dominant_turn_type,
+        baseline_response_mode=turn_interpretation.response_mode,
+        task_type=task_type,
+        active_topic=active_topic,
+        open_goal=str(open_goal or ""),
+        next_step=str(next_step or ""),
+        recommended_agent_chain=tuple(deduped_chain),
+        meta_context_bundle=meta_context_bundle.to_dict(),
+        preference_memory_selection=preference_memory_selection,
+        topic_state_transition=topic_transition.to_dict(),
+    )
+    policy_decision = resolve_meta_response_policy(policy_input)
+    final_task_type = task_type
+    final_reason = reason
+    final_chain = list(deduped_chain)
+    final_response_mode = turn_interpretation.response_mode
+    if policy_decision.override_applied:
+        final_response_mode = policy_decision.response_mode
+        final_reason = f"meta_policy:{policy_decision.policy_reason}"
+        if policy_decision.task_type_override:
+            final_task_type = policy_decision.task_type_override
+        if policy_decision.agent_chain_override:
+            final_chain = list(policy_decision.agent_chain_override)
+    if not final_chain:
+        final_chain = ["meta"]
+
     prefer_youtube_research_only = (
-        task_type == "youtube_content_extraction"
+        final_task_type == "youtube_content_extraction"
         and has_direct_youtube_url
         and has_youtube_fact_check
         and not has_browser
     )
-    recipe = resolve_orchestration_recipe(task_type, site_kind)
-    alternatives = resolve_orchestration_alternative_recipes(task_type, site_kind)
+    recipe = resolve_orchestration_recipe(final_task_type, site_kind) if policy_decision.recipe_enabled else None
+    alternatives = (
+        resolve_orchestration_alternative_recipes(final_task_type, site_kind)
+        if policy_decision.recipe_enabled
+        else []
+    )
     if prefer_youtube_research_only:
         preferred_recipe = _build_recipe_payload("youtube_research_only")
         if preferred_recipe:
@@ -2702,13 +2735,13 @@ def classify_meta_task(
                 if payload and payload["recipe_id"] != preferred_recipe["recipe_id"]:
                     alternatives.append(payload)
     classification = {
-        "task_type": task_type,
+        "task_type": final_task_type,
         "site_kind": site_kind,
         "required_capabilities": sorted(set(required_capabilities)),
-        "recommended_entry_agent": deduped_chain[0],
-        "recommended_agent_chain": deduped_chain,
-        "needs_structured_handoff": len(deduped_chain) > 1,
-        "reason": reason,
+        "recommended_entry_agent": final_chain[0],
+        "recommended_agent_chain": final_chain,
+        "needs_structured_handoff": len(final_chain) > 1,
+        "reason": final_reason,
         "recommended_recipe_id": None if not recipe else recipe["recipe_id"],
         "recipe_stages": [] if not recipe else recipe["recipe_stages"],
         "recipe_recoveries": [] if not recipe else recipe.get("recipe_recoveries", []),
@@ -2724,9 +2757,10 @@ def classify_meta_task(
         "compressed_followup_parsed": compressed_followup_parsed,
         "dominant_turn_type": turn_interpretation.dominant_turn_type,
         "turn_signals": list(turn_interpretation.turn_signals),
-        "response_mode": turn_interpretation.response_mode,
+        "response_mode": final_response_mode,
         "state_effects": turn_interpretation.state_effects.to_dict(),
         "turn_understanding": turn_interpretation.to_dict(),
+        "meta_policy_decision": policy_decision.to_dict(),
         "topic_shift_detected": topic_transition.topic_shift_detected,
         "topic_state_transition": topic_transition.to_dict(),
         "meta_context_bundle": meta_context_bundle.to_dict(),
@@ -2741,7 +2775,7 @@ def classify_meta_task(
     capability_graph = build_capability_graph(
         goal_spec,
         get_agent_capability_map(),
-        current_chain=deduped_chain,
+        current_chain=final_chain,
         required_capabilities=classification["required_capabilities"],
     )
     learned_chain_stats: List[Dict[str, Any]] = []

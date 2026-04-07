@@ -219,6 +219,8 @@ def evaluate_query_orchestration(query: str) -> Dict[str, Any]:
         ),
         "needs_structured_handoff": bool(route_to_meta or meta_task["needs_structured_handoff"]),
         "meta_classification_reason": meta_task["reason"],
+        "response_mode": meta_task.get("response_mode"),
+        "meta_policy_decision": dict(meta_task.get("meta_policy_decision") or {}),
         "recommended_recipe_id": meta_task.get("recommended_recipe_id"),
         "recipe_stages": list(meta_task.get("recipe_stages") or []),
         "recipe_recoveries": list(meta_task.get("recipe_recoveries") or []),

@@ -108,6 +108,7 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert "task_profile_json:" in result
     assert "selected_strategy_json:" in result
     assert "meta_self_state_json:" in result
+    assert "meta_policy_decision_json:" in result
     assert "alternative_recipes_json:" in result
     assert "recipe_stages:" in result
     assert "- visual_access: visual" in result
@@ -333,6 +334,7 @@ def test_build_meta_handoff_payload_exposes_learning_snapshot(monkeypatch):
     assert "site_recipe_feedback_score: 0.78 (evidence=5)" in rendered
     assert "recommended_agent_chain_key: meta__visual__research__document" in rendered
     assert "meta_self_state_json:" in rendered
+    assert "meta_policy_decision_json:" in rendered
     assert "goal_spec_json:" in rendered
     assert "capability_graph_json:" in rendered
     assert "adaptive_plan_json:" in rendered

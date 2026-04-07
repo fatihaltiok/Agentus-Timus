@@ -2275,6 +2275,8 @@ def _build_meta_handoff_payload(query: str) -> dict:
         "recommended_agent_chain": list(policy.get("recommended_agent_chain") or ["meta"]),
         "needs_structured_handoff": bool(policy.get("needs_structured_handoff")),
         "reason": policy.get("meta_classification_reason") or policy.get("reason") or "unknown",
+        "response_mode": policy.get("response_mode", ""),
+        "meta_policy_decision": dict(policy.get("meta_policy_decision") or {}),
         "recommended_recipe_id": policy.get("recommended_recipe_id"),
         "recipe_stages": list(policy.get("recipe_stages") or []),
         "recipe_recoveries": list(policy.get("recipe_recoveries") or []),
@@ -2431,6 +2433,8 @@ def _render_meta_handoff_block(payload: dict) -> str:
         "needs_structured_handoff: "
         + ("yes" if payload.get("needs_structured_handoff") else "no")
     )
+    if payload.get("response_mode"):
+        lines.append(f"response_mode: {payload['response_mode']}")
     task_profile = payload.get("task_profile") or {}
     if task_profile.get("intent"):
         lines.append(f"task_profile_intent: {task_profile['intent']}")
@@ -2478,6 +2482,11 @@ def _render_meta_handoff_block(payload: dict) -> str:
         lines.append(
             "meta_context_bundle_json: "
             + json.dumps(payload["meta_context_bundle"], ensure_ascii=False, sort_keys=True)
+        )
+    if payload.get("meta_policy_decision"):
+        lines.append(
+            "meta_policy_decision_json: "
+            + json.dumps(payload["meta_policy_decision"], ensure_ascii=False, sort_keys=True)
         )
     if payload.get("goal_spec"):
         lines.append(

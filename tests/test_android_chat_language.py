@@ -536,6 +536,66 @@ def test_record_meta_turn_understanding_observations_emits_context_misread_suspe
     assert any("resume_mode_without_open_loop" in (payload.get("risk_reasons") or []) for payload in risk_payloads)
 
 
+def test_record_meta_turn_understanding_observations_emits_meta_policy_events(monkeypatch):
+    captured: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        mcp_server,
+        "_record_chat_observation",
+        lambda event_type, payload: captured.append((event_type, payload)),
+    )
+
+    mcp_server._record_meta_turn_understanding_observations(
+        request_id="req_meta_policy",
+        session_id="sess_meta_policy",
+        classification={
+            "dominant_turn_type": "followup",
+            "response_mode": "clarify_before_execute",
+            "reason": "meta_policy:open_loop_not_reliable",
+            "turn_understanding": {
+                "turn_signals": ["followup"],
+                "route_bias": "follow_existing_lane",
+                "confidence": 0.43,
+                "response_mode": "resume_open_loop",
+                "state_effects": {},
+            },
+            "meta_policy_decision": {
+                "response_mode": "clarify_before_execute",
+                "policy_reason": "open_loop_not_reliable",
+                "policy_confidence": 0.84,
+                "answer_shape": "question_first",
+                "should_delegate": False,
+                "should_store_preference": False,
+                "should_resume_open_loop": False,
+                "should_summarize_state": False,
+                "override_applied": True,
+                "agent_chain_override": ["meta"],
+                "task_type_override": "single_lane",
+                "policy_signals": ["open_loop_resume_requested", "resume_mode_without_open_loop"],
+            },
+            "meta_context_bundle": {
+                "bundle_reason": "meta_context_rehydration",
+                "context_slots": [
+                    {"slot": "current_query", "priority": 1, "content": "ok fang an", "source": "current_user_query"},
+                    {
+                        "slot": "assistant_fallback_context",
+                        "priority": 2,
+                        "content": "Soll ich mit dem ersten Schritt anfangen?",
+                        "source": "recent_assistant_replies",
+                    },
+                ],
+                "suppressed_context": [],
+                "confidence": 0.43,
+            },
+        },
+    )
+
+    event_types = [event_type for event_type, _ in captured]
+    assert "meta_policy_mode_selected" in event_types
+    assert "meta_policy_override_applied" in event_types
+    override_payloads = [payload for event_type, payload in captured if event_type == "meta_policy_override_applied"]
+    assert any(payload.get("baseline_response_mode") == "resume_open_loop" for payload in override_payloads)
+
+
 def test_record_meta_turn_understanding_observations_emits_topic_shift_and_state_update(monkeypatch):
     captured: list[tuple[str, dict]] = []
     monkeypatch.setattr(
