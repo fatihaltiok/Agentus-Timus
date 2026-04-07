@@ -865,6 +865,7 @@ def test_classify_meta_task_marks_topic_shift_for_new_unrelated_task():
     transition = result["topic_state_transition"]
     assert transition["previous_topic"] == "aktuelle Weltlage und News-Qualitaet"
     assert "browser automation" in transition["next_topic"].lower()
+    assert result["meta_context_bundle"]["open_loop"] == ""
 
 
 def test_classify_meta_task_resumes_open_loop_for_first_option_followup():

@@ -1875,6 +1875,7 @@ def _select_open_loop_payload(
     *,
     conversation_state: Mapping[str, Any],
     dialog_state: Mapping[str, Any],
+    effective_query: str,
     turn_type: str,
     response_mode: str,
 ) -> str:
@@ -1890,7 +1891,10 @@ def _select_open_loop_payload(
         return next_step or open_loop
     if response_mode in {"resume_open_loop", "acknowledge_and_store"}:
         return next_step or open_loop
-    return open_loop if len(open_loop.split()) <= 12 else next_step
+    selected = open_loop if len(open_loop.split()) <= 12 else next_step
+    if turn_type == "new_task" and selected and _meta_context_overlap_size(selected, effective_query) == 0:
+        return ""
+    return selected
 
 
 def _suppress_low_priority_context(
@@ -2064,6 +2068,7 @@ def build_meta_context_bundle(
     selected_open_loop = _select_open_loop_payload(
         conversation_state=merged_state,
         dialog_state=dialog,
+        effective_query=effective_query,
         turn_type=turn_type,
         response_mode=response_mode,
     )
@@ -2167,7 +2172,7 @@ def build_meta_context_bundle(
         bundle_reason="meta_context_rehydration",
         active_topic=_clean_meta_state_fragment(merged_state.get("active_topic"), max_chars=220),
         active_goal=_clean_meta_state_fragment(merged_state.get("active_goal"), max_chars=220),
-        open_loop=_clean_meta_state_fragment(merged_state.get("open_loop") or selected_open_loop, max_chars=220),
+        open_loop=_clean_meta_state_fragment(selected_open_loop, max_chars=220),
         next_expected_step=_clean_meta_state_fragment(merged_state.get("next_expected_step"), max_chars=220),
         turn_type=turn_type,
         response_mode=response_mode,

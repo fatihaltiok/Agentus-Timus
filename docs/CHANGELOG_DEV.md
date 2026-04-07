@@ -3769,3 +3769,21 @@ Die erste Live-Pruefung von D0.4 hat noch zwei Restkanten gezeigt:
   - erweiterter D0-/Meta-/Handoff-Block erneut gruen (`101 passed`)
   - `timus-mcp` und `timus-dispatcher` neu gestartet
   - Live-Observation fuer die Session `d03d04_live_final2_20260407` bestaetigt Reframe + Topic-Shift-Ende-zu-Ende
+
+## Nachtrag 2026-04-07 14:35 CEST - D0.4 Open-Loop-Hygiene bei neuen Tasks geschaerft
+
+Ein letzter Live-Nachlauf zeigte noch eine D0.4-Hygienekante: Bei einem klaren `new_task` konnte ein alter `pending_followup_prompt` noch als `open_loop` im Bundle auftauchen, obwohl er thematisch nicht mehr zum aktuellen Query passte.
+
+- Umsetzung:
+  - `orchestration/meta_orchestration.py`
+    - `_select_open_loop_payload(...)` beruecksichtigt jetzt auch den aktuellen Query
+    - bei `new_task` wird ein alter `open_loop` verworfen, wenn er keinerlei Themenueberlappung mehr mit dem aktuellen Query hat
+    - `MetaContextBundle.open_loop` nutzt jetzt nur noch den bereinigten `selected_open_loop`, nicht mehr den rohen State-Rest
+
+- Wirkung:
+  - bei harten Themenwechseln landet alter Follow-up-Muell nicht mehr als scheinbar aktiver Open-Loop im neuen Bundle
+  - `topic_shift_detected` und der persistierte neue `conversation_state` laufen damit sauberer zusammen
+
+- Verifikation:
+  - fokussierte Regression fuer den Topic-Shift-Bundle-Fall gruen (`1 passed`)
+  - `py_compile` fuer `orchestration/meta_orchestration.py` gruen
