@@ -386,6 +386,27 @@ Ziel:
 
 - `meta` soll seine aktuelle Faehigkeit, seine Grenzen und den Unterschied zwischen Zielbild und Ist-Zustand sauber benennen koennen
 
+Stand 2026-04-07:
+
+- abgeschlossen im eigenen Scope
+- Details in:
+  - [D0_6A_META_SELF_MODEL_PREP.md](/home/fatih-ubuntu/dev/timus/docs/D0_6A_META_SELF_MODEL_PREP.md)
+- bereits umgesetzt:
+  - `meta_self_state` traegt jetzt getrennt:
+    - `current_capabilities`
+    - `partial_capabilities`
+    - `planned_capabilities`
+    - `blocked_capabilities`
+    - `confidence_bounds`
+    - `autonomy_limits`
+  - der strukturierte Handoff zu `meta` enthaelt dieses erweiterte Selbstmodell bereits
+  - Dispatcher routet Selbstbildfragen jetzt an `meta`
+  - D0.6-Policy behandelt sie als `self_model_status_request`
+  - `meta_policy_self_model_bound_applied` macht den Bound sichtbar
+- spaeter moegliche Nacharbeiten:
+  - weitere Live-Evals
+  - Stil-Feinschliff bei Selbstbeschreibungen
+
 Warum das gebraucht wird:
 
 - sonst antwortet `meta` zu selbstsicher

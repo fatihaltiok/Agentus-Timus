@@ -6,22 +6,22 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
 
-def test_quick_intent_routes_self_status_to_executor():
+def test_quick_intent_routes_self_status_to_meta():
     import main_dispatcher
 
-    assert main_dispatcher.quick_intent_check("Was hast du fuer Probleme?") == "executor"
-    assert main_dispatcher.quick_intent_check("sag du es mir") == "executor"
-    assert main_dispatcher.quick_intent_check("und was kannst du dagegen tun") == "executor"
-    assert main_dispatcher.quick_intent_check("und was davon machst du zuerst") == "executor"
-    assert main_dispatcher.quick_intent_check("Hast du etwas zu korrigieren oder fixen?") == "executor"
+    assert main_dispatcher.quick_intent_check("Was hast du fuer Probleme?") == "meta"
+    assert main_dispatcher.quick_intent_check("sag du es mir") == "meta"
+    assert main_dispatcher.quick_intent_check("und was kannst du dagegen tun") == "meta"
+    assert main_dispatcher.quick_intent_check("und was davon machst du zuerst") == "meta"
+    assert main_dispatcher.quick_intent_check("Hast du etwas zu korrigieren oder fixen?") == "meta"
 
 
-def test_quick_intent_routes_colloquial_self_reflection_to_executor():
+def test_quick_intent_routes_colloquial_self_reflection_to_meta():
     import main_dispatcher
 
-    assert main_dispatcher.quick_intent_check("ok was stoert dich wie kann ich dir helfen") == "executor"
-    assert main_dispatcher.quick_intent_check("bist du anpassungsfaehig") == "executor"
-    assert main_dispatcher.quick_intent_check("bist du ein funktionierendes ki system ?") == "executor"
+    assert main_dispatcher.quick_intent_check("ok was stoert dich wie kann ich dir helfen") == "meta"
+    assert main_dispatcher.quick_intent_check("bist du anpassungsfaehig") == "meta"
+    assert main_dispatcher.quick_intent_check("bist du ein funktionierendes ki system ?") == "meta"
 
 
 def test_dispatcher_extracts_core_query_from_colloquial_shells():

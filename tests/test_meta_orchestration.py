@@ -220,6 +220,22 @@ def test_classify_meta_task_uses_state_summary_policy_for_status_question():
     assert result["meta_policy_decision"]["should_summarize_state"] is True
 
 
+def test_classify_meta_task_uses_self_model_status_policy_for_capability_question():
+    result = classify_meta_task(
+        "ist das geplant oder kannst du das jetzt schon",
+        action_count=0,
+    )
+
+    assert result["task_type"] == "single_lane"
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["recommended_recipe_id"] is None
+    assert result["response_mode"] == "summarize_state"
+    assert result["reason"] == "meta_policy:self_model_status_request"
+    assert result["meta_policy_decision"]["override_applied"] is True
+    assert result["meta_policy_decision"]["self_model_bound_applied"] is True
+    assert result["meta_policy_decision"]["answer_shape"] == "self_model_status"
+
+
 def test_classify_meta_task_clarifies_low_confidence_action_followup_before_execution():
     result = classify_meta_task(
         "# FOLLOW-UP CONTEXT\n"

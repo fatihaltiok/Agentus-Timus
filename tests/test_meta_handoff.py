@@ -136,11 +136,15 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert meta["meta_self_state"]["identity"] == "Timus"
     assert any(item["name"] == "get_youtube_subtitles" for item in meta["tool_affordances"])
     assert meta["meta_self_state"]["strategy_posture"] in {"neutral", "preferred", "conservative"}
+    assert isinstance(meta["meta_self_state"]["current_capabilities"], list)
+    assert isinstance(meta["meta_self_state"]["confidence_bounds"], list)
+    assert isinstance(meta["meta_self_state"]["autonomy_limits"], list)
     assert len(meta["recipe_stages"]) == 3
     assert len(meta["recipe_recoveries"]) == 1
     parsed = MetaAgent._parse_meta_orchestration_handoff(result)
     assert parsed is not None
     assert parsed["meta_self_state"]["identity"] == "Timus"
+    assert "response_mode_policy" in parsed["meta_self_state"]["current_capabilities"]
     assert parsed["goal_spec"]["output_mode"] == "report"
     assert parsed["adaptive_plan"]["recommended_chain"] == ["meta", "visual", "research", "document"]
     assert parsed["planner_resolution"]["state"] in {"fallback_current", "rejected", "adopted"}
@@ -317,6 +321,8 @@ def test_build_meta_handoff_payload_exposes_learning_snapshot(monkeypatch):
     assert self_state["identity"] == "Timus"
     assert self_state["strategy_posture"] == "conservative"
     assert self_state["preferred_entry_agent"] == "meta"
+    assert "response_mode_policy" in self_state["current_capabilities"]
+    assert "approval_gate_workflows" in self_state["planned_capabilities"]
     assert "bounded_replanning_only" in self_state["known_limits"]
     assert self_state["runtime_constraints"]["stability_gate_state"] == "warn"
     assert any(risk["signal"] == "negative_outcome_history" for risk in self_state["active_risks"])

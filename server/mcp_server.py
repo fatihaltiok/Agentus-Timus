@@ -1316,6 +1316,19 @@ def _record_meta_turn_understanding_observations(
                     "agent_chain_override": list(meta_policy_decision.get("agent_chain_override") or []),
                 },
             )
+        if bool(meta_policy_decision.get("self_model_bound_applied")):
+            _record_chat_observation(
+                "meta_policy_self_model_bound_applied",
+                {
+                    "request_id": request_id,
+                    "session_id": session_id,
+                    "source": "canvas_chat",
+                    "response_mode": str(meta_policy_decision.get("response_mode") or response_mode),
+                    "policy_reason": str(meta_policy_decision.get("policy_reason") or ""),
+                    "answer_shape": str(meta_policy_decision.get("answer_shape") or ""),
+                    "policy_signals": list(meta_policy_decision.get("policy_signals") or []),
+                },
+            )
     _record_chat_observation(
         "conversation_state_effects_derived",
         {

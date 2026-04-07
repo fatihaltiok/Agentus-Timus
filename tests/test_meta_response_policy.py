@@ -128,6 +128,31 @@ def test_meta_response_policy_preserves_acknowledge_and_store_for_preference_upd
     assert decision.should_store_preference is True
 
 
+def test_meta_response_policy_uses_self_model_status_for_capability_questions():
+    decision = resolve_meta_response_policy(
+        _build_policy_input(
+            effective_query="ist das geplant oder kannst du das jetzt schon",
+            dominant_turn_type="new_task",
+            baseline_response_mode="execute",
+            task_type="single_lane",
+            meta_context_bundle={
+                "context_slots": [
+                    {"slot": "current_query", "content": "ist das geplant oder kannst du das jetzt schon"},
+                ],
+                "suppressed_context": [],
+            },
+            recommended_agent_chain=("executor",),
+        )
+    )
+
+    assert decision.response_mode == "summarize_state"
+    assert decision.override_applied is True
+    assert decision.self_model_bound_applied is True
+    assert decision.task_type_override == "single_lane"
+    assert decision.agent_chain_override == ("meta",)
+    assert decision.answer_shape == "self_model_status"
+
+
 def test_meta_response_policy_does_not_slow_explicit_system_diagnosis_with_followup_context():
     decision = resolve_meta_response_policy(
         _build_policy_input(

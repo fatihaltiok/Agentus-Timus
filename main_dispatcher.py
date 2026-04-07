@@ -1564,6 +1564,8 @@ _DISPATCHER_SELF_REFLECTION_PATTERNS = (
     r"\bbist\s+du\s+(?:bereit|okay|ok)\b",
 )
 
+_DISPATCHER_META_SELF_MODEL_PATTERNS = _DISPATCHER_SELF_REFLECTION_PATTERNS
+
 _DISPATCHER_META_FEEDBACK_PATTERNS = (
     r"\banscheinend\s+verstehst\s+du\s+mich\s+nicht\b",
     r"\bverstehst\s+du\s+mich\s+nicht\b",
@@ -2004,8 +2006,8 @@ def quick_intent_check(query: str) -> Optional[str]:
     location_intent = analyze_location_local_intent(analysis_query)
     orchestration_policy = evaluate_query_orchestration(analysis_query)
 
-    if any(re.search(pattern, focus_lower) for pattern in _DISPATCHER_SELF_REFLECTION_PATTERNS):
-        return "executor"
+    if any(re.search(pattern, focus_lower) for pattern in _DISPATCHER_META_SELF_MODEL_PATTERNS):
+        return "meta"
     if any(re.search(pattern, focus_lower) for pattern in _DISPATCHER_META_FEEDBACK_PATTERNS):
         return "meta"
     if _looks_like_direct_youtube_verification_query(analysis_query):
@@ -2032,13 +2034,13 @@ def quick_intent_check(query: str) -> Optional[str]:
         return None
 
     if any(keyword in analysis_query for keyword in SELF_STATUS_KEYWORDS):
-        return "executor"
+        return "meta"
     if any(keyword in analysis_query for keyword in SELF_REMEDIATION_KEYWORDS):
-        return "executor"
+        return "meta"
     if any(keyword in analysis_query for keyword in SELF_PRIORITY_KEYWORDS):
-        return "executor"
+        return "meta"
     if analysis_query.strip() == "sag du es mir":
-        return "executor"
+        return "meta"
     if location_intent.is_location_only:
         return "executor"
 

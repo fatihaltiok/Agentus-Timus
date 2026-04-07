@@ -20,6 +20,26 @@ _STATE_SUMMARY_PATTERNS = (
     r"\bwie\s+ist\s+der\s+stand\b",
 )
 
+_SELF_MODEL_STATUS_PATTERNS = (
+    r"\bbist\s+du\s+anpassungsf(?:aehig|[aä]hig)\b",
+    r"\bbist\s+du\s+ein\s+funktionierendes?\s+ki(?:-| )?system\b",
+    r"\bwas\s+hast\s+du\s+f(?:u|ü)r\s+probleme\b",
+    r"\bwelche\s+probleme\s+hast\s+du\b",
+    r"\bwas\s+ist\s+los\b",
+    r"\bwo\s+hakt\s+es\b",
+    r"\bwas\s+kannst\s+du\s+dagegen\s+tun\b",
+    r"\bwie\s+priorisierst\s+du\s+das\b",
+    r"\bwas\s+davon\s+machst\s+du\s+zuerst\b",
+    r"\bkannst\s+du\s+das\s+schon\b",
+    r"\bkannst\s+du\s+das\s+jetzt\s+schon\b",
+    r"\bist\s+das\s+geplant\b",
+    r"\bist\s+das\s+schon\s+deine\s+philosophie\b",
+    r"\bkoenntest\s+du\s+dir\s+selbst\b",
+    r"\bk[oö]nntest\s+du\s+dir\s+selbst\b",
+    r"\bbist\s+du\s+schon\s+soweit\b",
+    r"\bvollautomatisch\b",
+)
+
 _RESEARCH_ACTION_HINTS = (
     "recherchiere",
     "recherchier",
@@ -182,6 +202,10 @@ def _looks_like_state_summary(query: str) -> bool:
     return _matches_any(query, _STATE_SUMMARY_PATTERNS)
 
 
+def _looks_like_self_model_status(query: str) -> bool:
+    return _matches_any(query, _SELF_MODEL_STATUS_PATTERNS)
+
+
 def _looks_action_oriented(query: str) -> bool:
     lowered = _normalize_text(query).lower()
     return any(any(token in lowered for token in group) for group in _ACTION_HINT_GROUPS)
@@ -246,6 +270,25 @@ def resolve_meta_response_policy(policy_input: MetaPolicyInput) -> MetaPolicyDec
     risk_reasons = tuple(str(item or "") for item in (risk.get("reasons") or []))
     suspicious = bool(risk.get("suspicious"))
     signals: list[str] = []
+
+    if _looks_like_self_model_status(policy_input.effective_query):
+        signals.append("self_model_status_question")
+        return MetaPolicyDecision(
+            response_mode="summarize_state",
+            policy_reason="self_model_status_request",
+            policy_confidence=0.9,
+            answer_shape="self_model_status",
+            should_delegate=False,
+            should_store_preference=False,
+            should_resume_open_loop=False,
+            should_summarize_state=True,
+            self_model_bound_applied=True,
+            policy_signals=tuple(signals),
+            override_applied=True,
+            agent_chain_override=("meta",),
+            task_type_override="single_lane",
+            recipe_enabled=False,
+        )
 
     if _looks_like_state_summary(policy_input.effective_query):
         signals.append("state_summary_language")

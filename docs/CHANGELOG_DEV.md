@@ -3962,3 +3962,93 @@ Status:
 - erster Runtime-Slice sauber integriert
 - D0.6 noch nicht abgeschlossen
 - D0.6a weiter bewusst offen
+
+## Nachtrag 2026-04-07 - D0.6a abgeschlossen
+
+D0.6a ist jetzt nicht mehr nur Self-State-Schema, sondern ein kompletter Pfad fuer Selbstbild- und Faehigkeitsfragen.
+
+Neu:
+
+- [meta_self_state.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_self_state.py)
+  - `meta_self_state` traegt jetzt zusaetzlich:
+    - `current_capabilities`
+    - `partial_capabilities`
+    - `planned_capabilities`
+    - `blocked_capabilities`
+    - `confidence_bounds`
+    - `autonomy_limits`
+- [D0_6A_META_SELF_MODEL_PREP.md](/home/fatih-ubuntu/dev/timus/docs/D0_6A_META_SELF_MODEL_PREP.md)
+  - dokumentiert Ziel, Status und Bedeutung der neuen Felder
+- [meta_response_policy.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_response_policy.py)
+  - erkennt jetzt `self_model_status_request`
+- [main_dispatcher.py](/home/fatih-ubuntu/dev/timus/main_dispatcher.py)
+  - Selbstbildfragen gehen nicht mehr auf den alten Executor-Kurzpfad
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - neues Observation-Event:
+    - `meta_policy_self_model_bound_applied`
+- [agent/prompts.py](/home/fatih-ubuntu/dev/timus/agent/prompts.py)
+  - Meta-Prompt nutzt `meta_self_state` jetzt explizit fuer ehrliche Selbsteinschaetzung
+
+Inhaltlich umgesetzt:
+
+- Timus unterscheidet im maschinenlesbaren Selbstmodell jetzt erstmals zwischen:
+  - was aktuell verfuegbar ist
+  - was nur teilweise verfuegbar ist
+  - was geplant ist
+  - was aktuell blockiert ist
+- `confidence_bounds` machen explizit, dass
+  - aktuelle Faehigkeiten nur als `current`
+  - Teilfaehigkeiten nur mit Caveats
+  - geplante Faehigkeiten nicht als aktuelle Realitaet
+  beschrieben werden duerfen
+- `autonomy_limits` machen explizite Grenzen sichtbar, statt nur lose `known_limits` zu transportieren
+- Selbstbildfragen wie:
+  - `bist du anpassungsfaehig`
+  - `bist du ein funktionierendes ki system`
+  - `kannst du das schon vollautomatisch`
+  - `ist das geplant oder kannst du das jetzt schon`
+  laufen jetzt ueber `meta` statt ueber den alten Executor-Schnellpfad
+- die D0.6-Policy zieht diese Faelle auf:
+  - `response_mode = summarize_state`
+  - `task_type = single_lane`
+  - `agent_chain = ["meta"]`
+  - `self_model_bound_applied = true`
+
+Wichtig:
+
+- das loest nicht jeden kuenftigen Formulierungsfehler automatisch
+- aber D0.6a ist im eigenen Scope jetzt geschlossen:
+  - Routing
+  - Self-State
+  - Policy-Bound
+  - Prompt-Grenze
+  - Observability
+  - Tests
+
+Neue Regressionen:
+
+- [test_meta_self_state.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_self_state.py)
+  - neue Capability-, Bound- und Limit-Felder
+  - blocked-Fall unter Runtime-Holds
+- [test_meta_self_state_contracts.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_self_state_contracts.py)
+  - Schema-Contracts fuer die neuen Felder
+- [test_meta_handoff.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_handoff.py)
+  - Handoff traegt das erweiterte Self-State-Schema
+- [test_meta_response_policy.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_response_policy.py)
+  - Self-Model-Statusfragen werden gebunden und nicht delegiert
+- [test_meta_orchestration.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_orchestration.py)
+  - echter Meta-Klassifikationspfad fuer Selbstbildfragen
+- [test_dispatcher_self_status_routing.py](/home/fatih-ubuntu/dev/timus/tests/test_dispatcher_self_status_routing.py)
+  - Frontdoor routed diese Fragen jetzt an `meta`
+- [test_android_chat_language.py](/home/fatih-ubuntu/dev/timus/tests/test_android_chat_language.py)
+  - `meta_policy_self_model_bound_applied`
+
+Verifikation:
+
+- `python -m py_compile orchestration/meta_self_state.py ...` gruen
+- fokussierte D0.6a-Self-State-Suite gruen (`11 passed`)
+- fokussierte D0.6a-End-to-End-Suite gruen (`116 passed`)
+
+Status:
+
+- D0.6a abgeschlossen

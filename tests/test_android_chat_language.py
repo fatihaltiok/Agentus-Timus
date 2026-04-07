@@ -596,6 +596,60 @@ def test_record_meta_turn_understanding_observations_emits_meta_policy_events(mo
     assert any(payload.get("baseline_response_mode") == "resume_open_loop" for payload in override_payloads)
 
 
+def test_record_meta_turn_understanding_observations_emits_self_model_bound_event(monkeypatch):
+    captured: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        mcp_server,
+        "_record_chat_observation",
+        lambda event_type, payload: captured.append((event_type, payload)),
+    )
+
+    mcp_server._record_meta_turn_understanding_observations(
+        request_id="req_self_model_bound",
+        session_id="sess_self_model_bound",
+        classification={
+            "dominant_turn_type": "new_task",
+            "response_mode": "summarize_state",
+            "reason": "meta_policy:self_model_status_request",
+            "turn_understanding": {
+                "turn_signals": ["self_model_question"],
+                "route_bias": "meta_only",
+                "confidence": 0.88,
+                "response_mode": "execute",
+                "state_effects": {},
+            },
+            "meta_policy_decision": {
+                "response_mode": "summarize_state",
+                "policy_reason": "self_model_status_request",
+                "policy_confidence": 0.9,
+                "answer_shape": "self_model_status",
+                "should_delegate": False,
+                "should_store_preference": False,
+                "should_resume_open_loop": False,
+                "should_summarize_state": True,
+                "self_model_bound_applied": True,
+                "override_applied": True,
+                "agent_chain_override": ["meta"],
+                "task_type_override": "single_lane",
+                "policy_signals": ["self_model_status_question"],
+            },
+            "meta_context_bundle": {
+                "bundle_reason": "meta_context_rehydration",
+                "context_slots": [
+                    {"slot": "current_query", "priority": 1, "content": "kannst du das schon vollautomatisch", "source": "current_user_query"},
+                ],
+                "suppressed_context": [],
+                "confidence": 0.88,
+            },
+        },
+    )
+
+    event_types = [event_type for event_type, _ in captured]
+    assert "meta_policy_self_model_bound_applied" in event_types
+    bound_payloads = [payload for event_type, payload in captured if event_type == "meta_policy_self_model_bound_applied"]
+    assert any(payload.get("answer_shape") == "self_model_status" for payload in bound_payloads)
+
+
 def test_record_meta_turn_understanding_observations_emits_topic_shift_and_state_update(monkeypatch):
     captured: list[tuple[str, dict]] = []
     monkeypatch.setattr(
