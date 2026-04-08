@@ -78,9 +78,19 @@ def test_summarize_autonomy_events_tracks_meta_context_state_metrics():
             "payload": {"request_id": "req-1"},
         },
         {
+            "event_type": "conversation_state_decayed",
+            "observed_at": "2026-04-08T10:00:10.500000+02:00",
+            "payload": {"request_id": "req-1", "reasons": ["stale_open_loop"]},
+        },
+        {
             "event_type": "topic_shift_detected",
             "observed_at": "2026-04-08T10:00:11+02:00",
             "payload": {"request_id": "req-1"},
+        },
+        {
+            "event_type": "historical_topic_attached",
+            "observed_at": "2026-04-08T10:00:12+02:00",
+            "payload": {"request_id": "req-1", "time_label": "year_scale"},
         },
     ]
 
@@ -99,12 +109,16 @@ def test_summarize_autonomy_events_tracks_meta_context_state_metrics():
     assert block["preference_applied_total"] == 1
     assert block["context_misread_suspected_total"] == 1
     assert block["conversation_state_updated_total"] == 1
+    assert block["conversation_state_decayed_total"] == 1
     assert block["topic_shift_total"] == 1
+    assert block["historical_topic_attached_total"] == 1
     assert block["by_turn_type"]["behavior_instruction"] == 1
     assert block["by_response_mode"]["acknowledge_and_store"] == 2
     assert block["by_policy_reason"]["state_summary_request"] == 2
     assert block["by_slot"]["conversation_state"] == 1
     assert block["by_suppression_reason"]["topic_mismatch_with_current_query"] == 1
+    assert block["by_decay_reason"]["stale_open_loop"] == 1
+    assert block["by_historical_time_label"]["year_scale"] == 1
     assert block["by_preference_scope"]["topic"] == 2
     assert block["by_preference_family"]["source_policy"] == 1
     assert block["by_misread_reason"]["thin_context_for_risky_turn"] == 1
@@ -129,6 +143,16 @@ def test_render_autonomy_observation_markdown_includes_d0_context_state_section(
                 "observed_at": "2026-04-08T10:00:01+02:00",
                 "payload": {"scope": "topic", "request_id": "req-1"},
             },
+            {
+                "event_type": "conversation_state_decayed",
+                "observed_at": "2026-04-08T10:00:02+02:00",
+                "payload": {"request_id": "req-1", "reasons": ["stale_open_loop"]},
+            },
+            {
+                "event_type": "historical_topic_attached",
+                "observed_at": "2026-04-08T10:00:03+02:00",
+                "payload": {"request_id": "req-1", "time_label": "year_scale"},
+            },
         ]
     )
 
@@ -136,5 +160,9 @@ def test_render_autonomy_observation_markdown_includes_d0_context_state_section(
 
     assert "## D0 Meta Context State" in markdown
     assert "Context-Bundles gebaut" in markdown
+    assert "Conversation-State-Decay" in markdown
+    assert "Historical-Topic-Attachments" in markdown
     assert "Preference-Captures" in markdown
     assert "Misread-Rate" in markdown
+    assert "Decay `stale_open_loop`" in markdown
+    assert "Historical `year_scale`" in markdown

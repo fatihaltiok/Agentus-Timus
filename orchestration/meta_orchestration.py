@@ -17,6 +17,7 @@ from orchestration.diagnosis_records import (
 )
 from orchestration.preference_instruction_memory import select_stored_preference_memory_with_summary
 from orchestration.meta_response_policy import build_meta_policy_input, resolve_meta_response_policy
+from orchestration.topic_state_history import select_historical_topic_memory
 from orchestration.goal_spec import derive_goal_spec
 from orchestration.root_cause_tasks import build_root_cause_task_payload
 from orchestration.turn_understanding import (
@@ -2042,10 +2043,11 @@ def build_meta_context_bundle(
     session_summary: str = "",
     recent_user_turns: Iterable[str] | None = None,
     recent_assistant_turns: Iterable[str] | None = None,
+    topic_history: Iterable[Any] | None = None,
     topic_memory_hits: Iterable[Any] | None = None,
     preference_memory_hits: Iterable[Any] | None = None,
     semantic_recall_hits: Iterable[Any] | None = None,
-) -> Tuple[MetaContextBundle, Dict[str, Any]]:
+) -> Tuple[MetaContextBundle, Dict[str, Any], Dict[str, Any]]:
     raw = str(raw_query or "")
     dialog = dict(dialog_state or {})
     explicit_state = dict(conversation_state or {})
@@ -2105,6 +2107,11 @@ def build_meta_context_bundle(
         turn_type=turn_type,
         provided_hits=preference_memory_hits,
     )
+    historical_topic_memory, historical_topic_selection = select_historical_topic_memory(
+        topic_history,
+        session_id=str((conversation_state or {}).get("session_id") or "default"),
+        query=effective_query,
+    )
     selected_open_loop = _select_open_loop_payload(
         conversation_state=merged_state,
         dialog_state=dialog,
@@ -2147,30 +2154,43 @@ def build_meta_context_bundle(
         ),
         source="open_loop",
     )
-    for idx, item in enumerate(recent_users[:2], start=4):
+    next_priority = 4
+    for item in historical_topic_memory[:2]:
+        _append_meta_context_slot(
+            slots,
+            slot="historical_topic_memory",
+            priority=next_priority,
+            content=item,
+            source="topic_history",
+        )
+        next_priority += 1
+    for item in recent_users[:2]:
         _append_meta_context_slot(
             slots,
             slot="recent_user_turn",
-            priority=idx,
+            priority=next_priority,
             content=item,
             source="recent_user_queries",
         )
-    for idx, item in enumerate(topic_memory, start=6):
+        next_priority += 1
+    for item in topic_memory:
         _append_meta_context_slot(
             slots,
             slot="topic_memory",
-            priority=idx,
+            priority=next_priority,
             content=item,
             source="topic_memory",
         )
-    for idx, item in enumerate(preference_memory, start=8):
+        next_priority += 1
+    for item in preference_memory:
         _append_meta_context_slot(
             slots,
             slot="preference_memory",
-            priority=idx,
+            priority=next_priority,
             content=item,
             source="preference_memory",
         )
+        next_priority += 1
     if not recent_users and recent_assistant:
         _append_meta_context_slot(
             slots,
@@ -2219,7 +2239,7 @@ def build_meta_context_bundle(
         context_slots=tuple(sorted(slots, key=lambda item: item.priority)),
         suppressed_context=tuple(suppressed_context),
         confidence=round(max(0.0, min(confidence or 0.0, 1.0)), 2),
-    ), preference_selection
+    ), preference_selection, historical_topic_selection
 
 
 def render_meta_context_bundle(bundle: MetaContextBundle | Mapping[str, Any] | None) -> str:
@@ -2432,6 +2452,7 @@ def classify_meta_task(
     recent_user_turns: Iterable[str] | None = None,
     recent_assistant_turns: Iterable[str] | None = None,
     session_summary: str = "",
+    topic_history: Iterable[Any] | None = None,
     topic_memory_hits: Iterable[Any] | None = None,
     preference_memory_hits: Iterable[Any] | None = None,
     semantic_recall_hits: Iterable[Any] | None = None,
@@ -2531,7 +2552,7 @@ def classify_meta_task(
         context_anchor_applied=context_anchor_applied,
     )
     turn_interpretation = interpret_turn(turn_input)
-    meta_context_bundle, preference_memory_selection = build_meta_context_bundle(
+    meta_context_bundle, preference_memory_selection, historical_topic_selection = build_meta_context_bundle(
         raw_query=query,
         effective_query=effective_query,
         dialog_state=dialog_state,
@@ -2540,6 +2561,7 @@ def classify_meta_task(
         session_summary=session_summary,
         recent_user_turns=recent_user_turns,
         recent_assistant_turns=recent_assistant_turns,
+        topic_history=topic_history,
         topic_memory_hits=topic_memory_hits,
         preference_memory_hits=preference_memory_hits,
         semantic_recall_hits=semantic_recall_hits,
@@ -2765,6 +2787,7 @@ def classify_meta_task(
         "topic_state_transition": topic_transition.to_dict(),
         "meta_context_bundle": meta_context_bundle.to_dict(),
         "preference_memory_selection": preference_memory_selection,
+        "historical_topic_selection": historical_topic_selection,
         "meta_context_slot_types": [slot.slot for slot in meta_context_bundle.context_slots],
         "meta_context_suppressed_count": len(meta_context_bundle.suppressed_context),
     }

@@ -120,10 +120,12 @@ from orchestration.conversation_state import (
     apply_turn_interpretation,
     apply_pending_followup_prompt,
     conversation_state_to_dict,
+    decay_conversation_state,
     touch_conversation_state,
 )
 from orchestration.meta_context_eval import detect_context_misread_risk
 from orchestration.preference_instruction_memory import capture_preference_memory
+from orchestration.topic_state_history import topic_history_to_list, update_topic_history
 from orchestration.longrunner_transport import (
     bind_longrun_context,
     get_current_run_id,
@@ -549,6 +551,11 @@ def _normalize_session_capsule_payload(capsule: dict | None) -> dict:
         session_id=session_id,
         last_updated=str(payload.get("last_updated") or ""),
         pending_followup_prompt=str(payload.get("pending_followup_prompt") or ""),
+    )
+    payload["topic_history"] = topic_history_to_list(
+        payload.get("topic_history"),
+        session_id=session_id,
+        now=str(payload.get("last_updated") or ""),
     )
     return payload
 
@@ -1174,9 +1181,16 @@ def _persist_meta_turn_understanding(
     if not session_id or not isinstance(classification, dict):
         return None
     capsule = _load_session_capsule(session_id)
+    previous_state = conversation_state_to_dict(
+        capsule.get("conversation_state"),
+        session_id=session_id,
+        last_updated=str(capsule.get("last_updated") or ""),
+        pending_followup_prompt=str(capsule.get("pending_followup_prompt") or ""),
+        decay_now=updated_at,
+    )
     turn_understanding = dict(classification.get("turn_understanding") or {})
     updated_state = apply_turn_interpretation(
-        capsule.get("conversation_state"),
+        previous_state,
         session_id=session_id,
         dominant_turn_type=str(classification.get("dominant_turn_type") or ""),
         response_mode=str(classification.get("response_mode") or ""),
@@ -1190,6 +1204,14 @@ def _persist_meta_turn_understanding(
         updated_at=updated_at,
     ).to_dict()
     capsule["conversation_state"] = updated_state
+    capsule["topic_history"] = update_topic_history(
+        capsule.get("topic_history"),
+        session_id=session_id,
+        previous_state=previous_state,
+        updated_state=updated_state,
+        topic_transition=classification.get("topic_state_transition"),
+        updated_at=updated_at,
+    )
     _store_session_capsule(capsule)
     return updated_state
 
@@ -1248,6 +1270,7 @@ def _record_meta_turn_understanding_observations(
     state_effects = dict(turn_understanding.get("state_effects") or classification.get("state_effects") or {})
     meta_context_bundle = dict(classification.get("meta_context_bundle") or {})
     preference_selection = dict(classification.get("preference_memory_selection") or {})
+    historical_topic_selection = dict(classification.get("historical_topic_selection") or {})
     meta_policy_decision = dict(classification.get("meta_policy_decision") or {})
     baseline_response_mode = str(turn_understanding.get("response_mode") or "")
     context_slots = meta_context_bundle.get("context_slots") or []
@@ -1407,6 +1430,19 @@ def _record_meta_turn_understanding_observations(
                 "source": "canvas_chat",
                 "dominant_turn_type": dominant_turn_type,
                 "slot_count": slot_types.count("topic_memory"),
+            },
+        )
+    if "historical_topic_memory" in slot_types:
+        _record_chat_observation(
+            "historical_topic_attached",
+            {
+                "request_id": request_id,
+                "session_id": session_id,
+                "source": "canvas_chat",
+                "dominant_turn_type": dominant_turn_type,
+                "time_label": str(historical_topic_selection.get("time_label") or ""),
+                "slot_count": slot_types.count("historical_topic_memory"),
+                "history_size": int(historical_topic_selection.get("history_size") or 0),
             },
         )
     if "preference_memory" in slot_types:
@@ -1694,6 +1730,7 @@ def _is_short_contextual_reply(query: str, capsule: dict) -> bool:
 
 def _build_followup_capsule(session_id: str, query: str = "") -> dict:
     capsule = _load_session_capsule(session_id)
+    decay_now = datetime.utcnow().isoformat() + "Z"
     entries = _get_session_chat_entries(session_id, limit=16)
     last_user = ""
     last_assistant = ""
@@ -1751,11 +1788,17 @@ def _build_followup_capsule(session_id: str, query: str = "") -> dict:
     pending_followup_prompt = str(capsule.get("pending_followup_prompt") or "").strip()
     if not pending_followup_prompt and last_assistant:
         pending_followup_prompt = _extract_pending_followup_prompt(last_assistant)
-    conversation_state = conversation_state_to_dict(
+    conversation_state, conversation_state_decay = decay_conversation_state(
         capsule.get("conversation_state"),
         session_id=session_id,
         last_updated=str(capsule.get("last_updated") or ""),
         pending_followup_prompt=pending_followup_prompt,
+        now=decay_now,
+    )
+    topic_history = topic_history_to_list(
+        capsule.get("topic_history"),
+        session_id=session_id,
+        now=decay_now,
     )
 
     return {
@@ -1772,7 +1815,9 @@ def _build_followup_capsule(session_id: str, query: str = "") -> dict:
         "pending_followup_prompt": pending_followup_prompt,
         "last_proposed_action": last_proposed_action,
         "semantic_recall": semantic_recall,
-        "conversation_state": conversation_state,
+        "conversation_state": conversation_state.to_dict(),
+        "conversation_state_decay": conversation_state_decay,
+        "topic_history": topic_history,
     }
 
 
@@ -3927,6 +3972,18 @@ async def canvas_chat(request: Request):
             "resolved_proposal_agent": resolved_proposal_agent,
         },
     )
+    decay_info = dict(followup_capsule.get("conversation_state_decay") or {})
+    if bool(decay_info.get("applied")):
+        _record_chat_observation(
+            "conversation_state_decayed",
+            {
+                "request_id": request_id,
+                "session_id": session_id,
+                "source": "canvas_chat",
+                "reasons": list(decay_info.get("reasons") or []),
+                "age_hours": float(decay_info.get("age_hours") or 0.0),
+            },
+        )
 
     _broadcast_sse({"type": "chat_user", "request_id": request_id, "text": query, "ts": ts})
 
@@ -4003,6 +4060,7 @@ async def canvas_chat(request: Request):
                             recent_user_turns=followup_capsule.get("recent_user_queries"),
                             recent_assistant_turns=followup_capsule.get("recent_assistant_replies"),
                             session_summary=str(followup_capsule.get("session_summary") or ""),
+                            topic_history=followup_capsule.get("topic_history"),
                             semantic_recall_hits=followup_capsule.get("semantic_recall"),
                         )
                         updated_state = _persist_meta_turn_understanding(

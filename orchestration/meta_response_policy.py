@@ -7,6 +7,7 @@ import re
 from typing import Any, Mapping, Tuple
 
 from orchestration.meta_context_eval import detect_context_misread_risk
+from orchestration.topic_state_history import parse_historical_topic_recall_hint
 
 
 _STATE_SUMMARY_PATTERNS = (
@@ -270,6 +271,7 @@ def resolve_meta_response_policy(policy_input: MetaPolicyInput) -> MetaPolicyDec
     risk_reasons = tuple(str(item or "") for item in (risk.get("reasons") or []))
     suspicious = bool(risk.get("suspicious"))
     signals: list[str] = []
+    historical_recall = parse_historical_topic_recall_hint(policy_input.effective_query)
 
     if _looks_like_self_model_status(policy_input.effective_query):
         signals.append("self_model_status_question")
@@ -285,6 +287,25 @@ def resolve_meta_response_policy(policy_input: MetaPolicyInput) -> MetaPolicyDec
             self_model_bound_applied=True,
             policy_signals=tuple(signals),
             override_applied=True,
+            agent_chain_override=("meta",),
+            task_type_override="single_lane",
+            recipe_enabled=False,
+        )
+
+    if historical_recall.requested:
+        signals.extend(["historical_topic_recall", historical_recall.time_label])
+        return MetaPolicyDecision(
+            response_mode="summarize_state",
+            policy_reason="historical_topic_recall",
+            policy_confidence=0.89,
+            answer_shape="historical_topic_state",
+            should_delegate=False,
+            should_store_preference=False,
+            should_resume_open_loop=False,
+            should_summarize_state=True,
+            self_model_bound_applied=False,
+            policy_signals=tuple(signals),
+            override_applied=(baseline != "summarize_state"),
             agent_chain_override=("meta",),
             task_type_override="single_lane",
             recipe_enabled=False,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import re
 from typing import Any, Iterable, Mapping
 
@@ -147,6 +148,21 @@ def _looks_like_question(text: str) -> bool:
     return bool(re.search(r"\b(wie|was|welche|welcher|welches|warum|wieso|ob|soll ich|magst du|willst du)\b", lowered))
 
 
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    text = _normalize_text(value, limit=80)
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
 @dataclass(frozen=True, slots=True)
 class ConversationState:
     schema_version: int
@@ -280,6 +296,70 @@ def touch_conversation_state(
     )
 
 
+def decay_conversation_state(
+    payload: ConversationState | Mapping[str, Any] | None,
+    *,
+    session_id: str,
+    last_updated: str = "",
+    pending_followup_prompt: str = "",
+    now: str = "",
+) -> tuple[ConversationState, dict[str, Any]]:
+    current = normalize_conversation_state(
+        payload.to_dict() if isinstance(payload, ConversationState) else payload,
+        session_id=session_id,
+        last_updated=last_updated,
+        pending_followup_prompt=pending_followup_prompt,
+    )
+    if not now:
+        return current, {"applied": False, "reasons": [], "age_hours": 0.0}
+
+    updated_dt = _parse_iso_datetime(current.updated_at)
+    now_dt = _parse_iso_datetime(now)
+    if updated_dt is None or now_dt is None:
+        return current, {"applied": False, "reasons": [], "age_hours": 0.0}
+
+    age_hours = max(0.0, (now_dt - updated_dt).total_seconds() / 3600.0)
+    reasons: list[str] = []
+    open_loop = current.open_loop
+    next_expected_step = current.next_expected_step
+    open_questions = list(current.open_questions)
+    topic_confidence = current.topic_confidence
+    sources = tuple(item for item in current.state_source if item != "state_decay")
+
+    if age_hours >= 72.0 and open_loop:
+        open_loop = ""
+        next_expected_step = ""
+        reasons.append("stale_open_loop")
+    if age_hours >= 72.0 and open_questions:
+        open_questions = []
+        reasons.append("stale_open_questions")
+    if age_hours >= 168.0 and topic_confidence > 0.25:
+        topic_confidence = max(0.25, round(topic_confidence * 0.6, 2))
+        reasons.append("topic_confidence_decay")
+
+    if not reasons:
+        return current, {"applied": False, "reasons": [], "age_hours": round(age_hours, 2)}
+
+    sources = _append_source(sources, "state_decay")
+    decayed = ConversationState(
+        schema_version=current.schema_version,
+        session_id=current.session_id,
+        active_topic=current.active_topic,
+        active_goal=current.active_goal,
+        open_loop=open_loop,
+        next_expected_step=next_expected_step,
+        turn_type_hint=current.turn_type_hint,
+        preferences=current.preferences,
+        recent_corrections=current.recent_corrections,
+        constraints=current.constraints,
+        open_questions=tuple(open_questions),
+        state_source=sources,
+        topic_confidence=topic_confidence,
+        updated_at=current.updated_at,
+    )
+    return decayed, {"applied": True, "reasons": reasons, "age_hours": round(age_hours, 2)}
+
+
 def apply_pending_followup_prompt(
     payload: ConversationState | Mapping[str, Any] | None,
     *,
@@ -329,12 +409,14 @@ def conversation_state_to_dict(
     session_id: str,
     last_updated: str = "",
     pending_followup_prompt: str = "",
+    decay_now: str = "",
 ) -> dict[str, Any]:
-    state = normalize_conversation_state(
+    state, _ = decay_conversation_state(
         payload.to_dict() if isinstance(payload, ConversationState) else payload,
         session_id=session_id,
         last_updated=last_updated,
         pending_followup_prompt=pending_followup_prompt,
+        now=decay_now,
     )
     return state.to_dict()
 

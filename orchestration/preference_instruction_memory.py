@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 import re
 from typing import Any, Iterable, Mapping
 
@@ -385,6 +385,20 @@ def _parse_updated_at_rank(value: Any) -> float:
         return 0.0
 
 
+def _preference_age_days(value: Any) -> float:
+    text = _normalize_text(value, limit=64)
+    if not text:
+        return 0.0
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except Exception:
+        return 0.0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    return max(0.0, (now - parsed.astimezone(timezone.utc)).total_seconds() / 86400.0)
+
+
 def _scope_priority(scope: str) -> int:
     return _SCOPE_PRIORITY.get(_normalize_text(scope, limit=24).lower(), 0)
 
@@ -456,6 +470,7 @@ def select_stored_preference_memory_with_summary(
             instruction,
             topic_anchor,
         )
+        age_days = _preference_age_days(value.get("updated_at"))
         overlap = max(
             len(focus_terms.intersection(_tokenize(instruction))),
             len(focus_terms.intersection(_tokenize(topic_anchor))),
@@ -465,8 +480,36 @@ def select_stored_preference_memory_with_summary(
         if scope == "session":
             if not session_id or item_session != session_id:
                 continue
+            if age_days > 2.0:
+                ignored_low_stability.append(
+                    {
+                        **_build_candidate_detail(
+                            rendered=rendered,
+                            scope=scope,
+                            family=family,
+                            stability=stability,
+                            evidence_count=evidence_count,
+                        ),
+                        "reason": "session_preference_expired",
+                    }
+                )
+                continue
         elif scope == "topic":
             if overlap <= 0 and topic_anchor and _overlap(topic_anchor, focus_text) <= 0:
+                continue
+            if age_days > 120.0 and evidence_count < 2:
+                ignored_low_stability.append(
+                    {
+                        **_build_candidate_detail(
+                            rendered=rendered,
+                            scope=scope,
+                            family=family,
+                            stability=stability,
+                            evidence_count=evidence_count,
+                        ),
+                        "reason": "topic_preference_stale",
+                    }
+                )
                 continue
             if evidence_count < 2 and stability < 0.72 and overlap < 2:
                 ignored_low_stability.append(
@@ -483,6 +526,20 @@ def select_stored_preference_memory_with_summary(
                 )
                 continue
         elif scope == "global":
+            if age_days > 365.0 and evidence_count < 3 and not explicit_global:
+                ignored_low_stability.append(
+                    {
+                        **_build_candidate_detail(
+                            rendered=rendered,
+                            scope=scope,
+                            family=family,
+                            stability=stability,
+                            evidence_count=evidence_count,
+                        ),
+                        "reason": "global_preference_stale",
+                    }
+                )
+                continue
             if not _allow_global_preference(
                 stability=stability,
                 evidence_count=evidence_count,

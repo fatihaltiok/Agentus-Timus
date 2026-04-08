@@ -2,6 +2,7 @@ from orchestration.conversation_state import (
     apply_turn_interpretation,
     apply_pending_followup_prompt,
     conversation_state_to_dict,
+    decay_conversation_state,
     derive_topic_state_transition,
     normalize_conversation_state,
     touch_conversation_state,
@@ -214,3 +215,27 @@ def test_apply_turn_interpretation_seeds_topic_from_preference_update_query_when
     assert updated.active_topic == "bei news bitte zuerst agenturquellen"
     assert updated.active_goal == "bei news bitte zuerst agenturquellen"
     assert updated.next_expected_step == "bei news bitte zuerst agenturquellen"
+
+
+def test_decay_conversation_state_clears_stale_open_loop_after_three_days():
+    decayed, summary = decay_conversation_state(
+        {
+            "active_topic": "aktuelle Weltlage",
+            "active_goal": "brauchbare Live-News",
+            "open_loop": "Reuters und AP zuerst pruefen",
+            "next_expected_step": "Reuters und AP zuerst pruefen",
+            "open_questions": ["Welche Agentur zuerst?"],
+            "updated_at": "2026-04-05T10:00:00Z",
+            "topic_confidence": 0.9,
+        },
+        session_id="canvas_decay",
+        now="2026-04-08T12:00:00Z",
+    )
+
+    assert decayed.active_topic == "aktuelle Weltlage"
+    assert decayed.open_loop == ""
+    assert decayed.next_expected_step == ""
+    assert decayed.open_questions == ()
+    assert "state_decay" in decayed.state_source
+    assert summary["applied"] is True
+    assert "stale_open_loop" in summary["reasons"]

@@ -220,6 +220,35 @@ def test_classify_meta_task_uses_state_summary_policy_for_status_question():
     assert result["meta_policy_decision"]["should_summarize_state"] is True
 
 
+def test_classify_meta_task_uses_historical_topic_recall_policy_for_time_anchored_memory_queries():
+    result = classify_meta_task(
+        "weisst du noch was wir vor 6 monaten ueber die agentenarchitektur besprochen hatten",
+        action_count=0,
+        topic_history=[
+            {
+                "topic": "Agentenarchitektur und Meta-Koordination",
+                "goal": "saubere Rollen fuer Meta, Executor und Research",
+                "open_loop": "",
+                "next_expected_step": "",
+                "status": "closed",
+                "first_seen_at": "2025-09-20T10:00:00Z",
+                "last_seen_at": "2025-10-05T10:00:00Z",
+                "closed_at": "2025-10-05T10:00:00Z",
+                "topic_confidence": 0.88,
+                "turn_type_hint": "new_task",
+            }
+        ],
+    )
+
+    assert result["task_type"] == "single_lane"
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["response_mode"] == "summarize_state"
+    assert result["reason"] == "meta_policy:historical_topic_recall"
+    assert result["meta_policy_decision"]["answer_shape"] == "historical_topic_state"
+    assert result["meta_policy_decision"]["should_delegate"] is False
+    assert "historical_topic_memory" in result["meta_context_slot_types"]
+
+
 def test_classify_meta_task_uses_self_model_status_policy_for_capability_question():
     result = classify_meta_task(
         "ist das geplant oder kannst du das jetzt schon",

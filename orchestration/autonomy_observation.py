@@ -215,7 +215,9 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
             "context_slot_selected_total": 0,
             "context_slot_suppressed_total": 0,
             "conversation_state_updated_total": 0,
+            "conversation_state_decayed_total": 0,
             "topic_shift_total": 0,
+            "historical_topic_attached_total": 0,
             "preference_captured_total": 0,
             "preference_applied_total": 0,
             "preference_scope_selected_total": 0,
@@ -231,6 +233,8 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
             "by_policy_reason": {},
             "by_slot": {},
             "by_suppression_reason": {},
+            "by_decay_reason": {},
+            "by_historical_time_label": {},
             "by_preference_scope": {},
             "by_preference_family": {},
             "by_misread_reason": {},
@@ -570,6 +574,15 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
         elif event_type == "conversation_state_updated":
             meta_context_state["conversation_state_updated_total"] += 1
 
+        elif event_type == "conversation_state_decayed":
+            meta_context_state["conversation_state_decayed_total"] += 1
+            for reason in list(payload.get("reasons") or []):
+                _bump(meta_context_state["by_decay_reason"], reason)
+
+        elif event_type == "historical_topic_attached":
+            meta_context_state["historical_topic_attached_total"] += 1
+            _bump(meta_context_state["by_historical_time_label"], payload.get("time_label"))
+
         elif event_type == "preference_captured":
             meta_context_state["preference_captured_total"] += 1
             _bump(meta_context_state["by_preference_scope"], payload.get("scope"))
@@ -727,6 +740,8 @@ def render_autonomy_observation_markdown(summary: Dict[str, Any]) -> str:
             f"- State-Update-Coverage: `{float(meta_context_state.get('state_update_coverage') or 0.0):.3f}`",
             f"- Preference-Roundtrip-Rate: `{float(meta_context_state.get('preference_roundtrip_rate') or 0.0):.3f}`",
             f"- Policy-Override-Rate: `{float(meta_context_state.get('policy_override_rate') or 0.0):.3f}`",
+            f"- Conversation-State-Decay: `{int(meta_context_state.get('conversation_state_decayed_total') or 0)}`",
+            f"- Historical-Topic-Attachments: `{int(meta_context_state.get('historical_topic_attached_total') or 0)}`",
             f"- Preference-Captures: `{int(meta_context_state.get('preference_captured_total') or 0)}`",
             f"- Preference-Applies: `{int(meta_context_state.get('preference_applied_total') or 0)}`",
             "",
@@ -751,6 +766,10 @@ def render_autonomy_observation_markdown(summary: Dict[str, Any]) -> str:
         lines.append(f"- Specialist `{key}`: `{int(value or 0)}`")
     for key, value in sorted(dict(meta_diag.get("direct_tool_by_method") or {}).items()):
         lines.append(f"- Meta-Tool `{key}`: `{int(value or 0)}`")
+    for key, value in sorted(dict(meta_context_state.get("by_decay_reason") or {}).items()):
+        lines.append(f"- Decay `{key}`: `{int(value or 0)}`")
+    for key, value in sorted(dict(meta_context_state.get("by_historical_time_label") or {}).items()):
+        lines.append(f"- Historical `{key}`: `{int(value or 0)}`")
 
     lines.extend(
         [

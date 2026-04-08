@@ -445,6 +445,13 @@ Ziel:
 
 - diese Schicht muss messbar werden, sonst endet sie wieder in unsichtbaren Prompt-Aenderungen
 
+Stand 2026-04-08:
+
+- im eigenen Scope abgeschlossen
+- zwei Runtime-Slices fuer Eval und Beobachtbarkeit umgesetzt
+- nach Reload live ueber `/chat` und `/autonomy/observation` bestaetigt
+- D0.7 macht die Meta-Kontextschicht jetzt nicht nur sichtbar, sondern auch qualitativ auswertbar
+
 Neue Signale:
 
 - `meta_turn_type_selected`
@@ -479,11 +486,6 @@ Erster Runtime-Slice:
   - neuer Summary-Block `meta_context_state`
   - zaehlt jetzt die zentralen D0-Signale als zusammenhaengende Metrik statt nur als Roh-Events
 
-Offen fuer den Abschluss von D0.7:
-
-- Live-Nachweis des neuen D0.7-Blocks nach Reload
-- spaetere Einbindung in Status-/UI-Sichten, wenn die Metriken nicht nur im Log bleiben sollen
-
 Zweiter Runtime-Slice:
 
 - [meta_context_state_eval.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_context_state_eval.py)
@@ -503,11 +505,38 @@ Zweiter Runtime-Slice:
     - `preference_roundtrip_rate`
     - `policy_override_rate`
 
+Live-Abschlussnachweis:
+
+- Session `d07_live_verify_20260408`
+- Request `req_1b886852f468`
+  - Verhaltensanweisung wurde live als `behavior_instruction` erkannt
+  - `preference_captured`, `preference_scope_selected`, `preference_applied` und `conversation_state_updated` wurden beobachtet
+- Request `req_2b4e58e8763e`
+  - Follow-up wurde live als `followup` mit `resume_open_loop` erkannt
+  - `context_rehydration_bundle_built`, `open_loop_attached`, `topic_memory_attached`, `preference_memory_attached`, `preference_conflict_resolved` und `chat_request_completed` wurden beobachtet
+- Live-Summary in `/autonomy/observation` zeigte danach u. a.:
+  - `healthy_bundle_rate = 1.0`
+  - `misread_rate = 0.0`
+  - `preference_roundtrip_rate = 1.0`
+  - `preference_conflict_resolved_total = 1`
+
+Rest fuer spaeter, aber nicht blockierend fuer D0.7:
+
+- Einbindung der D0-Metriken in spaetere UI-/Statusflaechen
+- weitere Langzeit-Eval-Faelle koennen spaeter D0.8/D0.9 begleiten
+
 ### D0.8 Sicheres Vergessen und State-Decay
 
 Ziel:
 
 - nicht alles fuer immer festhalten
+
+Stand 2026-04-08:
+
+- gestartet, erster Runtime-Slice umgesetzt
+- Session-State bekommt jetzt kontrolliertes Decay statt blindem Dauerfesthalten
+- Topic-History wird als eigener Verlaufspfad gefuehrt
+- historische Themen koennen jetzt zeitbezogen fuer `eben`, `gestern`, `letzte Woche`, `vor 3/6/12 Monaten` und `vor einem Jahr` rehydriert werden
 
 Regeln:
 
@@ -515,6 +544,69 @@ Regeln:
 - thematische Preferences bleiben laenger
 - globale Preferences nur bei wiederholter Evidenz
 - veraltete offene Schleifen muessen sauber geschlossen werden
+
+Erster Runtime-Slice:
+
+- [topic_state_history.py](/home/fatih-ubuntu/dev/timus/orchestration/topic_state_history.py)
+  - neue `topic_history`-Eintraege pro Session
+  - Statusmodell:
+    - `active`
+    - `historical`
+    - `stale`
+    - `closed`
+  - Historienabruf ueber relative Zeitanker:
+    - `eben`
+    - `gestern`
+    - `letzte Woche`
+    - `vor 3 Monaten`
+    - `vor 6 Monaten`
+    - `vor 12 Monaten`
+    - `vor einem Jahr`
+- [conversation_state.py](/home/fatih-ubuntu/dev/timus/orchestration/conversation_state.py)
+  - `decay_conversation_state(...)`
+  - stale `open_loop` und `open_questions` werden nach laengerer Inaktivitaet entwertet
+- [meta_orchestration.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_orchestration.py)
+  - `historical_topic_memory` als eigener Context-Slot im `meta_context_bundle`
+- [meta_response_policy.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_response_policy.py)
+  - zeitbezogene Erinnerungsfragen laufen jetzt als `historical_topic_recall` auf `meta` mit `summarize_state`
+- [mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - Session-Kapseln tragen jetzt `topic_history`
+  - Follow-up-Capsules laden decay-bereinigten State plus `topic_history`
+
+Noch offen fuer den Abschluss von D0.8:
+
+- staerkere Live-End-to-End-Nachweise fuer echte historische Topic-Rueckgriffe mit belastbaren Themenankern
+
+Nachhaertung 2026-04-08:
+
+- [topic_state_history.py](/home/fatih-ubuntu/dev/timus/orchestration/topic_state_history.py)
+  - allgemeine relative Monats-/Jahresfenster statt nur harter Einzelwerte:
+    - `vor 18 Monaten`
+    - `vor 3 Jahren`
+    - weitere numerische Monats-/Jahresangaben werden jetzt generisch abgeleitet
+  - sehr alte `historical`/`stale`/`closed` History-Eintraege werden ab >10 Jahren aus dem aktiven History-Satz entfernt
+- [autonomy_observation.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomy_observation.py)
+  - D0.8-Metriken werden jetzt auch sichtbar im Markdown-Output gerendert:
+    - `Conversation-State-Decay`
+    - `Historical-Topic-Attachments`
+    - `by_decay_reason`
+    - `by_historical_time_label`
+
+Verifikation:
+
+- `pytest -q tests/test_topic_state_history.py tests/test_topic_state_history_hypothesis.py tests/test_topic_state_history_contracts.py tests/test_conversation_state.py tests/test_meta_orchestration.py tests/test_autonomy_observation_d0.py tests/test_android_chat_language.py` -> `108 passed`
+- `python -m crosshair check tests/test_topic_state_history_contracts.py` -> gruen
+
+Live-Reload:
+
+- `timus-mcp.service` und `timus-dispatcher.service` wurden am **8. April 2026 um 13:24:57 CEST** neu geladen
+- `GET /health` war danach wieder `healthy`
+- der neue `historical_topic_recall`-Policy-Pfad lief live fuer die Session `d08_live_verify_20260408`
+
+Wichtiger Restpunkt:
+
+- der spontane Live-Test mit `von eben` zeigte die neue Policy live, aber der vorangehende Turn setzte noch keinen starken genugen Themenanker fuer `historical_topic_attached`
+- das ist kein Parser-/Zeitankerfehler mehr, sondern ein verbleibender Qualitaetsrest bei der Themenverankerung ueber freie neue Tasks
 
 ### D0.9 Specialist Context Propagation
 

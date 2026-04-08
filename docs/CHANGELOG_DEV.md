@@ -4168,3 +4168,164 @@ Status:
 - D0.7 deutlich weiter
 - noch nicht live neu geladen
 - noch nicht abgeschlossen
+
+## Nachtrag 2026-04-08 - D0.7 live bestaetigt und abgeschlossen
+
+D0.7 ist jetzt auch im echten Laufzeitpfad sauber nachgewiesen und damit im eigenen Scope abgeschlossen.
+
+Live-Nachweis:
+
+- Session `d07_live_verify_20260408`
+- Request `req_1b886852f468`
+  - Query: `dann mach das in zukunft so dass du bei news reuters und ap zuerst nimmst`
+  - live beobachtet:
+    - `meta_turn_type_selected` mit `behavior_instruction`
+    - `meta_response_mode_selected` mit `acknowledge_and_store`
+    - `preference_captured`
+    - `preference_scope_selected`
+    - `preference_applied`
+    - `conversation_state_updated`
+- Request `req_2b4e58e8763e`
+  - Query: `und was gibt es bei news zur weltlage`
+  - live beobachtet:
+    - `meta_turn_type_selected` mit `followup`
+    - `meta_response_mode_selected` mit `resume_open_loop`
+    - `meta_policy_mode_selected`
+    - `context_rehydration_bundle_built`
+    - `open_loop_attached`
+    - `topic_memory_attached`
+    - `preference_memory_attached`
+    - `preference_conflict_resolved`
+    - `chat_request_completed`
+
+Live-Summary danach auf `/autonomy/observation`:
+
+- `healthy_bundle_rate = 1.0`
+- `misread_rate = 0.0`
+- `state_update_coverage = 0.762`
+- `preference_roundtrip_rate = 1.0`
+- `policy_override_rate = 0.0`
+- `preference_conflict_resolved_total = 1`
+- `recent_misreads = []`
+
+Ergebnis:
+
+- D0.7 ist nicht mehr nur testseitig grün, sondern live im MCP-Beobachtungspfad bestaetigt
+- Eval und Observability decken jetzt Capture, Rehydration, Resume, Preference-Roundtrip und Konfliktaufloesung zusammenhaengend ab
+- der naechste logische Block ist damit D0.8 `State-Decay und Cleanup`
+
+## Nachtrag 2026-04-08 - D0.8 gestartet: State-Decay und historischer Topic-Retrieval-Pfad
+
+D0.8 ist jetzt als erster Runtime-Slice gestartet.
+
+Neu:
+
+- [topic_state_history.py](/home/fatih-ubuntu/dev/timus/orchestration/topic_state_history.py)
+  - neuer Session-Verlauf fuer `topic_history`
+  - Statusmodell:
+    - `active`
+    - `historical`
+    - `stale`
+    - `closed`
+  - relativer Abruf fuer:
+    - `eben`
+    - `gestern`
+    - `letzte Woche`
+    - `vor 3 Monaten`
+    - `vor 6 Monaten`
+    - `vor 12 Monaten`
+    - `vor einem Jahr`
+- [conversation_state.py](/home/fatih-ubuntu/dev/timus/orchestration/conversation_state.py)
+  - `decay_conversation_state(...)`
+  - stale `open_loop` und `open_questions` werden nach laengerer Inaktivitaet nicht mehr blind weitergetragen
+- [meta_orchestration.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_orchestration.py)
+  - `historical_topic_memory` als eigener Context-Slot im `meta_context_bundle`
+- [meta_response_policy.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_response_policy.py)
+  - zeitbezogene Erinnerungsfragen werden als `historical_topic_recall` auf `meta` gezogen
+- [mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - Session-Kapseln speichern jetzt `topic_history`
+  - Follow-up-Capsules laden decay-bereinigten `conversation_state` plus Historie
+
+Tests:
+
+- [test_topic_state_history.py](/home/fatih-ubuntu/dev/timus/tests/test_topic_state_history.py)
+  - deckt `eben`, Monats-/Jahresfenster und historischen Themenabruf ab
+- [test_conversation_state.py](/home/fatih-ubuntu/dev/timus/tests/test_conversation_state.py)
+  - neue Decay-Regression fuer stale `open_loop`
+- [test_meta_orchestration.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_orchestration.py)
+  - Meta-Policy fuer zeitverankerte Erinnerungsfragen
+
+Verifikation:
+
+- `python -m py_compile ...` gruen
+- `pytest -q tests/test_topic_state_history.py tests/test_conversation_state.py tests/test_meta_orchestration.py` -> `71 passed`
+- `pytest -q tests/test_android_chat_language.py tests/test_autonomy_observation_d0.py` -> `27 passed`
+- `pytest -q tests/test_topic_state_history_hypothesis.py tests/test_topic_state_history_contracts.py` -> `8 passed`
+- `python -m crosshair check tests/test_topic_state_history_contracts.py` -> gruen
+
+Formale Nachhaertung:
+
+- [test_topic_state_history_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_topic_state_history_hypothesis.py)
+  - Hypothesis fuer:
+    - History-Limit und Topic-Dedupe
+    - bounded historical selection
+    - Zeitfenster fuer `eben`/`gestern`/Monate/Jahre
+    - Decay-Invariante `topic_confidence` steigt nie
+- [test_topic_state_history_contracts.py](/home/fatih-ubuntu/dev/timus/tests/test_topic_state_history_contracts.py)
+  - deal/CrossHair-taugliche Vertraege fuer:
+    - `parse_historical_topic_recall_hint`
+    - `normalize_topic_history`
+    - `select_historical_topic_memory`
+    - `decay_conversation_state`
+
+Status:
+
+- D0.8 gestartet
+- noch nicht live neu geladen
+- noch nicht abgeschlossen
+
+## Nachtrag 2026-04-08 - D0.8 nachgehaertet: generische Monats-/Jahresfenster und sichtbare Decay-/History-Metriken
+
+Neu:
+
+- [topic_state_history.py](/home/fatih-ubuntu/dev/timus/orchestration/topic_state_history.py)
+  - relative Zeitanker sind jetzt nicht mehr nur auf harte Einzelwerte beschraenkt
+  - z. B.:
+    - `vor 18 Monaten`
+    - `vor 3 Jahren`
+  - numerische Monats-/Jahresfenster werden jetzt generisch in passende Recall-Bereiche uebersetzt
+  - sehr alte `historical`/`stale`/`closed` History-Eintraege fallen ab >10 Jahren aus dem aktiven Topic-History-Satz
+- [autonomy_observation.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomy_observation.py)
+  - D0.8-Metriken werden jetzt auch im Markdown-Output sichtbar:
+    - `Conversation-State-Decay`
+    - `Historical-Topic-Attachments`
+    - Decay-Reason-Breakdown
+    - Historical-Time-Label-Breakdown
+
+Tests:
+
+- [test_topic_state_history.py](/home/fatih-ubuntu/dev/timus/tests/test_topic_state_history.py)
+  - neue Regressionen fuer `vor 18 Monaten` und `vor 3 Jahren`
+- [test_topic_state_history_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_topic_state_history_hypothesis.py)
+  - Hypothesis erweitert um mehrjaehrige Zeitanker
+- [test_topic_state_history_contracts.py](/home/fatih-ubuntu/dev/timus/tests/test_topic_state_history_contracts.py)
+  - neuer Contract-Fall fuer mehrjaehrige Recall-Requests
+- [test_autonomy_observation_d0.py](/home/fatih-ubuntu/dev/timus/tests/test_autonomy_observation_d0.py)
+  - D0.8-Decays und Historical-Attachments werden jetzt auch im Summary/Markdown geprueft
+
+Verifikation:
+
+- `python -m py_compile orchestration/topic_state_history.py orchestration/autonomy_observation.py tests/test_topic_state_history.py tests/test_topic_state_history_hypothesis.py tests/test_topic_state_history_contracts.py tests/test_autonomy_observation_d0.py` -> gruen
+- `pytest -q tests/test_topic_state_history.py tests/test_topic_state_history_hypothesis.py tests/test_topic_state_history_contracts.py tests/test_conversation_state.py tests/test_meta_orchestration.py tests/test_autonomy_observation_d0.py tests/test_android_chat_language.py` -> `108 passed`
+- `python -m crosshair check tests/test_topic_state_history_contracts.py` -> gruen
+
+Live:
+
+- `timus-mcp.service` und `timus-dispatcher.service` wurden am **8. April 2026, 13:24:57 CEST** neu geladen
+- `GET /health` war danach wieder `healthy`
+- der neue `historical_topic_recall`-Policy-Pfad lief live fuer `req_856e2864313a` in der Session `d08_live_verify_20260408`
+
+Offener Rest:
+
+- der spontane `von eben`-Live-Test zeigte die neue Policy live, aber noch keinen belastbaren `historical_topic_attached`-Nachweis
+- der Rest liegt damit nicht mehr in der Zeitanker-/Decay-Logik, sondern in der noch zu schwachen Themenverankerung freier neuer Tasks
