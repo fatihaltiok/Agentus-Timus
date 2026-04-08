@@ -2,6 +2,47 @@
 
 ---
 
+## Fortschritt 2026-04-08 - D0.8 Historical Recall nach Review nachgehaertet
+
+Ein Review der letzten D0.8-Commits hat drei echte Fehler im Historical-Recall-Pfad offengelegt:
+
+- das reine Vorkommen von `eben`/`vorhin`/`kuerzlich` konnte normale Arbeitsanweisungen faelschlich als historische Rueckfrage markieren
+- bei gleicher Relevanz wurden in `recent_moment`-Faellen aeltere Topics vor neueren bevorzugt
+- generische Rueckfragen wie `was wir letztes Mal besprochen hatten` konnten trotz vorhandener History leer zurueckkommen
+
+Nachgehaertet:
+
+- [orchestration/topic_state_history.py](/home/fatih-ubuntu/dev/timus/orchestration/topic_state_history.py)
+  - `recent_moment` wird jetzt nicht mehr durch blosses `eben` getriggert, sondern nur noch mit echtem Recall-Kontext
+    - Beispiele: `weisst du noch ...`, `was habe ich eben gesagt`, `von eben`
+  - die History-Auswahl sortiert bei gleichem Score jetzt neuere Eintraege vor aelteren
+  - generische Gespraechsverben wie `besprochen`, `gesagt`, `geschrieben`, `gearbeitet`, `geantwortet` zaehlen nicht mehr als kuenstliche Fokus-Terme
+- [tests/test_topic_state_history.py](/home/fatih-ubuntu/dev/timus/tests/test_topic_state_history.py)
+  - neue Regression:
+    - plain recent-time reference (`ich habe dir eben einen link gegeben ...`) darf kein Historical-Recall sein
+  - neue Regression:
+    - `recent_moment` bevorzugt den neueren Treffer
+  - neue Regression:
+    - `weisst du noch was wir letztes mal besprochen hatten` liefert wieder einen Treffer
+- [tests/test_meta_orchestration.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_orchestration.py)
+  - neue Regression:
+    - plain `eben`-Action-Query darf nicht in `meta_policy:historical_topic_recall` kippen
+
+Verifikation:
+
+- `python -m py_compile orchestration/topic_state_history.py tests/test_topic_state_history.py tests/test_meta_orchestration.py`
+- `pytest -q tests/test_topic_state_history.py tests/test_meta_orchestration.py`
+- `pytest -q tests/test_topic_state_history_hypothesis.py tests/test_topic_state_history_contracts.py`
+- `python -m crosshair check tests/test_topic_state_history_contracts.py`
+
+Ergebnis:
+
+- `68 passed` im fokussierten D0.8-/Meta-Ring
+- `9 passed` im D0.8-Hypothesis-/Contract-Ring
+- `CrossHair` gruen
+
+---
+
 ## Fortschritt 2026-04-06 - Telegram-Observability parity und generische Preisfragen entkoppelt
 
 Zwei Telegram-/Lookup-Probleme sind jetzt geschlossen:

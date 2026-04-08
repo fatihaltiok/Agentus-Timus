@@ -33,10 +33,13 @@ _TOPIC_STOPWORDS = {
     "erinnerst",
     "faden",
     "frage",
+    "geantwortet",
+    "gearbeitet",
     "gerade",
     "gesagt",
     "gespraech",
     "gespräch",
+    "geschrieben",
     "gestern",
     "greif",
     "hatten",
@@ -79,6 +82,7 @@ _TOPIC_STOPWORDS = {
     "woruber",
     "worüber",
     "zu",
+    "besprochen",
 }
 _HISTORICAL_RECALL_PATTERNS = (
     r"\bwei(?:ss|ß)t\s+du\s+noch\b",
@@ -93,7 +97,14 @@ _HISTORICAL_RECALL_PATTERNS = (
     r"\b(?:von|ueber)\s+letzte(?:r|n)?\s+woche\b",
     r"\bvor\s+einem\s+monat\b",
     r"\bletztes\s+mal\b",
-    r"\b(?:eben|gerade\s+eben|vorhin|k[üu]rzlich)\b",
+)
+
+_RECENT_MOMENT_TOKENS = ("gerade eben", "eben", "vorhin", "kürzlich", "kurzlich")
+_RECENT_MOMENT_CONTEXT_PATTERNS = (
+    r"\b(?:von|ueber)\s+(?:gerade\s+eben|eben|vorhin|k[üu]rzlich)\b",
+    r"\bwas\s+habe\s+ich\s+(?:gerade\s+eben|eben|vorhin|k[üu]rzlich)\s+gesagt\b",
+    r"\bwas\s+hast\s+du\s+(?:gerade\s+eben|eben|vorhin|k[üu]rzlich)\s+gesagt\b",
+    r"\berinner(?:st|e)\b.*\b(?:gerade\s+eben|eben|vorhin|k[üu]rzlich)\b",
 )
 
 _NUMBER_WORDS = {
@@ -446,11 +457,15 @@ def parse_historical_topic_recall_hint(query: str) -> HistoricalTopicRecallHint:
     cleaned = _normalize_text(query, limit=400)
     lowered = cleaned.lower()
     requested = any(re.search(pattern, lowered) for pattern in _HISTORICAL_RECALL_PATTERNS)
+    recent_moment_requested = any(re.search(pattern, lowered) for pattern in _RECENT_MOMENT_CONTEXT_PATTERNS)
 
     time_label = "recent_history"
     min_age_days = 0.0
     max_age_days = 3650.0
-    if any(token in lowered for token in ("gerade eben", "eben", "vorhin", "kürzlich", "kurzlich")):
+    if recent_moment_requested or (
+        requested
+        and any(token in lowered for token in _RECENT_MOMENT_TOKENS)
+    ):
         time_label = "recent_moment"
         min_age_days = 0.0
         max_age_days = 0.25
@@ -575,7 +590,7 @@ def select_historical_topic_memory(
         score = (time_score * 10.0) + (overlap * 3.0) + float(entry.topic_confidence) + status_bonus
         scored.append((score, entry))
 
-    scored.sort(key=lambda item: (-item[0], -_age_days(item[1].last_seen_at, now=now), item[1].topic))
+    scored.sort(key=lambda item: (-item[0], _age_days(item[1].last_seen_at, now=now), item[1].topic))
     selected_entries = [entry for _, entry in scored[: max(1, limit)]]
     selected = [_render_historical_topic_entry(entry, hint) for entry in selected_entries]
     selected_details = [

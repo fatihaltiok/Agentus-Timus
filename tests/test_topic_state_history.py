@@ -12,6 +12,12 @@ def test_parse_historical_topic_recall_hint_supports_eben():
     assert hint.time_label == "recent_moment"
 
 
+def test_parse_historical_topic_recall_hint_does_not_trigger_on_plain_recent_time_reference():
+    hint = parse_historical_topic_recall_hint("ich habe dir eben einen link gegeben, hol mehr infos dazu")
+
+    assert hint.requested is False
+
+
 def test_parse_historical_topic_recall_hint_supports_month_and_year_ranges():
     six_months = parse_historical_topic_recall_hint("was hatten wir vor 6 monaten dazu besprochen")
     one_year = parse_historical_topic_recall_hint("weisst du noch was wir vor einem jahr dazu besprochen hatten")
@@ -115,3 +121,72 @@ def test_select_historical_topic_memory_can_recall_multi_year_topic():
     assert selected
     assert summary["time_label"] == "year_scale"
     assert "archivregeln" in selected[0].lower()
+
+
+def test_select_historical_topic_memory_prefers_newer_recent_match_for_recent_moment():
+    history = [
+        {
+            "topic": "Thema alt",
+            "goal": "A",
+            "open_loop": "",
+            "next_expected_step": "",
+            "status": "historical",
+            "first_seen_at": "2026-04-08T09:00:00Z",
+            "last_seen_at": "2026-04-08T10:00:00Z",
+            "closed_at": "",
+            "topic_confidence": 0.9,
+            "turn_type_hint": "followup",
+        },
+        {
+            "topic": "Thema neu",
+            "goal": "B",
+            "open_loop": "",
+            "next_expected_step": "",
+            "status": "historical",
+            "first_seen_at": "2026-04-08T11:00:00Z",
+            "last_seen_at": "2026-04-08T11:50:00Z",
+            "closed_at": "",
+            "topic_confidence": 0.9,
+            "turn_type_hint": "followup",
+        },
+    ]
+
+    selected, _summary = select_historical_topic_memory(
+        history,
+        session_id="canvas_recent_order",
+        query="weisst du noch was wir eben besprochen hatten",
+        now="2026-04-08T12:00:00Z",
+        limit=1,
+    )
+
+    assert selected
+    assert "Thema neu" in selected[0]
+
+
+def test_select_historical_topic_memory_supports_generic_previous_session_recall_without_topic_terms():
+    history = [
+        {
+            "topic": "Archivregeln bei Timus",
+            "goal": "Archivierung planen",
+            "open_loop": "",
+            "next_expected_step": "",
+            "status": "closed",
+            "first_seen_at": "2026-04-01T10:00:00Z",
+            "last_seen_at": "2026-04-02T10:00:00Z",
+            "closed_at": "2026-04-02T10:00:00Z",
+            "topic_confidence": 0.91,
+            "turn_type_hint": "followup",
+        }
+    ]
+
+    selected, summary = select_historical_topic_memory(
+        history,
+        session_id="canvas_previous_session",
+        query="weisst du noch was wir letztes mal besprochen hatten",
+        now="2026-04-08T10:00:00Z",
+        limit=1,
+    )
+
+    assert selected
+    assert summary["time_label"] == "previous_session"
+    assert "Archivregeln bei Timus" in selected[0]

@@ -280,6 +280,17 @@ def test_classify_meta_task_can_fall_back_to_recent_assistant_turn_for_what_you_
     assert result["historical_topic_selection"]["fallback_source"] == "recent_assistant_turn"
 
 
+def test_classify_meta_task_does_not_misclassify_plain_recent_time_reference_as_historical_recall():
+    result = classify_meta_task(
+        "ich habe dir eben einen link gegeben, hol mehr infos dazu",
+        action_count=0,
+    )
+
+    assert result["reason"] != "meta_policy:historical_topic_recall"
+    assert result["response_mode"] != "summarize_state"
+    assert result["meta_policy_decision"]["policy_reason"] != "historical_topic_recall"
+
+
 def test_classify_meta_task_uses_self_model_status_policy_for_capability_question():
     result = classify_meta_task(
         "ist das geplant oder kannst du das jetzt schon",
