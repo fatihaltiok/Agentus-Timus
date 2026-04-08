@@ -29,6 +29,7 @@ def _sanitize_events(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 @deal.post(lambda r: int(r["total_events"]) >= 0)
 @deal.post(lambda r: sum(int(v) for v in r["event_counts"].values()) == int(r["total_events"]))
 @deal.post(lambda r: isinstance(r["request_correlation"], dict))
+@deal.post(lambda r: isinstance(r["meta_context_state"], dict))
 @deal.post(lambda r: int(r["request_correlation"]["chat_requests_total"]) >= 0)
 @deal.post(lambda r: int(r["request_correlation"]["dispatcher_routes_total"]) >= 0)
 @deal.post(lambda r: int(r["request_correlation"]["request_routes_total"]) >= 0)
@@ -42,6 +43,7 @@ def _sanitize_events(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 @deal.post(lambda r: len(r["request_correlation"]["recent_requests"]) <= 8)
 @deal.post(lambda r: len(r["request_correlation"]["recent_routes"]) <= 8)
 @deal.post(lambda r: len(r["request_correlation"]["recent_outcomes"]) <= 8)
+@deal.post(lambda r: len(r["meta_context_state"]["recent_misreads"]) <= 8)
 @deal.post(
     lambda r: int(r["request_correlation"]["user_visible_failures_total"])
     <= int(r["request_correlation"]["chat_failed_total"])

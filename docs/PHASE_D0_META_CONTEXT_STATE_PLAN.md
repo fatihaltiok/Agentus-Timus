@@ -463,6 +463,46 @@ Eval-Sets:
 - thematische Wiederaufnahme nach Tagen
 - Beschwerde ueber letzte Antwort plus neue Arbeitsanweisung
 
+Erster Runtime-Slice:
+
+- [meta_context_state_eval.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_context_state_eval.py)
+  - kanonische D0-Eval-Faelle direkt ueber `classify_meta_task(...)`
+  - Benchmark fuer:
+    - `task_type`
+    - Agentenkette
+    - `dominant_turn_type`
+    - `response_mode`
+    - Context-Slot-Abdeckung
+    - Signal-Mix
+    - `context_misread`-Risiko
+- [autonomy_observation.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomy_observation.py)
+  - neuer Summary-Block `meta_context_state`
+  - zaehlt jetzt die zentralen D0-Signale als zusammenhaengende Metrik statt nur als Roh-Events
+
+Offen fuer den Abschluss von D0.7:
+
+- Live-Nachweis des neuen D0.7-Blocks nach Reload
+- spaetere Einbindung in Status-/UI-Sichten, wenn die Metriken nicht nur im Log bleiben sollen
+
+Zweiter Runtime-Slice:
+
+- [meta_context_state_eval.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_context_state_eval.py)
+  - jetzt mit Eval-Familien fuer:
+    - `approval_resume`
+    - `auth_resume`
+    - `topic_resumption`
+    - `complaint_plus_instruction`
+  - Summary liefert jetzt:
+    - `by_family`
+    - `quality_score`
+    - `gate_passed`
+- [autonomy_observation.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomy_observation.py)
+  - `meta_context_state` enthaelt jetzt zusaetzlich:
+    - `misread_rate`
+    - `state_update_coverage`
+    - `preference_roundtrip_rate`
+    - `policy_override_rate`
+
 ### D0.8 Sicheres Vergessen und State-Decay
 
 Ziel:

@@ -4052,3 +4052,119 @@ Verifikation:
 Status:
 
 - D0.6a abgeschlossen
+
+## Nachtrag 2026-04-08 - Beobachtungsblock zu Meta-Selbstueberschaetzung und anthropomorpher Selbstsprache
+
+Aus einem laengeren Canvas-Dialog ueber Mars, Freiheit und kuenftige KI-Zivilisationen ist ein wichtiger Nachbeobachtungspunkt entstanden:
+
+- Timus kann in philosophischen oder spekulativen Gespraechen sehr fluessig, tief und kohärent antworten
+- dabei kann `meta` sprachlich weiter gehen, als es der operative Systemzustand eigentlich deckt
+- das muss nicht sofort zu falschen Nutzererwartungen fuehren
+- es kann aber spaeter zu interner Selbstueberschaetzung oder zu unscharfer Systemkommunikation fuehren
+
+Festgehalten:
+
+- Das ist aktuell **kein akuter Produktfehler**, der sofort hart gedeckelt werden muss.
+- Es ist aber ein wichtiges Beobachtungs- und Wissensfeld fuer kuenftige Agentenarbeit.
+- Der Punkt wurde deshalb als eigenes Wissensdokument ausgelagert:
+  - [META_SELF_MODEL_OVERCONFIDENCE_KNOWLEDGE.md](/home/fatih-ubuntu/dev/timus/docs/META_SELF_MODEL_OVERCONFIDENCE_KNOWLEDGE.md)
+
+Kernaussage:
+
+- Problematisch ist nicht philosophische Tiefe an sich
+- problematisch wird die Vermischung von:
+  - poetischer oder modellierender Sprache
+  - und aktuellem operativem Systemzustand
+
+## Nachtrag 2026-04-08 - D0.7 gestartet: ausfuehrbare D0-Evals und gebuendelter Meta-Context-Observability-Block
+
+D0.7 ist jetzt als erster echter Laufzeit-Slice gestartet.
+
+Neu:
+
+- [meta_context_state_eval.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_context_state_eval.py)
+  - neues kanonisches D0-Eval-Set direkt ueber `classify_meta_task(...)`
+  - Faelle fuer:
+    - Praeferenz-/Verhaltensanweisung
+    - Korrektur
+    - kurzer Options-Follow-up
+    - thematische Wiederaufnahme mit `topic_memory`
+    - Beschwerde plus neue Arbeitsanweisung
+- [autonomy_observation.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomy_observation.py)
+  - neuer Summary-Block `meta_context_state`
+  - zaehlt jetzt:
+    - `meta_turn_type_selected`
+    - `meta_response_mode_selected`
+    - `meta_policy_mode_selected`
+    - `context_rehydration_bundle_built`
+    - `context_slot_selected`
+    - `context_slot_suppressed`
+    - `context_misread_suspected`
+    - `conversation_state_updated`
+    - `topic_shift_detected`
+    - `preference_captured`
+    - `preference_applied`
+    - `preference_scope_selected`
+    - `preference_conflict_resolved`
+  - inklusive:
+    - `healthy_bundle_rate`
+    - `by_turn_type`
+    - `by_response_mode`
+    - `by_policy_reason`
+    - `by_slot`
+    - `by_suppression_reason`
+    - `by_misread_reason`
+    - `recent_misreads`
+- [test_meta_context_state_eval.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_context_state_eval.py)
+- [test_meta_context_state_eval_contracts.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_context_state_eval_contracts.py)
+- [test_autonomy_observation_d0.py](/home/fatih-ubuntu/dev/timus/tests/test_autonomy_observation_d0.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/meta_context_state_eval.py orchestration/autonomy_observation.py ...` gruen
+- fokussierte D0.7-Suite gruen: `10 passed`
+- breiter D0-/MCP-/Observation-Ring gruen: `100 passed`
+
+Status:
+
+- D0.7 gestartet
+- noch nicht live neu geladen
+- noch nicht abgeschlossen
+
+## Nachtrag 2026-04-08 - D0.7 erweitert: Eval-Familien und Qualitaetsmetriken
+
+Der zweite D0.7-Slice haertet nicht neue Roh-Events, sondern die Auswertungsschicht.
+
+Neu:
+
+- [meta_context_state_eval.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_context_state_eval.py)
+  - jetzt mit Eval-Familien fuer:
+    - `approval_resume`
+    - `auth_resume`
+    - `topic_resumption`
+    - `complaint_plus_instruction`
+  - Summary liefert jetzt:
+    - `by_family`
+    - `quality_score`
+    - `gate_passed`
+- [autonomy_observation.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomy_observation.py)
+  - `meta_context_state` enthaelt jetzt zusaetzlich:
+    - `misread_rate`
+    - `state_update_coverage`
+    - `preference_roundtrip_rate`
+    - `policy_override_rate`
+- [test_meta_context_state_eval.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_context_state_eval.py)
+  - neue Assertions fuer Eval-Familien und D0.7-Gate
+- [test_autonomy_observation_d0.py](/home/fatih-ubuntu/dev/timus/tests/test_autonomy_observation_d0.py)
+  - neue Assertions fuer die abgeleiteten D0-Metriken
+
+Verifikation:
+
+- fokussierte D0.7-Suite gruen: `11 passed`
+- breiter D0-/MCP-/Observation-Ring gruen: `101 passed`
+
+Status:
+
+- D0.7 deutlich weiter
+- noch nicht live neu geladen
+- noch nicht abgeschlossen

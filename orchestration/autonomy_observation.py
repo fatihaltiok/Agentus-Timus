@@ -205,6 +205,37 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
             "recent_outcomes": [],
             "recent_failures": [],
         },
+        "meta_context_state": {
+            "turn_type_selected_total": 0,
+            "response_mode_selected_total": 0,
+            "policy_mode_selected_total": 0,
+            "policy_override_total": 0,
+            "self_model_bound_total": 0,
+            "context_bundle_built_total": 0,
+            "context_slot_selected_total": 0,
+            "context_slot_suppressed_total": 0,
+            "conversation_state_updated_total": 0,
+            "topic_shift_total": 0,
+            "preference_captured_total": 0,
+            "preference_applied_total": 0,
+            "preference_scope_selected_total": 0,
+            "preference_conflict_resolved_total": 0,
+            "context_misread_suspected_total": 0,
+            "healthy_bundle_rate": 0.0,
+            "misread_rate": 0.0,
+            "state_update_coverage": 0.0,
+            "preference_roundtrip_rate": 0.0,
+            "policy_override_rate": 0.0,
+            "by_turn_type": {},
+            "by_response_mode": {},
+            "by_policy_reason": {},
+            "by_slot": {},
+            "by_suppression_reason": {},
+            "by_preference_scope": {},
+            "by_preference_family": {},
+            "by_misread_reason": {},
+            "recent_misreads": [],
+        },
         "top_goal_signatures": [],
         # C2: Nutzerwirkungs-Klassen — eigener Block, unabhängig von request_correlation.
         # user_visible_failures_total in request_correlation wird NICHT doppelt erhöht.
@@ -221,12 +252,14 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
     goal_counts: Dict[str, Dict[str, int]] = {}
     meta_diag = summary["meta_diagnostics"]
     request_correlation = summary["request_correlation"]
+    meta_context_state = summary["meta_context_state"]
     user_impact = summary["user_impact"]
     recent_requests: List[Dict[str, Any]] = []
     recent_routes: List[Dict[str, Any]] = []
     recent_outcomes: List[Dict[str, Any]] = []
     recent_failures: List[Dict[str, Any]] = []
     recent_impacts: List[Dict[str, Any]] = []
+    recent_misreads: List[Dict[str, Any]] = []
 
     def _bump(bucket: Dict[str, Any], key: Any, *, amount: int = 1, fallback: str = "unknown") -> None:
         normalized = _normalize_counter_key(key, fallback=fallback)
@@ -480,6 +513,79 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
             _record_recent_outcome(event_type, observed_at, payload)
             _record_recent_failure(event_type, observed_at, payload)
 
+        elif event_type == "meta_turn_type_selected":
+            meta_context_state["turn_type_selected_total"] += 1
+            _bump(meta_context_state["by_turn_type"], payload.get("dominant_turn_type"))
+
+        elif event_type == "meta_response_mode_selected":
+            meta_context_state["response_mode_selected_total"] += 1
+            _bump(meta_context_state["by_response_mode"], payload.get("response_mode"))
+
+        elif event_type == "meta_policy_mode_selected":
+            meta_context_state["policy_mode_selected_total"] += 1
+            _bump(meta_context_state["by_response_mode"], payload.get("response_mode"))
+            _bump(meta_context_state["by_policy_reason"], payload.get("policy_reason"))
+
+        elif event_type == "meta_policy_override_applied":
+            meta_context_state["policy_override_total"] += 1
+            _bump(meta_context_state["by_policy_reason"], payload.get("policy_reason"))
+
+        elif event_type == "meta_policy_self_model_bound_applied":
+            meta_context_state["self_model_bound_total"] += 1
+            _bump(meta_context_state["by_policy_reason"], payload.get("policy_reason"))
+
+        elif event_type == "context_rehydration_bundle_built":
+            meta_context_state["context_bundle_built_total"] += 1
+
+        elif event_type == "context_slot_selected":
+            meta_context_state["context_slot_selected_total"] += 1
+            _bump(meta_context_state["by_slot"], payload.get("slot"))
+
+        elif event_type == "context_slot_suppressed":
+            meta_context_state["context_slot_suppressed_total"] += 1
+            _bump(meta_context_state["by_suppression_reason"], payload.get("reason"))
+
+        elif event_type == "context_misread_suspected":
+            meta_context_state["context_misread_suspected_total"] += 1
+            for reason in list(payload.get("risk_reasons") or []):
+                _bump(meta_context_state["by_misread_reason"], reason)
+            recent_misreads.append(
+                {
+                    "observed_at": str(observed_at or ""),
+                    "request_id": str(payload.get("request_id") or ""),
+                    "session_id": str(payload.get("session_id") or ""),
+                    "dominant_turn_type": str(payload.get("dominant_turn_type") or ""),
+                    "response_mode": str(payload.get("response_mode") or ""),
+                    "risk_reasons": [
+                        _normalize_counter_key(item)
+                        for item in list(payload.get("risk_reasons") or [])
+                        if str(item or "").strip()
+                    ][:6],
+                }
+            )
+
+        elif event_type == "topic_shift_detected":
+            meta_context_state["topic_shift_total"] += 1
+
+        elif event_type == "conversation_state_updated":
+            meta_context_state["conversation_state_updated_total"] += 1
+
+        elif event_type == "preference_captured":
+            meta_context_state["preference_captured_total"] += 1
+            _bump(meta_context_state["by_preference_scope"], payload.get("scope"))
+
+        elif event_type == "preference_applied":
+            meta_context_state["preference_applied_total"] += 1
+
+        elif event_type == "preference_scope_selected":
+            meta_context_state["preference_scope_selected_total"] += 1
+            _bump(meta_context_state["by_preference_scope"], payload.get("scope"))
+            _bump(meta_context_state["by_preference_family"], payload.get("family"))
+
+        elif event_type == "preference_conflict_resolved":
+            meta_context_state["preference_conflict_resolved_total"] += 1
+            _bump(meta_context_state["by_preference_family"], payload.get("family"))
+
         elif event_type in _USER_IMPACT_EVENT_TYPES:
             # C2: Nutzerwirkungs-Klassen. Eigener Block — user_visible_failures_total
             # in request_correlation wird nicht doppelt erhöht.
@@ -537,6 +643,34 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
         key=lambda item: str(item.get("observed_at") or ""),
         reverse=True,
     )[:_RECENT_CORRELATION_LIMIT]
+    bundle_total = int(meta_context_state.get("context_bundle_built_total") or 0)
+    if bundle_total > 0:
+        suspicious_total = int(meta_context_state.get("context_misread_suspected_total") or 0)
+        meta_context_state["healthy_bundle_rate"] = round(max(0.0, 1.0 - (suspicious_total / bundle_total)), 3)
+        meta_context_state["misread_rate"] = round(min(1.0, suspicious_total / bundle_total), 3)
+    turn_total = int(meta_context_state.get("turn_type_selected_total") or 0)
+    if turn_total > 0:
+        meta_context_state["state_update_coverage"] = round(
+            min(1.0, int(meta_context_state.get("conversation_state_updated_total") or 0) / turn_total),
+            3,
+        )
+    captured_total = int(meta_context_state.get("preference_captured_total") or 0)
+    if captured_total > 0:
+        meta_context_state["preference_roundtrip_rate"] = round(
+            min(1.0, int(meta_context_state.get("preference_applied_total") or 0) / captured_total),
+            3,
+        )
+    policy_total = int(meta_context_state.get("policy_mode_selected_total") or 0)
+    if policy_total > 0:
+        meta_context_state["policy_override_rate"] = round(
+            min(1.0, int(meta_context_state.get("policy_override_total") or 0) / policy_total),
+            3,
+        )
+    summary["meta_context_state"]["recent_misreads"] = sorted(
+        recent_misreads,
+        key=lambda item: str(item.get("observed_at") or ""),
+        reverse=True,
+    )[:_RECENT_CORRELATION_LIMIT]
     return summary
 
 
@@ -547,6 +681,7 @@ def render_autonomy_observation_markdown(summary: Dict[str, Any]) -> str:
     runtime = dict(summary.get("runtime_gaps") or {})
     hardening = dict(summary.get("self_hardening") or {})
     meta_diag = dict(summary.get("meta_diagnostics") or {})
+    meta_context_state = dict(summary.get("meta_context_state") or {})
     request_correlation = dict(summary.get("request_correlation") or {})
     event_counts = dict(summary.get("event_counts") or {})
 
@@ -581,6 +716,19 @@ def render_autonomy_observation_markdown(summary: Dict[str, Any]) -> str:
             f"- Follow-up-Tasks deferiert: `{int(meta_diag.get('followup_tasks_deferred_total') or 0)}`",
             f"- Root-Cause-Gate blockiert: `{int(meta_diag.get('root_cause_gate_blocked_total') or 0)}`",
             f"- Task-Mix unterdrueckt: `{int(meta_diag.get('task_mix_suppressed_total') or 0)}`",
+            "",
+            "## D0 Meta Context State",
+            f"- Turn-Typ-Entscheidungen: `{int(meta_context_state.get('turn_type_selected_total') or 0)}`",
+            f"- Response-Mode-Entscheidungen: `{int(meta_context_state.get('response_mode_selected_total') or 0)}`",
+            f"- Context-Bundles gebaut: `{int(meta_context_state.get('context_bundle_built_total') or 0)}`",
+            f"- Verdacht auf Kontext-Fehlgriff: `{int(meta_context_state.get('context_misread_suspected_total') or 0)}`",
+            f"- Healthy-Bundle-Rate: `{float(meta_context_state.get('healthy_bundle_rate') or 0.0):.3f}`",
+            f"- Misread-Rate: `{float(meta_context_state.get('misread_rate') or 0.0):.3f}`",
+            f"- State-Update-Coverage: `{float(meta_context_state.get('state_update_coverage') or 0.0):.3f}`",
+            f"- Preference-Roundtrip-Rate: `{float(meta_context_state.get('preference_roundtrip_rate') or 0.0):.3f}`",
+            f"- Policy-Override-Rate: `{float(meta_context_state.get('policy_override_rate') or 0.0):.3f}`",
+            f"- Preference-Captures: `{int(meta_context_state.get('preference_captured_total') or 0)}`",
+            f"- Preference-Applies: `{int(meta_context_state.get('preference_applied_total') or 0)}`",
             "",
             "## Recipe Outcomes",
             f"- Gesamt: `{int(recipe.get('total') or 0)}`",
