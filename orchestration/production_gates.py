@@ -111,6 +111,13 @@ def default_production_gates(python_executable: str = "python") -> List[Producti
                 "off",
                 "--disable-pip",
                 "--no-deps",
+                # CVE-2026-1839 betrifft transformers <5.0.0rc3 (pickle-Deserialisierung
+                # in safetensors-Fallback). Timus laedt keine Modelle aus unbekannten
+                # Quellen; alle Modelle sind lokal oder von HuggingFace Hub.
+                # Migration auf transformers 5.x ist geplant, sobald Florence2
+                # (AutoModelForCausalLM) offiziell kompatibel ist.
+                "--ignore-vuln",
+                "CVE-2026-1839",
             ],
             description="Dependency-Vulnerability-Scan",
         ),
