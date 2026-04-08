@@ -249,6 +249,37 @@ def test_classify_meta_task_uses_historical_topic_recall_policy_for_time_anchore
     assert "historical_topic_memory" in result["meta_context_slot_types"]
 
 
+def test_classify_meta_task_falls_back_to_recent_user_turn_for_recent_historical_recall():
+    result = classify_meta_task(
+        "weisst du noch was wir eben ueber archivregeln besprochen hatten",
+        action_count=0,
+        recent_user_turns=["Lass uns ueber Langzeitgedaechtnis und Archivregeln bei Timus sprechen."],
+    )
+
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["reason"] == "meta_policy:historical_topic_recall"
+    assert result["dominant_turn_type"] == "followup"
+    assert result["response_mode"] == "summarize_state"
+    assert "historical_topic_memory" in result["meta_context_slot_types"]
+    assert result["historical_topic_selection"]["fallback_applied"] is True
+    assert result["historical_topic_selection"]["fallback_source"] == "recent_user_turn"
+
+
+def test_classify_meta_task_can_fall_back_to_recent_assistant_turn_for_what_you_said():
+    result = classify_meta_task(
+        "was hast du eben gesagt",
+        action_count=0,
+        recent_assistant_turns=["Ich habe dir gerade drei Optionen fuer die Archivregeln genannt."],
+    )
+
+    assert result["reason"] == "meta_policy:historical_topic_recall"
+    assert result["dominant_turn_type"] == "followup"
+    assert result["response_mode"] == "summarize_state"
+    assert "historical_topic_memory" in result["meta_context_slot_types"]
+    assert result["historical_topic_selection"]["fallback_applied"] is True
+    assert result["historical_topic_selection"]["fallback_source"] == "recent_assistant_turn"
+
+
 def test_classify_meta_task_uses_self_model_status_policy_for_capability_question():
     result = classify_meta_task(
         "ist das geplant oder kannst du das jetzt schon",

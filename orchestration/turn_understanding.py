@@ -6,6 +6,8 @@ import re
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Iterable, Mapping, Tuple
 
+from orchestration.topic_state_history import parse_historical_topic_recall_hint
+
 
 _CORRECTION_PATTERNS = (
     r"\bso\s+meinte\s+ich\s+das\s+nicht\b",
@@ -139,6 +141,9 @@ class TurnUnderstandingInput:
     dialog_constraints: Tuple[str, ...]
     semantic_review_hints: Tuple[str, ...]
     has_followup_context: bool
+    has_recent_user_turns: bool
+    has_recent_assistant_turns: bool
+    historical_recall_requested: bool
     compressed_followup_parsed: bool
     active_topic_reused: bool
     context_anchor_applied: bool
@@ -200,6 +205,8 @@ def build_turn_understanding_input(
     dialog_state: Mapping[str, Any] | None,
     semantic_review_hints: Iterable[str] | None = None,
     conversation_state: Mapping[str, Any] | None = None,
+    recent_user_turns: Iterable[str] | None = None,
+    recent_assistant_turns: Iterable[str] | None = None,
     context_anchor_applied: bool = False,
 ) -> TurnUnderstandingInput:
     state = dict(dialog_state or {})
@@ -207,6 +214,9 @@ def build_turn_understanding_input(
     active_topic = _normalize_text(state.get("active_topic") or session_state.get("active_topic"))
     open_goal = _normalize_text(state.get("open_goal") or session_state.get("active_goal"))
     next_step = _normalize_text(state.get("next_step") or session_state.get("next_expected_step"))
+    normalized_recent_users = _normalize_list(recent_user_turns or (), limit=3, item_limit=160)
+    normalized_recent_assistant = _normalize_list(recent_assistant_turns or (), limit=3, item_limit=160)
+    historical_recall_requested = parse_historical_topic_recall_hint(_normalize_text(effective_query, limit=800)).requested
     return TurnUnderstandingInput(
         raw_query=_normalize_text(raw_query, limit=2000),
         effective_query=_normalize_text(effective_query, limit=800),
@@ -216,6 +226,9 @@ def build_turn_understanding_input(
         dialog_constraints=_normalize_list(state.get("constraints") or session_state.get("constraints") or (), limit=8),
         semantic_review_hints=_normalize_list(semantic_review_hints or (), limit=8, item_limit=64),
         has_followup_context="# current user query" in str(raw_query or "").lower(),
+        has_recent_user_turns=bool(normalized_recent_users),
+        has_recent_assistant_turns=bool(normalized_recent_assistant),
+        historical_recall_requested=bool(historical_recall_requested),
         compressed_followup_parsed=bool(state.get("compressed_followup_parsed")),
         active_topic_reused=bool(state.get("active_topic_reused")),
         context_anchor_applied=bool(context_anchor_applied),
@@ -230,12 +243,27 @@ def detect_turn_signals(turn_input: TurnUnderstandingInput) -> tuple[str, ...]:
 
     if turn_input.has_followup_context:
         signals.append("followup_context_present")
+    if turn_input.has_recent_user_turns:
+        signals.append("recent_user_turns_present")
+    if turn_input.has_recent_assistant_turns:
+        signals.append("recent_assistant_turns_present")
     if turn_input.active_topic or turn_input.active_topic_reused or turn_input.context_anchor_applied:
         signals.append("active_topic_present")
     if turn_input.open_goal or turn_input.next_step:
         signals.append("open_loop_present")
     if turn_input.compressed_followup_parsed:
         signals.append("compressed_followup")
+    if turn_input.historical_recall_requested:
+        signals.append("historical_recall_requested")
+        if (
+            turn_input.has_recent_user_turns
+            or turn_input.has_recent_assistant_turns
+            or turn_input.has_followup_context
+            or turn_input.active_topic
+            or turn_input.open_goal
+            or turn_input.next_step
+        ):
+            signals.append("historical_recall_with_context")
 
     if "behavior_preference_alignment" in hints:
         signals.extend(["behavior_instruction", "preference_update"])
@@ -304,6 +332,8 @@ def resolve_dominant_turn_type(turn_input: TurnUnderstandingInput, signals: Iter
         return "result_extraction"
     if "clarification_language" in signal_set:
         return "clarification"
+    if "historical_recall_with_context" in signal_set:
+        return "followup"
     if "short_contextual_followup_language" in signal_set:
         return "followup"
     if (
@@ -326,6 +356,8 @@ def resolve_response_mode(dominant_turn_type: str, turn_input: TurnUnderstanding
         return "correct_previous_path"
     if dominant_turn_type == "clarification":
         return "clarify_before_execute"
+    if dominant_turn_type == "followup" and "historical_recall_requested" in signal_set:
+        return "resume_open_loop"
     if dominant_turn_type == "followup" and ("open_loop_present" in signal_set or turn_input.next_step):
         return "resume_open_loop"
     if dominant_turn_type == "followup":

@@ -17,7 +17,7 @@ from orchestration.diagnosis_records import (
 )
 from orchestration.preference_instruction_memory import select_stored_preference_memory_with_summary
 from orchestration.meta_response_policy import build_meta_policy_input, resolve_meta_response_policy
-from orchestration.topic_state_history import select_historical_topic_memory
+from orchestration.topic_state_history import parse_historical_topic_recall_hint, select_historical_topic_memory
 from orchestration.goal_spec import derive_goal_spec
 from orchestration.root_cause_tasks import build_root_cause_task_payload
 from orchestration.turn_understanding import (
@@ -1912,6 +1912,101 @@ def _select_relevant_recent_assistant_turns(
     return selected
 
 
+def _select_recent_historical_topic_fallback(
+    *,
+    effective_query: str,
+    recent_user_turns: Iterable[str],
+    recent_assistant_turns: Iterable[str],
+    conversation_state: Mapping[str, Any],
+    limit: int = 2,
+) -> Tuple[List[str], Dict[str, Any]]:
+    hint = parse_historical_topic_recall_hint(effective_query)
+    if not hint.requested or hint.time_label not in {"recent_moment", "recent_history"}:
+        return [], {
+            "requested": hint.requested,
+            "time_label": hint.time_label,
+            "selected": [],
+            "selected_details": [],
+            "history_size": 0,
+            "focus_terms": list(hint.focus_terms),
+            "fallback_applied": False,
+        }
+
+    lowered_query = _clean_meta_state_fragment(effective_query, max_chars=220).lower()
+    wants_assistant_recall = "du" in lowered_query and any(
+        token in lowered_query for token in ("gesagt", "geantwortet", "antwort", "geschrieben")
+    )
+    candidates: List[Tuple[float, str, str]] = []
+
+    for index, item in enumerate(recent_user_turns):
+        cleaned = _clean_meta_state_fragment(item, max_chars=220)
+        if not cleaned:
+            continue
+        overlap = _meta_context_overlap_size(cleaned, effective_query)
+        if hint.focus_terms and overlap <= 0 and index > 0:
+            continue
+        score = float((overlap * 3) + max(0, 4 - index) + 0.6)
+        candidates.append((score, "recent_user_turn", cleaned))
+
+    if wants_assistant_recall:
+        for index, item in enumerate(recent_assistant_turns):
+            cleaned = _clean_meta_state_fragment(item, max_chars=220)
+            if not cleaned:
+                continue
+            overlap = _meta_context_overlap_size(cleaned, effective_query)
+            score = float((overlap * 3) + max(0, 4 - index) + 1.2)
+            candidates.append((score, "recent_assistant_turn", cleaned))
+
+    state_preview = _meta_context_slot_text(
+        "conversation_state",
+        [
+            conversation_state.get("active_topic"),
+            conversation_state.get("active_goal"),
+            conversation_state.get("open_loop"),
+        ],
+    )
+    if state_preview:
+        overlap = _meta_context_overlap_size(state_preview, effective_query)
+        candidates.append((float((overlap * 3) + 1.0), "conversation_state", state_preview))
+
+    candidates.sort(key=lambda item: (-item[0], item[1], item[2]))
+    selected: List[str] = []
+    selected_details: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for score, source, content in candidates:
+        if content in seen:
+            continue
+        seen.add(content)
+        if source == "recent_assistant_turn":
+            rendered = f"historical_topic[{hint.time_label}] => recent_assistant_turn: {content}"
+        elif source == "conversation_state":
+            rendered = f"historical_topic[{hint.time_label}] => {content}"
+        else:
+            rendered = f"historical_topic[{hint.time_label}] => recent_user_turn: {content}"
+        selected.append(rendered)
+        selected_details.append(
+            {
+                "source": source,
+                "content_preview": content[:180],
+                "time_label": hint.time_label,
+                "score": round(float(score), 2),
+            }
+        )
+        if len(selected) >= max(1, limit):
+            break
+
+    return selected, {
+        "requested": hint.requested,
+        "time_label": hint.time_label,
+        "selected": list(selected),
+        "selected_details": selected_details,
+        "history_size": 0,
+        "focus_terms": list(hint.focus_terms),
+        "fallback_applied": bool(selected),
+        "fallback_source": selected_details[0]["source"] if selected_details else "",
+    }
+
+
 def _select_open_loop_payload(
     *,
     conversation_state: Mapping[str, Any],
@@ -2112,6 +2207,13 @@ def build_meta_context_bundle(
         session_id=str((conversation_state or {}).get("session_id") or "default"),
         query=effective_query,
     )
+    if not historical_topic_memory:
+        historical_topic_memory, historical_topic_selection = _select_recent_historical_topic_fallback(
+            effective_query=effective_query,
+            recent_user_turns=recent_users,
+            recent_assistant_turns=recent_assistant,
+            conversation_state=merged_state,
+        )
     selected_open_loop = _select_open_loop_payload(
         conversation_state=merged_state,
         dialog_state=dialog,
@@ -2549,6 +2651,8 @@ def classify_meta_task(
         dialog_state=dialog_state,
         semantic_review_hints=semantic_review.get("semantic_ambiguity_hints") or [],
         conversation_state=conversation_state,
+        recent_user_turns=recent_user_turns,
+        recent_assistant_turns=recent_assistant_turns,
         context_anchor_applied=context_anchor_applied,
     )
     turn_interpretation = interpret_turn(turn_input)

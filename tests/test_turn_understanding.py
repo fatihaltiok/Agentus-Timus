@@ -145,3 +145,21 @@ def test_interpret_turn_treats_short_contextual_reframe_as_followup_without_caps
 
     assert interpretation.dominant_turn_type == "followup"
     assert interpretation.response_mode == "resume_open_loop"
+
+
+def test_interpret_turn_treats_recent_historical_recall_with_recent_turns_as_followup():
+    turn_input = build_turn_understanding_input(
+        raw_query="weisst du noch was wir eben ueber archivregeln besprochen hatten",
+        effective_query="weisst du noch was wir eben ueber archivregeln besprochen hatten",
+        dialog_state={},
+        semantic_review_hints=[],
+        conversation_state={},
+        recent_user_turns=["Lass uns ueber Langzeitgedaechtnis und Archivregeln bei Timus sprechen."],
+        context_anchor_applied=False,
+    )
+
+    interpretation = interpret_turn(turn_input)
+
+    assert interpretation.dominant_turn_type == "followup"
+    assert interpretation.response_mode == "resume_open_loop"
+    assert interpretation.route_bias == "follow_existing_lane"

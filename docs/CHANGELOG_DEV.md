@@ -4329,3 +4329,52 @@ Offener Rest:
 
 - der spontane `von eben`-Live-Test zeigte die neue Policy live, aber noch keinen belastbaren `historical_topic_attached`-Nachweis
 - der Rest liegt damit nicht mehr in der Zeitanker-/Decay-Logik, sondern in der noch zu schwachen Themenverankerung freier neuer Tasks
+
+## Nachtrag 2026-04-08 - D0.8 abgeschlossen: robuste Wiederaufnahme fuer `von eben`
+
+Der offene D0.8-Rest ist jetzt geschlossen.
+
+Neu:
+
+- [turn_understanding.py](/home/fatih-ubuntu/dev/timus/orchestration/turn_understanding.py)
+  - zeitverankerte Rueckfragen mit frischem Session-Kontext werden nicht mehr als nackter `new_task` gelesen
+  - `historical_recall_requested` + frische User-/Assistant-Turns -> `followup`
+  - dadurch wird derselbe Themenfaden robuster wiederaufgenommen
+- [meta_orchestration.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_orchestration.py)
+  - wenn `topic_history` fuer `von eben` noch leer ist, baut Timus jetzt einen historischen Themenanker aus den frischen Session-Turns
+  - Fallback-Quellen:
+    - `recent_user_turn`
+    - bei `was hast du eben gesagt` auch `recent_assistant_turn`
+  - der historische Slot ist damit nicht mehr davon abhaengig, dass der vorige freie Turn schon komplett in `topic_history` gelandet ist
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - `historical_topic_attached` traegt jetzt auch `fallback_source`
+
+Tests:
+
+- [test_turn_understanding.py](/home/fatih-ubuntu/dev/timus/tests/test_turn_understanding.py)
+  - neuer Fall fuer `von eben` + frischer Recent-User-Turn
+- [test_meta_orchestration.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_orchestration.py)
+  - Fallback auf `recent_user_turn`
+  - Fallback auf `recent_assistant_turn`
+
+Verifikation:
+
+- `python -m py_compile orchestration/turn_understanding.py orchestration/meta_orchestration.py server/mcp_server.py tests/test_turn_understanding.py tests/test_meta_orchestration.py` -> gruen
+- `pytest -q tests/test_turn_understanding.py tests/test_meta_orchestration.py tests/test_topic_state_history.py tests/test_topic_state_history_hypothesis.py tests/test_topic_state_history_contracts.py tests/test_conversation_state.py tests/test_autonomy_observation_d0.py tests/test_android_chat_language.py` -> `118 passed`
+
+Runtime:
+
+- `timus-mcp.service` und `timus-dispatcher.service` wurden am **8. April 2026, 14:09:02 CEST** neu geladen
+- direkter Smoke nach dem Reload:
+  - Query: `weisst du noch was wir eben ueber archivregeln besprochen hatten`
+  - frischer Session-Turn: `Lass uns ueber Langzeitgedaechtnis und Archivregeln bei Timus sprechen.`
+  - Ergebnis:
+    - `dominant_turn_type = followup`
+    - `response_mode = summarize_state`
+    - `historical_topic_selection.fallback_source = recent_user_turn`
+    - `historical_topic_memory` im Bundle vorhanden
+
+Status:
+
+- D0.8 abgeschlossen
+- naechster logischer Block: `D0.9 Specialist Context Propagation`

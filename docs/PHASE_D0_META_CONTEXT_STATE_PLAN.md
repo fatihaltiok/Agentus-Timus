@@ -573,11 +573,38 @@ Erster Runtime-Slice:
   - Session-Kapseln tragen jetzt `topic_history`
   - Follow-up-Capsules laden decay-bereinigten State plus `topic_history`
 
-Noch offen fuer den Abschluss von D0.8:
+Nachhaertung 2026-04-08 - Resume/Anchor-Robustheit:
 
-- staerkere Live-End-to-End-Nachweise fuer echte historische Topic-Rueckgriffe mit belastbaren Themenankern
+- [turn_understanding.py](/home/fatih-ubuntu/dev/timus/orchestration/turn_understanding.py)
+  - zeitverankerte Rueckfragen mit frischem Session-Kontext laufen jetzt nicht mehr stumpf als `new_task`
+  - `historical_recall_requested` + frische User-/Assistant-Turns -> `followup`
+  - Basismodus fuer solche Faelle wird auf `resume_open_loop` gezogen; die D0.6-Policy setzt danach sauber `summarize_state`
+- [meta_orchestration.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_orchestration.py)
+  - wenn `topic_history` fuer `von eben` noch leer ist, baut Timus jetzt einen historischen Themenanker aus frischen Session-Turns:
+    - `recent_user_turn`
+    - bei `was hast du eben gesagt` auch `recent_assistant_turn`
+  - dadurch entsteht jetzt `historical_topic_memory`, auch wenn der vorige freie Turn noch nicht in `topic_history` materialisiert wurde
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - `historical_topic_attached` traegt jetzt auch `fallback_source`
 
-Nachhaertung 2026-04-08:
+Verifikation:
+
+- `pytest -q tests/test_turn_understanding.py tests/test_meta_orchestration.py tests/test_topic_state_history.py tests/test_topic_state_history_hypothesis.py tests/test_topic_state_history_contracts.py tests/test_conversation_state.py tests/test_autonomy_observation_d0.py tests/test_android_chat_language.py` -> `118 passed`
+- direkter Runtime-Smoke:
+  - Query: `weisst du noch was wir eben ueber archivregeln besprochen hatten`
+  - frischer Session-Turn: `Lass uns ueber Langzeitgedaechtnis und Archivregeln bei Timus sprechen.`
+  - Ergebnis:
+    - `dominant_turn_type = followup`
+    - `response_mode = summarize_state`
+    - `historical_topic_selection.fallback_source = recent_user_turn`
+    - `historical_topic_memory` im Bundle vorhanden
+
+Status:
+
+- D0.8 ist damit im eigenen Scope abgeschlossen
+- weitergehende Retrieval-Qualitaet ueber viele Monate/Jahre bleibt spaeter ein Eval-/Qualitaetsthema, aber nicht mehr der offene Kernrest von D0.8
+
+Vorheriger Nachhaertungsblock 2026-04-08:
 
 - [topic_state_history.py](/home/fatih-ubuntu/dev/timus/orchestration/topic_state_history.py)
   - allgemeine relative Monats-/Jahresfenster statt nur harter Einzelwerte:

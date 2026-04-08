@@ -1441,6 +1441,7 @@ def _record_meta_turn_understanding_observations(
                 "source": "canvas_chat",
                 "dominant_turn_type": dominant_turn_type,
                 "time_label": str(historical_topic_selection.get("time_label") or ""),
+                "fallback_source": str(historical_topic_selection.get("fallback_source") or ""),
                 "slot_count": slot_types.count("historical_topic_memory"),
                 "history_size": int(historical_topic_selection.get("history_size") or 0),
             },
