@@ -54,6 +54,59 @@ Ergebnis:
 - `53 passed` im breiteren Browser-/Phase-D-/Pending-Workflow-Ring
 - `py_compile` gruen
 
+## Fortschritt 2026-04-09 - Phase D3.2 Resume fuer user-mediated Login
+
+D3.1 konnte Login-Workflows kontrolliert an der Login-Maske stoppen, aber der eigentliche Rueckweg fehlte noch: `weiter`, `ich bin eingeloggt` oder Hinweise auf CAPTCHA/2FA waren noch nicht als gezielte Wiederaufnahme desselben Login-Workflows verdrahtet.
+
+Nachgezogen:
+
+- [pending_workflow_state.py](/home/fatih-ubuntu/dev/timus/orchestration/pending_workflow_state.py)
+  - neue Resume-Klassifikation fuer Pending-Workflow-Antworten:
+    - `resume_requested`
+    - `challenge_present`
+    - `resume_blocked`
+  - typische D3-Faelle wie `ich bin eingeloggt`, `weiter`, `ich sehe jetzt eine 2fa challenge` werden jetzt strukturiert erkannt
+- [mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - Follow-up-Capsules tragen jetzt zusaetzlich:
+    - `pending_workflow_reply`
+    - `pending_workflow_id`
+    - `pending_workflow_url`
+    - `pending_workflow_source_agent`
+    - `pending_workflow_source_stage`
+    - `pending_workflow_reply_kind`
+  - fuer offene `awaiting_user`-Login-Workflows wird bei Resume-Sprache jetzt der urspruengliche Source-Agent bevorzugt
+  - wenn derselbe Agent den Login-Workflow erfolgreich wieder aufnimmt und keinen neuen Blocker setzt, wird der offene Pending-Workflow wieder sauber geloescht
+- [visual.py](/home/fatih-ubuntu/dev/timus/agent/agents/visual.py)
+  - neuer Resume-Pfad fuer `user_mediated_login`
+  - `visual` kann jetzt aus dem Follow-up-Kontext lesen:
+    - welcher Login-Workflow offen ist
+    - ob der Nutzer `weiter` / `ich bin eingeloggt` signalisiert
+    - ob stattdessen eine Challenge/2FA im Weg ist
+  - bei Resume:
+    - erfolgreicher Login wird ueber sichtbare Screen-Signale validiert
+    - Challenges werden wieder als strukturierter `challenge_required`-Workflow zurueckgemeldet
+    - unklare/gescheiterte Resume-Faelle bleiben als `awaiting_user` sichtbar statt still ins Leere zu laufen
+- [tests/test_pending_workflow_state.py](/home/fatih-ubuntu/dev/timus/tests/test_pending_workflow_state.py)
+  - neue Resume-/Challenge-Vertragstests
+- [tests/test_android_chat_language.py](/home/fatih-ubuntu/dev/timus/tests/test_android_chat_language.py)
+  - neue Regression:
+    - `ich bin eingeloggt` bei offenem Login-Workflow praeselektiert jetzt den `visual`-Resume-Pfad und serialisiert den Reply-Kind in den Follow-up-Kontext
+- [tests/test_specialist_handoffs.py](/home/fatih-ubuntu/dev/timus/tests/test_specialist_handoffs.py)
+  - neue Regression:
+    - `visual` bestaetigt einen resumed Login bei erfolgreicher Screen-Validierung statt wieder an der Login-Maske stehenzubleiben
+
+Verifikation:
+
+- `python -m py_compile orchestration/pending_workflow_state.py server/mcp_server.py agent/agents/visual.py tests/test_pending_workflow_state.py tests/test_android_chat_language.py tests/test_specialist_handoffs.py`
+- `pytest -q tests/test_pending_workflow_state.py tests/test_android_chat_language.py tests/test_specialist_handoffs.py`
+- `pytest -q tests/test_browser_workflow_plan.py tests/test_approval_auth_contract.py tests/test_pending_workflow_state.py tests/test_android_chat_language.py tests/test_specialist_context_runtime.py tests/test_specialist_handoffs.py tests/test_browser_isolation.py`
+
+Ergebnis:
+
+- `52 passed` im direkten D3-Resume-Ring
+- `84 passed` im breiteren Browser-/Phase-D-/Pending-Workflow-Ring
+- `py_compile` gruen
+
 ## Fortschritt 2026-04-09 - Phase D2.2 Pending-Workflow sichtbar in Telegram und Canvas
 
 Mit D2.1 hatte Timus bereits einen echten Pending-Workflow-Zustand pro Session, aber dieser blieb noch weitgehend intern. Telegram und Canvas sahen weiter nur allgemeine Blocker, nicht den eigentlichen Approval-/Auth-Workflow mit Status, Service und naechstem Nutzerschritt.

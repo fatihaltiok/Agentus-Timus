@@ -536,6 +536,38 @@ def test_short_contextual_reply_anchors_on_pending_workflow_without_pending_prom
     assert mcp_server._is_short_contextual_reply("ja mach weiter", capsule) is True
 
 
+def test_pending_login_workflow_resume_prefers_source_agent_and_serializes_reply_kind(tmp_path, monkeypatch):
+    mcp_server._chat_history.clear()
+    monkeypatch.setenv("TIMUS_SESSION_STORAGE_ROOT", str(tmp_path))
+
+    session_id = "login_resume_roundtrip"
+    mcp_server._store_pending_workflow_in_capsule(
+        session_id,
+        {
+            "status": "awaiting_user",
+            "service": "github",
+            "url": "https://github.com/login",
+            "reason": "user_mediated_login",
+            "message": "Die Login-Maske ist bereit.",
+            "user_action_required": "Bitte fuehre den Login selbst aus.",
+            "resume_hint": "Sag danach weiter.",
+            "source_agent": "visual",
+            "source_stage": "await_login_completion",
+        },
+        updated_at="2026-04-09T11:00:00Z",
+    )
+
+    followup_capsule = mcp_server._build_followup_capsule(session_id, query="ich bin eingeloggt")
+
+    assert followup_capsule["pending_workflow_reply"]["reply_kind"] == "resume_requested"
+    assert mcp_server._resolve_followup_agent("ich bin eingeloggt", followup_capsule) == "visual"
+
+    augmented = mcp_server._augment_query_with_followup_capsule("ich bin eingeloggt", followup_capsule)
+    assert "pending_workflow_reply_kind: resume_requested" in augmented
+    assert "pending_workflow_source_agent: visual" in augmented
+    assert "pending_workflow_url: https://github.com/login" in augmented
+
+
 def test_record_meta_turn_understanding_observations_emits_context_misread_suspected(monkeypatch):
     captured: list[tuple[str, dict]] = []
     monkeypatch.setattr(

@@ -633,6 +633,43 @@ async def test_visual_login_flow_stops_at_login_maske_and_returns_awaiting_user(
 
 
 @pytest.mark.asyncio
+async def test_visual_resumes_pending_login_followup_after_user_reports_success(monkeypatch):
+    agent = VisualAgent(tools_description_string="")
+
+    async def _fake_detect_authenticated_session_state(self, service: str):
+        return {
+            "success": True,
+            "positive_hits": ["repositories", "profile"],
+            "negative_hits": [],
+            "text_preview": "repositories profile",
+        }
+
+    monkeypatch.setattr(VisualAgent, "_detect_authenticated_session_state", _fake_detect_authenticated_session_state)
+
+    task = "\n".join(
+        [
+            "# FOLLOW-UP CONTEXT",
+            "last_agent: meta",
+            "pending_workflow_id: wf_login_resume",
+            "pending_workflow_status: awaiting_user",
+            "pending_workflow_service: github",
+            "pending_workflow_reason: user_mediated_login",
+            "pending_workflow_url: https://github.com/login",
+            "pending_workflow_source_agent: visual",
+            "pending_workflow_reply_kind: resume_requested",
+            "",
+            "# CURRENT USER QUERY",
+            "ich bin eingeloggt",
+        ]
+    )
+
+    result = await agent.run(task)
+
+    assert "Login bei github wirkt bestaetigt" in result
+    assert "repositories" in result
+
+
+@pytest.mark.asyncio
 async def test_system_snapshot_compact_mode_targets_requested_service(monkeypatch):
     calls = []
 

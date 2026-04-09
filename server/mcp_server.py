@@ -125,6 +125,7 @@ from orchestration.conversation_state import (
 )
 from orchestration.meta_context_eval import detect_context_misread_risk
 from orchestration.pending_workflow_state import (
+    classify_pending_workflow_reply,
     clear_pending_workflow_state,
     is_pending_workflow_state,
     pending_workflow_state_to_dict,
@@ -1838,6 +1839,7 @@ def _build_followup_capsule(session_id: str, query: str = "") -> dict:
     last_proposed_action: dict | None = capsule.get("last_proposed_action") or None
     pending_followup_prompt = str(capsule.get("pending_followup_prompt") or "").strip()
     pending_workflow = capsule.get("pending_workflow") if isinstance(capsule.get("pending_workflow"), dict) else {}
+    pending_workflow_reply = classify_pending_workflow_reply(query, pending_workflow)
     if not pending_followup_prompt and last_assistant:
         pending_followup_prompt = _extract_pending_followup_prompt(last_assistant)
     conversation_state, conversation_state_decay = decay_conversation_state(
@@ -1867,6 +1869,7 @@ def _build_followup_capsule(session_id: str, query: str = "") -> dict:
         "pending_followup_prompt": pending_followup_prompt,
         "last_proposed_action": last_proposed_action,
         "pending_workflow": capsule.get("pending_workflow") or {},
+        "pending_workflow_reply": pending_workflow_reply,
         "semantic_recall": semantic_recall,
         "conversation_state": conversation_state.to_dict(),
         "conversation_state_decay": conversation_state_decay,
@@ -1887,16 +1890,31 @@ def _resolve_followup_agent(query: str, capsule: dict[str, str]) -> str:
         normalized,
         str(capsule.get("last_assistant") or ""),
     )
+    pending_workflow_reply = capsule.get("pending_workflow_reply") if isinstance(capsule.get("pending_workflow_reply"), dict) else {}
+    has_pending_workflow_resume = bool(str(pending_workflow_reply.get("reply_kind") or "").strip())
     if not (
         is_followup
         or is_contextual_recall
         or is_short_contextual_reply
         or is_capability_followup
         or is_result_extraction_followup
+        or has_pending_workflow_resume
     ):
         return ""
     matched_reply_points = capsule.get("matched_reply_points") or []
     last_agent = str(capsule.get("last_agent") or "").strip().lower()
+    pending_workflow = capsule.get("pending_workflow") if isinstance(capsule.get("pending_workflow"), dict) else {}
+    pending_source_agent = str(pending_workflow.get("source_agent") or "").strip().lower()
+    pending_status = str(pending_workflow.get("status") or "").strip().lower()
+    pending_reason = str(pending_workflow.get("reason") or "").strip().lower()
+    pending_reply_kind = str(pending_workflow_reply.get("reply_kind") or "").strip().lower()
+    if (
+        pending_source_agent
+        and pending_status == "awaiting_user"
+        and pending_reason == "user_mediated_login"
+        and pending_reply_kind in {"resume_requested", "challenge_present", "resume_blocked"}
+    ):
+        return pending_source_agent
     if not last_agent:
         return ""
     if is_capability_followup:
@@ -1961,6 +1979,8 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
     last_proposed_action: dict | None = capsule.get("last_proposed_action") or None
     pending_followup_prompt = str(capsule.get("pending_followup_prompt") or "").strip()
     pending_workflow = capsule.get("pending_workflow") if isinstance(capsule.get("pending_workflow"), dict) else {}
+    pending_workflow_reply = capsule.get("pending_workflow_reply") if isinstance(capsule.get("pending_workflow_reply"), dict) else {}
+    has_pending_workflow_resume = bool(str(pending_workflow_reply.get("reply_kind") or "").strip())
 
     # P4: Kurze Zustimmung + gespeichertes Angebot → direkt auflösen
     if is_affirm and last_proposed_action and not _should_prefer_pending_followup_prompt(
@@ -1994,6 +2014,7 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
         or is_short_contextual_reply
         or is_capability_followup
         or is_result_extraction_followup
+        or has_pending_workflow_resume
     ):
         return query
 
@@ -2070,6 +2091,7 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
     if pending_followup_prompt:
         parts.append(f"pending_followup_prompt: {pending_followup_prompt[:320]}")
     if isinstance(pending_workflow, dict) and pending_workflow:
+        workflow_id = str(pending_workflow.get("workflow_id") or "").strip()
         workflow_status = str(pending_workflow.get("status") or "").strip()
         workflow_service = str(pending_workflow.get("service") or pending_workflow.get("platform") or "").strip()
         workflow_reason = str(pending_workflow.get("reason") or "").strip()
@@ -2077,6 +2099,8 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
         workflow_user_action = str(pending_workflow.get("user_action_required") or "").strip()
         workflow_resume_hint = str(pending_workflow.get("resume_hint") or "").strip()
         workflow_challenge_type = str(pending_workflow.get("challenge_type") or "").strip()
+        if workflow_id:
+            parts.append(f"pending_workflow_id: {workflow_id[:64]}")
         if workflow_status:
             parts.append(f"pending_workflow_status: {workflow_status[:64]}")
         if workflow_service:
@@ -2091,6 +2115,19 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
             parts.append(f"pending_workflow_resume_hint: {workflow_resume_hint[:220]}")
         if workflow_challenge_type:
             parts.append(f"pending_workflow_challenge_type: {workflow_challenge_type[:64]}")
+        workflow_url = str(pending_workflow.get("url") or "").strip()
+        workflow_source_agent = str(pending_workflow.get("source_agent") or "").strip()
+        workflow_source_stage = str(pending_workflow.get("source_stage") or "").strip()
+        if workflow_url:
+            parts.append(f"pending_workflow_url: {workflow_url[:320]}")
+        if workflow_source_agent:
+            parts.append(f"pending_workflow_source_agent: {workflow_source_agent[:64]}")
+        if workflow_source_stage:
+            parts.append(f"pending_workflow_source_stage: {workflow_source_stage[:96]}")
+    if isinstance(pending_workflow_reply, dict) and pending_workflow_reply:
+        reply_kind = str(pending_workflow_reply.get("reply_kind") or "").strip()
+        if reply_kind:
+            parts.append(f"pending_workflow_reply_kind: {reply_kind[:64]}")
     if isinstance(conversation_state, dict):
         active_topic = str(conversation_state.get("active_topic") or "").strip()
         active_goal = str(conversation_state.get("active_goal") or "").strip()
@@ -4264,11 +4301,19 @@ async def canvas_chat(request: Request):
         pending_followup_prompt = _extract_pending_followup_prompt(reply)
         _store_pending_followup_prompt_in_capsule(session_id, pending_followup_prompt)
         previous_pending_workflow = followup_capsule.get("pending_workflow") if isinstance(followup_capsule.get("pending_workflow"), dict) else {}
+        pending_workflow_reply = followup_capsule.get("pending_workflow_reply") if isinstance(followup_capsule.get("pending_workflow_reply"), dict) else {}
+        pending_workflow_reply_kind = str(pending_workflow_reply.get("reply_kind") or "").strip().lower()
         if (
             previous_pending_workflow
             and not pending_workflow_updated
-            and str((meta_classification or {}).get("dominant_turn_type") or "").strip().lower()
-            in {"approval_response", "auth_response", "handover_resume"}
+            and (
+                str((meta_classification or {}).get("dominant_turn_type") or "").strip().lower()
+                in {"approval_response", "auth_response", "handover_resume"}
+                or (
+                    pending_workflow_reply_kind == "resume_requested"
+                    and agent == str(previous_pending_workflow.get("source_agent") or "").strip()
+                )
+            )
         ):
             _store_pending_workflow_in_capsule(
                 session_id,

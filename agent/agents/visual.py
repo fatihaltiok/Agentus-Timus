@@ -20,6 +20,8 @@ from agent.shared.delegation_handoff import DelegationHandoff, parse_delegation_
 from agent.shared.json_utils import extract_json_robust
 from agent.shared.vision_formatter import convert_openai_to_anthropic
 from orchestration.approval_auth_contract import (
+    build_awaiting_user_workflow_payload,
+    build_challenge_required_workflow_payload,
     build_user_mediated_login_workflow_payload,
     derive_user_action_blocker_reason,
     normalize_phase_d_workflow_payload,
@@ -420,6 +422,160 @@ class VisualAgent(BaseAgent):
                 lines.append(f"{key}={value}")
 
         return effective_task, "\n".join(lines)
+
+    @staticmethod
+    def _extract_followup_field(raw_task: str, field_name: str) -> str:
+        match = re.search(
+            rf"^\s*{re.escape(field_name)}:\s*(.+)$",
+            str(raw_task or ""),
+            flags=re.IGNORECASE | re.MULTILINE,
+        )
+        return str(match.group(1) if match else "").strip()
+
+    @staticmethod
+    def _extract_followup_current_query(raw_task: str) -> str:
+        match = re.search(
+            r"#\s*CURRENT USER QUERY\s*(.+)$",
+            str(raw_task or ""),
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        return str(match.group(1) if match else "").strip()
+
+    def _extract_pending_login_resume_context(self, raw_task: str) -> dict[str, str]:
+        source = str(raw_task or "")
+        if "# FOLLOW-UP CONTEXT" not in source:
+            return {}
+        status = self._extract_followup_field(source, "pending_workflow_status").lower()
+        reason = self._extract_followup_field(source, "pending_workflow_reason").lower()
+        reply_kind = self._extract_followup_field(source, "pending_workflow_reply_kind").lower()
+        source_agent = self._extract_followup_field(source, "pending_workflow_source_agent").lower()
+        if status != "awaiting_user" or reason != "user_mediated_login" or not reply_kind:
+            return {}
+        return {
+            "workflow_id": self._extract_followup_field(source, "pending_workflow_workflow_id")
+            or self._extract_followup_field(source, "pending_workflow_id"),
+            "status": status,
+            "reason": reason,
+            "service": self._extract_followup_field(source, "pending_workflow_service").lower(),
+            "url": self._extract_followup_field(source, "pending_workflow_url"),
+            "reply_kind": reply_kind,
+            "source_agent": source_agent,
+            "current_query": self._extract_followup_current_query(source),
+        }
+
+    @staticmethod
+    def _infer_challenge_type_from_query(query: str) -> str:
+        lowered = str(query or "").strip().lower()
+        if "captcha" in lowered:
+            return "captcha"
+        if "2fa" in lowered or "authenticator" in lowered or "sms" in lowered or "code" in lowered:
+            return "2fa"
+        return "security_challenge"
+
+    @staticmethod
+    def _authenticated_markers_for_service(service: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        common_positive = ("dashboard", "profil", "profile", "account", "settings", "abmelden", "sign out")
+        common_negative = ("login", "sign in", "anmelden", "passwort", "password", "username")
+        normalized = str(service or "").strip().lower()
+        if normalized == "github":
+            return (
+                ("repositories", "pull requests", "issues", "codespaces", "github", *common_positive),
+                common_negative,
+            )
+        if normalized == "x":
+            return (
+                ("home", "notifications", "messages", "post", "what's happening", *common_positive),
+                common_negative,
+            )
+        if normalized == "linkedin":
+            return (
+                ("feed", "network", "messaging", "jobs", "linkedin", *common_positive),
+                common_negative,
+            )
+        if normalized == "outlook":
+            return (
+                ("inbox", "new mail", "outlook", "sent items", *common_positive),
+                common_negative,
+            )
+        return (common_positive, common_negative)
+
+    async def _detect_authenticated_session_state(self, service: str) -> dict[str, Any]:
+        screen_state = await self._analyze_current_screen()
+        elements = list(screen_state.get("elements") or []) if isinstance(screen_state, dict) else []
+        text_blob = " | ".join(
+            str(item.get("text") or "").strip().lower()
+            for item in elements
+            if isinstance(item, dict) and str(item.get("text") or "").strip()
+        )
+        positive_markers, negative_markers = self._authenticated_markers_for_service(service)
+        positive_hits = [marker for marker in positive_markers if marker in text_blob]
+        negative_hits = [marker for marker in negative_markers if marker in text_blob]
+        return {
+            "success": bool(positive_hits),
+            "positive_hits": positive_hits,
+            "negative_hits": negative_hits,
+            "text_preview": text_blob[:280],
+        }
+
+    async def _resume_user_mediated_login(self, context: dict[str, str]) -> str:
+        service = str(context.get("service") or "").strip().lower()
+        url = str(context.get("url") or "").strip()
+        reply_kind = str(context.get("reply_kind") or "").strip().lower()
+        workflow_id = str(context.get("workflow_id") or "").strip()
+        current_query = str(context.get("current_query") or "").strip()
+
+        if reply_kind == "challenge_present":
+            payload = build_challenge_required_workflow_payload(
+                service=service,
+                workflow_id=workflow_id,
+                challenge_type=self._infer_challenge_type_from_query(current_query),
+                message="Ich sehe den Login noch nicht als abgeschlossen, sondern als Sicherheitspruefung.",
+                user_action_required=(
+                    "Bitte loese die Challenge oder 2FA selbst im Browser und sag danach wieder 'weiter'."
+                ),
+            )
+            self._emit_user_action_blocker(payload, stage="await_login_challenge_resolution")
+            return f"{payload['message']}\n\n{payload['user_action_required']}".strip()
+
+        if reply_kind == "resume_blocked":
+            payload = build_awaiting_user_workflow_payload(
+                service=service,
+                workflow_id=workflow_id,
+                url=url,
+                reason="user_mediated_login",
+                step="login_form_ready",
+                message="Der Login wirkt noch nicht abgeschlossen.",
+                resume_hint="Sage 'ich bin eingeloggt' oder beschreibe die sichtbare Blockade genauer.",
+                user_action_required="Bitte schliesse den Login selbst im Browser ab oder gib die sichtbare Blockade an.",
+            )
+            self._emit_user_action_blocker(payload, stage="await_login_completion")
+            return f"{payload['message']}\n\n{payload['user_action_required']}".strip()
+
+        verification = await self._detect_authenticated_session_state(service)
+        if verification.get("success"):
+            positives = ", ".join(str(item) for item in verification.get("positive_hits") or [])
+            suffix = f" Sichtbare Signale: {positives}." if positives else ""
+            return (
+                f"Der Login bei {service or 'dem Dienst'} wirkt bestaetigt. "
+                f"Der user-mediated Login-Workflow ist damit abgeschlossen.{suffix}"
+            ).strip()
+
+        payload = build_awaiting_user_workflow_payload(
+            service=service,
+            workflow_id=workflow_id,
+            url=url,
+            reason="user_mediated_login",
+            step="login_form_ready",
+            message="Ich kann den erfolgreichen Login noch nicht sicher bestaetigen.",
+            resume_hint=(
+                "Wenn du eingeloggt bist, sag 'ich bin eingeloggt' oder beschreibe kurz, was du jetzt im Browser siehst."
+            ),
+            user_action_required=(
+                "Bitte schliesse den Login selbst im Browser ab. Falls eine Challenge sichtbar ist, nenne sie kurz."
+            ),
+        )
+        self._emit_user_action_blocker(payload, stage="await_login_completion")
+        return f"{payload['message']}\n\n{payload['user_action_required']}".strip()
 
     async def _call_llm(self, messages: List[Dict]) -> str:
         if self.provider == ModelProvider.ANTHROPIC:
@@ -1004,6 +1160,9 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             return None
 
     async def run(self, task: str) -> Any:
+        pending_login_resume = self._extract_pending_login_resume_context(task)
+        if pending_login_resume and pending_login_resume.get("source_agent") in {"", "visual", "visual_nemotron"}:
+            return await self._resume_user_mediated_login(pending_login_resume)
         effective_task, handoff_context = self._prepare_visual_task(task)
         handoff = parse_delegation_handoff(task)
         specialist_context_payload = (

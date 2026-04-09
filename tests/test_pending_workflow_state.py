@@ -33,3 +33,35 @@ def test_pending_workflow_state_rejects_non_pending_status():
     from orchestration.pending_workflow_state import normalize_pending_workflow_state
 
     assert normalize_pending_workflow_state({"status": "completed"}) is None
+
+
+def test_classify_pending_workflow_reply_detects_login_resume():
+    from orchestration.pending_workflow_state import classify_pending_workflow_reply
+
+    result = classify_pending_workflow_reply(
+        "ich bin eingeloggt",
+        {
+            "status": "awaiting_user",
+            "reason": "user_mediated_login",
+            "source_agent": "visual",
+        },
+    )
+
+    assert result["reply_kind"] == "resume_requested"
+    assert result["status"] == "awaiting_user"
+    assert result["source_agent"] == "visual"
+
+
+def test_classify_pending_workflow_reply_detects_challenge_update():
+    from orchestration.pending_workflow_state import classify_pending_workflow_reply
+
+    result = classify_pending_workflow_reply(
+        "ich sehe jetzt eine 2fa challenge",
+        {
+            "status": "awaiting_user",
+            "reason": "user_mediated_login",
+            "source_agent": "visual",
+        },
+    )
+
+    assert result["reply_kind"] == "challenge_present"

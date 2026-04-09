@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Mapping
 
 from orchestration.approval_auth_contract import normalize_phase_d_workflow_payload
@@ -15,6 +16,31 @@ _PENDING_STATUSES = {
     "awaiting_user",
     "challenge_required",
 }
+_RESUME_PATTERNS = (
+    r"^\s*(?:ok|okay|ja)?\s*(?:weiter|mach\s+weiter|mach\s+weiter\s+damit|weiter\s+damit)\b",
+    r"\bich\s+bin\s+eingeloggt\b",
+    r"\bbin\s+eingeloggt\b",
+    r"\blogin\s+(?:fertig|erledigt)\b",
+    r"\bbin\s+drin\b",
+    r"\bfertig\b",
+    r"\berledigt\b",
+)
+_CHALLENGE_PATTERNS = (
+    r"\bcaptcha\b",
+    r"\b2fa\b",
+    r"\bcode\b",
+    r"\bauthenticator\b",
+    r"\bsms\b",
+    r"\bchallenge\b",
+    r"\bsicherheits(?:pruefung|prüfung)\b",
+)
+_FAILURE_PATTERNS = (
+    r"\bgeht\s+nicht\b",
+    r"\bklappt\s+nicht\b",
+    r"\bkomme\s+nicht\s+rein\b",
+    r"\bproblem\b",
+    r"\bfehler\b",
+)
 
 
 def _clean_text(value: Any, *, limit: int = 280) -> str:
@@ -123,6 +149,37 @@ def pending_workflow_state_to_dict(
 
 def is_pending_workflow_state(payload: Mapping[str, Any] | None) -> bool:
     return normalize_pending_workflow_state(payload) is not None
+
+
+def classify_pending_workflow_reply(
+    query: str,
+    workflow: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    normalized_workflow = pending_workflow_state_to_dict(workflow)
+    if not normalized_workflow:
+        return {}
+    normalized_query = str(query or "").strip().lower()
+    if not normalized_query:
+        return {}
+
+    reply_kind = ""
+    if any(re.search(pattern, normalized_query) for pattern in _CHALLENGE_PATTERNS):
+        reply_kind = "challenge_present"
+    elif any(re.search(pattern, normalized_query) for pattern in _FAILURE_PATTERNS):
+        reply_kind = "resume_blocked"
+    elif any(re.search(pattern, normalized_query) for pattern in _RESUME_PATTERNS):
+        reply_kind = "resume_requested"
+
+    if not reply_kind:
+        return {}
+
+    return {
+        "reply_kind": reply_kind,
+        "workflow_id": str(normalized_workflow.get("workflow_id") or ""),
+        "status": str(normalized_workflow.get("status") or ""),
+        "reason": str(normalized_workflow.get("reason") or ""),
+        "source_agent": str(normalized_workflow.get("source_agent") or ""),
+    }
 
 
 def clear_pending_workflow_state() -> dict[str, Any]:

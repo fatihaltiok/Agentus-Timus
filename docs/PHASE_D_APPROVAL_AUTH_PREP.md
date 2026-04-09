@@ -210,6 +210,10 @@ Phase D braucht einen gemeinsamen Nutzeraktions-Vertrag, statt fuer jede Plattfo
   - `visual` gibt dort einen strukturierten `awaiting_user`-Workflow zurueck statt Username/Passwort/Submit blind weiter auszufuehren
   - der Rueckweg bleibt im bestehenden Pending-Workflow-/C4-Pfad sichtbar
   - Registry behandelt solche Rueckgaben als partielle Workflows statt als Erfolg
+- D3.2:
+  - `weiter`, `ich bin eingeloggt` oder Challenge-Hinweise werden jetzt als Resume-Sprache auf offene Login-Workflows bezogen
+  - der urspruengliche Source-Agent wird fuer diese Resume-Turns bevorzugt
+  - `visual` kann den resumed Login jetzt bestaetigen oder wieder als `awaiting_user` / `challenge_required` zurueckmelden
 
 ### D4. Auth Session Reuse
 
