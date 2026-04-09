@@ -3437,6 +3437,14 @@ let longrunState       = {
   preview: "",
   userActionRequired: "",
   blockerReason: "",
+  workflowId: "",
+  workflowStatus: "",
+  workflowService: "",
+  workflowReason: "",
+  workflowMessage: "",
+  workflowResumeHint: "",
+  workflowChallengeType: "",
+  workflowApprovalScope: "",
   ts: "",
 };
 
@@ -4956,6 +4964,12 @@ function runtimeMetaText(state) {
   const parts = [];
   if (state.agent) parts.push(state.agent);
   if (state.stage) parts.push(String(state.stage).replace(/_/g, " "));
+  if (state.workflowStatus) {
+    const workflow = [String(state.workflowStatus).replace(/_/g, " "), state.workflowService]
+      .filter(Boolean)
+      .join(" · ");
+    if (workflow) parts.push(workflow);
+  }
   if (state.requestId) parts.push(state.requestId);
   if (state.ts) {
     const dt = new Date(state.ts);
@@ -5007,7 +5021,17 @@ function renderRuntimeStatus() {
   headline.textContent = longrunState.message || runtimeDisplayLabel(longrunState);
   meta.textContent = runtimeMetaText(longrunState) || "Aktualisiert";
   const previewText = shortenText(
-    longrunState.userActionRequired || longrunState.preview || "",
+    [
+      longrunState.userActionRequired,
+      longrunState.workflowMessage,
+      longrunState.workflowResumeHint,
+      longrunState.workflowChallengeType
+        ? `Challenge: ${String(longrunState.workflowChallengeType).replace(/_/g, " ")}`
+        : "",
+      longrunState.preview,
+    ]
+      .filter(Boolean)
+      .join("\n"),
     420
   );
   preview.textContent =
@@ -5053,6 +5077,14 @@ function updateLongrunState(d) {
     preview: String(d.content_preview || ""),
     userActionRequired: String(d.user_action_required || ""),
     blockerReason: String(d.blocker_reason || ""),
+    workflowId: String(d.workflow_id || ""),
+    workflowStatus: String(d.workflow_status || ""),
+    workflowService: String(d.workflow_service || ""),
+    workflowReason: String(d.workflow_reason || ""),
+    workflowMessage: String(d.workflow_message || ""),
+    workflowResumeHint: String(d.workflow_resume_hint || ""),
+    workflowChallengeType: String(d.workflow_challenge_type || ""),
+    workflowApprovalScope: String(d.workflow_approval_scope || ""),
     ts: String(d.ts || new Date().toISOString()),
   };
   renderRuntimeStatus();
@@ -5133,6 +5165,14 @@ function handleSSE(d) {
         preview: String(d.error || ""),
         userActionRequired: "",
         blockerReason: "",
+        workflowId: "",
+        workflowStatus: "",
+        workflowService: "",
+        workflowReason: "",
+        workflowMessage: "",
+        workflowResumeHint: "",
+        workflowChallengeType: "",
+        workflowApprovalScope: "",
         ts: new Date().toISOString(),
       };
       renderRuntimeStatus();
@@ -5231,6 +5271,14 @@ async function sendChat() {
     preview: shortenText(query, 220),
     userActionRequired: "",
     blockerReason: "",
+    workflowId: "",
+    workflowStatus: "",
+    workflowService: "",
+    workflowReason: "",
+    workflowMessage: "",
+    workflowResumeHint: "",
+    workflowChallengeType: "",
+    workflowApprovalScope: "",
     ts: new Date().toISOString(),
   };
   renderRuntimeStatus();
@@ -5252,6 +5300,14 @@ async function sendChat() {
       preview: String(err.message || ""),
       userActionRequired: "",
       blockerReason: "",
+      workflowId: "",
+      workflowStatus: "",
+      workflowService: "",
+      workflowReason: "",
+      workflowMessage: "",
+      workflowResumeHint: "",
+      workflowChallengeType: "",
+      workflowApprovalScope: "",
       ts: new Date().toISOString(),
     };
     renderRuntimeStatus();

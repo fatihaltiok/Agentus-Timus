@@ -70,12 +70,24 @@ def test_blocker_requires_reason_and_preserves_user_action():
         message="Login erforderlich.",
         blocker_reason="auth_required",
         user_action_required="Bitte bestaetige den Zugriff.",
+        workflow_id="wf_auth_1",
+        workflow_status="auth_required",
+        workflow_service="x",
+        workflow_reason="login_wall",
+        workflow_message="X liefert ohne Login unvollstaendige Inhalte.",
+        workflow_resume_hint="Timus setzt den Abruf danach fort.",
     )
 
     payload = event.to_dict()
     assert payload["type"] == "blocker"
     assert payload["blocker_reason"] == "auth_required"
     assert payload["user_action_required"] == "Bitte bestaetige den Zugriff."
+    assert payload["workflow_id"] == "wf_auth_1"
+    assert payload["workflow_status"] == "auth_required"
+    assert payload["workflow_service"] == "x"
+    assert payload["workflow_reason"] == "login_wall"
+    assert payload["workflow_message"] == "X liefert ohne Login unvollstaendige Inhalte."
+    assert payload["workflow_resume_hint"] == "Timus setzt den Abruf danach fort."
 
 
 def test_partial_result_requires_preview_and_is_not_terminal():

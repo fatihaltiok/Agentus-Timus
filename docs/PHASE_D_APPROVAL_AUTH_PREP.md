@@ -189,6 +189,17 @@ Phase D braucht einen gemeinsamen Nutzeraktions-Vertrag, statt fuer jede Plattfo
 
 - explizite Freigabe des Nutzers vor Account-Zugriff
 - Approval nicht nur als Text, sondern als strukturierter Workflow-Zustand
+- D2.1:
+  - offener Workflow-Zustand pro Session (`pending_workflow`)
+  - kurze Antworten wie `ja` / `mach weiter` bleiben an Approval-/Auth-Zustaende gebunden
+- D2.2:
+  - Telegram und Canvas zeigen den offenen Workflow jetzt sichtbar an
+  - C4-Blocker tragen Workflow-Felder wie Status, Service, Message und Resume-Hinweis
+  - sichtbare Nutzerpfade fuer:
+    - `approval_required`
+    - `auth_required`
+    - `awaiting_user`
+    - `challenge_required`
 
 ### D3. User-mediated Login
 

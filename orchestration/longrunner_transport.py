@@ -56,6 +56,14 @@ class LongRunTransportEventDict(TypedDict, total=False):
     is_final: bool
     blocker_reason: str
     user_action_required: str
+    workflow_id: str
+    workflow_status: str
+    workflow_service: str
+    workflow_reason: str
+    workflow_message: str
+    workflow_resume_hint: str
+    workflow_challenge_type: str
+    workflow_approval_scope: str
     error_class: str
     error_code: str
 
@@ -116,6 +124,14 @@ class LongRunTransportEvent:
     is_final: bool = False
     blocker_reason: str = ""
     user_action_required: str = ""
+    workflow_id: str = ""
+    workflow_status: str = ""
+    workflow_service: str = ""
+    workflow_reason: str = ""
+    workflow_message: str = ""
+    workflow_resume_hint: str = ""
+    workflow_challenge_type: str = ""
+    workflow_approval_scope: str = ""
     error_class: str = ""
     error_code: str = ""
     schema_version: int = SCHEMA_VERSION
@@ -133,6 +149,14 @@ class LongRunTransportEvent:
         object.__setattr__(self, "content_preview", _normalized_text(self.content_preview))
         object.__setattr__(self, "blocker_reason", _normalized_text(self.blocker_reason))
         object.__setattr__(self, "user_action_required", _normalized_text(self.user_action_required))
+        object.__setattr__(self, "workflow_id", _normalized_text(self.workflow_id))
+        object.__setattr__(self, "workflow_status", _normalized_text(self.workflow_status))
+        object.__setattr__(self, "workflow_service", _normalized_text(self.workflow_service))
+        object.__setattr__(self, "workflow_reason", _normalized_text(self.workflow_reason))
+        object.__setattr__(self, "workflow_message", _normalized_text(self.workflow_message))
+        object.__setattr__(self, "workflow_resume_hint", _normalized_text(self.workflow_resume_hint))
+        object.__setattr__(self, "workflow_challenge_type", _normalized_text(self.workflow_challenge_type))
+        object.__setattr__(self, "workflow_approval_scope", _normalized_text(self.workflow_approval_scope))
         object.__setattr__(self, "error_class", _normalized_text(self.error_class))
         object.__setattr__(self, "error_code", _normalized_text(self.error_code))
         object.__setattr__(self, "seq", max(0, int(self.seq)))
@@ -187,6 +211,14 @@ def validate_transport_event(payload: Mapping[str, Any]) -> LongRunTransportEven
         is_final=bool(payload.get("is_final", False)),
         blocker_reason=str(payload.get("blocker_reason") or ""),
         user_action_required=str(payload.get("user_action_required") or ""),
+        workflow_id=str(payload.get("workflow_id") or ""),
+        workflow_status=str(payload.get("workflow_status") or ""),
+        workflow_service=str(payload.get("workflow_service") or ""),
+        workflow_reason=str(payload.get("workflow_reason") or ""),
+        workflow_message=str(payload.get("workflow_message") or ""),
+        workflow_resume_hint=str(payload.get("workflow_resume_hint") or ""),
+        workflow_challenge_type=str(payload.get("workflow_challenge_type") or ""),
+        workflow_approval_scope=str(payload.get("workflow_approval_scope") or ""),
         error_class=str(payload.get("error_class") or ""),
         error_code=str(payload.get("error_code") or ""),
     )
@@ -208,6 +240,14 @@ def make_transport_event(
     is_final: bool = False,
     blocker_reason: str = "",
     user_action_required: str = "",
+    workflow_id: str = "",
+    workflow_status: str = "",
+    workflow_service: str = "",
+    workflow_reason: str = "",
+    workflow_message: str = "",
+    workflow_resume_hint: str = "",
+    workflow_challenge_type: str = "",
+    workflow_approval_scope: str = "",
     error_class: str = "",
     error_code: str = "",
     ts: str = "",
@@ -228,6 +268,14 @@ def make_transport_event(
         is_final=is_final,
         blocker_reason=blocker_reason,
         user_action_required=user_action_required,
+        workflow_id=workflow_id,
+        workflow_status=workflow_status,
+        workflow_service=workflow_service,
+        workflow_reason=workflow_reason,
+        workflow_message=workflow_message,
+        workflow_resume_hint=workflow_resume_hint,
+        workflow_challenge_type=workflow_challenge_type,
+        workflow_approval_scope=workflow_approval_scope,
         error_class=error_class,
         error_code=error_code,
     )
@@ -316,6 +364,14 @@ def make_blocker_event(
     message: str,
     blocker_reason: str,
     user_action_required: str = "",
+    workflow_id: str = "",
+    workflow_status: str = "",
+    workflow_service: str = "",
+    workflow_reason: str = "",
+    workflow_message: str = "",
+    workflow_resume_hint: str = "",
+    workflow_challenge_type: str = "",
+    workflow_approval_scope: str = "",
 ) -> LongRunTransportEvent:
     return make_transport_event(
         event_type="blocker",
@@ -328,6 +384,14 @@ def make_blocker_event(
         message=message,
         blocker_reason=blocker_reason,
         user_action_required=user_action_required,
+        workflow_id=workflow_id,
+        workflow_status=workflow_status,
+        workflow_service=workflow_service,
+        workflow_reason=workflow_reason,
+        workflow_message=workflow_message,
+        workflow_resume_hint=workflow_resume_hint,
+        workflow_challenge_type=workflow_challenge_type,
+        workflow_approval_scope=workflow_approval_scope,
     )
 
 

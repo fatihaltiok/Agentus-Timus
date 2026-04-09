@@ -45,6 +45,10 @@ from telegram.ext import (
 
 from gateway.status_snapshot import collect_status_snapshot, format_status_message
 from orchestration.autonomy_observation import record_autonomy_observation
+from orchestration.pending_workflow_state import (
+    is_pending_workflow_state,
+    pending_workflow_state_to_dict,
+)
 from orchestration.request_correlation import bind_request_correlation
 from utils.telegram_notify import build_feedback_markup, decode_feedback_signal
 
@@ -109,7 +113,8 @@ async def _run_telegram_chat_query(
     session_id: str,
     tools_desc: str,
     source: str,
-) -> tuple[str, str, str]:
+) -> tuple[str, str, str, dict]:
+    import main_dispatcher as _dispatcher_mod
     from main_dispatcher import run_agent
 
     request_id = _new_telegram_request_id()
@@ -118,6 +123,7 @@ async def _run_telegram_chat_query(
     resolved_proposal_agent = ""
     route_source = "dispatcher"
     agent = "executor"
+    pending_workflow: dict = {}
 
     _record_telegram_chat_observation(
         "chat_request_received",
@@ -135,26 +141,66 @@ async def _run_telegram_chat_query(
 
     try:
         with bind_request_correlation(request_id=request_id, session_id=session_id):
-            agent = await _select_agent_with_request_id(query, session_id, request_id)
-            _record_telegram_chat_observation(
-                "request_route_selected",
-                {
-                    "request_id": request_id,
-                    "session_id": session_id,
-                    "source": source,
-                    "agent": agent,
-                    "route_source": route_source,
-                    "dispatcher_query_kind": dispatcher_query_kind,
-                    "followup_agent": followup_agent,
-                    "resolved_proposal_agent": resolved_proposal_agent,
-                },
-            )
-            result = await run_agent(
-                agent_name=agent,
-                query=query,
-                tools_description=tools_desc,
-                session_id=session_id,
-            )
+            previous_agent_progress_hook = getattr(_dispatcher_mod, "_agent_progress_hook", None)
+
+            def _telegram_progress_event(payload: dict) -> None:
+                nonlocal pending_workflow
+                if not isinstance(payload, dict):
+                    return
+                agent_name = str(payload.get("agent") or "").strip()
+                stage = str(payload.get("stage") or "").strip()
+                payload_info = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+                if is_pending_workflow_state(payload_info):
+                    pending_workflow = pending_workflow_state_to_dict(
+                        {
+                            **payload_info,
+                            "source_agent": agent_name,
+                            "source_stage": stage,
+                        }
+                    )
+                    _record_telegram_chat_observation(
+                        "pending_workflow_updated",
+                        {
+                            "request_id": request_id,
+                            "session_id": session_id,
+                            "source": source,
+                            "agent": agent_name,
+                            "stage": stage,
+                            "workflow_status": str(pending_workflow.get("status") or ""),
+                            "workflow_id": str(pending_workflow.get("workflow_id") or ""),
+                            "workflow_reason": str(pending_workflow.get("reason") or ""),
+                        },
+                    )
+                if callable(previous_agent_progress_hook):
+                    try:
+                        previous_agent_progress_hook(payload)
+                    except Exception:
+                        pass
+
+            _dispatcher_mod._agent_progress_hook = _telegram_progress_event
+            try:
+                agent = await _select_agent_with_request_id(query, session_id, request_id)
+                _record_telegram_chat_observation(
+                    "request_route_selected",
+                    {
+                        "request_id": request_id,
+                        "session_id": session_id,
+                        "source": source,
+                        "agent": agent,
+                        "route_source": route_source,
+                        "dispatcher_query_kind": dispatcher_query_kind,
+                        "followup_agent": followup_agent,
+                        "resolved_proposal_agent": resolved_proposal_agent,
+                    },
+                )
+                result = await run_agent(
+                    agent_name=agent,
+                    query=query,
+                    tools_description=tools_desc,
+                    session_id=session_id,
+                )
+            finally:
+                _dispatcher_mod._agent_progress_hook = previous_agent_progress_hook
     except Exception as exc:
         _record_telegram_chat_observation(
             "chat_request_failed",
@@ -186,9 +232,10 @@ async def _run_telegram_chat_query(
             "reply_length": len(response),
             "location_context_injected": False,
             "pending_followup_prompt": "",
+            "pending_workflow_status": str(pending_workflow.get("status") or ""),
         },
     )
-    return agent, response, request_id
+    return agent, response, request_id, pending_workflow
 
 
 async def _send_long(update: Update, text: str, parse_mode: Optional[str] = None) -> None:
@@ -296,6 +343,37 @@ async def _reply_with_feedback(
     if body:
         await _send_long(update, body, parse_mode=parse_mode)
     await update.message.reply_text("War diese Antwort hilfreich?", reply_markup=keyboard)
+
+
+def _format_pending_workflow_notice(pending_workflow: dict | None) -> str:
+    workflow = dict(pending_workflow or {})
+    status = str(workflow.get("status") or "").strip().lower()
+    if not status:
+        return ""
+    service = str(workflow.get("service") or workflow.get("platform") or "").strip()
+    status_label = {
+        "approval_required": "Freigabe erforderlich",
+        "auth_required": "Login erforderlich",
+        "awaiting_user": "Nutzeraktion ausstehend",
+        "challenge_required": "Sicherheitspruefung erforderlich",
+    }.get(status, status.replace("_", " "))
+    header = f"Offener Schritt: {status_label}"
+    if service:
+        header += f" · {service}"
+    lines = [header]
+    user_action = str(workflow.get("user_action_required") or "").strip()
+    message = str(workflow.get("message") or "").strip()
+    resume_hint = str(workflow.get("resume_hint") or "").strip()
+    challenge_type = str(workflow.get("challenge_type") or "").strip()
+    if user_action:
+        lines.append(user_action)
+    elif message:
+        lines.append(message)
+    if resume_hint:
+        lines.append(f"Weiter danach: {resume_hint}")
+    if challenge_type:
+        lines.append(f"Challenge: {challenge_type}")
+    return "\n".join(line for line in lines if line)
 
 
 async def _try_send_image(update: Update, result: str) -> bool:
@@ -1049,7 +1127,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         typing_task = asyncio.create_task(_keep_typing(update))
         try:
-            agent, response, _request_id = await _run_telegram_chat_query(
+            agent, response, _request_id, pending_workflow = await _run_telegram_chat_query(
                 query=text,
                 session_id=session_id,
                 tools_desc=tools_desc,
@@ -1075,7 +1153,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             response=response,
             source="telegram_reply",
         )
+        if pending_workflow:
+            feedback_context["pending_workflow_status"] = str(pending_workflow.get("status") or "")
+            feedback_context["pending_workflow_service"] = str(
+                pending_workflow.get("service") or pending_workflow.get("platform") or ""
+            )
         action_id = f"tgmsg:{session_id}:{uuid.uuid4().hex[:8]}"
+        pending_workflow_notice = _format_pending_workflow_notice(pending_workflow)
+        response_for_user = response
+        if pending_workflow_notice and pending_workflow_notice not in response_for_user:
+            response_for_user = f"{response_for_user.rstrip()}\n\n{pending_workflow_notice}".strip()
+            _record_telegram_chat_observation(
+                "pending_workflow_visible",
+                {
+                    "request_id": _request_id,
+                    "session_id": session_id,
+                    "source": "telegram_reply",
+                    "agent": agent,
+                    "workflow_status": str(pending_workflow.get("status") or ""),
+                    "workflow_id": str(pending_workflow.get("workflow_id") or ""),
+                },
+            )
 
         # Bild → als Foto senden
         image_sent = await _try_send_image(update, response)
@@ -1085,12 +1183,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if not image_sent and not doc_sent:
             await _reply_with_feedback(
                 update,
-                text=response,
+                text=response_for_user,
                 action_id=action_id,
                 context=feedback_context,
                 feedback_targets=feedback_targets,
             )
         else:
+            if pending_workflow_notice:
+                await update.message.reply_text(pending_workflow_notice)
             await _reply_with_feedback(
                 update,
                 text="War diese Antwort hilfreich?",
@@ -1151,7 +1251,7 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
         typing_task = asyncio.create_task(_keep_typing(update))
         try:
-            agent, response, _request_id = await _run_telegram_chat_query(
+            agent, response, _request_id, pending_workflow = await _run_telegram_chat_query(
                 query=user_text,
                 session_id=session_id,
                 tools_desc=tools_desc,
@@ -1176,7 +1276,27 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
             response=response,
             source="telegram_voice_reply",
         )
+        if pending_workflow:
+            feedback_context["pending_workflow_status"] = str(pending_workflow.get("status") or "")
+            feedback_context["pending_workflow_service"] = str(
+                pending_workflow.get("service") or pending_workflow.get("platform") or ""
+            )
         action_id = f"tgvoice:{session_id}:{uuid.uuid4().hex[:8]}"
+        pending_workflow_notice = _format_pending_workflow_notice(pending_workflow)
+        response_for_user = response
+        if pending_workflow_notice and pending_workflow_notice not in response_for_user:
+            response_for_user = f"{response_for_user.rstrip()}\n\n{pending_workflow_notice}".strip()
+            _record_telegram_chat_observation(
+                "pending_workflow_visible",
+                {
+                    "request_id": _request_id,
+                    "session_id": session_id,
+                    "source": "telegram_voice_reply",
+                    "agent": agent,
+                    "workflow_status": str(pending_workflow.get("status") or ""),
+                    "workflow_id": str(pending_workflow.get("workflow_id") or ""),
+                },
+            )
 
         # 4. Bild-Check / Dokument-Check
         image_sent = await _try_send_image(update, response)
@@ -1184,11 +1304,11 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
         # 5. TTS → Sprachnachricht zurück (nur wenn kein Dokument/Bild bereits gesendet)
         await update.message.chat.send_action(ChatAction.RECORD_VOICE)
-        ogg_audio = await _synthesize_voice(response)
+        ogg_audio = await _synthesize_voice(response_for_user)
 
         if ogg_audio:
             # Kurze Caption: erste 200 Zeichen der Antwort
-            caption = response[:200] + ("…" if len(response) > 200 else "")
+            caption = response_for_user[:200] + ("…" if len(response_for_user) > 200 else "")
             await update.message.reply_voice(
                 voice=io.BytesIO(ogg_audio),
                 caption=caption if not image_sent and not doc_sent else None,
@@ -1205,12 +1325,14 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
             if not image_sent and not doc_sent:
                 await _reply_with_feedback(
                     update,
-                    text=response,
+                    text=response_for_user,
                     action_id=action_id,
                     context=feedback_context,
                     feedback_targets=feedback_targets,
                 )
             else:
+                if pending_workflow_notice:
+                    await update.message.reply_text(pending_workflow_notice)
                 await _reply_with_feedback(
                     update,
                     text="War diese Antwort hilfreich?",

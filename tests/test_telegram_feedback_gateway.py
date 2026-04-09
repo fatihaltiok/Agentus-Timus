@@ -143,6 +143,63 @@ async def test_handle_message_records_request_lifecycle_with_request_id(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_handle_message_surfaces_pending_workflow_notice(monkeypatch):
+    update = _FakeUpdate(text="lies den x post")
+    context = SimpleNamespace(bot_data={"tools_desc": ""})
+    calls = []
+
+    async def _fake_reply_with_feedback(update_obj, **kwargs):
+        calls.append(kwargs)
+
+    async def _fake_run_agent(agent_name, query, tools_description, session_id=None):
+        import main_dispatcher
+
+        hook = getattr(main_dispatcher, "_agent_progress_hook", None)
+        if callable(hook):
+            hook(
+                {
+                    "agent": "executor",
+                    "session_id": session_id,
+                    "stage": "fetch_primary_source_blocked",
+                    "payload": {
+                        "kind": "blocker",
+                        "status": "auth_required",
+                        "workflow_id": "wf_tg_auth",
+                        "service": "x",
+                        "reason": "login_wall",
+                        "message": "X liefert ohne Login unvollstaendige Inhalte.",
+                        "user_action_required": "Bitte bestaetige den Zugriff.",
+                        "blocker_reason": "auth_required",
+                    },
+                }
+            )
+        return "Ich brauche deinen Zugriff."
+
+    async def _fake_keep_typing(update_obj):
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(telegram_gateway, "_is_allowed", lambda _: True)
+    monkeypatch.setattr(telegram_gateway, "_get_session", lambda _: "tg_42_test")
+    monkeypatch.setattr(telegram_gateway, "_reply_with_feedback", _fake_reply_with_feedback)
+    monkeypatch.setattr(telegram_gateway, "_try_send_image", lambda *args, **kwargs: asyncio.sleep(0, result=False))
+    monkeypatch.setattr(telegram_gateway, "_try_send_document", lambda *args, **kwargs: asyncio.sleep(0, result=False))
+    monkeypatch.setattr(telegram_gateway, "_keep_typing", _fake_keep_typing)
+    monkeypatch.setattr(
+        "main_dispatcher.get_agent_decision",
+        lambda _text, session_id=None, request_id=None: asyncio.sleep(0, result="meta"),
+    )
+    monkeypatch.setattr("main_dispatcher.run_agent", _fake_run_agent)
+
+    await telegram_gateway.handle_message(update, context)
+
+    assert len(calls) == 1
+    assert "Offener Schritt: Login erforderlich · x" in calls[0]["text"]
+    assert "Bitte bestaetige den Zugriff." in calls[0]["text"]
+    assert calls[0]["context"]["pending_workflow_status"] == "auth_required"
+    assert calls[0]["context"]["pending_workflow_service"] == "x"
+
+
+@pytest.mark.asyncio
 async def test_callback_query_short_token_records_feedback(monkeypatch, tmp_path):
     engine = FeedbackEngine(db_path=tmp_path / "feedback.db")
     token = engine.register_feedback_request(

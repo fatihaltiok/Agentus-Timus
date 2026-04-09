@@ -726,6 +726,14 @@ def _emit_longrun_event(
     content_preview: str = "",
     blocker_reason: str = "",
     user_action_required: str = "",
+    workflow_id: str = "",
+    workflow_status: str = "",
+    workflow_service: str = "",
+    workflow_reason: str = "",
+    workflow_message: str = "",
+    workflow_resume_hint: str = "",
+    workflow_challenge_type: str = "",
+    workflow_approval_scope: str = "",
     error_class: str = "",
     error_code: str = "",
     request_id: str = "",
@@ -784,6 +792,14 @@ def _emit_longrun_event(
             message=text or _longrun_default_message(kind=event_type, agent=effective_agent, stage=str(stage or "blocked").strip()),
             blocker_reason=str(blocker_reason or "blocked").strip(),
             user_action_required=str(user_action_required or "").strip(),
+            workflow_id=str(workflow_id or "").strip(),
+            workflow_status=str(workflow_status or "").strip(),
+            workflow_service=str(workflow_service or "").strip(),
+            workflow_reason=str(workflow_reason or "").strip(),
+            workflow_message=str(workflow_message or "").strip(),
+            workflow_resume_hint=str(workflow_resume_hint or "").strip(),
+            workflow_challenge_type=str(workflow_challenge_type or "").strip(),
+            workflow_approval_scope=str(workflow_approval_scope or "").strip(),
         )
     elif event_type == "run_completed":
         event = make_run_completed_event(
@@ -826,6 +842,14 @@ def _emit_longrun_progress_from_payload(agent: str, stage: str, payload: dict | 
             message=message,
             blocker_reason=str(info.get("blocker_reason") or "blocked").strip(),
             user_action_required=str(info.get("user_action_required") or "").strip(),
+            workflow_id=str(info.get("workflow_id") or "").strip(),
+            workflow_status=str(info.get("status") or info.get("workflow_status") or "").strip(),
+            workflow_service=str(info.get("service") or info.get("platform") or info.get("workflow_service") or "").strip(),
+            workflow_reason=str(info.get("workflow_reason") or info.get("reason") or "").strip(),
+            workflow_message=str(info.get("workflow_message") or info.get("message") or "").strip(),
+            workflow_resume_hint=str(info.get("workflow_resume_hint") or info.get("resume_hint") or "").strip(),
+            workflow_challenge_type=str(info.get("workflow_challenge_type") or info.get("challenge_type") or "").strip(),
+            workflow_approval_scope=str(info.get("workflow_approval_scope") or info.get("approval_scope") or "").strip(),
         )
     if kind == "partial_result":
         preview = str(info.get("content_preview") or info.get("preview") or "").strip()

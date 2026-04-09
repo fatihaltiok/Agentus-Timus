@@ -2,6 +2,64 @@
 
 ---
 
+## Fortschritt 2026-04-09 - Phase D2.2 Pending-Workflow sichtbar in Telegram und Canvas
+
+Mit D2.1 hatte Timus bereits einen echten Pending-Workflow-Zustand pro Session, aber dieser blieb noch weitgehend intern. Telegram und Canvas sahen weiter nur allgemeine Blocker, nicht den eigentlichen Approval-/Auth-Workflow mit Status, Service und naechstem Nutzerschritt.
+
+Nachgezogen:
+
+- [gateway/telegram_gateway.py](/home/fatih-ubuntu/dev/timus/gateway/telegram_gateway.py)
+  - der Telegram-Chat haengt sich jetzt waehrend eines Requests an den echten Agent-Progress-Hook
+  - strukturierte Pending-Workflows aus `approval_required`, `auth_required`, `awaiting_user` und `challenge_required` werden direkt eingesammelt
+  - Antworten zeigen jetzt sichtbare Nutzerhinweise wie:
+    - `Offener Schritt: Login erforderlich · x`
+    - `Bitte bestaetige den Zugriff.`
+    - optional `Weiter danach: ...`
+    - optional `Challenge: ...`
+  - neue Observation-Events:
+    - `pending_workflow_updated`
+    - `pending_workflow_visible`
+  - Feedback-Kontext traegt jetzt zusaetzlich:
+    - `pending_workflow_status`
+    - `pending_workflow_service`
+- [orchestration/longrunner_transport.py](/home/fatih-ubuntu/dev/timus/orchestration/longrunner_transport.py)
+  - der C4-Transportvertrag traegt Blocker jetzt nicht mehr nur mit `blocker_reason` und `user_action_required`, sondern auch mit echten Workflow-Feldern:
+    - `workflow_id`
+    - `workflow_status`
+    - `workflow_service`
+    - `workflow_reason`
+    - `workflow_message`
+    - `workflow_resume_hint`
+    - `workflow_challenge_type`
+    - `workflow_approval_scope`
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - der MCP-Progresspfad reicht die strukturierten Workflow-Felder jetzt in Longrunner-/SSE-Events durch
+  - dadurch bleiben Approval-/Auth-/Challenge-Blocker ueber Canvas und andere C4-Konsumenten sichtbar und maschinenlesbar
+- [server/canvas_ui.py](/home/fatih-ubuntu/dev/timus/server/canvas_ui.py)
+  - Canvas Runtime zeigt Pending-Workflow-Status jetzt explizit an
+  - Preview bevorzugt jetzt:
+    - `user_action_required`
+    - `workflow_message`
+    - `workflow_resume_hint`
+    - `workflow_challenge_type`
+  - damit wirken Approval-/Awaiting-User-Zustaende nicht mehr wie generische Runtime-Blocker
+- [tests/test_telegram_feedback_gateway.py](/home/fatih-ubuntu/dev/timus/tests/test_telegram_feedback_gateway.py)
+  - neue Regression:
+    - Telegram surfacet einen echten `auth_required`-Blocker sichtbar im Replytext und traegt den Zustand in den Feedback-Kontext
+- [tests/test_longrunner_transport_contract.py](/home/fatih-ubuntu/dev/timus/tests/test_longrunner_transport_contract.py)
+  - neue Regression:
+    - Blocker-Events behalten die neuen Workflow-Felder im C4-Transportvertrag bei
+
+Verifikation:
+
+- `python -m py_compile gateway/telegram_gateway.py orchestration/longrunner_transport.py server/mcp_server.py server/canvas_ui.py tests/test_telegram_feedback_gateway.py tests/test_longrunner_transport_contract.py`
+- `pytest -q tests/test_telegram_feedback_gateway.py tests/test_longrunner_transport_contract.py tests/test_c4_longrunner_runtime.py tests/test_pending_workflow_state.py tests/test_android_chat_language.py`
+
+Ergebnis:
+
+- `45 passed` im fokussierten D2.2-/Telegram-/Canvas-/Workflow-Ring
+- `py_compile` gruen
+
 ## Fortschritt 2026-04-09 - Phase D2.1 Pending-Workflow-State gestartet
 
 Der erste D-Block hatte bereits normalisierte `auth_required`- und `challenge_required`-Payloads, aber noch keinen echten turn-uebergreifenden Pending-Zustand. Damit gingen offene Freigabe-/Auth-Schritte nur als fluechtiger Blocker durch den aktuellen Lauf.
