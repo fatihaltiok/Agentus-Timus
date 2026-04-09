@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from contextvars import ContextVar
 
 from agent.shared.delegation_handoff import parse_delegation_handoff
+from orchestration.approval_auth_contract import normalize_phase_d_workflow_payload
 from orchestration.llm_budget_guard import cap_parallelism_for_budget
 from orchestration.orchestration_policy import evaluate_parallel_tasks
 from orchestration.specialist_context import (
@@ -1280,6 +1281,16 @@ class AgentRegistry:
             )
             return "partial", signal_message or fallback
         if isinstance(raw, dict):
+            workflow_payload = normalize_phase_d_workflow_payload(raw)
+            workflow_status = str(workflow_payload.get("status") or "").strip().lower()
+            if workflow_status in {"approval_required", "auth_required", "awaiting_user", "challenge_required"}:
+                return "partial", str(
+                    raw.get("error")
+                    or raw.get("message")
+                    or raw.get("result")
+                    or workflow_payload.get("message")
+                    or result_text
+                )
             raw_status = str(raw.get("status") or "").strip().lower()
             if raw.get("skipped") is True:
                 return "error", str(raw.get("reason") or "Delegierter Tool-Call wurde blockiert")
@@ -1311,6 +1322,15 @@ class AgentRegistry:
         meta: Dict[str, Any] = {}
         if not isinstance(raw, dict):
             return meta
+
+        workflow_payload = normalize_phase_d_workflow_payload(raw)
+        if workflow_payload:
+            meta["phase_d_workflow"] = workflow_payload
+            meta["workflow_id"] = str(workflow_payload.get("workflow_id") or "")
+            meta["workflow_status"] = str(workflow_payload.get("status") or "")
+            meta["workflow_service"] = str(
+                workflow_payload.get("service") or workflow_payload.get("platform") or ""
+            )
 
         raw_meta = raw.get("metadata")
         if isinstance(raw_meta, dict):

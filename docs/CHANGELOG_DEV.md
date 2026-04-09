@@ -2,6 +2,58 @@
 
 ---
 
+## Fortschritt 2026-04-09 - Phase D3.1 User-mediated Login gestartet
+
+Phase D hatte nach D1/D2 bereits strukturierte Approval-/Auth-Blocker und sichtbare Pending-Workflows, aber noch keinen echten user-mediated Login-Laufzeitpfad. Login-Workflows konnten daher weiter wie normale Browser-Aufgaben behandelt werden und haetten Benutzername/Passwort/Submit zu weit automatisiert.
+
+Nachgezogen:
+
+- [approval_auth_contract.py](/home/fatih-ubuntu/dev/timus/orchestration/approval_auth_contract.py)
+  - `build_awaiting_user_workflow_payload(...)` traegt jetzt auch `url` und `reason`
+  - neues D3-Helper-Builder:
+    - `build_user_mediated_login_workflow_payload(...)`
+  - erzeugt einen klaren `awaiting_user`-Workflow fuer Login-Masken mit:
+    - `reason = user_mediated_login`
+    - `step = login_form_ready`
+    - Resume-Hinweis fuer `weiter` / `ich bin eingeloggt`
+- [visual.py](/home/fatih-ubuntu/dev/timus/agent/agents/visual.py)
+  - Login-Flows stoppen jetzt bewusst an der verifizierten Login-Maske statt Username/Passwort/Submit blind weiter abzuarbeiten
+  - `visual` emittiert dafuer einen echten Blocker in den bestehenden Pending-Workflow-/C4-Pfad
+  - der neue Workflow liefert:
+    - `awaiting_user`
+    - `service`
+    - `url`
+    - `user_action_required`
+    - `resume_hint`
+  - Browser-Plan-Aufbau nutzt jetzt auch die bereits uebergebene `source_url`, nicht nur URLs aus dem Goal-Text
+- [agent_registry.py](/home/fatih-ubuntu/dev/timus/agent/agent_registry.py)
+  - Phase-D-Workflow-Returns wie `approval_required`, `auth_required`, `awaiting_user` und `challenge_required` werden jetzt als `partial` statt als Erfolg klassifiziert
+  - strukturierte Workflow-Metadaten werden in Delegationsergebnissen mitgefuehrt:
+    - `phase_d_workflow`
+    - `workflow_id`
+    - `workflow_status`
+    - `workflow_service`
+- [tests/test_specialist_handoffs.py](/home/fatih-ubuntu/dev/timus/tests/test_specialist_handoffs.py)
+  - neue D3-Regression:
+    - `visual` stoppt bei `github.com/login` an der Login-Maske und liefert `awaiting_user` plus Progress-Blocker
+- [tests/test_specialist_context_runtime.py](/home/fatih-ubuntu/dev/timus/tests/test_specialist_context_runtime.py)
+  - neue D3-Regression:
+    - Agent-Registry behandelt Phase-D-Workflow-Rueckgaben als partiellen Workflow und behaelt die strukturierten Metadaten
+- [tests/test_approval_auth_contract.py](/home/fatih-ubuntu/dev/timus/tests/test_approval_auth_contract.py)
+  - neuer Vertragstest fuer `build_user_mediated_login_workflow_payload(...)`
+
+Verifikation:
+
+- `python -m py_compile orchestration/approval_auth_contract.py agent/agent_registry.py agent/agents/visual.py tests/test_approval_auth_contract.py tests/test_specialist_context_runtime.py tests/test_specialist_handoffs.py`
+- `pytest -q tests/test_approval_auth_contract.py tests/test_specialist_context_runtime.py tests/test_specialist_handoffs.py`
+- `pytest -q tests/test_browser_workflow_plan.py tests/test_approval_auth_contract.py tests/test_specialist_context_runtime.py tests/test_specialist_handoffs.py tests/test_pending_workflow_state.py tests/test_browser_isolation.py`
+
+Ergebnis:
+
+- `29 passed` im direkten D3-Ring
+- `53 passed` im breiteren Browser-/Phase-D-/Pending-Workflow-Ring
+- `py_compile` gruen
+
 ## Fortschritt 2026-04-09 - Phase D2.2 Pending-Workflow sichtbar in Telegram und Canvas
 
 Mit D2.1 hatte Timus bereits einen echten Pending-Workflow-Zustand pro Session, aber dieser blieb noch weitgehend intern. Telegram und Canvas sahen weiter nur allgemeine Blocker, nicht den eigentlichen Approval-/Auth-Workflow mit Status, Service und naechstem Nutzerschritt.

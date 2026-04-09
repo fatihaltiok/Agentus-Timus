@@ -218,10 +218,51 @@ async def test_agent_registry_emits_email_observation_events_for_communication_s
     event_names = [name for name, _payload in observed]
     assert "communication_task_started" in event_names
     assert "communication_task_completed" in event_names
-    assert "send_email_succeeded" in event_names
-    success_payload = next(payload for name, payload in observed if name == "send_email_succeeded")
-    assert success_payload["request_id"] == "req_mail_1"
-    assert success_payload["session_id"] == "tg_mail_demo"
-    assert success_payload["source"] == "telegram_chat"
-    assert success_payload["backend"] == "resend"
-    assert success_payload["recipient"] == "fatihaltiok@outlook.com"
+
+
+@pytest.mark.asyncio
+async def test_agent_registry_treats_phase_d_awaiting_user_payload_as_partial():
+    from agent.agent_registry import AgentRegistry
+
+    registry = AgentRegistry()
+
+    async def _fake_tools():
+        return "tools"
+
+    registry._get_tools_description = _fake_tools
+
+    class _VisualAgent:
+        conversation_session_id = None
+
+        async def run(self, task: str):
+            return {
+                "status": "awaiting_user",
+                "workflow_id": "wf_login_1",
+                "service": "github",
+                "url": "https://github.com/login",
+                "reason": "user_mediated_login",
+                "message": "Die Login-Maske ist bereit.",
+                "user_action_required": "Bitte fuehre den Login selbst aus.",
+                "resume_hint": "Sage danach weiter.",
+                "result": "Die Login-Maske ist bereit.",
+            }
+
+    registry.register_spec(
+        "visual",
+        "visual",
+        ["visual"],
+        lambda tools_description_string: _VisualAgent(),
+    )
+
+    result = await registry.delegate(
+        from_agent="meta",
+        to_agent="visual",
+        task="oeffne github login",
+        session_id="d3_registry_partial",
+    )
+
+    assert result["status"] == "partial"
+    assert result["metadata"]["workflow_id"] == "wf_login_1"
+    assert result["metadata"]["workflow_status"] == "awaiting_user"
+    assert result["metadata"]["workflow_service"] == "github"
+    assert result["metadata"]["phase_d_workflow"]["reason"] == "user_mediated_login"

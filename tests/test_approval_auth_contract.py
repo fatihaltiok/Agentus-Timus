@@ -54,3 +54,20 @@ def test_derive_user_action_blocker_reason_maps_awaiting_user_to_legacy_blocker_
         )
         == "user_action_required"
     )
+
+
+def test_build_user_mediated_login_workflow_payload_sets_resume_and_url():
+    from orchestration.approval_auth_contract import build_user_mediated_login_workflow_payload
+
+    payload = build_user_mediated_login_workflow_payload(
+        service="github",
+        url="https://github.com/login",
+    )
+
+    assert payload["status"] == "awaiting_user"
+    assert payload["awaiting_user"] is True
+    assert payload["service"] == "github"
+    assert payload["url"] == "https://github.com/login"
+    assert payload["reason"] == "user_mediated_login"
+    assert payload["step"] == "login_form_ready"
+    assert "weiter" in payload["resume_hint"].lower()

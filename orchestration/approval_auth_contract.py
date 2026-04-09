@@ -201,6 +201,8 @@ def build_awaiting_user_workflow_payload(
     service: str = "",
     workflow_id: str = "",
     step: str = "",
+    url: str = "",
+    reason: str = "",
     message: str = "",
     resume_hint: str = "",
     user_action_required: str = "",
@@ -212,11 +214,47 @@ def build_awaiting_user_workflow_payload(
             "workflow_kind": "assistive_action",
             "service": service,
             "step": step,
+            "url": url,
+            "reason": reason,
             "message": message,
             "resume_hint": resume_hint,
             "user_action_required": user_action_required,
         },
         default_status="awaiting_user",
+    )
+
+
+def build_user_mediated_login_workflow_payload(
+    *,
+    service: str = "",
+    url: str = "",
+    workflow_id: str = "",
+    message: str = "",
+    resume_hint: str = "",
+    user_action_required: str = "",
+) -> dict[str, Any]:
+    service_label = str(service or "dem Dienst").strip()
+    effective_message = (
+        _clean_text(message)
+        or "Die Login-Maske ist bereit. Bitte fuehre den Login jetzt selbst im Browser aus."
+    )
+    effective_user_action = (
+        _clean_text(user_action_required)
+        or f"Bitte gib Benutzername, Passwort und ggf. 2FA selbst bei {service_label} ein."
+    )
+    effective_resume_hint = (
+        _clean_text(resume_hint)
+        or "Sage danach 'weiter' oder 'ich bin eingeloggt', damit Timus kontrolliert fortsetzen kann."
+    )
+    return build_awaiting_user_workflow_payload(
+        service=service,
+        workflow_id=workflow_id,
+        step="login_form_ready",
+        url=url,
+        reason="user_mediated_login",
+        message=effective_message,
+        resume_hint=effective_resume_hint,
+        user_action_required=effective_user_action,
     )
 
 

@@ -205,6 +205,11 @@ Phase D braucht einen gemeinsamen Nutzeraktions-Vertrag, statt fuer jede Plattfo
 
 - Timus navigiert bis zur Login-Maske
 - Nutzer gibt Passwort / 2FA selbst ein oder bestaetigt bewusst den Schritt
+- D3.1:
+  - Login-Flows stoppen jetzt bewusst an der verifizierten Login-Maske
+  - `visual` gibt dort einen strukturierten `awaiting_user`-Workflow zurueck statt Username/Passwort/Submit blind weiter auszufuehren
+  - der Rueckweg bleibt im bestehenden Pending-Workflow-/C4-Pfad sichtbar
+  - Registry behandelt solche Rueckgaben als partielle Workflows statt als Erfolg
 
 ### D4. Auth Session Reuse
 

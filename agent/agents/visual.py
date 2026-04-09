@@ -19,6 +19,11 @@ from agent.prompts import VISUAL_SYSTEM_PROMPT
 from agent.shared.delegation_handoff import DelegationHandoff, parse_delegation_handoff
 from agent.shared.json_utils import extract_json_robust
 from agent.shared.vision_formatter import convert_openai_to_anthropic
+from orchestration.approval_auth_contract import (
+    build_user_mediated_login_workflow_payload,
+    derive_user_action_blocker_reason,
+    normalize_phase_d_workflow_payload,
+)
 from orchestration.specialist_context import (
     assess_specialist_context_alignment,
     extract_specialist_context_from_handoff_data,
@@ -67,6 +72,54 @@ class VisualAgent(BaseAgent):
         self.current_workflow_plan: List[str] = []
         self.current_structured_workflow_plan: Optional[BrowserWorkflowPlan] = None
         self.current_browser_url: str = ""
+
+    def _notify_delegation_progress(self, stage: str, **payload: Any) -> None:
+        callback = getattr(self, "_delegation_progress_callback", None)
+        if not callable(callback):
+            return
+        try:
+            callback(stage=stage, payload=payload)
+            return
+        except TypeError:
+            pass
+        try:
+            callback(stage, payload)
+            return
+        except TypeError:
+            pass
+        try:
+            callback(stage)
+        except Exception:
+            return
+
+    def _emit_user_action_blocker(self, payload: Any, *, stage: str = "user_action_required") -> None:
+        if not isinstance(payload, dict):
+            return
+        normalized_payload = normalize_phase_d_workflow_payload(payload)
+        if not normalized_payload:
+            return
+        self._notify_delegation_progress(
+            stage,
+            kind="blocker",
+            blocker_reason=derive_user_action_blocker_reason(normalized_payload),
+            message=str(normalized_payload.get("error") or normalized_payload.get("message") or "").strip(),
+            user_action_required=str(normalized_payload.get("user_action_required") or "").strip(),
+            platform=str(normalized_payload.get("platform") or "").strip(),
+            service=str(normalized_payload.get("service") or "").strip(),
+            url=str(normalized_payload.get("url") or "").strip(),
+            tool_status=str(normalized_payload.get("status") or "").strip(),
+            workflow_id=str(normalized_payload.get("workflow_id") or "").strip(),
+            workflow_kind=str(normalized_payload.get("workflow_kind") or "").strip(),
+            workflow_reason=str(normalized_payload.get("reason") or "").strip(),
+            approval_scope=str(normalized_payload.get("approval_scope") or "").strip(),
+            resume_hint=str(normalized_payload.get("resume_hint") or "").strip(),
+            challenge_type=str(normalized_payload.get("challenge_type") or "").strip(),
+            auth_required=bool(normalized_payload.get("auth_required")),
+            approval_required=bool(normalized_payload.get("approval_required")),
+            awaiting_user=bool(normalized_payload.get("awaiting_user")),
+            challenge_required=bool(normalized_payload.get("challenge_required")),
+            status=str(normalized_payload.get("status") or "").strip(),
+        )
 
     def _get_screenshot_as_base64(self) -> str:
         if not self._mss_module or not self._pil_image:
@@ -287,13 +340,15 @@ class VisualAgent(BaseAgent):
             self.current_structured_workflow_plan = None
             return ""
 
+        browser_url = self._extract_browser_url(task_text) or self.current_browser_url
+
         self.current_structured_workflow_plan = build_structured_browser_workflow_plan(
             task_text,
-            self._extract_browser_url(task_text),
+            browser_url,
         )
         self.current_workflow_plan = build_browser_workflow_plan(
             task_text,
-            self._extract_browser_url(task_text),
+            browser_url,
         )
         plan_lines = []
         for index, step in enumerate(self.current_structured_workflow_plan.steps[:8], start=1):
@@ -695,6 +750,108 @@ class VisualAgent(BaseAgent):
             "plan_id": plan_id,
         }
 
+    def _infer_service_from_browser_url(self, url: str) -> str:
+        host = str(url or "").strip().lower()
+        if not host:
+            return ""
+        host = host.replace("https://", "").replace("http://", "").split("/")[0]
+        if host.startswith("www."):
+            host = host[4:]
+        if host.startswith("x.com") or host.startswith("twitter.com"):
+            return "x"
+        if host.endswith("github.com"):
+            return "github"
+        if host.endswith("linkedin.com"):
+            return "linkedin"
+        if host.endswith("outlook.com") or host.endswith("live.com"):
+            return "outlook"
+        if host.endswith("booking.com"):
+            return "booking"
+        if "." in host:
+            return host.split(".")[0]
+        return host
+
+    async def _execute_user_mediated_login_plan(
+        self,
+        plan: BrowserWorkflowPlan,
+        *,
+        handoff: Optional[DelegationHandoff],
+        effective_task: str,
+    ) -> Dict[str, Any]:
+        execution_log: List[Dict[str, Any]] = []
+        current_state = plan.initial_state
+        plan_id = f"{plan.flow_type}-{int(time.time() * 1000)}"
+        prefix_steps: List[BrowserWorkflowStep] = []
+
+        for step in plan.steps:
+            prefix_steps.append(step)
+            if step.expected_state == "login_modal":
+                break
+
+        for index, step in enumerate(prefix_steps, start=1):
+            result = await self._execute_structured_step(step)
+            verification = result.get("verification_result", {}) or {}
+            success = bool(result.get("success"))
+            if success:
+                current_state = step.expected_state
+            execution_log.append(
+                {
+                    "plan_id": plan_id,
+                    "step_number": index,
+                    "current_state": current_state,
+                    "action": step.action,
+                    "strategy": result.get("strategy", ""),
+                    "fallback_reason": "" if success else "step_failed",
+                    "verification_result": verification,
+                }
+            )
+            if not success:
+                return {
+                    "success": False,
+                    "error": f"Structured step failed: {step.action}",
+                    "completed_steps": execution_log,
+                    "current_state": current_state,
+                    "plan_id": plan_id,
+                }
+
+        source_url = (
+            str((handoff.handoff_data.get("source_url") or "") if handoff else "").strip()
+            or self.current_browser_url
+            or self._extract_browser_url(effective_task)
+        )
+        service = (
+            str((handoff.handoff_data.get("service") or handoff.handoff_data.get("service_name") or "") if handoff else "").strip().lower()
+            or self._infer_service_from_browser_url(source_url)
+        )
+        workflow_payload = build_user_mediated_login_workflow_payload(
+            service=service,
+            url=source_url,
+            message=(
+                "Die Login-Maske ist bereit. Bitte fuehre den Login jetzt selbst im Browser aus; "
+                "Timus stoppt hier bewusst vor Benutzername, Passwort und 2FA."
+            ),
+            user_action_required=(
+                f"Bitte gib Benutzername, Passwort und ggf. 2FA selbst bei {service or 'dem Dienst'} ein."
+            ),
+            resume_hint=(
+                "Sage danach 'weiter', 'ich bin eingeloggt' oder beschreibe die sichtbare Challenge, "
+                "damit Timus kontrolliert fortsetzen kann."
+            ),
+        )
+        self._emit_user_action_blocker(workflow_payload, stage="await_login_completion")
+        return {
+            **workflow_payload,
+            "status": "awaiting_user",
+            "success": False,
+            "result": str(workflow_payload.get("message") or "").strip(),
+            "completed_steps": execution_log,
+            "current_state": current_state,
+            "plan_id": plan_id,
+            "metadata": {
+                "phase_d_workflow": workflow_payload,
+            },
+        }
+
     async def _create_navigation_plan_with_llm(self, task: str, screen_state: Dict) -> Optional[Dict]:
         try:
             elements = screen_state.get("elements", [])
@@ -802,11 +959,17 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             log.error(f"ActionPlan-Erstellung fehlgeschlagen: {e}")
             return None
 
-    async def _try_structured_navigation(self, task: str) -> Optional[Dict]:
+    async def _try_structured_navigation(self, task: str, *, handoff: Optional[DelegationHandoff] = None) -> Optional[Dict]:
         try:
             log.info("Versuche strukturierte Navigation...")
 
             if self.current_structured_workflow_plan:
+                if self.current_structured_workflow_plan.flow_type == "login_flow":
+                    return await self._execute_user_mediated_login_plan(
+                        self.current_structured_workflow_plan,
+                        handoff=handoff,
+                        effective_task=task,
+                    )
                 structured_result = await self._execute_structured_workflow_plan(
                     self.current_structured_workflow_plan
                 )
@@ -840,7 +1003,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             log.error(f"Strukturierte Navigation fehlgeschlagen: {e}")
             return None
 
-    async def run(self, task: str) -> str:
+    async def run(self, task: str) -> Any:
         effective_task, handoff_context = self._prepare_visual_task(task)
         handoff = parse_delegation_handoff(task)
         specialist_context_payload = (
@@ -907,16 +1070,28 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         runtime_feedback_recorded = False
 
         if selected_strategy == "structured_navigation":
-            structured_result = await self._try_structured_navigation(effective_task)
-            if structured_result and structured_result.get("success"):
-                log.info(f"Strukturierte Navigation erfolgreich: {structured_result['result']}")
-                if roi_set:
-                    self._clear_roi()
-                self._record_runtime_feedback(effective_task, success=True, strategy="browser_flow", stage="structured_navigation")
-                runtime_feedback_recorded = True
-                return structured_result["result"]
-            else:
-                log.info("Fallback zu Vision-basierter Navigation")
+            structured_result = await self._try_structured_navigation(effective_task, handoff=handoff)
+            if structured_result:
+                if structured_result.get("success"):
+                    log.info(f"Strukturierte Navigation erfolgreich: {structured_result['result']}")
+                    if roi_set:
+                        self._clear_roi()
+                    self._record_runtime_feedback(effective_task, success=True, strategy="browser_flow", stage="structured_navigation")
+                    runtime_feedback_recorded = True
+                    return structured_result["result"]
+                pending_status = str(structured_result.get("status") or "").strip().lower()
+                if pending_status in {"approval_required", "auth_required", "awaiting_user", "challenge_required"}:
+                    if roi_set:
+                        self._clear_roi()
+                    self._record_runtime_feedback(
+                        effective_task,
+                        success=False,
+                        strategy="browser_flow",
+                        stage=f"structured_navigation_{pending_status}",
+                    )
+                    runtime_feedback_recorded = True
+                    return structured_result
+            log.info("Fallback zu Vision-basierter Navigation")
         else:
             log.info("D0.9 Strategy: Vision-first statt strukturierter Navigation")
 

@@ -567,6 +567,72 @@ async def test_visual_prefers_vision_first_for_text_reading(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_visual_login_flow_stops_at_login_maske_and_returns_awaiting_user(monkeypatch):
+    agent = VisualAgent(tools_description_string="")
+    specialist_context = build_specialist_context_payload(
+        current_topic="GitHub Login",
+        active_goal="Bis zur Login-Maske navigieren und dann uebergeben",
+        open_loop="Login kontrolliert vorbereiten",
+        next_expected_step="Nur bis zur Login-Maske gehen",
+        turn_type="followup",
+        response_mode="execute",
+        user_preferences=["Login user-mediated"],
+    )
+    task = (
+        "# DELEGATION HANDOFF\n"
+        "target_agent: visual\n"
+        "goal: Oeffne github.com/login und fuehre mich bis zur Login-Maske.\n"
+        "expected_output: login_handoff\n"
+        "success_signal: login maske sichtbar\n"
+        "handoff_data:\n"
+        "- source_url: https://github.com/login\n"
+        "- expected_state: login_dialog\n"
+        "- original_user_task: Oeffne github.com/login und fuehre mich bis zur Login-Maske.\n"
+        f"- specialist_context_json: {json.dumps(specialist_context, ensure_ascii=False, sort_keys=True)}\n"
+    )
+
+    progress_events = []
+
+    def _progress_callback(*args, **kwargs):
+        if kwargs:
+            progress_events.append(kwargs)
+            return
+        stage = args[0] if len(args) > 0 else ""
+        payload = args[1] if len(args) > 1 else {}
+        progress_events.append({"stage": stage, "payload": payload})
+
+    async def _fake_execute_structured_step(self, step):
+        return {
+            "success": True,
+            "strategy": "dom_lookup",
+            "verification_result": {"success": True, "matched_signals": [step.expected_state]},
+        }
+
+    async def _fake_detect_dynamic_ui_and_set_roi(self, task_text: str):
+        return False
+
+    monkeypatch.setattr(VisualAgent, "_execute_structured_step", _fake_execute_structured_step)
+    monkeypatch.setattr(VisualAgent, "_detect_dynamic_ui_and_set_roi", _fake_detect_dynamic_ui_and_set_roi)
+    setattr(agent, "_delegation_progress_callback", _progress_callback)
+
+    result = await agent.run(task)
+
+    assert isinstance(result, dict)
+    assert result["status"] == "awaiting_user"
+    assert result["service"] == "github"
+    assert result["reason"] == "user_mediated_login"
+    assert result["url"] == "https://github.com/login"
+    assert "2fa" in result["user_action_required"].lower()
+    assert "weiter" in result["resume_hint"].lower()
+    assert progress_events
+    payload = progress_events[-1]["payload"]
+    assert payload["kind"] == "blocker"
+    assert payload["status"] == "awaiting_user"
+    assert payload["workflow_reason"] == "user_mediated_login"
+    assert payload["workflow_id"].startswith("wf_")
+
+
+@pytest.mark.asyncio
 async def test_system_snapshot_compact_mode_targets_requested_service(monkeypatch):
     calls = []
 
