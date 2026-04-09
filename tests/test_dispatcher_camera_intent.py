@@ -71,6 +71,30 @@ def test_quick_intent_keeps_simple_browser_step_on_visual_nemotron():
     assert decision == "visual_nemotron"
 
 
+def test_quick_intent_routes_login_mask_setup_to_phase_d_visual():
+    import main_dispatcher
+
+    decision = main_dispatcher.quick_intent_check(
+        "Oeffne github.com/login und fuehre mich bis zur Login-Maske."
+    )
+    assert decision == "visual_login"
+
+
+def test_build_visual_login_handoff_wraps_phase_d_login_contract():
+    import main_dispatcher
+
+    handoff = main_dispatcher._build_visual_login_handoff(
+        "Oeffne github.com/login und fuehre mich bis zur Login-Maske."
+    )
+
+    assert "# DELEGATION HANDOFF" in handoff
+    assert "target_agent: visual" in handoff
+    assert "expected_output: login_handoff" in handoff
+    assert "success_signal: login maske sichtbar" in handoff
+    assert "source_url: https://github.com/login" in handoff
+    assert "expected_state: login_dialog" in handoff
+
+
 def test_quick_intent_keeps_service_start_on_shell():
     import main_dispatcher
 

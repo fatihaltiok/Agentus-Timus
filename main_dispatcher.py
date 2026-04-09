@@ -65,7 +65,10 @@ from orchestration.meta_orchestration import (
     meta_site_recipe_key,
     resolve_adaptive_plan_adoption,
 )
-from orchestration.specialist_context import parse_specialist_context_payload
+from orchestration.specialist_context import (
+    build_specialist_context_payload,
+    parse_specialist_context_payload,
+)
 from orchestration.meta_self_state import build_meta_self_state
 from orchestration.self_improvement_engine import LLMUsageRecord, get_improvement_engine
 from utils.dashscope_native import (
@@ -173,6 +176,8 @@ from agent.agents.communication import CommunicationAgent
 from agent.agents.system import SystemAgent
 # M4: neue Agenten
 from agent.agents.shell import ShellAgent
+# Phase D: kontrollierter Login-/Approval-Visual-Pfad
+from agent.agents.visual import VisualAgent as WorkflowVisualAgent
 # M5: Bild-Analyse
 from agent.agents.image import ImageAgent
 
@@ -292,6 +297,102 @@ def _is_complex_browser_workflow(query_lower: str) -> bool:
         )
     )
     return action_count >= 3 or (action_count >= 2 and marker_count >= 1) or has_booking_like_state
+
+
+def _looks_like_user_mediated_login_setup_query(query_lower: str) -> bool:
+    normalized = str(query_lower or "").strip().lower()
+    if not normalized:
+        return False
+
+    has_browser_target = bool(
+        re.search(r"https?://[^\s]+", normalized)
+        or re.search(r"\b[a-z0-9.-]+\.(?:de|com|org|net|io|ai)(?:/[^\s]*)?\b", normalized)
+        or "browser" in normalized
+        or "webseite" in normalized
+        or "website" in normalized
+    )
+    has_entry_action = any(
+        token in normalized
+        for token in (
+            "oeffne",
+            "öffne",
+            "gehe auf",
+            "gehe zu",
+            "navigiere zu",
+            "starte den browser",
+        )
+    )
+    has_login_target = bool(
+        re.search(r"https?://[^\s]*/login\b", normalized)
+        or re.search(r"\b[a-z0-9.-]+\.(?:de|com|org|net|io|ai)/login\b", normalized)
+        or any(
+            token in normalized
+            for token in (
+                "login-maske",
+                "login maske",
+                "anmeldemaske",
+                "anmelde maske",
+                "sign in",
+                "log in",
+                "einloggen",
+                "anmelden",
+                "login",
+            )
+        )
+    )
+    return has_browser_target and has_entry_action and has_login_target
+
+
+def _extract_dispatcher_browser_url(query: str) -> str:
+    text = str(query or "").strip()
+    if not text:
+        return ""
+
+    url_match = re.search(r"https?://[^\s]+", text)
+    if url_match:
+        return url_match.group(0).strip("\"'(),[]")
+
+    domain_match = re.search(
+        r"\b([a-zA-Z0-9.-]+\.(?:de|com|org|net|io|ai)(?:/[^\s]*)?)\b",
+        text,
+    )
+    if not domain_match:
+        return ""
+    candidate = domain_match.group(1).strip("\"'(),[]")
+    if candidate.startswith("http://") or candidate.startswith("https://"):
+        return candidate
+    return f"https://{candidate}"
+
+
+def _build_visual_login_handoff(query: str) -> str:
+    source_url = _extract_dispatcher_browser_url(query)
+    specialist_context = build_specialist_context_payload(
+        current_topic="Login-Workflow",
+        active_goal="Bis zur Login-Maske navigieren und dann uebergeben",
+        open_loop="Login kontrolliert vorbereiten",
+        next_expected_step="Nur bis zur Login-Maske gehen",
+        turn_type="new_task",
+        response_mode="execute",
+        user_preferences=["Login user-mediated"],
+    )
+    lines = [
+        "# DELEGATION HANDOFF",
+        "target_agent: visual",
+        f"goal: {query}",
+        "expected_output: login_handoff",
+        "success_signal: login maske sichtbar",
+        "handoff_data:",
+    ]
+    if source_url:
+        lines.append(f"- source_url: {source_url}")
+    lines.extend(
+        [
+            "- expected_state: login_dialog",
+            f"- original_user_task: {query}",
+            f"- specialist_context_json: {json.dumps(specialist_context, ensure_ascii=False, sort_keys=True)}",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _dispatcher_content_to_text(content: Any) -> str:
@@ -893,6 +994,7 @@ AGENT_CLASS_MAP = {
     "research": DeepResearchAgent,
     "executor": ExecutorAgent,
     "visual": "SPECIAL_VISUAL_NEMOTRON",  # Florence-2 + Nemotron
+    "visual_login": WorkflowVisualAgent,  # Phase D: user-mediated Login-Workflows
     "vision_qwen": "SPECIAL_VISUAL_NEMOTRON",  # Florence-2 + Nemotron (ehem. Qwen-VL)
     "visual_nemotron": "SPECIAL_VISUAL_NEMOTRON",  # Florence-2 + Nemotron
     "meta": MetaAgent,
@@ -2045,6 +2147,9 @@ def quick_intent_check(query: str) -> Optional[str]:
     if location_intent.is_location_only:
         return "executor"
 
+    if _looks_like_user_mediated_login_setup_query(analysis_query):
+        return "visual_login"
+
     # Browser-Automation muss vor generischen Shell-Phrasen erkannt werden.
     # Komplexe Browser-Workflows gehen an META, damit der Orchestrator
     # den Ablauf in robuste Teilaufgaben für Visual zerlegt.
@@ -2854,6 +2959,13 @@ async def run_agent(
                 _render_meta_handoff_block(meta_handoff)
                 + f"\n\n# ORIGINAL USER TASK\n{clean_meta_query}"
             )
+    elif agent_name == "visual_login":
+        visual_login_handoff = _build_visual_login_handoff(query)
+        runtime_metadata["phase_d_visual_login"] = {
+            "source_url": _extract_dispatcher_browser_url(query),
+            "wrapped": True,
+        }
+        agent_query = visual_login_handoff
 
     log.info(f"\n🚀 Starte Agent: {agent_name.upper()}")
     _emit_dispatcher_status(agent_name, "start", "Initialisiere Agent")

@@ -116,6 +116,7 @@ from server.conversation_qdrant import recall_chat_turns as _semantic_recall_cha
 from server.conversation_qdrant import store_chat_turn as _semantic_store_chat_turn
 from gateway.status_snapshot import collect_status_snapshot
 from orchestration.autonomy_observation import record_autonomy_observation
+from orchestration.approval_auth_contract import normalize_phase_d_workflow_payload
 from orchestration.conversation_state import (
     apply_turn_interpretation,
     apply_pending_followup_prompt,
@@ -1761,6 +1762,51 @@ def _extract_pending_followup_prompt(text: str) -> str:
         if "?" in sentence or re.search(r"\b(soll ich|willst du|magst du|möchtest du|moechtest du)\b", lowered):
             return sentence[:280]
     return ""
+
+
+def _render_phase_d_workflow_reply(raw: Any) -> tuple[str, dict[str, Any] | None]:
+    if not isinstance(raw, Mapping):
+        return "", None
+
+    workflow = normalize_phase_d_workflow_payload(raw)
+    status = str(workflow.get("status") or "").strip().lower()
+    if status not in {"approval_required", "auth_required", "awaiting_user", "challenge_required"}:
+        return "", None
+
+    message = str(
+        workflow.get("message")
+        or raw.get("message")
+        or raw.get("error")
+        or raw.get("result")
+        or ""
+    ).strip()
+    user_action = str(workflow.get("user_action_required") or "").strip()
+    resume_hint = str(workflow.get("resume_hint") or "").strip()
+    service = str(workflow.get("service") or workflow.get("platform") or "").strip()
+    url = str(workflow.get("url") or "").strip()
+
+    parts: list[str] = []
+    if message:
+        parts.append(message)
+    if user_action:
+        parts.append(f"Naechster Schritt: {user_action}")
+    if resume_hint:
+        parts.append(f"Danach: {resume_hint}")
+    if url and status in {"auth_required", "awaiting_user", "challenge_required"}:
+        label = service or "Login"
+        parts.append(f"Seite: {label} -> {url}")
+
+    rendered = "\n\n".join(part for part in parts if part).strip()
+    return rendered or str(message or user_action or resume_hint or status), workflow
+
+
+def _render_chat_reply(raw: Any) -> tuple[str, dict[str, Any] | None]:
+    rendered_workflow_reply, workflow = _render_phase_d_workflow_reply(raw)
+    if rendered_workflow_reply:
+        return rendered_workflow_reply, workflow
+    if raw is None:
+        return "(keine Antwort)", None
+    return str(raw), None
 
 
 def _is_short_contextual_reply(query: str, capsule: dict) -> bool:
@@ -4283,7 +4329,7 @@ async def canvas_chat(request: Request):
                 _dispatcher_mod._agent_progress_hook = previous_agent_progress_hook
 
         _set_agent_status(agent, "completed", query)
-        reply = str(result) if result else "(keine Antwort)"
+        reply, rendered_phase_d_workflow = _render_chat_reply(result)
         reply_ts = datetime.utcnow().isoformat() + "Z"
 
         _append_chat_entry(
@@ -4371,7 +4417,16 @@ async def canvas_chat(request: Request):
         )
 
         _broadcast_sse({"type": "chat_reply", "request_id": request_id, "agent": agent, "text": reply, "ts": reply_ts})
-        return {"status": "success", "agent": agent, "reply": reply, "session_id": session_id, "request_id": request_id}
+        response_payload = {
+            "status": "success",
+            "agent": agent,
+            "reply": reply,
+            "session_id": session_id,
+            "request_id": request_id,
+        }
+        if rendered_phase_d_workflow:
+            response_payload["phase_d_workflow"] = rendered_phase_d_workflow
+        return response_payload
 
     except Exception as e:
         log.error(f"Canvas-Chat Fehler: {e}", exc_info=True)
