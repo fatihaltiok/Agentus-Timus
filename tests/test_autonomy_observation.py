@@ -339,10 +339,51 @@ def test_autonomy_observation_summarizes_request_and_task_correlation(tmp_path: 
         },
         observed_at=(base - timedelta(minutes=2, seconds=57)).isoformat(),
     )
+    assert store.record_event(
+        "communication_task_started",
+        {
+            "request_id": "req-2",
+            "session_id": "tg_demo",
+            "source": "telegram_chat",
+            "agent": "communication",
+            "channel": "email",
+            "backend": "resend",
+            "recipient": "fatihaltiok@outlook.com",
+        },
+        observed_at=(base - timedelta(minutes=1, seconds=30)).isoformat(),
+    )
+    assert store.record_event(
+        "send_email_succeeded",
+        {
+            "request_id": "req-2",
+            "session_id": "tg_demo",
+            "source": "telegram_chat",
+            "agent": "communication",
+            "channel": "email",
+            "backend": "resend",
+            "recipient": "fatihaltiok@outlook.com",
+        },
+        observed_at=(base - timedelta(minutes=1, seconds=28)).isoformat(),
+    )
+    assert store.record_event(
+        "send_email_failed",
+        {
+            "request_id": "req-3",
+            "session_id": "canvas_demo",
+            "source": "canvas_chat",
+            "agent": "communication",
+            "channel": "email",
+            "backend": "smtp",
+            "recipient": "fatihaltiok@outlook.com",
+            "error": "smtp down",
+        },
+        observed_at=(base - timedelta(minutes=1, seconds=25)).isoformat(),
+    )
 
     summary = store.build_summary()
 
     correlation = summary["request_correlation"]
+    communication = summary["communication_runtime"]
     assert correlation["chat_requests_total"] == 1
     assert correlation["chat_failed_total"] == 1
     assert correlation["dispatcher_routes_total"] == 1
@@ -365,8 +406,17 @@ def test_autonomy_observation_summarizes_request_and_task_correlation(tmp_path: 
     assert correlation["recent_outcomes"][1]["event_type"] == "chat_request_failed"
     assert correlation["recent_failures"][0]["event_type"] == "task_execution_failed"
     assert correlation["recent_failures"][1]["event_type"] == "chat_request_failed"
+    assert communication["tasks_started_total"] == 1
+    assert communication["email_send_success_total"] == 1
+    assert communication["email_send_failed_total"] == 1
+    assert communication["by_backend"]["resend"] == 2
+    assert communication["by_backend"]["smtp"] == 1
+    assert communication["by_channel"]["email"] == 3
 
     markdown = render_autonomy_observation_markdown(summary)
+    assert "## Communication Runtime" in markdown
+    assert "E-Mail-Versand Erfolg" in markdown
+    assert "Mail-Backend `resend`" in markdown
     assert "## Request-Korrelation" in markdown
     assert "## Letzte korrelierte Fehler" in markdown
     assert "canvas_chat_exception" in markdown

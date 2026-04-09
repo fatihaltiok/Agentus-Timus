@@ -20,8 +20,16 @@ from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass, field
 from contextvars import ContextVar
 
+from agent.shared.delegation_handoff import parse_delegation_handoff
 from orchestration.llm_budget_guard import cap_parallelism_for_budget
 from orchestration.orchestration_policy import evaluate_parallel_tasks
+from orchestration.specialist_context import (
+    assess_specialist_context_alignment,
+    extract_specialist_context_from_handoff_data,
+    parse_specialist_signal_response,
+)
+from orchestration.autonomy_observation import record_autonomy_observation
+from orchestration.request_correlation import get_current_request_correlation
 
 log = logging.getLogger("AgentRegistry")
 
@@ -247,6 +255,139 @@ class AgentRegistry:
             return ""
         return match.group(1).strip().lower()
 
+    @staticmethod
+    def _infer_observation_source(session_id: str) -> str:
+        normalized = str(session_id or "").strip().lower()
+        if normalized.startswith("tg_"):
+            return "telegram_chat"
+        if normalized.startswith("canvas_"):
+            return "canvas_chat"
+        if normalized.startswith("auto_"):
+            return "autonomous_runner"
+        return "delegation"
+
+    @staticmethod
+    def _extract_first_email_address(text: str) -> str:
+        match = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", str(text or ""), re.IGNORECASE)
+        return str(match.group(0) if match else "").strip()
+
+    @classmethod
+    def _extract_communication_delivery_payload(
+        cls,
+        *,
+        task: str,
+        raw: Any = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        artifacts: Optional[List[Dict[str, Any]]] = None,
+        from_agent: str,
+        to_agent: str,
+        session_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        if to_agent != "communication":
+            return None
+
+        handoff = parse_delegation_handoff(task)
+        handoff_data = dict(handoff.handoff_data or {}) if handoff else {}
+        raw_dict = dict(raw) if isinstance(raw, dict) else {}
+        nested = dict(raw_dict.get("data") or {}) if isinstance(raw_dict.get("data"), dict) else {}
+        effective_metadata = dict(metadata or {})
+        artifact_items = list(artifacts or [])
+
+        recipient = (
+            str(handoff_data.get("recipient") or "").strip()
+            or str(raw_dict.get("to") or "").strip()
+            or str(nested.get("to") or "").strip()
+        )
+        subject = (
+            str(handoff_data.get("subject") or "").strip()
+            or str(handoff_data.get("subject_hint") or "").strip()
+            or str(raw_dict.get("subject") or "").strip()
+            or str(nested.get("subject") or "").strip()
+        )
+        backend = (
+            str(raw_dict.get("backend") or "").strip()
+            or str(nested.get("backend") or "").strip()
+            or str(effective_metadata.get("backend") or "").strip()
+        )
+        attachment_path = (
+            str(handoff_data.get("attachment_path") or "").strip()
+            or str(raw_dict.get("attachment_path") or "").strip()
+            or str(nested.get("attachment_path") or "").strip()
+        )
+        attachment_name = (
+            str(raw_dict.get("attachment") or "").strip()
+            or str(nested.get("attachment") or "").strip()
+        )
+        if not attachment_path:
+            for item in artifact_items:
+                if not isinstance(item, dict):
+                    continue
+                path = str(item.get("path") or "").strip()
+                if path:
+                    attachment_path = path
+                    break
+        if not attachment_name and attachment_path:
+            attachment_name = attachment_path.rsplit("/", 1)[-1]
+
+        lower_task = str(task or "").lower()
+        email_like = bool(
+            recipient
+            or "send_email" in lower_task
+            or "e-mail" in lower_task
+            or "email" in lower_task
+            or "anhang" in lower_task
+            or cls._extract_first_email_address(task)
+        )
+        if not email_like:
+            return None
+
+        if not recipient:
+            recipient = cls._extract_first_email_address(task)
+
+        correlation = get_current_request_correlation()
+        return {
+            "request_id": str(correlation.get("request_id") or "").strip(),
+            "session_id": str(session_id or correlation.get("session_id") or "").strip(),
+            "source": cls._infer_observation_source(session_id or str(correlation.get("session_id") or "")),
+            "from_agent": from_agent,
+            "agent": to_agent,
+            "channel": "email",
+            "recipient": recipient,
+            "subject": subject[:180],
+            "backend": backend,
+            "attachment": attachment_name[:180],
+            "attachment_path": attachment_path[:240],
+        }
+
+    @classmethod
+    def _record_communication_delivery_observation(
+        cls,
+        *,
+        event_type: str,
+        task: str,
+        raw: Any = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        artifacts: Optional[List[Dict[str, Any]]] = None,
+        from_agent: str,
+        to_agent: str,
+        session_id: str,
+        error: str = "",
+    ) -> None:
+        payload = cls._extract_communication_delivery_payload(
+            task=task,
+            raw=raw,
+            metadata=metadata,
+            artifacts=artifacts,
+            from_agent=from_agent,
+            to_agent=to_agent,
+            session_id=session_id,
+        )
+        if not payload:
+            return
+        if error:
+            payload["error"] = str(error)[:240]
+        record_autonomy_observation(event_type, payload)
+
     @classmethod
     def _is_simple_live_lookup_delegation(cls, agent_name: str, task: str) -> bool:
         return agent_name == "executor" and cls._extract_handoff_task_type(task) == "simple_live_lookup"
@@ -321,6 +462,40 @@ class AgentRegistry:
             )
         except Exception:
             pass
+
+    @staticmethod
+    def _derive_specialist_context_signal(task: str) -> Dict[str, Any]:
+        handoff = parse_delegation_handoff(task)
+        if not handoff:
+            return {}
+
+        specialist_context = extract_specialist_context_from_handoff_data(handoff.handoff_data)
+        if not specialist_context:
+            return {}
+
+        current_task = " | ".join(
+            str(item or "").strip()
+            for item in (
+                handoff.handoff_data.get("original_user_task"),
+                handoff.handoff_data.get("query"),
+                handoff.handoff_data.get("target_hint"),
+                handoff.goal,
+            )
+            if str(item or "").strip()
+        )
+        alignment = assess_specialist_context_alignment(
+            current_task=current_task,
+            payload=specialist_context,
+        )
+        state = str(alignment.get("alignment_state") or "").strip().lower()
+        if state not in {"context_mismatch", "needs_meta_reframe"}:
+            return {}
+
+        return {
+            "signal": state,
+            "alignment": alignment,
+            "specialist_context": specialist_context,
+        }
 
     @classmethod
     def _make_progress_callback(
@@ -506,6 +681,13 @@ class AgentRegistry:
             message=f"Delegation gestartet: {from_agent} -> {to_agent}",
             payload={"stack_depth": len(next_stack)},
         )
+        self._record_communication_delivery_observation(
+            event_type="communication_task_started",
+            task=task,
+            from_agent=from_agent,
+            to_agent=to_agent,
+            session_id=effective_session_id or "",
+        )
 
         timeout = self._select_delegation_timeout(to_agent, task)
         progress_timeout = self._select_progress_timeout(to_agent, task)
@@ -603,15 +785,87 @@ class AgentRegistry:
             if last_error is not None:
                 raise last_error
 
-            result_str = AgentRegistry._stringify_delegation_result(raw)
+            raw_result_str = AgentRegistry._stringify_delegation_result(raw)
+            explicit_specialist_signal = parse_specialist_signal_response(raw_result_str)
+            result_str = raw_result_str
+            if explicit_specialist_signal:
+                cleaned_text = str(explicit_specialist_signal.get("cleaned_text") or "").strip()
+                if cleaned_text:
+                    result_str = cleaned_text
             _meta, _artifacts = AgentRegistry._build_result_metadata_and_artifacts(
                 raw,
                 to_agent,
             )
-            outcome_status, outcome_error = AgentRegistry._classify_delegation_outcome(
-                raw,
-                result_str,
-            )
+            specialist_signal = AgentRegistry._derive_specialist_context_signal(task)
+            if explicit_specialist_signal:
+                specialist_signal = {
+                    "signal": str(explicit_specialist_signal.get("signal") or ""),
+                    "alignment": {
+                        "alignment_state": str(explicit_specialist_signal.get("signal") or ""),
+                        "reason": str(explicit_specialist_signal.get("reason") or ""),
+                    },
+                    "specialist_context": (
+                        dict(specialist_signal.get("specialist_context") or {})
+                        if specialist_signal
+                        else {}
+                    ),
+                    "signal_source": "agent",
+                }
+            if specialist_signal:
+                _meta = dict(_meta or {})
+                _meta["specialist_return_signal"] = str(specialist_signal.get("signal") or "")
+                _meta["specialist_context_alignment"] = dict(specialist_signal.get("alignment") or {})
+                _meta["specialist_signal_source"] = str(specialist_signal.get("signal_source") or "heuristic")
+                if specialist_signal.get("specialist_context"):
+                    _meta["specialist_context"] = dict(specialist_signal.get("specialist_context") or {})
+            if explicit_specialist_signal:
+                outcome_status, outcome_error = "partial", str(
+                    explicit_specialist_signal.get("message")
+                    or "Spezialist fordert eine Meta-Neurahmung."
+                )
+            else:
+                outcome_status, outcome_error = AgentRegistry._classify_delegation_outcome(
+                    raw,
+                    result_str,
+                )
+
+            if specialist_signal:
+                signal_name = str(specialist_signal.get("signal") or "")
+                record_autonomy_observation(
+                    "specialist_signal_emitted",
+                    {
+                        "from_agent": from_agent,
+                        "agent": to_agent,
+                        "signal": signal_name,
+                        "signal_source": str(specialist_signal.get("signal_source") or "heuristic"),
+                        "alignment_state": str(
+                            dict(specialist_signal.get("alignment") or {}).get("alignment_state") or ""
+                        ),
+                        "reason": str(
+                            dict(specialist_signal.get("alignment") or {}).get("reason") or ""
+                        ),
+                        "session_id": effective_session_id or "",
+                    },
+                )
+                signal_payload = {
+                    "kind": signal_name,
+                    "message": (
+                        "Spezialist meldet einen moeglichen Kontext-Mismatch."
+                        if signal_name == "context_mismatch"
+                        else "Spezialist braucht vermutlich einen Meta-Reframe."
+                    ),
+                    "signal": signal_name,
+                    "reason": str(
+                        dict(specialist_signal.get("alignment") or {}).get("reason") or ""
+                    ),
+                }
+                self._emit_transport_progress(
+                    from_agent=from_agent,
+                    to_agent=to_agent,
+                    session_id=effective_session_id or "",
+                    stage=f"delegation_{signal_name}",
+                    payload=signal_payload,
+                )
 
             # Partial-Result-Erkennung
             if outcome_status == "partial":
@@ -656,6 +910,17 @@ class AgentRegistry:
                     blackboard_key=bb_key,
                     metadata=_meta,
                     artifacts=_artifacts,
+                )
+                self._record_communication_delivery_observation(
+                    event_type="communication_task_partial",
+                    task=task,
+                    raw=raw,
+                    metadata=_meta,
+                    artifacts=_artifacts,
+                    from_agent=from_agent,
+                    to_agent=to_agent,
+                    session_id=effective_session_id or "",
+                    error=result_str,
                 )
                 return {
                     "status": _res.status,
@@ -703,6 +968,28 @@ class AgentRegistry:
                     metadata=_meta,
                     artifacts=_artifacts,
                 )
+                self._record_communication_delivery_observation(
+                    event_type="communication_task_failed",
+                    task=task,
+                    raw=raw,
+                    metadata=_meta,
+                    artifacts=_artifacts,
+                    from_agent=from_agent,
+                    to_agent=to_agent,
+                    session_id=effective_session_id or "",
+                    error=outcome_error,
+                )
+                self._record_communication_delivery_observation(
+                    event_type="send_email_failed",
+                    task=task,
+                    raw=raw,
+                    metadata=_meta,
+                    artifacts=_artifacts,
+                    from_agent=from_agent,
+                    to_agent=to_agent,
+                    session_id=effective_session_id or "",
+                    error=outcome_error,
+                )
                 return {
                     "status": _res.status,
                     "agent": _res.agent,
@@ -746,6 +1033,26 @@ class AgentRegistry:
                 blackboard_key=bb_key,
                 metadata=_meta,
                 artifacts=_artifacts,
+            )
+            self._record_communication_delivery_observation(
+                event_type="communication_task_completed",
+                task=task,
+                raw=raw,
+                metadata=_meta,
+                artifacts=_artifacts,
+                from_agent=from_agent,
+                to_agent=to_agent,
+                session_id=effective_session_id or "",
+            )
+            self._record_communication_delivery_observation(
+                event_type="send_email_succeeded",
+                task=task,
+                raw=raw,
+                metadata=_meta,
+                artifacts=_artifacts,
+                from_agent=from_agent,
+                to_agent=to_agent,
+                session_id=effective_session_id or "",
             )
             return {
                 "status": _res.status,
@@ -963,6 +1270,15 @@ class AgentRegistry:
     def _classify_delegation_outcome(cls, raw: Any, result_text: str) -> tuple[str, str]:
         """Klassifiziert delegierte Ergebnisse, damit Fehlertext nicht als Erfolg durchgeht."""
         stripped = (result_text or "").strip()
+        explicit_signal = parse_specialist_signal_response(stripped)
+        if explicit_signal:
+            signal_message = str(explicit_signal.get("message") or "").strip()
+            fallback = (
+                "Spezialist fordert eine Meta-Neurahmung."
+                if explicit_signal.get("signal") == "needs_meta_reframe"
+                else "Spezialist meldet einen moeglichen Kontext-Mismatch."
+            )
+            return "partial", signal_message or fallback
         if isinstance(raw, dict):
             raw_status = str(raw.get("status") or "").strip().lower()
             if raw.get("skipped") is True:

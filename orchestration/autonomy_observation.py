@@ -240,6 +240,31 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
             "by_misread_reason": {},
             "recent_misreads": [],
         },
+        "specialist_context": {
+            "strategy_selected_total": 0,
+            "specialist_signal_total": 0,
+            "needs_meta_reframe_total": 0,
+            "context_mismatch_total": 0,
+            "agent_signal_rate": 0.0,
+            "signal_reframe_rate": 0.0,
+            "by_agent": {},
+            "by_strategy_mode": {},
+            "by_response_mode": {},
+            "by_signal": {},
+            "by_signal_source": {},
+        },
+        "communication_runtime": {
+            "tasks_started_total": 0,
+            "tasks_completed_total": 0,
+            "tasks_failed_total": 0,
+            "tasks_partial_total": 0,
+            "email_send_success_total": 0,
+            "email_send_failed_total": 0,
+            "by_source": {},
+            "by_backend": {},
+            "by_agent": {},
+            "by_channel": {},
+        },
         "top_goal_signatures": [],
         # C2: Nutzerwirkungs-Klassen — eigener Block, unabhängig von request_correlation.
         # user_visible_failures_total in request_correlation wird NICHT doppelt erhöht.
@@ -257,6 +282,8 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
     meta_diag = summary["meta_diagnostics"]
     request_correlation = summary["request_correlation"]
     meta_context_state = summary["meta_context_state"]
+    specialist_context = summary["specialist_context"]
+    communication_runtime = summary["communication_runtime"]
     user_impact = summary["user_impact"]
     recent_requests: List[Dict[str, Any]] = []
     recent_routes: List[Dict[str, Any]] = []
@@ -599,6 +626,65 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
             meta_context_state["preference_conflict_resolved_total"] += 1
             _bump(meta_context_state["by_preference_family"], payload.get("family"))
 
+        elif event_type == "specialist_strategy_selected":
+            specialist_context["strategy_selected_total"] += 1
+            _bump(specialist_context["by_agent"], payload.get("agent"))
+            _bump(specialist_context["by_strategy_mode"], payload.get("strategy_mode"))
+            _bump(specialist_context["by_response_mode"], payload.get("response_mode"))
+
+        elif event_type == "specialist_signal_emitted":
+            specialist_context["specialist_signal_total"] += 1
+            _bump(specialist_context["by_agent"], payload.get("agent"))
+            _bump(specialist_context["by_signal"], payload.get("signal"))
+            _bump(specialist_context["by_signal_source"], payload.get("signal_source"))
+            signal_name = _normalize_counter_key(payload.get("signal"))
+            if signal_name == "needs_meta_reframe":
+                specialist_context["needs_meta_reframe_total"] += 1
+            elif signal_name == "context_mismatch":
+                specialist_context["context_mismatch_total"] += 1
+
+        elif event_type == "communication_task_started":
+            communication_runtime["tasks_started_total"] += 1
+            _bump(communication_runtime["by_source"], payload.get("source"))
+            _bump(communication_runtime["by_backend"], payload.get("backend"), fallback="unknown")
+            _bump(communication_runtime["by_agent"], payload.get("agent"))
+            _bump(communication_runtime["by_channel"], payload.get("channel"))
+
+        elif event_type == "communication_task_completed":
+            communication_runtime["tasks_completed_total"] += 1
+            _bump(communication_runtime["by_source"], payload.get("source"))
+            _bump(communication_runtime["by_backend"], payload.get("backend"), fallback="unknown")
+            _bump(communication_runtime["by_agent"], payload.get("agent"))
+            _bump(communication_runtime["by_channel"], payload.get("channel"))
+
+        elif event_type == "communication_task_partial":
+            communication_runtime["tasks_partial_total"] += 1
+            _bump(communication_runtime["by_source"], payload.get("source"))
+            _bump(communication_runtime["by_backend"], payload.get("backend"), fallback="unknown")
+            _bump(communication_runtime["by_agent"], payload.get("agent"))
+            _bump(communication_runtime["by_channel"], payload.get("channel"))
+
+        elif event_type == "communication_task_failed":
+            communication_runtime["tasks_failed_total"] += 1
+            _bump(communication_runtime["by_source"], payload.get("source"))
+            _bump(communication_runtime["by_backend"], payload.get("backend"), fallback="unknown")
+            _bump(communication_runtime["by_agent"], payload.get("agent"))
+            _bump(communication_runtime["by_channel"], payload.get("channel"))
+
+        elif event_type == "send_email_succeeded":
+            communication_runtime["email_send_success_total"] += 1
+            _bump(communication_runtime["by_source"], payload.get("source"))
+            _bump(communication_runtime["by_backend"], payload.get("backend"), fallback="unknown")
+            _bump(communication_runtime["by_agent"], payload.get("agent"))
+            _bump(communication_runtime["by_channel"], payload.get("channel"))
+
+        elif event_type == "send_email_failed":
+            communication_runtime["email_send_failed_total"] += 1
+            _bump(communication_runtime["by_source"], payload.get("source"))
+            _bump(communication_runtime["by_backend"], payload.get("backend"), fallback="unknown")
+            _bump(communication_runtime["by_agent"], payload.get("agent"))
+            _bump(communication_runtime["by_channel"], payload.get("channel"))
+
         elif event_type in _USER_IMPACT_EVENT_TYPES:
             # C2: Nutzerwirkungs-Klassen. Eigener Block — user_visible_failures_total
             # in request_correlation wird nicht doppelt erhöht.
@@ -679,6 +765,17 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
             min(1.0, int(meta_context_state.get("policy_override_total") or 0) / policy_total),
             3,
         )
+    strategy_total = int(specialist_context.get("strategy_selected_total") or 0)
+    signal_total = int(specialist_context.get("specialist_signal_total") or 0)
+    if signal_total > 0:
+        specialist_context["agent_signal_rate"] = round(
+            min(1.0, int(dict(specialist_context.get("by_signal_source") or {}).get("agent") or 0) / signal_total),
+            3,
+        )
+        specialist_context["signal_reframe_rate"] = round(
+            min(1.0, int(specialist_context.get("needs_meta_reframe_total") or 0) / signal_total),
+            3,
+        )
     summary["meta_context_state"]["recent_misreads"] = sorted(
         recent_misreads,
         key=lambda item: str(item.get("observed_at") or ""),
@@ -695,6 +792,8 @@ def render_autonomy_observation_markdown(summary: Dict[str, Any]) -> str:
     hardening = dict(summary.get("self_hardening") or {})
     meta_diag = dict(summary.get("meta_diagnostics") or {})
     meta_context_state = dict(summary.get("meta_context_state") or {})
+    specialist_context = dict(summary.get("specialist_context") or {})
+    communication_runtime = dict(summary.get("communication_runtime") or {})
     request_correlation = dict(summary.get("request_correlation") or {})
     event_counts = dict(summary.get("event_counts") or {})
 
@@ -745,6 +844,22 @@ def render_autonomy_observation_markdown(summary: Dict[str, Any]) -> str:
             f"- Preference-Captures: `{int(meta_context_state.get('preference_captured_total') or 0)}`",
             f"- Preference-Applies: `{int(meta_context_state.get('preference_applied_total') or 0)}`",
             "",
+            "## D0.9 Specialist Context",
+            f"- Strategien gewaehlt: `{int(specialist_context.get('strategy_selected_total') or 0)}`",
+            f"- Specialist-Signale: `{int(specialist_context.get('specialist_signal_total') or 0)}`",
+            f"- `needs_meta_reframe`: `{int(specialist_context.get('needs_meta_reframe_total') or 0)}`",
+            f"- `context_mismatch`: `{int(specialist_context.get('context_mismatch_total') or 0)}`",
+            f"- Agent-Signal-Rate: `{float(specialist_context.get('agent_signal_rate') or 0.0):.3f}`",
+            f"- Reframe-Rate: `{float(specialist_context.get('signal_reframe_rate') or 0.0):.3f}`",
+            "",
+            "## Communication Runtime",
+            f"- Communication-Tasks gestartet: `{int(communication_runtime.get('tasks_started_total') or 0)}`",
+            f"- Communication-Tasks abgeschlossen: `{int(communication_runtime.get('tasks_completed_total') or 0)}`",
+            f"- Communication-Tasks partiell: `{int(communication_runtime.get('tasks_partial_total') or 0)}`",
+            f"- Communication-Tasks fehlgeschlagen: `{int(communication_runtime.get('tasks_failed_total') or 0)}`",
+            f"- E-Mail-Versand Erfolg: `{int(communication_runtime.get('email_send_success_total') or 0)}`",
+            f"- E-Mail-Versand Fehler: `{int(communication_runtime.get('email_send_failed_total') or 0)}`",
+            "",
             "## Recipe Outcomes",
             f"- Gesamt: `{int(recipe.get('total') or 0)}`",
             f"- Erfolg: `{int(recipe.get('success_total') or 0)}`",
@@ -770,6 +885,16 @@ def render_autonomy_observation_markdown(summary: Dict[str, Any]) -> str:
         lines.append(f"- Decay `{key}`: `{int(value or 0)}`")
     for key, value in sorted(dict(meta_context_state.get("by_historical_time_label") or {}).items()):
         lines.append(f"- Historical `{key}`: `{int(value or 0)}`")
+    for key, value in sorted(dict(specialist_context.get("by_strategy_mode") or {}).items()):
+        lines.append(f"- Specialist-Strategie `{key}`: `{int(value or 0)}`")
+    for key, value in sorted(dict(specialist_context.get("by_signal") or {}).items()):
+        lines.append(f"- Specialist-Signal `{key}`: `{int(value or 0)}`")
+    for key, value in sorted(dict(specialist_context.get("by_signal_source") or {}).items()):
+        lines.append(f"- Specialist-Signalquelle `{key}`: `{int(value or 0)}`")
+    for key, value in sorted(dict(communication_runtime.get("by_backend") or {}).items()):
+        lines.append(f"- Mail-Backend `{key}`: `{int(value or 0)}`")
+    for key, value in sorted(dict(communication_runtime.get("by_channel") or {}).items()):
+        lines.append(f"- Communication-Kanal `{key}`: `{int(value or 0)}`")
 
     lines.extend(
         [

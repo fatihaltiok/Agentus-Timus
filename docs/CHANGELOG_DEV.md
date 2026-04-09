@@ -2,6 +2,47 @@
 
 ---
 
+## Fortschritt 2026-04-09 - Telegram/Mail-Observability nachgezogen
+
+Der Telegram-Chat hat einen echten Mailversand bestaetigt, waehrend im Observation-Log fuer denselben Request nur `chat_request_completed` sichtbar war. Der Versandpfad funktionierte also, aber die Laufzeitbeobachtung war zu duenn.
+
+Nachgezogen:
+
+- [agent_registry.py](/home/fatih-ubuntu/dev/timus/agent/agent_registry.py)
+  - der echte `communication`-Delegationspfad emittiert jetzt explizit:
+    - `communication_task_started`
+    - `communication_task_completed`
+    - `communication_task_partial`
+    - `communication_task_failed`
+    - `send_email_succeeded`
+    - `send_email_failed`
+  - die Events tragen Request-/Session-Korrelation, Kanal (`email`), Empfaenger, Betreff/Anhang-Hinweise und Backend, soweit aus Handoff oder Tool-Ergebnis belegbar
+  - Telegram-/Canvas-Quelle wird aus Session-/Request-Korrelation sauber abgeleitet, statt spaeter nur an `chat_request_completed` haengen zu bleiben
+- [autonomy_observation.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomy_observation.py)
+  - neuer Summary-Block `communication_runtime`
+  - zaehlt jetzt:
+    - gestartete/abgeschlossene/partielle/fehlgeschlagene Communication-Tasks
+    - erfolgreiche/fehlgeschlagene E-Mail-Sendungen
+    - Verteilung nach Backend und Kanal
+  - Markdown-Render zeigt die neue Communication-/Mail-Sicht jetzt explizit an
+- [test_specialist_context_runtime.py](/home/fatih-ubuntu/dev/timus/tests/test_specialist_context_runtime.py)
+  - neue Regression:
+    - erfolgreicher `communication`-Delegationspfad emittiert `communication_task_started`, `communication_task_completed` und `send_email_succeeded` mit korrekter Request-/Session-Korrelation
+- [test_autonomy_observation.py](/home/fatih-ubuntu/dev/timus/tests/test_autonomy_observation.py)
+  - neue Regression:
+    - Summary und Markdown enthalten den neuen `Communication Runtime`-Block inklusive Backend-/E-Mail-Counter
+
+Verifikation:
+
+- `python -m py_compile agent/agent_registry.py orchestration/autonomy_observation.py tests/test_specialist_context_runtime.py tests/test_autonomy_observation.py`
+- `pytest -q tests/test_specialist_context_runtime.py tests/test_autonomy_observation.py`
+- `pytest -q tests/test_telegram_feedback_gateway.py tests/test_meta_handoff.py tests/test_specialist_handoffs.py`
+
+Ergebnis:
+
+- `10 passed` im direkten Mail-/Observation-Ring
+- `27 passed` im breiteren Telegram-/Meta-/Specialist-Handoff-Ring
+
 ## Fortschritt 2026-04-08 - D0.8 Historical Recall nach Review nachgehaertet
 
 Ein Review der letzten D0.8-Commits hat drei echte Fehler im Historical-Recall-Pfad offengelegt:
@@ -3062,6 +3103,28 @@ Die Beobachtung zeigt klar:
 - kritische Runtime-/Infra-Aenderungen
 - alles davon nur mit expliziter Freigabe oder starkem Policy-Gate
 
+5. Memory Curation Autonomy
+- Timus soll sein Langzeitgedaechtnis spaeter nicht nur fuellen, sondern kontrolliert pflegen
+- Ziel ist keine blinde Loesch-Automation, sondern eine policy-gesteuerte Gedaechtnisorganisation
+- der Block gehoert **in Phase E**, nicht in Phase D
+  - weil es um interne Selbstorganisation und qualitative Selbstverbesserung geht
+  - nicht um Nutzerfreigaben, Auth oder assistive Aussenaktionen
+- Zielbild:
+  - fluechtige Erinnerungen, Topic-Historie und stabile Langzeitfakten unterschiedlich behandeln
+  - alte, schwache oder redundante Erinnerungen zusammenfassen, archivieren oder konservativ entwerten
+  - Retrieval-Qualitaet dabei messbar verbessern statt nur Speicher zu reduzieren
+- noetige Bausteine:
+  - `Memory Curation Policy`
+  - `Memory Curation Engine`
+  - Verifikation nach jeder Pflege
+  - Rollback/Snapshots
+  - Observability fuer `memory_curation_started`, `memory_summarized`, `memory_archived`, `memory_pruned`, `memory_curation_rollback`
+  - konservative Autonomiegrenzen und spaeter optional Approval fuer aggressivere Eingriffe
+- Einordnung innerhalb von Phase E:
+  - nicht ganz am Anfang von E
+  - erst nachdem D0, Phase D und der Spezialisten-Rollout stabil genug sind
+  - sinnvoll als spaeterer Self-Improvement-Block fuer kontrollierte Gedaechtnispflege
+
 ### Erfolgskriterium
 
 - Timus beschreibt Schwaechen nicht nur
@@ -4418,4 +4481,226 @@ Runtime:
 Status:
 
 - D0.8 abgeschlossen
-- naechster logischer Block: `D0.9 Specialist Context Propagation`
+- D0.9 gestartet
+
+## 2026-04-08 D0.9 erster Runtime-Slice: Specialist Context Propagation
+
+Neu:
+
+- [orchestration/specialist_context.py](/home/fatih-ubuntu/dev/timus/orchestration/specialist_context.py)
+- [agent/agents/meta.py](/home/fatih-ubuntu/dev/timus/agent/agents/meta.py)
+- [main_dispatcher.py](/home/fatih-ubuntu/dev/timus/main_dispatcher.py)
+- [orchestration/meta_orchestration.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_orchestration.py)
+- [orchestration/orchestration_policy.py](/home/fatih-ubuntu/dev/timus/orchestration/orchestration_policy.py)
+- [agent/agents/executor.py](/home/fatih-ubuntu/dev/timus/agent/agents/executor.py)
+- [agent/agents/research.py](/home/fatih-ubuntu/dev/timus/agent/agents/research.py)
+- [agent/agents/visual.py](/home/fatih-ubuntu/dev/timus/agent/agents/visual.py)
+- [agent/agents/system.py](/home/fatih-ubuntu/dev/timus/agent/agents/system.py)
+- [tests/test_meta_handoff.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_handoff.py)
+- [tests/test_specialist_handoffs.py](/home/fatih-ubuntu/dev/timus/tests/test_specialist_handoffs.py)
+
+Inhalt:
+
+- `classify_meta_task(...)` erzeugt jetzt einen normalisierten `specialist_context_seed`
+- der Dispatcher traegt diesen Seed in den Meta-Handoff
+- `MetaAgent` haelt den aktiven Orchestrierungs-Handoff jetzt auch fuer nicht-rezeptartige Meta-Laeufe vor
+- strukturierte Specialist-Handoffs und Rezept-/Recovery-Stages tragen jetzt `specialist_context_json`
+- `executor`, `research`, `visual` und `system` rendern den propagierten Spezialistenkontext jetzt sichtbar im Arbeitskontext
+- der erste D0.9-Vertrag umfasst:
+  - `current_topic`
+  - `active_goal`
+  - `open_loop`
+  - `next_expected_step`
+  - `turn_type`
+  - `response_mode`
+  - `user_preferences`
+  - `recent_corrections`
+  - `signal_contract`
+
+Verifikation:
+
+- `python -m py_compile ...` gruen
+- `pytest -q tests/test_meta_handoff.py tests/test_specialist_handoffs.py` -> `16 passed`
+- `pytest -q tests/test_meta_orchestration.py tests/test_android_chat_language.py tests/test_meta_handoff.py tests/test_specialist_handoffs.py` -> `101 passed`
+
+Status:
+
+- D0.9 ist als erster echter Runtime-Slice gestartet
+- offen fuer den naechsten Slice:
+  - tiefere Nutzung des Kontexts in Specialist-Entscheidungen und Toolwahl
+  - weitere Spezialisten ausserhalb des ersten Kernrings
+
+## 2026-04-08 D0.9 zweiter Runtime-Slice: Context Alignment + Return Signals
+
+Neu:
+
+- [agent/agent_registry.py](/home/fatih-ubuntu/dev/timus/agent/agent_registry.py)
+- [orchestration/specialist_context.py](/home/fatih-ubuntu/dev/timus/orchestration/specialist_context.py)
+- [tests/test_specialist_context_runtime.py](/home/fatih-ubuntu/dev/timus/tests/test_specialist_context_runtime.py)
+
+Inhalt:
+
+- propagierter Spezialistenkontext bekommt jetzt eine gemeinsame Alignment-Heuristik
+- `executor`, `research`, `visual` und `system` sehen bei schwacher Kontextverankerung jetzt eine explizite Kontextwarnung im Handoff-Kontext
+- `AgentRegistry.delegate(...)` leitet daraus erstmals strukturierte Specialist-Ruecksignale im echten Delegationspfad ab:
+  - `context_mismatch`
+  - `needs_meta_reframe`
+- diese Signale landen jetzt in:
+  - `metadata.specialist_return_signal`
+  - `metadata.specialist_context_alignment`
+  - C4-Transportereignissen mit `kind=context_mismatch` bzw. `kind=needs_meta_reframe`
+
+Verifikation:
+
+- `python -m py_compile ...` gruen
+- `pytest -q tests/test_specialist_context_runtime.py tests/test_specialist_handoffs.py tests/test_meta_handoff.py` -> `18 passed`
+- `pytest -q tests/test_meta_orchestration.py tests/test_android_chat_language.py tests/test_meta_handoff.py tests/test_specialist_handoffs.py tests/test_specialist_context_runtime.py tests/test_c4_longrunner_runtime.py tests/test_delegation_hardening.py` -> `116 passed`
+
+Status:
+
+- D0.9 ist jetzt ueber reine Kontextpropagierung hinaus im Delegations-Rueckweg angekommen
+- offen fuer den naechsten Slice:
+  - weitere agentenseitige Signalspezialfaelle ausserhalb des ersten Kernrings
+  - tiefere kontextabhaengige Tool- und Strategieanpassung in den Spezialisten
+
+## 2026-04-08 D0.9 dritter Runtime-Slice: Agent-side Signals + First Behavior Guard
+
+Neu:
+
+- [orchestration/specialist_context.py](/home/fatih-ubuntu/dev/timus/orchestration/specialist_context.py)
+- [agent/agent_registry.py](/home/fatih-ubuntu/dev/timus/agent/agent_registry.py)
+- [agent/agents/executor.py](/home/fatih-ubuntu/dev/timus/agent/agents/executor.py)
+- [agent/agents/research.py](/home/fatih-ubuntu/dev/timus/agent/agents/research.py)
+- [agent/agents/visual.py](/home/fatih-ubuntu/dev/timus/agent/agents/visual.py)
+- [agent/agents/system.py](/home/fatih-ubuntu/dev/timus/agent/agents/system.py)
+- [tests/test_specialist_context_runtime.py](/home/fatih-ubuntu/dev/timus/tests/test_specialist_context_runtime.py)
+- [tests/test_specialist_handoffs.py](/home/fatih-ubuntu/dev/timus/tests/test_specialist_handoffs.py)
+
+Inhalt:
+
+- Spezialisten haben jetzt ein erstes explizites Signal-Protokoll:
+  - `Specialist Signal: context_mismatch`
+  - `Specialist Signal: needs_meta_reframe`
+- `AgentRegistry` erkennt diese expliziten Signale jetzt direkt und behandelt sie als `partial`
+- explizite Signalsessions werden jetzt in den Delegations-Metadaten sichtbar:
+  - `specialist_return_signal`
+  - `specialist_signal_source = agent`
+  - `specialist_context_alignment`
+- `executor`, `research`, `visual` und `system` erzeugen bei starkem Kontextbruch jetzt direkt `needs_meta_reframe`
+- erster echter kontextabhaengiger Behavior-Guard:
+  - `executor` blockt Aktions-Handoffs wie `simple_live_lookup` jetzt aktiv, wenn der propagierte Meta-Modus `summarize_state` dazu im Widerspruch steht
+
+Verifikation:
+
+- `python -m py_compile ...` gruen
+- `pytest -q tests/test_specialist_context_runtime.py tests/test_specialist_handoffs.py tests/test_meta_handoff.py` -> `21 passed`
+- `pytest -q tests/test_meta_orchestration.py tests/test_android_chat_language.py tests/test_meta_handoff.py tests/test_specialist_handoffs.py tests/test_specialist_context_runtime.py tests/test_c4_longrunner_runtime.py tests/test_delegation_hardening.py` -> `119 passed`
+
+Status:
+
+- D0.9 hat jetzt nicht nur propagierten Kontext und heuristische Ruecksignale, sondern erste bewusst erzeugte Specialist-Signale
+- offen fuer den naechsten Slice:
+  - tiefere kontextabhaengige Tool-/Strategiewahl in `research`, `visual`, `system`
+  - weitere explizite Signalszenarien ausserhalb des ersten Kernrings
+
+## 2026-04-08 D0.9 vierter Runtime-Slice: Specialist Strategy Guards
+
+Neu:
+
+- [agent/agents/research.py](/home/fatih-ubuntu/dev/timus/agent/agents/research.py)
+- [agent/agents/visual.py](/home/fatih-ubuntu/dev/timus/agent/agents/visual.py)
+- [agent/agents/system.py](/home/fatih-ubuntu/dev/timus/agent/agents/system.py)
+- [tests/test_specialist_handoffs.py](/home/fatih-ubuntu/dev/timus/tests/test_specialist_handoffs.py)
+- [PHASE_D0_META_CONTEXT_STATE_PLAN.md](/home/fatih-ubuntu/dev/timus/docs/PHASE_D0_META_CONTEXT_STATE_PLAN.md)
+
+Inhalt:
+
+- `research` blockt jetzt explizit leichte Lookup-Handoffs wie `simple_live_lookup`, wenn sie faelschlich im Deep-Research-Pfad landen
+- `research` haengt bei uebergebenen `source_urls`, vorhandenem `captured_context` und knappen/quellengetriebenen Nutzerpraeferenzen jetzt explizite Strategiehinweise an
+- `visual` blockt jetzt echte UI-/Browser-Aktions-Handoffs, wenn propagierter `response_mode=summarize_state` dazu im Widerspruch steht
+- `system` hat jetzt einen direkten `summarize_state`-Pfad fuer Service-/Status-Handoffs ohne LLM-Runde
+
+Verifikation:
+
+- `python -m py_compile ...` gruen
+- `pytest -q tests/test_specialist_handoffs.py tests/test_specialist_context_runtime.py tests/test_meta_handoff.py` -> `24 passed`
+- `pytest -q tests/test_meta_orchestration.py tests/test_android_chat_language.py tests/test_meta_handoff.py tests/test_specialist_handoffs.py tests/test_specialist_context_runtime.py tests/test_c4_longrunner_runtime.py tests/test_delegation_hardening.py` -> `122 passed`
+
+Status:
+
+- D0.9 greift jetzt nicht mehr nur beim Handoff und im Ruecksignal, sondern in ersten echten Specialist-Entscheidungen
+- offen fuer den naechsten Slice:
+  - feinere Tool-/Priorisierungswahl innerhalb der Spezialisten
+  - weitere explizite Signalszenarien ausserhalb des ersten Kernrings
+
+## 2026-04-08 D0.9 fuenfter Runtime-Slice: Specialist Prioritization Paths
+
+Neu:
+
+- [agent/agents/research.py](/home/fatih-ubuntu/dev/timus/agent/agents/research.py)
+- [agent/agents/visual.py](/home/fatih-ubuntu/dev/timus/agent/agents/visual.py)
+- [agent/agents/system.py](/home/fatih-ubuntu/dev/timus/agent/agents/system.py)
+- [tests/test_specialist_handoffs.py](/home/fatih-ubuntu/dev/timus/tests/test_specialist_handoffs.py)
+- [PHASE_D0_META_CONTEXT_STATE_PLAN.md](/home/fatih-ubuntu/dev/timus/docs/PHASE_D0_META_CONTEXT_STATE_PLAN.md)
+
+Inhalt:
+
+- `research` leitet jetzt aus Handoff und Nutzerpraeferenzen eine echte Kontext-Policy ab:
+  - `source_first`
+  - `compact_mode`
+  - `suppress_blackboard`
+  - `suppress_curiosity`
+- `research` nutzt diese Policy jetzt im echten Kontextaufbau, statt nur weitere Strategiehinweise zu rendern
+- `visual` waehlt jetzt explizit zwischen `structured_navigation` und `vision_first`
+- `visual` kann damit text-/ocr-lastige Faelle direkt im Vision-Pfad halten, auch wenn ein Browser-Handoff vorhanden ist
+- `system` waehlt jetzt gezielte Snapshot-Plaene mit `preferred_service` und `compact`, statt immer denselben Voll-Snapshot zu erzeugen
+
+Verifikation:
+
+- `python -m py_compile ...` gruen
+- `pytest -q tests/test_specialist_handoffs.py tests/test_specialist_context_runtime.py tests/test_meta_handoff.py` -> `28 passed`
+- `pytest -q tests/test_meta_orchestration.py tests/test_android_chat_language.py tests/test_meta_handoff.py tests/test_specialist_handoffs.py tests/test_specialist_context_runtime.py tests/test_c4_longrunner_runtime.py tests/test_delegation_hardening.py` -> `126 passed`
+
+Status:
+
+- D0.9 hat jetzt neben Kontextpropagierung, Ruecksignalen und Guards auch erste echte Priorisierungspfade in `research`, `visual` und `system`
+- offen fuer den naechsten Slice:
+  - Live-Nachweis fuer diese Priorisierungspfade im laufenden System
+  - Abschluss-/Eval-Slice mit sauberer Restabgrenzung zu Phase D
+
+## 2026-04-08 D0.9 sechster Abschluss-Slice: Eval + Specialist Observability
+
+Neu:
+
+- [orchestration/specialist_context_eval.py](/home/fatih-ubuntu/dev/timus/orchestration/specialist_context_eval.py)
+- [orchestration/autonomy_observation.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomy_observation.py)
+- [agent/agent_registry.py](/home/fatih-ubuntu/dev/timus/agent/agent_registry.py)
+- [agent/agents/research.py](/home/fatih-ubuntu/dev/timus/agent/agents/research.py)
+- [agent/agents/visual.py](/home/fatih-ubuntu/dev/timus/agent/agents/visual.py)
+- [agent/agents/system.py](/home/fatih-ubuntu/dev/timus/agent/agents/system.py)
+- [tests/test_specialist_context_eval.py](/home/fatih-ubuntu/dev/timus/tests/test_specialist_context_eval.py)
+- [tests/test_autonomy_observation_d09.py](/home/fatih-ubuntu/dev/timus/tests/test_autonomy_observation_d09.py)
+- [PHASE_D0_META_CONTEXT_STATE_PLAN.md](/home/fatih-ubuntu/dev/timus/docs/PHASE_D0_META_CONTEXT_STATE_PLAN.md)
+
+Inhalt:
+
+- D0.9 hat jetzt ein eigenes ausfuehrbares Eval-Set fuer:
+  - `research` Kontext-Policy
+  - `visual` Strategieauswahl
+  - `system` Snapshot-Planung
+  - den Specialist-Signalvertrag
+- die Autonomy-Observation hat jetzt einen eigenen D0.9-Block `specialist_context`
+- `agent_registry` emittiert jetzt `specialist_signal_emitted`
+- `research`, `visual` und `system` emittieren jetzt `specialist_strategy_selected`
+
+Verifikation:
+
+- `python -m py_compile ...` gruen
+- `pytest -q tests/test_specialist_context_eval.py tests/test_autonomy_observation_d09.py tests/test_specialist_handoffs.py tests/test_specialist_context_runtime.py tests/test_meta_handoff.py` -> `32 passed`
+- `pytest -q tests/test_meta_orchestration.py tests/test_android_chat_language.py tests/test_meta_handoff.py tests/test_specialist_handoffs.py tests/test_specialist_context_runtime.py tests/test_specialist_context_eval.py tests/test_autonomy_observation_d0.py tests/test_autonomy_observation_d09.py tests/test_c4_longrunner_runtime.py tests/test_delegation_hardening.py` -> `132 passed`
+
+Status:
+
+- D0.9 ist damit im Repo-/Test-Scope abgeschlossen
+- offen bleibt nur noch ein separater Live-Reload fuer den laufenden Prozess, falls der neue Stand sofort produktiv geladen werden soll
+- D0 insgesamt ist damit funktional abgeschlossen; der naechste groessere Block ist Phase D
