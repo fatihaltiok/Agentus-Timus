@@ -219,6 +219,27 @@ Phase D braucht einen gemeinsamen Nutzeraktions-Vertrag, statt fuer jede Plattfo
 
 - authentische Session kontrolliert wiederverwenden
 - nur mit klarer Scope- und Ablaufregel
+- D4.1:
+  - bestaetigte Login-Sessions werden jetzt als eigener `auth_session`-Zustand im Session-Capsule-Pfad gespeichert
+  - `visual` emittiert nach bestaetigtem user-mediated Login jetzt ein strukturiertes `auth_session_ready`-Signal
+  - Follow-up-Kontext serialisiert jetzt den neuesten verifizierten Session-Anker mit:
+    - `auth_session_service`
+    - `auth_session_status`
+    - `auth_session_scope`
+    - `auth_session_url`
+    - `auth_session_confirmed_at`
+    - `auth_session_expires_at`
+  - der erste Reuse-Slice bleibt bewusst konservativ:
+    - session-scope
+    - keine globale Credential-Wiederverwendung
+    - keine Roh-Secrets
+    - noch kein aggressives Auto-Reuse ueber beliebige neue Workflows
+- spaeterer Unterblock:
+  - **D4b Chrome Credential Broker**
+  - wenn gespeicherte Zugangsdaten praktisch nur im Chrome-Passwortmanager vorhanden sind, soll nicht Timus selbst die Secrets kennen, sondern Chrome als Credential Broker dienen
+  - Timus darf dann nur mit expliziter Freigabe einen Login-Workflow im freigegebenen Chrome-Profil anstossen und danach mit Session-Reuse arbeiten
+  - Roh-Credentials bleiben ausserhalb von Prompt, Memory, Handoff und Observation
+  - Details in [CREDENTIAL_BROKER_CHROME_PASSWORD_MANAGER_PLAN.md](/home/fatih-ubuntu/dev/timus/docs/CREDENTIAL_BROKER_CHROME_PASSWORD_MANAGER_PLAN.md)
 
 ### D5. Challenge Handover
 
@@ -231,6 +252,7 @@ Phase D braucht einen gemeinsamen Nutzeraktions-Vertrag, statt fuer jede Plattfo
 - kein neuer produktiver Secret-Vault
 - keine Zahlungsfreigabe-Logik
 - keine vollstaendige Buchungsautomation
+- kein Export aus dem Chrome-Passwortmanager in Timus
 
 ## Fertig fuer Start, wenn
 

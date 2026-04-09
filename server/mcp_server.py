@@ -117,6 +117,12 @@ from server.conversation_qdrant import store_chat_turn as _semantic_store_chat_t
 from gateway.status_snapshot import collect_status_snapshot
 from orchestration.autonomy_observation import record_autonomy_observation
 from orchestration.approval_auth_contract import normalize_phase_d_workflow_payload
+from orchestration.auth_session_state import (
+    auth_session_index_to_dict,
+    latest_auth_session_from_index,
+    normalize_auth_session_entry,
+    upsert_auth_session_index,
+)
 from orchestration.conversation_state import (
     apply_turn_interpretation,
     apply_pending_followup_prompt,
@@ -567,6 +573,11 @@ def _normalize_session_capsule_payload(capsule: dict | None) -> dict:
     )
     payload["pending_workflow"] = pending_workflow_state_to_dict(
         payload.get("pending_workflow"),
+        updated_at=str(payload.get("last_updated") or ""),
+    )
+    payload["auth_sessions"] = auth_session_index_to_dict(
+        payload.get("auth_sessions"),
+        session_id=session_id,
         updated_at=str(payload.get("last_updated") or ""),
     )
     return payload
@@ -1186,6 +1197,25 @@ def _store_pending_workflow_in_capsule(session_id: str, workflow: dict | None, *
         capsule.pop("pending_workflow", None)
     _store_session_capsule(capsule)
     return normalized
+
+
+def _store_auth_session_in_capsule(session_id: str, auth_session: dict | None, *, updated_at: str = "") -> dict:
+    capsule = _load_session_capsule(session_id)
+    effective_updated_at = str(updated_at or capsule.get("last_updated") or datetime.utcnow().isoformat() + "Z")
+    normalized = normalize_auth_session_entry(
+        auth_session,
+        session_id=session_id,
+        updated_at=effective_updated_at,
+    )
+    if normalized:
+        capsule["auth_sessions"] = upsert_auth_session_index(
+            capsule.get("auth_sessions"),
+            normalized.to_dict(),
+            session_id=session_id,
+            updated_at=effective_updated_at,
+        )
+    _store_session_capsule(capsule)
+    return normalized.to_dict() if normalized else {}
 
 
 def _log_chat_interaction(
@@ -1900,6 +1930,11 @@ def _build_followup_capsule(session_id: str, query: str = "") -> dict:
         session_id=session_id,
         now=decay_now,
     )
+    auth_sessions = auth_session_index_to_dict(
+        capsule.get("auth_sessions"),
+        session_id=session_id,
+        updated_at=str(capsule.get("last_updated") or ""),
+    )
 
     return {
         "session_id": session_id,
@@ -1916,6 +1951,8 @@ def _build_followup_capsule(session_id: str, query: str = "") -> dict:
         "last_proposed_action": last_proposed_action,
         "pending_workflow": capsule.get("pending_workflow") or {},
         "pending_workflow_reply": pending_workflow_reply,
+        "auth_sessions": auth_sessions,
+        "latest_auth_session": latest_auth_session_from_index(auth_sessions),
         "semantic_recall": semantic_recall,
         "conversation_state": conversation_state.to_dict(),
         "conversation_state_decay": conversation_state_decay,
@@ -2027,6 +2064,7 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
     pending_workflow = capsule.get("pending_workflow") if isinstance(capsule.get("pending_workflow"), dict) else {}
     pending_workflow_reply = capsule.get("pending_workflow_reply") if isinstance(capsule.get("pending_workflow_reply"), dict) else {}
     has_pending_workflow_resume = bool(str(pending_workflow_reply.get("reply_kind") or "").strip())
+    latest_auth_session = capsule.get("latest_auth_session") if isinstance(capsule.get("latest_auth_session"), dict) else {}
 
     # P4: Kurze Zustimmung + gespeichertes Angebot → direkt auflösen
     if is_affirm and last_proposed_action and not _should_prefer_pending_followup_prompt(
@@ -2174,6 +2212,25 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
         reply_kind = str(pending_workflow_reply.get("reply_kind") or "").strip()
         if reply_kind:
             parts.append(f"pending_workflow_reply_kind: {reply_kind[:64]}")
+    if isinstance(latest_auth_session, dict) and latest_auth_session:
+        auth_service = str(latest_auth_session.get("service") or "").strip()
+        auth_status = str(latest_auth_session.get("status") or "").strip()
+        auth_scope = str(latest_auth_session.get("scope") or "").strip()
+        auth_url = str(latest_auth_session.get("url") or "").strip()
+        auth_confirmed = str(latest_auth_session.get("confirmed_at") or "").strip()
+        auth_expires = str(latest_auth_session.get("expires_at") or "").strip()
+        if auth_service:
+            parts.append(f"auth_session_service: {auth_service[:64]}")
+        if auth_status:
+            parts.append(f"auth_session_status: {auth_status[:64]}")
+        if auth_scope:
+            parts.append(f"auth_session_scope: {auth_scope[:32]}")
+        if auth_url:
+            parts.append(f"auth_session_url: {auth_url[:320]}")
+        if auth_confirmed:
+            parts.append(f"auth_session_confirmed_at: {auth_confirmed[:64]}")
+        if auth_expires:
+            parts.append(f"auth_session_expires_at: {auth_expires[:64]}")
     if isinstance(conversation_state, dict):
         active_topic = str(conversation_state.get("active_topic") or "").strip()
         active_goal = str(conversation_state.get("active_goal") or "").strip()
@@ -4193,6 +4250,38 @@ async def canvas_chat(request: Request):
                             "workflow_reason": str(stored_workflow.get("reason") or ""),
                         },
                     )
+                elif str(payload_info.get("kind") or "").strip().lower() == "auth_session":
+                    stored_auth_session = _store_auth_session_in_capsule(
+                        session_id,
+                        {
+                            "status": str(payload_info.get("auth_session_status") or ""),
+                            "service": str(payload_info.get("auth_session_service") or ""),
+                            "url": str(payload_info.get("auth_session_url") or ""),
+                            "scope": str(payload_info.get("auth_session_scope") or ""),
+                            "workflow_id": str(payload_info.get("auth_session_workflow_id") or ""),
+                            "reason": str(payload_info.get("auth_session_reason") or ""),
+                            "source_agent": agent_name,
+                            "source_stage": stage,
+                            "reuse_ready": bool(payload_info.get("auth_session_reuse_ready")),
+                            "evidence": str(payload_info.get("auth_session_evidence") or ""),
+                        },
+                        updated_at=datetime.utcnow().isoformat() + "Z",
+                    )
+                    if stored_auth_session:
+                        _record_chat_observation(
+                            "auth_session_updated",
+                            {
+                                "request_id": request_id,
+                                "session_id": session_id,
+                                "source": "canvas_chat",
+                                "agent": agent_name,
+                                "stage": stage,
+                                "auth_session_service": str(stored_auth_session.get("service") or ""),
+                                "auth_session_status": str(stored_auth_session.get("status") or ""),
+                                "auth_session_scope": str(stored_auth_session.get("scope") or ""),
+                                "auth_session_workflow_id": str(stored_auth_session.get("workflow_id") or ""),
+                            },
+                        )
                 _emit_longrun_progress_from_payload(
                     agent=agent_name,
                     stage=stage,

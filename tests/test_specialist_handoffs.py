@@ -635,6 +635,15 @@ async def test_visual_login_flow_stops_at_login_maske_and_returns_awaiting_user(
 @pytest.mark.asyncio
 async def test_visual_resumes_pending_login_followup_after_user_reports_success(monkeypatch):
     agent = VisualAgent(tools_description_string="")
+    progress_events = []
+
+    def _progress_callback(*args, **kwargs):
+        if kwargs:
+            progress_events.append(kwargs)
+            return
+        stage = args[0] if len(args) > 0 else ""
+        payload = args[1] if len(args) > 1 else {}
+        progress_events.append({"stage": stage, "payload": payload})
 
     async def _fake_detect_authenticated_session_state(self, service: str):
         return {
@@ -645,6 +654,7 @@ async def test_visual_resumes_pending_login_followup_after_user_reports_success(
         }
 
     monkeypatch.setattr(VisualAgent, "_detect_authenticated_session_state", _fake_detect_authenticated_session_state)
+    setattr(agent, "_delegation_progress_callback", _progress_callback)
 
     task = "\n".join(
         [
@@ -667,6 +677,12 @@ async def test_visual_resumes_pending_login_followup_after_user_reports_success(
 
     assert "Login bei github wirkt bestaetigt" in result
     assert "repositories" in result
+    assert progress_events
+    payload = progress_events[-1]["payload"]
+    assert payload["kind"] == "auth_session"
+    assert payload["auth_session_service"] == "github"
+    assert payload["auth_session_status"] == "authenticated"
+    assert payload["auth_session_reuse_ready"] is True
 
 
 @pytest.mark.asyncio

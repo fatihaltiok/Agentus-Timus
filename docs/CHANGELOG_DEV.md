@@ -2,6 +2,90 @@
 
 ---
 
+## Fortschritt 2026-04-09 - Phase D4.1 Auth Session Reuse gestartet
+
+Nach D3 konnte Timus Login-Workflows sauber bis zur Login-Maske fuehren und nach `weiter` / `ich bin eingeloggt` kontrolliert wieder aufnehmen. Es fehlte aber noch ein expliziter Zustand fuer erfolgreich bestaetigte authentische Sessions. Ohne diesen Zustand blieb Session-Reuse implizit im Browser-Kontext, aber nicht sichtbar, nicht kapselbar und nicht sauber an spaetere Workflows bindbar.
+
+Nachgezogen:
+
+- [auth_session_state.py](/home/fatih-ubuntu/dev/timus/orchestration/auth_session_state.py)
+  - neues D4.1-Modul fuer normalisierte auth-session-Eintraege
+  - speichert pro Dienst konservativ:
+    - `service`
+    - `status`
+    - `scope`
+    - `url`
+    - `workflow_id`
+    - `browser_session_id`
+    - `confirmed_at`
+    - `expires_at`
+    - `reuse_ready`
+    - `evidence`
+- [visual.py](/home/fatih-ubuntu/dev/timus/agent/agents/visual.py)
+  - bestaetigte resumed Logins emittieren jetzt ein strukturiertes `auth_session_ready`-Signal
+  - damit wird ein erfolgreicher user-mediated Login nicht nur als Text bestaetigt, sondern auch als wiederverwendbarer Session-Anker an den Runtime-Pfad gemeldet
+- [mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - Session-Capsules speichern jetzt `auth_sessions`
+  - neuer Store-Pfad:
+    - `_store_auth_session_in_capsule(...)`
+  - Follow-up-Capsules tragen jetzt zusaetzlich:
+    - `auth_sessions`
+    - `latest_auth_session`
+  - der serialisierte Follow-up-Kontext traegt jetzt explizit:
+    - `auth_session_service`
+    - `auth_session_status`
+    - `auth_session_scope`
+    - `auth_session_url`
+    - `auth_session_confirmed_at`
+    - `auth_session_expires_at`
+  - neues Observation-Event:
+    - `auth_session_updated`
+- [test_auth_session_state.py](/home/fatih-ubuntu/dev/timus/tests/test_auth_session_state.py)
+  - neue D4.1-Vertragstests fuer Normalisierung, Upsert und Latest-Auswahl
+- [test_android_chat_language.py](/home/fatih-ubuntu/dev/timus/tests/test_android_chat_language.py)
+  - neue Regression:
+    - auth-session roundtrip ueber Session-Capsule und Follow-up-Kontext
+- [test_specialist_handoffs.py](/home/fatih-ubuntu/dev/timus/tests/test_specialist_handoffs.py)
+  - neue Regression:
+    - erfolgreicher resumed Login emittiert `kind=auth_session`
+
+Verifikation:
+
+- `python -m py_compile orchestration/auth_session_state.py server/mcp_server.py agent/agents/visual.py tests/test_auth_session_state.py tests/test_android_chat_language.py tests/test_specialist_handoffs.py`
+- `pytest -q tests/test_auth_session_state.py tests/test_android_chat_language.py tests/test_specialist_handoffs.py`
+- `pytest -q tests/test_approval_auth_contract.py tests/test_pending_workflow_state.py tests/test_auth_session_state.py tests/test_phase_d_chat_rendering.py tests/test_browser_isolation.py tests/test_android_chat_language.py tests/test_specialist_context_runtime.py tests/test_specialist_handoffs.py`
+
+Ergebnis:
+
+- `52 passed` im fokussierten D4.1-/D3-Ring
+- `85 passed` im breiteren Phase-D-/Browser-/Capsule-Ring
+- `py_compile` gruen
+
+## Fortschritt 2026-04-09 - Zielblock Credential Broker statt Secret Exposure eingeordnet
+
+Fuer spaetere Login-Assistenz reicht es nicht, Timus einfach alle Nutzernamen und Passwoerter zu geben. Das waere architektonisch die falsche Richtung, besonders wenn die Zugangsdaten praktisch bereits im Chrome-Passwortmanager liegen.
+
+Neu eingeordnet:
+
+- [CREDENTIAL_BROKER_CHROME_PASSWORD_MANAGER_PLAN.md](/home/fatih-ubuntu/dev/timus/docs/CREDENTIAL_BROKER_CHROME_PASSWORD_MANAGER_PLAN.md)
+  - neuer Zielblock fuer:
+    - **Chrome als Credential Broker**
+    - **Timus ohne Roh-Secrets**
+    - domain- und workflow-gebundene Freigaben
+    - Session-Reuse vor erneuter Credential-Nutzung
+    - user-mediated 2FA/CAPTCHA auch im Broker-Modell
+- [PHASE_D_APPROVAL_AUTH_PREP.md](/home/fatih-ubuntu/dev/timus/docs/PHASE_D_APPROVAL_AUTH_PREP.md)
+  - `D4 Auth Session Reuse` traegt jetzt einen spaeteren Unterblock:
+    - **D4b Chrome Credential Broker**
+  - zusaetzlich explizit festgehalten:
+    - kein Export aus dem Chrome-Passwortmanager in Timus
+
+Einordnung:
+
+- der Block gehoert **in spaete Phase D**
+- nicht in Phase E
+- weil es um Approval/Auth/Login-Assistenz geht, nicht um Self-Improvement
+
 ## Fortschritt 2026-04-09 - Phase D3.1 User-mediated Login gestartet
 
 Phase D hatte nach D1/D2 bereits strukturierte Approval-/Auth-Blocker und sichtbare Pending-Workflows, aber noch keinen echten user-mediated Login-Laufzeitpfad. Login-Workflows konnten daher weiter wie normale Browser-Aufgaben behandelt werden und haetten Benutzername/Passwort/Submit zu weit automatisiert.

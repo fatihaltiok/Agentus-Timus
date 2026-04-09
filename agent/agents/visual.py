@@ -123,6 +123,29 @@ class VisualAgent(BaseAgent):
             status=str(normalized_payload.get("status") or "").strip(),
         )
 
+    def _emit_auth_session_ready(
+        self,
+        *,
+        service: str,
+        url: str,
+        workflow_id: str,
+        evidence: str = "",
+    ) -> None:
+        if not service and not url:
+            return
+        self._notify_delegation_progress(
+            "auth_session_ready",
+            kind="auth_session",
+            auth_session_status="authenticated",
+            auth_session_service=str(service or "").strip().lower(),
+            auth_session_url=str(url or "").strip(),
+            auth_session_scope="session",
+            auth_session_workflow_id=str(workflow_id or "").strip(),
+            auth_session_reason="login_confirmed",
+            auth_session_reuse_ready=True,
+            auth_session_evidence=str(evidence or "").strip(),
+        )
+
     def _get_screenshot_as_base64(self) -> str:
         if not self._mss_module or not self._pil_image:
             return ""
@@ -554,6 +577,12 @@ class VisualAgent(BaseAgent):
         verification = await self._detect_authenticated_session_state(service)
         if verification.get("success"):
             positives = ", ".join(str(item) for item in verification.get("positive_hits") or [])
+            self._emit_auth_session_ready(
+                service=service,
+                url=url,
+                workflow_id=workflow_id,
+                evidence=positives,
+            )
             suffix = f" Sichtbare Signale: {positives}." if positives else ""
             return (
                 f"Der Login bei {service or 'dem Dienst'} wirkt bestaetigt. "

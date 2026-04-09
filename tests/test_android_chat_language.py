@@ -568,6 +568,36 @@ def test_pending_login_workflow_resume_prefers_source_agent_and_serializes_reply
     assert "pending_workflow_url: https://github.com/login" in augmented
 
 
+def test_store_auth_session_in_capsule_roundtrips_into_followup_capsule(tmp_path, monkeypatch):
+    mcp_server._chat_history.clear()
+    monkeypatch.setenv("TIMUS_SESSION_STORAGE_ROOT", str(tmp_path))
+
+    session_id = "auth_session_roundtrip"
+    stored = mcp_server._store_auth_session_in_capsule(
+        session_id,
+        {
+            "status": "authenticated",
+            "service": "github",
+            "url": "https://github.com/settings/profile",
+            "workflow_id": "wf_auth_github",
+            "reason": "login_confirmed",
+        },
+        updated_at="2026-04-09T17:30:00Z",
+    )
+
+    assert stored["service"] == "github"
+    capsule = mcp_server._load_session_capsule(session_id)
+    assert capsule["auth_sessions"]["github"]["status"] == "authenticated"
+
+    followup_capsule = mcp_server._build_followup_capsule(session_id, query="und jetzt weiter")
+    assert followup_capsule["latest_auth_session"]["service"] == "github"
+
+    augmented = mcp_server._augment_query_with_followup_capsule("und jetzt weiter", followup_capsule)
+    assert "auth_session_service: github" in augmented
+    assert "auth_session_status: authenticated" in augmented
+    assert "auth_session_url: https://github.com/settings/profile" in augmented
+
+
 def test_record_meta_turn_understanding_observations_emits_context_misread_suspected(monkeypatch):
     captured: list[tuple[str, dict]] = []
     monkeypatch.setattr(
