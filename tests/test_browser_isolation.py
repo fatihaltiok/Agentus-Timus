@@ -257,6 +257,47 @@ class TestBrowserToolIntegration:
         # Cleanup
         await shared_context.browser_context_manager.shutdown()
         shared_context.browser_context_manager = None
+
+    @pytest.mark.asyncio
+    async def test_open_url_returns_phase_d_challenge_payload_for_cloudflare_wall(self, monkeypatch):
+        """Testet den normalisierten Phase-D-Challenge-Vertrag im Browserpfad."""
+        from tools.browser_tool import tool as browser_tool
+
+        class _FakeResponse:
+            status = 403
+
+        class _FakePage:
+            url = "https://example.com/private"
+
+            async def goto(self, url, wait_until="domcontentloaded", timeout=60000):
+                return _FakeResponse()
+
+            async def wait_for_timeout(self, ms):
+                return None
+
+            async def content(self):
+                return "<html><body>Checking if the site connection is secure<br>Cloudflare</body></html>"
+
+            async def title(self):
+                return "Attention Required"
+
+        async def _fake_ensure(session_id: str):
+            return _FakePage()
+
+        async def _fake_execute_with_retry(action, *args, **kwargs):
+            return await action(*args, **kwargs)
+
+        monkeypatch.setattr(browser_tool, "ensure_browser_initialized", _fake_ensure)
+        monkeypatch.setattr(browser_tool.retry_handler, "execute_with_retry", _fake_execute_with_retry)
+
+        result = await browser_tool.open_url("https://example.com/private", session_id="phase_d")
+
+        assert result["status"] == "challenge_required"
+        assert result["challenge_required"] is True
+        assert result["workflow_id"].startswith("wf_")
+        assert result["challenge_type"] == "cloudflare_challenge"
+        assert result["session_id"] == "phase_d"
+        assert "loese die Challenge" in result["user_action_required"]
     
     def test_session_tools_registered(self):
         """Testet dass Session-Tools registriert sind."""

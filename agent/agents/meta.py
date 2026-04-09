@@ -32,6 +32,10 @@ from orchestration.meta_orchestration import (
     resolve_runtime_goal_gap_stage,
     resolve_orchestration_recipe,
 )
+from orchestration.specialist_context import (
+    build_specialist_context_payload,
+    parse_specialist_context_payload,
+)
 from orchestration.self_selected_strategy import classify_strategy_error
 from utils.location_local_intent import is_location_local_query, is_location_route_query
 
@@ -200,6 +204,7 @@ class MetaAgent(BaseAgent):
 
         self.skill_registry = None
         self.active_skills: list = []
+        self._active_meta_orchestration_handoff: Dict[str, Any] | None = None
         self._init_skill_system()
 
     @staticmethod
@@ -888,6 +893,8 @@ class MetaAgent(BaseAgent):
         method: str,
         params: Dict[str, Any],
         task: str,
+        *,
+        specialist_context: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "target_agent": specialist_agent,
@@ -976,6 +983,10 @@ class MetaAgent(BaseAgent):
             payload["expected_output"] = "Bild/Text-Artefakt"
             payload["success_signal"] = "Kreatives Ergebnis erzeugt"
 
+        parsed_specialist_context = parse_specialist_context_payload(specialist_context or {})
+        if parsed_specialist_context:
+            payload["handoff_data"]["specialist_context_json"] = parsed_specialist_context
+
         return payload
 
     @classmethod
@@ -985,8 +996,16 @@ class MetaAgent(BaseAgent):
         method: str,
         params: Dict[str, Any],
         task: str,
+        *,
+        specialist_context: Dict[str, Any] | None = None,
     ) -> str:
-        payload = cls._build_specialist_handoff_payload(specialist_agent, method, params, task)
+        payload = cls._build_specialist_handoff_payload(
+            specialist_agent,
+            method,
+            params,
+            task,
+            specialist_context=specialist_context,
+        )
         task_text = payload["goal"] if specialist_agent == "developer" else task
         lines = ["# DELEGATION HANDOFF"]
         lines.append(f"target_agent: {payload['target_agent']}")
@@ -1008,7 +1027,12 @@ class MetaAgent(BaseAgent):
         return "\n".join(lines)
 
     @classmethod
-    def _parse_meta_orchestration_handoff(cls, task: str) -> Optional[Dict[str, Any]]:
+    def _parse_meta_orchestration_handoff(
+        cls,
+        task: str,
+        *,
+        require_recipe_stages: bool = True,
+    ) -> Optional[Dict[str, Any]]:
         if cls._META_HANDOFF_HEADER not in task:
             return None
 
@@ -1135,6 +1159,8 @@ class MetaAgent(BaseAgent):
                     payload["meta_context_bundle"] = json.loads(normalized_value)
                 except json.JSONDecodeError:
                     payload["meta_context_bundle"] = {"raw": normalized_value}
+            elif normalized_key == "specialist_context_seed_json":
+                payload["specialist_context_seed"] = parse_specialist_context_payload(normalized_value)
             elif normalized_key in {"meta_policy_decision_json", "meta_policy_json"}:
                 try:
                     payload["meta_policy_decision"] = json.loads(normalized_value)
@@ -1191,9 +1217,33 @@ class MetaAgent(BaseAgent):
             else:
                 payload[normalized_key] = normalized_value
 
-        if not payload.get("recipe_stages"):
+        if require_recipe_stages and not payload.get("recipe_stages"):
             return None
         return payload
+
+    @classmethod
+    def _resolve_specialist_context_seed(cls, handoff: Dict[str, Any] | None) -> Dict[str, Any]:
+        if not isinstance(handoff, dict):
+            return {}
+
+        parsed = parse_specialist_context_payload(handoff.get("specialist_context_seed") or {})
+        if parsed:
+            return parsed
+
+        meta_context_bundle = dict(handoff.get("meta_context_bundle") or {})
+        preference_selection = dict(handoff.get("preference_memory_selection") or {})
+        return build_specialist_context_payload(
+            current_topic=meta_context_bundle.get("active_topic") or handoff.get("active_topic"),
+            active_goal=meta_context_bundle.get("active_goal") or handoff.get("open_goal"),
+            open_loop=meta_context_bundle.get("open_loop"),
+            next_expected_step=meta_context_bundle.get("next_expected_step") or handoff.get("next_step"),
+            turn_type=meta_context_bundle.get("turn_type") or handoff.get("dominant_turn_type"),
+            response_mode=meta_context_bundle.get("response_mode")
+            or handoff.get("response_mode")
+            or dict(handoff.get("meta_policy_decision") or {}).get("response_mode"),
+            user_preferences=list(preference_selection.get("selected") or []),
+            recent_corrections=[],
+        )
 
     @classmethod
     def _current_recipe_payload_from_handoff(cls, handoff: Dict[str, Any]) -> Dict[str, Any]:
@@ -1896,6 +1946,9 @@ class MetaAgent(BaseAgent):
             f"- stage_id: {stage.get('stage_id', '')}",
             f"- original_user_task: {cls._shorten(original_user_task, limit=500)}",
         ]
+        specialist_context = cls._resolve_specialist_context_seed(handoff)
+        if specialist_context:
+            payload_lines.append("- specialist_context_json: " + cls._format_handoff_value(specialist_context))
         selected_strategy = dict(handoff.get("selected_strategy") or {})
         if selected_strategy.get("strategy_id"):
             payload_lines.append(f"- strategy_id: {selected_strategy['strategy_id']}")
@@ -2138,6 +2191,9 @@ class MetaAgent(BaseAgent):
             f"- failed_stage_error: {cls._shorten(failed_stage.get('error', ''), limit=220)}",
             f"- original_user_task: {cls._shorten(original_user_task, limit=500)}",
         ]
+        specialist_context = cls._resolve_specialist_context_seed(handoff)
+        if specialist_context:
+            payload_lines.append("- specialist_context_json: " + cls._format_handoff_value(specialist_context))
         error_signal = dict(failed_stage.get("error_signal") or {})
         if error_signal.get("error_class"):
             payload_lines.append(f"- failed_error_class: {error_signal['error_class']}")
@@ -2795,11 +2851,15 @@ class MetaAgent(BaseAgent):
         if specialist_agent:
             task = self._build_specialist_delegation_task(method, params)
             if task:
+                specialist_context = self._resolve_specialist_context_seed(
+                    self._active_meta_orchestration_handoff
+                )
                 structured_task = self._render_structured_delegation_task(
                     specialist_agent=specialist_agent,
                     method=method,
                     params=params,
                     task=task,
+                    specialist_context=specialist_context,
                 )
                 result = await super()._call_tool(
                     "delegate_to_agent",
@@ -2818,6 +2878,9 @@ class MetaAgent(BaseAgent):
                         {
                             "method": method,
                             "agent": specialist_agent,
+                            "has_specialist_context": bool(specialist_context),
+                            "specialist_turn_type": str(specialist_context.get("turn_type") or ""),
+                            "specialist_response_mode": str(specialist_context.get("response_mode") or ""),
                             "status": str(normalized_dict.get("status") or ""),
                             "has_error": bool(str(normalized_dict.get("error") or "").strip()),
                             "error": str(normalized_dict.get("error") or "")[:240],
@@ -2914,48 +2977,54 @@ class MetaAgent(BaseAgent):
     async def run(self, task: str) -> str:
         log.info(f"MetaAgent mit Kontext + Skill-Orchestrierung: {task[:50]}...")
 
-        recipe_handoff = self._parse_meta_orchestration_handoff(task)
-        if recipe_handoff:
-            recipe_result = await self._execute_meta_recipe_handoff(task, recipe_handoff)
-            if recipe_result:
-                return recipe_result
+        active_handoff = self._parse_meta_orchestration_handoff(task, require_recipe_stages=False)
+        previous_active_handoff = self._active_meta_orchestration_handoff
+        self._active_meta_orchestration_handoff = dict(active_handoff or {}) if active_handoff else None
+        try:
+            recipe_handoff = active_handoff if active_handoff and active_handoff.get("recipe_stages") else None
+            if recipe_handoff:
+                recipe_result = await self._execute_meta_recipe_handoff(task, recipe_handoff)
+                if recipe_result:
+                    return recipe_result
 
-        # 1. Timus Autonomie-Kontext laden
-        meta_context = await self._build_meta_context()
+            # 1. Timus Autonomie-Kontext laden
+            meta_context = await self._build_meta_context()
 
-        # 2. Skills auswählen
-        self.active_skills = self._select_skills_for_task(task, top_k=3)
-        skill_context = self._build_skill_context(self.active_skills, include_references=False)
+            # 2. Skills auswählen
+            self.active_skills = self._select_skills_for_task(task, top_k=3)
+            skill_context = self._build_skill_context(self.active_skills, include_references=False)
 
-        # 3. Task anreichern
-        parts: list[str] = []
-        if meta_context:
-            parts.append(meta_context)
-        if skill_context:
-            parts.append(skill_context)
-        parts.append(f"# AUFGABE\n{task}")
-        if skill_context:
-            parts.append("Prüfe ob verfügbare Skills zur Aufgabe passen und nutze sie entsprechend.")
+            # 3. Task anreichern
+            parts: list[str] = []
+            if meta_context:
+                parts.append(meta_context)
+            if skill_context:
+                parts.append(skill_context)
+            parts.append(f"# AUFGABE\n{task}")
+            if skill_context:
+                parts.append("Prüfe ob verfügbare Skills zur Aufgabe passen und nutze sie entsprechend.")
 
-        # Decomposition-Hint für komplexe Aufgaben
-        if self._needs_decomposition_hint(task):
-            parts.append(self._DECOMPOSITION_HINT)
-            log.info("MetaAgent: Decomposition-Hint injiziert (komplexe Aufgabe erkannt)")
+            # Decomposition-Hint für komplexe Aufgaben
+            if self._needs_decomposition_hint(task):
+                parts.append(self._DECOMPOSITION_HINT)
+                log.info("MetaAgent: Decomposition-Hint injiziert (komplexe Aufgabe erkannt)")
 
-        enhanced_task = "\n\n".join(parts)
+            enhanced_task = "\n\n".join(parts)
 
-        result = await super().run(enhanced_task)
+            result = await super().run(enhanced_task)
 
-        # Partial-Result-Erkennung
-        _partial_markers = {"Limit erreicht.", "Max Iterationen."}
-        if result in _partial_markers:
-            log.warning(
-                f"MetaAgent: Ergebnis ist partiell ('{result}') — "
-                "Aufgabe moeglicherweise nicht vollstaendig abgeschlossen."
-            )
-            return result + "\n\n_(Koordinator-Hinweis: Ergebnis unvollstaendig)_"
+            # Partial-Result-Erkennung
+            _partial_markers = {"Limit erreicht.", "Max Iterationen."}
+            if result in _partial_markers:
+                log.warning(
+                    f"MetaAgent: Ergebnis ist partiell ('{result}') — "
+                    "Aufgabe moeglicherweise nicht vollstaendig abgeschlossen."
+                )
+                return result + "\n\n_(Koordinator-Hinweis: Ergebnis unvollstaendig)_"
 
-        return result
+            return result
+        finally:
+            self._active_meta_orchestration_handoff = previous_active_handoff
 
     # ------------------------------------------------------------------
     # Timus Autonomie-Kontext aufbauen

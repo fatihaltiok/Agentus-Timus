@@ -24,6 +24,13 @@ import httpx
 from agent.base_agent import BaseAgent
 from agent.prompts import DEEP_RESEARCH_PROMPT_TEMPLATE
 from agent.shared.delegation_handoff import DelegationHandoff, parse_delegation_handoff
+from orchestration.specialist_context import (
+    assess_specialist_context_alignment,
+    extract_specialist_context_from_handoff_data,
+    format_specialist_signal_response,
+    render_specialist_context_block,
+)
+from orchestration.autonomy_observation import record_autonomy_observation
 from tools.deep_research.research_contracts import is_german_state_affiliated_url
 
 log = logging.getLogger("DeepResearchAgent")
@@ -197,15 +204,78 @@ class DeepResearchAgent(BaseAgent):
     async def run(self, task: str) -> str:
         """Reichert den Task mit Zielen und Blackboard-Vorwissen an."""
         handoff = parse_delegation_handoff(task)
+        specialist_context_payload = (
+            extract_specialist_context_from_handoff_data(handoff.handoff_data) if handoff else {}
+        )
+        alignment = assess_specialist_context_alignment(
+            current_task=(
+                (handoff.handoff_data.get("original_user_task") or "") if handoff else ""
+            )
+            or ((handoff.handoff_data.get("query") or "") if handoff else "")
+            or (handoff.goal if handoff and handoff.goal else task),
+            payload=specialist_context_payload,
+        )
+        response_mode = str(specialist_context_payload.get("response_mode") or "").strip().lower()
+        handoff_task_type = str((handoff.handoff_data or {}).get("task_type") or "").strip().lower() if handoff else ""
+        if handoff and response_mode == "summarize_state":
+            return format_specialist_signal_response(
+                "needs_meta_reframe",
+                reason="state_mode_conflicts_with_research_task",
+                message=(
+                    "Der aktuelle Research-Handoff verlangt eine tiefergehende Recherche, "
+                    "waehrend Meta gerade im Zusammenfassungsmodus ist. "
+                    "Meta sollte erst entscheiden, ob ein Status-Resume oder echte Recherche gewollt ist."
+                ),
+            )
+        if handoff and handoff_task_type in {
+            "simple_live_lookup",
+            "simple_live_lookup_document",
+            "location_local_search",
+            "location_route",
+            "youtube_light_research",
+        }:
+            return format_specialist_signal_response(
+                "needs_meta_reframe",
+                reason="lightweight_lookup_conflicts_with_deep_research",
+                message=(
+                    "Der aktuelle Handoff ist als leichte Suche oder kompakter Lookup markiert, "
+                    "nicht als Deep-Research-Aufgabe. Meta sollte dafuer einen leichteren Spezialisten oder "
+                    "einen kompakteren Suchpfad waehlen."
+                ),
+            )
+        if handoff and alignment.get("alignment_state") == "needs_meta_reframe":
+            return format_specialist_signal_response(
+                "needs_meta_reframe",
+                reason=str(alignment.get("reason") or ""),
+                message=(
+                    "Der aktuelle Research-Handoff wirkt nicht sauber am aktiven Themenanker verankert. "
+                    "Meta sollte die Anfrage zuerst neu rahmen oder den richtigen Recherchefokus neu setzen."
+                ),
+            )
         # original_user_task ist das eigentliche Recherche-Thema (z.B. "KI Industrie Roboter").
         # handoff.goal ist das generische Delegationsziel ("Recherchiere externe Fakten...").
         # Das LLM bekommt original_user_task als primären Task damit es weiß WAS zu recherchieren ist.
         original = (handoff.handoff_data.get("original_user_task") or "") if handoff else ""
         effective_task = original.strip() or (handoff.goal if handoff and handoff.goal else task)
-        context = await self._build_research_context(effective_task)
+        context_policy = self._derive_research_context_policy(handoff, specialist_context_payload)
+        if handoff:
+            record_autonomy_observation(
+                "specialist_strategy_selected",
+                {
+                    "agent": "research",
+                    "strategy_mode": self._research_strategy_mode(context_policy),
+                    "response_mode": response_mode,
+                    "task_type": handoff_task_type,
+                    "session_id": str(handoff.handoff_data.get("session_id") or self.current_session_id or ""),
+                },
+            )
+        context = await self._build_research_context(effective_task, policy=context_policy)
         handoff_context = self._build_delegation_research_context(handoff)
+        strategy_context = self._build_specialist_strategy_context(handoff, specialist_context_payload)
 
         parts = [effective_task]
+        if strategy_context:
+            parts.append(strategy_context)
         if context:
             parts.append(context)
         if handoff_context:
@@ -251,11 +321,80 @@ class DeepResearchAgent(BaseAgent):
 
         return ""
 
+    def _build_specialist_strategy_context(
+        self,
+        handoff: Optional[DelegationHandoff],
+        specialist_context_payload: dict,
+    ) -> str:
+        if not handoff:
+            return ""
+
+        hints: list[str] = []
+        if handoff.handoff_data.get("source_urls"):
+            hints.append(
+                "Beginne bei den bereits uebergebenen Quell-URLs und erweitere die Recherche nur, wenn dort Luecken bleiben."
+            )
+        if handoff.handoff_data.get("captured_context"):
+            hints.append(
+                "Nutze den bereits erfassten Kontext zuerst fuer deine Synthese, statt den gesamten Recherchepfad blind neu aufzubauen."
+            )
+        preferences = [str(item or "").strip().lower() for item in specialist_context_payload.get("user_preferences") or []]
+        if any("quelle" in item for item in preferences):
+            hints.append("Arbeite quellengetrieben und mache belastbare Quellen vor Interpretation sichtbar.")
+        if any("kurz" in item or "knapp" in item for item in preferences):
+            hints.append("Halte die erste Synthese kompakt und fuehre nur bei echtem Bedarf weiter aus.")
+        if not hints:
+            return ""
+        return "# RESEARCH-STRATEGIE\n" + "\n".join(f"- {hint}" for hint in hints[:4])
+
+    def _derive_research_context_policy(
+        self,
+        handoff: Optional[DelegationHandoff],
+        specialist_context_payload: dict,
+    ) -> dict:
+        preferences = [str(item or "").strip().lower() for item in specialist_context_payload.get("user_preferences") or []]
+        next_expected_step = str(specialist_context_payload.get("next_expected_step") or "").strip().lower()
+        expected_output = str(handoff.expected_output or "").strip().lower() if handoff else ""
+        source_first = bool(
+            handoff
+            and (
+                handoff.handoff_data.get("source_urls")
+                or handoff.handoff_data.get("captured_context")
+                or any("quelle" in item for item in preferences)
+            )
+        )
+        compact_mode = bool(
+            any(("kurz" in item) or ("knapp" in item) for item in preferences)
+            or "kompakt" in expected_output
+            or "kurz" in expected_output
+            or "knapp" in next_expected_step
+            or "kurz" in next_expected_step
+        )
+        return {
+            "source_first": source_first,
+            "compact_mode": compact_mode,
+            "suppress_blackboard": source_first and compact_mode,
+            "suppress_curiosity": source_first or compact_mode,
+        }
+
+    @staticmethod
+    def _research_strategy_mode(policy: Mapping[str, Any] | None) -> str:
+        normalized = dict(policy or {})
+        source_first = bool(normalized.get("source_first"))
+        compact_mode = bool(normalized.get("compact_mode"))
+        if source_first and compact_mode:
+            return "source_first_compact"
+        if source_first:
+            return "source_first"
+        if compact_mode:
+            return "compact_research"
+        return "generic_research"
+
     # ------------------------------------------------------------------
     # Recherche-Kontext aufbauen (kompakt — Research produziert viele Tokens)
     # ------------------------------------------------------------------
 
-    async def _build_research_context(self, task: str) -> str:
+    async def _build_research_context(self, task: str, policy: Optional[dict] = None) -> str:
         """
         Erstellt kompakten Kontext für den Research-Agent:
         - Aktive Ziele (Recherche auf relevante Themen fokussieren)
@@ -263,6 +402,7 @@ class DeepResearchAgent(BaseAgent):
         - Letzte CuriosityEngine-Topics (Verbindung zu laufenden Interessen)
         - Aktuelle Zeit
         """
+        policy = dict(policy or {})
         lines: list[str] = ["# RECHERCHE-KONTEXT (automatisch geladen)"]
         has_content = False
 
@@ -273,15 +413,24 @@ class DeepResearchAgent(BaseAgent):
             has_content = True
 
         # 2. Blackboard — bereits bekannte Infos zum Thema (mit echtem Thema suchen, nicht Handoff-Boilerplate)
-        bb = await asyncio.to_thread(self._get_blackboard_for_task, task)
-        if bb:
-            lines.append(f"Bereits bekannt zu ANDEREM Thema (NUR nutzen wenn thematisch passend, sonst ignorieren): {bb}")
-            has_content = True
+        if not policy.get("suppress_blackboard"):
+            bb = await asyncio.to_thread(self._get_blackboard_for_task, task)
+            if bb:
+                lines.append(f"Bereits bekannt zu ANDEREM Thema (NUR nutzen wenn thematisch passend, sonst ignorieren): {bb}")
+                has_content = True
 
         # 3. Letzte Curiosity-Topics
-        curiosity = await asyncio.to_thread(self._get_recent_curiosity_topics)
-        if curiosity:
-            lines.append(f"Aktuelle Interessensgebiete: {curiosity}")
+        if not policy.get("suppress_curiosity"):
+            curiosity = await asyncio.to_thread(self._get_recent_curiosity_topics)
+            if curiosity:
+                lines.append(f"Aktuelle Interessensgebiete: {curiosity}")
+                has_content = True
+
+        if policy.get("source_first"):
+            lines.append("Priorisierung: Nutze zuerst uebergebene Quellen und erfassten Kontext, bevor du breiter ausweitest.")
+            has_content = True
+        if policy.get("compact_mode"):
+            lines.append("Priorisierung: Halte den ersten Recherchepass kompakt und eskaliere nur bei klaren Luecken.")
             has_content = True
 
         lines.append(f"Aktuelle Zeit: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -304,6 +453,19 @@ class DeepResearchAgent(BaseAgent):
             lines.append(f"Erfolgssignal: {handoff.success_signal}")
         if handoff.constraints:
             lines.append("Constraints: " + " | ".join(handoff.constraints))
+
+        specialist_context_payload = extract_specialist_context_from_handoff_data(handoff.handoff_data)
+        specialist_context = render_specialist_context_block(
+            specialist_context_payload,
+            alignment=assess_specialist_context_alignment(
+                current_task=handoff.handoff_data.get("original_user_task")
+                or handoff.handoff_data.get("query")
+                or handoff.goal,
+                payload=specialist_context_payload,
+            ),
+        )
+        if specialist_context:
+            lines.append(specialist_context)
 
         for key, label in (
             ("recipe_id", "Rezept"),

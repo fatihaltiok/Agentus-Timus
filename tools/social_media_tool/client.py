@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 import httpx
 from dotenv import load_dotenv
+from orchestration.approval_auth_contract import build_auth_required_workflow_payload
 
 load_dotenv(override=True)
 
@@ -157,19 +158,22 @@ def build_auth_required_payload(url: str, *, platform: str = "") -> dict:
         "instagram": "Instagram",
         "tiktok": "TikTok",
     }.get(normalized_platform, normalized_platform or "die Plattform")
-    return {
-        "status": "auth_required",
-        "platform": normalized_platform or "unknown",
-        "url": url,
-        "content": "",
-        "char_count": 0,
-        "auth_required": True,
-        "error": f"{platform_label} verlangt fuer lesbare Inhalte einen angemeldeten Zugriff.",
-        "user_action_required": (
+    payload = build_auth_required_workflow_payload(
+        url=url,
+        platform=normalized_platform or "unknown",
+        message=f"{platform_label} verlangt fuer lesbare Inhalte einen angemeldeten Zugriff.",
+        user_action_required=(
             f"Bitte frage den Nutzer, ob Timus seinen Login-Zugang fuer {platform_label} "
             "verwenden darf, damit die Inhalte mit seinem Account gelesen werden koennen."
         ),
-    }
+    )
+    payload.update(
+        {
+            "content": "",
+            "char_count": 0,
+        }
+    )
+    return payload
 
 
 async def fetch_page_text_via_scrapingant(

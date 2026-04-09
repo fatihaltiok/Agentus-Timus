@@ -108,6 +108,7 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert "task_profile_json:" in result
     assert "selected_strategy_json:" in result
     assert "meta_self_state_json:" in result
+    assert "specialist_context_seed_json:" in result
     assert "meta_policy_decision_json:" in result
     assert "alternative_recipes_json:" in result
     assert "recipe_stages:" in result
@@ -144,6 +145,13 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     parsed = MetaAgent._parse_meta_orchestration_handoff(result)
     assert parsed is not None
     assert parsed["meta_self_state"]["identity"] == "Timus"
+    assert parsed["specialist_context_seed"]["response_mode"] == "execute"
+    assert parsed["specialist_context_seed"]["signal_contract"] == [
+        "partial_result",
+        "blocker",
+        "context_mismatch",
+        "needs_meta_reframe",
+    ]
     assert "response_mode_policy" in parsed["meta_self_state"]["current_capabilities"]
     assert parsed["goal_spec"]["output_mode"] == "report"
     assert parsed["adaptive_plan"]["recommended_chain"] == ["meta", "visual", "research", "document"]
@@ -341,6 +349,7 @@ def test_build_meta_handoff_payload_exposes_learning_snapshot(monkeypatch):
     assert "recommended_agent_chain_key: meta__visual__research__document" in rendered
     assert "meta_self_state_json:" in rendered
     assert "meta_policy_decision_json:" in rendered
+    assert "specialist_context_seed_json:" in rendered
     assert "goal_spec_json:" in rendered
     assert "capability_graph_json:" in rendered
     assert "adaptive_plan_json:" in rendered

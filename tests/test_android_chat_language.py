@@ -493,6 +493,49 @@ def test_followup_capsule_serializes_conversation_state_into_query_block(tmp_pat
     assert "conversation_state_recent_corrections: Nicht auf Standort abdriften" in augmented
 
 
+def test_store_pending_workflow_in_capsule_roundtrips_into_followup_capsule(tmp_path, monkeypatch):
+    mcp_server._chat_history.clear()
+    monkeypatch.setenv("TIMUS_SESSION_STORAGE_ROOT", str(tmp_path))
+
+    session_id = "approval_pending_roundtrip"
+    stored = mcp_server._store_pending_workflow_in_capsule(
+        session_id,
+        {
+            "status": "approval_required",
+            "service": "x",
+            "message": "Timus braucht deine Freigabe.",
+            "user_action_required": "Bitte bestaetige den Zugriff.",
+            "approval_scope": "account_access",
+        },
+        updated_at="2026-04-09T10:30:00Z",
+    )
+
+    assert stored["status"] == "approval_required"
+    capsule = mcp_server._load_session_capsule(session_id)
+    assert capsule["pending_workflow"]["status"] == "approval_required"
+
+    followup_capsule = mcp_server._build_followup_capsule(session_id, query="ja")
+    assert followup_capsule["pending_workflow"]["status"] == "approval_required"
+
+    augmented = mcp_server._augment_query_with_followup_capsule("ja", followup_capsule)
+    assert "pending_workflow_status: approval_required" in augmented
+    assert "pending_workflow_user_action_required: Bitte bestaetige den Zugriff." in augmented
+
+
+def test_short_contextual_reply_anchors_on_pending_workflow_without_pending_prompt():
+    capsule = {
+        "pending_followup_prompt": "",
+        "last_proposed_action": None,
+        "pending_workflow": {
+            "status": "approval_required",
+            "message": "Timus braucht deine Freigabe.",
+            "user_action_required": "Bitte bestaetige den Zugriff.",
+        },
+    }
+
+    assert mcp_server._is_short_contextual_reply("ja mach weiter", capsule) is True
+
+
 def test_record_meta_turn_understanding_observations_emits_context_misread_suspected(monkeypatch):
     captured: list[tuple[str, dict]] = []
     monkeypatch.setattr(

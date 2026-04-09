@@ -202,4 +202,7 @@ async def test_scrapingant_client_returns_auth_required_for_detected_x_login_wal
 
     assert result["status"] == "auth_required"
     assert result["auth_required"] is True
+    assert result["workflow_id"].startswith("wf_")
+    assert result["service"] == "x"
+    assert result["reason"] == "login_wall"
     assert "Login-Zugang" in result["user_action_required"]

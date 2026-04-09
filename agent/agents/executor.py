@@ -8,6 +8,16 @@ from typing import Any
 from agent.base_agent import BaseAgent
 from agent.prompts import EXECUTOR_PROMPT_TEMPLATE
 from agent.shared.delegation_handoff import DelegationHandoff, parse_delegation_handoff
+from orchestration.approval_auth_contract import (
+    derive_user_action_blocker_reason,
+    normalize_phase_d_workflow_payload,
+)
+from orchestration.specialist_context import (
+    assess_specialist_context_alignment,
+    extract_specialist_context_from_handoff_data,
+    format_specialist_signal_response,
+    render_specialist_context_block,
+)
 from utils.location_local_intent import analyze_location_local_intent, analyze_location_route_intent
 from utils.location_route import build_google_maps_directions_url, normalize_route_travel_mode
 
@@ -373,6 +383,17 @@ class ExecutorAgent(BaseAgent):
         if handoff.constraints:
             lines.append("Constraints: " + " | ".join(handoff.constraints))
 
+        specialist_context_payload = extract_specialist_context_from_handoff_data(handoff.handoff_data)
+        specialist_context = render_specialist_context_block(
+            specialist_context_payload,
+            alignment=assess_specialist_context_alignment(
+                current_task=handoff.handoff_data.get("original_user_task") or handoff.goal,
+                payload=specialist_context_payload,
+            ),
+        )
+        if specialist_context:
+            lines.append(specialist_context)
+
         for key, label in (
             ("task_type", "Task-Typ"),
             ("recipe_id", "Rezept"),
@@ -418,22 +439,31 @@ class ExecutorAgent(BaseAgent):
     def _emit_user_action_blocker(self, payload: Any, *, stage: str = "user_action_required") -> None:
         if not isinstance(payload, dict):
             return
-        if not (payload.get("auth_required") or payload.get("user_action_required")):
+        normalized_payload = normalize_phase_d_workflow_payload(payload)
+        if not normalized_payload and not (payload.get("auth_required") or payload.get("user_action_required")):
             return
-        blocker_reason = (
-            "auth_required"
-            if payload.get("auth_required") or str(payload.get("status") or "").strip().lower() == "auth_required"
-            else "user_action_required"
-        )
+        effective_payload = normalized_payload or dict(payload)
+        blocker_reason = derive_user_action_blocker_reason(effective_payload)
         self._notify_delegation_progress(
             stage,
             kind="blocker",
             blocker_reason=blocker_reason,
-            message=str(payload.get("error") or payload.get("message") or "Nutzeraktion erforderlich.").strip(),
-            user_action_required=str(payload.get("user_action_required") or "").strip(),
-            platform=str(payload.get("platform") or "").strip(),
-            url=str(payload.get("url") or "").strip(),
-            tool_status=str(payload.get("status") or "").strip(),
+            message=str(effective_payload.get("error") or effective_payload.get("message") or "Nutzeraktion erforderlich.").strip(),
+            user_action_required=str(effective_payload.get("user_action_required") or "").strip(),
+            platform=str(effective_payload.get("platform") or "").strip(),
+            service=str(effective_payload.get("service") or "").strip(),
+            url=str(effective_payload.get("url") or "").strip(),
+            tool_status=str(effective_payload.get("status") or "").strip(),
+            workflow_id=str(effective_payload.get("workflow_id") or "").strip(),
+            workflow_kind=str(effective_payload.get("workflow_kind") or "").strip(),
+            workflow_reason=str(effective_payload.get("reason") or "").strip(),
+            approval_scope=str(effective_payload.get("approval_scope") or "").strip(),
+            resume_hint=str(effective_payload.get("resume_hint") or "").strip(),
+            challenge_type=str(effective_payload.get("challenge_type") or "").strip(),
+            auth_required=bool(effective_payload.get("auth_required")),
+            approval_required=bool(effective_payload.get("approval_required")),
+            awaiting_user=bool(effective_payload.get("awaiting_user")),
+            challenge_required=bool(effective_payload.get("challenge_required")),
         )
 
     @staticmethod
@@ -2393,6 +2423,43 @@ class ExecutorAgent(BaseAgent):
     async def run(self, task: str) -> str:
         self._notify_delegation_progress("executor_run_started")
         handoff = parse_delegation_handoff(task)
+        specialist_context_payload = (
+            extract_specialist_context_from_handoff_data(handoff.handoff_data) if handoff else {}
+        )
+        alignment = assess_specialist_context_alignment(
+            current_task=(
+                handoff.handoff_data.get("original_user_task")
+                or handoff.handoff_data.get("query")
+                or (handoff.goal if handoff else task)
+            ),
+            payload=specialist_context_payload,
+        )
+        response_mode = str(specialist_context_payload.get("response_mode") or "").strip().lower()
+        handoff_task_type = str((handoff.handoff_data or {}).get("task_type") or "").strip().lower() if handoff else ""
+        if handoff and response_mode == "summarize_state" and handoff_task_type in {
+            "simple_live_lookup",
+            "simple_live_lookup_document",
+            "location_local_search",
+            "location_route",
+            "youtube_light_research",
+        }:
+            return format_specialist_signal_response(
+                "needs_meta_reframe",
+                reason="state_mode_conflicts_with_action_task",
+                message=(
+                    "Der Handoff verlangt einen Aktionspfad, der propagierte Meta-Modus erwartet aber eher "
+                    "eine Zustandszusammenfassung oder Neubewertung statt direkter Ausfuehrung."
+                ),
+            )
+        if handoff and alignment.get("alignment_state") == "needs_meta_reframe":
+            return format_specialist_signal_response(
+                "needs_meta_reframe",
+                reason=str(alignment.get("reason") or ""),
+                message=(
+                    "Der aktuelle Handoff ist fuer diesen Executor-Lauf zu schwach oder falsch am laufenden "
+                    "Gesprächsanker verankert. Meta sollte den Rahmen erst neu setzen."
+                ),
+            )
         plain_task = self._recover_user_query(task)
         semantic_recall = self._recover_semantic_recall(task)
         recent_assistant_replies = self._recover_recent_assistant_replies(task)

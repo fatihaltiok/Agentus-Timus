@@ -124,6 +124,11 @@ from orchestration.conversation_state import (
     touch_conversation_state,
 )
 from orchestration.meta_context_eval import detect_context_misread_risk
+from orchestration.pending_workflow_state import (
+    clear_pending_workflow_state,
+    is_pending_workflow_state,
+    pending_workflow_state_to_dict,
+)
 from orchestration.preference_instruction_memory import capture_preference_memory
 from orchestration.topic_state_history import topic_history_to_list, update_topic_history
 from orchestration.longrunner_transport import (
@@ -335,6 +340,7 @@ _AFFIRMATION_PATTERNS = (
     r"^\s*(?:ok(?:ay)?\s+)?leg\s+los\s*[.!]?\s*$",
     r"\bja\s+mach\s+das\b",
     r"\bja\s+mach\s+mal\b",
+    r"\bja\s+mach\s+weiter\b",
     r"\bja\s+schau\s+(mal\s+)?danach\b",
     r"\bschau\s+mal\s+danach\b",
     r"\bklingt\s+gut\b",
@@ -556,6 +562,10 @@ def _normalize_session_capsule_payload(capsule: dict | None) -> dict:
         payload.get("topic_history"),
         session_id=session_id,
         now=str(payload.get("last_updated") or ""),
+    )
+    payload["pending_workflow"] = pending_workflow_state_to_dict(
+        payload.get("pending_workflow"),
+        updated_at=str(payload.get("last_updated") or ""),
     )
     return payload
 
@@ -1135,6 +1145,21 @@ def _store_pending_followup_prompt_in_capsule(session_id: str, prompt: str) -> N
         updated_at=updated_at,
     ).to_dict()
     _store_session_capsule(capsule)
+
+
+def _store_pending_workflow_in_capsule(session_id: str, workflow: dict | None, *, updated_at: str = "") -> dict:
+    capsule = _load_session_capsule(session_id)
+    effective_updated_at = str(updated_at or capsule.get("last_updated") or datetime.utcnow().isoformat() + "Z")
+    normalized = pending_workflow_state_to_dict(
+        workflow,
+        updated_at=effective_updated_at,
+    )
+    if normalized:
+        capsule["pending_workflow"] = normalized
+    else:
+        capsule.pop("pending_workflow", None)
+    _store_session_capsule(capsule)
+    return normalized
 
 
 def _log_chat_interaction(
@@ -1720,7 +1745,8 @@ def _is_short_contextual_reply(query: str, capsule: dict) -> bool:
     if len(normalized.split()) > 12:
         return False
     pending_prompt = str(capsule.get("pending_followup_prompt") or "").strip()
-    if not pending_prompt and not capsule.get("last_proposed_action"):
+    pending_workflow = capsule.get("pending_workflow") if isinstance(capsule.get("pending_workflow"), dict) else {}
+    if not pending_prompt and not capsule.get("last_proposed_action") and not pending_workflow:
         return False
     if any(re.search(pattern, normalized) for pattern in _AFFIRMATION_PATTERNS):
         return True
@@ -1787,6 +1813,7 @@ def _build_followup_capsule(session_id: str, query: str = "") -> dict:
     # P4: gespeichertes Angebot aus Kapsel lesen
     last_proposed_action: dict | None = capsule.get("last_proposed_action") or None
     pending_followup_prompt = str(capsule.get("pending_followup_prompt") or "").strip()
+    pending_workflow = capsule.get("pending_workflow") if isinstance(capsule.get("pending_workflow"), dict) else {}
     if not pending_followup_prompt and last_assistant:
         pending_followup_prompt = _extract_pending_followup_prompt(last_assistant)
     conversation_state, conversation_state_decay = decay_conversation_state(
@@ -1815,6 +1842,7 @@ def _build_followup_capsule(session_id: str, query: str = "") -> dict:
         "inherited_topic_recall": inherited_topic_recall,
         "pending_followup_prompt": pending_followup_prompt,
         "last_proposed_action": last_proposed_action,
+        "pending_workflow": capsule.get("pending_workflow") or {},
         "semantic_recall": semantic_recall,
         "conversation_state": conversation_state.to_dict(),
         "conversation_state_decay": conversation_state_decay,
@@ -1908,6 +1936,7 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
 
     last_proposed_action: dict | None = capsule.get("last_proposed_action") or None
     pending_followup_prompt = str(capsule.get("pending_followup_prompt") or "").strip()
+    pending_workflow = capsule.get("pending_workflow") if isinstance(capsule.get("pending_workflow"), dict) else {}
 
     # P4: Kurze Zustimmung + gespeichertes Angebot → direkt auflösen
     if is_affirm and last_proposed_action and not _should_prefer_pending_followup_prompt(
@@ -1968,6 +1997,7 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
         or inherited_topic_recall
         or semantic_recall
         or pending_followup_prompt
+        or pending_workflow
         or conversation_state
     ):
         return query
@@ -2015,6 +2045,28 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
             parts.append("semantic_recall: " + " || ".join(recall_lines))
     if pending_followup_prompt:
         parts.append(f"pending_followup_prompt: {pending_followup_prompt[:320]}")
+    if isinstance(pending_workflow, dict) and pending_workflow:
+        workflow_status = str(pending_workflow.get("status") or "").strip()
+        workflow_service = str(pending_workflow.get("service") or pending_workflow.get("platform") or "").strip()
+        workflow_reason = str(pending_workflow.get("reason") or "").strip()
+        workflow_message = str(pending_workflow.get("message") or "").strip()
+        workflow_user_action = str(pending_workflow.get("user_action_required") or "").strip()
+        workflow_resume_hint = str(pending_workflow.get("resume_hint") or "").strip()
+        workflow_challenge_type = str(pending_workflow.get("challenge_type") or "").strip()
+        if workflow_status:
+            parts.append(f"pending_workflow_status: {workflow_status[:64]}")
+        if workflow_service:
+            parts.append(f"pending_workflow_service: {workflow_service[:64]}")
+        if workflow_reason:
+            parts.append(f"pending_workflow_reason: {workflow_reason[:96]}")
+        if workflow_message:
+            parts.append(f"pending_workflow_message: {workflow_message[:280]}")
+        if workflow_user_action:
+            parts.append(f"pending_workflow_user_action_required: {workflow_user_action[:280]}")
+        if workflow_resume_hint:
+            parts.append(f"pending_workflow_resume_hint: {workflow_resume_hint[:220]}")
+        if workflow_challenge_type:
+            parts.append(f"pending_workflow_challenge_type: {workflow_challenge_type[:64]}")
     if isinstance(conversation_state, dict):
         active_topic = str(conversation_state.get("active_topic") or "").strip()
         active_goal = str(conversation_state.get("active_goal") or "").strip()
@@ -3992,6 +4044,7 @@ async def canvas_chat(request: Request):
     run_id = new_run_id()
     longrun_terminal_emitted = False
     meta_classification: dict | None = None
+    pending_workflow_updated = False
     try:
         import main_dispatcher as _dispatcher_mod
         from main_dispatcher import run_agent, get_agent_decision
@@ -4003,12 +4056,40 @@ async def canvas_chat(request: Request):
             previous_agent_progress_hook = getattr(_dispatcher_mod, "_agent_progress_hook", None)
 
             def _dispatcher_progress_event(payload: dict) -> None:
+                nonlocal pending_workflow_updated
                 if not isinstance(payload, dict):
                     return
+                stage = str(payload.get("stage") or "").strip()
+                payload_info = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+                agent_name = str(payload.get("agent") or "").strip()
+                if is_pending_workflow_state(payload_info):
+                    stored_workflow = _store_pending_workflow_in_capsule(
+                        session_id,
+                        {
+                            **payload_info,
+                            "source_agent": agent_name,
+                            "source_stage": stage,
+                        },
+                        updated_at=datetime.utcnow().isoformat() + "Z",
+                    )
+                    pending_workflow_updated = True
+                    _record_chat_observation(
+                        "pending_workflow_updated",
+                        {
+                            "request_id": request_id,
+                            "session_id": session_id,
+                            "source": "canvas_chat",
+                            "agent": agent_name,
+                            "stage": stage,
+                            "workflow_status": str(stored_workflow.get("status") or ""),
+                            "workflow_id": str(stored_workflow.get("workflow_id") or ""),
+                            "workflow_reason": str(stored_workflow.get("reason") or ""),
+                        },
+                    )
                 _emit_longrun_progress_from_payload(
-                    agent=str(payload.get("agent") or "").strip(),
-                    stage=str(payload.get("stage") or "").strip(),
-                    payload=payload.get("payload") if isinstance(payload.get("payload"), dict) else {},
+                    agent=agent_name,
+                    stage=stage,
+                    payload=payload_info,
                 )
 
             _dispatcher_mod._agent_progress_hook = _dispatcher_progress_event
@@ -4158,6 +4239,30 @@ async def canvas_chat(request: Request):
         _store_proposal_in_capsule(session_id, proposal)
         pending_followup_prompt = _extract_pending_followup_prompt(reply)
         _store_pending_followup_prompt_in_capsule(session_id, pending_followup_prompt)
+        previous_pending_workflow = followup_capsule.get("pending_workflow") if isinstance(followup_capsule.get("pending_workflow"), dict) else {}
+        if (
+            previous_pending_workflow
+            and not pending_workflow_updated
+            and str((meta_classification or {}).get("dominant_turn_type") or "").strip().lower()
+            in {"approval_response", "auth_response", "handover_resume"}
+        ):
+            _store_pending_workflow_in_capsule(
+                session_id,
+                clear_pending_workflow_state(),
+                updated_at=reply_ts,
+            )
+            _record_chat_observation(
+                "pending_workflow_cleared",
+                {
+                    "request_id": request_id,
+                    "session_id": session_id,
+                    "source": "canvas_chat",
+                    "agent": agent,
+                    "reason": "workflow_response_resolved_without_new_blocker",
+                    "previous_status": str(previous_pending_workflow.get("status") or ""),
+                    "previous_workflow_id": str(previous_pending_workflow.get("workflow_id") or ""),
+                },
+            )
         _log_chat_interaction(
             session_id=session_id,
             user_input=query,

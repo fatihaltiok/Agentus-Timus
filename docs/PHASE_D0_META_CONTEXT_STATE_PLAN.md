@@ -668,6 +668,62 @@ Wichtig:
 - erst dann ist die Meta-Seite stabil genug, um ihren Kontext sauber in andere Agenten zu propagieren
 - Ziel ist nicht, jeden Spezialisten wie `meta` zu machen, sondern den laufenden Arbeitskontext mitzutragen
 
+Aktueller Runtime-Stand:
+
+- erster Runtime-Slice ist umgesetzt
+- `meta` erzeugt jetzt einen normalisierten `specialist_context_seed`
+- der Seed wird im Meta-Handoff und in strukturierten Specialist-Handoffs mitgetragen
+- `executor`, `research`, `visual` und `system` rendern diesen Kontext jetzt sichtbar im Specialist-Handoff-Kontext
+- zweiter Runtime-Slice ist umgesetzt:
+  - gemeinsame Alignment-Heuristik fuer propagierten Spezialistenkontext
+  - sichtbare Kontextwarnung im Specialist-Handoff bei schwacher Verankerung
+  - erste strukturierte Ruecksignale im Delegations-Rueckweg:
+    - `context_mismatch`
+    - `needs_meta_reframe`
+- dritter Runtime-Slice ist umgesetzt:
+  - erstes agentenseitiges Signal-Protokoll `Specialist Signal: ...`
+  - Registry erkennt diese Signale jetzt explizit statt nur heuristisch
+  - `needs_meta_reframe` fuehrt im Delegationspfad jetzt zu `partial` statt stiller Erfolgsmeldung
+  - `executor` blockt Aktions-Handoffs jetzt aktiv, wenn propagierter `response_mode=summarize_state` dazu im Widerspruch steht
+- vierter Runtime-Slice ist umgesetzt:
+  - `research` blockt jetzt leichte Lookup-/Live-Such-Handoffs aktiv, wenn sie faelschlich in den Deep-Research-Pfad geraten
+  - `research` bekommt fuer uebergebene Quellen, erfassten Kontext und knappe/quellengetriebene Nutzerpraeferenzen jetzt explizite Strategiehinweise
+  - `visual` blockt echte UI-/Browser-Aktions-Handoffs jetzt aktiv, wenn propagierter `response_mode=summarize_state` dazu im Widerspruch steht
+  - `system` hat jetzt einen direkten Status-Zusammenfassungspfad ohne LLM, wenn Meta explizit im `summarize_state`-Modus einen Service-/Status-Handoff schickt
+- fuenfter Runtime-Slice ist umgesetzt:
+  - `research` leitet jetzt aus Handoff und Nutzerpraeferenzen eine echte Kontext-Policy ab (`source_first`, `compact_mode`)
+  - `research` unterdrueckt in source-first/kompakten Faellen jetzt Blackboard-/Curiosity-Kontext statt ihn nur weicher zu formulieren
+  - `visual` waehlt jetzt explizit zwischen `structured_navigation` und `vision_first`
+  - `system` waehlt jetzt gezielte Snapshot-Plaene (`preferred_service`, `compact`) statt immer denselben Voll-Snapshot
+- sechster Abschluss-Slice ist umgesetzt:
+  - D0.9 hat jetzt ein eigenes ausfuehrbares Eval-Set fuer `research`, `visual`, `system` und den Specialist-Signalvertrag
+  - D0.9 hat jetzt einen eigenen Observability-Block `specialist_context` mit Strategie- und Signalmetriken
+  - die Kernkette ist jetzt abgeschlossen:
+    - Kontext-Propagation
+    - Alignment
+    - Ruecksignale
+    - agentenseitige Signale
+    - erste echte Guards
+    - erste echte Priorisierung
+    - Eval + Observability
+- aktuell propagierte Felder:
+  - `current_topic`
+  - `active_goal`
+  - `open_loop`
+  - `next_expected_step`
+  - `turn_type`
+  - `response_mode`
+  - `user_preferences`
+  - `recent_corrections`
+  - `signal_contract`
+
+Status:
+
+- D0.9 ist im Repo-/Test-Scope abgeschlossen
+- der erste Kernring `executor`, `research`, `visual`, `system` traegt jetzt propagierten Kontext nicht mehr nur passiv, sondern nutzt ihn in ersten echten Entscheidungen
+- weitere Spezialisten ausserhalb des Kernrings sind kein D0-Pflichtrest mehr, sondern koennen spaeter gezielt nachgezogen werden
+- ein Live-Reload ist fuer den produktiven Lauf noch separat noetig; der Abschluss hier bezieht sich auf Implementierung, Tests und Doku
+
 ## Empfohlene Reihenfolge
 
 1. D0.1 Conversation-State-Schema
@@ -719,6 +775,7 @@ Begruendung:
 - D1-D5 brauchen stabiles Kontextverstaendnis
 - ansonsten werden Approval, Auth und Handover im laufenden Gespraech wieder falsch verstanden
 - Phase E sollte auf D0 aufbauen, weil erst dann eine echte Schwaeche-zu-Verbesserung-Kette semantisch belastbar wird
+- eine spaetere autonome Gedaechtnispflege (`Memory Curation Autonomy`) gehoert ebenfalls nach D0 und nach Phase D, weil sie auf sauberem Topic-State, Preference-Memory und sicheren Autonomiegrenzen aufsetzen muss
 
 Kurz:
 
@@ -726,3 +783,4 @@ Kurz:
 - **Phase D0**: Meta Context State
 - **Phase D1-D5**: Approval, Auth, Handover, assistive Workflows
 - **Phase E**: Self-Improvement auf belastbarer Gespraechsbasis
+  - spaeter darin: `Memory Curation Autonomy` fuer policy-gesteuerte, beobachtbare und reversible Gedaechtnispflege

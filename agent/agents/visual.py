@@ -16,9 +16,16 @@ from agent.base_agent import BaseAgent, MCP_URL
 from agent.providers import ModelProvider
 from agent.providers import resolve_model_provider_env
 from agent.prompts import VISUAL_SYSTEM_PROMPT
-from agent.shared.delegation_handoff import parse_delegation_handoff
+from agent.shared.delegation_handoff import DelegationHandoff, parse_delegation_handoff
 from agent.shared.json_utils import extract_json_robust
 from agent.shared.vision_formatter import convert_openai_to_anthropic
+from orchestration.specialist_context import (
+    assess_specialist_context_alignment,
+    extract_specialist_context_from_handoff_data,
+    format_specialist_signal_response,
+    render_specialist_context_block,
+)
+from orchestration.autonomy_observation import record_autonomy_observation
 from orchestration.browser_workflow_plan import (
     BrowserStateEvidence,
     BrowserWorkflowPlan,
@@ -326,6 +333,20 @@ class VisualAgent(BaseAgent):
             lines.append(f"success_signal={handoff.success_signal}")
         if handoff.constraints:
             lines.append("constraints=" + " | ".join(handoff.constraints))
+
+        specialist_context_payload = extract_specialist_context_from_handoff_data(handoff.handoff_data)
+        specialist_context = render_specialist_context_block(
+            specialist_context_payload,
+            header="SPEZIALISTENKONTEXT:",
+            alignment=assess_specialist_context_alignment(
+                current_task=handoff.handoff_data.get("original_user_task")
+                or handoff.handoff_data.get("target_hint")
+                or handoff.goal,
+                payload=specialist_context_payload,
+            ),
+        )
+        if specialist_context:
+            lines.append(specialist_context)
 
         for key in (
             "recipe_id",
@@ -821,7 +842,50 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
 
     async def run(self, task: str) -> str:
         effective_task, handoff_context = self._prepare_visual_task(task)
+        handoff = parse_delegation_handoff(task)
+        specialist_context_payload = (
+            extract_specialist_context_from_handoff_data(handoff.handoff_data) if handoff else {}
+        )
+        alignment = assess_specialist_context_alignment(
+            current_task=(
+                (handoff.handoff_data.get("original_user_task") or "") if handoff else ""
+            )
+            or ((handoff.handoff_data.get("target_hint") or "") if handoff else "")
+            or effective_task,
+            payload=specialist_context_payload,
+        )
+        response_mode = str(specialist_context_payload.get("response_mode") or "").strip().lower()
+        if handoff and response_mode == "summarize_state" and self._handoff_requires_visual_action(handoff, effective_task):
+            return format_specialist_signal_response(
+                "needs_meta_reframe",
+                reason="state_mode_conflicts_with_visual_action",
+                message=(
+                    "Der aktuelle Visual-Handoff verlangt eine echte UI- oder Browser-Aktion, "
+                    "waehrend Meta gerade im Zusammenfassungsmodus ist. "
+                    "Meta sollte erst zwischen Statuszusammenfassung und Visual-Ausfuehrung entscheiden."
+                ),
+            )
+        if handoff and alignment.get("alignment_state") == "needs_meta_reframe":
+            return format_specialist_signal_response(
+                "needs_meta_reframe",
+                reason=str(alignment.get("reason") or ""),
+                message=(
+                    "Der aktuelle Visual-Handoff ist nicht stabil genug am laufenden Themenanker verankert. "
+                    "Meta sollte die UI-Aufgabe erst genauer neu rahmen."
+                ),
+            )
         log.info(f"VisualAgent: {effective_task}")
+        selected_strategy = self._choose_visual_strategy_mode(handoff, specialist_context_payload, effective_task)
+        if handoff:
+            record_autonomy_observation(
+                "specialist_strategy_selected",
+                {
+                    "agent": "visual",
+                    "strategy_mode": selected_strategy,
+                    "response_mode": response_mode,
+                    "session_id": str(handoff.handoff_data.get("session_id") or ""),
+                },
+            )
         browser_plan_context = self._build_browser_plan_context(effective_task)
         user_sections = [f"AUFGABE: {effective_task}"]
         if handoff_context:
@@ -842,16 +906,19 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         force_vision_mode = False
         runtime_feedback_recorded = False
 
-        structured_result = await self._try_structured_navigation(effective_task)
-        if structured_result and structured_result.get("success"):
-            log.info(f"Strukturierte Navigation erfolgreich: {structured_result['result']}")
-            if roi_set:
-                self._clear_roi()
-            self._record_runtime_feedback(effective_task, success=True, strategy="browser_flow", stage="structured_navigation")
-            runtime_feedback_recorded = True
-            return structured_result["result"]
+        if selected_strategy == "structured_navigation":
+            structured_result = await self._try_structured_navigation(effective_task)
+            if structured_result and structured_result.get("success"):
+                log.info(f"Strukturierte Navigation erfolgreich: {structured_result['result']}")
+                if roi_set:
+                    self._clear_roi()
+                self._record_runtime_feedback(effective_task, success=True, strategy="browser_flow", stage="structured_navigation")
+                runtime_feedback_recorded = True
+                return structured_result["result"]
+            else:
+                log.info("Fallback zu Vision-basierter Navigation")
         else:
-            log.info("Fallback zu Vision-basierter Navigation")
+            log.info("D0.9 Strategy: Vision-first statt strukturierter Navigation")
 
         for iteration in range(self.max_iterations):
             if consecutive_loops >= 2:
@@ -954,3 +1021,52 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             self._record_runtime_feedback(effective_task, success=False, stage="max_iterations")
             runtime_feedback_recorded = True
         return "Max Iterationen."
+
+    def _handoff_requires_visual_action(self, handoff: DelegationHandoff, effective_task: str) -> bool:
+        if handoff.handoff_data.get("source_url") or handoff.handoff_data.get("results_url"):
+            return True
+        if handoff.handoff_data.get("browser_plan") or handoff.handoff_data.get("expected_state"):
+            return True
+        target_hint = str(handoff.handoff_data.get("target_hint") or "").strip().lower()
+        if target_hint:
+            return True
+        task_lower = str(effective_task or "").strip().lower()
+        return any(
+            token in task_lower
+            for token in (
+                "browser",
+                "website",
+                "webseite",
+                "formular",
+                "login",
+                "anmelden",
+                "oeffne",
+                "öffne",
+                "klicke",
+                "click",
+                ".com",
+                ".de",
+            )
+        )
+
+    def _choose_visual_strategy_mode(
+        self,
+        handoff: Optional[DelegationHandoff],
+        specialist_context_payload: dict,
+        effective_task: str,
+    ) -> str:
+        preference_text = " | ".join(str(item or "").strip().lower() for item in specialist_context_payload.get("user_preferences") or [])
+        guidance_text = " | ".join(
+            str(item or "").strip().lower()
+            for item in (
+                specialist_context_payload.get("next_expected_step"),
+                specialist_context_payload.get("open_loop"),
+                specialist_context_payload.get("active_goal"),
+            )
+            if str(item or "").strip()
+        )
+        if any(token in preference_text or token in guidance_text for token in ("ocr", "text", "text zuerst", "screen text", "lesen", "lies", "lese")):
+            return "vision_first"
+        if handoff and self._handoff_requires_visual_action(handoff, effective_task):
+            return "structured_navigation"
+        return "vision_first"

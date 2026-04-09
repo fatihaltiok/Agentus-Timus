@@ -25,7 +25,7 @@ import time
 import asyncio
 import subprocess
 import os
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 from typing import Optional, Any, Dict, List, Union
 import json
 import re
@@ -51,6 +51,7 @@ from .persistent_context import (
     set_context_manager
 )
 from .retry_handler import retry_handler, BrowserRetryHandler
+from orchestration.approval_auth_contract import build_challenge_required_workflow_payload
 from tools.hybrid_input_tool import hybrid_click_or_fill
 
 # --- Globale Konfiguration & Logging ---
@@ -71,6 +72,43 @@ if not log.handlers:
         format="%(asctime)s | %(levelname)-7s | %(name)-12s | %(message)s")
 
 BROWSER_ENGINE = (os.getenv("TIMUS_BROWSER_ENGINE", "firefox") or "firefox").strip().lower()
+
+
+def _infer_service_from_url(url: str) -> str:
+    hostname = str(urlparse(str(url or "")).hostname or "").strip().lower()
+    if not hostname:
+        return ""
+    labels = [part for part in hostname.split(".") if part and part != "www"]
+    if len(labels) >= 2:
+        return labels[-2]
+    return labels[0]
+
+
+def _build_browser_challenge_payload(
+    *,
+    url: str,
+    session_id: str,
+    title: str = "",
+    challenge_type: str = "captcha",
+    message: str = "",
+    user_action_required: str = "",
+) -> dict[str, Any]:
+    payload = build_challenge_required_workflow_payload(
+        service=_infer_service_from_url(url),
+        challenge_type=challenge_type,
+        message=message or "Die Seite verlangt eine Sicherheitspruefung vor weiterem Zugriff.",
+        user_action_required=user_action_required or (
+            "Bitte loese die Sicherheitspruefung selbst oder bestaetige, wie Timus fortsetzen soll."
+        ),
+    )
+    payload.update(
+        {
+            "url": url,
+            "session_id": session_id,
+            "title": str(title or "").strip(),
+        }
+    )
+    return payload
 
 
 # =================================================================
@@ -248,9 +286,24 @@ async def open_url(url: str, session_id: str = "default") -> dict:
             return {"status": "failed_retry", "url": url, "error": response.get("error")}
 
         page_content = await page.content()
-        if "Checking if the site connection is secure" in page_content or "DDoS protection by Cloudflare" in page_content:
+        challenge_check = retry_handler.check_page_content_for_captcha(page_content)
+        if challenge_check.get("is_blocked"):
             log.warning(f"Seite {url} wird durch Blocker geschützt.")
-            return {"status": "blocked_by_security", "url": url, "title": await page.title(), "session_id": session_id}
+            indicators = [str(item or "").lower() for item in challenge_check.get("indicators") or ()]
+            challenge_type = "cloudflare_challenge" if any(
+                "cloudflare" in indicator or "cf-" in indicator for indicator in indicators
+            ) else "captcha"
+            return _build_browser_challenge_payload(
+                url=url,
+                session_id=session_id,
+                title=await page.title(),
+                challenge_type=challenge_type,
+                message="Die Seite blockiert automatischen Zugriff mit einer Sicherheitspruefung.",
+                user_action_required=(
+                    "Bitte loese die Challenge selbst und bestaetige danach, ob Timus den Workflow "
+                    "fortsetzen soll."
+                ),
+            )
 
         status = response.status if response else "unbekannt"
         title = await page.title()

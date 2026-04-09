@@ -17,6 +17,7 @@ from orchestration.diagnosis_records import (
 )
 from orchestration.preference_instruction_memory import select_stored_preference_memory_with_summary
 from orchestration.meta_response_policy import build_meta_policy_input, resolve_meta_response_policy
+from orchestration.specialist_context import build_specialist_context_payload
 from orchestration.topic_state_history import parse_historical_topic_recall_hint, select_historical_topic_memory
 from orchestration.goal_spec import derive_goal_spec
 from orchestration.root_cause_tasks import build_root_cause_task_payload
@@ -2839,6 +2840,19 @@ def classify_meta_task(
     if not final_chain:
         final_chain = ["meta"]
 
+    conversation_state_map = dict(conversation_state or {})
+    specialist_context_seed = build_specialist_context_payload(
+        current_topic=active_topic,
+        active_goal=open_goal,
+        open_loop=meta_context_bundle.open_loop or meta_context_bundle.next_expected_step,
+        next_expected_step=meta_context_bundle.next_expected_step or next_step,
+        turn_type=turn_interpretation.dominant_turn_type,
+        response_mode=final_response_mode,
+        user_preferences=list(conversation_state_map.get("preferences") or [])
+        + list((preference_memory_selection or {}).get("selected") or []),
+        recent_corrections=list(conversation_state_map.get("recent_corrections") or []),
+    )
+
     prefer_youtube_research_only = (
         final_task_type == "youtube_content_extraction"
         and has_direct_youtube_url
@@ -2892,6 +2906,7 @@ def classify_meta_task(
         "meta_context_bundle": meta_context_bundle.to_dict(),
         "preference_memory_selection": preference_memory_selection,
         "historical_topic_selection": historical_topic_selection,
+        "specialist_context_seed": specialist_context_seed,
         "meta_context_slot_types": [slot.slot for slot in meta_context_bundle.context_slots],
         "meta_context_suppressed_count": len(meta_context_bundle.suppressed_context),
     }

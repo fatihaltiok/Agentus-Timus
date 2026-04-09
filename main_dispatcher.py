@@ -65,6 +65,7 @@ from orchestration.meta_orchestration import (
     meta_site_recipe_key,
     resolve_adaptive_plan_adoption,
 )
+from orchestration.specialist_context import parse_specialist_context_payload
 from orchestration.meta_self_state import build_meta_self_state
 from orchestration.self_improvement_engine import LLMUsageRecord, get_improvement_engine
 from utils.dashscope_native import (
@@ -2279,6 +2280,7 @@ def _build_meta_handoff_payload(query: str) -> dict:
         "reason": policy.get("meta_classification_reason") or policy.get("reason") or "unknown",
         "response_mode": policy.get("response_mode", ""),
         "meta_policy_decision": dict(policy.get("meta_policy_decision") or {}),
+        "dominant_turn_type": policy.get("dominant_turn_type", ""),
         "recommended_recipe_id": policy.get("recommended_recipe_id"),
         "recipe_stages": list(policy.get("recipe_stages") or []),
         "recipe_recoveries": list(policy.get("recipe_recoveries") or []),
@@ -2287,6 +2289,9 @@ def _build_meta_handoff_payload(query: str) -> dict:
         "capability_graph": dict(policy.get("capability_graph") or {}),
         "adaptive_plan": dict(policy.get("adaptive_plan") or {}),
         "meta_context_bundle": dict(policy.get("meta_context_bundle") or {}),
+        "specialist_context_seed": parse_specialist_context_payload(
+            policy.get("specialist_context_seed") or {}
+        ),
         "task_profile": dict(policy.get("task_profile") or {}),
         "tool_affordances": list(policy.get("tool_affordances") or []),
         "selected_strategy": dict(policy.get("selected_strategy") or {}),
@@ -2437,6 +2442,8 @@ def _render_meta_handoff_block(payload: dict) -> str:
     )
     if payload.get("response_mode"):
         lines.append(f"response_mode: {payload['response_mode']}")
+    if payload.get("dominant_turn_type"):
+        lines.append(f"dominant_turn_type: {payload['dominant_turn_type']}")
     task_profile = payload.get("task_profile") or {}
     if task_profile.get("intent"):
         lines.append(f"task_profile_intent: {task_profile['intent']}")
@@ -2484,6 +2491,11 @@ def _render_meta_handoff_block(payload: dict) -> str:
         lines.append(
             "meta_context_bundle_json: "
             + json.dumps(payload["meta_context_bundle"], ensure_ascii=False, sort_keys=True)
+        )
+    if payload.get("specialist_context_seed"):
+        lines.append(
+            "specialist_context_seed_json: "
+            + json.dumps(payload["specialist_context_seed"], ensure_ascii=False, sort_keys=True)
         )
     if payload.get("meta_policy_decision"):
         lines.append(

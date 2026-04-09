@@ -2,6 +2,39 @@
 
 ---
 
+## Fortschritt 2026-04-09 - Phase D2.1 Pending-Workflow-State gestartet
+
+Der erste D-Block hatte bereits normalisierte `auth_required`- und `challenge_required`-Payloads, aber noch keinen echten turn-uebergreifenden Pending-Zustand. Damit gingen offene Freigabe-/Auth-Schritte nur als fluechtiger Blocker durch den aktuellen Lauf.
+
+Nachgezogen:
+
+- [pending_workflow_state.py](/home/fatih-ubuntu/dev/timus/orchestration/pending_workflow_state.py)
+  - neues D2.1-Modul fuer einen normalisierten Session-Zustand:
+    - `approval_required`
+    - `auth_required`
+    - `awaiting_user`
+    - `challenge_required`
+  - speichert dazu:
+    - `workflow_id`
+    - `workflow_kind`
+    - `service`
+    - `reason`
+    - `message`
+    - `user_action_required`
+    - `resume_hint`
+    - `challenge_type`
+    - `approval_scope`
+    - `source_agent`
+    - `source_stage`
+- [mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - Session-Capsules normalisieren und speichern jetzt `pending_workflow`
+  - der echte Agent-Progress-Hook schreibt Pending-Workflows direkt aus strukturierten Blocker-Payloads in die Capsule
+  - neue Observation-Events:
+    - `pending_workflow_updated`
+    - `pending_workflow_cleared`
+  - Follow-up-Capsules serialisieren den offenen Pending-Workflow jetzt explizit in den Kontextblock
+  - kurze Antworten wie `ja`, `mach weiter` oder aehnliche knappe Reaktionen bleiben damit auch ohne `pending_followup_prompt` an einem offenen Approval-/Auth-Zustand verankert
+
 ## Fortschritt 2026-04-09 - Telegram/Mail-Observability nachgezogen
 
 Der Telegram-Chat hat einen echten Mailversand bestaetigt, waehrend im Observation-Log fuer denselben Request nur `chat_request_completed` sichtbar war. Der Versandpfad funktionierte also, aber die Laufzeitbeobachtung war zu duenn.
@@ -4704,3 +4737,17 @@ Status:
 - D0.9 ist damit im Repo-/Test-Scope abgeschlossen
 - offen bleibt nur noch ein separater Live-Reload fuer den laufenden Prozess, falls der neue Stand sofort produktiv geladen werden soll
 - D0 insgesamt ist damit funktional abgeschlossen; der naechste groessere Block ist Phase D
+## 2026-04-09 - Phase D1.1/D1.2 gemeinsamer Auth-Vertrag gestartet
+
+- Neues gemeinsames Laufzeitmodul [approval_auth_contract.py](/home/fatih-ubuntu/dev/timus/orchestration/approval_auth_contract.py) fuer:
+  - `approval_required`
+  - `auth_required`
+  - `awaiting_user`
+  - `challenge_required`
+- Der bestehende Social-Auth-Wall-Pfad in [client.py](/home/fatih-ubuntu/dev/timus/tools/social_media_tool/client.py) liefert jetzt schon den normalisierten Phase-D-Workflow-Vertrag statt einer reinen Ad-hoc-Payload.
+- Der Browser-Blockerpfad in [tool.py](/home/fatih-ubuntu/dev/timus/tools/browser_tool/tool.py) liefert bei Cloudflare/CAPTCHA jetzt `challenge_required` mit `workflow_id`, `challenge_type` und `user_action_required` statt nur `blocked_by_security`.
+- Der Executor propagiert normalisierte Auth-/User-Action-Blocker jetzt mit `workflow_id`, `workflow_kind`, `service`, `reason`, `approval_scope`, `resume_hint` und `challenge_type`, ohne den bestehenden C4-Blockerpfad zu brechen.
+- Fokus dieses ersten D-Slices:
+  - gemeinsamer Vertrag zuerst
+  - produktive `auth_required`- und `challenge_required`-Pfade daran angebunden
+  - noch kein echter Login-Flow
