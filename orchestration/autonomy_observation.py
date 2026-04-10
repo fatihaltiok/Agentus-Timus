@@ -265,6 +265,17 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
             "by_agent": {},
             "by_channel": {},
         },
+        "challenge_runtime": {
+            "challenge_required_total": 0,
+            "challenge_resume_total": 0,
+            "challenge_resolved_total": 0,
+            "challenge_reblocked_total": 0,
+            "resolution_rate": 0.0,
+            "reblock_rate": 0.0,
+            "by_service": {},
+            "by_challenge_type": {},
+            "by_reply_kind": {},
+        },
         "top_goal_signatures": [],
         # C2: Nutzerwirkungs-Klassen — eigener Block, unabhängig von request_correlation.
         # user_visible_failures_total in request_correlation wird NICHT doppelt erhöht.
@@ -284,6 +295,7 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
     meta_context_state = summary["meta_context_state"]
     specialist_context = summary["specialist_context"]
     communication_runtime = summary["communication_runtime"]
+    challenge_runtime = summary["challenge_runtime"]
     user_impact = summary["user_impact"]
     recent_requests: List[Dict[str, Any]] = []
     recent_routes: List[Dict[str, Any]] = []
@@ -685,6 +697,29 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
             _bump(communication_runtime["by_agent"], payload.get("agent"))
             _bump(communication_runtime["by_channel"], payload.get("channel"))
 
+        elif event_type == "challenge_required":
+            challenge_runtime["challenge_required_total"] += 1
+            _bump(challenge_runtime["by_service"], payload.get("service"))
+            _bump(challenge_runtime["by_challenge_type"], payload.get("challenge_type"))
+
+        elif event_type == "challenge_resume":
+            challenge_runtime["challenge_resume_total"] += 1
+            _bump(challenge_runtime["by_service"], payload.get("service"))
+            _bump(challenge_runtime["by_challenge_type"], payload.get("challenge_type"))
+            _bump(challenge_runtime["by_reply_kind"], payload.get("reply_kind"))
+
+        elif event_type == "challenge_resolved":
+            challenge_runtime["challenge_resolved_total"] += 1
+            _bump(challenge_runtime["by_service"], payload.get("service"))
+            _bump(challenge_runtime["by_challenge_type"], payload.get("challenge_type"))
+            _bump(challenge_runtime["by_reply_kind"], payload.get("reply_kind"))
+
+        elif event_type == "challenge_reblocked":
+            challenge_runtime["challenge_reblocked_total"] += 1
+            _bump(challenge_runtime["by_service"], payload.get("service"))
+            _bump(challenge_runtime["by_challenge_type"], payload.get("challenge_type"))
+            _bump(challenge_runtime["by_reply_kind"], payload.get("reply_kind"))
+
         elif event_type in _USER_IMPACT_EVENT_TYPES:
             # C2: Nutzerwirkungs-Klassen. Eigener Block — user_visible_failures_total
             # in request_correlation wird nicht doppelt erhöht.
@@ -776,6 +811,18 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
             min(1.0, int(specialist_context.get("needs_meta_reframe_total") or 0) / signal_total),
             3,
         )
+    challenge_required_total = int(challenge_runtime.get("challenge_required_total") or 0)
+    challenge_resume_total = int(challenge_runtime.get("challenge_resume_total") or 0)
+    if challenge_required_total > 0:
+        challenge_runtime["resolution_rate"] = round(
+            min(1.0, int(challenge_runtime.get("challenge_resolved_total") or 0) / challenge_required_total),
+            3,
+        )
+    if challenge_resume_total > 0:
+        challenge_runtime["reblock_rate"] = round(
+            min(1.0, int(challenge_runtime.get("challenge_reblocked_total") or 0) / challenge_resume_total),
+            3,
+        )
     summary["meta_context_state"]["recent_misreads"] = sorted(
         recent_misreads,
         key=lambda item: str(item.get("observed_at") or ""),
@@ -794,6 +841,7 @@ def render_autonomy_observation_markdown(summary: Dict[str, Any]) -> str:
     meta_context_state = dict(summary.get("meta_context_state") or {})
     specialist_context = dict(summary.get("specialist_context") or {})
     communication_runtime = dict(summary.get("communication_runtime") or {})
+    challenge_runtime = dict(summary.get("challenge_runtime") or {})
     request_correlation = dict(summary.get("request_correlation") or {})
     event_counts = dict(summary.get("event_counts") or {})
 
@@ -860,6 +908,14 @@ def render_autonomy_observation_markdown(summary: Dict[str, Any]) -> str:
             f"- E-Mail-Versand Erfolg: `{int(communication_runtime.get('email_send_success_total') or 0)}`",
             f"- E-Mail-Versand Fehler: `{int(communication_runtime.get('email_send_failed_total') or 0)}`",
             "",
+            "## Challenge Runtime",
+            f"- Challenge erforderlich: `{int(challenge_runtime.get('challenge_required_total') or 0)}`",
+            f"- Challenge-Resume erkannt: `{int(challenge_runtime.get('challenge_resume_total') or 0)}`",
+            f"- Challenge aufgeloest: `{int(challenge_runtime.get('challenge_resolved_total') or 0)}`",
+            f"- Challenge erneut blockiert: `{int(challenge_runtime.get('challenge_reblocked_total') or 0)}`",
+            f"- Challenge-Resolution-Rate: `{float(challenge_runtime.get('resolution_rate') or 0.0):.3f}`",
+            f"- Challenge-Reblock-Rate: `{float(challenge_runtime.get('reblock_rate') or 0.0):.3f}`",
+            "",
             "## Recipe Outcomes",
             f"- Gesamt: `{int(recipe.get('total') or 0)}`",
             f"- Erfolg: `{int(recipe.get('success_total') or 0)}`",
@@ -895,6 +951,10 @@ def render_autonomy_observation_markdown(summary: Dict[str, Any]) -> str:
         lines.append(f"- Mail-Backend `{key}`: `{int(value or 0)}`")
     for key, value in sorted(dict(communication_runtime.get("by_channel") or {}).items()):
         lines.append(f"- Communication-Kanal `{key}`: `{int(value or 0)}`")
+    for key, value in sorted(dict(challenge_runtime.get("by_challenge_type") or {}).items()):
+        lines.append(f"- Challenge-Typ `{key}`: `{int(value or 0)}`")
+    for key, value in sorted(dict(challenge_runtime.get("by_reply_kind") or {}).items()):
+        lines.append(f"- Challenge-Reply `{key}`: `{int(value or 0)}`")
 
     lines.extend(
         [

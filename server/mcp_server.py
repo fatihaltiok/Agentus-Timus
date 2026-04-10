@@ -1839,6 +1839,46 @@ def _render_chat_reply(raw: Any) -> tuple[str, dict[str, Any] | None]:
     return str(raw), None
 
 
+def _build_challenge_resume_observation_payload(capsule: dict[str, Any]) -> dict[str, str]:
+    pending_workflow = capsule.get("pending_workflow") if isinstance(capsule.get("pending_workflow"), dict) else {}
+    pending_workflow_reply = capsule.get("pending_workflow_reply") if isinstance(capsule.get("pending_workflow_reply"), dict) else {}
+    if not pending_workflow or not pending_workflow_reply:
+        return {}
+
+    status = str(pending_workflow.get("status") or "").strip().lower()
+    reason = str(pending_workflow.get("reason") or "").strip().lower()
+    reply_kind = str(pending_workflow_reply.get("reply_kind") or "").strip().lower()
+    if not reply_kind:
+        return {}
+
+    is_direct_challenge_resume = status == "challenge_required"
+    is_login_challenge_resume = (
+        status == "awaiting_user"
+        and reason == "user_mediated_login"
+        and reply_kind in {"challenge_present", "challenge_resolved"}
+    )
+    if not (is_direct_challenge_resume or is_login_challenge_resume):
+        return {}
+
+    return {
+        "workflow_id": str(pending_workflow.get("workflow_id") or "").strip(),
+        "workflow_status": status,
+        "workflow_reason": reason,
+        "service": str(pending_workflow.get("service") or pending_workflow.get("platform") or "").strip().lower(),
+        "challenge_type": str(
+            pending_workflow.get("challenge_type")
+            or pending_workflow_reply.get("challenge_type")
+            or ""
+        ).strip().lower(),
+        "reply_kind": reply_kind,
+        "source_agent": str(
+            pending_workflow_reply.get("source_agent")
+            or pending_workflow.get("source_agent")
+            or ""
+        ).strip().lower(),
+    }
+
+
 def _is_short_contextual_reply(query: str, capsule: dict) -> bool:
     normalized = str(query or "").strip().lower()
     if not normalized:
@@ -4197,6 +4237,17 @@ async def canvas_chat(request: Request):
             "resolved_proposal_agent": resolved_proposal_agent,
         },
     )
+    challenge_resume_payload = _build_challenge_resume_observation_payload(followup_capsule)
+    if challenge_resume_payload:
+        _record_chat_observation(
+            "challenge_resume",
+            {
+                "request_id": request_id,
+                "session_id": session_id,
+                "source": "canvas_chat",
+                **challenge_resume_payload,
+            },
+        )
     decay_info = dict(followup_capsule.get("conversation_state_decay") or {})
     if bool(decay_info.get("applied")):
         _record_chat_observation(
@@ -4235,6 +4286,16 @@ async def canvas_chat(request: Request):
                 payload_info = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
                 agent_name = str(payload.get("agent") or "").strip()
                 if is_pending_workflow_state(payload_info):
+                    previous_pending_workflow = (
+                        followup_capsule.get("pending_workflow")
+                        if isinstance(followup_capsule.get("pending_workflow"), dict)
+                        else {}
+                    )
+                    previous_pending_reply = (
+                        followup_capsule.get("pending_workflow_reply")
+                        if isinstance(followup_capsule.get("pending_workflow_reply"), dict)
+                        else {}
+                    )
                     stored_workflow = _store_pending_workflow_in_capsule(
                         session_id,
                         {
@@ -4258,6 +4319,44 @@ async def canvas_chat(request: Request):
                             "workflow_reason": str(stored_workflow.get("reason") or ""),
                         },
                     )
+                    if str(stored_workflow.get("status") or "").strip().lower() == "challenge_required":
+                        _record_chat_observation(
+                            "challenge_required",
+                            {
+                                "request_id": request_id,
+                                "session_id": session_id,
+                                "source": "canvas_chat",
+                                "agent": agent_name,
+                                "stage": stage,
+                                "workflow_id": str(stored_workflow.get("workflow_id") or ""),
+                                "service": str(stored_workflow.get("service") or stored_workflow.get("platform") or ""),
+                                "challenge_type": str(stored_workflow.get("challenge_type") or ""),
+                            },
+                        )
+                        previous_status = str(previous_pending_workflow.get("status") or "").strip().lower()
+                        previous_reply_kind = str(previous_pending_reply.get("reply_kind") or "").strip().lower()
+                        if (
+                            previous_status in {"awaiting_user", "challenge_required"}
+                            and previous_reply_kind in {"resume_requested", "challenge_resolved"}
+                        ):
+                            _record_chat_observation(
+                                "challenge_reblocked",
+                                {
+                                    "request_id": request_id,
+                                    "session_id": session_id,
+                                    "source": "canvas_chat",
+                                    "agent": agent_name,
+                                    "stage": stage,
+                                    "workflow_id": str(stored_workflow.get("workflow_id") or ""),
+                                    "service": str(stored_workflow.get("service") or stored_workflow.get("platform") or ""),
+                                    "challenge_type": str(
+                                        stored_workflow.get("challenge_type")
+                                        or previous_pending_workflow.get("challenge_type")
+                                        or ""
+                                    ),
+                                    "reply_kind": previous_reply_kind,
+                                },
+                            )
                 elif str(payload_info.get("kind") or "").strip().lower() == "auth_session":
                     stored_auth_session = _store_auth_session_in_capsule(
                         session_id,
@@ -4458,11 +4557,31 @@ async def canvas_chat(request: Request):
                 )
             )
         ):
+            previous_pending_status = str(previous_pending_workflow.get("status") or "").strip().lower()
+            previous_pending_challenge_type = str(previous_pending_workflow.get("challenge_type") or "").strip().lower()
+            previous_pending_service = str(
+                previous_pending_workflow.get("service") or previous_pending_workflow.get("platform") or ""
+            ).strip().lower()
+            previous_pending_workflow_id = str(previous_pending_workflow.get("workflow_id") or "").strip()
             _store_pending_workflow_in_capsule(
                 session_id,
                 clear_pending_workflow_state(),
                 updated_at=reply_ts,
             )
+            if previous_pending_status == "challenge_required" and pending_workflow_reply_kind in {"resume_requested", "challenge_resolved"}:
+                _record_chat_observation(
+                    "challenge_resolved",
+                    {
+                        "request_id": request_id,
+                        "session_id": session_id,
+                        "source": "canvas_chat",
+                        "agent": agent,
+                        "workflow_id": previous_pending_workflow_id,
+                        "service": previous_pending_service,
+                        "challenge_type": previous_pending_challenge_type,
+                        "reply_kind": pending_workflow_reply_kind,
+                    },
+                )
             _record_chat_observation(
                 "pending_workflow_cleared",
                 {

@@ -268,6 +268,21 @@ Phase D braucht einen gemeinsamen Nutzeraktions-Vertrag, statt fuer jede Plattfo
     - erneute Challenge sichtbar -> `challenge_required`
     - Challenge geloest und Auth verifiziert -> Workflow abgeschlossen
     - Challenge angeblich geloest, aber kein Auth-Nachweis -> wieder `challenge_required`
+- D5.2:
+  - Challenge-Resume wird jetzt als eigener Laufzeitpfad beobachtbar:
+    - `challenge_required`
+    - `challenge_resume`
+    - `challenge_resolved`
+    - `challenge_reblocked`
+  - `canvas_chat` erkennt jetzt offene Challenge-Follow-ups und schreibt dafuer eigene Observation-Events
+  - wenn ein Resume wieder in `challenge_required` zurueckfaellt, wird das als `challenge_reblocked` sichtbar statt nur indirekt ueber Pending-Workflow-Events
+  - wenn ein offener Challenge-Workflow sauber ohne neuen Blocker abgeschlossen wird, wird das explizit als `challenge_resolved` beobachtet
+  - `autonomy_observation` traegt dafuer jetzt einen eigenen Summary-Block `Challenge Runtime` mit:
+    - Gesamtzahl Challenge-Handover
+    - Resume-Erkennung
+    - Resolution-Rate
+    - Reblock-Rate
+    - Aufschluesselung nach Challenge-Typ und Reply-Kind
 
 ## Nicht Teil der Vorbereitung
 

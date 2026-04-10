@@ -2,6 +2,49 @@
 
 ---
 
+## Fortschritt 2026-04-10 - Phase D5.2 Challenge Runtime Observability
+
+Nach D5.1 waren Challenge-Typisierung und Resume-Vertrag im Code vorhanden, aber im Laufzeitbild noch nicht sauber messbar. Resume-Faelle, erneute Blockaden und erfolgreiche Challenge-Aufloesungen verschwanden bisher weitgehend in generischen Pending-Workflow-Events.
+
+Nachgezogen:
+
+- [mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - neuer Helper:
+    - `_build_challenge_resume_observation_payload(...)`
+  - `canvas_chat` schreibt jetzt bei offenen Challenge-Follow-ups ein eigenes `challenge_resume`-Event
+  - wenn ein neuer `challenge_required`-Blocker aus einem Resume heraus wieder auftaucht, wird jetzt zusaetzlich `challenge_reblocked` emittiert
+  - wenn ein offener `challenge_required`-Workflow ohne neuen Blocker erfolgreich aufgeloest wird, wird jetzt `challenge_resolved` emittiert
+- [autonomy_observation.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomy_observation.py)
+  - neuer Summary-Block:
+    - `challenge_runtime`
+  - neue Metriken:
+    - `challenge_required_total`
+    - `challenge_resume_total`
+    - `challenge_resolved_total`
+    - `challenge_reblocked_total`
+    - `resolution_rate`
+    - `reblock_rate`
+  - Aufschluesselung nach:
+    - `by_service`
+    - `by_challenge_type`
+    - `by_reply_kind`
+  - Markdown-Report zeigt jetzt den Block `## Challenge Runtime`
+- Tests:
+  - [test_autonomy_observation.py](/home/fatih-ubuntu/dev/timus/tests/test_autonomy_observation.py)
+    - neuer Summary-Test fuer `challenge_runtime`
+  - [test_android_chat_language.py](/home/fatih-ubuntu/dev/timus/tests/test_android_chat_language.py)
+    - neuer MCP-Helper-Test fuer `challenge_resume`-Payloads
+
+Verifikation:
+
+- `python -m py_compile orchestration/autonomy_observation.py server/mcp_server.py tests/test_autonomy_observation.py tests/test_android_chat_language.py`
+- `pytest -q tests/test_autonomy_observation.py tests/test_android_chat_language.py tests/test_approval_auth_contract.py tests/test_pending_workflow_state.py tests/test_browser_isolation.py tests/test_specialist_handoffs.py`
+
+Ergebnis:
+
+- `87 passed` im kombinierten D5.2-/Phase-D-/Observation-Ring
+- `py_compile` gruen
+
 ## Fortschritt 2026-04-10 - Phase D5.1 Challenge Handover gestartet
 
 Nach D4.2 konnte Timus Auth-Sessions wiederverwenden und user-mediated Logins kontrolliert wieder aufnehmen. Was noch fehlte, war ein echter Challenge-Handover-Pfad: CAPTCHA-, 2FA- und Security-Challenges wurden zwar grob erkannt, aber noch nicht fein typisiert, nicht als eigener Resume-Pfad behandelt und nicht sauber genug an spaetere Follow-ups gebunden.

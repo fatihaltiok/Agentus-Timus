@@ -420,3 +420,74 @@ def test_autonomy_observation_summarizes_request_and_task_correlation(tmp_path: 
     assert "## Request-Korrelation" in markdown
     assert "## Letzte korrelierte Fehler" in markdown
     assert "canvas_chat_exception" in markdown
+
+
+def test_autonomy_observation_summarizes_challenge_runtime(tmp_path: Path) -> None:
+    base = datetime.now().astimezone().replace(microsecond=0)
+    store = AutonomyObservationStore(
+        log_path=tmp_path / "autonomy_observation.jsonl",
+        state_path=tmp_path / "autonomy_observation_state.json",
+    )
+    store.start_session(label="d5-challenge", duration_days=1, started_at=(base - timedelta(minutes=5)).isoformat())
+
+    assert store.record_event(
+        "challenge_required",
+        {
+            "request_id": "req_c1",
+            "session_id": "sess_c",
+            "service": "github",
+            "challenge_type": "2fa",
+        },
+        observed_at=(base - timedelta(minutes=4)).isoformat(),
+    )
+    assert store.record_event(
+        "challenge_resume",
+        {
+            "request_id": "req_c2",
+            "session_id": "sess_c",
+            "service": "github",
+            "challenge_type": "2fa",
+            "reply_kind": "challenge_resolved",
+        },
+        observed_at=(base - timedelta(minutes=3)).isoformat(),
+    )
+    assert store.record_event(
+        "challenge_reblocked",
+        {
+            "request_id": "req_c3",
+            "session_id": "sess_c",
+            "service": "github",
+            "challenge_type": "2fa",
+            "reply_kind": "challenge_resolved",
+        },
+        observed_at=(base - timedelta(minutes=2)).isoformat(),
+    )
+    assert store.record_event(
+        "challenge_resolved",
+        {
+            "request_id": "req_c4",
+            "session_id": "sess_c",
+            "service": "github",
+            "challenge_type": "2fa",
+            "reply_kind": "challenge_resolved",
+        },
+        observed_at=(base - timedelta(minutes=1)).isoformat(),
+    )
+
+    summary = store.build_summary()
+
+    challenge = summary["challenge_runtime"]
+    assert challenge["challenge_required_total"] == 1
+    assert challenge["challenge_resume_total"] == 1
+    assert challenge["challenge_resolved_total"] == 1
+    assert challenge["challenge_reblocked_total"] == 1
+    assert challenge["resolution_rate"] == 1.0
+    assert challenge["reblock_rate"] == 1.0
+    assert challenge["by_service"]["github"] == 4
+    assert challenge["by_challenge_type"]["2fa"] == 4
+    assert challenge["by_reply_kind"]["challenge_resolved"] == 3
+
+    markdown = render_autonomy_observation_markdown(summary)
+    assert "## Challenge Runtime" in markdown
+    assert "Challenge aufgeloest" in markdown
+    assert "Challenge-Typ `2fa`" in markdown

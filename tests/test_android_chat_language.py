@@ -586,6 +586,34 @@ def test_followup_resolver_prefers_visual_for_challenge_resume():
     assert mcp_server._resolve_followup_agent("2fa erledigt, weiter", capsule) == "visual"
 
 
+def test_build_challenge_resume_observation_payload_handles_pending_challenge_resume():
+    capsule = {
+        "pending_workflow": {
+            "workflow_id": "wf_challenge_1",
+            "status": "challenge_required",
+            "reason": "security_challenge",
+            "service": "github",
+            "challenge_type": "2fa",
+            "source_agent": "visual",
+        },
+        "pending_workflow_reply": {
+            "reply_kind": "challenge_resolved",
+            "challenge_type": "2fa",
+            "service": "github",
+            "source_agent": "visual",
+        },
+    }
+
+    payload = mcp_server._build_challenge_resume_observation_payload(capsule)
+
+    assert payload["workflow_id"] == "wf_challenge_1"
+    assert payload["workflow_status"] == "challenge_required"
+    assert payload["service"] == "github"
+    assert payload["challenge_type"] == "2fa"
+    assert payload["reply_kind"] == "challenge_resolved"
+    assert payload["source_agent"] == "visual"
+
+
 def test_store_auth_session_in_capsule_roundtrips_into_followup_capsule(tmp_path, monkeypatch):
     mcp_server._chat_history.clear()
     monkeypatch.setenv("TIMUS_SESSION_STORAGE_ROOT", str(tmp_path))
