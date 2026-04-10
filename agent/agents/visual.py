@@ -820,6 +820,17 @@ class VisualAgent(BaseAgent):
             )
         return (common_positive, common_negative)
 
+    @staticmethod
+    def _infer_visible_browser_from_text_blob(text_blob: str) -> str:
+        lowered = str(text_blob or "").strip().lower()
+        if not lowered:
+            return ""
+        if "mozilla firefox" in lowered or "firefox" in lowered:
+            return "firefox"
+        if "google chrome" in lowered or "chrome" in lowered or "chromium" in lowered:
+            return "chrome"
+        return ""
+
     async def _detect_authenticated_session_state(self, service: str) -> dict[str, Any]:
         screen_state = await self._analyze_current_screen()
         elements = list(screen_state.get("elements") or []) if isinstance(screen_state, dict) else []
@@ -836,6 +847,75 @@ class VisualAgent(BaseAgent):
             "positive_hits": positive_hits,
             "negative_hits": negative_hits,
             "text_preview": text_blob[:280],
+            "visible_browser": self._infer_visible_browser_from_text_blob(text_blob),
+        }
+
+    def _build_goal_satisfied_login_result(
+        self,
+        *,
+        service: str,
+        url: str,
+        workflow_id: str,
+        lane: dict[str, str],
+        verification: dict[str, Any],
+        execution_log: List[Dict[str, Any]],
+        current_state: str,
+        plan_id: str,
+    ) -> Dict[str, Any]:
+        positives = ", ".join(str(item) for item in verification.get("positive_hits") or [])
+        visible_browser = str(verification.get("visible_browser") or "").strip().lower()
+        session_browser = visible_browser or str(lane.get("browser_type") or self.current_browser_type or "").strip().lower()
+        session_broker = ""
+        session_profile = ""
+        if session_browser == "chrome" and str(lane.get("credential_broker") or "").strip().lower() == "chrome_password_manager":
+            session_broker = "chrome_password_manager"
+            session_profile = str(lane.get("broker_profile") or "").strip()
+
+        self._emit_auth_session_ready(
+            service=service,
+            url=url,
+            workflow_id=workflow_id,
+            status="authenticated",
+            reason="goal_already_satisfied",
+            evidence=positives,
+            browser_type=session_browser,
+            credential_broker=session_broker,
+            broker_profile=session_profile,
+            domain=str(lane.get("domain") or self._infer_domain_from_url(url)).strip().lower(),
+        )
+
+        browser_note = ""
+        requested_browser = str(lane.get("browser_type") or "").strip().lower()
+        if visible_browser and requested_browser and visible_browser != requested_browser:
+            browser_note = (
+                f" Sichtbar ist der eingeloggte Zustand aktuell in {visible_browser}, "
+                f"nicht im angeforderten {requested_browser}."
+            )
+        evidence_note = f" Sichtbare Signale: {positives}." if positives else ""
+
+        return {
+            "success": True,
+            "result": (
+                f"Der Login bei {service or 'dem Dienst'} ist funktional bereits erfüllt. "
+                f"Ich sehe bereits einen eingeloggten Zustand und ueberspringe den Login-Schritt."
+                f"{evidence_note}{browser_note}"
+            ).strip(),
+            "current_state": "authenticated",
+            "completed_steps": execution_log,
+            "plan_id": plan_id,
+            "metadata": {
+                "auth_session": {
+                    "service": service,
+                    "status": "authenticated",
+                    "scope": "session",
+                    "url": url,
+                    "workflow_id": workflow_id,
+                    "browser_type": session_browser,
+                    "credential_broker": session_broker,
+                    "broker_profile": session_profile,
+                    "domain": str(lane.get("domain") or self._infer_domain_from_url(url)).strip().lower(),
+                }
+            },
         }
 
     async def _resume_user_mediated_login(self, context: dict[str, str]) -> str:
@@ -1339,6 +1419,8 @@ class VisualAgent(BaseAgent):
         current_state = plan.initial_state
         plan_id = f"{plan.flow_type}-{int(time.time() * 1000)}"
         prefix_steps: List[BrowserWorkflowStep] = []
+        source_url, service = self._resolve_login_target(handoff, effective_task)
+        lane = self._resolve_login_lane(handoff=handoff, auth_session=None, url=source_url)
 
         for step in plan.steps:
             prefix_steps.append(step)
@@ -1363,6 +1445,18 @@ class VisualAgent(BaseAgent):
                 }
             )
             if not success:
+                verification = await self._detect_authenticated_session_state(service)
+                if verification.get("success"):
+                    return self._build_goal_satisfied_login_result(
+                        service=service,
+                        url=source_url,
+                        workflow_id="",
+                        lane=lane,
+                        verification=verification,
+                        execution_log=execution_log,
+                        current_state=current_state,
+                        plan_id=plan_id,
+                    )
                 return {
                     "success": False,
                     "error": f"Structured step failed: {step.action}",
@@ -1371,8 +1465,19 @@ class VisualAgent(BaseAgent):
                     "plan_id": plan_id,
                 }
 
-        source_url, service = self._resolve_login_target(handoff, effective_task)
-        lane = self._resolve_login_lane(handoff=handoff, auth_session=None, url=source_url)
+        verification = await self._detect_authenticated_session_state(service)
+        if verification.get("success") and current_state != "login_modal":
+            return self._build_goal_satisfied_login_result(
+                service=service,
+                url=source_url,
+                workflow_id="",
+                lane=lane,
+                verification=verification,
+                execution_log=execution_log,
+                current_state=current_state,
+                plan_id=plan_id,
+            )
+
         workflow_payload = build_user_mediated_login_workflow_payload(
             service=service,
             url=source_url,

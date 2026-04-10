@@ -711,6 +711,99 @@ async def test_visual_login_flow_uses_chrome_credential_broker_when_requested(mo
 
 
 @pytest.mark.asyncio
+async def test_visual_login_flow_accepts_visible_authenticated_state_as_goal_satisfied(monkeypatch):
+    agent = VisualAgent(tools_description_string="")
+    specialist_context = build_specialist_context_payload(
+        current_topic="GitHub Login",
+        active_goal="Wenn schon eingeloggt, Login-Schritt ueberspringen",
+        open_loop="GitHub-Zugriff funktional sicherstellen",
+        next_expected_step="Bei bestehender Auth direkt fortsetzen",
+        turn_type="new_task",
+        response_mode="execute",
+        user_preferences=["Login dynamisch behandeln"],
+    )
+    task = (
+        "# DELEGATION HANDOFF\n"
+        "target_agent: visual\n"
+        "goal: Oeffne github.com/login in Chrome und nutze den Passwortmanager.\n"
+        "expected_output: login_handoff\n"
+        "success_signal: login maske sichtbar\n"
+        "handoff_data:\n"
+        "- source_url: https://github.com/login\n"
+        "- expected_state: login_dialog\n"
+        "- browser_type: chrome\n"
+        "- credential_broker: chrome_password_manager\n"
+        "- broker_profile: Default\n"
+        "- domain: github.com\n"
+        "- original_user_task: Oeffne github.com/login in Chrome und nutze den Passwortmanager.\n"
+        f"- specialist_context_json: {json.dumps(specialist_context, ensure_ascii=False, sort_keys=True)}\n"
+    )
+
+    progress_events = []
+    browser_calls = []
+
+    def _progress_callback(*args, **kwargs):
+        if kwargs:
+            progress_events.append(kwargs)
+            return
+        stage = args[0] if len(args) > 0 else ""
+        payload = args[1] if len(args) > 1 else {}
+        progress_events.append({"stage": stage, "payload": payload})
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        if method == "start_visual_browser":
+            browser_calls.append(dict(params))
+            return {"success": True, "url": params.get("url")}
+        raise AssertionError(f"unexpected tool call: {method}")
+
+    async def _fake_verify_structured_step(self, step):
+        if step.expected_state == "login_modal":
+            return {
+                "success": False,
+                "matched_signals": [],
+                "observation": {"current_url": "https://github.com", "elements": []},
+            }
+        return {
+            "success": True,
+            "matched_signals": [step.expected_state],
+            "observation": {"current_url": "https://github.com", "elements": []},
+        }
+
+    async def _fake_detect_authenticated_session_state(self, service: str):
+        return {
+            "success": True,
+            "positive_hits": ["repositories", "profile"],
+            "negative_hits": [],
+            "text_preview": "repositories profile mozilla firefox",
+            "visible_browser": "firefox",
+        }
+
+    async def _fake_detect_dynamic_ui_and_set_roi(self, task_text: str):
+        return False
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+    monkeypatch.setattr(VisualAgent, "_verify_structured_step", _fake_verify_structured_step)
+    monkeypatch.setattr(VisualAgent, "_detect_authenticated_session_state", _fake_detect_authenticated_session_state)
+    monkeypatch.setattr(VisualAgent, "_detect_dynamic_ui_and_set_roi", _fake_detect_dynamic_ui_and_set_roi)
+    setattr(agent, "_delegation_progress_callback", _progress_callback)
+
+    result = await agent.run(task)
+
+    assert browser_calls
+    assert browser_calls[0]["browser_type"] == "chrome"
+    assert browser_calls[0]["profile_name"] == "Default"
+    assert "funktional bereits erfüllt" in result
+    assert "repositories" in result
+    assert "nicht im angeforderten chrome" in result.lower()
+    assert progress_events
+    payload = progress_events[-1]["payload"]
+    assert payload["kind"] == "auth_session"
+    assert payload["auth_session_status"] == "authenticated"
+    assert payload["auth_session_service"] == "github"
+    assert payload["auth_session_browser_type"] == "firefox"
+
+
+@pytest.mark.asyncio
 async def test_visual_login_success_result_is_rewrapped_as_phase_d_pending_when_not_authenticated(monkeypatch):
     agent = VisualAgent(tools_description_string="")
     specialist_context = build_specialist_context_payload(
@@ -985,7 +1078,7 @@ async def test_visual_reuses_existing_auth_session_before_new_login_flow(monkeyp
         "- auth_session_scope: session\n"
         "- auth_session_url: https://github.com/settings/profile\n"
         "- auth_session_confirmed_at: 2026-04-09T18:00:00Z\n"
-        "- auth_session_expires_at: 2026-04-10T18:00:00Z\n"
+        "- auth_session_expires_at: 2026-04-11T18:00:00Z\n"
         "- original_user_task: Oeffne github.com/login und fuehre mich bis zur Login-Maske.\n"
     )
 

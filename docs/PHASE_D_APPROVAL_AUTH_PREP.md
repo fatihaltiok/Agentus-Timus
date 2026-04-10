@@ -252,6 +252,9 @@ Phase D braucht einen gemeinsamen Nutzeraktions-Vertrag, statt fuer jede Plattfo
   - fuer den konservativen Startpfad wird dabei standardmaessig das Chrome-Profil `Default` verwendet, solange kein anderes Broker-Profil angegeben ist
   - der sichtbare Browser-Start nutzt diese Profilinfo jetzt auch wirklich im Tool-Aufruf, statt sie nur als Metadatum mitzutragen
   - bestaetigte Auth-Sessions koennen damit spaeter broker-konsistent wiederverwendet werden, ohne Roh-Secrets in Timus zu ziehen
+  - zusaetzlich gilt jetzt ein Zielzustands-Guard:
+    - wenn die Login-Maske ausbleibt, aber ein passender authentischer Zustand bereits sichtbar ist, darf Timus den Login-Schritt als **funktional erfuellt** behandeln
+    - damit blockiert der Pfad nicht mehr starr an `login_dialog`, wenn das eigentliche Ziel schon erreicht ist
   - der Slice ist bewusst konservativ:
     - nur bei expliziter Chrome-/Passwortmanager-Anforderung
     - noch keine Chrome-Autofill-Verifikation

@@ -55,6 +55,32 @@ Einordnung:
 - er fuehrt noch keine Autofill-/Secret-Verifikation durch
 - er baut auf D3 user-mediated Login und D4 Session Reuse auf, statt sie zu umgehen
 
+## Fortschritt 2026-04-10 - Login-Zielzustand zaehlt jetzt mehr als der starre Login-Schritt
+
+Im D4b-Live-Test zeigte sich ein typischer Restfehler: Timus startete korrekt den Chrome-Broker-Pfad, hielt aber trotzdem weiter an `login_dialog` fest, obwohl GitHub funktional bereits eingeloggt sichtbar war. Das war zu schrittorientiert. Timus soll hier zielzustandsorientiert handeln: wenn ein passender authentischer Zustand schon sichtbar ist, darf der Login-Schritt als erfuellt gelten.
+
+Geaendert:
+
+- [agent/agents/visual.py](/home/fatih-ubuntu/dev/timus/agent/agents/visual.py)
+  - Login-Flows pruefen jetzt bei einem Fehlschlag auf dem Weg zur Login-Maske zusaetzlich, ob der Dienst bereits sichtbar authentisch ist
+  - wenn ja, behandelt `visual_login` den Login als **funktional bereits erfuellt**
+  - statt `partial_result` gibt der Pfad jetzt einen echten Erfolgszustand mit `auth_session`-Signal zurueck
+  - wenn ein anderer sichtbarer Browserzustand den Login bereits erfuellt, macht Timus den Browser-Mismatch transparent, blockiert aber nicht mehr blind am Schritt `login_dialog`
+- [tests/test_specialist_handoffs.py](/home/fatih-ubuntu/dev/timus/tests/test_specialist_handoffs.py)
+  - neue Regression fuer:
+    - Chrome-Broker angefordert
+    - Login-Maske nicht erreicht
+    - GitHub bereits sichtbar eingeloggt
+    - Login-Schritt wird uebersprungen und als Zielerfuellung behandelt
+
+Einordnung:
+
+- das ist kein neuer Secret- oder Broker-Mechanismus
+- es ist eine **Strategiehaertung** fuer Phase D:
+  - `goal_satisfied > expected_state`
+  - `reuse_before_relogin`
+  - `authenticated state can satisfy login intent`
+
 ## Fortschritt 2026-04-10 - D5 frische Session fuer Login- und Challenge-Resume gehaertet
 
 Der erste D5-Resume-Fix hat den Challenge-Follow-up zwar wieder an `visual_login` gebunden, aber ein frischer Login-Start konnte den Pending-Workflow noch verlieren: Wenn die Login-Maske bereits sichtbar war, kam der Visual-Pfad gelegentlich nur als plain `success` mit `login_handoff ...` zurueck. Dann fehlte `pending_workflow_updated`, und der direkte Follow-up `ich sehe jetzt eine 2fa challenge` fiel in einer neuen Session wieder auf `meta`.
