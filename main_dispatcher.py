@@ -347,6 +347,15 @@ def _extract_dispatcher_browser_url(query: str) -> str:
     text = str(query or "").strip()
     if not text:
         return ""
+    current_query_match = re.search(
+        r"#\s*CURRENT USER QUERY\s*(.+)$",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if current_query_match:
+        candidate_query = str(current_query_match.group(1) or "").strip()
+        if candidate_query:
+            text = candidate_query
 
     url_match = re.search(r"https?://[^\s]+", text)
     if url_match:
@@ -364,14 +373,35 @@ def _extract_dispatcher_browser_url(query: str) -> str:
     return f"https://{candidate}"
 
 
+def _extract_dispatcher_followup_field(query: str, field_name: str) -> str:
+    match = re.search(
+        rf"^\s*{re.escape(field_name)}:\s*(.+)$",
+        str(query or ""),
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    return str(match.group(1) if match else "").strip()
+
+
 def _build_visual_login_handoff(query: str) -> str:
     source_url = _extract_dispatcher_browser_url(query)
+    auth_session_fields = {
+        "auth_session_service": _extract_dispatcher_followup_field(query, "auth_session_service"),
+        "auth_session_status": _extract_dispatcher_followup_field(query, "auth_session_status"),
+        "auth_session_scope": _extract_dispatcher_followup_field(query, "auth_session_scope"),
+        "auth_session_url": _extract_dispatcher_followup_field(query, "auth_session_url"),
+        "auth_session_confirmed_at": _extract_dispatcher_followup_field(query, "auth_session_confirmed_at"),
+        "auth_session_expires_at": _extract_dispatcher_followup_field(query, "auth_session_expires_at"),
+    }
     specialist_context = build_specialist_context_payload(
         current_topic="Login-Workflow",
         active_goal="Bis zur Login-Maske navigieren und dann uebergeben",
         open_loop="Login kontrolliert vorbereiten",
-        next_expected_step="Nur bis zur Login-Maske gehen",
-        turn_type="new_task",
+        next_expected_step=(
+            "Vor neuem Login zuerst vorhandene authentische Session pruefen"
+            if auth_session_fields["auth_session_service"]
+            else "Nur bis zur Login-Maske gehen"
+        ),
+        turn_type="followup" if auth_session_fields["auth_session_service"] else "new_task",
         response_mode="execute",
         user_preferences=["Login user-mediated"],
     )
@@ -392,6 +422,9 @@ def _build_visual_login_handoff(query: str) -> str:
             f"- specialist_context_json: {json.dumps(specialist_context, ensure_ascii=False, sort_keys=True)}",
         ]
     )
+    for key, value in auth_session_fields.items():
+        if value:
+            lines.append(f"- {key}: {value}")
     return "\n".join(lines)
 
 

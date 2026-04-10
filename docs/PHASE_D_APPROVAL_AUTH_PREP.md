@@ -234,6 +234,12 @@ Phase D braucht einen gemeinsamen Nutzeraktions-Vertrag, statt fuer jede Plattfo
     - keine globale Credential-Wiederverwendung
     - keine Roh-Secrets
     - noch kein aggressives Auto-Reuse ueber beliebige neue Workflows
+- D4.2:
+  - vorhandene verifizierte Sessions werden jetzt im Login-Pfad **bevorzugt** vor einem neuen Login-Versuch geprueft
+  - `visual` versucht bei `login_flow` zuerst eine Reuse-Navigation auf die gespeicherte authentische Zielseite
+  - nur wenn diese Session-Pruefung fehlschlaegt, faellt Timus zurueck auf den normalen D3-Login-Workflow
+  - bestaetigte Wiederverwendung wird jetzt explizit als `session_reused` signalisiert
+  - der `visual_login`-Dispatcher-Wrapper behaelt vorhandene `auth_session_*`-Kontextfelder jetzt bei, statt sie beim Login-Handoff zu verlieren
 - spaeterer Unterblock:
   - **D4b Chrome Credential Broker**
   - wenn gespeicherte Zugangsdaten praktisch nur im Chrome-Passwortmanager vorhanden sind, soll nicht Timus selbst die Secrets kennen, sondern Chrome als Credential Broker dienen

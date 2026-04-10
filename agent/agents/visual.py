@@ -26,6 +26,7 @@ from orchestration.approval_auth_contract import (
     derive_user_action_blocker_reason,
     normalize_phase_d_workflow_payload,
 )
+from orchestration.auth_session_state import is_auth_session_reusable, normalize_auth_session_entry
 from orchestration.specialist_context import (
     assess_specialist_context_alignment,
     extract_specialist_context_from_handoff_data,
@@ -129,6 +130,8 @@ class VisualAgent(BaseAgent):
         service: str,
         url: str,
         workflow_id: str,
+        status: str = "authenticated",
+        reason: str = "login_confirmed",
         evidence: str = "",
     ) -> None:
         if not service and not url:
@@ -136,12 +139,12 @@ class VisualAgent(BaseAgent):
         self._notify_delegation_progress(
             "auth_session_ready",
             kind="auth_session",
-            auth_session_status="authenticated",
+            auth_session_status=str(status or "authenticated").strip().lower(),
             auth_session_service=str(service or "").strip().lower(),
             auth_session_url=str(url or "").strip(),
             auth_session_scope="session",
             auth_session_workflow_id=str(workflow_id or "").strip(),
-            auth_session_reason="login_confirmed",
+            auth_session_reason=str(reason or "login_confirmed").strip().lower(),
             auth_session_reuse_ready=True,
             auth_session_evidence=str(evidence or "").strip(),
         )
@@ -484,6 +487,107 @@ class VisualAgent(BaseAgent):
             "reply_kind": reply_kind,
             "source_agent": source_agent,
             "current_query": self._extract_followup_current_query(source),
+        }
+
+    def _extract_auth_session_context(
+        self,
+        raw_task: str,
+        handoff: Optional[DelegationHandoff] = None,
+    ) -> dict[str, str]:
+        payload: dict[str, Any] = {}
+        handoff_data = handoff.handoff_data if handoff else {}
+        for key in (
+            "auth_session_service",
+            "auth_session_status",
+            "auth_session_scope",
+            "auth_session_url",
+            "auth_session_confirmed_at",
+            "auth_session_expires_at",
+        ):
+            value = str(handoff_data.get(key) or "").strip()
+            if value:
+                payload[key.replace("auth_session_", "")] = value
+
+        if not payload and "# FOLLOW-UP CONTEXT" in str(raw_task or ""):
+            for key in (
+                "service",
+                "status",
+                "scope",
+                "url",
+                "confirmed_at",
+                "expires_at",
+            ):
+                value = self._extract_followup_field(raw_task, f"auth_session_{key}")
+                if value:
+                    payload[key] = value
+
+        normalized = normalize_auth_session_entry(payload) if payload else None
+        return normalized.to_dict() if normalized else {}
+
+    def _resolve_login_target(self, handoff: Optional[DelegationHandoff], effective_task: str) -> tuple[str, str]:
+        source_url = (
+            str((handoff.handoff_data.get("source_url") or "") if handoff else "").strip()
+            or self.current_browser_url
+            or self._extract_browser_url(effective_task)
+        )
+        service = (
+            str((handoff.handoff_data.get("service") or handoff.handoff_data.get("service_name") or "") if handoff else "").strip().lower()
+            or self._infer_service_from_browser_url(source_url)
+        )
+        return source_url, service
+
+    async def _try_reuse_authenticated_session(
+        self,
+        auth_session: dict[str, str],
+        *,
+        handoff: Optional[DelegationHandoff],
+        effective_task: str,
+    ) -> Optional[Dict[str, Any]]:
+        source_url, target_service = self._resolve_login_target(handoff, effective_task)
+        reusable_service = str(auth_session.get("service") or "").strip().lower() or target_service
+        if not reusable_service:
+            return None
+        if not is_auth_session_reusable(auth_session, service=reusable_service):
+            return None
+
+        reuse_url = str(auth_session.get("url") or "").strip() or source_url
+        if not reuse_url:
+            return None
+
+        self.current_browser_url = reuse_url
+        result = await self._call_tool("start_visual_browser", {"url": reuse_url})
+        if isinstance(result, dict) and result.get("success") is False:
+            return None
+
+        verification = await self._detect_authenticated_session_state(reusable_service)
+        if not verification.get("success"):
+            return None
+
+        positives = ", ".join(str(item) for item in verification.get("positive_hits") or [])
+        self._emit_auth_session_ready(
+            service=reusable_service,
+            url=reuse_url,
+            workflow_id=str(auth_session.get("workflow_id") or ""),
+            status="session_reused",
+            reason="session_reused",
+            evidence=positives,
+        )
+        suffix = f" Sichtbare Signale: {positives}." if positives else ""
+        return {
+            "success": True,
+            "result": (
+                f"Bestehende Session bei {reusable_service} wiederverwendet. "
+                f"Ein neuer Login-Schritt wurde uebersprungen.{suffix}"
+            ).strip(),
+            "current_state": "authenticated",
+            "metadata": {
+                "auth_session": {
+                    **auth_session,
+                    "status": "session_reused",
+                    "service": reusable_service,
+                    "url": reuse_url,
+                }
+            },
         }
 
     @staticmethod
@@ -999,15 +1103,7 @@ class VisualAgent(BaseAgent):
                     "plan_id": plan_id,
                 }
 
-        source_url = (
-            str((handoff.handoff_data.get("source_url") or "") if handoff else "").strip()
-            or self.current_browser_url
-            or self._extract_browser_url(effective_task)
-        )
-        service = (
-            str((handoff.handoff_data.get("service") or handoff.handoff_data.get("service_name") or "") if handoff else "").strip().lower()
-            or self._infer_service_from_browser_url(source_url)
-        )
+        source_url, service = self._resolve_login_target(handoff, effective_task)
         workflow_payload = build_user_mediated_login_workflow_payload(
             service=service,
             url=source_url,
@@ -1144,12 +1240,25 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             log.error(f"ActionPlan-Erstellung fehlgeschlagen: {e}")
             return None
 
-    async def _try_structured_navigation(self, task: str, *, handoff: Optional[DelegationHandoff] = None) -> Optional[Dict]:
+    async def _try_structured_navigation(
+        self,
+        task: str,
+        *,
+        handoff: Optional[DelegationHandoff] = None,
+        auth_session: Optional[dict[str, str]] = None,
+    ) -> Optional[Dict]:
         try:
             log.info("Versuche strukturierte Navigation...")
 
             if self.current_structured_workflow_plan:
                 if self.current_structured_workflow_plan.flow_type == "login_flow":
+                    reused_result = await self._try_reuse_authenticated_session(
+                        auth_session or {},
+                        handoff=handoff,
+                        effective_task=task,
+                    )
+                    if reused_result:
+                        return reused_result
                     return await self._execute_user_mediated_login_plan(
                         self.current_structured_workflow_plan,
                         handoff=handoff,
@@ -1192,8 +1301,9 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         pending_login_resume = self._extract_pending_login_resume_context(task)
         if pending_login_resume and pending_login_resume.get("source_agent") in {"", "visual", "visual_nemotron"}:
             return await self._resume_user_mediated_login(pending_login_resume)
-        effective_task, handoff_context = self._prepare_visual_task(task)
         handoff = parse_delegation_handoff(task)
+        auth_session_context = self._extract_auth_session_context(task, handoff=handoff)
+        effective_task, handoff_context = self._prepare_visual_task(task)
         specialist_context_payload = (
             extract_specialist_context_from_handoff_data(handoff.handoff_data) if handoff else {}
         )
@@ -1258,7 +1368,11 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         runtime_feedback_recorded = False
 
         if selected_strategy == "structured_navigation":
-            structured_result = await self._try_structured_navigation(effective_task, handoff=handoff)
+            structured_result = await self._try_structured_navigation(
+                effective_task,
+                handoff=handoff,
+                auth_session=auth_session_context,
+            )
             if structured_result:
                 if structured_result.get("success"):
                     log.info(f"Strukturierte Navigation erfolgreich: {structured_result['result']}")

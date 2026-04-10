@@ -686,6 +686,68 @@ async def test_visual_resumes_pending_login_followup_after_user_reports_success(
 
 
 @pytest.mark.asyncio
+async def test_visual_reuses_existing_auth_session_before_new_login_flow(monkeypatch):
+    agent = VisualAgent(tools_description_string="")
+    progress_events = []
+
+    def _progress_callback(*args, **kwargs):
+        if kwargs:
+            progress_events.append(kwargs)
+            return
+        stage = args[0] if len(args) > 0 else ""
+        payload = args[1] if len(args) > 1 else {}
+        progress_events.append({"stage": stage, "payload": payload})
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        if method == "start_visual_browser":
+            return {"success": True, "url": params.get("url")}
+        raise AssertionError(f"unexpected tool call: {method}")
+
+    async def _fake_detect_authenticated_session_state(self, service: str):
+        return {
+            "success": True,
+            "positive_hits": ["profile", "sign out"],
+            "negative_hits": [],
+            "text_preview": "profile sign out",
+        }
+
+    async def _fake_detect_dynamic_ui_and_set_roi(self, task_text: str):
+        return False
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+    monkeypatch.setattr(VisualAgent, "_detect_authenticated_session_state", _fake_detect_authenticated_session_state)
+    monkeypatch.setattr(VisualAgent, "_detect_dynamic_ui_and_set_roi", _fake_detect_dynamic_ui_and_set_roi)
+    setattr(agent, "_delegation_progress_callback", _progress_callback)
+
+    task = (
+        "# DELEGATION HANDOFF\n"
+        "target_agent: visual\n"
+        "goal: Oeffne github.com/login und fuehre mich bis zur Login-Maske.\n"
+        "expected_output: login_handoff\n"
+        "success_signal: login maske sichtbar\n"
+        "handoff_data:\n"
+        "- source_url: https://github.com/login\n"
+        "- expected_state: login_dialog\n"
+        "- auth_session_service: github\n"
+        "- auth_session_status: authenticated\n"
+        "- auth_session_scope: session\n"
+        "- auth_session_url: https://github.com/settings/profile\n"
+        "- auth_session_confirmed_at: 2026-04-09T18:00:00Z\n"
+        "- auth_session_expires_at: 2026-04-10T18:00:00Z\n"
+        "- original_user_task: Oeffne github.com/login und fuehre mich bis zur Login-Maske.\n"
+    )
+
+    result = await agent.run(task)
+
+    assert "Bestehende Session bei github wiederverwendet" in result
+    assert progress_events
+    payload = progress_events[-1]["payload"]
+    assert payload["kind"] == "auth_session"
+    assert payload["auth_session_status"] == "session_reused"
+    assert payload["auth_session_service"] == "github"
+
+
+@pytest.mark.asyncio
 async def test_system_snapshot_compact_mode_targets_requested_service(monkeypatch):
     calls = []
 

@@ -125,7 +125,7 @@ def normalize_auth_session_entry(
     return AuthSessionState(
         schema_version=_SCHEMA_VERSION,
         service=service,
-        status="authenticated",
+        status=status,
         scope=_clean_text(payload.get("scope"), limit=32).lower() or _DEFAULT_SCOPE,
         url=url,
         workflow_id=_clean_text(payload.get("workflow_id"), limit=64),
@@ -139,6 +139,26 @@ def normalize_auth_session_entry(
         reuse_ready=bool(payload.get("reuse_ready", True)),
         evidence=_clean_text(payload.get("evidence")),
     )
+
+
+def is_auth_session_reusable(
+    payload: Mapping[str, Any] | None,
+    *,
+    service: str = "",
+    now: str = "",
+) -> bool:
+    normalized = normalize_auth_session_entry(payload, updated_at=now)
+    if not normalized:
+        return False
+    if not normalized.reuse_ready:
+        return False
+    if service and normalized.service != str(service or "").strip().lower():
+        return False
+    expires_dt = _parse_iso_datetime(normalized.expires_at)
+    now_dt = _parse_iso_datetime(now) or datetime.now(timezone.utc)
+    if expires_dt and expires_dt <= now_dt:
+        return False
+    return True
 
 
 def auth_session_index_to_dict(

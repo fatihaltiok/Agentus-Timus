@@ -2,6 +2,48 @@
 
 ---
 
+## Fortschritt 2026-04-09 - Phase D4.2 echte Reuse-Priorisierung
+
+Mit D4.1 konnte Timus erfolgreiche Logins erstmals als `auth_session`-Zustand speichern. Es fehlte aber noch die eigentliche Priorisierung: ein vorhandener Session-Anker wurde im Login-Pfad noch nicht wirklich vor einem neuen Login-Versuch bevorzugt.
+
+Nachgezogen:
+
+- [main_dispatcher.py](/home/fatih-ubuntu/dev/timus/main_dispatcher.py)
+  - der `visual_login`-Wrapper behaelt `auth_session_*`-Felder aus einem Follow-up-Kontext jetzt bei
+  - bei augmentierten Queries wird fuer `source_url` jetzt die eigentliche `# CURRENT USER QUERY` bevorzugt, nicht versehentlich eine frueher gespeicherte `auth_session_url`
+- [auth_session_state.py](/home/fatih-ubuntu/dev/timus/orchestration/auth_session_state.py)
+  - `session_reused` bleibt jetzt als eigener Status erhalten
+  - neue Reuse-Pruefung:
+    - `is_auth_session_reusable(...)`
+  - abgelaufene oder service-falsche Sessions werden damit konservativ ausgeschlossen
+- [visual.py](/home/fatih-ubuntu/dev/timus/agent/agents/visual.py)
+  - `visual` kann jetzt `auth_session_*`-Kontext aus Handoff oder Follow-up lesen
+  - bei `login_flow` wird jetzt zuerst ein echter Reuse-Versuch auf die bereits bestaetigte authentische Seite gemacht
+  - nur bei gescheitertem Reuse faellt Timus auf den normalen user-mediated Login-Flow zurueck
+  - erfolgreiche Wiederverwendung emittiert jetzt explizit:
+    - `kind=auth_session`
+    - `auth_session_status=session_reused`
+- [test_dispatcher_camera_intent.py](/home/fatih-ubuntu/dev/timus/tests/test_dispatcher_camera_intent.py)
+  - neue Regression:
+    - `visual_login`-Handoff behaelt `auth_session_*`-Felder sauber bei
+- [test_specialist_handoffs.py](/home/fatih-ubuntu/dev/timus/tests/test_specialist_handoffs.py)
+  - neue Regression:
+    - vorhandene GitHub-Session wird vor neuem Login-Versuch wiederverwendet
+- [test_auth_session_state.py](/home/fatih-ubuntu/dev/timus/tests/test_auth_session_state.py)
+  - neue D4.2-Vertragstests fuer `session_reused` und Expiry-Pruefung
+
+Verifikation:
+
+- `python -m py_compile orchestration/auth_session_state.py main_dispatcher.py agent/agents/visual.py tests/test_auth_session_state.py tests/test_dispatcher_camera_intent.py tests/test_specialist_handoffs.py`
+- `pytest -q tests/test_auth_session_state.py tests/test_dispatcher_camera_intent.py tests/test_specialist_handoffs.py`
+- `pytest -q tests/test_approval_auth_contract.py tests/test_pending_workflow_state.py tests/test_auth_session_state.py tests/test_dispatcher_camera_intent.py tests/test_phase_d_chat_rendering.py tests/test_browser_isolation.py tests/test_android_chat_language.py tests/test_specialist_context_runtime.py tests/test_specialist_handoffs.py`
+
+Ergebnis:
+
+- `38 passed` im fokussierten D4.2-Ring
+- `100 passed` im breiteren Phase-D-/Browser-/Dispatcher-Ring
+- `py_compile` gruen
+
 ## Fortschritt 2026-04-09 - Phase D4.1 Auth Session Reuse gestartet
 
 Nach D3 konnte Timus Login-Workflows sauber bis zur Login-Maske fuehren und nach `weiter` / `ich bin eingeloggt` kontrolliert wieder aufnehmen. Es fehlte aber noch ein expliziter Zustand fuer erfolgreich bestaetigte authentische Sessions. Ohne diesen Zustand blieb Session-Reuse implizit im Browser-Kontext, aber nicht sichtbar, nicht kapselbar und nicht sauber an spaetere Workflows bindbar.

@@ -83,3 +83,36 @@ def test_latest_auth_session_from_index_prefers_newest_entry():
     )
 
     assert latest["service"] == "x"
+
+
+def test_normalize_auth_session_entry_preserves_session_reused_status():
+    from orchestration.auth_session_state import normalize_auth_session_entry
+
+    state = normalize_auth_session_entry(
+        {
+            "status": "session_reused",
+            "service": "github",
+            "url": "https://github.com/settings/profile",
+        },
+        updated_at="2026-04-09T18:00:00Z",
+    )
+
+    assert state is not None
+    assert state.status == "session_reused"
+
+
+def test_is_auth_session_reusable_rejects_expired_entry():
+    from orchestration.auth_session_state import is_auth_session_reusable
+
+    reusable = is_auth_session_reusable(
+        {
+            "status": "authenticated",
+            "service": "github",
+            "url": "https://github.com/settings/profile",
+            "expires_at": "2026-04-09T17:59:59Z",
+        },
+        service="github",
+        now="2026-04-09T18:00:00Z",
+    )
+
+    assert reusable is False

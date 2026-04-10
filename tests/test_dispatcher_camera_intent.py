@@ -95,6 +95,29 @@ def test_build_visual_login_handoff_wraps_phase_d_login_contract():
     assert "expected_state: login_dialog" in handoff
 
 
+def test_build_visual_login_handoff_preserves_auth_session_context():
+    import main_dispatcher
+
+    handoff = main_dispatcher._build_visual_login_handoff(
+        "\n".join(
+            [
+                "# FOLLOW-UP CONTEXT",
+                "auth_session_service: github",
+                "auth_session_status: authenticated",
+                "auth_session_url: https://github.com/settings/profile",
+                "",
+                "# CURRENT USER QUERY",
+                "Oeffne github.com/login und fuehre mich bis zur Login-Maske.",
+            ]
+        )
+    )
+
+    assert "- source_url: https://github.com/login" in handoff
+    assert "- auth_session_service: github" in handoff
+    assert "- auth_session_status: authenticated" in handoff
+    assert "- auth_session_url: https://github.com/settings/profile" in handoff
+
+
 def test_quick_intent_keeps_service_start_on_shell():
     import main_dispatcher
 
