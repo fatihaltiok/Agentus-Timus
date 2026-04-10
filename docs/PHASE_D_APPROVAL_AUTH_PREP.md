@@ -263,6 +263,7 @@ Phase D braucht einen gemeinsamen Nutzeraktions-Vertrag, statt fuer jede Plattfo
     - die Auth-Erkennung kann jetzt bei schwacher OCR zusaetzlich `analyze_screen_verified` nutzen, um sichtbare eingeloggte Zustaende robuster als funktional erfuellten Login zu erkennen
     - layoutkritische URL-Eingaben wie `https://github.com/login` werden im Desktop-Input-Pfad jetzt erzwungen ueber Clipboard statt ueber stilles Key-by-Key-Fallback behandelt
     - wenn Clipboard fuer solche Eingaben nicht verfuegbar ist, bricht der Pfad jetzt hart ab statt fehlerhaft Zeichen wie `/` als `7` zu tippen
+    - natuerliche D4b-Formulierungen wie `Bitte melde mich in Chrome bei GitHub an und nutze den Passwortmanager` triggern jetzt ebenfalls den `visual_login`-Quick-Intent statt ueber `meta` in `fallback_empty_decision` zu laufen
 - weiterer Ausbau:
   - **D4b Chrome Credential Broker**
   - wenn gespeicherte Zugangsdaten praktisch nur im Chrome-Passwortmanager vorhanden sind, soll nicht Timus selbst die Secrets kennen, sondern Chrome als Credential Broker dienen

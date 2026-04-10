@@ -80,6 +80,15 @@ def test_quick_intent_routes_login_mask_setup_to_phase_d_visual():
     assert decision == "visual_login"
 
 
+def test_quick_intent_routes_natural_chrome_password_manager_login_to_phase_d_visual():
+    import main_dispatcher
+
+    decision = main_dispatcher.quick_intent_check(
+        "Bitte melde mich in Chrome bei GitHub an und nutze den Passwortmanager."
+    )
+    assert decision == "visual_login"
+
+
 def test_build_visual_login_handoff_wraps_phase_d_login_contract():
     import main_dispatcher
 

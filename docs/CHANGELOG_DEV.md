@@ -5275,6 +5275,7 @@ Inhalt:
 - Der Desktop-Eingabepfad behandelt URL- und layoutkritischen Text jetzt konsequent als Clipboard-Eingabe.
 - Für solche Texte gibt es keinen stillen Fallback mehr auf direktes Tippen; wenn Clipboard scheitert, bricht die Eingabe jetzt hart und sichtbar ab.
 - Damit verschwindet der Fehler `https:77github.com7login`, der durch deutsches Keyboard-Layout im Key-by-Key-Fallback entstehen konnte.
+- Der Dispatcher erkennt jetzt auch natürlichere D4b-Login-Formulierungen mit Chrome und Passwortmanager als `visual_login`, statt sie über `fallback_empty_decision` an `meta` zu verlieren.
 
 Verifikation:
 
@@ -5285,4 +5286,7 @@ Verifikation:
 Status:
 
 - der Fix ist lokal live geladen und `/health` wieder grün
-- offen bleibt nur noch der breitere D4b-End-to-End-Nachweis auf einer sauberen Chrome-Loginmaske
+- live bestätigt ist jetzt auch:
+  - `Bitte melde mich in Chrome bei GitHub an und nutze den Passwortmanager.`
+  - route -> `visual_login`
+- offen bleibt nur noch der breitere D4b-End-to-End-Nachweis auf einer sauberen Chrome-Loginmaske und ein schnellerer technischer Abschluss im langen Visual-Pfad

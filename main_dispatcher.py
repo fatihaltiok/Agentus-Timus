@@ -304,12 +304,20 @@ def _looks_like_user_mediated_login_setup_query(query_lower: str) -> bool:
     if not normalized:
         return False
 
+    has_broker_login_language = _requests_chrome_credential_broker(normalized) and bool(
+        re.search(r"\b(login|anmeld|sign in|log in|melde mich|logge mich)\b", normalized)
+    )
+    if has_broker_login_language:
+        return True
+
     has_browser_target = bool(
         re.search(r"https?://[^\s]+", normalized)
         or re.search(r"\b[a-z0-9.-]+\.(?:de|com|org|net|io|ai)(?:/[^\s]*)?\b", normalized)
         or "browser" in normalized
         or "webseite" in normalized
         or "website" in normalized
+        or "chrome" in normalized
+        or "google chrome" in normalized
     )
     has_entry_action = any(
         token in normalized
@@ -321,7 +329,7 @@ def _looks_like_user_mediated_login_setup_query(query_lower: str) -> bool:
             "navigiere zu",
             "starte den browser",
         )
-    )
+    ) or bool(re.search(r"\b(melde|logge)\s+mich\b.*\b(an|ein)\b", normalized))
     has_login_target = bool(
         re.search(r"https?://[^\s]*/login\b", normalized)
         or re.search(r"\b[a-z0-9.-]+\.(?:de|com|org|net|io|ai)/login\b", normalized)
