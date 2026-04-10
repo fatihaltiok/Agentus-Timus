@@ -5259,3 +5259,30 @@ Status:
   - gemeinsamer Vertrag zuerst
   - produktive `auth_required`- und `challenge_required`-Pfade daran angebunden
   - noch kein echter Login-Flow
+
+## 2026-04-10 - D4b Haertung: verifizierte Auth-Erkennung + layoutsichere URL-Eingabe
+
+- [agent/agents/visual.py](/home/fatih-ubuntu/dev/timus/agent/agents/visual.py)
+- [tools/mouse_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/mouse_tool/tool.py)
+- [tests/test_specialist_handoffs.py](/home/fatih-ubuntu/dev/timus/tests/test_specialist_handoffs.py)
+- [tests/test_mouse_tool_text_entry.py](/home/fatih-ubuntu/dev/timus/tests/test_mouse_tool_text_entry.py)
+- [docs/PHASE_D_APPROVAL_AUTH_PREP.md](/home/fatih-ubuntu/dev/timus/docs/PHASE_D_APPROVAL_AUTH_PREP.md)
+
+Inhalt:
+
+- `visual` kann sichtbare authentische Zustände jetzt auch über `analyze_screen_verified` erkennen, wenn die rohe OCR zu dünn ist.
+- Der D4b-Loginpfad akzeptiert damit vorhandene GitHub-/Service-Session-Zustände robuster als funktional erfüllten Login-Schritt.
+- Der Desktop-Eingabepfad behandelt URL- und layoutkritischen Text jetzt konsequent als Clipboard-Eingabe.
+- Für solche Texte gibt es keinen stillen Fallback mehr auf direktes Tippen; wenn Clipboard scheitert, bricht die Eingabe jetzt hart und sichtbar ab.
+- Damit verschwindet der Fehler `https:77github.com7login`, der durch deutsches Keyboard-Layout im Key-by-Key-Fallback entstehen konnte.
+
+Verifikation:
+
+- `python -m py_compile tools/mouse_tool/tool.py tests/test_mouse_tool_text_entry.py`
+- `pytest -q tests/test_mouse_tool_text_entry.py tests/test_visual_improvements.py` -> `24 passed`
+- fokussierter D4b-/Login-Ring inkl. Verified-Vision-Fallback -> `84 passed`
+
+Status:
+
+- der Fix ist lokal live geladen und `/health` wieder grün
+- offen bleibt nur noch der breitere D4b-End-to-End-Nachweis auf einer sauberen Chrome-Loginmaske

@@ -9,6 +9,8 @@ Korrigiertes Mouse-Tool mit einheitlicher Monitor-Logik über monitor_config.py.
 import logging
 import asyncio
 import os
+import re
+import subprocess
 from typing import Tuple, List
 from tools.tool_registry_v2 import tool, ToolParameter as P, ToolCategory as C
 from monitor_config import convert_relative_to_absolute, get_monitor_bounds
@@ -23,6 +25,7 @@ else:
     _import_error = None
 
 log = logging.getLogger(__name__)
+_LAYOUT_SENSITIVE_TEXT_RE = re.compile(r"[:/?=&%#@+~^\\|]")
 
 def _ensure_pyautogui_ok():
     """Prüft PyAutoGUI-Verfügbarkeit."""
@@ -76,6 +79,62 @@ def _ensure_safe_mouse_position():
         return True
     return False
 
+
+def _requires_clipboard_entry(text: str) -> bool:
+    """Clipboard ist fuer URLs und layoutkritische Zeichen robuster als Key-by-Key."""
+    candidate = str(text or "").strip()
+    if not candidate:
+        return False
+    if candidate.startswith(("http://", "https://", "www.")):
+        return True
+    return bool(_LAYOUT_SENSITIVE_TEXT_RE.search(candidate))
+
+
+def _resolve_type_method(text: str, requested_method: str) -> str:
+    normalized = str(requested_method or "auto").strip().lower() or "auto"
+    if normalized not in {"auto", "clipboard", "write"}:
+        normalized = "auto"
+    if _requires_clipboard_entry(text):
+        return "clipboard"
+    return normalized
+
+
+def _set_clipboard_text(text: str) -> str:
+    """Schreibt Text ueber einen verfuegbaren Clipboard-Backend in die Zwischenablage."""
+    clipboard_commands = [
+        ["xclip", "-selection", "clipboard"],
+        ["xsel", "--clipboard", "--input"],
+    ]
+    errors: list[str] = []
+
+    for command in clipboard_commands:
+        try:
+            completed = subprocess.run(
+                command,
+                input=text.encode("utf-8"),
+                capture_output=True,
+                check=True,
+            )
+            if completed.returncode == 0:
+                return command[0]
+        except Exception as exc:
+            errors.append(f"{command[0]}: {exc}")
+
+    try:
+        import tkinter
+
+        root = tkinter.Tk()
+        root.withdraw()
+        root.clipboard_clear()
+        root.clipboard_append(text)
+        root.update()
+        root.destroy()
+        return "tkinter"
+    except Exception as exc:
+        errors.append(f"tkinter: {exc}")
+
+    raise Exception("Kein Clipboard-Backend verfuegbar: " + "; ".join(errors))
+
 def _type_write(text: str, press_enter: bool):
     """Direktes Tippen Zeichen für Zeichen (robust, funktioniert ohne perfekten Fokus)."""
     pyautogui.FAILSAFE = False  # Deaktivieren, da wir Position prüfen
@@ -86,27 +145,20 @@ def _type_write(text: str, press_enter: bool):
         pyautogui.press('enter')
     pyautogui.FAILSAFE = True  # Wieder aktivieren
 
-def _type_sync(text: str, press_enter: bool):
+def _type_sync(text: str, press_enter: bool, *, allow_write_fallback: bool = True):
     pyautogui.FAILSAFE = False  # Deaktivieren, da wir Position prüfen
-    _ensure_safe_mouse_position()
-    # Zwischenablage-Methode (schnell, robust für alle Layouts)
     try:
-        subprocess = __import__("subprocess")
-        process = subprocess.Popen(['xclip', '-selection', 'clipboard'], stdin=subprocess.PIPE)
-        process.communicate(text.encode('utf-8'))
+        _ensure_safe_mouse_position()
+        _set_clipboard_text(text)
+        pyautogui.hotkey('ctrl', 'v')
+        if press_enter:
+            pyautogui.press('enter')
     except Exception:
-        try:
-            process = subprocess.Popen(['xsel', '--clipboard', '--input'], stdin=subprocess.PIPE)
-            process.communicate(text.encode('utf-8'))
-        except Exception:
-            # Fallback zu direktem Tippen
-            _type_write(text, press_enter)
-            pyautogui.FAILSAFE = True
-            return
-    pyautogui.hotkey('ctrl', 'v')
-    if press_enter:
-        pyautogui.press('enter')
-    pyautogui.FAILSAFE = True  # Wieder aktivieren
+        if not allow_write_fallback:
+            raise
+        _type_write(text, press_enter)
+    finally:
+        pyautogui.FAILSAFE = True  # Wieder aktivieren
 
 def _scroll_sync(amount: int):
     pyautogui.FAILSAFE = False  # Wir prüfen Position vorher
@@ -213,25 +265,53 @@ async def type_text(text_to_type: str, press_enter_after: bool = False, method: 
     """
     _ensure_pyautogui_ok()
     preview = text_to_type[:40] + "…" if len(text_to_type) > 40 else text_to_type
-    log.info(f"type_text: '{preview}' (Enter: {press_enter_after}, Methode: {method})")
+    effective_method = _resolve_type_method(text_to_type, method)
+    log.info(
+        f"type_text: '{preview}' (Enter: {press_enter_after}, Methode: {method}, effektiv: {effective_method})"
+    )
 
     # Methode wählen mit Fehlerbehandlung
     try:
-        if method == "write":
+        if effective_method == "write":
             await asyncio.to_thread(_type_write, text_to_type, press_enter_after)
         else:
-            await asyncio.to_thread(_type_sync, text_to_type, press_enter_after)
-        return {"status": "typed", "length": len(text_to_type), "enter": press_enter_after, "method": method}
+            allow_write_fallback = effective_method != "clipboard"
+            await asyncio.to_thread(
+                _type_sync,
+                text_to_type,
+                press_enter_after,
+                allow_write_fallback=allow_write_fallback,
+            )
+        return {
+            "status": "typed",
+            "length": len(text_to_type),
+            "enter": press_enter_after,
+            "method": effective_method,
+            "requested_method": method,
+        }
     except pyautogui.FailSafeException as e:
         log.warning(f"FailSafeException gefangen: {e} - Versuche erneut...")
         # Retry nach sicherer Position
         await asyncio.sleep(0.2)
         try:
-            if method == "write":
+            if effective_method == "write":
                 await asyncio.to_thread(_type_write, text_to_type, press_enter_after)
             else:
-                await asyncio.to_thread(_type_sync, text_to_type, press_enter_after)
-            return {"status": "typed", "length": len(text_to_type), "enter": press_enter_after, "method": method, "retry": True}
+                allow_write_fallback = effective_method != "clipboard"
+                await asyncio.to_thread(
+                    _type_sync,
+                    text_to_type,
+                    press_enter_after,
+                    allow_write_fallback=allow_write_fallback,
+                )
+            return {
+                "status": "typed",
+                "length": len(text_to_type),
+                "enter": press_enter_after,
+                "method": effective_method,
+                "requested_method": method,
+                "retry": True,
+            }
         except Exception as e2:
             log.error(f"Retry fehlgeschlagen: {e2}")
             raise Exception(f"Typ-Operation fehlgeschlagen: {e2}")

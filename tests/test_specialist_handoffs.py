@@ -804,6 +804,32 @@ async def test_visual_login_flow_accepts_visible_authenticated_state_as_goal_sat
 
 
 @pytest.mark.asyncio
+async def test_detect_authenticated_session_state_uses_verified_vision_fallback(monkeypatch):
+    agent = VisualAgent(tools_description_string="")
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        if method == "get_all_screen_text":
+            return {"texts": [{"text": "GitHub - Mozilla Firefox"}]}
+        if method == "analyze_screen_verified":
+            return {
+                "filtered_elements": [
+                    {"label": "Repositories", "element_type": "text", "ocr_text": "repositories"},
+                    {"label": "Profile", "element_type": "text", "ocr_text": "profile"},
+                    {"label": "Mozilla Firefox", "element_type": "text", "ocr_text": "mozilla firefox"},
+                ]
+            }
+        raise AssertionError(f"unexpected tool call: {method}")
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    result = await agent._detect_authenticated_session_state("github")
+
+    assert result["success"] is True
+    assert any(marker in result["positive_hits"] for marker in ("github", "repositories", "profile"))
+    assert result["visible_browser"] == "firefox"
+
+
+@pytest.mark.asyncio
 async def test_visual_login_success_result_is_rewrapped_as_phase_d_pending_when_not_authenticated(monkeypatch):
     agent = VisualAgent(tools_description_string="")
     specialist_context = build_specialist_context_payload(

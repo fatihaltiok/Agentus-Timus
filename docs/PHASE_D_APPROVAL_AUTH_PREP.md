@@ -259,6 +259,10 @@ Phase D braucht einen gemeinsamen Nutzeraktions-Vertrag, statt fuer jede Plattfo
     - nur bei expliziter Chrome-/Passwortmanager-Anforderung
     - noch keine Chrome-Autofill-Verifikation
     - noch kein globales Broker-Routing fuer beliebige Login-Flows
+  - weitere Haertung:
+    - die Auth-Erkennung kann jetzt bei schwacher OCR zusaetzlich `analyze_screen_verified` nutzen, um sichtbare eingeloggte Zustaende robuster als funktional erfuellten Login zu erkennen
+    - layoutkritische URL-Eingaben wie `https://github.com/login` werden im Desktop-Input-Pfad jetzt erzwungen ueber Clipboard statt ueber stilles Key-by-Key-Fallback behandelt
+    - wenn Clipboard fuer solche Eingaben nicht verfuegbar ist, bricht der Pfad jetzt hart ab statt fehlerhaft Zeichen wie `/` als `7` zu tippen
 - weiterer Ausbau:
   - **D4b Chrome Credential Broker**
   - wenn gespeicherte Zugangsdaten praktisch nur im Chrome-Passwortmanager vorhanden sind, soll nicht Timus selbst die Secrets kennen, sondern Chrome als Credential Broker dienen

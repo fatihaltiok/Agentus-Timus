@@ -820,6 +820,15 @@ class VisualAgent(BaseAgent):
             )
         return (common_positive, common_negative)
 
+    def _authenticated_target_elements_for_service(self, service: str) -> list[dict[str, str]]:
+        positive_markers, _negative_markers = self._authenticated_markers_for_service(service)
+        unique: list[str] = []
+        for marker in positive_markers:
+            cleaned = str(marker or "").strip()
+            if cleaned and cleaned not in unique:
+                unique.append(cleaned)
+        return [{"type": "text", "label": marker} for marker in unique[:8]]
+
     @staticmethod
     def _infer_visible_browser_from_text_blob(text_blob: str) -> str:
         lowered = str(text_blob or "").strip().lower()
@@ -830,6 +839,18 @@ class VisualAgent(BaseAgent):
         if "google chrome" in lowered or "chrome" in lowered or "chromium" in lowered:
             return "chrome"
         return ""
+
+    @staticmethod
+    def _verified_elements_to_text_blob(elements: Any) -> str:
+        parts: list[str] = []
+        for item in elements or []:
+            if not isinstance(item, dict):
+                continue
+            for key in ("label", "ocr_text", "element_type", "reasoning"):
+                value = str(item.get(key) or "").strip().lower()
+                if value:
+                    parts.append(value)
+        return " | ".join(parts)
 
     async def _detect_authenticated_session_state(self, service: str) -> dict[str, Any]:
         screen_state = await self._analyze_current_screen()
@@ -842,12 +863,42 @@ class VisualAgent(BaseAgent):
         positive_markers, negative_markers = self._authenticated_markers_for_service(service)
         positive_hits = [marker for marker in positive_markers if marker in text_blob]
         negative_hits = [marker for marker in negative_markers if marker in text_blob]
+        visible_browser = self._infer_visible_browser_from_text_blob(text_blob)
+
+        if not positive_hits:
+            try:
+                verified = await self._call_tool(
+                    "analyze_screen_verified",
+                    {
+                        "target_elements": self._authenticated_target_elements_for_service(service),
+                        "min_confidence": 0.65,
+                        "verify_with_ocr": True,
+                        "verify_with_llm": True,
+                    },
+                )
+                verified_blob = self._verified_elements_to_text_blob(
+                    (verified or {}).get("filtered_elements")
+                    or (verified or {}).get("verified_elements")
+                    or []
+                )
+                if verified_blob:
+                    positive_hits = [marker for marker in positive_markers if marker in verified_blob]
+                    negative_hits = [marker for marker in negative_markers if marker in verified_blob]
+                    if not visible_browser:
+                        visible_browser = self._infer_visible_browser_from_text_blob(verified_blob)
+                    if verified_blob and text_blob:
+                        text_blob = f"{text_blob} | {verified_blob}"
+                    elif verified_blob:
+                        text_blob = verified_blob
+            except Exception as e:
+                log.debug("Verified auth detection fallback failed: %s", e)
+
         return {
             "success": bool(positive_hits),
             "positive_hits": positive_hits,
             "negative_hits": negative_hits,
             "text_preview": text_blob[:280],
-            "visible_browser": self._infer_visible_browser_from_text_blob(text_blob),
+            "visible_browser": visible_browser,
         }
 
     def _build_goal_satisfied_login_result(
