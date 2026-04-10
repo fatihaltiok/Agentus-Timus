@@ -2346,6 +2346,10 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
         workflow_user_action = str(pending_workflow.get("user_action_required") or "").strip()
         workflow_resume_hint = str(pending_workflow.get("resume_hint") or "").strip()
         workflow_challenge_type = str(pending_workflow.get("challenge_type") or "").strip()
+        workflow_domain = str(pending_workflow.get("domain") or "").strip()
+        workflow_preferred_browser = str(pending_workflow.get("preferred_browser") or "").strip()
+        workflow_credential_broker = str(pending_workflow.get("credential_broker") or "").strip()
+        workflow_broker_profile = str(pending_workflow.get("broker_profile") or "").strip()
         if workflow_id:
             parts.append(f"pending_workflow_id: {workflow_id[:64]}")
         if workflow_status:
@@ -2362,6 +2366,14 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
             parts.append(f"pending_workflow_resume_hint: {workflow_resume_hint[:220]}")
         if workflow_challenge_type:
             parts.append(f"pending_workflow_challenge_type: {workflow_challenge_type[:64]}")
+        if workflow_domain:
+            parts.append(f"pending_workflow_domain: {workflow_domain[:160]}")
+        if workflow_preferred_browser:
+            parts.append(f"pending_workflow_preferred_browser: {workflow_preferred_browser[:32]}")
+        if workflow_credential_broker:
+            parts.append(f"pending_workflow_credential_broker: {workflow_credential_broker[:64]}")
+        if workflow_broker_profile:
+            parts.append(f"pending_workflow_broker_profile: {workflow_broker_profile[:96]}")
         workflow_url = str(pending_workflow.get("url") or "").strip()
         workflow_source_agent = str(pending_workflow.get("source_agent") or "").strip()
         workflow_source_stage = str(pending_workflow.get("source_stage") or "").strip()
@@ -2382,6 +2394,10 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
         auth_url = str(latest_auth_session.get("url") or "").strip()
         auth_confirmed = str(latest_auth_session.get("confirmed_at") or "").strip()
         auth_expires = str(latest_auth_session.get("expires_at") or "").strip()
+        auth_browser_type = str(latest_auth_session.get("browser_type") or "").strip()
+        auth_credential_broker = str(latest_auth_session.get("credential_broker") or "").strip()
+        auth_broker_profile = str(latest_auth_session.get("broker_profile") or "").strip()
+        auth_domain = str(latest_auth_session.get("domain") or "").strip()
         if auth_service:
             parts.append(f"auth_session_service: {auth_service[:64]}")
         if auth_status:
@@ -2394,6 +2410,14 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
             parts.append(f"auth_session_confirmed_at: {auth_confirmed[:64]}")
         if auth_expires:
             parts.append(f"auth_session_expires_at: {auth_expires[:64]}")
+        if auth_browser_type:
+            parts.append(f"auth_session_browser_type: {auth_browser_type[:32]}")
+        if auth_credential_broker:
+            parts.append(f"auth_session_credential_broker: {auth_credential_broker[:64]}")
+        if auth_broker_profile:
+            parts.append(f"auth_session_broker_profile: {auth_broker_profile[:96]}")
+        if auth_domain:
+            parts.append(f"auth_session_domain: {auth_domain[:160]}")
     if isinstance(conversation_state, dict):
         active_topic = str(conversation_state.get("active_topic") or "").strip()
         active_goal = str(conversation_state.get("active_goal") or "").strip()
@@ -4421,6 +4445,10 @@ async def canvas_chat(request: Request):
                             "scope": str(payload_info.get("auth_session_scope") or ""),
                             "workflow_id": str(payload_info.get("auth_session_workflow_id") or ""),
                             "reason": str(payload_info.get("auth_session_reason") or ""),
+                            "browser_type": str(payload_info.get("auth_session_browser_type") or ""),
+                            "credential_broker": str(payload_info.get("auth_session_credential_broker") or ""),
+                            "broker_profile": str(payload_info.get("auth_session_broker_profile") or ""),
+                            "domain": str(payload_info.get("auth_session_domain") or ""),
                             "source_agent": agent_name,
                             "source_stage": stage,
                             "reuse_ready": bool(payload_info.get("auth_session_reuse_ready")),
@@ -4441,6 +4469,8 @@ async def canvas_chat(request: Request):
                                 "auth_session_status": str(stored_auth_session.get("status") or ""),
                                 "auth_session_scope": str(stored_auth_session.get("scope") or ""),
                                 "auth_session_workflow_id": str(stored_auth_session.get("workflow_id") or ""),
+                                "auth_session_browser_type": str(stored_auth_session.get("browser_type") or ""),
+                                "auth_session_credential_broker": str(stored_auth_session.get("credential_broker") or ""),
                             },
                         )
                 _emit_longrun_progress_from_payload(

@@ -116,3 +116,26 @@ def test_is_auth_session_reusable_rejects_expired_entry():
     )
 
     assert reusable is False
+
+
+def test_normalize_auth_session_entry_preserves_browser_and_broker_fields():
+    from orchestration.auth_session_state import normalize_auth_session_entry
+
+    state = normalize_auth_session_entry(
+        {
+            "status": "authenticated",
+            "service": "github",
+            "url": "https://github.com/login",
+            "browser_type": "chrome",
+            "credential_broker": "chrome_password_manager",
+            "broker_profile": "Default",
+            "domain": "github.com",
+        },
+        updated_at="2026-04-10T15:00:00Z",
+    )
+
+    assert state is not None
+    assert state.browser_type == "chrome"
+    assert state.credential_broker == "chrome_password_manager"
+    assert state.broker_profile == "Default"
+    assert state.domain == "github.com"

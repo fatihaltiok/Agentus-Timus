@@ -733,6 +733,10 @@ def test_store_auth_session_in_capsule_roundtrips_into_followup_capsule(tmp_path
             "url": "https://github.com/settings/profile",
             "workflow_id": "wf_auth_github",
             "reason": "login_confirmed",
+            "browser_type": "chrome",
+            "credential_broker": "chrome_password_manager",
+            "broker_profile": "Default",
+            "domain": "github.com",
         },
         updated_at="2026-04-09T17:30:00Z",
     )
@@ -748,6 +752,9 @@ def test_store_auth_session_in_capsule_roundtrips_into_followup_capsule(tmp_path
     assert "auth_session_service: github" in augmented
     assert "auth_session_status: authenticated" in augmented
     assert "auth_session_url: https://github.com/settings/profile" in augmented
+    assert "auth_session_browser_type: chrome" in augmented
+    assert "auth_session_credential_broker: chrome_password_manager" in augmented
+    assert "auth_session_domain: github.com" in augmented
 
 
 def test_record_meta_turn_understanding_observations_emits_context_misread_suspected(monkeypatch):

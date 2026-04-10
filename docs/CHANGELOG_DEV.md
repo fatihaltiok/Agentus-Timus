@@ -2,6 +2,59 @@
 
 ---
 
+## Fortschritt 2026-04-10 - D4b Chrome Credential Broker als erster Runtime-Slice gestartet
+
+Der Chrome-Credential-Broker war bisher nur als spaeterer Ausbau fuer Phase D eingeordnet. Nach D3/D4 ist jetzt der erste konservative Runtime-Slice dafuer live im Code vorbereitet: Timus kennt weiterhin keine Roh-Secrets, kann aber fuer explizite Chrome-/Passwortmanager-Loginwuensche denselben Workflow in einem eigenen Broker-Lane fuehren.
+
+Geaendert:
+
+- [main_dispatcher.py](/home/fatih-ubuntu/dev/timus/main_dispatcher.py)
+  - erkennt jetzt explizite Chrome-/Passwortmanager-Loginwuensche
+  - `visual_login`-Handoffs tragen dafuer jetzt:
+    - `browser_type: chrome`
+    - `credential_broker: chrome_password_manager`
+    - `domain`
+  - vorhandene `auth_session_*`-Brokerfelder bleiben im Login-Follow-up erhalten
+- [agent/agents/visual.py](/home/fatih-ubuntu/dev/timus/agent/agents/visual.py)
+  - fuehrt `login_flow` im expliziten Broker-Fall jetzt in Chrome aus
+  - haelt Browser-/Broker-/Domain-Kontext ueber Login, Resume und Auth-Session-Ready zusammen
+  - reicht jetzt auch `broker_profile` an den sichtbaren Browser-Start weiter
+  - `awaiting_user`-Workflows geben jetzt im Broker-Fall Chrome-spezifische Hinweise statt generischer Login-Texte aus
+- [orchestration/approval_auth_contract.py](/home/fatih-ubuntu/dev/timus/orchestration/approval_auth_contract.py)
+  - Phase-D-Workflow-Payloads tragen jetzt auch:
+    - `domain`
+    - `preferred_browser`
+    - `credential_broker`
+    - `broker_profile`
+- [orchestration/pending_workflow_state.py](/home/fatih-ubuntu/dev/timus/orchestration/pending_workflow_state.py)
+  - Pending-Workflows serialisieren den Broker-Kontext jetzt turnuebergreifend mit
+- [orchestration/auth_session_state.py](/home/fatih-ubuntu/dev/timus/orchestration/auth_session_state.py)
+  - Auth-Session-State speichert jetzt:
+    - `browser_type`
+    - `credential_broker`
+    - `broker_profile`
+    - `domain`
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - Follow-up-Capsules und `auth_session_updated`-Events transportieren die neuen Broker-Felder jetzt mit
+- [tools/visual_browser_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/visual_browser_tool/tool.py)
+  - `start_visual_browser(...)` kann jetzt optional ein `profile_name` entgegennehmen
+  - Chrome-Starts tragen dieses Profil jetzt in den echten Startbefehl ein, z. B. `--profile-directory=Default`
+  - profilgebundene Chrome-Instanzen werden getrennt verwaltet statt nur ueber einen globalen `chrome`-Key
+- Tests:
+  - [test_dispatcher_camera_intent.py](/home/fatih-ubuntu/dev/timus/tests/test_dispatcher_camera_intent.py)
+  - [test_auth_session_state.py](/home/fatih-ubuntu/dev/timus/tests/test_auth_session_state.py)
+  - [test_android_chat_language.py](/home/fatih-ubuntu/dev/timus/tests/test_android_chat_language.py)
+  - [test_specialist_handoffs.py](/home/fatih-ubuntu/dev/timus/tests/test_specialist_handoffs.py)
+  - [test_visual_browser_tool.py](/home/fatih-ubuntu/dev/timus/tests/test_visual_browser_tool.py)
+
+Einordnung:
+
+- der Slice ist bewusst konservativ
+- er greift nur bei **explizitem** Chrome-/Passwortmanager-Wunsch
+- ohne explizite Profilangabe faellt der Broker-Lane jetzt konservativ auf Chrome-Profil `Default` zurueck
+- er fuehrt noch keine Autofill-/Secret-Verifikation durch
+- er baut auf D3 user-mediated Login und D4 Session Reuse auf, statt sie zu umgehen
+
 ## Fortschritt 2026-04-10 - D5 frische Session fuer Login- und Challenge-Resume gehaertet
 
 Der erste D5-Resume-Fix hat den Challenge-Follow-up zwar wieder an `visual_login` gebunden, aber ein frischer Login-Start konnte den Pending-Workflow noch verlieren: Wenn die Login-Maske bereits sichtbar war, kam der Visual-Pfad gelegentlich nur als plain `success` mit `login_handoff ...` zurueck. Dann fehlte `pending_workflow_updated`, und der direkte Follow-up `ich sehe jetzt eine 2fa challenge` fiel in einer neuen Session wieder auf `meta`.

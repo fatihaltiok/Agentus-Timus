@@ -45,6 +45,16 @@ def _service_from_platform(platform: Any) -> str:
     return _SERVICE_ALIASES.get(normalized, normalized)
 
 
+def _infer_domain_from_url(url: Any) -> str:
+    raw = str(url or "").strip().lower()
+    if not raw:
+        return ""
+    host = raw.replace("https://", "").replace("http://", "").split("/")[0]
+    if host.startswith("www."):
+        host = host[4:]
+    return _clean_text(host, limit=160).lower()
+
+
 def _default_reason(status: str) -> str:
     if status == "approval_required":
         return "approval_required"
@@ -172,6 +182,10 @@ def normalize_phase_d_workflow_payload(
     approval_scope = _clean_text(loaded.get("approval_scope"), limit=64).lower()
     step = _clean_text(loaded.get("step"), limit=64).lower()
     url = _clean_text(loaded.get("url"), limit=500)
+    domain = _clean_text(loaded.get("domain"), limit=160).lower() or _infer_domain_from_url(url)
+    preferred_browser = _clean_text(loaded.get("preferred_browser") or loaded.get("browser_type"), limit=32).lower()
+    credential_broker = _clean_text(loaded.get("credential_broker"), limit=64).lower()
+    broker_profile = _clean_text(loaded.get("broker_profile"), limit=96)
 
     if not resume_hint and status == "challenge_required":
         resume_hint = _default_challenge_resume_hint(challenge_type)
@@ -192,6 +206,10 @@ def normalize_phase_d_workflow_payload(
         "challenge_type": challenge_type,
         "approval_scope": approval_scope,
         "step": step,
+        "domain": domain,
+        "preferred_browser": preferred_browser,
+        "credential_broker": credential_broker,
+        "broker_profile": broker_profile,
         "approval_required": status == "approval_required",
         "auth_required": status == "auth_required",
         "awaiting_user": status == "awaiting_user",
@@ -258,6 +276,10 @@ def build_awaiting_user_workflow_payload(
     message: str = "",
     resume_hint: str = "",
     user_action_required: str = "",
+    domain: str = "",
+    preferred_browser: str = "",
+    credential_broker: str = "",
+    broker_profile: str = "",
 ) -> dict[str, Any]:
     return normalize_phase_d_workflow_payload(
         {
@@ -271,6 +293,10 @@ def build_awaiting_user_workflow_payload(
             "message": message,
             "resume_hint": resume_hint,
             "user_action_required": user_action_required,
+            "domain": domain,
+            "preferred_browser": preferred_browser,
+            "credential_broker": credential_broker,
+            "broker_profile": broker_profile,
         },
         default_status="awaiting_user",
     )
@@ -284,6 +310,10 @@ def build_user_mediated_login_workflow_payload(
     message: str = "",
     resume_hint: str = "",
     user_action_required: str = "",
+    domain: str = "",
+    preferred_browser: str = "",
+    credential_broker: str = "",
+    broker_profile: str = "",
 ) -> dict[str, Any]:
     service_label = str(service or "dem Dienst").strip()
     effective_message = (
@@ -307,6 +337,10 @@ def build_user_mediated_login_workflow_payload(
         message=effective_message,
         resume_hint=effective_resume_hint,
         user_action_required=effective_user_action,
+        domain=domain,
+        preferred_browser=preferred_browser,
+        credential_broker=credential_broker,
+        broker_profile=broker_profile,
     )
 
 
@@ -319,6 +353,11 @@ def build_challenge_required_workflow_payload(
     message: str = "",
     resume_hint: str = "",
     user_action_required: str = "",
+    url: str = "",
+    domain: str = "",
+    preferred_browser: str = "",
+    credential_broker: str = "",
+    broker_profile: str = "",
 ) -> dict[str, Any]:
     service_label = str(service or "der Dienst").strip()
     normalized_challenge_type = _clean_text(challenge_type, limit=64).lower()
@@ -330,12 +369,17 @@ def build_challenge_required_workflow_payload(
             "service": service,
             "challenge_type": normalized_challenge_type,
             "reason": reason,
+            "url": url,
+            "domain": domain,
             "message": _clean_text(message)
             or _default_challenge_message(service=service_label, challenge_type=normalized_challenge_type),
             "resume_hint": _clean_text(resume_hint)
             or _default_challenge_resume_hint(normalized_challenge_type),
             "user_action_required": _clean_text(user_action_required)
             or _default_challenge_user_action(service=service_label, challenge_type=normalized_challenge_type),
+            "preferred_browser": preferred_browser,
+            "credential_broker": credential_broker,
+            "broker_profile": broker_profile,
         },
         default_status="challenge_required",
     )

@@ -203,6 +203,30 @@ Die passende Einordnung ist:
 - Session-Reuse wird bevorzugt
 - Challenges bleiben user-mediated
 
+## Aktueller erster Runtime-Slice
+
+- der Dispatcher kann jetzt **explizite** Chrome-/Passwortmanager-Loginwuensche in einen eigenen Broker-Lane einordnen
+- `visual_login` startet diesen Login-Flow dann in **Chrome** statt Firefox
+- Phase-D-Workflow-Payloads, Pending-Workflows und Auth-Sessions tragen jetzt:
+  - `preferred_browser`
+  - `credential_broker`
+  - `domain`
+  - optional `broker_profile`
+- wenn kein Broker-Profil angegeben ist, nutzt der konservative Startpfad aktuell `Default`
+- der sichtbare Browser-Start uebergibt dieses Profil jetzt auch wirklich an Chrome statt es nur im Workflow-State zu speichern
+- dadurch bleibt der Broker-Kontext ueber:
+  - Login-Start
+  - user-mediated Resume
+  - Session-Reuse
+  konsistent erhalten
+
+Der Slice ist bewusst konservativ:
+
+- keine Roh-Secrets in Timus
+- kein generischer Zwang auf Chrome fuer alle Login-Flows
+- keine Behauptung, dass Chrome-Autofill schon verifiziert erkannt wird
+- keine Umgehung von 2FA/CAPTCHA
+
 ## Nicht Ziel
 
 - kein Export aller Credentials an Timus

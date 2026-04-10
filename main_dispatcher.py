@@ -382,8 +382,36 @@ def _extract_dispatcher_followup_field(query: str, field_name: str) -> str:
     return str(match.group(1) if match else "").strip()
 
 
+def _infer_login_domain(url: str) -> str:
+    raw = str(url or "").strip().lower()
+    if not raw:
+        return ""
+    host = raw.replace("https://", "").replace("http://", "").split("/")[0]
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def _requests_chrome_credential_broker(query: str) -> bool:
+    lowered = str(query or "").strip().lower()
+    if not lowered:
+        return False
+    chrome_tokens = ("chrome", "google chrome")
+    broker_tokens = (
+        "passwortmanager",
+        "password manager",
+        "gespeicherte zugangsdaten",
+        "gespeicherte passwoerter",
+        "gespeicherte passwörter",
+        "autofill",
+        "credential broker",
+    )
+    return any(token in lowered for token in chrome_tokens) and any(token in lowered for token in broker_tokens)
+
+
 def _build_visual_login_handoff(query: str) -> str:
     source_url = _extract_dispatcher_browser_url(query)
+    inferred_domain = _infer_login_domain(source_url)
     auth_session_fields = {
         "auth_session_service": _extract_dispatcher_followup_field(query, "auth_session_service"),
         "auth_session_status": _extract_dispatcher_followup_field(query, "auth_session_status"),
@@ -391,19 +419,40 @@ def _build_visual_login_handoff(query: str) -> str:
         "auth_session_url": _extract_dispatcher_followup_field(query, "auth_session_url"),
         "auth_session_confirmed_at": _extract_dispatcher_followup_field(query, "auth_session_confirmed_at"),
         "auth_session_expires_at": _extract_dispatcher_followup_field(query, "auth_session_expires_at"),
+        "auth_session_browser_type": _extract_dispatcher_followup_field(query, "auth_session_browser_type"),
+        "auth_session_credential_broker": _extract_dispatcher_followup_field(query, "auth_session_credential_broker"),
+        "auth_session_broker_profile": _extract_dispatcher_followup_field(query, "auth_session_broker_profile"),
+        "auth_session_domain": _extract_dispatcher_followup_field(query, "auth_session_domain"),
     }
+    use_chrome_broker = (
+        _requests_chrome_credential_broker(query)
+        or auth_session_fields["auth_session_browser_type"].lower() == "chrome"
+        or auth_session_fields["auth_session_credential_broker"].lower() == "chrome_password_manager"
+    )
+    login_domain = auth_session_fields["auth_session_domain"] or inferred_domain
+    broker_profile = auth_session_fields["auth_session_broker_profile"]
+    if use_chrome_broker and not broker_profile:
+        broker_profile = "Default"
     specialist_context = build_specialist_context_payload(
         current_topic="Login-Workflow",
         active_goal="Bis zur Login-Maske navigieren und dann uebergeben",
         open_loop="Login kontrolliert vorbereiten",
         next_expected_step=(
+            "Chrome-Profil oeffnen und Passwortmanager fuer den gespeicherten Login anbieten"
+            if use_chrome_broker
+            else (
             "Vor neuem Login zuerst vorhandene authentische Session pruefen"
             if auth_session_fields["auth_session_service"]
             else "Nur bis zur Login-Maske gehen"
+            )
         ),
         turn_type="followup" if auth_session_fields["auth_session_service"] else "new_task",
         response_mode="execute",
-        user_preferences=["Login user-mediated"],
+        user_preferences=(
+            ["Login user-mediated", "Chrome credential broker"]
+            if use_chrome_broker
+            else ["Login user-mediated"]
+        ),
     )
     lines = [
         "# DELEGATION HANDOFF",
@@ -415,6 +464,12 @@ def _build_visual_login_handoff(query: str) -> str:
     ]
     if source_url:
         lines.append(f"- source_url: {source_url}")
+    if use_chrome_broker:
+        lines.append("- browser_type: chrome")
+        lines.append("- credential_broker: chrome_password_manager")
+        lines.append(f"- broker_profile: {broker_profile}")
+        if login_domain:
+            lines.append(f"- domain: {login_domain}")
     lines.extend(
         [
             "- expected_state: login_dialog",

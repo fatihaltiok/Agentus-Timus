@@ -118,6 +118,19 @@ def test_build_visual_login_handoff_preserves_auth_session_context():
     assert "- auth_session_url: https://github.com/settings/profile" in handoff
 
 
+def test_build_visual_login_handoff_requests_chrome_credential_broker_when_explicit():
+    import main_dispatcher
+
+    handoff = main_dispatcher._build_visual_login_handoff(
+        "Oeffne github.com/login in Chrome und nutze den Chrome Passwortmanager fuer den gespeicherten Login."
+    )
+
+    assert "- browser_type: chrome" in handoff
+    assert "- credential_broker: chrome_password_manager" in handoff
+    assert "- broker_profile: Default" in handoff
+    assert "- domain: github.com" in handoff
+
+
 def test_visual_login_followup_context_is_preserved_for_resume():
     import main_dispatcher
 

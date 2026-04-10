@@ -18,10 +18,24 @@ log = logging.getLogger("visual_browser_tool")
 active_browsers = {}
 
 
-def _build_windows_browser_command(target: str, url: Optional[str]) -> list[str]:
+def _normalize_profile_name(profile_name: Optional[str]) -> str:
+    return str(profile_name or "").strip()
+
+
+def _browser_instance_key(browser_type: str, profile_name: Optional[str] = None) -> str:
+    browser = str(browser_type or "default").strip().lower() or "default"
+    profile = _normalize_profile_name(profile_name)
+    if browser == "chrome" and profile:
+        return f"{browser}::{profile.lower()}"
+    return browser
+
+
+def _build_windows_browser_command(target: str, url: Optional[str], profile_name: Optional[str] = None) -> list[str]:
     """Build a Windows browser start command without shell=True."""
     if target == "chrome":
         cmd = ["cmd.exe", "/c", "start", "", "chrome", "--new-window"]
+        if _normalize_profile_name(profile_name):
+            cmd.append(f"--profile-directory={_normalize_profile_name(profile_name)}")
     elif target == "firefox":
         cmd = ["cmd.exe", "/c", "start", "", "firefox", "--new-window"]
     else:
@@ -36,11 +50,12 @@ def _get_windows_taskkill_command(pid: int) -> list[str]:
     """Build a Windows taskkill command without shell=True."""
     return ["taskkill", "/PID", str(pid), "/T", "/F"]
 
-def _get_browser_command(browser_type: str, url: Optional[str] = None) -> list[str]:
+def _get_browser_command(browser_type: str, url: Optional[str] = None, profile_name: Optional[str] = None) -> list[str]:
     """
     Ermittelt den korrekten Startbefehl für das Betriebssystem.
     """
     system = platform.system().lower()
+    normalized_profile = _normalize_profile_name(profile_name)
 
     # Standardisierung des Namens
     if "chrome" in browser_type.lower():
@@ -53,11 +68,13 @@ def _get_browser_command(browser_type: str, url: Optional[str] = None) -> list[s
     cmd = []
 
     if system == "windows":
-        cmd = _build_windows_browser_command(target, url)
+        cmd = _build_windows_browser_command(target, url, normalized_profile)
 
     elif system == "darwin": # macOS
         if target == "chrome":
             cmd = ["open", "-a", "Google Chrome", "--args", "--new-window"]
+            if normalized_profile:
+                cmd.append(f"--profile-directory={normalized_profile}")
         elif target == "firefox":
             cmd = ["open", "-a", "Firefox", "--args", "--new-window"]
         else:
@@ -69,6 +86,8 @@ def _get_browser_command(browser_type: str, url: Optional[str] = None) -> list[s
             exe = shutil.which("google-chrome") or shutil.which("chromium") or shutil.which("chromium-browser")
             if exe:
                 cmd = [exe, "--new-window"]
+                if normalized_profile:
+                    cmd.append(f"--profile-directory={normalized_profile}")
         elif target == "firefox":
             exe = shutil.which("firefox")
             if exe:
@@ -95,32 +114,50 @@ def _get_browser_command(browser_type: str, url: Optional[str] = None) -> list[s
     parameters=[
         P("url", "string", "Die zu öffnende URL", required=False, default="https://www.google.com"),
         P("browser_type", "string", "Browser-Typ: firefox, chrome, default", required=False, default="firefox"),
+        P("profile_name", "string", "Optionales Browser-Profil, z. B. Chrome 'Default'", required=False, default=""),
     ],
     capabilities=["browser", "vision"],
     category=C.BROWSER
 )
-async def start_visual_browser(url: str = "https://www.google.com", browser_type: str = "firefox") -> dict:
+async def start_visual_browser(
+    url: str = "https://www.google.com",
+    browser_type: str = "firefox",
+    profile_name: str = "",
+) -> dict:
     """
     Startet einen SICHTBAREN Webbrowser auf dem Desktop.
 
     Args:
         url: Die zu öffnende URL.
         browser_type: 'firefox', 'chrome' oder 'default'.
+        profile_name: Optionaler Browser-Profilname fuer Chrome.
     """
-    log.info(f"Starte visuellen Browser ({browser_type}) mit URL: {url}")
+    normalized_browser = str(browser_type or "firefox").strip().lower() or "firefox"
+    normalized_profile = _normalize_profile_name(profile_name)
+    browser_key = _browser_instance_key(normalized_browser, normalized_profile)
+    log.info(f"Starte visuellen Browser ({normalized_browser}, profile={normalized_profile or '-'}) mit URL: {url}")
 
     # Prüfe ob bereits ein Browser dieses Typs von uns verwaltet wird
-    if browser_type in active_browsers:
-        proc = active_browsers[browser_type]
+    if browser_key in active_browsers:
+        proc = active_browsers[browser_key]
         if proc.poll() is None: # Läuft noch
-            log.info(f"Browser {browser_type} läuft bereits. Öffne URL dort.")
+            log.info(f"Browser {browser_key} läuft bereits. Öffne URL dort.")
+            if normalized_browser == "chrome" and normalized_profile:
+                cmd = _get_browser_command(normalized_browser, url, normalized_profile)
+                subprocess.Popen(cmd, shell=False)
+                await asyncio.sleep(2)
+                return {
+                    "status": "opened",
+                    "message": f"Browser ({normalized_browser}) mit Profil {normalized_profile} hat URL {url} geoeffnet.",
+                    "profile_name": normalized_profile,
+                }
             return await open_url_in_visual_browser(url)
 
     try:
-        cmd = _get_browser_command(browser_type, url)
+        cmd = _get_browser_command(normalized_browser, url, normalized_profile)
 
         if not cmd:
-             raise Exception(f"Konnte keinen Befehl für Browser '{browser_type}' finden.")
+             raise Exception(f"Konnte keinen Befehl für Browser '{normalized_browser}' finden.")
 
         log.info(f"Ausführen des Befehls: {cmd}")
 
@@ -128,15 +165,16 @@ async def start_visual_browser(url: str = "https://www.google.com", browser_type
         proc = subprocess.Popen(cmd, shell=False)
 
         # Prozess speichern
-        active_browsers[browser_type] = proc
+        active_browsers[browser_key] = proc
 
         # Wichtig: Dem Browser Zeit geben, sichtbar zu werden, bevor der Agent den nächsten Screenshot macht
         await asyncio.sleep(3)
 
         return {
             "status": "started",
-            "message": f"Browser ({browser_type}) gestartet und URL {url} geladen.",
-            "pid": proc.pid
+            "message": f"Browser ({normalized_browser}) gestartet und URL {url} geladen.",
+            "pid": proc.pid,
+            "profile_name": normalized_profile,
         }
 
     except Exception as e:
@@ -181,22 +219,25 @@ async def open_url_in_visual_browser(url: str) -> dict:
     description="Versucht, den vom Agenten gestarteten Browser zu schließen.",
     parameters=[
         P("browser_type", "string", "Browser-Typ: firefox, chrome", required=False, default="firefox"),
+        P("profile_name", "string", "Optionales Browser-Profil fuer profilgebundene Browser-Instanzen", required=False, default=""),
     ],
     capabilities=["browser", "vision"],
     category=C.BROWSER
 )
-async def close_visual_browser(browser_type: str = "firefox") -> dict:
+async def close_visual_browser(browser_type: str = "firefox", profile_name: str = "") -> dict:
     """Versucht, den vom Agenten gestarteten Browser zu schließen."""
-    if browser_type in active_browsers:
-        proc = active_browsers[browser_type]
+    normalized_browser = str(browser_type or "firefox").strip().lower() or "firefox"
+    browser_key = _browser_instance_key(normalized_browser, profile_name)
+    if browser_key in active_browsers:
+        proc = active_browsers[browser_key]
         try:
             if platform.system().lower() == "windows":
                 subprocess.run(_get_windows_taskkill_command(proc.pid), check=False)
             else:
                 proc.terminate()
 
-            del active_browsers[browser_type]
-            return {"status": "closed", "browser": browser_type}
+            del active_browsers[browser_key]
+            return {"status": "closed", "browser": normalized_browser, "profile_name": _normalize_profile_name(profile_name)}
         except Exception as e:
             raise Exception(f"Fehler beim Schließen: {e}")
 

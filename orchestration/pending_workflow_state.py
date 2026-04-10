@@ -70,6 +70,10 @@ class PendingWorkflowState:
     resume_hint: str
     challenge_type: str
     approval_scope: str
+    domain: str
+    preferred_browser: str
+    credential_broker: str
+    broker_profile: str
     source_agent: str
     source_stage: str
     created_at: str
@@ -90,6 +94,10 @@ class PendingWorkflowState:
             "resume_hint": self.resume_hint,
             "challenge_type": self.challenge_type,
             "approval_scope": self.approval_scope,
+            "domain": self.domain,
+            "preferred_browser": self.preferred_browser,
+            "credential_broker": self.credential_broker,
+            "broker_profile": self.broker_profile,
             "source_agent": self.source_agent,
             "source_stage": self.source_stage,
             "created_at": self.created_at,
@@ -132,6 +140,10 @@ def normalize_pending_workflow_state(
         resume_hint=_clean_text(normalized.get("resume_hint")),
         challenge_type=_clean_text(normalized.get("challenge_type"), limit=64),
         approval_scope=_clean_text(normalized.get("approval_scope"), limit=64),
+        domain=_clean_text(normalized.get("domain"), limit=160),
+        preferred_browser=_clean_text(normalized.get("preferred_browser"), limit=32).lower(),
+        credential_broker=_clean_text(normalized.get("credential_broker"), limit=64).lower(),
+        broker_profile=_clean_text(normalized.get("broker_profile"), limit=96),
         source_agent=_clean_text(payload.get("source_agent") or source_agent, limit=64),
         source_stage=_clean_text(payload.get("source_stage") or source_stage, limit=96),
         created_at=created_at,

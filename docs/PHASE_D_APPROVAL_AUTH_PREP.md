@@ -2,7 +2,7 @@
 
 Stand: 2026-04-10
 
-Diese Datei bereitet Phase D vor, ohne bereits echte Nutzerfreigaben, Login-Automation oder Session-Reuse live einzuschalten.
+Diese Datei beschreibt den laufenden Ausbau von Phase D. Die fruehen Approval-/Auth-/Login-Bloecke sind inzwischen live, spaetere Unterbloecke werden hier als Zielbild und Fortschritt gemeinsam gepflegt.
 
 ## Ziel
 
@@ -240,7 +240,23 @@ Phase D braucht einen gemeinsamen Nutzeraktions-Vertrag, statt fuer jede Plattfo
   - nur wenn diese Session-Pruefung fehlschlaegt, faellt Timus zurueck auf den normalen D3-Login-Workflow
   - bestaetigte Wiederverwendung wird jetzt explizit als `session_reused` signalisiert
   - der `visual_login`-Dispatcher-Wrapper behaelt vorhandene `auth_session_*`-Kontextfelder jetzt bei, statt sie beim Login-Handoff zu verlieren
-- spaeterer Unterblock:
+- D4b erster Runtime-Slice:
+  - fuer **explizite** Chrome-/Passwortmanager-Loginwuensche kann der Dispatcher jetzt einen eigenen Chrome-Broker-Lane markieren
+  - `visual_login` startet den Login-Workflow in diesem Fall jetzt in **Chrome** statt Firefox
+  - der Workflow traegt dafuer jetzt explizit:
+    - `preferred_browser`
+    - `credential_broker`
+    - `domain`
+    - `broker_profile`
+  - Pending-Workflow- und Auth-Session-State serialisieren diese Broker-Felder jetzt mit, damit Folge-Turns denselben Broker-Kontext behalten
+  - fuer den konservativen Startpfad wird dabei standardmaessig das Chrome-Profil `Default` verwendet, solange kein anderes Broker-Profil angegeben ist
+  - der sichtbare Browser-Start nutzt diese Profilinfo jetzt auch wirklich im Tool-Aufruf, statt sie nur als Metadatum mitzutragen
+  - bestaetigte Auth-Sessions koennen damit spaeter broker-konsistent wiederverwendet werden, ohne Roh-Secrets in Timus zu ziehen
+  - der Slice ist bewusst konservativ:
+    - nur bei expliziter Chrome-/Passwortmanager-Anforderung
+    - noch keine Chrome-Autofill-Verifikation
+    - noch kein globales Broker-Routing fuer beliebige Login-Flows
+- weiterer Ausbau:
   - **D4b Chrome Credential Broker**
   - wenn gespeicherte Zugangsdaten praktisch nur im Chrome-Passwortmanager vorhanden sind, soll nicht Timus selbst die Secrets kennen, sondern Chrome als Credential Broker dienen
   - Timus darf dann nur mit expliziter Freigabe einen Login-Workflow im freigegebenen Chrome-Profil anstossen und danach mit Session-Reuse arbeiten

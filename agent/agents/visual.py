@@ -75,6 +75,10 @@ class VisualAgent(BaseAgent):
         self.current_workflow_plan: List[str] = []
         self.current_structured_workflow_plan: Optional[BrowserWorkflowPlan] = None
         self.current_browser_url: str = ""
+        self.current_browser_type: str = "firefox"
+        self.current_credential_broker: str = ""
+        self.current_broker_profile: str = ""
+        self.current_broker_domain: str = ""
 
     def _notify_delegation_progress(self, stage: str, **payload: Any) -> None:
         callback = getattr(self, "_delegation_progress_callback", None)
@@ -163,6 +167,10 @@ class VisualAgent(BaseAgent):
         status: str = "authenticated",
         reason: str = "login_confirmed",
         evidence: str = "",
+        browser_type: str = "",
+        credential_broker: str = "",
+        broker_profile: str = "",
+        domain: str = "",
     ) -> None:
         if not service and not url:
             return
@@ -177,6 +185,10 @@ class VisualAgent(BaseAgent):
             auth_session_reason=str(reason or "login_confirmed").strip().lower(),
             auth_session_reuse_ready=True,
             auth_session_evidence=str(evidence or "").strip(),
+            auth_session_browser_type=str(browser_type or "").strip().lower(),
+            auth_session_credential_broker=str(credential_broker or "").strip().lower(),
+            auth_session_broker_profile=str(broker_profile or "").strip(),
+            auth_session_domain=str(domain or "").strip().lower(),
         )
 
     def _get_screenshot_as_base64(self) -> str:
@@ -520,6 +532,13 @@ class VisualAgent(BaseAgent):
             "challenge_type": self._extract_followup_field(source, "pending_workflow_challenge_type").lower(),
             "resume_hint": self._extract_followup_field(source, "pending_workflow_resume_hint"),
             "source_agent": source_agent,
+            "preferred_browser": (
+                self._extract_followup_field(source, "pending_workflow_preferred_browser")
+                or self._extract_followup_field(source, "pending_workflow_browser_type")
+            ).lower(),
+            "credential_broker": self._extract_followup_field(source, "pending_workflow_credential_broker").lower(),
+            "broker_profile": self._extract_followup_field(source, "pending_workflow_broker_profile"),
+            "domain": self._extract_followup_field(source, "pending_workflow_domain").lower(),
             "current_query": self._extract_followup_current_query(source),
         }
 
@@ -537,6 +556,10 @@ class VisualAgent(BaseAgent):
             "auth_session_url",
             "auth_session_confirmed_at",
             "auth_session_expires_at",
+            "auth_session_browser_type",
+            "auth_session_credential_broker",
+            "auth_session_broker_profile",
+            "auth_session_domain",
         ):
             value = str(handoff_data.get(key) or "").strip()
             if value:
@@ -550,6 +573,10 @@ class VisualAgent(BaseAgent):
                 "url",
                 "confirmed_at",
                 "expires_at",
+                "browser_type",
+                "credential_broker",
+                "broker_profile",
+                "domain",
             ):
                 value = self._extract_followup_field(raw_task, f"auth_session_{key}")
                 if value:
@@ -557,6 +584,59 @@ class VisualAgent(BaseAgent):
 
         normalized = normalize_auth_session_entry(payload) if payload else None
         return normalized.to_dict() if normalized else {}
+
+    @staticmethod
+    def _infer_domain_from_url(url: str) -> str:
+        raw = str(url or "").strip().lower()
+        if not raw:
+            return ""
+        host = raw.replace("https://", "").replace("http://", "").split("/")[0]
+        if host.startswith("www."):
+            host = host[4:]
+        return host
+
+    def _resolve_login_lane(
+        self,
+        *,
+        handoff: Optional[DelegationHandoff],
+        auth_session: Optional[dict[str, str]],
+        url: str,
+    ) -> dict[str, str]:
+        handoff_data = handoff.handoff_data if handoff else {}
+        browser_type = (
+            str(handoff_data.get("browser_type") or "").strip().lower()
+            or str((auth_session or {}).get("browser_type") or "").strip().lower()
+            or "firefox"
+        )
+        credential_broker = (
+            str(handoff_data.get("credential_broker") or "").strip().lower()
+            or str((auth_session or {}).get("credential_broker") or "").strip().lower()
+        )
+        broker_profile = (
+            str(handoff_data.get("broker_profile") or "").strip()
+            or str((auth_session or {}).get("broker_profile") or "").strip()
+        )
+        domain = (
+            str(handoff_data.get("domain") or "").strip().lower()
+            or str((auth_session or {}).get("domain") or "").strip().lower()
+            or self._infer_domain_from_url(url)
+        )
+        if credential_broker == "chrome_password_manager" and browser_type == "firefox":
+            browser_type = "chrome"
+        if credential_broker == "chrome_password_manager" and not broker_profile:
+            broker_profile = "Default"
+        return {
+            "browser_type": browser_type,
+            "credential_broker": credential_broker,
+            "broker_profile": broker_profile,
+            "domain": domain,
+        }
+
+    def _set_login_lane(self, lane: dict[str, str]) -> None:
+        self.current_browser_type = str(lane.get("browser_type") or "firefox").strip().lower() or "firefox"
+        self.current_credential_broker = str(lane.get("credential_broker") or "").strip().lower()
+        self.current_broker_profile = str(lane.get("broker_profile") or "").strip()
+        self.current_broker_domain = str(lane.get("domain") or "").strip().lower()
 
     def _resolve_login_target(self, handoff: Optional[DelegationHandoff], effective_task: str) -> tuple[str, str]:
         source_url = (
@@ -589,7 +669,12 @@ class VisualAgent(BaseAgent):
             return None
 
         self.current_browser_url = reuse_url
-        result = await self._call_tool("start_visual_browser", {"url": reuse_url})
+        browser_type = str(auth_session.get("browser_type") or self.current_browser_type or "firefox").strip().lower() or "firefox"
+        broker_profile = str(auth_session.get("broker_profile") or "").strip()
+        start_payload: Dict[str, Any] = {"url": reuse_url, "browser_type": browser_type}
+        if browser_type == "chrome" and broker_profile:
+            start_payload["profile_name"] = broker_profile
+        result = await self._call_tool("start_visual_browser", start_payload)
         if isinstance(result, dict) and result.get("success") is False:
             return None
 
@@ -605,6 +690,10 @@ class VisualAgent(BaseAgent):
             status="session_reused",
             reason="session_reused",
             evidence=positives,
+            browser_type=browser_type,
+            credential_broker=str(auth_session.get("credential_broker") or "").strip().lower(),
+            broker_profile=broker_profile,
+            domain=str(auth_session.get("domain") or self._infer_domain_from_url(reuse_url)).strip().lower(),
         )
         suffix = f" Sichtbare Signale: {positives}." if positives else ""
         return {
@@ -653,12 +742,20 @@ class VisualAgent(BaseAgent):
         payload = build_user_mediated_login_workflow_payload(
             service=service,
             url=source_url,
+            domain=self.current_broker_domain or self._infer_domain_from_url(source_url),
+            preferred_browser=self.current_browser_type,
+            credential_broker=self.current_credential_broker,
+            broker_profile=self.current_broker_profile,
             message=(
                 "Die Login-Maske ist sichtbar und bereit zur nutzergesteuerten Anmeldung. "
                 "Timus stoppt hier bewusst vor Benutzername, Passwort und 2FA."
             ),
             user_action_required=(
-                f"Bitte gib Benutzername, Passwort und ggf. 2FA selbst bei {service or 'dem Dienst'} ein."
+                (
+                    f"Bitte nutze den Chrome-Passwortmanager oder gib Benutzername, Passwort und ggf. 2FA selbst bei {service or 'dem Dienst'} ein."
+                    if self.current_credential_broker == "chrome_password_manager"
+                    else f"Bitte gib Benutzername, Passwort und ggf. 2FA selbst bei {service or 'dem Dienst'} ein."
+                )
             ),
             resume_hint=(
                 "Sage danach 'weiter', 'ich bin eingeloggt' oder beschreibe die sichtbare Challenge, "
@@ -758,6 +855,11 @@ class VisualAgent(BaseAgent):
                 service=service,
                 workflow_id=workflow_id,
                 challenge_type=challenge_type,
+                url=url,
+                domain=str(context.get("domain") or "").strip().lower(),
+                preferred_browser=str(context.get("preferred_browser") or "").strip().lower(),
+                credential_broker=str(context.get("credential_broker") or "").strip().lower(),
+                broker_profile=str(context.get("broker_profile") or "").strip(),
                 message="Ich sehe den Login noch nicht als abgeschlossen; die Sicherheitspruefung ist weiterhin aktiv.",
             )
             self._emit_user_action_blocker(payload, stage="await_login_challenge_resolution")
@@ -772,6 +874,11 @@ class VisualAgent(BaseAgent):
                     service=service,
                     workflow_id=workflow_id,
                     challenge_type=challenge_type,
+                    url=url,
+                    domain=str(context.get("domain") or "").strip().lower(),
+                    preferred_browser=str(context.get("preferred_browser") or "").strip().lower(),
+                    credential_broker=str(context.get("credential_broker") or "").strip().lower(),
+                    broker_profile=str(context.get("broker_profile") or "").strip(),
                     message="Die Sicherheitspruefung scheint noch nicht geloest zu sein.",
                 )
                 self._emit_user_action_blocker(payload, stage="await_login_challenge_resolution")
@@ -785,6 +892,10 @@ class VisualAgent(BaseAgent):
                 url=url,
                 reason="user_mediated_login",
                 step="login_form_ready",
+                domain=str(context.get("domain") or "").strip().lower(),
+                preferred_browser=str(context.get("preferred_browser") or "").strip().lower(),
+                credential_broker=str(context.get("credential_broker") or "").strip().lower(),
+                broker_profile=str(context.get("broker_profile") or "").strip(),
                 message="Der Login wirkt noch nicht abgeschlossen.",
                 resume_hint="Sage 'ich bin eingeloggt' oder beschreibe die sichtbare Blockade genauer.",
                 user_action_required="Bitte schliesse den Login selbst im Browser ab oder gib die sichtbare Blockade an.",
@@ -803,6 +914,10 @@ class VisualAgent(BaseAgent):
                 url=url,
                 workflow_id=workflow_id,
                 evidence=positives,
+                browser_type=str(context.get("preferred_browser") or "").strip().lower(),
+                credential_broker=str(context.get("credential_broker") or "").strip().lower(),
+                broker_profile=str(context.get("broker_profile") or "").strip(),
+                domain=str(context.get("domain") or "").strip().lower(),
             )
             suffix = f" Sichtbare Signale: {positives}." if positives else ""
             return (
@@ -815,6 +930,11 @@ class VisualAgent(BaseAgent):
                 service=service,
                 workflow_id=workflow_id,
                 challenge_type=challenge_type,
+                url=url,
+                domain=str(context.get("domain") or "").strip().lower(),
+                preferred_browser=str(context.get("preferred_browser") or "").strip().lower(),
+                credential_broker=str(context.get("credential_broker") or "").strip().lower(),
+                broker_profile=str(context.get("broker_profile") or "").strip(),
                 message="Ich kann nach der Sicherheitspruefung noch keinen bestaetigten eingeloggten Zustand erkennen.",
             )
             self._emit_user_action_blocker(payload, stage="await_login_challenge_resolution")
@@ -829,6 +949,10 @@ class VisualAgent(BaseAgent):
             url=url,
             reason="user_mediated_login",
             step="login_form_ready",
+            domain=str(context.get("domain") or "").strip().lower(),
+            preferred_browser=str(context.get("preferred_browser") or "").strip().lower(),
+            credential_broker=str(context.get("credential_broker") or "").strip().lower(),
+            broker_profile=str(context.get("broker_profile") or "").strip(),
             message="Ich kann den erfolgreichen Login noch nicht sicher bestaetigen.",
             resume_hint=(
                 "Wenn du eingeloggt bist, sag 'ich bin eingeloggt' oder beschreibe kurz, was du jetzt im Browser siehst."
@@ -1058,7 +1182,18 @@ class VisualAgent(BaseAgent):
             if target_url and not target_url.startswith("http"):
                 target_url = f"https://{target_url}"
             self.current_browser_url = target_url
-            result = await self._call_tool("start_visual_browser", {"url": target_url})
+            result = await self._call_tool(
+                "start_visual_browser",
+                {
+                    "url": target_url,
+                    "browser_type": self.current_browser_type or "firefox",
+                    **(
+                        {"profile_name": self.current_broker_profile}
+                        if (self.current_browser_type or "firefox") == "chrome" and self.current_broker_profile
+                        else {}
+                    ),
+                },
+            )
             verify = await self._verify_structured_step(step)
             return {
                 "success": bool(result and result.get("success", True)) and verify["success"],
@@ -1237,15 +1372,24 @@ class VisualAgent(BaseAgent):
                 }
 
         source_url, service = self._resolve_login_target(handoff, effective_task)
+        lane = self._resolve_login_lane(handoff=handoff, auth_session=None, url=source_url)
         workflow_payload = build_user_mediated_login_workflow_payload(
             service=service,
             url=source_url,
+            domain=lane["domain"],
+            preferred_browser=lane["browser_type"],
+            credential_broker=lane["credential_broker"],
+            broker_profile=lane["broker_profile"],
             message=(
                 "Die Login-Maske ist bereit. Bitte fuehre den Login jetzt selbst im Browser aus; "
                 "Timus stoppt hier bewusst vor Benutzername, Passwort und 2FA."
             ),
             user_action_required=(
-                f"Bitte gib Benutzername, Passwort und ggf. 2FA selbst bei {service or 'dem Dienst'} ein."
+                (
+                    f"Bitte nutze den Chrome-Passwortmanager oder gib Benutzername, Passwort und ggf. 2FA selbst bei {service or 'dem Dienst'} ein."
+                    if lane["credential_broker"] == "chrome_password_manager"
+                    else f"Bitte gib Benutzername, Passwort und ggf. 2FA selbst bei {service or 'dem Dienst'} ein."
+                )
             ),
             resume_hint=(
                 "Sage danach 'weiter', 'ich bin eingeloggt' oder beschreibe die sichtbare Challenge, "
@@ -1469,6 +1613,10 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 ),
             )
         log.info(f"VisualAgent: {effective_task}")
+        self.current_browser_type = "firefox"
+        self.current_credential_broker = ""
+        self.current_broker_profile = ""
+        self.current_broker_domain = ""
         selected_strategy = self._choose_visual_strategy_mode(handoff, specialist_context_payload, effective_task)
         if handoff:
             record_autonomy_observation(
@@ -1501,6 +1649,14 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         runtime_feedback_recorded = False
 
         if selected_strategy == "structured_navigation":
+            source_url, _service = self._resolve_login_target(handoff, effective_task)
+            self._set_login_lane(
+                self._resolve_login_lane(
+                    handoff=handoff,
+                    auth_session=auth_session_context,
+                    url=source_url,
+                )
+            )
             structured_result = await self._try_structured_navigation(
                 effective_task,
                 handoff=handoff,

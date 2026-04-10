@@ -62,6 +62,10 @@ class AuthSessionState:
     source_stage: str
     reason: str
     browser_session_id: str
+    browser_type: str
+    credential_broker: str
+    broker_profile: str
+    domain: str
     confirmed_at: str
     updated_at: str
     expires_at: str
@@ -80,6 +84,10 @@ class AuthSessionState:
             "source_stage": self.source_stage,
             "reason": self.reason,
             "browser_session_id": self.browser_session_id,
+            "browser_type": self.browser_type,
+            "credential_broker": self.credential_broker,
+            "broker_profile": self.broker_profile,
+            "domain": self.domain,
             "confirmed_at": self.confirmed_at,
             "updated_at": self.updated_at,
             "expires_at": self.expires_at,
@@ -133,6 +141,10 @@ def normalize_auth_session_entry(
         source_stage=_clean_text(payload.get("source_stage"), limit=96),
         reason=_clean_text(payload.get("reason"), limit=96) or "login_confirmed",
         browser_session_id=_clean_text(payload.get("browser_session_id") or session_id, limit=96),
+        browser_type=_clean_text(payload.get("browser_type"), limit=32).lower(),
+        credential_broker=_clean_text(payload.get("credential_broker"), limit=64).lower(),
+        broker_profile=_clean_text(payload.get("broker_profile"), limit=96),
+        domain=_clean_text(payload.get("domain"), limit=160).lower() or _infer_service_from_url(url),
         confirmed_at=_to_iso_z(confirmed_dt),
         updated_at=_to_iso_z(updated_dt),
         expires_at=_to_iso_z(expires_dt),
