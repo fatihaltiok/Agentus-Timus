@@ -184,6 +184,18 @@ class TestBrowserRetryHandler:
         # Normale Seite
         result_normal = {"status": "opened", "content": "Welcome"}
         assert retry_handler._is_captcha_blocked(result_normal) is False
+
+    def test_page_content_detection_infers_specific_challenge_type(self):
+        """Testet Challenge-Typisierung fuer Page-Content."""
+        from tools.browser_tool.retry_handler import retry_handler
+
+        result = retry_handler.check_page_content_for_captcha(
+            "<html><body><div class='hcaptcha'>Please verify you are a human</div></body></html>"
+        )
+
+        assert result["is_blocked"] is True
+        assert result["challenge_type"] == "hcaptcha"
+        assert result["suggestion"] == "Manual intervention required - CAPTCHA present"
     
     def test_retryable_error_detection(self):
         """Testet Retry-Fehler-Erkennung."""

@@ -74,6 +74,55 @@ def _default_message(status: str, *, service: str = "") -> str:
     return "Workflow-Status aktualisiert."
 
 
+def _default_challenge_message(*, service: str = "", challenge_type: str = "") -> str:
+    service_label = str(service or "der Dienst").strip()
+    challenge = str(challenge_type or "").strip().lower()
+    if challenge == "cloudflare_challenge":
+        return f"{service_label} zeigt eine Cloudflare-Sicherheitspruefung."
+    if challenge == "recaptcha":
+        return f"{service_label} zeigt ein reCAPTCHA vor dem eigentlichen Zugriff."
+    if challenge == "hcaptcha":
+        return f"{service_label} zeigt ein hCaptcha vor dem eigentlichen Zugriff."
+    if challenge == "2fa":
+        return f"{service_label} verlangt 2FA oder eine zusaetzliche Code-Bestaetigung."
+    if challenge == "access_denied":
+        return f"{service_label} blockiert den Zugriff momentan mit einer Sicherheitsmeldung."
+    if challenge == "human_verification":
+        return f"{service_label} verlangt eine menschliche Verifikation."
+    return f"{service_label} verlangt eine Sicherheitspruefung."
+
+
+def _default_challenge_user_action(*, service: str = "", challenge_type: str = "") -> str:
+    service_label = str(service or "dem Dienst").strip()
+    challenge = str(challenge_type or "").strip().lower()
+    if challenge == "2fa":
+        return (
+            f"Bitte gib den 2FA- oder SMS-Code selbst bei {service_label} ein und bestaetige danach die Fortsetzung."
+        )
+    if challenge in {"recaptcha", "hcaptcha", "cloudflare_challenge", "human_verification"}:
+        return (
+            f"Bitte loese die Challenge oder sichtbare Verifikation selbst bei {service_label} und bestaetige danach die Fortsetzung."
+        )
+    if challenge == "access_denied":
+        return (
+            f"Bitte pruefe die sichtbare Sicherheitsmeldung bei {service_label} selbst und beschreibe danach kurz, was dort steht."
+        )
+    return (
+        f"Bitte loese die sichtbare Sicherheitspruefung selbst bei {service_label} und bestaetige danach die Fortsetzung."
+    )
+
+
+def _default_challenge_resume_hint(challenge_type: str = "") -> str:
+    challenge = str(challenge_type or "").strip().lower()
+    if challenge == "2fa":
+        return (
+            "Sage danach 'weiter', '2FA erledigt' oder beschreibe, ob noch ein Code- oder Bestaetigungsdialog sichtbar ist."
+        )
+    return (
+        "Sage danach 'weiter', 'Challenge geloest' oder beschreibe die noch sichtbare Sicherheitspruefung, damit Timus gezielt fortsetzen kann."
+    )
+
+
 def _infer_status(payload: Mapping[str, Any], *, default_status: str = "") -> str:
     status = str(payload.get("status") or "").strip().lower()
     if status in _KNOWN_STATUSES:
@@ -123,6 +172,9 @@ def normalize_phase_d_workflow_payload(
     approval_scope = _clean_text(loaded.get("approval_scope"), limit=64).lower()
     step = _clean_text(loaded.get("step"), limit=64).lower()
     url = _clean_text(loaded.get("url"), limit=500)
+
+    if not resume_hint and status == "challenge_required":
+        resume_hint = _default_challenge_resume_hint(challenge_type)
 
     return {
         "schema_version": PHASE_D_WORKFLOW_SCHEMA_VERSION,
@@ -263,18 +315,27 @@ def build_challenge_required_workflow_payload(
     service: str = "",
     workflow_id: str = "",
     challenge_type: str = "",
+    reason: str = "security_challenge",
     message: str = "",
+    resume_hint: str = "",
     user_action_required: str = "",
 ) -> dict[str, Any]:
+    service_label = str(service or "der Dienst").strip()
+    normalized_challenge_type = _clean_text(challenge_type, limit=64).lower()
     return normalize_phase_d_workflow_payload(
         {
             "status": "challenge_required",
             "workflow_id": workflow_id,
             "workflow_kind": "assistive_action",
             "service": service,
-            "challenge_type": challenge_type,
-            "message": message,
-            "user_action_required": user_action_required,
+            "challenge_type": normalized_challenge_type,
+            "reason": reason,
+            "message": _clean_text(message)
+            or _default_challenge_message(service=service_label, challenge_type=normalized_challenge_type),
+            "resume_hint": _clean_text(resume_hint)
+            or _default_challenge_resume_hint(normalized_challenge_type),
+            "user_action_required": _clean_text(user_action_required)
+            or _default_challenge_user_action(service=service_label, challenge_type=normalized_challenge_type),
         },
         default_status="challenge_required",
     )

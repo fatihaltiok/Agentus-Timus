@@ -2,6 +2,59 @@
 
 ---
 
+## Fortschritt 2026-04-10 - Phase D5.1 Challenge Handover gestartet
+
+Nach D4.2 konnte Timus Auth-Sessions wiederverwenden und user-mediated Logins kontrolliert wieder aufnehmen. Was noch fehlte, war ein echter Challenge-Handover-Pfad: CAPTCHA-, 2FA- und Security-Challenges wurden zwar grob erkannt, aber noch nicht fein typisiert, nicht als eigener Resume-Pfad behandelt und nicht sauber genug an spaetere Follow-ups gebunden.
+
+Nachgezogen:
+
+- [approval_auth_contract.py](/home/fatih-ubuntu/dev/timus/orchestration/approval_auth_contract.py)
+  - `build_challenge_required_workflow_payload(...)` traegt jetzt auch:
+    - `reason`
+    - `resume_hint`
+  - neue typisierte Standard-Copy fuer:
+    - `cloudflare_challenge`
+    - `recaptcha`
+    - `hcaptcha`
+    - `2fa`
+    - `access_denied`
+    - `human_verification`
+    - Fallback `captcha`
+  - `normalize_phase_d_workflow_payload(...)` setzt fuer `challenge_required` jetzt automatisch einen Resume-Hinweis, wenn keiner mitgegeben wurde
+- [pending_workflow_state.py](/home/fatih-ubuntu/dev/timus/orchestration/pending_workflow_state.py)
+  - neue Reply-Klassifikation:
+    - `challenge_resolved`
+  - Reply-Payloads tragen jetzt auch `challenge_type` und `service`
+- [retry_handler.py](/home/fatih-ubuntu/dev/timus/tools/browser_tool/retry_handler.py)
+  - Challenge-Erkennung liefert jetzt neben `is_blocked` auch einen feineren `challenge_type`
+- [tool.py](/home/fatih-ubuntu/dev/timus/tools/browser_tool/tool.py)
+  - Browser-Challenge-Payloads nutzen jetzt die feinere Typisierung und einen echten Resume-Hinweis, statt nur generischer Blocker-Texte
+- [visual.py](/home/fatih-ubuntu/dev/timus/agent/agents/visual.py)
+  - offene `challenge_required`-Workflows koennen jetzt wieder aufgenommen werden
+  - `visual` behandelt `challenge_present`, `challenge_resolved` und geblockte Resume-Faelle jetzt getrennt
+  - wenn nach gemeldeter Challenge-Aufloesung kein authentischer Zustand sichtbar ist, faellt Timus wieder kontrolliert auf `challenge_required` zurueck statt auf ein unscharfes `awaiting_user`
+- [mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - Follow-up-Routing bevorzugt jetzt auch bei offenem `challenge_required`-Workflow wieder den urspruenglichen Source-Agent
+  - Pending-Workflow-Cleanup akzeptiert jetzt auch `challenge_resolved`, wenn derselbe Agent den Workflow ohne neuen Blocker sauber abschliesst
+- Tests:
+  - [test_approval_auth_contract.py](/home/fatih-ubuntu/dev/timus/tests/test_approval_auth_contract.py)
+  - [test_pending_workflow_state.py](/home/fatih-ubuntu/dev/timus/tests/test_pending_workflow_state.py)
+  - [test_browser_isolation.py](/home/fatih-ubuntu/dev/timus/tests/test_browser_isolation.py)
+  - [test_specialist_handoffs.py](/home/fatih-ubuntu/dev/timus/tests/test_specialist_handoffs.py)
+  - [test_android_chat_language.py](/home/fatih-ubuntu/dev/timus/tests/test_android_chat_language.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/approval_auth_contract.py orchestration/pending_workflow_state.py tools/browser_tool/retry_handler.py tools/browser_tool/tool.py agent/agents/visual.py server/mcp_server.py tests/test_approval_auth_contract.py tests/test_pending_workflow_state.py tests/test_browser_isolation.py tests/test_specialist_handoffs.py tests/test_android_chat_language.py`
+- `pytest -q tests/test_approval_auth_contract.py tests/test_browser_isolation.py`
+- `pytest -q tests/test_approval_auth_contract.py tests/test_pending_workflow_state.py tests/test_browser_isolation.py tests/test_specialist_handoffs.py tests/test_android_chat_language.py`
+
+Ergebnis:
+
+- `23 passed` im gezielten Contract-/Browser-Ring
+- `80 passed` im breiten D5-/Phase-D-Ring
+- `py_compile` gruen
+
 ## Fortschritt 2026-04-09 - Phase D4.2 echte Reuse-Priorisierung
 
 Mit D4.1 konnte Timus erfolgreiche Logins erstmals als `auth_session`-Zustand speichern. Es fehlte aber noch die eigentliche Priorisierung: ein vorhandener Session-Anker wurde im Login-Pfad noch nicht wirklich vor einem neuen Login-Versuch bevorzugt.

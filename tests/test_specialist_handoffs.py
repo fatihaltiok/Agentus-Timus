@@ -686,6 +686,58 @@ async def test_visual_resumes_pending_login_followup_after_user_reports_success(
 
 
 @pytest.mark.asyncio
+async def test_visual_resumes_pending_challenge_followup_after_user_reports_resolution(monkeypatch):
+    agent = VisualAgent(tools_description_string="")
+    progress_events = []
+
+    def _progress_callback(*args, **kwargs):
+        if kwargs:
+            progress_events.append(kwargs)
+            return
+        stage = args[0] if len(args) > 0 else ""
+        payload = args[1] if len(args) > 1 else {}
+        progress_events.append({"stage": stage, "payload": payload})
+
+    async def _fake_detect_authenticated_session_state(self, service: str):
+        return {
+            "success": True,
+            "positive_hits": ["repositories", "profile"],
+            "negative_hits": [],
+            "text_preview": "repositories profile",
+        }
+
+    monkeypatch.setattr(VisualAgent, "_detect_authenticated_session_state", _fake_detect_authenticated_session_state)
+    setattr(agent, "_delegation_progress_callback", _progress_callback)
+
+    task = "\n".join(
+        [
+            "# FOLLOW-UP CONTEXT",
+            "last_agent: meta",
+            "pending_workflow_id: wf_login_challenge",
+            "pending_workflow_status: challenge_required",
+            "pending_workflow_service: github",
+            "pending_workflow_reason: security_challenge",
+            "pending_workflow_url: https://github.com/login",
+            "pending_workflow_challenge_type: 2fa",
+            "pending_workflow_source_agent: visual",
+            "pending_workflow_reply_kind: challenge_resolved",
+            "",
+            "# CURRENT USER QUERY",
+            "2fa erledigt, weiter",
+        ]
+    )
+
+    result = await agent.run(task)
+
+    assert "Login bei github wirkt bestaetigt" in result
+    assert progress_events
+    payload = progress_events[-1]["payload"]
+    assert payload["kind"] == "auth_session"
+    assert payload["auth_session_service"] == "github"
+    assert payload["auth_session_status"] == "authenticated"
+
+
+@pytest.mark.asyncio
 async def test_visual_reuses_existing_auth_session_before_new_login_flow(monkeypatch):
     agent = VisualAgent(tools_description_string="")
     progress_events = []

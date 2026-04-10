@@ -568,6 +568,24 @@ def test_pending_login_workflow_resume_prefers_source_agent_and_serializes_reply
     assert "pending_workflow_url: https://github.com/login" in augmented
 
 
+def test_followup_resolver_prefers_visual_for_challenge_resume():
+    capsule = {
+        "last_agent": "meta",
+        "pending_workflow": {
+            "status": "challenge_required",
+            "reason": "security_challenge",
+            "service": "github",
+            "source_agent": "visual",
+        },
+        "pending_workflow_reply": {
+            "reply_kind": "challenge_resolved",
+            "source_agent": "visual",
+        },
+    }
+
+    assert mcp_server._resolve_followup_agent("2fa erledigt, weiter", capsule) == "visual"
+
+
 def test_store_auth_session_in_capsule_roundtrips_into_followup_capsule(tmp_path, monkeypatch):
     mcp_server._chat_history.clear()
     monkeypatch.setenv("TIMUS_SESSION_STORAGE_ROOT", str(tmp_path))

@@ -91,15 +91,15 @@ def _build_browser_challenge_payload(
     title: str = "",
     challenge_type: str = "captcha",
     message: str = "",
+    resume_hint: str = "",
     user_action_required: str = "",
 ) -> dict[str, Any]:
     payload = build_challenge_required_workflow_payload(
         service=_infer_service_from_url(url),
         challenge_type=challenge_type,
-        message=message or "Die Seite verlangt eine Sicherheitspruefung vor weiterem Zugriff.",
-        user_action_required=user_action_required or (
-            "Bitte loese die Sicherheitspruefung selbst oder bestaetige, wie Timus fortsetzen soll."
-        ),
+        message=message,
+        resume_hint=resume_hint,
+        user_action_required=user_action_required,
     )
     payload.update(
         {
@@ -289,19 +289,14 @@ async def open_url(url: str, session_id: str = "default") -> dict:
         challenge_check = retry_handler.check_page_content_for_captcha(page_content)
         if challenge_check.get("is_blocked"):
             log.warning(f"Seite {url} wird durch Blocker geschützt.")
-            indicators = [str(item or "").lower() for item in challenge_check.get("indicators") or ()]
-            challenge_type = "cloudflare_challenge" if any(
-                "cloudflare" in indicator or "cf-" in indicator for indicator in indicators
-            ) else "captcha"
+            challenge_type = str(challenge_check.get("challenge_type") or "").strip().lower() or "captcha"
             return _build_browser_challenge_payload(
                 url=url,
                 session_id=session_id,
                 title=await page.title(),
                 challenge_type=challenge_type,
-                message="Die Seite blockiert automatischen Zugriff mit einer Sicherheitspruefung.",
-                user_action_required=(
-                    "Bitte loese die Challenge selbst und bestaetige danach, ob Timus den Workflow "
-                    "fortsetzen soll."
+                resume_hint=(
+                    "Sage danach 'weiter', 'Challenge geloest' oder beschreibe kurz, welche Sicherheitspruefung noch sichtbar ist."
                 ),
             )
 

@@ -34,6 +34,14 @@ _CHALLENGE_PATTERNS = (
     r"\bchallenge\b",
     r"\bsicherheits(?:pruefung|prüfung)\b",
 )
+_CHALLENGE_RESOLVED_PATTERNS = (
+    r"\bcaptcha\s+(?:geloest|gelöst|fertig|erledigt|weg)\b",
+    r"\b2fa\s+(?:fertig|erledigt|durch|bestaetigt)\b",
+    r"\bcode\s+(?:eingegeben|bestaetigt|fertig|erledigt)\b",
+    r"\bchallenge\s+(?:geloest|gelöst|fertig|erledigt)\b",
+    r"\bverifikation\s+(?:abgeschlossen|fertig|erledigt)\b",
+    r"\bsecurity\s+check\s+(?:done|resolved)\b",
+)
 _FAILURE_PATTERNS = (
     r"\bgeht\s+nicht\b",
     r"\bklappt\s+nicht\b",
@@ -163,7 +171,9 @@ def classify_pending_workflow_reply(
         return {}
 
     reply_kind = ""
-    if any(re.search(pattern, normalized_query) for pattern in _CHALLENGE_PATTERNS):
+    if any(re.search(pattern, normalized_query) for pattern in _CHALLENGE_RESOLVED_PATTERNS):
+        reply_kind = "challenge_resolved"
+    elif any(re.search(pattern, normalized_query) for pattern in _CHALLENGE_PATTERNS):
         reply_kind = "challenge_present"
     elif any(re.search(pattern, normalized_query) for pattern in _FAILURE_PATTERNS):
         reply_kind = "resume_blocked"
@@ -179,6 +189,8 @@ def classify_pending_workflow_reply(
         "status": str(normalized_workflow.get("status") or ""),
         "reason": str(normalized_workflow.get("reason") or ""),
         "source_agent": str(normalized_workflow.get("source_agent") or ""),
+        "challenge_type": str(normalized_workflow.get("challenge_type") or ""),
+        "service": str(normalized_workflow.get("service") or ""),
     }
 
 

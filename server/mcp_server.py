@@ -1993,9 +1993,17 @@ def _resolve_followup_agent(query: str, capsule: dict[str, str]) -> str:
     pending_reply_kind = str(pending_workflow_reply.get("reply_kind") or "").strip().lower()
     if (
         pending_source_agent
-        and pending_status == "awaiting_user"
-        and pending_reason == "user_mediated_login"
-        and pending_reply_kind in {"resume_requested", "challenge_present", "resume_blocked"}
+        and (
+            (
+                pending_status == "awaiting_user"
+                and pending_reason == "user_mediated_login"
+                and pending_reply_kind in {"resume_requested", "challenge_present", "resume_blocked", "challenge_resolved"}
+            )
+            or (
+                pending_status == "challenge_required"
+                and pending_reply_kind in {"resume_requested", "challenge_present", "resume_blocked", "challenge_resolved"}
+            )
+        )
     ):
         return pending_source_agent
     if not last_agent:
@@ -4445,7 +4453,7 @@ async def canvas_chat(request: Request):
                 str((meta_classification or {}).get("dominant_turn_type") or "").strip().lower()
                 in {"approval_response", "auth_response", "handover_resume"}
                 or (
-                    pending_workflow_reply_kind == "resume_requested"
+                    pending_workflow_reply_kind in {"resume_requested", "challenge_resolved"}
                     and agent == str(previous_pending_workflow.get("source_agent") or "").strip()
                 )
             )

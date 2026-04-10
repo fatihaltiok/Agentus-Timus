@@ -71,3 +71,20 @@ def test_build_user_mediated_login_workflow_payload_sets_resume_and_url():
     assert payload["reason"] == "user_mediated_login"
     assert payload["step"] == "login_form_ready"
     assert "weiter" in payload["resume_hint"].lower()
+
+
+def test_build_challenge_required_workflow_payload_sets_resume_hint_and_type_specific_copy():
+    from orchestration.approval_auth_contract import build_challenge_required_workflow_payload
+
+    payload = build_challenge_required_workflow_payload(
+        service="github",
+        challenge_type="2fa",
+    )
+
+    assert payload["status"] == "challenge_required"
+    assert payload["challenge_required"] is True
+    assert payload["challenge_type"] == "2fa"
+    assert payload["reason"] == "security_challenge"
+    assert "2FA" in payload["message"]
+    assert "2FA" in payload["resume_hint"]
+    assert "SMS-Code" in payload["user_action_required"]

@@ -65,3 +65,22 @@ def test_classify_pending_workflow_reply_detects_challenge_update():
     )
 
     assert result["reply_kind"] == "challenge_present"
+
+
+def test_classify_pending_workflow_reply_detects_challenge_resolved():
+    from orchestration.pending_workflow_state import classify_pending_workflow_reply
+
+    result = classify_pending_workflow_reply(
+        "2fa erledigt, ich bin weiter",
+        {
+            "status": "challenge_required",
+            "reason": "security_challenge",
+            "challenge_type": "2fa",
+            "service": "github",
+            "source_agent": "visual",
+        },
+    )
+
+    assert result["reply_kind"] == "challenge_resolved"
+    assert result["challenge_type"] == "2fa"
+    assert result["service"] == "github"

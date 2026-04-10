@@ -199,6 +199,32 @@ class BrowserRetryHandler:
         # Sonstige nicht retry-würdig (z.B. User-Fehler)
         return False
 
+    def _infer_challenge_type(self, indicators: list[str], content: str = "") -> str:
+        combined = " ".join(str(item or "") for item in indicators).lower()
+        content_lower = str(content or "").lower()
+        searchable = f"{combined} {content_lower}"
+
+        if any(
+            marker in searchable
+            for marker in (
+                "cloudflare",
+                "cf-browser-verification",
+                "challenge-platform",
+                "cf-turnstile",
+                "just a moment",
+            )
+        ):
+            return "cloudflare_challenge"
+        if "hcaptcha" in searchable:
+            return "hcaptcha"
+        if "recaptcha" in searchable:
+            return "recaptcha"
+        if "access denied" in searchable:
+            return "access_denied"
+        if "verify you are a human" in searchable or "human verification" in searchable:
+            return "human_verification"
+        return "captcha"
+
     def check_page_content_for_captcha(self, content: str) -> Dict[str, Any]:
         """
         Analysiert Page-Content auf CAPTCHA/Block-Indikatoren.
@@ -217,20 +243,24 @@ class BrowserRetryHandler:
                 found_indicators.append(indicator)
 
         is_blocked = len(found_indicators) > 0
+        challenge_type = self._infer_challenge_type(found_indicators, content)
 
         suggestion = None
         if is_blocked:
-            if any("cloudflare" in i.lower() or "cf-" in i.lower() for i in found_indicators):
+            if challenge_type == "cloudflare_challenge":
                 suggestion = "Wait and retry - Cloudflare challenge may resolve"
-            elif any("captcha" in i.lower() for i in found_indicators):
+            elif challenge_type in {"captcha", "recaptcha", "hcaptcha", "human_verification"}:
                 suggestion = "Manual intervention required - CAPTCHA present"
+            elif challenge_type == "access_denied":
+                suggestion = "Manual intervention required - site blocks automated access"
             else:
                 suggestion = "Site may be blocking automated access"
 
         return {
             "is_blocked": is_blocked,
             "indicators": found_indicators,
-            "suggestion": suggestion
+            "suggestion": suggestion,
+            "challenge_type": challenge_type if is_blocked else "",
         }
 
 

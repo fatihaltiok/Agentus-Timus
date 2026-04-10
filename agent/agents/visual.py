@@ -475,7 +475,9 @@ class VisualAgent(BaseAgent):
         reason = self._extract_followup_field(source, "pending_workflow_reason").lower()
         reply_kind = self._extract_followup_field(source, "pending_workflow_reply_kind").lower()
         source_agent = self._extract_followup_field(source, "pending_workflow_source_agent").lower()
-        if status != "awaiting_user" or reason != "user_mediated_login" or not reply_kind:
+        is_login_resume = status == "awaiting_user" and reason == "user_mediated_login"
+        is_challenge_resume = status == "challenge_required"
+        if (not is_login_resume and not is_challenge_resume) or not reply_kind:
             return {}
         return {
             "workflow_id": self._extract_followup_field(source, "pending_workflow_workflow_id")
@@ -485,6 +487,8 @@ class VisualAgent(BaseAgent):
             "service": self._extract_followup_field(source, "pending_workflow_service").lower(),
             "url": self._extract_followup_field(source, "pending_workflow_url"),
             "reply_kind": reply_kind,
+            "challenge_type": self._extract_followup_field(source, "pending_workflow_challenge_type").lower(),
+            "resume_hint": self._extract_followup_field(source, "pending_workflow_resume_hint"),
             "source_agent": source_agent,
             "current_query": self._extract_followup_current_query(source),
         }
@@ -593,10 +597,18 @@ class VisualAgent(BaseAgent):
     @staticmethod
     def _infer_challenge_type_from_query(query: str) -> str:
         lowered = str(query or "").strip().lower()
+        if "cloudflare" in lowered or "turnstile" in lowered:
+            return "cloudflare_challenge"
+        if "hcaptcha" in lowered:
+            return "hcaptcha"
+        if "recaptcha" in lowered:
+            return "recaptcha"
         if "captcha" in lowered:
             return "captcha"
         if "2fa" in lowered or "authenticator" in lowered or "sms" in lowered or "code" in lowered:
             return "2fa"
+        if "access denied" in lowered:
+            return "access_denied"
         return "security_challenge"
 
     @staticmethod
@@ -649,22 +661,33 @@ class VisualAgent(BaseAgent):
         url = str(context.get("url") or "").strip()
         reply_kind = str(context.get("reply_kind") or "").strip().lower()
         workflow_id = str(context.get("workflow_id") or "").strip()
+        workflow_status = str(context.get("status") or "").strip().lower()
         current_query = str(context.get("current_query") or "").strip()
+        challenge_type = (
+            str(context.get("challenge_type") or "").strip().lower()
+            or self._infer_challenge_type_from_query(current_query)
+        )
 
         if reply_kind == "challenge_present":
             payload = build_challenge_required_workflow_payload(
                 service=service,
                 workflow_id=workflow_id,
-                challenge_type=self._infer_challenge_type_from_query(current_query),
-                message="Ich sehe den Login noch nicht als abgeschlossen, sondern als Sicherheitspruefung.",
-                user_action_required=(
-                    "Bitte loese die Challenge oder 2FA selbst im Browser und sag danach wieder 'weiter'."
-                ),
+                challenge_type=challenge_type,
+                message="Ich sehe den Login noch nicht als abgeschlossen; die Sicherheitspruefung ist weiterhin aktiv.",
             )
             self._emit_user_action_blocker(payload, stage="await_login_challenge_resolution")
             return f"{payload['message']}\n\n{payload['user_action_required']}".strip()
 
         if reply_kind == "resume_blocked":
+            if workflow_status == "challenge_required":
+                payload = build_challenge_required_workflow_payload(
+                    service=service,
+                    workflow_id=workflow_id,
+                    challenge_type=challenge_type,
+                    message="Die Sicherheitspruefung scheint noch nicht geloest zu sein.",
+                )
+                self._emit_user_action_blocker(payload, stage="await_login_challenge_resolution")
+                return f"{payload['message']}\n\n{payload['user_action_required']}".strip()
             payload = build_awaiting_user_workflow_payload(
                 service=service,
                 workflow_id=workflow_id,
@@ -692,6 +715,16 @@ class VisualAgent(BaseAgent):
                 f"Der Login bei {service or 'dem Dienst'} wirkt bestaetigt. "
                 f"Der user-mediated Login-Workflow ist damit abgeschlossen.{suffix}"
             ).strip()
+
+        if workflow_status == "challenge_required" or reply_kind == "challenge_resolved":
+            payload = build_challenge_required_workflow_payload(
+                service=service,
+                workflow_id=workflow_id,
+                challenge_type=challenge_type,
+                message="Ich kann nach der Sicherheitspruefung noch keinen bestaetigten eingeloggten Zustand erkennen.",
+            )
+            self._emit_user_action_blocker(payload, stage="await_login_challenge_resolution")
+            return f"{payload['message']}\n\n{payload['user_action_required']}".strip()
 
         payload = build_awaiting_user_workflow_payload(
             service=service,

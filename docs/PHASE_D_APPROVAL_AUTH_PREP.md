@@ -1,6 +1,6 @@
 # Phase D Vorbereitung - Approval, Auth und User Handover
 
-Stand: 2026-04-06
+Stand: 2026-04-10
 
 Diese Datei bereitet Phase D vor, ohne bereits echte Nutzerfreigaben, Login-Automation oder Session-Reuse live einzuschalten.
 
@@ -251,6 +251,23 @@ Phase D braucht einen gemeinsamen Nutzeraktions-Vertrag, statt fuer jede Plattfo
 
 - CAPTCHA / 2FA / Security-Checks sauber an den Nutzer uebergeben
 - kein blindes Weiterprobieren
+- D5.1:
+  - Browser- und Visual-Pfade unterscheiden Challenges jetzt feiner:
+    - `cloudflare_challenge`
+    - `recaptcha`
+    - `hcaptcha`
+    - `2fa`
+    - `access_denied`
+    - `human_verification`
+    - Fallback `captcha`
+  - `challenge_required`-Payloads tragen jetzt typisierte Standardtexte plus `resume_hint`
+  - Pending-Workflow-Replys erkennen jetzt zusaetzlich:
+    - `challenge_resolved`
+  - offene `challenge_required`-Workflows werden im Follow-up-Routing jetzt wieder gezielt an den urspruenglichen Source-Agent gebunden
+  - `visual` kann offene Login-Challenges jetzt als eigenen Resume-Pfad behandeln:
+    - erneute Challenge sichtbar -> `challenge_required`
+    - Challenge geloest und Auth verifiziert -> Workflow abgeschlossen
+    - Challenge angeblich geloest, aber kein Auth-Nachweis -> wieder `challenge_required`
 
 ## Nicht Teil der Vorbereitung
 
