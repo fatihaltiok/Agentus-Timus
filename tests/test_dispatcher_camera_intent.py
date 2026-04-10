@@ -118,6 +118,35 @@ def test_build_visual_login_handoff_preserves_auth_session_context():
     assert "- auth_session_url: https://github.com/settings/profile" in handoff
 
 
+def test_visual_login_followup_context_is_preserved_for_resume():
+    import main_dispatcher
+
+    followup_query = "\n".join(
+        [
+            "# FOLLOW-UP CONTEXT",
+            "pending_workflow_status: awaiting_user",
+            "pending_workflow_reason: user_mediated_login",
+            "pending_workflow_source_agent: visual_login",
+            "",
+            "# CURRENT USER QUERY",
+            "ich sehe jetzt eine 2fa challenge",
+        ]
+    )
+
+    assert main_dispatcher._should_preserve_visual_login_followup(followup_query) is True
+
+
+def test_visual_login_new_task_is_still_wrapped():
+    import main_dispatcher
+
+    assert (
+        main_dispatcher._should_preserve_visual_login_followup(
+            "Oeffne github.com/login und fuehre mich bis zur Login-Maske."
+        )
+        is False
+    )
+
+
 def test_quick_intent_keeps_service_start_on_shell():
     import main_dispatcher
 

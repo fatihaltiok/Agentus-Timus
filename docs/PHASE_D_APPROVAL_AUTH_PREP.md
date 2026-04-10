@@ -283,6 +283,17 @@ Phase D braucht einen gemeinsamen Nutzeraktions-Vertrag, statt fuer jede Plattfo
     - Resolution-Rate
     - Reblock-Rate
     - Aufschluesselung nach Challenge-Typ und Reply-Kind
+- D5.3:
+  - der frische Live-Fall `login-maske -> 2fa challenge` haelt jetzt auch in einer neuen Session wieder durch
+  - `visual_login`-Follow-ups behalten `# FOLLOW-UP CONTEXT` im Dispatcher statt neu als frischer Login-Handoff gewrappt zu werden
+  - wenn die Login-Maske bereits sichtbar ist, aber der Visual-Pfad irrtuemlich als `success` zurueckkommt, wird das jetzt wieder zu einem echten `awaiting_user`-Workflow normalisiert
+  - Live-Nachweis:
+    - Session `d5_live_verify_20260410_fix_d`
+    - Step 1 emittiert wieder `pending_workflow_updated`
+    - Step 2 emittiert `challenge_resume`
+    - der Follow-up bleibt auf `visual_login` mit `route_source = followup_capsule`
+  - offener Rest:
+    - echte `challenge_required` / `challenge_reblocked` / `challenge_resolved`-Live-Nachweise haengen weiter an einem real sichtbaren Challenge-Screen, nicht mehr an der Follow-up-Verankerung
 
 ## Nicht Teil der Vorbereitung
 

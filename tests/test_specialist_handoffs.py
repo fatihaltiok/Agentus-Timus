@@ -633,6 +633,78 @@ async def test_visual_login_flow_stops_at_login_maske_and_returns_awaiting_user(
 
 
 @pytest.mark.asyncio
+async def test_visual_login_success_result_is_rewrapped_as_phase_d_pending_when_not_authenticated(monkeypatch):
+    agent = VisualAgent(tools_description_string="")
+    specialist_context = build_specialist_context_payload(
+        current_topic="GitHub Login",
+        active_goal="Bis zur Login-Maske navigieren und dann uebergeben",
+        open_loop="Login kontrolliert vorbereiten",
+        next_expected_step="Nur bis zur Login-Maske gehen",
+        turn_type="new_task",
+        response_mode="execute",
+        user_preferences=["Login user-mediated"],
+    )
+    task = (
+        "# DELEGATION HANDOFF\n"
+        "target_agent: visual\n"
+        "goal: Oeffne github.com/login und fuehre mich bis zur Login-Maske.\n"
+        "expected_output: login_handoff\n"
+        "success_signal: login maske sichtbar\n"
+        "handoff_data:\n"
+        "- source_url: https://github.com/login\n"
+        "- expected_state: login_dialog\n"
+        "- original_user_task: Oeffne github.com/login und fuehre mich bis zur Login-Maske.\n"
+        f"- specialist_context_json: {json.dumps(specialist_context, ensure_ascii=False, sort_keys=True)}\n"
+    )
+
+    progress_events = []
+
+    def _progress_callback(*args, **kwargs):
+        if kwargs:
+            progress_events.append(kwargs)
+            return
+        stage = args[0] if len(args) > 0 else ""
+        payload = args[1] if len(args) > 1 else {}
+        progress_events.append({"stage": stage, "payload": payload})
+
+    async def _fake_detect_dynamic_ui_and_set_roi(self, task_text: str):
+        return False
+
+    async def _fake_try_structured_navigation(self, task_text: str, *, handoff=None, auth_session=None):
+        return {
+            "success": True,
+            "result": "login_handoff — GitHub-Login-Maske ist sichtbar und bereit zur nutzergesteuerten Anmeldung.",
+            "current_state": "login_modal",
+        }
+
+    async def _fake_detect_authenticated_session_state(self, service: str):
+        return {
+            "success": False,
+            "positive_hits": [],
+            "negative_hits": ["login", "password"],
+            "text_preview": "login password",
+        }
+
+    monkeypatch.setattr(VisualAgent, "_detect_dynamic_ui_and_set_roi", _fake_detect_dynamic_ui_and_set_roi)
+    monkeypatch.setattr(VisualAgent, "_try_structured_navigation", _fake_try_structured_navigation)
+    monkeypatch.setattr(VisualAgent, "_detect_authenticated_session_state", _fake_detect_authenticated_session_state)
+    setattr(agent, "_delegation_progress_callback", _progress_callback)
+
+    result = await agent.run(task)
+
+    assert isinstance(result, dict)
+    assert result["status"] == "awaiting_user"
+    assert result["service"] == "github"
+    assert result["reason"] == "user_mediated_login"
+    assert result["current_state"] == "login_modal"
+    assert progress_events
+    payload = progress_events[-1]["payload"]
+    assert payload["kind"] == "blocker"
+    assert payload["status"] == "awaiting_user"
+    assert payload["workflow_reason"] == "user_mediated_login"
+
+
+@pytest.mark.asyncio
 async def test_visual_resumes_pending_login_followup_after_user_reports_success(monkeypatch):
     agent = VisualAgent(tools_description_string="")
     progress_events = []
@@ -735,6 +807,56 @@ async def test_visual_resumes_pending_challenge_followup_after_user_reports_reso
     assert payload["kind"] == "auth_session"
     assert payload["auth_session_service"] == "github"
     assert payload["auth_session_status"] == "authenticated"
+
+
+@pytest.mark.asyncio
+async def test_visual_resumes_pending_login_followup_for_visual_login_source_agent(monkeypatch):
+    agent = VisualAgent(tools_description_string="")
+    progress_events = []
+
+    def _progress_callback(*args, **kwargs):
+        if kwargs:
+            progress_events.append(kwargs)
+            return
+        stage = args[0] if len(args) > 0 else ""
+        payload = args[1] if len(args) > 1 else {}
+        progress_events.append({"stage": stage, "payload": payload})
+
+    async def _fake_detect_authenticated_session_state(self, service: str):
+        return {
+            "success": True,
+            "positive_hits": ["repositories", "profile"],
+            "negative_hits": [],
+            "text_preview": "repositories profile",
+        }
+
+    monkeypatch.setattr(VisualAgent, "_detect_authenticated_session_state", _fake_detect_authenticated_session_state)
+    setattr(agent, "_delegation_progress_callback", _progress_callback)
+
+    task = "\n".join(
+        [
+            "# FOLLOW-UP CONTEXT",
+            "last_agent: meta",
+            "pending_workflow_id: wf_login_visual_login",
+            "pending_workflow_status: awaiting_user",
+            "pending_workflow_service: github",
+            "pending_workflow_reason: user_action_required",
+            "pending_workflow_url: https://github.com/login",
+            "pending_workflow_source_agent: visual_login",
+            "pending_workflow_reply_kind: resume_requested",
+            "",
+            "# CURRENT USER QUERY",
+            "ich bin eingeloggt",
+        ]
+    )
+
+    result = await agent.run(task)
+
+    assert "Login bei github wirkt bestaetigt" in result
+    assert progress_events
+    payload = progress_events[-1]["payload"]
+    assert payload["kind"] == "auth_session"
+    assert payload["auth_session_service"] == "github"
 
 
 @pytest.mark.asyncio

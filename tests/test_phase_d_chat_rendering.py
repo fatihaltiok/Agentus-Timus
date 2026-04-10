@@ -32,3 +32,32 @@ def test_render_chat_reply_keeps_plain_strings_unchanged():
 
     assert reply == "GitHub-Loginmaske ist geoeffnet und bereit zur Eingabe."
     assert workflow is None
+
+
+def test_render_chat_reply_uses_nested_phase_d_workflow_metadata():
+    reply, workflow = _render_chat_reply(
+        {
+            "status": "success",
+            "result": "partial_result — GitHub-Login-Maske ist sichtbar und bereit zur nutzergesteuerten Anmeldung.",
+            "metadata": {
+                "phase_d_workflow": {
+                    "status": "awaiting_user",
+                    "workflow_id": "wf_nested_1",
+                    "service": "github",
+                    "url": "https://github.com/login",
+                    "reason": "user_mediated_login",
+                    "message": "Die Login-Maske ist bereit.",
+                    "user_action_required": "Bitte fuehre den Login selbst aus.",
+                    "resume_hint": "Sage danach 'weiter'.",
+                    "awaiting_user": True,
+                }
+            },
+        }
+    )
+
+    assert reply.startswith("Die Login-Maske ist bereit.")
+    assert "Naechster Schritt: Bitte fuehre den Login selbst aus." in reply
+    assert "Danach: Sage danach 'weiter'." in reply
+    assert workflow is not None
+    assert workflow["status"] == "awaiting_user"
+    assert workflow["workflow_id"] == "wf_nested_1"

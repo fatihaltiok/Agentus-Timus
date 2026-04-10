@@ -428,6 +428,11 @@ def _build_visual_login_handoff(query: str) -> str:
     return "\n".join(lines)
 
 
+def _should_preserve_visual_login_followup(query: str) -> bool:
+    source = str(query or "")
+    return "# FOLLOW-UP CONTEXT" in source and "# CURRENT USER QUERY" in source
+
+
 def _dispatcher_content_to_text(content: Any) -> str:
     if isinstance(content, str):
         return _strip_dispatcher_think_tags(content)
@@ -2993,12 +2998,15 @@ async def run_agent(
                 + f"\n\n# ORIGINAL USER TASK\n{clean_meta_query}"
             )
     elif agent_name == "visual_login":
-        visual_login_handoff = _build_visual_login_handoff(query)
         runtime_metadata["phase_d_visual_login"] = {
             "source_url": _extract_dispatcher_browser_url(query),
-            "wrapped": True,
+            "wrapped": not _should_preserve_visual_login_followup(query),
         }
-        agent_query = visual_login_handoff
+        if _should_preserve_visual_login_followup(query):
+            agent_query = query
+        else:
+            visual_login_handoff = _build_visual_login_handoff(query)
+            agent_query = visual_login_handoff
 
     log.info(f"\n🚀 Starte Agent: {agent_name.upper()}")
     _emit_dispatcher_status(agent_name, "start", "Initialisiere Agent")

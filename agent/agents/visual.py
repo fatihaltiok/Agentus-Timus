@@ -124,6 +124,36 @@ class VisualAgent(BaseAgent):
             status=str(normalized_payload.get("status") or "").strip(),
         )
 
+    @staticmethod
+    def _build_phase_d_workflow_result(
+        payload: Any,
+        *,
+        result_text: str = "",
+        **extra: Any,
+    ) -> dict[str, Any]:
+        normalized_payload = normalize_phase_d_workflow_payload(payload)
+        if not normalized_payload:
+            return {}
+        effective_result = str(
+            result_text
+            or normalized_payload.get("message")
+            or normalized_payload.get("error")
+            or normalized_payload.get("status")
+            or ""
+        ).strip()
+        response = {
+            **normalized_payload,
+            "success": False,
+            "result": effective_result,
+            "metadata": {
+                "phase_d_workflow": normalized_payload,
+            },
+        }
+        for key, value in extra.items():
+            if value is not None:
+                response[key] = value
+        return response
+
     def _emit_auth_session_ready(
         self,
         *,
@@ -475,7 +505,7 @@ class VisualAgent(BaseAgent):
         reason = self._extract_followup_field(source, "pending_workflow_reason").lower()
         reply_kind = self._extract_followup_field(source, "pending_workflow_reply_kind").lower()
         source_agent = self._extract_followup_field(source, "pending_workflow_source_agent").lower()
-        is_login_resume = status == "awaiting_user" and reason == "user_mediated_login"
+        is_login_resume = status == "awaiting_user" and reason in {"", "user_mediated_login", "user_action_required"}
         is_challenge_resume = status == "challenge_required"
         if (not is_login_resume and not is_challenge_resume) or not reply_kind:
             return {}
@@ -594,6 +624,61 @@ class VisualAgent(BaseAgent):
             },
         }
 
+    async def _normalize_login_flow_success_result(
+        self,
+        result: Dict[str, Any],
+        *,
+        handoff: Optional[DelegationHandoff],
+        effective_task: str,
+    ) -> Dict[str, Any]:
+        if not isinstance(result, dict) or not result.get("success"):
+            return result
+        if not self.current_structured_workflow_plan:
+            return result
+        if str(self.current_structured_workflow_plan.flow_type or "").strip().lower() != "login_flow":
+            return result
+
+        raw_metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+        auth_metadata = raw_metadata.get("auth_session") if isinstance(raw_metadata.get("auth_session"), dict) else {}
+        if auth_metadata:
+            return result
+        if str(result.get("current_state") or "").strip().lower() == "authenticated":
+            return result
+
+        source_url, service = self._resolve_login_target(handoff, effective_task)
+        verification = await self._detect_authenticated_session_state(service)
+        if verification.get("success"):
+            return result
+
+        payload = build_user_mediated_login_workflow_payload(
+            service=service,
+            url=source_url,
+            message=(
+                "Die Login-Maske ist sichtbar und bereit zur nutzergesteuerten Anmeldung. "
+                "Timus stoppt hier bewusst vor Benutzername, Passwort und 2FA."
+            ),
+            user_action_required=(
+                f"Bitte gib Benutzername, Passwort und ggf. 2FA selbst bei {service or 'dem Dienst'} ein."
+            ),
+            resume_hint=(
+                "Sage danach 'weiter', 'ich bin eingeloggt' oder beschreibe die sichtbare Challenge, "
+                "damit Timus kontrolliert fortsetzen kann."
+            ),
+        )
+        self._emit_user_action_blocker(payload, stage="await_login_completion")
+        phase_d_result = self._build_phase_d_workflow_result(
+            payload,
+            result_text=str(payload.get("message") or "").strip(),
+        )
+        for key in ("completed_steps", "current_state", "plan_id", "state"):
+            if key in result:
+                phase_d_result[key] = result[key]
+        if raw_metadata:
+            merged_metadata = dict(raw_metadata)
+            merged_metadata.update(phase_d_result.get("metadata") or {})
+            phase_d_result["metadata"] = merged_metadata
+        return phase_d_result
+
     @staticmethod
     def _infer_challenge_type_from_query(query: str) -> str:
         lowered = str(query or "").strip().lower()
@@ -676,7 +761,10 @@ class VisualAgent(BaseAgent):
                 message="Ich sehe den Login noch nicht als abgeschlossen; die Sicherheitspruefung ist weiterhin aktiv.",
             )
             self._emit_user_action_blocker(payload, stage="await_login_challenge_resolution")
-            return f"{payload['message']}\n\n{payload['user_action_required']}".strip()
+            return self._build_phase_d_workflow_result(
+                payload,
+                result_text=f"{payload['message']}\n\n{payload['user_action_required']}".strip(),
+            )
 
         if reply_kind == "resume_blocked":
             if workflow_status == "challenge_required":
@@ -687,7 +775,10 @@ class VisualAgent(BaseAgent):
                     message="Die Sicherheitspruefung scheint noch nicht geloest zu sein.",
                 )
                 self._emit_user_action_blocker(payload, stage="await_login_challenge_resolution")
-                return f"{payload['message']}\n\n{payload['user_action_required']}".strip()
+                return self._build_phase_d_workflow_result(
+                    payload,
+                    result_text=f"{payload['message']}\n\n{payload['user_action_required']}".strip(),
+                )
             payload = build_awaiting_user_workflow_payload(
                 service=service,
                 workflow_id=workflow_id,
@@ -699,7 +790,10 @@ class VisualAgent(BaseAgent):
                 user_action_required="Bitte schliesse den Login selbst im Browser ab oder gib die sichtbare Blockade an.",
             )
             self._emit_user_action_blocker(payload, stage="await_login_completion")
-            return f"{payload['message']}\n\n{payload['user_action_required']}".strip()
+            return self._build_phase_d_workflow_result(
+                payload,
+                result_text=f"{payload['message']}\n\n{payload['user_action_required']}".strip(),
+            )
 
         verification = await self._detect_authenticated_session_state(service)
         if verification.get("success"):
@@ -724,7 +818,10 @@ class VisualAgent(BaseAgent):
                 message="Ich kann nach der Sicherheitspruefung noch keinen bestaetigten eingeloggten Zustand erkennen.",
             )
             self._emit_user_action_blocker(payload, stage="await_login_challenge_resolution")
-            return f"{payload['message']}\n\n{payload['user_action_required']}".strip()
+            return self._build_phase_d_workflow_result(
+                payload,
+                result_text=f"{payload['message']}\n\n{payload['user_action_required']}".strip(),
+            )
 
         payload = build_awaiting_user_workflow_payload(
             service=service,
@@ -741,7 +838,10 @@ class VisualAgent(BaseAgent):
             ),
         )
         self._emit_user_action_blocker(payload, stage="await_login_completion")
-        return f"{payload['message']}\n\n{payload['user_action_required']}".strip()
+        return self._build_phase_d_workflow_result(
+            payload,
+            result_text=f"{payload['message']}\n\n{payload['user_action_required']}".strip(),
+        )
 
     async def _call_llm(self, messages: List[Dict]) -> str:
         if self.provider == ModelProvider.ANTHROPIC:
@@ -1332,7 +1432,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
 
     async def run(self, task: str) -> Any:
         pending_login_resume = self._extract_pending_login_resume_context(task)
-        if pending_login_resume and pending_login_resume.get("source_agent") in {"", "visual", "visual_nemotron"}:
+        if pending_login_resume and pending_login_resume.get("source_agent") in {"", "visual", "visual_login", "visual_nemotron"}:
             return await self._resume_user_mediated_login(pending_login_resume)
         handoff = parse_delegation_handoff(task)
         auth_session_context = self._extract_auth_session_context(task, handoff=handoff)
@@ -1407,6 +1507,11 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 auth_session=auth_session_context,
             )
             if structured_result:
+                structured_result = await self._normalize_login_flow_success_result(
+                    structured_result,
+                    handoff=handoff,
+                    effective_task=effective_task,
+                )
                 if structured_result.get("success"):
                     log.info(f"Strukturierte Navigation erfolgreich: {structured_result['result']}")
                     if roi_set:

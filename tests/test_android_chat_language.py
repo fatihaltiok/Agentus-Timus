@@ -568,6 +568,66 @@ def test_pending_login_workflow_resume_prefers_source_agent_and_serializes_reply
     assert "pending_workflow_url: https://github.com/login" in augmented
 
 
+@pytest.mark.asyncio
+async def test_canvas_chat_persists_phase_d_workflow_from_final_result_without_progress_hook(monkeypatch, tmp_path):
+    mcp_server._chat_history.clear()
+    monkeypatch.setenv("TIMUS_SESSION_STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setattr(mcp_server, "_semantic_store_chat_turn", lambda **kwargs: None)
+    monkeypatch.setattr(mcp_server, "_semantic_recall_chat_turns", lambda **kwargs: [])
+
+    async def fake_build_tools_description():
+        return "tools"
+
+    async def fake_get_agent_decision(query, session_id=None, request_id=""):
+        return "visual_login"
+
+    async def fake_run_agent(agent_name, query, tools_description, session_id=None):
+        assert agent_name == "visual_login"
+        return {
+            "status": "success",
+            "result": "partial_result — GitHub-Login-Maske ist sichtbar und bereit zur nutzergesteuerten Anmeldung.",
+            "metadata": {
+                "phase_d_workflow": {
+                    "status": "awaiting_user",
+                    "workflow_id": "wf_live_fallback",
+                    "service": "github",
+                    "url": "https://github.com/login",
+                    "reason": "user_mediated_login",
+                    "message": "Die Login-Maske ist bereit.",
+                    "user_action_required": "Bitte fuehre den Login selbst aus.",
+                    "resume_hint": "Sage danach 'weiter'.",
+                    "awaiting_user": True,
+                }
+            },
+        }
+
+    fake_dispatcher = SimpleNamespace(
+        get_agent_decision=fake_get_agent_decision,
+        run_agent=fake_run_agent,
+    )
+
+    monkeypatch.setattr(mcp_server, "_build_tools_description", fake_build_tools_description)
+    monkeypatch.setitem(sys.modules, "main_dispatcher", fake_dispatcher)
+
+    session_id = "phase_d_workflow_fallback"
+    response = await mcp_server.canvas_chat(
+        _FakeRequest(
+            {
+                "query": "oeffne github.com/login und bring mich bis zur login-maske",
+                "session_id": session_id,
+            }
+        )
+    )
+
+    assert response["status"] == "success"
+    assert response["agent"] == "visual_login"
+    assert response["phase_d_workflow"]["status"] == "awaiting_user"
+    capsule = mcp_server._load_session_capsule(session_id)
+    assert capsule["pending_workflow"]["status"] == "awaiting_user"
+    assert capsule["pending_workflow"]["workflow_id"] == "wf_live_fallback"
+    assert capsule["pending_workflow"]["source_agent"] == "visual_login"
+
+
 def test_followup_resolver_prefers_visual_for_challenge_resume():
     capsule = {
         "last_agent": "meta",
@@ -584,6 +644,25 @@ def test_followup_resolver_prefers_visual_for_challenge_resume():
     }
 
     assert mcp_server._resolve_followup_agent("2fa erledigt, weiter", capsule) == "visual"
+
+
+def test_followup_resolver_prefers_visual_login_for_challenge_present_on_pending_login():
+    capsule = {
+        "last_agent": "meta",
+        "pending_workflow": {
+            "status": "awaiting_user",
+            "reason": "user_action_required",
+            "service": "github",
+            "source_agent": "visual_login",
+        },
+        "pending_workflow_reply": {
+            "reply_kind": "challenge_present",
+            "challenge_type": "2fa",
+            "source_agent": "visual_login",
+        },
+    }
+
+    assert mcp_server._resolve_followup_agent("ich sehe jetzt eine 2fa challenge", capsule) == "visual_login"
 
 
 def test_build_challenge_resume_observation_payload_handles_pending_challenge_resume():
@@ -612,6 +691,33 @@ def test_build_challenge_resume_observation_payload_handles_pending_challenge_re
     assert payload["challenge_type"] == "2fa"
     assert payload["reply_kind"] == "challenge_resolved"
     assert payload["source_agent"] == "visual"
+
+
+def test_build_challenge_resume_observation_payload_handles_login_challenge_without_specific_reason():
+    capsule = {
+        "pending_workflow": {
+            "workflow_id": "wf_challenge_login",
+            "status": "awaiting_user",
+            "reason": "user_action_required",
+            "service": "github",
+            "challenge_type": "",
+            "source_agent": "visual_login",
+        },
+        "pending_workflow_reply": {
+            "reply_kind": "challenge_present",
+            "challenge_type": "2fa",
+            "service": "github",
+            "source_agent": "visual_login",
+        },
+    }
+
+    payload = mcp_server._build_challenge_resume_observation_payload(capsule)
+
+    assert payload["workflow_id"] == "wf_challenge_login"
+    assert payload["workflow_status"] == "awaiting_user"
+    assert payload["challenge_type"] == "2fa"
+    assert payload["reply_kind"] == "challenge_present"
+    assert payload["source_agent"] == "visual_login"
 
 
 def test_store_auth_session_in_capsule_roundtrips_into_followup_capsule(tmp_path, monkeypatch):

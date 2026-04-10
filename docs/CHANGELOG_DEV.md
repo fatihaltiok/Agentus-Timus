@@ -2,6 +2,50 @@
 
 ---
 
+## Fortschritt 2026-04-10 - D5 frische Session fuer Login- und Challenge-Resume gehaertet
+
+Der erste D5-Resume-Fix hat den Challenge-Follow-up zwar wieder an `visual_login` gebunden, aber ein frischer Login-Start konnte den Pending-Workflow noch verlieren: Wenn die Login-Maske bereits sichtbar war, kam der Visual-Pfad gelegentlich nur als plain `success` mit `login_handoff ...` zurueck. Dann fehlte `pending_workflow_updated`, und der direkte Follow-up `ich sehe jetzt eine 2fa challenge` fiel in einer neuen Session wieder auf `meta`.
+
+Geaendert:
+
+- [main_dispatcher.py](/home/fatih-ubuntu/dev/timus/main_dispatcher.py)
+  - `visual_login`-Follow-ups mit `# FOLLOW-UP CONTEXT` werden jetzt im Dispatcher nicht mehr erneut als frischer Login-Handoff gewrappt
+  - dadurch bleibt der Pending-Workflow-Kontext auf dem Resume-Pfad fuer `visual_login` erhalten
+- [agent/agents/visual.py](/home/fatih-ubuntu/dev/timus/agent/agents/visual.py)
+  - neuer Guard fuer `login_flow`:
+    - wenn ein Login-Task irrtuemlich als `success` endet, aber noch kein authentischer Zustand bestaetigt ist, wird das Ergebnis wieder in einen echten Phase-D-Workflow `awaiting_user` normalisiert
+  - damit bleibt auch der Fall `Login-Maske schon sichtbar` sauber user-mediated und schreibt wieder einen Pending-Workflow
+- [tests/test_dispatcher_camera_intent.py](/home/fatih-ubuntu/dev/timus/tests/test_dispatcher_camera_intent.py)
+  - Regression fuer erhaltenen `visual_login`-Follow-up-Kontext
+- [tests/test_specialist_handoffs.py](/home/fatih-ubuntu/dev/timus/tests/test_specialist_handoffs.py)
+  - neue Regression fuer den Fall:
+    - `login_flow`
+    - sichtbare Login-Maske
+    - fälschlich success
+    - wird wieder zu `awaiting_user`
+- [docs/PHASE_D_APPROVAL_AUTH_PREP.md](/home/fatih-ubuntu/dev/timus/docs/PHASE_D_APPROVAL_AUTH_PREP.md)
+  - D5.3-Livehaertung dokumentiert
+
+Verifikation:
+
+- `python -m py_compile agent/agents/visual.py main_dispatcher.py server/mcp_server.py tests/test_dispatcher_camera_intent.py tests/test_phase_d_chat_rendering.py tests/test_android_chat_language.py tests/test_specialist_handoffs.py`
+- `pytest -q tests/test_dispatcher_camera_intent.py tests/test_phase_d_chat_rendering.py tests/test_android_chat_language.py tests/test_pending_workflow_state.py tests/test_specialist_handoffs.py`
+  - `80 passed`
+
+Live-Nachweis:
+
+- Session `d5_live_verify_20260410_fix_d`
+- Step 1 `oeffne github.com/login und bring mich bis zur login-maske`
+  - natuerliche Phase-D-Antwort
+  - `phase_d_workflow` im `/chat`-Response
+  - `pending_workflow_updated` im Observation-Log
+- Step 2 `ich sehe jetzt eine 2fa challenge`
+  - `challenge_resume` im Observation-Log
+  - `request_route_selected` mit:
+    - `agent = visual_login`
+    - `route_source = followup_capsule`
+  - der Resume-Pfad bleibt damit in einer frischen Session stabil auf `visual_login`, statt wieder auf `meta` zu fallen
+
 ## Fortschritt 2026-04-10 - Phase D5.2 Challenge Runtime Observability
 
 Nach D5.1 waren Challenge-Typisierung und Resume-Vertrag im Code vorhanden, aber im Laufzeitbild noch nicht sauber messbar. Resume-Faelle, erneute Blockaden und erfolgreiche Challenge-Aufloesungen verschwanden bisher weitgehend in generischen Pending-Workflow-Events.
