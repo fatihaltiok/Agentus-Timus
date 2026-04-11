@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping
 
 
@@ -171,6 +171,13 @@ _DEDUPE_STOPWORDS = {
     "zu",
 }
 
+_SOURCE_FRESHNESS_PROFILES = {
+    "autonomy_observation": {"fresh_days": 2.0, "stale_days": 7.0, "min_score": 0.28},
+    "self_healing_incident": {"fresh_days": 4.0, "stale_days": 21.0, "min_score": 0.38},
+    "session_reflection": {"fresh_days": 10.0, "stale_days": 60.0, "min_score": 0.52},
+    "self_improvement_engine": {"fresh_days": 14.0, "stale_days": 75.0, "min_score": 0.58},
+}
+
 
 def _clean_text(value: Any, *, limit: int = 240) -> str:
     text = str(value or "").strip()
@@ -215,6 +222,65 @@ def _normalize_severity(value: Any, *, default: str = "medium") -> str:
     if severity in _SEVERITY_ORDER:
         return severity
     return default
+
+
+def _parse_candidate_datetime(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _resolve_reference_now(reference_now: Any = None) -> datetime:
+    if isinstance(reference_now, datetime):
+        return reference_now.astimezone(timezone.utc) if reference_now.tzinfo else reference_now.replace(tzinfo=timezone.utc)
+    parsed = _parse_candidate_datetime(reference_now)
+    if parsed is not None:
+        return parsed
+    return datetime.now(timezone.utc)
+
+
+def _freshness_profile(source: Any) -> dict[str, float]:
+    normalized = _clean_text(source, limit=64).lower()
+    return dict(_SOURCE_FRESHNESS_PROFILES.get(normalized) or {"fresh_days": 7.0, "stale_days": 30.0, "min_score": 0.5})
+
+
+def _candidate_age_days(value: Any, *, reference_now: Any = None) -> float | None:
+    parsed = _parse_candidate_datetime(value)
+    if parsed is None:
+        return None
+    now = _resolve_reference_now(reference_now)
+    delta = (now - parsed).total_seconds() / 86400.0
+    return max(0.0, round(delta, 3))
+
+
+def _freshness_score_for_source(source: Any, *, age_days: float | None) -> float:
+    if age_days is None:
+        return 0.75
+    profile = _freshness_profile(source)
+    fresh_days = max(0.0, float(profile["fresh_days"]))
+    stale_days = max(fresh_days + 0.001, float(profile["stale_days"]))
+    min_score = max(0.0, min(1.0, float(profile["min_score"])))
+    if age_days <= fresh_days:
+        return 1.0
+    if age_days >= stale_days:
+        return min_score
+    fraction = (age_days - fresh_days) / (stale_days - fresh_days)
+    return round(1.0 - ((1.0 - min_score) * fraction), 3)
+
+
+def _freshness_state(score: float) -> str:
+    if score >= 0.9:
+        return "fresh"
+    if score >= 0.6:
+        return "aging"
+    return "stale"
 
 
 def normalize_improvement_category(
@@ -321,6 +387,7 @@ def normalize_self_improvement_candidate(raw: Mapping[str, Any] | None) -> dict[
         "evidence_basis": evidence_basis,
         "occurrence_count": occurrence_count,
         "status": "applied" if applied else "open",
+        "created_at": created_at,
     }
 
 
@@ -372,6 +439,7 @@ def normalize_session_reflection_candidate(raw: Mapping[str, Any] | None) -> dic
         "evidence_basis": _clean_text(payload.get("evidence_basis"), limit=96) or "session_reflection",
         "occurrence_count": occurrence_count,
         "status": "applied" if applied else "open",
+        "created_at": created_at,
     }
 
 
@@ -438,6 +506,7 @@ def normalize_self_healing_incident_candidate(raw: Mapping[str, Any] | None) -> 
         "evidence_basis": "self_healing_runtime",
         "occurrence_count": occurrence_count,
         "status": "applied" if status in {"recovered", "archived"} else "open",
+        "created_at": created_at,
     }
 
 
@@ -564,6 +633,7 @@ def normalize_autonomy_observation_candidate(raw: Mapping[str, Any] | None) -> d
         "evidence_basis": "autonomy_observation",
         "occurrence_count": 1,
         "status": "open",
+        "created_at": observed_at,
     }
 
 
@@ -594,7 +664,14 @@ def _candidate_dedupe_key(candidate: Mapping[str, Any]) -> str:
     return f"{category}|{' '.join(key_terms)}"
 
 
-def _priority_score(item: Mapping[str, Any], *, source_count: int, occurrence_count: int) -> tuple[float, list[str]]:
+def _priority_score(
+    item: Mapping[str, Any],
+    *,
+    source_count: int,
+    occurrence_count: int,
+    freshness_score: float,
+    freshness_state: str,
+) -> tuple[float, list[str]]:
     severity = _normalize_severity(item.get("severity"), default="medium")
     confidence = _normalize_confidence(item.get("confidence"), default=0.5)
     severity_weight = {
@@ -614,6 +691,14 @@ def _priority_score(item: Mapping[str, Any], *, source_count: int, occurrence_co
     if source_count >= 2:
         score += min(0.2, 0.1 * (source_count - 1))
         reasons.append("multi_source")
+    freshness_score = max(0.0, min(1.0, float(freshness_score or 0.0)))
+    score = round(score * freshness_score, 3)
+    if freshness_state == "fresh":
+        reasons.append("fresh_signal")
+    elif freshness_state == "aging":
+        reasons.append("aging_signal")
+    else:
+        reasons.append("stale_signal")
     return round(score, 3), reasons
 
 
@@ -631,6 +716,7 @@ def consolidate_improvement_candidates(
     candidates: Iterable[Mapping[str, Any]],
     *,
     limit: int | None = None,
+    reference_now: Any = None,
 ) -> list[dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for candidate in candidates:
@@ -685,12 +771,38 @@ def consolidate_improvement_candidates(
             for item in items
             if _clean_text(item.get("evidence_basis"), limit=96)
         })
+        created_candidates = [
+            item for item in items if _parse_candidate_datetime(item.get("created_at")) is not None
+        ]
+        latest_created_dt = max(
+            (_parse_candidate_datetime(item.get("created_at")) for item in created_candidates),
+            default=None,
+        )
+        latest_created_at = latest_created_dt.isoformat() if latest_created_dt is not None else ""
+        freshness_samples = []
+        for item in items:
+            age_days = _candidate_age_days(item.get("created_at"), reference_now=reference_now)
+            freshness_samples.append(
+                {
+                    "source": _clean_text(item.get("source"), limit=64),
+                    "age_days": age_days,
+                    "score": _freshness_score_for_source(item.get("source"), age_days=age_days),
+                }
+            )
+        freshness_score = max((sample["score"] for sample in freshness_samples), default=0.75)
+        freshness_age_days = min(
+            (sample["age_days"] for sample in freshness_samples if sample["age_days"] is not None),
+            default=None,
+        )
+        freshness_state = _freshness_state(freshness_score)
         status = "open" if any(str(item.get("status") or "").strip().lower() != "applied" for item in items) else "applied"
         source_count = len(merged_sources) or 1
         priority_score, priority_reasons = _priority_score(
             {"severity": top_severity, "confidence": top_confidence},
             source_count=source_count,
             occurrence_count=merged_occurrences,
+            freshness_score=freshness_score,
+            freshness_state=freshness_state,
         )
         signal_class = _signal_class(
             source_count=source_count,
@@ -711,12 +823,16 @@ def consolidate_improvement_candidates(
                 "confidence": round(top_confidence, 3),
                 "occurrence_count": merged_occurrences,
                 "status": status,
+                "created_at": latest_created_at,
                 "evidence_level": "multi_source" if source_count >= 2 else (evidence_levels[0] if evidence_levels else ""),
                 "evidence_basis": ",".join(evidence_bases[:4]),
                 "merged_sources": merged_sources,
                 "source_count": source_count,
                 "merged_candidate_ids": merged_ids,
                 "duplicate_count": len(items),
+                "freshness_score": round(freshness_score, 3),
+                "freshness_state": freshness_state,
+                "freshness_age_days": freshness_age_days,
                 "priority_score": priority_score,
                 "priority_reasons": priority_reasons,
                 "signal_class": signal_class,
@@ -724,6 +840,70 @@ def consolidate_improvement_candidates(
         )
         consolidated.append(base)
     return sort_improvement_candidates(consolidated, limit=limit)
+
+
+def build_candidate_operator_view(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    item = dict(candidate or {})
+    title = _clean_text(item.get("title") or item.get("problem"), limit=160)
+    category = _clean_text(item.get("category"), limit=64).lower() or "unknown"
+    target = _clean_text(item.get("target"), limit=120)
+    if category and target:
+        label = f"{category}:{target}"
+    elif category:
+        label = category
+    else:
+        label = target or "candidate"
+    merged_sources = [
+        _clean_text(source, limit=64)
+        for source in list(item.get("merged_sources") or [])
+        if _clean_text(source, limit=64)
+    ]
+    if not merged_sources:
+        single_source = _clean_text(item.get("source"), limit=64)
+        if single_source:
+            merged_sources = [single_source]
+    priority_reasons = [
+        _clean_text(reason, limit=64)
+        for reason in list(item.get("priority_reasons") or [])
+        if _clean_text(reason, limit=64)
+    ]
+    summary_parts = [
+        f"{label}",
+        f"prio={float(item.get('priority_score') or 0.0):.3f}",
+        f"freshness={_clean_text(item.get('freshness_state'), limit=32) or 'unknown'}",
+        f"signal={_clean_text(item.get('signal_class'), limit=48) or 'unknown'}",
+    ]
+    if merged_sources:
+        summary_parts.append(f"sources={','.join(merged_sources[:4])}")
+    return {
+        "candidate_id": _clean_text(item.get("candidate_id") or item.get("id"), limit=96),
+        "label": label,
+        "title": title,
+        "priority_score": round(float(item.get("priority_score") or 0.0), 3),
+        "freshness_score": round(float(item.get("freshness_score") or 0.0), 3),
+        "freshness_state": _clean_text(item.get("freshness_state"), limit=32) or "unknown",
+        "signal_class": _clean_text(item.get("signal_class"), limit=48) or "unknown",
+        "merged_sources": merged_sources,
+        "priority_reasons": priority_reasons,
+        "summary": " | ".join(summary_parts),
+        "problem": _clean_text(item.get("problem"), limit=220),
+        "proposed_action": _clean_text(item.get("proposed_action"), limit=220),
+    }
+
+
+def build_candidate_operator_views(
+    candidates: Iterable[Mapping[str, Any]],
+    *,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    views = [
+        build_candidate_operator_view(candidate)
+        for candidate in candidates
+        if isinstance(candidate, Mapping)
+    ]
+    if limit is not None and limit >= 0:
+        return views[:limit]
+    return views
 
 
 def sort_improvement_candidates(

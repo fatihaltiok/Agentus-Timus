@@ -303,6 +303,7 @@ async def get_e2e_release_gate_status(
 )
 async def get_improvement_suggestions(include_applied: bool = False) -> dict:
     """Gibt Verbesserungsvorschläge zurück."""
+    from orchestration.improvement_candidates import build_candidate_operator_views
     from orchestration.self_improvement_engine import get_improvement_engine
     from orchestration.session_reflection import SessionReflectionLoop
 
@@ -319,4 +320,5 @@ async def get_improvement_suggestions(include_applied: bool = False) -> dict:
         "candidate_count": len(combined_candidates),
         "suggestions": suggestions,
         "normalized_candidates": combined_candidates,
+        "top_candidate_insights": build_candidate_operator_views(combined_candidates, limit=5),
     }

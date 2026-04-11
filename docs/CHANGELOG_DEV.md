@@ -2,6 +2,77 @@
 
 ---
 
+## Fortschritt 2026-04-11 - Phase E E1.6 gestartet: Operator Visibility fuer Candidate-Priorisierung
+
+Der naechste E1-Slice macht die neue Candidate-Priorisierung nach aussen erklaerbar. Nach E1.1 bis E1.5 war intern schon klar, warum ein Improvement-Kandidat hoch oder runter sortiert wird. Jetzt gibt es dafuer auch eine kompakte operator-lesbare Sicht in Tool- und MCP-Ausgaben.
+
+Geaendert:
+
+- [orchestration/improvement_candidates.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_candidates.py)
+  - neue Operator-View-Builder:
+    - `build_candidate_operator_view(...)`
+    - `build_candidate_operator_views(...)`
+  - die Sicht zeigt jetzt:
+    - `candidate_id`
+    - `label`
+    - `priority_score`
+    - `freshness_score`
+    - `freshness_state`
+    - `signal_class`
+    - `merged_sources`
+    - `priority_reasons`
+    - kompakte `summary`
+- [tools/self_improvement_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/self_improvement_tool/tool.py)
+  - `get_improvement_suggestions(...)` liefert jetzt zusaetzlich `top_candidate_insights`
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - `/autonomy/improvement` liefert jetzt ebenfalls `top_candidate_insights`
+
+Tests:
+
+- erweitert:
+  - [tests/test_improvement_candidates.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_candidates.py)
+  - [tests/test_self_improvement_tool_ops.py](/home/fatih-ubuntu/dev/timus/tests/test_self_improvement_tool_ops.py)
+  - [tests/test_c2_entrypoints.py](/home/fatih-ubuntu/dev/timus/tests/test_c2_entrypoints.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/improvement_candidates.py tools/self_improvement_tool/tool.py server/mcp_server.py tests/test_improvement_candidates.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py`
+- `pytest -q tests/test_improvement_candidates.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py`
+  - `28 passed`
+- `pytest -q tests/test_improvement_candidates.py tests/test_session_reflection_suggestions.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py tests/test_self_improvement_metrics.py tests/test_model_env_adoption.py`
+  - `44 passed`
+
+## Fortschritt 2026-04-11 - Phase E E1.5 gestartet: Candidate-Decay und Freshness-Regeln
+
+Der naechste E1-Slice verhindert, dass alte Observation-/Incident-Signale zu lange die Improvement-Priorisierung dominieren. Bisher baute `priority_score` nur auf Severity, Confidence, Occurrence und Multi-Source-Stuetzen auf. Jetzt kommt source-sensitive Freshness dazu.
+
+Geaendert:
+
+- [orchestration/improvement_candidates.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_candidates.py)
+  - source-sensitive Freshness-Profile:
+    - `autonomy_observation` altert am schnellsten
+    - `self_healing_incident` altert mittelfristig
+    - `session_reflection` und `self_improvement_engine` bleiben laenger relevant
+  - neue Felder auf konsolidierten Kandidaten:
+    - `freshness_score`
+    - `freshness_state`
+    - `freshness_age_days`
+  - `priority_score` wird jetzt mit einem echten Freshness-Decay gewichtet statt nur mit statischen Priorisierungsfaktoren
+  - Normalizer geben jetzt auch `created_at` durch, damit Freshness auf echten Zeitpunkten basiert
+
+Tests:
+
+- erweitert:
+  - [tests/test_improvement_candidates.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_candidates.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/improvement_candidates.py tests/test_improvement_candidates.py`
+- `pytest -q tests/test_improvement_candidates.py tests/test_session_reflection_suggestions.py`
+  - `12 passed`
+- `pytest -q tests/test_improvement_candidates.py tests/test_session_reflection_suggestions.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py tests/test_self_improvement_metrics.py tests/test_model_env_adoption.py`
+  - `43 passed`
+
 ## Fortschritt 2026-04-11 - Phase E E1.4 gestartet: Observation-Events als vierte Candidate-Quelle
 
 Der vierte E1-Slice erweitert den Improvement-Kandidatenstrom um ausgewaehlte Autonomy-Observation-Events. Damit koennen jetzt nicht nur Reflection-Patterns, M12-Suggestions und Self-Healing-Incidents, sondern auch direkte Runtime-/Routing-/Context-Risiken aus dem Observation-Log in denselben priorisierten Feed laufen.

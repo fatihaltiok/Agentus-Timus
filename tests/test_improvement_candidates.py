@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from orchestration.improvement_candidates import (
+    build_candidate_operator_view,
     consolidate_improvement_candidates,
     normalize_autonomy_observation_candidate,
     normalize_self_improvement_candidate,
@@ -37,6 +38,7 @@ def test_normalize_self_improvement_candidate_returns_phase_e_shape():
     assert candidate["confidence"] == 0.72
     assert candidate["status"] == "open"
     assert candidate["occurrence_count"] == 1
+    assert candidate["created_at"] == "2026-04-11T09:00:00"
 
 
 def test_normalize_session_reflection_candidate_derives_priority_from_occurrences():
@@ -59,6 +61,7 @@ def test_normalize_session_reflection_candidate_derives_priority_from_occurrence
     assert candidate["confidence"] == 0.93
     assert candidate["occurrence_count"] == 6
     assert candidate["status"] == "open"
+    assert candidate["created_at"] == "2026-04-11T09:00:00"
 
 
 def test_sort_improvement_candidates_prefers_severity_then_confidence_then_occurrences():
@@ -160,6 +163,7 @@ def test_normalize_self_healing_incident_candidate_maps_runtime_incident():
     assert candidate["occurrence_count"] == 4
     assert candidate["evidence_level"] == "incident"
     assert candidate["status"] == "open"
+    assert candidate["created_at"] == "2026-04-11T11:00:00"
 
 
 def test_normalize_autonomy_observation_candidate_maps_context_misread_event():
@@ -183,3 +187,96 @@ def test_normalize_autonomy_observation_candidate_maps_context_misread_event():
     assert "Kontext-Fehlgriff vermutet" in candidate["problem"]
     assert candidate["evidence_level"] == "observation"
     assert candidate["status"] == "open"
+    assert candidate["created_at"] == "2026-04-11T12:00:00"
+
+
+def test_consolidate_improvement_candidates_decays_stale_observation_vs_fresh_runtime_signal():
+    consolidated = consolidate_improvement_candidates(
+        [
+            normalize_autonomy_observation_candidate(
+                {
+                    "id": "evt-old",
+                    "observed_at": "2026-04-01T12:00:00+00:00",
+                    "event_type": "chat_request_failed",
+                    "payload": {
+                        "source": "canvas_chat",
+                        "error_class": "timeout",
+                    },
+                }
+            ),
+            normalize_self_improvement_candidate(
+                {
+                    "id": 9,
+                    "type": "routing",
+                    "target": "research",
+                    "finding": "Routing zu research ist schwach",
+                    "suggestion": "Routing haerten",
+                    "confidence": 0.8,
+                    "severity": "high",
+                    "created_at": "2026-04-11T10:00:00+00:00",
+                }
+            ),
+        ],
+        reference_now="2026-04-11T12:00:00+00:00",
+    )
+
+    assert len(consolidated) == 2
+    assert consolidated[0]["candidate_id"] == "m12:9"
+    assert consolidated[0]["freshness_state"] == "fresh"
+    stale = next(item for item in consolidated if item["candidate_id"] == "obs:evt-old")
+    assert stale["freshness_state"] == "stale"
+    assert stale["freshness_score"] < consolidated[0]["freshness_score"]
+    assert stale["priority_score"] < consolidated[0]["priority_score"]
+
+
+def test_consolidate_improvement_candidates_exposes_freshness_fields():
+    consolidated = consolidate_improvement_candidates(
+        [
+            normalize_self_healing_incident_candidate(
+                {
+                    "incident_key": "m3_queue_backlog",
+                    "component": "queue",
+                    "signal": "backlog",
+                    "severity": "high",
+                    "status": "open",
+                    "title": "Queue backlog steigt an",
+                    "details": {"failure_streak": 2},
+                    "last_seen_at": "2026-04-09T12:00:00+00:00",
+                }
+            )
+        ],
+        reference_now="2026-04-11T12:00:00+00:00",
+    )
+
+    candidate = consolidated[0]
+    assert candidate["freshness_state"] == "fresh"
+    assert candidate["freshness_score"] == 1.0
+    assert candidate["freshness_age_days"] == 2.0
+    assert "fresh_signal" in candidate["priority_reasons"]
+
+
+def test_build_candidate_operator_view_explains_priority_and_freshness():
+    view = build_candidate_operator_view(
+        {
+            "candidate_id": "m12:9",
+            "category": "routing",
+            "target": "research",
+            "title": "routing:research",
+            "problem": "Routing zu research ist schwach",
+            "proposed_action": "Routing haerten",
+            "priority_score": 1.133,
+            "freshness_score": 1.0,
+            "freshness_state": "fresh",
+            "signal_class": "structural_issue",
+            "merged_sources": ["self_improvement_engine", "session_reflection"],
+            "priority_reasons": ["severity:high", "multi_source", "fresh_signal"],
+        }
+    )
+
+    assert view["candidate_id"] == "m12:9"
+    assert view["label"] == "routing:research"
+    assert view["priority_score"] == 1.133
+    assert view["freshness_state"] == "fresh"
+    assert view["signal_class"] == "structural_issue"
+    assert "sources=self_improvement_engine,session_reflection" in view["summary"]
+    assert "prio=1.133" in view["summary"]

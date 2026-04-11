@@ -4998,6 +4998,7 @@ async def autonomy_incident_trace_endpoint(request_id: str, since: str = "", unt
 async def autonomy_improvement_endpoint():
     """Gibt Self-Improvement Statistiken und Vorschläge zurück."""
     try:
+        from orchestration.improvement_candidates import build_candidate_operator_views
         from orchestration.self_improvement_engine import get_improvement_engine
         from orchestration.session_reflection import SessionReflectionLoop
         engine = get_improvement_engine()
@@ -5017,6 +5018,7 @@ async def autonomy_improvement_endpoint():
             "critical_suggestions": sum(1 for s in suggestions if s.get("severity") == "high"),
             "top_suggestions": suggestions[:5],
             "top_candidates": combined_candidates[:5],
+            "top_candidate_insights": build_candidate_operator_views(combined_candidates, limit=5),
             "candidate_count": len(combined_candidates),
         }
     except Exception as e:

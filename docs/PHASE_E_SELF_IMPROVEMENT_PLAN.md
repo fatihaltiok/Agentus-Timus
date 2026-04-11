@@ -235,6 +235,58 @@ Noch offen fuer spaetere E1-Slices:
 - bessere Fenster-/Decay-Regeln fuer Observation-Kandidaten
 - staerkere Similarity-Heuristik fuer paraphrasierte Observation-/Incident-Kollisionen
 
+### E1.5 Candidate-Decay und Freshness-Regeln
+
+Stand:
+
+- erster Runtime-Slice gestartet
+
+Umgesetzt:
+
+- source-sensitive Freshness-Profile direkt in [orchestration/improvement_candidates.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_candidates.py)
+  - `autonomy_observation` altert am schnellsten
+  - `self_healing_incident` altert mittelfristig
+  - `session_reflection` und `self_improvement_engine` bleiben laenger relevant
+- konsolidierte Kandidaten tragen jetzt:
+  - `freshness_score`
+  - `freshness_state`
+  - `freshness_age_days`
+- `priority_score` wird jetzt nicht nur aus Severity/Confidence/Source-Count berechnet, sondern mit einem echten Freshness-Decay gewichtet
+- alte Observation-/Incident-Signale bleiben sichtbar, dominieren aber nicht mehr automatisch gegen frische strukturelle Befunde
+
+Noch offen fuer spaetere E1-Slices:
+
+- feinere Freshness-Profile pro Kategorie statt nur pro Quelle
+- decay-aware Dedupe-Entscheidungen bei sehr alten Duplicate
+
+### E1.6 Operator Visibility fuer Candidate-Priorisierung
+
+Stand:
+
+- erster Runtime-Slice gestartet
+
+Umgesetzt:
+
+- [orchestration/improvement_candidates.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_candidates.py) erzeugt jetzt aus priorisierten Improvement-Kandidaten eine operator-lesbare Sicht:
+  - `candidate_id`
+  - `label`
+  - `priority_score`
+  - `freshness_score`
+  - `freshness_state`
+  - `signal_class`
+  - `merged_sources`
+  - `priority_reasons`
+  - kompakte `summary`
+- [tools/self_improvement_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/self_improvement_tool/tool.py) gibt diese Sicht als `top_candidate_insights` zusaetzlich zur rohen Candidate-Liste aus
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py) exponiert dieselbe operator-orientierte Sicht im `/autonomy/improvement`-Pfad
+- damit wird jetzt nicht nur intern priorisiert, sondern auch sichtbar, warum ein Kandidat oben steht oder bereits zu altern beginnt
+
+Noch offen fuer spaetere E1-Slices:
+
+- Ranking-Erklaerungen ueber mehr als die Top-5-Kandidaten hinaus
+- decay-aware Visualisierung direkt in Observation-/Dashboard-Reports
+- spaetere Verknuepfung mit E2, damit aus sichtbaren Top-Kandidaten direkt konkrete Compiler-Tasks entstehen
+
 ### E2. Weakness-to-Task Compiler
 
 Ziel:
