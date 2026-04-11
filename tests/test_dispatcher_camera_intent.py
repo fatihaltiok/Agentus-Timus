@@ -89,6 +89,15 @@ def test_quick_intent_routes_natural_chrome_password_manager_login_to_phase_d_vi
     assert decision == "visual_login"
 
 
+def test_quick_intent_routes_unknown_domain_login_to_phase_d_visual():
+    import main_dispatcher
+
+    decision = main_dispatcher.quick_intent_check(
+        "Bitte melde mich in Chrome bei example-auth-site.net an und nutze den Passwortmanager."
+    )
+    assert decision == "visual_login"
+
+
 def test_build_visual_login_handoff_wraps_phase_d_login_contract():
     import main_dispatcher
 
@@ -150,6 +159,19 @@ def test_build_visual_login_handoff_normalizes_login_url_for_natural_prompt():
     assert "- source_url: https://github.com/login" in handoff
     assert "- browser_type: chrome" in handoff
     assert "- credential_broker: chrome_password_manager" in handoff
+
+
+def test_build_visual_login_handoff_keeps_unknown_domain_generic():
+    import main_dispatcher
+
+    handoff = main_dispatcher._build_visual_login_handoff(
+        "Bitte melde mich in Chrome bei example-auth-site.net an und nutze den Passwortmanager."
+    )
+
+    assert "- source_url: https://example-auth-site.net" in handoff
+    assert "- browser_type: chrome" in handoff
+    assert "- credential_broker: chrome_password_manager" in handoff
+    assert "- domain: example-auth-site.net" in handoff
 
 
 def test_visual_login_followup_context_is_preserved_for_resume():

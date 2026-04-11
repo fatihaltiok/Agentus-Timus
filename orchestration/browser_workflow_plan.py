@@ -190,9 +190,14 @@ def _canonicalize_login_url(url: str) -> str:
     domain = _extract_domain(safe_url)
     if not domain:
         return safe_url
+    normalized = domain.lower()
+    if normalized.startswith("www."):
+        normalized = normalized[4:]
+    if normalized == "github.com":
+        return "https://github.com/login"
     if safe_url.startswith("http://"):
-        return f"http://{domain}/login"
-    return f"https://{domain}/login"
+        return f"http://{domain}"
+    return f"https://{domain}"
 
 
 def _extract_destination(task: str) -> str:
@@ -364,6 +369,7 @@ def _build_login_flow(task: str, url: str) -> BrowserWorkflowPlan:
     safe_url = _canonicalize_login_url(url)
     domain = _extract_domain(safe_url)
     task_lower = safe_task.lower()
+    explicit_login_target = bool(re.search(r"/(?:login|signin|sign-in)\b", safe_url, flags=re.IGNORECASE))
     steps: List[BrowserWorkflowStep] = [
         _step(
             "navigate",
@@ -377,6 +383,25 @@ def _build_login_flow(task: str, url: str) -> BrowserWorkflowPlan:
             timeout=18.0,
             fallback_strategy="abort_with_handoff",
         ),
+    ]
+    if not explicit_login_target:
+        steps.append(
+            _step(
+                "click_target",
+                "button",
+                "login||sign in||log in||anmelden||einloggen",
+                "landing",
+                _evidence(
+                    ("visible_text", "login"),
+                    ("visible_text", "sign in"),
+                    ("visible_text", "anmelden"),
+                    ("url_contains", "login"),
+                ),
+                timeout=8.0,
+                fallback_strategy="vision_scan",
+            )
+        )
+    steps.append(
         _step(
             "verify_state",
             "modal",
@@ -384,12 +409,15 @@ def _build_login_flow(task: str, url: str) -> BrowserWorkflowPlan:
             "login_modal",
             _evidence(
                 ("visible_text", "login"),
+                ("visible_text", "sign in"),
+                ("visible_text", "anmelden"),
+                ("visible_text", "passkey"),
                 ("dom_selector", "password"),
             ),
             timeout=8.0,
             fallback_strategy="dom_lookup",
         ),
-    ]
+    )
     if any(token in task_lower for token in ("benutzername", "username", "email", "e-mail")):
         steps.extend(
             [

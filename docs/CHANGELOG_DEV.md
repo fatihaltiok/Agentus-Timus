@@ -2,6 +2,36 @@
 
 ---
 
+## Fortschritt 2026-04-11 - D4b Haertung: generische Login-Discovery ohne starres /login plus Loop-Breaker
+
+Der letzte groessere Restfehler in Phase D sass im generischen Chrome-Credential-Broker-Pfad fuer unbekannte oder nicht hart codierte Seiten. Timus ging dort zwar schon korrekt auf `visual_login`, baute fuer unbekannte Domains aber noch stumpf `https://<domain>/login` und konnte bei echten Root-Domain-Logins wie `grok.com` in einer zu langen `click_target`-Suche nach `login/sign in/...` haengen bleiben. Das ist jetzt beides gehaertet.
+
+Geaendert:
+
+- [main_dispatcher.py](/home/fatih-ubuntu/dev/timus/main_dispatcher.py)
+  - unbekannte Login-Domains werden im D4b-Handoff jetzt generisch auf die Root-Domain `https://<domain>` gesetzt statt blind auf `/login`
+- [orchestration/browser_workflow_plan.py](/home/fatih-ubuntu/dev/timus/orchestration/browser_workflow_plan.py)
+  - `login_flow` fuer unbekannte Seiten startet jetzt auf der Root-Domain
+  - danach folgt eine generische Login-Discovery ueber `click_target` mit Alternativen wie `login`, `sign in`, `log in`, `anmelden`, `einloggen`
+- [agent/agents/visual.py](/home/fatih-ubuntu/dev/timus/agent/agents/visual.py)
+  - generische Auth-/Broker-Erkennung wurde bereits site-agnostischer auf sichtbare Zustandsmarker umgestellt
+  - neu dazu kommt jetzt der eigentliche Loop-Breaker:
+    - wenn `login_flow` beim generischen `click_target` nach einem ersten Klick die Login-Verifikation nicht bestaetigen kann, versucht der Step nicht mehr innerhalb desselben Schritts endlos weiter
+    - stattdessen endet der Pfad kontrolliert als strukturierter `awaiting_user`-Workflow
+    - wenn der richtige Browser sichtbar ist, bekommt der Nutzer jetzt einen klaren Hinweis inklusive Ziel-URL, den Login-/Kontoauswahl-/Passwortmanager-Schritt manuell in den Vordergrund zu bringen
+- Tests:
+  - [tests/test_dispatcher_camera_intent.py](/home/fatih-ubuntu/dev/timus/tests/test_dispatcher_camera_intent.py)
+  - [tests/test_visual_improvements.py](/home/fatih-ubuntu/dev/timus/tests/test_visual_improvements.py)
+  - [tests/test_specialist_handoffs.py](/home/fatih-ubuntu/dev/timus/tests/test_specialist_handoffs.py)
+
+Verifikation:
+
+- `python -m py_compile main_dispatcher.py orchestration/browser_workflow_plan.py agent/agents/visual.py tests/test_dispatcher_camera_intent.py tests/test_visual_improvements.py tests/test_specialist_handoffs.py`
+- `pytest -q tests/test_visual_improvements.py tests/test_specialist_handoffs.py`
+  - `59 passed`
+- `pytest -q tests/test_dispatcher_camera_intent.py tests/test_visual_browser_tool.py tests/test_auth_session_state.py tests/test_android_chat_language.py tests/test_specialist_handoffs.py tests/test_visual_improvements.py`
+  - `120 passed`
+
 ## Fortschritt 2026-04-11 - D4b Haertung: login_modal-Mismatch bricht jetzt frueh und strukturiert ab
 
 Im Chrome-Credential-Broker-Pfad gab es noch einen konkreten Live-Restfehler: Wenn `start_visual_browser` bereits erfolgreich war, aber die erwartete `login_modal`-Verifikation fehlschlug, fiel `visual_login` noch in den generischen Vision-/LLM-Loop zurueck. Genau dort entstand der unnoetig lange visuelle Lauf. Dieser Bruch ist jetzt geschlossen.
@@ -28,6 +58,31 @@ Verifikation:
   - `54 passed`
 - `pytest -q tests/test_dispatcher_camera_intent.py tests/test_visual_browser_tool.py tests/test_auth_session_state.py tests/test_android_chat_language.py`
   - `59 passed`
+
+## Fortschritt 2026-04-11 - D4b erweitert: generische Auth- und Broker-State-Erkennung
+
+Geaendert:
+
+- [agent/agents/visual.py](/home/fatih-ubuntu/dev/timus/agent/agents/visual.py)
+  - die Auth-Zustandserkennung stuetzt sich jetzt staerker auf generische sichtbare Signale statt auf bekannte Site-Namen
+  - starke Logout-/Sign-out-Signale und mehrere generische Auth-Hinweise koennen jetzt auch bei unbekannten Seiten als `authenticated` gelten
+  - die Broker-Erkennung fuer Chrome-Passwortmanager/Passkey stuetzt sich jetzt auf generische Hinweise wie
+    - `passkey`
+    - `password manager`
+    - `choose an account`
+    - `continue as`
+    - `konto auswaehlen`
+- Tests:
+  - [tests/test_dispatcher_camera_intent.py](/home/fatih-ubuntu/dev/timus/tests/test_dispatcher_camera_intent.py)
+  - [tests/test_visual_improvements.py](/home/fatih-ubuntu/dev/timus/tests/test_visual_improvements.py)
+
+Verifikation:
+
+- `python -m py_compile main_dispatcher.py orchestration/browser_workflow_plan.py agent/agents/visual.py tests/test_dispatcher_camera_intent.py tests/test_visual_improvements.py`
+- `pytest -q tests/test_dispatcher_camera_intent.py tests/test_visual_improvements.py`
+  - `46 passed`
+- `pytest -q tests/test_specialist_handoffs.py tests/test_visual_browser_tool.py tests/test_auth_session_state.py tests/test_android_chat_language.py`
+  - `72 passed`
 
 ## Fortschritt 2026-04-10 - D4b Chrome Credential Broker als erster Runtime-Slice gestartet
 

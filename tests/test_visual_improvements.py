@@ -20,6 +20,7 @@ from hypothesis import strategies as st
 
 from agent import providers as providers_mod
 from agent.agents.visual import VisualAgent
+from agent.base_agent import BaseAgent
 from orchestration.browser_workflow_plan import BrowserWorkflowPlan, BrowserWorkflowStep, BrowserStateEvidence
 
 
@@ -237,6 +238,100 @@ def test_browser_plan_context_recognizes_natural_chrome_password_manager_login()
     assert agent.current_structured_workflow_plan is not None
 
 
+def test_browser_plan_context_keeps_unknown_domain_generic_login_flow():
+    agent = _make_agent()
+
+    context = agent._build_browser_plan_context(
+        "Bitte melde mich in Chrome bei example-auth-site.net an und nutze den Passwortmanager."
+    )
+
+    assert "STRIKTER BROWSER-ABLAUFPLAN" in context
+    assert "flow_type=login_flow" in context
+    assert "target=page:https://example-auth-site.net" in context
+    assert "action=click_target target=button:login||sign in||log in||anmelden||einloggen" in context
+    assert agent.current_structured_workflow_plan is not None
+    assert agent.current_structured_workflow_plan.steps[0].target_text == "https://example-auth-site.net"
+    assert agent.current_structured_workflow_plan.steps[1].action == "click_target"
+
+
+@pytest.mark.asyncio
+async def test_detect_credential_broker_ready_state_uses_passkey_markers(monkeypatch):
+    agent = _make_agent()
+
+    async def mock_call_tool(self, method: str, params: dict):
+        if method == "get_all_screen_text":
+            return {
+                "texts": [
+                    {"text": "Sign in with a passkey"},
+                    {"text": "Google Chrome"},
+                ]
+            }
+        if method == "analyze_screen_verified":
+            return {"filtered_elements": []}
+        raise AssertionError(f"unexpected tool call: {method}")
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", mock_call_tool)
+
+    result = await agent._detect_credential_broker_ready_state("github", "chrome_password_manager")
+
+    assert result["success"] is True
+    assert "passkey" in " ".join(result["positive_hits"])
+    assert result["visible_browser"] == "chrome"
+
+
+@pytest.mark.asyncio
+async def test_detect_credential_broker_ready_state_supports_unknown_site(monkeypatch):
+    agent = _make_agent()
+
+    async def mock_call_tool(self, method: str, params: dict):
+        if method == "get_all_screen_text":
+            return {
+                "texts": [
+                    {"text": "Mit Passkey anmelden"},
+                    {"text": "Konto auswählen"},
+                    {"text": "Google Chrome"},
+                ]
+            }
+        if method == "analyze_screen_verified":
+            return {"filtered_elements": []}
+        raise AssertionError(f"unexpected tool call: {method}")
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", mock_call_tool)
+
+    result = await agent._detect_credential_broker_ready_state("", "chrome_password_manager")
+
+    assert result["success"] is True
+    assert "mit passkey anmelden" in result["positive_hits"]
+    assert result["visible_browser"] == "chrome"
+
+
+@pytest.mark.asyncio
+async def test_detect_authenticated_session_state_supports_unknown_site_markers(monkeypatch):
+    agent = _make_agent()
+
+    async def mock_call_tool(self, method: str, params: dict):
+        if method == "get_all_screen_text":
+            return {
+                "texts": [
+                    {"text": "Dashboard"},
+                    {"text": "Sign out"},
+                    {"text": "Inbox"},
+                    {"text": "Google Chrome"},
+                ]
+            }
+        if method == "analyze_screen_verified":
+            return {"filtered_elements": []}
+        raise AssertionError(f"unexpected tool call: {method}")
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", mock_call_tool)
+
+    result = await agent._detect_authenticated_session_state("")
+
+    assert result["success"] is True
+    assert any(marker in result["positive_hits"] for marker in ("dashboard", "sign out", "inbox"))
+    assert result["visible_browser"] == "chrome"
+
+
 def test_preferred_text_entry_method_uses_clipboard_for_layout_sensitive_text():
     agent = _make_agent()
 
@@ -376,6 +471,59 @@ async def test_execute_structured_step_uses_real_fallback_strategy_switch(monkey
     find_calls = [item for item in calls if item[0] == "find_text_coordinates"]
     assert len(find_calls) >= 1
     assert any(call[1].get("fuzzy_threshold") == 65 for call in find_calls)
+
+
+@pytest.mark.asyncio
+async def test_execute_structured_step_stops_login_click_target_after_first_failed_verify(monkeypatch):
+    agent = _make_agent()
+    calls = []
+    locate_calls = {"n": 0}
+    verify_calls = {"n": 0}
+    agent.current_structured_workflow_plan = BrowserWorkflowPlan(
+        flow_type="login_flow",
+        initial_state="landing",
+        steps=[],
+    )
+
+    async def fake_call_tool(method, params):
+        calls.append((method, dict(params)))
+        if method == "click_at":
+            return {"success": True}
+        raise AssertionError(f"unexpected tool call: {method}")
+
+    async def fake_locate_target_coordinates(target_text, strategy):
+        locate_calls["n"] += 1
+        return {"x": 320, "y": 180}
+
+    async def fake_verify_structured_step(step):
+        verify_calls["n"] += 1
+        return {
+            "success": False,
+            "matched_signals": [],
+            "observation": {"current_url": "https://grok.com", "elements": []},
+        }
+
+    monkeypatch.setattr(agent, "_call_tool", fake_call_tool)
+    monkeypatch.setattr(agent, "_locate_target_coordinates", fake_locate_target_coordinates)
+    monkeypatch.setattr(agent, "_verify_structured_step", fake_verify_structured_step)
+
+    step = BrowserWorkflowStep(
+        action="click_target",
+        target_type="button",
+        target_text="login||sign in||log in||anmelden||einloggen",
+        expected_state="landing",
+        success_signal=[BrowserStateEvidence("visible_text", "login")],
+        timeout=6.0,
+        fallback_strategy="vision_scan",
+    )
+
+    result = await agent._execute_structured_step(step)
+
+    assert result["success"] is False
+    assert locate_calls["n"] == 1
+    assert verify_calls["n"] == 1
+    click_calls = [item for item in calls if item[0] == "click_at"]
+    assert len(click_calls) == 1
 
 
 @pytest.mark.asyncio

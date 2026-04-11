@@ -418,6 +418,17 @@ def _infer_login_domain_from_query(query: str) -> str:
     return ""
 
 
+def _canonical_login_seed_url_for_domain(domain: str) -> str:
+    normalized = str(domain or "").strip().lower()
+    if not normalized:
+        return ""
+    if normalized.startswith("www."):
+        normalized = normalized[4:]
+    if normalized == "github.com":
+        return "https://github.com/login"
+    return f"https://{normalized}"
+
+
 def _requests_chrome_credential_broker(query: str) -> bool:
     lowered = str(query or "").strip().lower()
     if not lowered:
@@ -447,7 +458,7 @@ def _build_visual_login_handoff(query: str) -> str:
             for token in ("login", "anmelden", "einloggen", "passwortmanager", "password manager")
         )
     ):
-        source_url = f"https://{inferred_domain}/login"
+        source_url = _canonical_login_seed_url_for_domain(inferred_domain)
     auth_session_fields = {
         "auth_session_service": _extract_dispatcher_followup_field(query, "auth_session_service"),
         "auth_session_status": _extract_dispatcher_followup_field(query, "auth_session_status"),
@@ -465,7 +476,11 @@ def _build_visual_login_handoff(query: str) -> str:
         or auth_session_fields["auth_session_browser_type"].lower() == "chrome"
         or auth_session_fields["auth_session_credential_broker"].lower() == "chrome_password_manager"
     )
-    login_domain = auth_session_fields["auth_session_domain"] or inferred_domain
+    login_domain = (
+        auth_session_fields["auth_session_domain"]
+        or inferred_domain
+        or _infer_login_domain(source_url)
+    )
     broker_profile = auth_session_fields["auth_session_broker_profile"]
     if use_chrome_broker and not broker_profile:
         broker_profile = "Default"

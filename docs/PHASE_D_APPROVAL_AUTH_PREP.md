@@ -278,6 +278,17 @@ Phase D braucht einen gemeinsamen Nutzeraktions-Vertrag, statt fuer jede Plattfo
       - `visual_login` startet Chrome mit `profile_name=Default`
       - GitHub-Loginmaske auf `https://github.com/login` wurde verifiziert
       - `pending_workflow_updated` wurde live mit `workflow_status=awaiting_user` geschrieben
+    - weiterer Ausbau Richtung generischer Site-Erkennung:
+      - Auth-Zustaende sollen nicht nur ueber bekannte Sites, sondern ueber generische sichtbare Signale erkannt werden
+      - Broker-Zustaende wie Passkey-/Account-Chooser sollen site-agnostisch erfasst werden
+      - Site-spezifische Marker bleiben hoechstens Praezisionshilfe, nicht das Fundament
+    - generische Login-Discovery:
+      - unbekannte Seiten gehen im D4b-Handoff jetzt nicht mehr stumpf auf `https://<domain>/login`
+      - stattdessen startet der Pfad auf `https://<domain>` und sucht dort generisch nach `login`, `sign in`, `log in`, `anmelden`, `einloggen`
+    - Loop-Breaker fuer echte Root-Domain-Logins:
+      - wenn dieser generische `click_target`-Schritt nach einem ersten Klick die Login-Verifikation nicht bestaetigen kann
+      - bleibt Timus nicht mehr in derselben Discovery-Schleife haengen
+      - stattdessen endet der Pfad kontrolliert wieder als `awaiting_user` mit klarer Ziel-URL und manuellem Login-Einstieg
   - weiterer Ausbau:
   - **D4b Chrome Credential Broker**
   - wenn gespeicherte Zugangsdaten praktisch nur im Chrome-Passwortmanager vorhanden sind, soll nicht Timus selbst die Secrets kennen, sondern Chrome als Credential Broker dienen

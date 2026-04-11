@@ -232,7 +232,14 @@ Neuere D4b-Haertung:
 - natuerliche Chrome-/Passwortmanager-Anfragen werden jetzt robuster direkt als `visual_login`-/`login_flow` behandelt
 - wenn der Zielbrowser nicht sauber bis zur Login-Maske vorbereitet werden kann, endet der Pfad strukturiert als `awaiting_user` statt in freie visuelle Navigation zu kippen
 - wenn die Login-Maske nach erfolgreicher Navigation nicht bestaetigt werden kann und der falsche Browser sichtbar ist, gibt Timus jetzt sofort `manual_browser_prepare` zurueck
+- fuer unbekannte Seiten startet der Broker-Pfad jetzt generisch auf `https://<domain>` statt blind auf `https://<domain>/login`
+- der Login-Einstieg wird danach generisch ueber sichtbare Marker wie `login`, `sign in`, `log in`, `anmelden`, `einloggen` gesucht
+- wenn dieser generische Discovery-Schritt nach einem ersten Klick die Login-Verifikation nicht bestaetigen kann, bricht Timus jetzt kontrolliert in `awaiting_user` ab statt im selben Suchschritt weiterzukreisen
 - der Broker-Pfad bleibt damit assistiv und zielzustandsorientiert, statt an einem einzelnen Browser-Schritt festzuhaken
+- der naechste richtige Ausbau ist generischer:
+  - Auth-Zustaende sollen ueber sichtbare generische Signalschichten erkannt werden, nicht primär ueber bekannte Sites
+  - Broker-Zustaende wie Passkey, Passwortmanager, Account-Chooser oder `continue as` sollen site-agnostisch erfasst werden
+  - Site-spezifische Adapter bleiben nur eine optionale Praezisionshilfe
 
 ## Nicht Ziel
 

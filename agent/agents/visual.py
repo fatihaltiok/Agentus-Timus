@@ -815,8 +815,39 @@ class VisualAgent(BaseAgent):
 
     @staticmethod
     def _authenticated_markers_for_service(service: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
-        common_positive = ("dashboard", "profil", "profile", "account", "settings", "abmelden", "sign out")
-        common_negative = ("login", "sign in", "anmelden", "passwort", "password", "username")
+        common_positive = (
+            "dashboard",
+            "profil",
+            "profile",
+            "account",
+            "my account",
+            "mein konto",
+            "settings",
+            "inbox",
+            "postfach",
+            "eingang",
+            "mailbox",
+            "messages",
+            "notifications",
+            "compose",
+            "new mail",
+            "abmelden",
+            "sign out",
+            "logout",
+            "log out",
+        )
+        common_negative = (
+            "login",
+            "log in",
+            "sign in",
+            "anmelden",
+            "einloggen",
+            "passwort",
+            "password",
+            "username",
+            "2fa",
+            "captcha",
+        )
         normalized = str(service or "").strip().lower()
         if normalized == "github":
             return (
@@ -863,13 +894,23 @@ class VisualAgent(BaseAgent):
     def _credential_broker_markers_for_service(self, service: str) -> tuple[str, ...]:
         common = (
             "passkey",
+            "use a passkey",
+            "use passkey",
+            "sign in with a passkey",
+            "mit passkey anmelden",
             "password manager",
             "passwortmanager",
             "saved password",
             "saved passwords",
+            "stored password",
+            "stored passwords",
             "autofill",
             "choose an account",
+            "choose account",
+            "account chooser",
             "continue as",
+            "konto auswählen",
+            "konto auswaehlen",
         )
         normalized = str(service or "").strip().lower()
         if normalized == "github":
@@ -881,6 +922,14 @@ class VisualAgent(BaseAgent):
                 *common,
             )
         return common
+
+    @staticmethod
+    def _auth_detection_confident(positive_hits: list[str], negative_hits: list[str]) -> bool:
+        strong_positive_markers = {"sign out", "logout", "log out", "abmelden"}
+        strong_positive_hits = [marker for marker in positive_hits if marker in strong_positive_markers]
+        return bool(strong_positive_hits) or (
+            len(positive_hits) >= 2 and len(positive_hits) >= len(negative_hits)
+        )
 
     @staticmethod
     def _verified_elements_to_text_blob(elements: Any) -> str:
@@ -1012,7 +1061,7 @@ class VisualAgent(BaseAgent):
         negative_hits = [marker for marker in negative_markers if marker in text_blob]
         visible_browser = self._infer_visible_browser_from_text_blob(text_blob)
 
-        if not positive_hits:
+        if not self._auth_detection_confident(positive_hits, negative_hits):
             try:
                 verified = await self._call_tool(
                     "analyze_screen_verified",
@@ -1029,8 +1078,10 @@ class VisualAgent(BaseAgent):
                     or []
                 )
                 if verified_blob:
-                    positive_hits = [marker for marker in positive_markers if marker in verified_blob]
-                    negative_hits = [marker for marker in negative_markers if marker in verified_blob]
+                    verified_positive_hits = [marker for marker in positive_markers if marker in verified_blob]
+                    verified_negative_hits = [marker for marker in negative_markers if marker in verified_blob]
+                    positive_hits = list(dict.fromkeys([*positive_hits, *verified_positive_hits]))
+                    negative_hits = list(dict.fromkeys([*negative_hits, *verified_negative_hits]))
                     if not visible_browser:
                         visible_browser = self._infer_visible_browser_from_text_blob(verified_blob)
                     if verified_blob and text_blob:
@@ -1041,7 +1092,7 @@ class VisualAgent(BaseAgent):
                 log.debug("Verified auth detection fallback failed: %s", e)
 
         return {
-            "success": bool(positive_hits),
+            "success": self._auth_detection_confident(positive_hits, negative_hits),
             "positive_hits": positive_hits,
             "negative_hits": negative_hits,
             "text_preview": text_blob[:280],
@@ -1468,6 +1519,23 @@ class VisualAgent(BaseAgent):
     def _normalize_match_text(self, value: str) -> str:
         return re.sub(r"\s+", " ", str(value or "").strip().lower())
 
+    def _candidate_target_texts(self, target_text: str) -> list[str]:
+        raw = str(target_text or "").strip()
+        if not raw:
+            return []
+        candidates = [
+            segment.strip()
+            for segment in raw.split("||")
+            if str(segment or "").strip()
+        ]
+        if not candidates:
+            candidates = [raw]
+        unique: list[str] = []
+        for candidate in candidates:
+            if candidate not in unique:
+                unique.append(candidate)
+        return unique
+
     def _observation_contains_text(self, observation: Dict[str, Any], needle: str) -> bool:
         target = self._normalize_match_text(needle)
         if not target:
@@ -1529,8 +1597,8 @@ class VisualAgent(BaseAgent):
         }
 
     async def _locate_target_coordinates(self, target_text: str, strategy: str) -> Optional[Dict[str, Any]]:
-        safe_target = str(target_text or "").strip()
-        if not safe_target:
+        safe_targets = self._candidate_target_texts(target_text)
+        if not safe_targets:
             return None
         if strategy == "vision_scan":
             await self._call_tool(
@@ -1538,17 +1606,18 @@ class VisualAgent(BaseAgent):
                 {"element_types": ["button", "input", "text"], "use_zoom": False},
             )
         elif strategy == "roi_shift":
-            await self._detect_dynamic_ui_and_set_roi(safe_target)
+            await self._detect_dynamic_ui_and_set_roi(safe_targets[0])
         fuzzy_threshold = 85 if strategy == "dom_lookup" else 65
-        try:
-            result = await self._call_tool(
-                "find_text_coordinates",
-                {"text_to_find": safe_target, "fuzzy_threshold": fuzzy_threshold},
-            )
-            if isinstance(result, dict) and result.get("found"):
-                return result
-        except Exception as e:
-            log.debug("Target-Lokalisierung fehlgeschlagen (%s): %s", strategy, e)
+        for safe_target in safe_targets:
+            try:
+                result = await self._call_tool(
+                    "find_text_coordinates",
+                    {"text_to_find": safe_target, "fuzzy_threshold": fuzzy_threshold},
+                )
+                if isinstance(result, dict) and result.get("found"):
+                    return result
+            except Exception as e:
+                log.debug("Target-Lokalisierung fehlgeschlagen (%s) fuer %s: %s", strategy, safe_target, e)
         return None
 
     def _build_fallback_chain(self, step: BrowserWorkflowStep) -> List[str]:
@@ -1635,6 +1704,16 @@ class VisualAgent(BaseAgent):
             if verify["success"]:
                 return {
                     "success": True,
+                    "strategy": strategy,
+                    "verification_result": verify,
+                }
+            if (
+                step.action == "click_target"
+                and self.current_structured_workflow_plan
+                and str(self.current_structured_workflow_plan.flow_type or "").strip().lower() == "login_flow"
+            ):
+                return {
+                    "success": False,
                     "strategy": strategy,
                     "verification_result": verify,
                 }
@@ -1774,6 +1853,80 @@ class VisualAgent(BaseAgent):
                         visible_browser=str(verification.get("visible_browser") or "").strip().lower(),
                     )
                     self._emit_user_action_blocker(workflow_payload, stage="await_manual_browser_prepare")
+                    return {
+                        **workflow_payload,
+                        "status": "awaiting_user",
+                        "success": False,
+                        "result": str(workflow_payload.get("message") or "").strip(),
+                        "completed_steps": execution_log,
+                        "current_state": current_state,
+                        "plan_id": plan_id,
+                        "metadata": {
+                            "phase_d_workflow": workflow_payload,
+                        },
+                    }
+                if step.action == "click_target":
+                    browser_state = await self._detect_visible_browser_state()
+                    visible_browser = (
+                        str(browser_state.get("visible_browser") or "").strip().lower()
+                        or str(verification.get("visible_browser") or "").strip().lower()
+                    )
+                    if not visible_browser or (
+                        lane["browser_type"] and visible_browser != lane["browser_type"]
+                    ):
+                        workflow_payload = self._build_manual_browser_prepare_payload(
+                            service=service,
+                            url=source_url,
+                            domain=lane["domain"],
+                            preferred_browser=lane["browser_type"],
+                            credential_broker=lane["credential_broker"],
+                            broker_profile=lane["broker_profile"],
+                            visible_browser=visible_browser,
+                            login_mask_confirmed=False,
+                        )
+                    else:
+                        workflow_payload = await self._build_login_waiting_payload(
+                            service=service,
+                            url=source_url,
+                            domain=lane["domain"],
+                            preferred_browser=lane["browser_type"],
+                            credential_broker=lane["credential_broker"],
+                            broker_profile=lane["broker_profile"],
+                            message=(
+                                "Ich konnte den Login-Einstieg noch nicht sicher oeffnen, "
+                                "aber der richtige Browser ist sichtbar."
+                            ),
+                            user_action_required=(
+                                f"Bitte bringe jetzt auf {source_url or 'der Zielseite'} den Login-, Kontoauswahl- oder Passwortmanager-/Passkey-Schritt manuell in den Vordergrund."
+                            ),
+                            resume_hint=(
+                                "Sage danach 'weiter', 'ich bin auf der Login-Seite' oder beschreibe die sichtbare Blockade, "
+                                "damit Timus kontrolliert fortsetzen kann."
+                            ),
+                        )
+                        if str(workflow_payload.get("step") or "").strip().lower() == "login_form_ready":
+                            workflow_payload = build_awaiting_user_workflow_payload(
+                                service=service,
+                                url=source_url,
+                                reason="user_mediated_login",
+                                step="manual_browser_prepare",
+                                domain=lane["domain"],
+                                preferred_browser=lane["browser_type"],
+                                credential_broker=lane["credential_broker"],
+                                broker_profile=lane["broker_profile"],
+                                message=(
+                                    "Ich konnte den Login-Einstieg noch nicht sicher oeffnen, "
+                                    "aber der richtige Browser ist sichtbar."
+                                ),
+                                user_action_required=(
+                                    f"Bitte bringe jetzt auf {source_url or 'der Zielseite'} den Login-, Kontoauswahl- oder Passwortmanager-/Passkey-Schritt manuell in den Vordergrund."
+                                ),
+                                resume_hint=(
+                                    "Sage danach 'weiter', 'ich bin auf der Login-Seite' oder beschreibe die sichtbare Blockade, "
+                                    "damit Timus kontrolliert fortsetzen kann."
+                                ),
+                            )
+                    self._emit_user_action_blocker(workflow_payload, stage="await_login_entry_prepare")
                     return {
                         **workflow_payload,
                         "status": "awaiting_user",

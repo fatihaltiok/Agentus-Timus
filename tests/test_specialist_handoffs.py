@@ -1004,6 +1004,124 @@ async def test_visual_login_flow_stops_after_login_modal_mismatch_instead_of_fal
 
 
 @pytest.mark.asyncio
+async def test_visual_login_flow_returns_manual_prepare_when_generic_login_entry_cannot_be_confirmed(monkeypatch):
+    agent = VisualAgent(tools_description_string="")
+    specialist_context = build_specialist_context_payload(
+        current_topic="Generischer Chrome Login",
+        active_goal="Unbekannte Sites ohne starres /login behandeln",
+        open_loop="Wenn der Login-Einstieg nicht sicher gefunden wird, geordnet an den Nutzer uebergeben",
+        next_expected_step="Bei Root-Domain-Discovery nicht in den Vision-Loop kippen",
+        turn_type="new_task",
+        response_mode="execute",
+        user_preferences=["Login dynamisch behandeln", "Chrome credential broker"],
+    )
+    task = (
+        "# DELEGATION HANDOFF\n"
+        "target_agent: visual\n"
+        "goal: Oeffne grok.com in Chrome und nutze den Passwortmanager.\n"
+        "expected_output: login_handoff\n"
+        "success_signal: login maske sichtbar\n"
+        "handoff_data:\n"
+        "- source_url: https://grok.com\n"
+        "- expected_state: login_dialog\n"
+        "- browser_type: chrome\n"
+        "- credential_broker: chrome_password_manager\n"
+        "- broker_profile: Default\n"
+        "- domain: grok.com\n"
+        "- original_user_task: Bitte melde mich in Chrome bei grok.com an und nutze den Passwortmanager.\n"
+        f"- specialist_context_json: {json.dumps(specialist_context, ensure_ascii=False, sort_keys=True)}\n"
+    )
+
+    progress_events = []
+    executed_actions = []
+
+    def _progress_callback(*args, **kwargs):
+        if kwargs:
+            progress_events.append(kwargs)
+            return
+        stage = args[0] if len(args) > 0 else ""
+        payload = args[1] if len(args) > 1 else {}
+        progress_events.append({"stage": stage, "payload": payload})
+
+    async def _fake_execute_structured_step(self, step):
+        executed_actions.append(step.action)
+        if step.action == "navigate":
+            return {
+                "success": True,
+                "strategy": "direct_navigate",
+                "matched_signals": ["url_contains=grok.com"],
+                "verification_result": {
+                    "success": True,
+                    "matched_signals": ["url_contains=grok.com"],
+                    "observation": {"current_url": "https://grok.com", "elements": []},
+                },
+            }
+        return {
+            "success": False,
+            "strategy": "vision_scan",
+            "verification_result": {
+                "success": False,
+                "matched_signals": [],
+                "observation": {"current_url": "https://grok.com", "elements": []},
+            },
+        }
+
+    async def _fake_detect_authenticated_session_state(self, service: str):
+        return {
+            "success": False,
+            "positive_hits": [],
+            "negative_hits": [],
+            "text_preview": "grok chrome",
+            "visible_browser": "chrome",
+        }
+
+    async def _fake_detect_visible_browser_state(self):
+        return {
+            "success": True,
+            "visible_browser": "chrome",
+            "text_preview": "grok chrome",
+        }
+
+    async def _fake_detect_credential_broker_ready_state(self, service: str, credential_broker: str):
+        return {
+            "success": False,
+            "positive_hits": [],
+            "negative_hits": [],
+            "text_preview": "grok chrome",
+            "visible_browser": "chrome",
+        }
+
+    async def _fake_detect_dynamic_ui_and_set_roi(self, task_text: str):
+        return False
+
+    async def _unexpected_llm(self, messages):
+        raise AssertionError("LLM-Fallback darf nach generic-login-entry-Mismatch nicht aufgerufen werden")
+
+    monkeypatch.setattr(VisualAgent, "_execute_structured_step", _fake_execute_structured_step)
+    monkeypatch.setattr(VisualAgent, "_detect_authenticated_session_state", _fake_detect_authenticated_session_state)
+    monkeypatch.setattr(VisualAgent, "_detect_visible_browser_state", _fake_detect_visible_browser_state)
+    monkeypatch.setattr(VisualAgent, "_detect_credential_broker_ready_state", _fake_detect_credential_broker_ready_state)
+    monkeypatch.setattr(VisualAgent, "_detect_dynamic_ui_and_set_roi", _fake_detect_dynamic_ui_and_set_roi)
+    monkeypatch.setattr(VisualAgent, "_call_llm", _unexpected_llm)
+    setattr(agent, "_delegation_progress_callback", _progress_callback)
+
+    result = await agent.run(task)
+
+    assert executed_actions[:2] == ["navigate", "click_target"]
+    assert isinstance(result, dict)
+    assert result["status"] == "awaiting_user"
+    assert result["step"] == "manual_browser_prepare"
+    assert result["credential_broker"] == "chrome_password_manager"
+    assert "login-einstieg" in result["message"].lower()
+    assert "https://grok.com" in result["user_action_required"].lower()
+    assert progress_events
+    payload = progress_events[-1]["payload"]
+    assert payload["kind"] == "blocker"
+    assert payload["tool_status"] == "awaiting_user"
+    assert payload["workflow_reason"] == "user_mediated_login"
+
+
+@pytest.mark.asyncio
 async def test_visual_login_flow_accepts_visible_authenticated_state_as_goal_satisfied(monkeypatch):
     agent = VisualAgent(tools_description_string="")
     specialist_context = build_specialist_context_payload(
