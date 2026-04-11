@@ -2,6 +2,33 @@
 
 ---
 
+## Fortschritt 2026-04-11 - D4b Haertung: login_modal-Mismatch bricht jetzt frueh und strukturiert ab
+
+Im Chrome-Credential-Broker-Pfad gab es noch einen konkreten Live-Restfehler: Wenn `start_visual_browser` bereits erfolgreich war, aber die erwartete `login_modal`-Verifikation fehlschlug, fiel `visual_login` noch in den generischen Vision-/LLM-Loop zurueck. Genau dort entstand der unnoetig lange visuelle Lauf. Dieser Bruch ist jetzt geschlossen.
+
+Geaendert:
+
+- [agent/agents/visual.py](/home/fatih-ubuntu/dev/timus/agent/agents/visual.py)
+  - neuer sichtbarer Browser-Check fuer den D4b-Loginpfad
+  - wenn `login_modal` nicht bestaetigt werden kann und der falsche oder gar kein Zielbrowser sichtbar ist, endet der Pfad jetzt sofort als strukturierter `awaiting_user`-Workflow statt als generischer Vision-Fallback
+  - der manuelle Browser-Prepare-Handoff ist jetzt als eigene Helper-Route vereinheitlicht
+  - `credential_broker_ready` bleibt weiter moeglich, wenn der richtige Browser sichtbar ist und Passwortmanager-/Passkey-Signale auftauchen
+- [tests/test_specialist_handoffs.py](/home/fatih-ubuntu/dev/timus/tests/test_specialist_handoffs.py)
+  - neue Regression fuer:
+    - `navigate` erfolgreich
+    - `login_modal` scheitert
+    - sichtbarer Browser ist falsch (`firefox` statt `chrome`)
+    - Ergebnis bleibt trotzdem direkt `manual_browser_prepare`
+    - kein Rueckfall in die LLM-/Vision-Schleife
+
+Verifikation:
+
+- `python -m py_compile agent/agents/visual.py tests/test_specialist_handoffs.py tests/test_visual_improvements.py`
+- `pytest -q tests/test_specialist_handoffs.py tests/test_visual_improvements.py`
+  - `54 passed`
+- `pytest -q tests/test_dispatcher_camera_intent.py tests/test_visual_browser_tool.py tests/test_auth_session_state.py tests/test_android_chat_language.py`
+  - `59 passed`
+
 ## Fortschritt 2026-04-10 - D4b Chrome Credential Broker als erster Runtime-Slice gestartet
 
 Der Chrome-Credential-Broker war bisher nur als spaeterer Ausbau fuer Phase D eingeordnet. Nach D3/D4 ist jetzt der erste konservative Runtime-Slice dafuer live im Code vorbereitet: Timus kennt weiterhin keine Roh-Secrets, kann aber fuer explizite Chrome-/Passwortmanager-Loginwuensche denselben Workflow in einem eigenen Broker-Lane fuehren.

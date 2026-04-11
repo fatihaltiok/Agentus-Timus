@@ -688,9 +688,13 @@ async def test_visual_login_flow_uses_chrome_credential_broker_when_requested(mo
     async def _fake_detect_dynamic_ui_and_set_roi(self, task_text: str):
         return False
 
+    async def _fake_detect_credential_broker_ready_state(self, service: str, credential_broker: str):
+        return {"success": False, "positive_hits": [], "text_preview": "", "visible_browser": ""}
+
     monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
     monkeypatch.setattr(VisualAgent, "_verify_structured_step", _fake_verify_structured_step)
     monkeypatch.setattr(VisualAgent, "_detect_dynamic_ui_and_set_roi", _fake_detect_dynamic_ui_and_set_roi)
+    monkeypatch.setattr(VisualAgent, "_detect_credential_broker_ready_state", _fake_detect_credential_broker_ready_state)
     setattr(agent, "_delegation_progress_callback", _progress_callback)
 
     result = await agent.run(task)
@@ -708,6 +712,93 @@ async def test_visual_login_flow_uses_chrome_credential_broker_when_requested(mo
     payload = progress_events[-1]["payload"]
     assert payload["kind"] == "blocker"
     assert payload["tool_status"] == "awaiting_user"
+
+
+@pytest.mark.asyncio
+async def test_visual_login_flow_marks_credential_broker_ready_when_passkey_ui_is_visible(monkeypatch):
+    agent = VisualAgent(tools_description_string="")
+    specialist_context = build_specialist_context_payload(
+        current_topic="GitHub Login",
+        active_goal="Chrome-Passwortmanager gezielt uebernehmen lassen",
+        open_loop="Broker-Schritt sichtbar unterscheiden",
+        next_expected_step="Passkey- oder Passwortmanager-Schritt bestaetigen lassen",
+        turn_type="new_task",
+        response_mode="execute",
+        user_preferences=["Chrome credential broker"],
+    )
+    task = (
+        "# DELEGATION HANDOFF\n"
+        "target_agent: visual\n"
+        "goal: Oeffne github.com/login in Chrome und nutze den Passwortmanager.\n"
+        "expected_output: login_handoff\n"
+        "success_signal: login maske sichtbar\n"
+        "handoff_data:\n"
+        "- source_url: https://github.com/login\n"
+        "- expected_state: login_dialog\n"
+        "- browser_type: chrome\n"
+        "- credential_broker: chrome_password_manager\n"
+        "- broker_profile: Default\n"
+        "- domain: github.com\n"
+        "- original_user_task: Bitte melde mich in Chrome bei GitHub an und nutze den Passwortmanager.\n"
+        f"- specialist_context_json: {json.dumps(specialist_context, ensure_ascii=False, sort_keys=True)}\n"
+    )
+
+    progress_events = []
+
+    def _progress_callback(*args, **kwargs):
+        if kwargs:
+            progress_events.append(kwargs)
+            return
+        stage = args[0] if len(args) > 0 else ""
+        payload = args[1] if len(args) > 1 else {}
+        progress_events.append({"stage": stage, "payload": payload})
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        if method == "start_visual_browser":
+            return {"success": True, "url": params.get("url")}
+        raise AssertionError(f"unexpected tool call: {method}")
+
+    async def _fake_verify_structured_step(self, step):
+        return {
+            "success": True,
+            "matched_signals": [step.expected_state],
+            "observation": {"current_url": "https://github.com/login", "elements": []},
+        }
+
+    async def _fake_detect_dynamic_ui_and_set_roi(self, task_text: str):
+        return False
+
+    async def _fake_detect_authenticated_session_state(self, service: str):
+        return {"success": False, "positive_hits": [], "negative_hits": [], "text_preview": "", "visible_browser": "chrome"}
+
+    async def _fake_detect_credential_broker_ready_state(self, service: str, credential_broker: str):
+        return {
+            "success": True,
+            "positive_hits": ["sign in with a passkey", "passkey"],
+            "text_preview": "sign in with a passkey | chrome",
+            "visible_browser": "chrome",
+        }
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+    monkeypatch.setattr(VisualAgent, "_verify_structured_step", _fake_verify_structured_step)
+    monkeypatch.setattr(VisualAgent, "_detect_dynamic_ui_and_set_roi", _fake_detect_dynamic_ui_and_set_roi)
+    monkeypatch.setattr(VisualAgent, "_detect_authenticated_session_state", _fake_detect_authenticated_session_state)
+    monkeypatch.setattr(VisualAgent, "_detect_credential_broker_ready_state", _fake_detect_credential_broker_ready_state)
+    setattr(agent, "_delegation_progress_callback", _progress_callback)
+
+    result = await agent.run(task)
+
+    assert isinstance(result, dict)
+    assert result["status"] == "awaiting_user"
+    assert result["step"] == "credential_broker_ready"
+    assert result["credential_broker"] == "chrome_password_manager"
+    assert "passkey" in result["message"].lower()
+    assert "gespeicherten zugang" in result["user_action_required"].lower()
+    assert progress_events
+    payload = progress_events[-1]["payload"]
+    assert payload["kind"] == "blocker"
+    assert payload["tool_status"] == "awaiting_user"
+    assert "passkey" in payload["message"].lower()
 
 
 @pytest.mark.asyncio
@@ -802,6 +893,114 @@ async def test_visual_login_flow_returns_manual_browser_prepare_when_chrome_cont
     assert payload["tool_status"] == "awaiting_user"
     assert payload["workflow_reason"] == "user_mediated_login"
     assert "https://github.com/login" in payload["user_action_required"].lower()
+
+
+@pytest.mark.asyncio
+async def test_visual_login_flow_stops_after_login_modal_mismatch_instead_of_falling_back_to_vision(monkeypatch):
+    agent = VisualAgent(tools_description_string="")
+    specialist_context = build_specialist_context_payload(
+        current_topic="GitHub Login",
+        active_goal="Chrome-Login nur bis zum sicheren Hand-off vorbereiten",
+        open_loop="Nach erfolgreicher Navigation nicht in den Vision-Loop kippen",
+        next_expected_step="Wenn die Login-Maske nicht bestaetigt werden kann, sofort awaiting_user setzen",
+        turn_type="new_task",
+        response_mode="execute",
+        user_preferences=["Login dynamisch behandeln", "Chrome credential broker"],
+    )
+    task = (
+        "# DELEGATION HANDOFF\n"
+        "target_agent: visual\n"
+        "goal: Oeffne github.com/login in Chrome und nutze den Passwortmanager.\n"
+        "expected_output: login_handoff\n"
+        "success_signal: login maske sichtbar\n"
+        "handoff_data:\n"
+        "- source_url: https://github.com/login\n"
+        "- expected_state: login_dialog\n"
+        "- browser_type: chrome\n"
+        "- credential_broker: chrome_password_manager\n"
+        "- broker_profile: Default\n"
+        "- domain: github.com\n"
+        "- original_user_task: Bitte melde mich in Chrome bei GitHub an und nutze den Passwortmanager.\n"
+        f"- specialist_context_json: {json.dumps(specialist_context, ensure_ascii=False, sort_keys=True)}\n"
+    )
+
+    progress_events = []
+    browser_calls = []
+    verify_states = []
+
+    def _progress_callback(*args, **kwargs):
+        if kwargs:
+            progress_events.append(kwargs)
+            return
+        stage = args[0] if len(args) > 0 else ""
+        payload = args[1] if len(args) > 1 else {}
+        progress_events.append({"stage": stage, "payload": payload})
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        if method == "start_visual_browser":
+            browser_calls.append(dict(params))
+            return {"success": True, "url": params.get("url")}
+        raise AssertionError(f"unexpected tool call: {method}")
+
+    async def _fake_verify_structured_step(self, step):
+        verify_states.append(step.expected_state)
+        if step.expected_state == "landing":
+            return {
+                "success": True,
+                "matched_signals": ["url_contains=github.com"],
+                "observation": {"current_url": "https://github.com/login", "elements": []},
+            }
+        return {
+            "success": False,
+            "matched_signals": [],
+            "observation": {"current_url": "about:blank", "elements": []},
+        }
+
+    async def _fake_detect_authenticated_session_state(self, service: str):
+        return {
+            "success": False,
+            "positive_hits": [],
+            "negative_hits": [],
+            "text_preview": "mozilla firefox timus canvas",
+            "visible_browser": "firefox",
+        }
+
+    async def _fake_detect_visible_browser_state(self):
+        return {
+            "success": True,
+            "visible_browser": "firefox",
+            "text_preview": "mozilla firefox timus canvas",
+        }
+
+    async def _fake_detect_dynamic_ui_and_set_roi(self, task_text: str):
+        return False
+
+    async def _unexpected_llm(self, messages):
+        raise AssertionError("LLM-Fallback darf nach login_modal-Mismatch nicht mehr aufgerufen werden")
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+    monkeypatch.setattr(VisualAgent, "_verify_structured_step", _fake_verify_structured_step)
+    monkeypatch.setattr(VisualAgent, "_detect_authenticated_session_state", _fake_detect_authenticated_session_state)
+    monkeypatch.setattr(VisualAgent, "_detect_visible_browser_state", _fake_detect_visible_browser_state)
+    monkeypatch.setattr(VisualAgent, "_detect_dynamic_ui_and_set_roi", _fake_detect_dynamic_ui_and_set_roi)
+    monkeypatch.setattr(VisualAgent, "_call_llm", _unexpected_llm)
+    setattr(agent, "_delegation_progress_callback", _progress_callback)
+
+    result = await agent.run(task)
+
+    assert browser_calls
+    assert verify_states[:2] == ["landing", "login_modal"]
+    assert isinstance(result, dict)
+    assert result["status"] == "awaiting_user"
+    assert result["step"] == "manual_browser_prepare"
+    assert result["credential_broker"] == "chrome_password_manager"
+    assert "nicht chrome" in result["message"].lower()
+    assert "https://github.com/login" in result["user_action_required"].lower()
+    assert progress_events
+    payload = progress_events[-1]["payload"]
+    assert payload["kind"] == "blocker"
+    assert payload["tool_status"] == "awaiting_user"
+    assert payload["workflow_reason"] == "user_mediated_login"
 
 
 @pytest.mark.asyncio

@@ -267,6 +267,11 @@ Phase D braucht einen gemeinsamen Nutzeraktions-Vertrag, statt fuer jede Plattfo
     - `visual` erkennt solche natuerlichen Chrome-/Passwortmanager-Anfragen jetzt auch intern als echten Browser-`login_flow`, statt sie vorzeitig aus dem Browser-Plan-Gate zu verlieren
     - wenn Chrome oder der Zielbrowser nicht sicher bis zur Login-Maske vorbereitet werden kann, kippt der Pfad nicht mehr in den langen generischen Vision-Loop
     - stattdessen erzeugt `visual_login` sofort einen sauberen `awaiting_user`-Workflow fuer die manuelle Browser-/Login-Vorbereitung
+    - auch ein spaeterer Fehlschlag bei `login_modal` fuehrt jetzt nicht mehr in den generischen Vision-Loop zurueck:
+      - wenn nach erfolgreicher Navigation die Login-Maske nicht bestaetigt werden kann
+      - und der falsche oder gar kein Zielbrowser sichtbar ist
+      - endet der Pfad jetzt direkt wieder als strukturierter `manual_browser_prepare`-Handoff
+    - damit bleibt D4b im assistiven Login-Rahmen statt nach einem strukturierten Teilfehler wieder in freie visuelle Exploration abzurutschen
     - Live-Nachweis:
       - Session `d4b_live_verify_20260410_h`
       - Request `req_e4df0d05c9b4`

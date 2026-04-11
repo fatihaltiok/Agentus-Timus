@@ -759,7 +759,7 @@ class VisualAgent(BaseAgent):
         if verification.get("success"):
             return result
 
-        payload = build_user_mediated_login_workflow_payload(
+        payload = await self._build_login_waiting_payload(
             service=service,
             url=source_url,
             domain=self.current_broker_domain or self._infer_domain_from_url(source_url),
@@ -860,6 +860,28 @@ class VisualAgent(BaseAgent):
             return "chrome"
         return ""
 
+    def _credential_broker_markers_for_service(self, service: str) -> tuple[str, ...]:
+        common = (
+            "passkey",
+            "password manager",
+            "passwortmanager",
+            "saved password",
+            "saved passwords",
+            "autofill",
+            "choose an account",
+            "continue as",
+        )
+        normalized = str(service or "").strip().lower()
+        if normalized == "github":
+            return (
+                "sign in with a passkey",
+                "passkey",
+                "with google",
+                "with apple",
+                *common,
+            )
+        return common
+
     @staticmethod
     def _verified_elements_to_text_blob(elements: Any) -> str:
         parts: list[str] = []
@@ -871,6 +893,111 @@ class VisualAgent(BaseAgent):
                 if value:
                     parts.append(value)
         return " | ".join(parts)
+
+    async def _detect_credential_broker_ready_state(
+        self,
+        service: str,
+        credential_broker: str,
+    ) -> dict[str, Any]:
+        if str(credential_broker or "").strip().lower() != "chrome_password_manager":
+            return {
+                "success": False,
+                "positive_hits": [],
+                "text_preview": "",
+                "visible_browser": "",
+            }
+
+        screen_state = await self._analyze_current_screen()
+        elements = list(screen_state.get("elements") or []) if isinstance(screen_state, dict) else []
+        text_blob = " | ".join(
+            str(item.get("text") or "").strip().lower()
+            for item in elements
+            if isinstance(item, dict) and str(item.get("text") or "").strip()
+        )
+        markers = self._credential_broker_markers_for_service(service)
+        positive_hits = [marker for marker in markers if marker in text_blob]
+        visible_browser = self._infer_visible_browser_from_text_blob(text_blob)
+
+        if not positive_hits:
+            try:
+                verified = await self._call_tool(
+                    "analyze_screen_verified",
+                    {
+                        "target_elements": [{"type": "text", "label": marker} for marker in markers[:8]],
+                        "min_confidence": 0.65,
+                        "verify_with_ocr": True,
+                        "verify_with_llm": True,
+                    },
+                )
+                verified_blob = self._verified_elements_to_text_blob(
+                    (verified or {}).get("filtered_elements")
+                    or (verified or {}).get("verified_elements")
+                    or []
+                )
+                if verified_blob:
+                    positive_hits = [marker for marker in markers if marker in verified_blob]
+                    if not visible_browser:
+                        visible_browser = self._infer_visible_browser_from_text_blob(verified_blob)
+                    if verified_blob and text_blob:
+                        text_blob = f"{text_blob} | {verified_blob}"
+                    elif verified_blob:
+                        text_blob = verified_blob
+            except Exception as e:
+                log.debug("Credential broker detection fallback failed: %s", e)
+
+        return {
+            "success": bool(positive_hits),
+            "positive_hits": positive_hits,
+            "text_preview": text_blob[:280],
+            "visible_browser": visible_browser,
+        }
+
+    async def _detect_visible_browser_state(self) -> dict[str, Any]:
+        screen_state = await self._analyze_current_screen()
+        elements = list(screen_state.get("elements") or []) if isinstance(screen_state, dict) else []
+        text_blob = " | ".join(
+            str(item.get("text") or "").strip().lower()
+            for item in elements
+            if isinstance(item, dict) and str(item.get("text") or "").strip()
+        )
+        visible_browser = self._infer_visible_browser_from_text_blob(text_blob)
+
+        if not visible_browser:
+            try:
+                verified = await self._call_tool(
+                    "analyze_screen_verified",
+                    {
+                        "target_elements": [
+                            {"type": "text", "label": "Google Chrome"},
+                            {"type": "text", "label": "Chrome"},
+                            {"type": "text", "label": "Mozilla Firefox"},
+                            {"type": "text", "label": "Firefox"},
+                            {"type": "text", "label": "Chromium"},
+                        ],
+                        "min_confidence": 0.65,
+                        "verify_with_ocr": True,
+                        "verify_with_llm": True,
+                    },
+                )
+                verified_blob = self._verified_elements_to_text_blob(
+                    (verified or {}).get("filtered_elements")
+                    or (verified or {}).get("verified_elements")
+                    or []
+                )
+                if verified_blob:
+                    visible_browser = self._infer_visible_browser_from_text_blob(verified_blob)
+                    if verified_blob and text_blob:
+                        text_blob = f"{text_blob} | {verified_blob}"
+                    elif verified_blob:
+                        text_blob = verified_blob
+            except Exception as e:
+                log.debug("Visible browser detection fallback failed: %s", e)
+
+        return {
+            "success": bool(visible_browser),
+            "visible_browser": visible_browser,
+            "text_preview": text_blob[:280],
+        }
 
     async def _detect_authenticated_session_state(self, service: str) -> dict[str, Any]:
         screen_state = await self._analyze_current_screen()
@@ -989,6 +1116,118 @@ class VisualAgent(BaseAgent):
             },
         }
 
+    async def _build_login_waiting_payload(
+        self,
+        *,
+        service: str,
+        url: str,
+        workflow_id: str = "",
+        domain: str = "",
+        preferred_browser: str = "",
+        credential_broker: str = "",
+        broker_profile: str = "",
+        message: str = "",
+        user_action_required: str = "",
+        resume_hint: str = "",
+    ) -> dict[str, Any]:
+        broker_state = await self._detect_credential_broker_ready_state(service, credential_broker)
+        if broker_state.get("success"):
+            hits = ", ".join(str(item) for item in broker_state.get("positive_hits") or [])
+            evidence_note = f" Sichtbare Hinweise: {hits}." if hits else ""
+            service_label = str(service or "dem Dienst").strip()
+            return build_awaiting_user_workflow_payload(
+                service=service,
+                workflow_id=workflow_id,
+                url=url,
+                reason="user_mediated_login",
+                step="credential_broker_ready",
+                domain=domain,
+                preferred_browser=preferred_browser,
+                credential_broker=credential_broker,
+                broker_profile=broker_profile,
+                message=(
+                    "Der Chrome-Passwortmanager-/Passkey-Schritt ist sichtbar und bereit zur Bestaetigung."
+                    f"{evidence_note}"
+                ),
+                user_action_required=(
+                    f"Bitte waehle den gespeicherten Zugang oder bestaetige den Passkey-Schritt bei {service_label} in Chrome."
+                ),
+                resume_hint=(
+                    str(resume_hint or "").strip()
+                    or "Sage danach 'weiter', 'ich bin eingeloggt' oder beschreibe die sichtbare Challenge, damit Timus kontrolliert fortsetzen kann."
+                ),
+            )
+        return build_user_mediated_login_workflow_payload(
+            service=service,
+            url=url,
+            workflow_id=workflow_id,
+            domain=domain,
+            preferred_browser=preferred_browser,
+            credential_broker=credential_broker,
+            broker_profile=broker_profile,
+            message=message,
+            user_action_required=user_action_required,
+            resume_hint=resume_hint,
+        )
+
+    def _build_manual_browser_prepare_payload(
+        self,
+        *,
+        service: str,
+        url: str,
+        domain: str,
+        preferred_browser: str,
+        credential_broker: str,
+        broker_profile: str,
+        visible_browser: str = "",
+        login_mask_confirmed: bool = False,
+    ) -> dict[str, Any]:
+        browser_label = preferred_browser or self.current_browser_type or "Browser"
+        profile_hint = (
+            f" im Profil {broker_profile}"
+            if preferred_browser == "chrome" and broker_profile
+            else ""
+        )
+        visible_note = ""
+        normalized_visible = str(visible_browser or "").strip().lower()
+        normalized_preferred = str(preferred_browser or "").strip().lower()
+        if normalized_visible and normalized_preferred and normalized_visible != normalized_preferred:
+            visible_note = (
+                f" Sichtbar ist aktuell {normalized_visible}, nicht {normalized_preferred}."
+            )
+        elif not login_mask_confirmed:
+            visible_note = " Die erwartete Login-Maske ist aktuell nicht sicher sichtbar."
+
+        user_action_required = (
+            (
+                f"Bitte oeffne Chrome{profile_hint} manuell, rufe {url or 'die Login-Seite'} auf "
+                f"und nutze dort den Chrome-Passwortmanager fuer {service or 'den Dienst'}."
+            )
+            if credential_broker == "chrome_password_manager"
+            else (
+                f"Bitte oeffne {browser_label}{profile_hint} manuell und rufe {url or 'die Login-Seite'} auf."
+            )
+        )
+        return build_awaiting_user_workflow_payload(
+            service=service,
+            url=url,
+            step="manual_browser_prepare",
+            reason="user_mediated_login",
+            domain=domain,
+            preferred_browser=preferred_browser,
+            credential_broker=credential_broker,
+            broker_profile=broker_profile,
+            message=(
+                f"Ich konnte {browser_label}{profile_hint} nicht sicher bis zur Login-Maske vorbereiten."
+                f"{visible_note}"
+            ),
+            user_action_required=user_action_required,
+            resume_hint=(
+                "Sage danach 'weiter', 'ich bin auf der Login-Seite' oder beschreibe die sichtbare Blockade, "
+                "damit Timus kontrolliert fortsetzen kann."
+            ),
+        )
+
     async def _resume_user_mediated_login(self, context: dict[str, str]) -> str:
         service = str(context.get("service") or "").strip().lower()
         url = str(context.get("url") or "").strip()
@@ -1037,12 +1276,10 @@ class VisualAgent(BaseAgent):
                     payload,
                     result_text=f"{payload['message']}\n\n{payload['user_action_required']}".strip(),
                 )
-            payload = build_awaiting_user_workflow_payload(
+            payload = await self._build_login_waiting_payload(
                 service=service,
                 workflow_id=workflow_id,
                 url=url,
-                reason="user_mediated_login",
-                step="login_form_ready",
                 domain=str(context.get("domain") or "").strip().lower(),
                 preferred_browser=str(context.get("preferred_browser") or "").strip().lower(),
                 credential_broker=str(context.get("credential_broker") or "").strip().lower(),
@@ -1094,12 +1331,10 @@ class VisualAgent(BaseAgent):
                 result_text=f"{payload['message']}\n\n{payload['user_action_required']}".strip(),
             )
 
-        payload = build_awaiting_user_workflow_payload(
+        payload = await self._build_login_waiting_payload(
             service=service,
             workflow_id=workflow_id,
             url=url,
-            reason="user_mediated_login",
-            step="login_form_ready",
             domain=str(context.get("domain") or "").strip().lower(),
             preferred_browser=str(context.get("preferred_browser") or "").strip().lower(),
             credential_broker=str(context.get("credential_broker") or "").strip().lower(),
@@ -1529,40 +1764,68 @@ class VisualAgent(BaseAgent):
                         plan_id=plan_id,
                     )
                 if step.action == "navigate":
-                    browser_label = lane["browser_type"] or self.current_browser_type or "Browser"
-                    profile_hint = (
-                        f" im Profil {lane['broker_profile']}"
-                        if lane["browser_type"] == "chrome" and lane["broker_profile"]
-                        else ""
-                    )
-                    workflow_payload = build_awaiting_user_workflow_payload(
+                    workflow_payload = self._build_manual_browser_prepare_payload(
                         service=service,
                         url=source_url,
-                        step="manual_browser_prepare",
-                        reason="user_mediated_login",
                         domain=lane["domain"],
                         preferred_browser=lane["browser_type"],
                         credential_broker=lane["credential_broker"],
                         broker_profile=lane["broker_profile"],
-                        message=(
-                            f"Ich konnte {browser_label}{profile_hint} nicht sicher bis zur Login-Maske vorbereiten."
-                        ),
-                        user_action_required=(
-                            (
-                                f"Bitte oeffne Chrome{profile_hint} manuell, rufe {source_url or 'die Login-Seite'} auf "
-                                f"und nutze dort den Chrome-Passwortmanager fuer {service or 'den Dienst'}."
-                            )
-                            if lane["credential_broker"] == "chrome_password_manager"
-                            else (
-                                f"Bitte oeffne {browser_label}{profile_hint} manuell und rufe {source_url or 'die Login-Seite'} auf."
-                            )
-                        ),
-                        resume_hint=(
-                            "Sage danach 'weiter', 'ich bin auf der Login-Seite' oder beschreibe die sichtbare Blockade, "
-                            "damit Timus kontrolliert fortsetzen kann."
-                        ),
+                        visible_browser=str(verification.get("visible_browser") or "").strip().lower(),
                     )
                     self._emit_user_action_blocker(workflow_payload, stage="await_manual_browser_prepare")
+                    return {
+                        **workflow_payload,
+                        "status": "awaiting_user",
+                        "success": False,
+                        "result": str(workflow_payload.get("message") or "").strip(),
+                        "completed_steps": execution_log,
+                        "current_state": current_state,
+                        "plan_id": plan_id,
+                        "metadata": {
+                            "phase_d_workflow": workflow_payload,
+                        },
+                    }
+                if step.expected_state == "login_modal":
+                    browser_state = await self._detect_visible_browser_state()
+                    visible_browser = (
+                        str(browser_state.get("visible_browser") or "").strip().lower()
+                        or str(verification.get("visible_browser") or "").strip().lower()
+                    )
+                    if not visible_browser or (
+                        lane["browser_type"] and visible_browser != lane["browser_type"]
+                    ):
+                        workflow_payload = self._build_manual_browser_prepare_payload(
+                            service=service,
+                            url=source_url,
+                            domain=lane["domain"],
+                            preferred_browser=lane["browser_type"],
+                            credential_broker=lane["credential_broker"],
+                            broker_profile=lane["broker_profile"],
+                            visible_browser=visible_browser,
+                            login_mask_confirmed=False,
+                        )
+                    else:
+                        workflow_payload = await self._build_login_waiting_payload(
+                            service=service,
+                            url=source_url,
+                            domain=lane["domain"],
+                            preferred_browser=lane["browser_type"],
+                            credential_broker=lane["credential_broker"],
+                            broker_profile=lane["broker_profile"],
+                            message=(
+                                "Ich kann die Login-Maske noch nicht sicher bestaetigen, "
+                                "aber der richtige Browser ist sichtbar."
+                            ),
+                            user_action_required=(
+                                "Bitte bringe die Login-Maske oder den Passwortmanager-/Passkey-Schritt in den Vordergrund."
+                            ),
+                            resume_hint=(
+                                "Sage danach 'weiter', 'ich bin auf der Login-Seite' oder beschreibe die sichtbare Blockade, "
+                                "damit Timus kontrolliert fortsetzen kann."
+                            ),
+                        )
+                    self._emit_user_action_blocker(workflow_payload, stage="await_login_completion")
                     return {
                         **workflow_payload,
                         "status": "awaiting_user",
@@ -1596,7 +1859,7 @@ class VisualAgent(BaseAgent):
                 plan_id=plan_id,
             )
 
-        workflow_payload = build_user_mediated_login_workflow_payload(
+        workflow_payload = await self._build_login_waiting_payload(
             service=service,
             url=source_url,
             domain=lane["domain"],

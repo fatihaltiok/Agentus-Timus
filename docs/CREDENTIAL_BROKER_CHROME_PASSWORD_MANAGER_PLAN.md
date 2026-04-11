@@ -227,6 +227,13 @@ Der Slice ist bewusst konservativ:
 - keine Behauptung, dass Chrome-Autofill schon verifiziert erkannt wird
 - keine Umgehung von 2FA/CAPTCHA
 
+Neuere D4b-Haertung:
+
+- natuerliche Chrome-/Passwortmanager-Anfragen werden jetzt robuster direkt als `visual_login`-/`login_flow` behandelt
+- wenn der Zielbrowser nicht sauber bis zur Login-Maske vorbereitet werden kann, endet der Pfad strukturiert als `awaiting_user` statt in freie visuelle Navigation zu kippen
+- wenn die Login-Maske nach erfolgreicher Navigation nicht bestaetigt werden kann und der falsche Browser sichtbar ist, gibt Timus jetzt sofort `manual_browser_prepare` zurueck
+- der Broker-Pfad bleibt damit assistiv und zielzustandsorientiert, statt an einem einzelnen Browser-Schritt festzuhaken
+
 ## Nicht Ziel
 
 - kein Export aller Credentials an Timus
