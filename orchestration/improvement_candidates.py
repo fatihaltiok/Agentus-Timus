@@ -19,6 +19,8 @@ _TAXONOMY_ALIASES = {
     "routing": "routing",
     "route": "routing",
     "router": "routing",
+    "incident": "runtime",
+    "self_healing_incident": "runtime",
     "conversation_recall": "memory",
     "recall": "memory",
     "memory": "memory",
@@ -370,6 +372,198 @@ def normalize_session_reflection_candidate(raw: Mapping[str, Any] | None) -> dic
         "evidence_basis": _clean_text(payload.get("evidence_basis"), limit=96) or "session_reflection",
         "occurrence_count": occurrence_count,
         "status": "applied" if applied else "open",
+    }
+
+
+def normalize_self_healing_incident_candidate(raw: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Normalizes a self-healing incident into the Phase-E candidate shape."""
+    payload = dict(raw or {})
+    details = payload.get("details")
+    if not isinstance(details, Mapping):
+        details = {}
+    raw_id = _clean_text(payload.get("incident_key") or payload.get("id"), limit=96)
+    component = _clean_text(payload.get("component"), limit=96).lower()
+    signal = _clean_text(payload.get("signal"), limit=96).lower()
+    target = _clean_text(f"{component}:{signal}".strip(":"), limit=160)
+    status = _clean_text(payload.get("status"), limit=64).lower() or "open"
+    title = _clean_text(payload.get("title"), limit=220)
+    if title:
+        problem = title
+    else:
+        problem = _clean_text(
+            f"Self-healing incident offen: {component or 'unknown_component'} / {signal or 'unknown_signal'}",
+            limit=320,
+        )
+    proposed_action = _clean_text(
+        payload.get("recovery_action")
+        or details.get("suggested_action")
+        or details.get("next_step")
+        or "Incident analysieren, Recovery-Guard pruefen und stabile Wiederholung verhindern.",
+        limit=320,
+    )
+    occurrence_count = _normalize_occurrence_count(
+        details.get("failure_streak")
+        or details.get("seen_count")
+        or details.get("incident_memory_seen_count")
+        or details.get("attempt_count")
+        or 1
+    )
+    severity = _normalize_severity(payload.get("severity"), default="medium")
+    confidence = _normalize_confidence(payload.get("confidence"), default=0.78 if status == "failed" else 0.72)
+    created_at = _clean_text(payload.get("last_seen_at") or payload.get("created_at"), limit=64)
+    raw_category = "self_healing_incident"
+    category = normalize_improvement_category(
+        raw_category,
+        problem=problem,
+        target=target,
+        proposed_action=proposed_action,
+    )
+    candidate_id = _build_candidate_id(
+        "incident",
+        raw_id,
+        f"{component}|{signal}|{problem}|{proposed_action}|{created_at}",
+    )
+    return {
+        "candidate_id": candidate_id,
+        "source": "self_healing_incident",
+        "raw_category": raw_category,
+        "category": category,
+        "target": target,
+        "title": _candidate_title(category=category, target=target, problem=problem),
+        "problem": problem,
+        "proposed_action": proposed_action,
+        "severity": severity,
+        "confidence": confidence,
+        "evidence_level": "incident",
+        "evidence_basis": "self_healing_runtime",
+        "occurrence_count": occurrence_count,
+        "status": "applied" if status in {"recovered", "archived"} else "open",
+    }
+
+
+def normalize_autonomy_observation_candidate(raw: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Normalizes selected autonomy observation events into Phase-E candidates."""
+    event = dict(raw or {})
+    event_type = _clean_text(event.get("event_type"), limit=96).lower()
+    payload = event.get("payload")
+    if not isinstance(payload, Mapping):
+        payload = {}
+    payload = dict(payload)
+    observed_at = _clean_text(event.get("observed_at"), limit=64)
+    raw_id = _clean_text(event.get("id"), limit=96)
+
+    raw_category = "runtime"
+    target = ""
+    problem = ""
+    proposed_action = ""
+    severity = "medium"
+    confidence = 0.65
+
+    if event_type == "dispatcher_meta_fallback":
+        reason = _clean_text(payload.get("reason"), limit=96).lower() or "unknown_reason"
+        raw_category = "routing"
+        target = f"dispatcher:{reason}"
+        problem = f"Dispatcher faellt auf Meta zurueck (reason: {reason})."
+        proposed_action = "Dispatcher-Entscheidung und Routing-Kriterien fuer diesen Fall nachschaerfen."
+        severity = "high" if reason in {"empty_decision", "uncertain_decision"} else "medium"
+        confidence = 0.72
+    elif event_type == "chat_request_failed":
+        source = _clean_text(payload.get("source"), limit=96).lower() or "unknown_source"
+        error_class = _clean_text(payload.get("error_class"), limit=96).lower() or "chat_request_failed"
+        raw_category = "runtime"
+        target = f"{source}:{error_class}"
+        problem = f"Chat-Request scheitert sichtbar fuer Nutzer (source: {source}, error_class: {error_class})."
+        proposed_action = "Fehlerpfad reproduzieren, Incident-Trace pruefen und user-visible Failure vermeiden."
+        severity = "high"
+        confidence = 0.82
+    elif event_type == "context_misread_suspected":
+        reasons = [
+            _clean_text(item, limit=96).lower()
+            for item in list(payload.get("risk_reasons") or [])
+            if _clean_text(item, limit=96)
+        ]
+        dominant_turn_type = _clean_text(payload.get("dominant_turn_type"), limit=64).lower()
+        raw_category = "context"
+        target = dominant_turn_type or "turn_understanding"
+        reason_text = ", ".join(reasons[:3]) or "unspecified_context_risk"
+        problem = f"Kontext-Fehlgriff vermutet ({reason_text})."
+        proposed_action = "Turn-Verstaendnis, Bundle-Rehydration und Follow-up-Bindung fuer diesen Risikofall haerten."
+        severity = "high" if len(reasons) >= 2 else "medium"
+        confidence = 0.74
+    elif event_type == "specialist_signal_emitted":
+        signal = _clean_text(payload.get("signal"), limit=96).lower()
+        if signal not in {"context_mismatch", "needs_meta_reframe"}:
+            return None
+        agent = _clean_text(payload.get("agent"), limit=64).lower() or "unknown_agent"
+        raw_category = "specialist"
+        target = f"{agent}:{signal}"
+        if signal == "context_mismatch":
+            problem = f"Spezialist meldet Kontext-Mismatch ({agent})."
+            proposed_action = "Specialist-Handoff und propagierten Kontext fuer diesen Agenten enger ausrichten."
+        else:
+            problem = f"Spezialist verlangt Meta-Reframe ({agent})."
+            proposed_action = "Meta-Handoff und Strategieauswahl fuer diesen Agenten sauberer reframen."
+        severity = "medium"
+        confidence = 0.71
+    elif event_type in {"communication_task_failed", "send_email_failed"}:
+        backend = _clean_text(payload.get("backend"), limit=96).lower() or "unknown_backend"
+        channel = _clean_text(payload.get("channel"), limit=96).lower() or "communication"
+        raw_category = "tool"
+        target = f"{channel}:{backend}"
+        problem = f"Communication-Lauf scheitert ({channel}, backend: {backend})."
+        proposed_action = "Communication-Backend, Credential-Status und Fehlerrueckgabe in diesem Pfad pruefen."
+        severity = "high" if event_type == "send_email_failed" else "medium"
+        confidence = 0.77
+    elif event_type == "challenge_reblocked":
+        service = _clean_text(payload.get("service"), limit=96).lower() or "unknown_service"
+        challenge_type = _clean_text(payload.get("challenge_type"), limit=96).lower() or "unknown_challenge"
+        raw_category = "policy"
+        target = f"{service}:{challenge_type}"
+        problem = f"Challenge wird erneut blockiert ({service}, type: {challenge_type})."
+        proposed_action = "Challenge-Handover, Resume-Pfad und Nutzeranweisung fuer diesen Auth-Fall haerten."
+        severity = "high"
+        confidence = 0.8
+    elif event_type == "meta_direct_tool_call":
+        status = _clean_text(payload.get("status"), limit=64).lower()
+        has_error = bool(payload.get("has_error"))
+        if status != "error" and not has_error:
+            return None
+        method = _clean_text(payload.get("method"), limit=96).lower() or "unknown_method"
+        raw_category = "tool"
+        target = method
+        problem = f"Meta-Direkttool-Call scheitert ({method})."
+        proposed_action = "Direkttool-Fehler analysieren und entweder Guard, Fallback oder Spezialistenroute haerten."
+        severity = "medium"
+        confidence = 0.69
+    else:
+        return None
+
+    category = normalize_improvement_category(
+        raw_category,
+        problem=problem,
+        target=target,
+        proposed_action=proposed_action,
+    )
+    candidate_id = _build_candidate_id(
+        "obs",
+        raw_id,
+        f"{event_type}|{target}|{problem}|{observed_at}",
+    )
+    return {
+        "candidate_id": candidate_id,
+        "source": "autonomy_observation",
+        "raw_category": raw_category,
+        "category": category,
+        "target": target,
+        "title": _candidate_title(category=category, target=target, problem=problem),
+        "problem": problem,
+        "proposed_action": proposed_action,
+        "severity": _normalize_severity(severity, default="medium"),
+        "confidence": _normalize_confidence(confidence, default=0.65),
+        "evidence_level": "observation",
+        "evidence_basis": "autonomy_observation",
+        "occurrence_count": 1,
+        "status": "open",
     }
 
 

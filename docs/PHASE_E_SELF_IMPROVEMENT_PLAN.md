@@ -183,6 +183,58 @@ Noch offen fuer spaetere E1-Slices:
 - staerkere Similarity-Heuristik fuer paraphrasierte Duplicate
 - systemweite Severity-/Confidence-Kalibrierung statt nur konservativer Merge-Regeln
 
+### E1.3 Incident Signals als dritte Candidate-Quelle
+
+Stand:
+
+- erster Runtime-Slice gestartet
+
+Umgesetzt:
+
+- offene und fehlgeschlagene Self-Healing-Incidents werden jetzt als eigene Improvement-Kandidaten normalisiert
+- neue Incident-Candidate-Form in [orchestration/improvement_candidates.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_candidates.py):
+  - `source = self_healing_incident`
+  - `evidence_level = incident`
+  - `evidence_basis = self_healing_runtime`
+- [orchestration/session_reflection.py](/home/fatih-ubuntu/dev/timus/orchestration/session_reflection.py) zieht jetzt zusaetzlich offene/fehlgeschlagene Incidents aus dem Self-Healing-Store in denselben deduplizierten Kandidatenstrom
+- dadurch koennen Incident-Signale jetzt zusammen mit:
+  - Reflection-Patterns
+  - M12-Runtime-Suggestions
+  priorisiert werden statt in einem separaten Diagnosepfad zu verbleiben
+
+Noch offen fuer spaetere E1-Slices:
+
+- echte Observation-Events aus `autonomy_observation` direkt als weitere Candidate-Quelle
+- staerkere Incident-Dedupe ueber aehnliche, aber nicht identische Incident-Titel
+- bessere Ableitung von `occurrence_count` aus Incident-Historie statt nur aus vorhandenem Detailzustand
+
+### E1.4 Observation-Events als vierte Candidate-Quelle
+
+Stand:
+
+- erster Runtime-Slice gestartet
+
+Umgesetzt:
+
+- ausgewaehlte negative Runtime-/Routing-/Context-Events aus [orchestration/autonomy_observation.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomy_observation.py) werden jetzt als Improvement-Kandidaten normalisiert
+- neue Observation-Candidate-Form in [orchestration/improvement_candidates.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_candidates.py) fuer einen konservativen stabilen Event-Satz:
+  - `dispatcher_meta_fallback`
+  - `chat_request_failed`
+  - `context_misread_suspected`
+  - `specialist_signal_emitted` mit `context_mismatch` oder `needs_meta_reframe`
+  - `communication_task_failed`
+  - `send_email_failed`
+  - `challenge_reblocked`
+  - fehlerhafte `meta_direct_tool_call`
+- [orchestration/session_reflection.py](/home/fatih-ubuntu/dev/timus/orchestration/session_reflection.py) zieht diese Observation-Events jetzt aus dem bestehenden Observation-Store in denselben kombinierten Kandidatenstrom
+- unter Pytest wird das produktive Observation-Log dabei konservativ nicht implizit mitgelesen; Tests muessen die Observation-Quelle explizit einspeisen
+
+Noch offen fuer spaetere E1-Slices:
+
+- breitere Event-Abdeckung ueber den konservativen Kernsatz hinaus
+- bessere Fenster-/Decay-Regeln fuer Observation-Kandidaten
+- staerkere Similarity-Heuristik fuer paraphrasierte Observation-/Incident-Kollisionen
+
 ### E2. Weakness-to-Task Compiler
 
 Ziel:

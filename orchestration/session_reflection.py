@@ -21,7 +21,9 @@ from typing import Any, Dict, List, Optional
 
 from orchestration.improvement_candidates import (
     consolidate_improvement_candidates,
+    normalize_autonomy_observation_candidate,
     normalize_self_improvement_candidate,
+    normalize_self_healing_incident_candidate,
     normalize_session_reflection_candidate,
     sort_improvement_candidates,
 )
@@ -101,6 +103,28 @@ class SessionReflectionLoop:
         self.db_path = db_path
         self._last_session_end: Optional[str] = None
         _ensure_tables(db_path)
+
+    def _get_recent_observation_events(self, *, limit: int = 120) -> List[Dict[str, Any]]:
+        if str(os.getenv("PYTEST_CURRENT_TEST") or "").strip():
+            if not (
+                os.getenv("AUTONOMY_OBSERVATION_LOG_PATH")
+                or os.getenv("AUTONOMY_OBSERVATION_STATE_PATH")
+            ):
+                return []
+        try:
+            from orchestration.autonomy_observation import get_autonomy_observation_store
+
+            store = get_autonomy_observation_store()
+            state = store.load_state()
+            since = str(state.get("started_at") or "").strip()
+            until = str(state.get("ends_at") or "").strip()
+            if not since:
+                since = (datetime.now().astimezone() - timedelta(days=7)).isoformat()
+            events = store.iter_events(since=since, until=until)
+            return events[-limit:] if limit > 0 else events
+        except Exception as e:
+            log.debug("_get_recent_observation_events: %s", e)
+            return []
 
     # ------------------------------------------------------------------
     # Hauptmethode
@@ -570,6 +594,29 @@ Antworte NUR als gültiges JSON:
                     suggestions.append(merged)
             except Exception as e:
                 log.debug("get_improvement_suggestions.self_improvement_engine: %s", e)
+
+            try:
+                from orchestration.task_queue import SelfHealingIncidentStatus, get_queue
+
+                incidents = get_queue().list_self_healing_incidents(
+                    statuses=[
+                        SelfHealingIncidentStatus.OPEN,
+                        SelfHealingIncidentStatus.FAILED,
+                    ],
+                    limit=20,
+                )
+                for incident in incidents:
+                    suggestions.append(normalize_self_healing_incident_candidate(incident))
+            except Exception as e:
+                log.debug("get_improvement_suggestions.self_healing_incidents: %s", e)
+
+            try:
+                for event in self._get_recent_observation_events(limit=120):
+                    candidate = normalize_autonomy_observation_candidate(event)
+                    if candidate:
+                        suggestions.append(candidate)
+            except Exception as e:
+                log.debug("get_improvement_suggestions.autonomy_observation: %s", e)
 
             return consolidate_improvement_candidates(
                 sort_improvement_candidates(suggestions),

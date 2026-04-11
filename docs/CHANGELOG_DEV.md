@@ -2,6 +2,77 @@
 
 ---
 
+## Fortschritt 2026-04-11 - Phase E E1.4 gestartet: Observation-Events als vierte Candidate-Quelle
+
+Der vierte E1-Slice erweitert den Improvement-Kandidatenstrom um ausgewaehlte Autonomy-Observation-Events. Damit koennen jetzt nicht nur Reflection-Patterns, M12-Suggestions und Self-Healing-Incidents, sondern auch direkte Runtime-/Routing-/Context-Risiken aus dem Observation-Log in denselben priorisierten Feed laufen.
+
+Geaendert:
+
+- [orchestration/improvement_candidates.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_candidates.py)
+  - neu: `normalize_autonomy_observation_candidate(...)`
+  - konservativer stabiler Event-Satz:
+    - `dispatcher_meta_fallback`
+    - `chat_request_failed`
+    - `context_misread_suspected`
+    - `specialist_signal_emitted` mit `context_mismatch` oder `needs_meta_reframe`
+    - `communication_task_failed`
+    - `send_email_failed`
+    - `challenge_reblocked`
+    - fehlerhafte `meta_direct_tool_call`
+  - Observation-Kandidaten tragen:
+    - `source = autonomy_observation`
+    - `evidence_level = observation`
+    - `evidence_basis = autonomy_observation`
+- [orchestration/session_reflection.py](/home/fatih-ubuntu/dev/timus/orchestration/session_reflection.py)
+  - neuer Loader fuer aktuelle Observation-Events aus dem bestehenden Store
+  - unter Pytest wird das produktive Observation-Log ohne explizite Test-Pfade nicht still mitgelesen
+  - Observation-Kandidaten laufen danach durch denselben Consolidation-/Dedupe-/Priorisierungspfad wie M8, M12 und Self-Healing-Incidents
+
+Tests:
+
+- erweitert:
+  - [tests/test_improvement_candidates.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_candidates.py)
+  - [tests/test_session_reflection_suggestions.py](/home/fatih-ubuntu/dev/timus/tests/test_session_reflection_suggestions.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/improvement_candidates.py orchestration/session_reflection.py tests/test_improvement_candidates.py tests/test_session_reflection_suggestions.py`
+- `pytest -q tests/test_improvement_candidates.py tests/test_session_reflection_suggestions.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py`
+  - `29 passed`
+- `pytest -q tests/test_improvement_candidates.py tests/test_session_reflection_suggestions.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py tests/test_self_improvement_metrics.py tests/test_model_env_adoption.py`
+  - `41 passed`
+
+## Fortschritt 2026-04-11 - Phase E E1.3 gestartet: Incident-Signale als dritte Candidate-Quelle
+
+Der naechste E1-Slice erweitert den Improvement-Kandidatenstrom um echte Runtime-Incidents aus dem Self-Healing-Store. Damit landen offene/fehlgeschlagene Incidents nicht mehr nur in separaten Health-/Incident-Pfaden, sondern koennen gemeinsam mit Reflection-Patterns und M12-Suggestions priorisiert werden.
+
+Geaendert:
+
+- [orchestration/improvement_candidates.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_candidates.py)
+  - neu: `normalize_self_healing_incident_candidate(...)`
+  - Incident-Kandidaten tragen jetzt:
+    - `source = self_healing_incident`
+    - `category = runtime` (bzw. taxonomisch abgeleitet)
+    - `evidence_level = incident`
+    - `evidence_basis = self_healing_runtime`
+- [orchestration/session_reflection.py](/home/fatih-ubuntu/dev/timus/orchestration/session_reflection.py)
+  - der kombinierte Candidate-Feed zieht jetzt zusaetzlich `open` und `failed` Self-Healing-Incidents aus dem TaskQueue-/Self-Healing-Store
+  - diese Incident-Kandidaten laufen danach durch dieselbe Dedupe-/Priorisierungsschicht wie M8 und M12
+
+Tests:
+
+- erweitert:
+  - [tests/test_improvement_candidates.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_candidates.py)
+  - [tests/test_session_reflection_suggestions.py](/home/fatih-ubuntu/dev/timus/tests/test_session_reflection_suggestions.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/improvement_candidates.py orchestration/session_reflection.py tests/test_improvement_candidates.py tests/test_session_reflection_suggestions.py`
+- `pytest -q tests/test_improvement_candidates.py tests/test_session_reflection_suggestions.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py`
+  - `27 passed`
+- `pytest -q tests/test_improvement_candidates.py tests/test_session_reflection_suggestions.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py tests/test_self_improvement_metrics.py tests/test_model_env_adoption.py`
+  - `39 passed`
+
 ## Fortschritt 2026-04-11 - Phase E E1.2 gestartet: Taxonomie, Dedupe und Priorisierung
 
 Der zweite Phase-E-Slice baut auf E1.1 auf und macht aus den normalisierten Improvement-Signalen erstmals einen gemeinsamen, priorisierten Kandidatenstrom statt nur eine nebeneinanderliegende Liste aus M8- und M12-Funden.

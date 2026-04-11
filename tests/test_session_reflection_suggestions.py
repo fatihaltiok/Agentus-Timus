@@ -117,3 +117,90 @@ async def test_get_improvement_suggestions_dedupes_cross_source_candidates(tmp_p
     assert candidate["merged_sources"] == ["self_improvement_engine", "session_reflection"]
     assert candidate["category"] == "routing"
     assert candidate["signal_class"] == "structural_issue"
+
+
+@pytest.mark.asyncio
+async def test_get_improvement_suggestions_includes_runtime_incident_candidates(tmp_path, monkeypatch):
+    db_path = tmp_path / "timus_memory.db"
+    loop = SessionReflectionLoop(db_path=db_path)
+
+    monkeypatch.setattr(
+        "orchestration.self_improvement_engine.get_improvement_engine",
+        lambda: type("_Engine", (), {"get_suggestions": staticmethod(lambda applied=False: [])})(),
+    )
+    monkeypatch.setattr(
+        "orchestration.task_queue.get_queue",
+        lambda: type(
+            "_Queue",
+            (),
+            {
+                "list_self_healing_incidents": staticmethod(
+                    lambda statuses=None, limit=20: [
+                        {
+                            "incident_key": "m3_mcp_health_unavailable",
+                            "component": "mcp",
+                            "signal": "health_unavailable",
+                            "severity": "high",
+                            "status": "open",
+                            "title": "MCP Health Endpoint nicht erreichbar",
+                            "details": {"failure_streak": 4},
+                            "recovery_action": "MCP Dienst und Health-Check pruefen.",
+                            "last_seen_at": "2026-04-11T11:00:00",
+                        }
+                    ]
+                )
+            },
+        )(),
+    )
+
+    suggestions = await loop.get_improvement_suggestions()
+
+    assert len(suggestions) == 1
+    candidate = suggestions[0]
+    assert candidate["source"] == "self_healing_incident"
+    assert candidate["category"] == "runtime"
+    assert candidate["candidate_id"] == "incident:m3_mcp_health_unavailable"
+    assert candidate["priority_score"] > 0.0
+
+
+@pytest.mark.asyncio
+async def test_get_improvement_suggestions_includes_observation_candidates(tmp_path, monkeypatch):
+    db_path = tmp_path / "timus_memory.db"
+    loop = SessionReflectionLoop(db_path=db_path)
+
+    monkeypatch.setattr(
+        "orchestration.self_improvement_engine.get_improvement_engine",
+        lambda: type("_Engine", (), {"get_suggestions": staticmethod(lambda applied=False: [])})(),
+    )
+    monkeypatch.setattr(
+        "orchestration.task_queue.get_queue",
+        lambda: type(
+            "_Queue",
+            (),
+            {"list_self_healing_incidents": staticmethod(lambda statuses=None, limit=20: [])},
+        )(),
+    )
+    monkeypatch.setattr(
+        loop,
+        "_get_recent_observation_events",
+        lambda limit=120: [
+            {
+                "id": "evt-1",
+                "observed_at": "2026-04-11T12:00:00",
+                "event_type": "context_misread_suspected",
+                "payload": {
+                    "dominant_turn_type": "followup",
+                    "risk_reasons": ["topic_leak", "weak_followup_anchor"],
+                },
+            }
+        ],
+    )
+
+    suggestions = await loop.get_improvement_suggestions()
+
+    assert len(suggestions) == 1
+    candidate = suggestions[0]
+    assert candidate["source"] == "autonomy_observation"
+    assert candidate["category"] == "context"
+    assert candidate["candidate_id"] == "obs:evt-1"
+    assert candidate["priority_score"] > 0.0

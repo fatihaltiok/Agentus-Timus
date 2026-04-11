@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from orchestration.improvement_candidates import (
     consolidate_improvement_candidates,
+    normalize_autonomy_observation_candidate,
     normalize_self_improvement_candidate,
+    normalize_self_healing_incident_candidate,
     normalize_session_reflection_candidate,
     sort_improvement_candidates,
 )
@@ -132,3 +134,52 @@ def test_consolidate_improvement_candidates_dedupes_cross_source_and_prioritizes
     assert candidate["signal_class"] == "structural_issue"
     assert candidate["priority_score"] > 1.0
     assert "multi_source" in candidate["priority_reasons"]
+
+
+def test_normalize_self_healing_incident_candidate_maps_runtime_incident():
+    candidate = normalize_self_healing_incident_candidate(
+        {
+            "incident_key": "m3_mcp_health_unavailable",
+            "component": "mcp",
+            "signal": "health_unavailable",
+            "severity": "high",
+            "status": "open",
+            "title": "MCP Health Endpoint nicht erreichbar",
+            "details": {"failure_streak": 4},
+            "recovery_action": "MCP Dienst und Health-Check pruefen.",
+            "last_seen_at": "2026-04-11T11:00:00",
+        }
+    )
+
+    assert candidate["candidate_id"] == "incident:m3_mcp_health_unavailable"
+    assert candidate["source"] == "self_healing_incident"
+    assert candidate["category"] == "runtime"
+    assert candidate["target"] == "mcp:health_unavailable"
+    assert candidate["problem"] == "MCP Health Endpoint nicht erreichbar"
+    assert candidate["proposed_action"] == "MCP Dienst und Health-Check pruefen."
+    assert candidate["occurrence_count"] == 4
+    assert candidate["evidence_level"] == "incident"
+    assert candidate["status"] == "open"
+
+
+def test_normalize_autonomy_observation_candidate_maps_context_misread_event():
+    candidate = normalize_autonomy_observation_candidate(
+        {
+            "id": "evt-1",
+            "observed_at": "2026-04-11T12:00:00",
+            "event_type": "context_misread_suspected",
+            "payload": {
+                "dominant_turn_type": "followup",
+                "risk_reasons": ["topic_leak", "weak_followup_anchor"],
+            },
+        }
+    )
+
+    assert candidate is not None
+    assert candidate["candidate_id"] == "obs:evt-1"
+    assert candidate["source"] == "autonomy_observation"
+    assert candidate["category"] == "context"
+    assert candidate["target"] == "followup"
+    assert "Kontext-Fehlgriff vermutet" in candidate["problem"]
+    assert candidate["evidence_level"] == "observation"
+    assert candidate["status"] == "open"
