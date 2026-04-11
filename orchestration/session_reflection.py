@@ -19,6 +19,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from orchestration.improvement_candidates import (
+    consolidate_improvement_candidates,
+    normalize_self_improvement_candidate,
+    normalize_session_reflection_candidate,
+    sort_improvement_candidates,
+)
+
 log = logging.getLogger("SessionReflectionLoop")
 
 MEMORY_DB_PATH = Path(__file__).resolve().parents[1] / "data" / "timus_memory.db"
@@ -526,49 +533,48 @@ Antworte NUR als gültiges JSON:
                        FROM improvement_suggestions
                        ORDER BY occurrences DESC, created_at DESC LIMIT 20""",
                 ).fetchall()
-                suggestions.extend([
-                    {
-                        "id": r[0],
-                        "pattern": r[1],
-                        "occurrences": r[2],
-                        "suggestion": r[3],
-                        "applied": bool(r[4]),
-                        "created_at": r[5],
+                for row in rows:
+                    suggestion = {
+                        "id": row[0],
+                        "pattern": row[1],
+                        "occurrences": row[2],
+                        "suggestion": row[3],
+                        "applied": bool(row[4]),
+                        "created_at": row[5],
                         "source": "session_reflection",
                     }
-                    for r in rows
-                ])
+                    suggestion.update(normalize_session_reflection_candidate(suggestion))
+                    suggestions.append(suggestion)
 
             try:
                 from orchestration.self_improvement_engine import get_improvement_engine
 
                 for suggestion in get_improvement_engine().get_suggestions(applied=False):
-                    suggestions.append(
-                        {
-                            "id": f"m12:{suggestion.get('id')}",
-                            "pattern": suggestion.get("finding", ""),
-                            "occurrences": 0,
-                            "suggestion": suggestion.get("suggestion", ""),
-                            "applied": bool(suggestion.get("applied")),
-                            "created_at": suggestion.get("created_at", ""),
-                            "source": "self_improvement_engine",
-                            "type": suggestion.get("type", ""),
-                            "target": suggestion.get("target", ""),
-                            "confidence": suggestion.get("confidence", 0.0),
-                            "severity": suggestion.get("severity", "medium"),
-                        }
-                    )
+                    merged = {
+                        "id": f"m12:{suggestion.get('id')}",
+                        "pattern": suggestion.get("finding", ""),
+                        "occurrences": 1,
+                        "suggestion": suggestion.get("suggestion", ""),
+                        "applied": bool(suggestion.get("applied")),
+                        "created_at": suggestion.get("created_at", ""),
+                        "source": "self_improvement_engine",
+                        "type": suggestion.get("type", ""),
+                        "target": suggestion.get("target", ""),
+                        "confidence": suggestion.get("confidence", 0.0),
+                        "severity": suggestion.get("severity", "medium"),
+                        "finding": suggestion.get("finding", ""),
+                        "evidence_level": suggestion.get("evidence_level", ""),
+                        "evidence_basis": suggestion.get("evidence_basis", ""),
+                    }
+                    merged.update(normalize_self_improvement_candidate(merged))
+                    suggestions.append(merged)
             except Exception as e:
                 log.debug("get_improvement_suggestions.self_improvement_engine: %s", e)
 
-            suggestions.sort(
-                key=lambda item: (
-                    str(item.get("created_at") or ""),
-                    int(item.get("occurrences") or 0),
-                ),
-                reverse=True,
+            return consolidate_improvement_candidates(
+                sort_improvement_candidates(suggestions),
+                limit=20,
             )
-            return suggestions[:20]
         except Exception as e:
             log.debug("get_improvement_suggestions: %s", e)
             return []

@@ -18,6 +18,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from orchestration.improvement_candidates import (
+    normalize_self_improvement_candidate,
+    sort_improvement_candidates,
+)
+
 log = logging.getLogger("SelfImprovementEngine")
 
 DB_PATH = Path(__file__).resolve().parents[1] / "data" / "task_queue.db"
@@ -1126,25 +1131,56 @@ class SelfImprovementEngine:
                        LIMIT 50""",
                     (int(applied),),
                 ).fetchall()
-            return [
-                {
-                    "id": r[0],
-                    "type": r[1],
-                    "target": r[2],
-                    "finding": r[3],
-                    "suggestion": r[4],
-                    "confidence": r[5],
-                    "severity": r[6],
+            suggestions = []
+            for row in rows:
+                suggestion = {
+                    "id": row[0],
+                    "type": row[1],
+                    "target": row[2],
+                    "finding": row[3],
+                    "suggestion": row[4],
+                    "confidence": row[5],
+                    "severity": row[6],
                     "evidence_level": "measured",
                     "evidence_basis": "runtime_analytics",
-                    "applied": bool(r[7]),
-                    "created_at": r[8],
+                    "applied": bool(row[7]),
+                    "created_at": row[8],
                 }
-                for r in rows
-            ]
+                suggestion.update(normalize_self_improvement_candidate(suggestion))
+                suggestions.append(suggestion)
+            return sort_improvement_candidates(suggestions, limit=50)
         except Exception as e:
             log.debug("get_suggestions: %s", e)
             return []
+
+    def get_normalized_suggestions(self, applied: bool = False) -> List[dict]:
+        """Returns suggestions as normalized Phase-E improvement candidates."""
+        return [
+            {
+                key: value
+                for key, value in suggestion.items()
+                if key
+                in {
+                    "candidate_id",
+                    "source",
+                    "category",
+                    "target",
+                    "title",
+                    "problem",
+                    "proposed_action",
+                    "severity",
+                    "confidence",
+                    "evidence_level",
+                    "evidence_basis",
+                    "occurrence_count",
+                    "status",
+                    "created_at",
+                    "id",
+                    "applied",
+                }
+            }
+            for suggestion in self.get_suggestions(applied=applied)
+        ]
 
     def mark_suggestion_applied(self, suggestion_id: str, applied: bool = True) -> None:
         """Markiert eine Suggestion als bearbeitet bzw. wieder offen."""

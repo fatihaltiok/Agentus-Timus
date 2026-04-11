@@ -4999,10 +4999,16 @@ async def autonomy_improvement_endpoint():
     """Gibt Self-Improvement Statistiken und Vorschläge zurück."""
     try:
         from orchestration.self_improvement_engine import get_improvement_engine
+        from orchestration.session_reflection import SessionReflectionLoop
         engine = get_improvement_engine()
         tool_stats = engine.get_tool_stats(days=7)
         routing_stats = engine.get_routing_stats(days=7)
         suggestions = engine.get_suggestions(applied=False)
+        normalized_candidates = engine.get_normalized_suggestions(applied=False)
+        try:
+            combined_candidates = await SessionReflectionLoop().get_improvement_suggestions()
+        except Exception:
+            combined_candidates = normalized_candidates
         return {
             "status": "success",
             "tool_stats_count": len(tool_stats),
@@ -5010,6 +5016,8 @@ async def autonomy_improvement_endpoint():
             "open_suggestions": len(suggestions),
             "critical_suggestions": sum(1 for s in suggestions if s.get("severity") == "high"),
             "top_suggestions": suggestions[:5],
+            "top_candidates": combined_candidates[:5],
+            "candidate_count": len(combined_candidates),
         }
     except Exception as e:
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})

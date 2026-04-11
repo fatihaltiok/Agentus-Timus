@@ -304,10 +304,19 @@ async def get_e2e_release_gate_status(
 async def get_improvement_suggestions(include_applied: bool = False) -> dict:
     """Gibt Verbesserungsvorschläge zurück."""
     from orchestration.self_improvement_engine import get_improvement_engine
+    from orchestration.session_reflection import SessionReflectionLoop
 
-    suggestions = get_improvement_engine().get_suggestions(applied=include_applied)
+    engine = get_improvement_engine()
+    suggestions = engine.get_suggestions(applied=include_applied)
+    normalized_candidates = engine.get_normalized_suggestions(applied=include_applied)
+    try:
+        combined_candidates = await SessionReflectionLoop().get_improvement_suggestions()
+    except Exception:
+        combined_candidates = normalized_candidates
     return {
         "status": "ok",
         "count": len(suggestions),
+        "candidate_count": len(combined_candidates),
         "suggestions": suggestions,
+        "normalized_candidates": combined_candidates,
     }

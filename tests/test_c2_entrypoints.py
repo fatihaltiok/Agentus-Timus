@@ -110,6 +110,62 @@ def test_observation_endpoint_has_user_impact_block(client):
     assert "misroute_recovered_total" in ui
 
 
+def test_improvement_endpoint_returns_top_candidates(client):
+    async def _fake_combined_candidates(self):
+        return [
+            {
+                "candidate_id": "m12:1",
+                "source": "self_improvement_engine",
+                "category": "routing",
+                "problem": "Routing schwach",
+                "proposed_action": "Routing haerten",
+                "status": "open",
+                "priority_score": 1.1,
+            }
+        ]
+
+    with patch(
+        "orchestration.self_improvement_engine.get_improvement_engine",
+        return_value=type(
+            "_Engine",
+            (),
+            {
+                "get_tool_stats": staticmethod(lambda days=7: [{"tool_name": "scan_ui"}]),
+                "get_routing_stats": staticmethod(lambda days=7: {"total_decisions": 4}),
+                "get_suggestions": staticmethod(
+                    lambda applied=False: [
+                        {"candidate_id": "m12:1", "severity": "high", "problem": "Routing schwach"}
+                    ]
+                ),
+                "get_normalized_suggestions": staticmethod(
+                    lambda applied=False: [
+                        {
+                            "candidate_id": "m12:1",
+                            "source": "self_improvement_engine",
+                            "category": "routing",
+                            "problem": "Routing schwach",
+                            "proposed_action": "Routing haerten",
+                            "status": "open",
+                        }
+                    ]
+                ),
+            },
+        )(),
+    ), patch(
+        "orchestration.session_reflection.SessionReflectionLoop.get_improvement_suggestions",
+        _fake_combined_candidates,
+    ):
+        resp = client.get("/autonomy/improvement")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "success"
+    assert data["open_suggestions"] == 1
+    assert data["candidate_count"] == 1
+    assert data["top_candidates"][0]["candidate_id"] == "m12:1"
+    assert data["top_candidates"][0]["problem"] == "Routing schwach"
+
+
 def test_incident_trace_endpoint_returns_trace(client):
     with patch("orchestration.autonomy_observation.get_incident_trace", return_value=_fake_trace()):
         resp = client.get("/autonomy/incident/req-test")

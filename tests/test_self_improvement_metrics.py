@@ -123,6 +123,54 @@ def test_get_suggestions_include_measured_evidence_fields(tmp_path):
     assert suggestions[0]["evidence_basis"] == "runtime_analytics"
 
 
+def test_get_suggestions_include_normalized_candidate_fields(tmp_path):
+    engine = SelfImprovementEngine(db_path=tmp_path / "task_queue.db")
+    engine._save_suggestion(
+        {
+            "type": "routing",
+            "target": "research",
+            "finding": "Gemessene Routing-Qualitaet zu Agent 'research' ist schwach.",
+            "suggestion": "Routing schaerfen.",
+            "confidence": 0.7,
+            "severity": "medium",
+        }
+    )
+
+    suggestion = engine.get_suggestions(applied=False)[0]
+
+    assert suggestion["candidate_id"] == "m12:1"
+    assert suggestion["source"] == "self_improvement_engine"
+    assert suggestion["category"] == "routing"
+    assert suggestion["problem"] == "Gemessene Routing-Qualitaet zu Agent 'research' ist schwach."
+    assert suggestion["proposed_action"] == "Routing schaerfen."
+    assert suggestion["occurrence_count"] == 1
+    assert suggestion["status"] == "open"
+
+
+def test_get_normalized_suggestions_returns_phase_e_shape_only(tmp_path):
+    engine = SelfImprovementEngine(db_path=tmp_path / "task_queue.db")
+    engine._save_suggestion(
+        {
+            "type": "routing",
+            "target": "research",
+            "finding": "Gemessene Routing-Qualitaet zu Agent 'research' ist schwach.",
+            "suggestion": "Routing schaerfen.",
+            "confidence": 0.7,
+            "severity": "medium",
+        }
+    )
+
+    suggestion = engine.get_normalized_suggestions(applied=False)[0]
+
+    assert suggestion["candidate_id"] == "m12:1"
+    assert suggestion["source"] == "self_improvement_engine"
+    assert suggestion["status"] == "open"
+    assert suggestion["problem"] == "Gemessene Routing-Qualitaet zu Agent 'research' ist schwach."
+    assert suggestion["proposed_action"] == "Routing schaerfen."
+    assert "finding" not in suggestion
+    assert "suggestion" not in suggestion
+
+
 def test_housekeeping_prunes_old_analytics_rows(tmp_path, monkeypatch):
     monkeypatch.setattr("orchestration.self_improvement_engine._ANALYTICS_RETENTION_DAYS", 30)
     monkeypatch.setattr("orchestration.self_improvement_engine._SUGGESTION_RETENTION_DAYS", 30)

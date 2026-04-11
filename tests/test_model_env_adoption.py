@@ -62,3 +62,27 @@ def test_meta_analyzer_uses_planning_model_env(monkeypatch):
 
     assert fake_completions.model == "glm-5"
     assert result["trend"] == "stable"
+
+
+def test_meta_analyzer_improvement_context_prefers_normalized_fields(monkeypatch):
+    monkeypatch.setenv("AUTONOMY_SELF_IMPROVEMENT_ENABLED", "true")
+    monkeypatch.setattr(
+        "orchestration.self_improvement_engine.get_improvement_engine",
+        lambda: SimpleNamespace(
+            get_suggestions=lambda applied=False: [
+                {
+                    "severity": "high",
+                    "category": "routing",
+                    "target": "research",
+                    "problem": "Normalized routing problem",
+                    "finding": "Legacy finding text",
+                }
+            ]
+        ),
+    )
+
+    context = MetaAnalyzer()._get_improvement_context()
+
+    assert "Kritische Self-Improvement Befunde:" in context
+    assert "[routing:research] Normalized routing problem" in context
+    assert "Legacy finding text" not in context

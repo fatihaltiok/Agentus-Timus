@@ -66,7 +66,11 @@ class MetaAnalyzer:
                 return ""
             lines = ["Kritische Self-Improvement Befunde:"]
             for s in critical:
-                lines.append(f"- [{s['type']}:{s['target']}] {s['finding'][:120]}")
+                category = str(s.get("category") or s.get("type") or "unknown")
+                target = str(s.get("target") or "").strip()
+                problem = str(s.get("problem") or s.get("finding") or "").strip()
+                label = f"{category}:{target}" if target else category
+                lines.append(f"- [{label}] {problem[:120]}")
             return "\n".join(lines)
         except Exception:
             return ""

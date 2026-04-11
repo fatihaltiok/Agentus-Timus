@@ -4,7 +4,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from tools.self_improvement_tool.tool import get_ops_observability
+from tools.self_improvement_tool.tool import (
+    get_improvement_suggestions,
+    get_ops_observability,
+)
 
 
 @pytest.mark.asyncio
@@ -89,3 +92,50 @@ async def test_get_ops_observability_returns_central_summary(monkeypatch):
     messages = [item["message"] for item in result["alerts"]]
     assert any("Service dispatcher" in message for message in messages)
     assert any("Provider openai" in message for message in messages)
+
+
+@pytest.mark.asyncio
+async def test_get_improvement_suggestions_exposes_normalized_candidates(monkeypatch):
+    async def _fake_combined_candidates(self):
+        return [
+            {
+                "candidate_id": "m12:1",
+                "source": "self_improvement_engine",
+                "category": "routing",
+                "problem": "Routing schwach",
+                "proposed_action": "Routing haerten",
+                "status": "open",
+                "priority_score": 1.1,
+            }
+        ]
+
+    monkeypatch.setattr(
+        "orchestration.self_improvement_engine.get_improvement_engine",
+        lambda: SimpleNamespace(
+            get_suggestions=lambda applied=False: [
+                {"id": 1, "finding": "Routing schwach", "suggestion": "Routing haerten"}
+            ],
+            get_normalized_suggestions=lambda applied=False: [
+                {
+                    "candidate_id": "m12:1",
+                    "source": "self_improvement_engine",
+                    "category": "routing",
+                    "problem": "Routing schwach",
+                    "proposed_action": "Routing haerten",
+                    "status": "open",
+                }
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        "orchestration.session_reflection.SessionReflectionLoop.get_improvement_suggestions",
+        _fake_combined_candidates,
+    )
+
+    result = await get_improvement_suggestions(include_applied=False)
+
+    assert result["status"] == "ok"
+    assert result["count"] == 1
+    assert result["candidate_count"] == 1
+    assert result["normalized_candidates"][0]["candidate_id"] == "m12:1"
+    assert result["normalized_candidates"][0]["problem"] == "Routing schwach"

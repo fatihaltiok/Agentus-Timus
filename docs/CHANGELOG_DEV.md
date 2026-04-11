@@ -2,6 +2,124 @@
 
 ---
 
+## Fortschritt 2026-04-11 - Phase E E1.2 gestartet: Taxonomie, Dedupe und Priorisierung
+
+Der zweite Phase-E-Slice baut auf E1.1 auf und macht aus den normalisierten Improvement-Signalen erstmals einen gemeinsamen, priorisierten Kandidatenstrom statt nur eine nebeneinanderliegende Liste aus M8- und M12-Funden.
+
+Geaendert:
+
+- [orchestration/improvement_candidates.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_candidates.py)
+  - gemeinsame Taxonomie fuer:
+    - `routing`
+    - `context`
+    - `policy`
+    - `runtime`
+    - `tool`
+    - `specialist`
+    - `memory`
+    - `ux_handoff`
+  - Reflection-Kandidaten behalten jetzt `raw_category=reflection_pattern`, werden aber wenn moeglich in die Taxonomie eingestuft
+  - neu:
+    - `consolidate_improvement_candidates(...)`
+    - `priority_score`
+    - `priority_reasons`
+    - `signal_class`
+    - `merged_sources`
+    - `source_count`
+    - `merged_candidate_ids`
+    - `duplicate_count`
+- [orchestration/session_reflection.py](/home/fatih-ubuntu/dev/timus/orchestration/session_reflection.py)
+  - merged M8-/M12-Suggestions werden jetzt quellenuebergreifend dedupliziert und priorisiert
+- [tools/self_improvement_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/self_improvement_tool/tool.py)
+  - `get_improvement_suggestions` nutzt jetzt bevorzugt die kombinierten, priorisierten Kandidaten aus `SessionReflectionLoop`
+  - neu: `candidate_count`
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - `/autonomy/improvement` gibt jetzt bevorzugt kombinierte `top_candidates` plus `candidate_count` aus
+
+Tests:
+
+- erweitert:
+  - [tests/test_improvement_candidates.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_candidates.py)
+  - [tests/test_session_reflection_suggestions.py](/home/fatih-ubuntu/dev/timus/tests/test_session_reflection_suggestions.py)
+  - [tests/test_self_improvement_tool_ops.py](/home/fatih-ubuntu/dev/timus/tests/test_self_improvement_tool_ops.py)
+  - [tests/test_c2_entrypoints.py](/home/fatih-ubuntu/dev/timus/tests/test_c2_entrypoints.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/improvement_candidates.py orchestration/session_reflection.py tools/self_improvement_tool/tool.py server/mcp_server.py tests/test_improvement_candidates.py tests/test_session_reflection_suggestions.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py`
+- `pytest -q tests/test_improvement_candidates.py tests/test_session_reflection_suggestions.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py tests/test_self_improvement_metrics.py tests/test_model_env_adoption.py`
+  - `37 passed`
+
+## Fortschritt 2026-04-11 - Phase E E1.1 gestartet: Improvement Signal Normalization
+
+Der erste echte Phase-E-Slice ist jetzt im Repo: Improvement-Signale aus M12 Self-Improvement und M8 Session Reflection laufen erstmals ueber ein gemeinsames Kandidatenformat statt nur ueber lose, quellenabhängige Suggestion-Formen.
+
+Geaendert:
+
+- Neu: [orchestration/improvement_candidates.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_candidates.py)
+  - gemeinsame Normalisierung fuer Improvement-Kandidaten
+  - dedizierte `candidate_id`-Formate fuer:
+    - `m12:*`
+    - `m8:*`
+  - gemeinsame Felder wie:
+    - `source`
+    - `category`
+    - `problem`
+    - `proposed_action`
+    - `severity`
+    - `confidence`
+    - `evidence_level`
+    - `evidence_basis`
+    - `occurrence_count`
+    - `status`
+- [orchestration/self_improvement_engine.py](/home/fatih-ubuntu/dev/timus/orchestration/self_improvement_engine.py)
+  - `get_suggestions(...)` liefert jetzt angereicherte, sortierte Kandidaten
+  - neu: `get_normalized_suggestions(...)`
+- [orchestration/session_reflection.py](/home/fatih-ubuntu/dev/timus/orchestration/session_reflection.py)
+  - Reflection-Suggestions und M12-Suggestions werden jetzt in dieselbe Candidate-Form ueberfuehrt und gemeinsam sortiert
+- [orchestration/meta_analyzer.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_analyzer.py)
+  - kritischer Improvement-Kontext nutzt jetzt bevorzugt normalisierte Problem-/Kategorie-Felder
+- [tools/self_improvement_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/self_improvement_tool/tool.py)
+  - `get_improvement_suggestions` exponiert jetzt zusaetzlich `normalized_candidates`
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - `/autonomy/improvement` exponiert jetzt zusaetzlich `top_candidates`
+
+Tests:
+
+- neu: [tests/test_improvement_candidates.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_candidates.py)
+- erweitert:
+  - [tests/test_self_improvement_metrics.py](/home/fatih-ubuntu/dev/timus/tests/test_self_improvement_metrics.py)
+  - [tests/test_session_reflection_suggestions.py](/home/fatih-ubuntu/dev/timus/tests/test_session_reflection_suggestions.py)
+  - [tests/test_self_improvement_tool_ops.py](/home/fatih-ubuntu/dev/timus/tests/test_self_improvement_tool_ops.py)
+  - [tests/test_c2_entrypoints.py](/home/fatih-ubuntu/dev/timus/tests/test_c2_entrypoints.py)
+  - [tests/test_model_env_adoption.py](/home/fatih-ubuntu/dev/timus/tests/test_model_env_adoption.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/improvement_candidates.py orchestration/self_improvement_engine.py orchestration/session_reflection.py orchestration/meta_analyzer.py tools/self_improvement_tool/tool.py server/mcp_server.py tests/test_improvement_candidates.py tests/test_self_improvement_metrics.py tests/test_session_reflection_suggestions.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py tests/test_model_env_adoption.py`
+- `pytest -q tests/test_improvement_candidates.py tests/test_self_improvement_metrics.py tests/test_session_reflection_suggestions.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py tests/test_model_env_adoption.py`
+  - `35 passed`
+
+## Fortschritt 2026-04-11 - Phase E Plan angelegt
+
+Der naechste grosse Block nach dem jetzt weitgehend abgeschlossenen Phase-D-Unterbau ist als eigene Plan-Datei angelegt:
+
+- [docs/PHASE_E_SELF_IMPROVEMENT_PLAN.md](/home/fatih-ubuntu/dev/timus/docs/PHASE_E_SELF_IMPROVEMENT_PLAN.md)
+
+Der Plan ordnet Phase E bewusst nicht als diffuse "mehr Autonomie"-Phase ein, sondern als kontrollierte Self-Improvement-Phase mit klaren Bausteinen:
+
+- Improvement Signal Pipeline
+- Weakness-to-Task Compiler
+- Safe Self-Hardening Execution
+- Verification / Canary / Rollback
+- spaeter: Memory Curation Autonomy
+- Operator Visibility und Governance
+
+Einordnung:
+
+- D0 und Phase D sind jetzt reif genug, damit Phase E auf belastbaren semantischen und operativen Signalen aufsetzen kann
+- der erste saubere Startblock fuer Phase E ist `E1.1 Improvement Signal Normalization`
+
 ## Fortschritt 2026-04-11 - D4b Haertung: generische Login-Discovery ohne starres /login plus Loop-Breaker
 
 Der letzte groessere Restfehler in Phase D sass im generischen Chrome-Credential-Broker-Pfad fuer unbekannte oder nicht hart codierte Seiten. Timus ging dort zwar schon korrekt auf `visual_login`, baute fuer unbekannte Domains aber noch stumpf `https://<domain>/login` und konnte bei echten Root-Domain-Logins wie `grok.com` in einer zu langen `click_target`-Suche nach `login/sign in/...` haengen bleiben. Das ist jetzt beides gehaertet.
