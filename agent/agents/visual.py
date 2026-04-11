@@ -35,6 +35,7 @@ from orchestration.specialist_context import (
 )
 from orchestration.autonomy_observation import record_autonomy_observation
 from orchestration.browser_workflow_plan import (
+    _looks_like_login_intent,
     BrowserStateEvidence,
     BrowserWorkflowPlan,
     BrowserWorkflowStep,
@@ -405,12 +406,31 @@ class VisualAgent(BaseAgent):
             self.current_structured_workflow_plan = None
             return ""
         task_lower = task_text.lower()
-        if not any(token in task_lower for token in ("browser", "website", "webseite", "booking", ".com", ".de", "formular", "login", "anmelden")):
+        browser_url = self._extract_browser_url(task_text) or self.current_browser_url
+        is_browser_like_task = any(
+            token in task_lower
+            for token in (
+                "browser",
+                "website",
+                "webseite",
+                "booking",
+                ".com",
+                ".de",
+                "formular",
+                "login",
+                "anmelden",
+                "chrome",
+                "firefox",
+                "passwortmanager",
+                "password manager",
+                "credential broker",
+                "autofill",
+            )
+        ) or _looks_like_login_intent(task_text, browser_url)
+        if not is_browser_like_task:
             self.current_workflow_plan = []
             self.current_structured_workflow_plan = None
             return ""
-
-        browser_url = self._extract_browser_url(task_text) or self.current_browser_url
 
         self.current_structured_workflow_plan = build_structured_browser_workflow_plan(
             task_text,
@@ -1508,6 +1528,53 @@ class VisualAgent(BaseAgent):
                         current_state=current_state,
                         plan_id=plan_id,
                     )
+                if step.action == "navigate":
+                    browser_label = lane["browser_type"] or self.current_browser_type or "Browser"
+                    profile_hint = (
+                        f" im Profil {lane['broker_profile']}"
+                        if lane["browser_type"] == "chrome" and lane["broker_profile"]
+                        else ""
+                    )
+                    workflow_payload = build_awaiting_user_workflow_payload(
+                        service=service,
+                        url=source_url,
+                        step="manual_browser_prepare",
+                        reason="user_mediated_login",
+                        domain=lane["domain"],
+                        preferred_browser=lane["browser_type"],
+                        credential_broker=lane["credential_broker"],
+                        broker_profile=lane["broker_profile"],
+                        message=(
+                            f"Ich konnte {browser_label}{profile_hint} nicht sicher bis zur Login-Maske vorbereiten."
+                        ),
+                        user_action_required=(
+                            (
+                                f"Bitte oeffne Chrome{profile_hint} manuell, rufe {source_url or 'die Login-Seite'} auf "
+                                f"und nutze dort den Chrome-Passwortmanager fuer {service or 'den Dienst'}."
+                            )
+                            if lane["credential_broker"] == "chrome_password_manager"
+                            else (
+                                f"Bitte oeffne {browser_label}{profile_hint} manuell und rufe {source_url or 'die Login-Seite'} auf."
+                            )
+                        ),
+                        resume_hint=(
+                            "Sage danach 'weiter', 'ich bin auf der Login-Seite' oder beschreibe die sichtbare Blockade, "
+                            "damit Timus kontrolliert fortsetzen kann."
+                        ),
+                    )
+                    self._emit_user_action_blocker(workflow_payload, stage="await_manual_browser_prepare")
+                    return {
+                        **workflow_payload,
+                        "status": "awaiting_user",
+                        "success": False,
+                        "result": str(workflow_payload.get("message") or "").strip(),
+                        "completed_steps": execution_log,
+                        "current_state": current_state,
+                        "plan_id": plan_id,
+                        "metadata": {
+                            "phase_d_workflow": workflow_payload,
+                        },
+                    }
                 return {
                     "success": False,
                     "error": f"Structured step failed: {step.action}",

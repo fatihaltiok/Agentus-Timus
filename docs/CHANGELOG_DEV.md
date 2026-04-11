@@ -5290,3 +5290,37 @@ Status:
   - `Bitte melde mich in Chrome bei GitHub an und nutze den Passwortmanager.`
   - route -> `visual_login`
 - offen bleibt nur noch der breitere D4b-End-to-End-Nachweis auf einer sauberen Chrome-Loginmaske und ein schnellerer technischer Abschluss im langen Visual-Pfad
+
+## 2026-04-10 - D4b Haertung: echter login_flow fuer natuerliche Chrome-Prompts
+
+- [agent/agents/visual.py](/home/fatih-ubuntu/dev/timus/agent/agents/visual.py)
+- [tests/test_visual_improvements.py](/home/fatih-ubuntu/dev/timus/tests/test_visual_improvements.py)
+- [tests/test_specialist_handoffs.py](/home/fatih-ubuntu/dev/timus/tests/test_specialist_handoffs.py)
+- [docs/PHASE_D_APPROVAL_AUTH_PREP.md](/home/fatih-ubuntu/dev/timus/docs/PHASE_D_APPROVAL_AUTH_PREP.md)
+
+Inhalt:
+
+- `visual` erkennt natuerliche Chrome-/Passwortmanager-Login-Anfragen jetzt selbst als Browser-Task und hebt sie in den strukturierten `login_flow`, statt sie vorzeitig aus dem Browser-Plan-Gate zu werfen.
+- Wenn der Chrome-Kontext nicht sicher bis zur Login-Maske vorbereitet werden kann, faellt der Pfad nicht mehr in den langen generischen Vision-Loop zurueck.
+- Stattdessen erzeugt `visual_login` jetzt direkt einen sauberen Phase-D-Workflow `awaiting_user`, damit der Nutzer Chrome oder die Login-Seite gezielt uebernehmen kann.
+- Live-Nachweis auf dem lokalen Stand:
+  - Session `d4b_live_verify_20260410_h`
+  - Request `req_e4df0d05c9b4`
+  - Route `visual_login`
+  - `start_visual_browser` mit `browser_type=chrome`, `profile_name=Default`
+  - verifizierte Login-Maske auf `https://github.com/login`
+  - `pending_workflow_updated` mit `workflow_status=awaiting_user`
+- Der Reply kommt jetzt sofort als sauberer user-mediated Login-Handoff mit `phase_d_workflow`, statt wieder in einem langen Desktop-Blocker oder generischen Vision-Run zu enden.
+
+Verifikation:
+
+- `python -m py_compile agent/agents/visual.py tests/test_visual_improvements.py tests/test_specialist_handoffs.py`
+- `pytest -q tests/test_visual_improvements.py tests/test_specialist_handoffs.py` -> `51 passed`
+- `pytest -q tests/test_dispatcher_camera_intent.py tests/test_visual_browser_tool.py tests/test_auth_session_state.py tests/test_android_chat_language.py` -> `59 passed`
+
+Status:
+
+- lokal live geladen
+- `/health` gruen
+- noch nicht committed
+- noch nicht gepusht

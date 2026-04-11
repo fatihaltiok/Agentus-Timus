@@ -218,7 +218,20 @@ def test_browser_plan_context_embeds_verifiable_steps():
 
     assert "STRIKTER BROWSER-ABLAUFPLAN" in context
     assert "flow_type=booking_search" in context
-    assert "expected_state=datepicker_open" in context
+
+
+def test_browser_plan_context_recognizes_natural_chrome_password_manager_login():
+    agent = _make_agent()
+    agent.current_browser_url = "https://github.com/login"
+
+    context = agent._build_browser_plan_context(
+        "Bitte melde mich in Chrome bei GitHub an und nutze den Passwortmanager."
+    )
+
+    assert "STRIKTER BROWSER-ABLAUFPLAN" in context
+    assert "flow_type=login_flow" in context
+    assert "target=page:https://github.com/login" in context
+    assert "expected_state=login_modal" in context
     assert "fallback=" in context
     assert agent.current_workflow_plan
     assert agent.current_structured_workflow_plan is not None

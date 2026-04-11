@@ -400,6 +400,24 @@ def _infer_login_domain(url: str) -> str:
     return host
 
 
+def _infer_login_domain_from_query(query: str) -> str:
+    lowered = str(query or "").strip().lower()
+    if not lowered:
+        return ""
+    service_domains = {
+        "github": "github.com",
+        "booking": "booking.com",
+        "x": "x.com",
+        "twitter": "x.com",
+        "linkedin": "linkedin.com",
+        "outlook": "outlook.com",
+    }
+    for token, domain in service_domains.items():
+        if re.search(rf"\b{re.escape(token)}\b", lowered):
+            return domain
+    return ""
+
+
 def _requests_chrome_credential_broker(query: str) -> bool:
     lowered = str(query or "").strip().lower()
     if not lowered:
@@ -419,7 +437,17 @@ def _requests_chrome_credential_broker(query: str) -> bool:
 
 def _build_visual_login_handoff(query: str) -> str:
     source_url = _extract_dispatcher_browser_url(query)
-    inferred_domain = _infer_login_domain(source_url)
+    inferred_domain = _infer_login_domain(source_url) or _infer_login_domain_from_query(query)
+    normalized_query = str(query or "").strip().lower()
+    if inferred_domain and (
+        not source_url
+        or "/login" not in source_url.lower()
+        and any(
+            token in normalized_query
+            for token in ("login", "anmelden", "einloggen", "passwortmanager", "password manager")
+        )
+    ):
+        source_url = f"https://{inferred_domain}/login"
     auth_session_fields = {
         "auth_session_service": _extract_dispatcher_followup_field(query, "auth_session_service"),
         "auth_session_status": _extract_dispatcher_followup_field(query, "auth_session_status"),

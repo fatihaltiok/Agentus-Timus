@@ -140,6 +140,18 @@ def test_build_visual_login_handoff_requests_chrome_credential_broker_when_expli
     assert "- domain: github.com" in handoff
 
 
+def test_build_visual_login_handoff_normalizes_login_url_for_natural_prompt():
+    import main_dispatcher
+
+    handoff = main_dispatcher._build_visual_login_handoff(
+        "Bitte melde mich in Chrome bei GitHub an und nutze den Passwortmanager."
+    )
+
+    assert "- source_url: https://github.com/login" in handoff
+    assert "- browser_type: chrome" in handoff
+    assert "- credential_broker: chrome_password_manager" in handoff
+
+
 def test_visual_login_followup_context_is_preserved_for_resume():
     import main_dispatcher
 

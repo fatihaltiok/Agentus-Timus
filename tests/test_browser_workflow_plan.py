@@ -69,6 +69,18 @@ def test_build_structured_browser_workflow_plan_for_login_and_form_use_reference
     assert any(step.expected_state == "form_submitted" for step in form_plan.steps)
 
 
+def test_build_structured_browser_workflow_plan_recognizes_natural_login_prompt_and_normalizes_login_url():
+    login_plan = build_structured_browser_workflow_plan(
+        "Bitte melde mich in Chrome bei GitHub an und nutze den Passwortmanager.",
+        "https://github.com",
+    )
+
+    assert login_plan.flow_type == "login_flow"
+    assert login_plan.steps[0].action == "navigate"
+    assert login_plan.steps[0].target_text == "https://github.com/login"
+    assert any(step.expected_state == "login_modal" for step in login_plan.steps)
+
+
 def test_build_structured_browser_workflow_plan_for_youtube_and_x_use_site_profiles():
     youtube_plan = build_structured_browser_workflow_plan(
         "Suche nach KI News März 2026 auf YouTube und öffne das erste relevante Video",

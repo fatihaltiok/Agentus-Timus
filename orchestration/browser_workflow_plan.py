@@ -168,6 +168,33 @@ def _extract_domain(url: str) -> str:
     return (url or "").replace("https://", "").replace("http://", "").split("/")[0]
 
 
+def _looks_like_login_intent(task: str, url: str) -> bool:
+    task_lower = str(task or "").strip().lower()
+    safe_url = str(url or "").strip().lower()
+    classic_markers = ("login", "log in", "sign in", "anmelden", "einloggen")
+    if any(marker in task_lower for marker in classic_markers) or "login" in safe_url:
+        return True
+    if re.search(r"\b(melde|logge)\s+mich\b.*\b(an|ein)\b", task_lower):
+        return True
+    if any(marker in task_lower for marker in ("passwortmanager", "password manager", "credential broker", "autofill")):
+        return bool(safe_url or any(token in task_lower for token in ("chrome", "github", "browser")))
+    return False
+
+
+def _canonicalize_login_url(url: str) -> str:
+    safe_url = str(url or "").strip()
+    if not safe_url:
+        return ""
+    if re.search(r"/(?:login|signin|sign-in)\b", safe_url, flags=re.IGNORECASE):
+        return safe_url
+    domain = _extract_domain(safe_url)
+    if not domain:
+        return safe_url
+    if safe_url.startswith("http://"):
+        return f"http://{domain}/login"
+    return f"https://{domain}/login"
+
+
 def _extract_destination(task: str) -> str:
     search_match = re.search(
         r"(?:suche(?:\s+nach)?|schau(?:\s+nach)?|finde)\s+(?:hotels?\s+in\s+)?(.+?)"
@@ -334,14 +361,14 @@ def _build_booking_flow(task: str, url: str) -> BrowserWorkflowPlan:
 
 def _build_login_flow(task: str, url: str) -> BrowserWorkflowPlan:
     safe_task = (task or "").strip()
-    safe_url = (url or "").strip()
+    safe_url = _canonicalize_login_url(url)
     domain = _extract_domain(safe_url)
     task_lower = safe_task.lower()
     steps: List[BrowserWorkflowStep] = [
         _step(
             "navigate",
             "page",
-            domain or safe_url or "login page",
+            safe_url or domain or "login page",
             "landing",
             _evidence(
                 ("url_contains", domain),
@@ -831,8 +858,7 @@ def build_structured_browser_workflow_plan(task: str, url: str) -> BrowserWorkfl
         return _build_youtube_flow(safe_task, safe_url)
     if any(marker in task_lower for marker in ("x.com", "twitter", "tweet", "poste auf x", "beitrag auf x")) or "x.com" in safe_url:
         return _build_x_compose_flow(safe_task, safe_url)
-    login_markers = ("login", "log in", "sign in", "anmelden", "einloggen")
-    if any(marker in task_lower for marker in login_markers) or "login" in safe_url:
+    if _looks_like_login_intent(safe_task, safe_url):
         return _build_login_flow(safe_task, safe_url)
     form_markers = ("formular", "kontaktformular", "contact form", "fülle", "fuelle", "trage", "absenden", "sende ab")
     if any(marker in task_lower for marker in form_markers):

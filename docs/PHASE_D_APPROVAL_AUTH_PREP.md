@@ -264,7 +264,16 @@ Phase D braucht einen gemeinsamen Nutzeraktions-Vertrag, statt fuer jede Plattfo
     - layoutkritische URL-Eingaben wie `https://github.com/login` werden im Desktop-Input-Pfad jetzt erzwungen ueber Clipboard statt ueber stilles Key-by-Key-Fallback behandelt
     - wenn Clipboard fuer solche Eingaben nicht verfuegbar ist, bricht der Pfad jetzt hart ab statt fehlerhaft Zeichen wie `/` als `7` zu tippen
     - natuerliche D4b-Formulierungen wie `Bitte melde mich in Chrome bei GitHub an und nutze den Passwortmanager` triggern jetzt ebenfalls den `visual_login`-Quick-Intent statt ueber `meta` in `fallback_empty_decision` zu laufen
-- weiterer Ausbau:
+    - `visual` erkennt solche natuerlichen Chrome-/Passwortmanager-Anfragen jetzt auch intern als echten Browser-`login_flow`, statt sie vorzeitig aus dem Browser-Plan-Gate zu verlieren
+    - wenn Chrome oder der Zielbrowser nicht sicher bis zur Login-Maske vorbereitet werden kann, kippt der Pfad nicht mehr in den langen generischen Vision-Loop
+    - stattdessen erzeugt `visual_login` sofort einen sauberen `awaiting_user`-Workflow fuer die manuelle Browser-/Login-Vorbereitung
+    - Live-Nachweis:
+      - Session `d4b_live_verify_20260410_h`
+      - Request `req_e4df0d05c9b4`
+      - `visual_login` startet Chrome mit `profile_name=Default`
+      - GitHub-Loginmaske auf `https://github.com/login` wurde verifiziert
+      - `pending_workflow_updated` wurde live mit `workflow_status=awaiting_user` geschrieben
+  - weiterer Ausbau:
   - **D4b Chrome Credential Broker**
   - wenn gespeicherte Zugangsdaten praktisch nur im Chrome-Passwortmanager vorhanden sind, soll nicht Timus selbst die Secrets kennen, sondern Chrome als Credential Broker dienen
   - Timus darf dann nur mit expliziter Freigabe einen Login-Workflow im freigegebenen Chrome-Profil anstossen und danach mit Session-Reuse arbeiten
