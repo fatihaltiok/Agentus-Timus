@@ -378,6 +378,7 @@ def normalize_self_improvement_candidate(raw: Mapping[str, Any] | None) -> dict[
         "raw_category": raw_category,
         "category": category,
         "target": target,
+        "source_type": raw_category,
         "title": _candidate_title(category=category, target=target, problem=problem),
         "problem": problem,
         "proposed_action": proposed_action,
@@ -430,6 +431,7 @@ def normalize_session_reflection_candidate(raw: Mapping[str, Any] | None) -> dic
         "raw_category": raw_category,
         "category": category,
         "target": target,
+        "source_type": raw_category,
         "title": _candidate_title(category=category, target=target, problem=problem),
         "problem": problem,
         "proposed_action": proposed_action,
@@ -497,6 +499,8 @@ def normalize_self_healing_incident_candidate(raw: Mapping[str, Any] | None) -> 
         "raw_category": raw_category,
         "category": category,
         "target": target,
+        "component": component,
+        "signal": signal,
         "title": _candidate_title(category=category, target=target, problem=problem),
         "problem": problem,
         "proposed_action": proposed_action,
@@ -624,6 +628,9 @@ def normalize_autonomy_observation_candidate(raw: Mapping[str, Any] | None) -> d
         "raw_category": raw_category,
         "category": category,
         "target": target,
+        "event_type": event_type,
+        "component": _clean_text(payload.get("component"), limit=96).lower(),
+        "signal": _clean_text(payload.get("signal"), limit=96).lower(),
         "title": _candidate_title(category=category, target=target, problem=problem),
         "problem": problem,
         "proposed_action": proposed_action,
@@ -771,6 +778,33 @@ def consolidate_improvement_candidates(
             for item in items
             if _clean_text(item.get("evidence_basis"), limit=96)
         })
+        verified_paths = sorted({
+            _clean_text(path, limit=200)
+            for item in items
+            for path in list(item.get("verified_paths") or item.get("target_paths") or item.get("target_files") or [])
+            if _clean_text(path, limit=200)
+        })
+        verified_functions = sorted({
+            _clean_text(name, limit=120)
+            for item in items
+            for name in list(item.get("verified_functions") or [])
+            if _clean_text(name, limit=120)
+        })
+        components = sorted({
+            _clean_text(item.get("component"), limit=96).lower()
+            for item in items
+            if _clean_text(item.get("component"), limit=96)
+        })
+        signals = sorted({
+            _clean_text(item.get("signal"), limit=96).lower()
+            for item in items
+            if _clean_text(item.get("signal"), limit=96)
+        })
+        event_types = sorted({
+            _clean_text(item.get("event_type"), limit=96).lower()
+            for item in items
+            if _clean_text(item.get("event_type"), limit=96)
+        })
         created_candidates = [
             item for item in items if _parse_candidate_datetime(item.get("created_at")) is not None
         ]
@@ -830,6 +864,11 @@ def consolidate_improvement_candidates(
                 "source_count": source_count,
                 "merged_candidate_ids": merged_ids,
                 "duplicate_count": len(items),
+                "verified_paths": verified_paths,
+                "verified_functions": verified_functions,
+                "components": components,
+                "signals": signals,
+                "event_types": event_types,
                 "freshness_score": round(freshness_score, 3),
                 "freshness_state": freshness_state,
                 "freshness_age_days": freshness_age_days,

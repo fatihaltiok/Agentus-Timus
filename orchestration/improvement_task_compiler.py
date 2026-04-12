@@ -160,7 +160,73 @@ def _stable_task_id(candidate_id: str) -> str:
     return f"task:{digest}"
 
 
+def _normalized_path_list(*values: Any) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        if isinstance(value, (list, tuple, set)):
+            items = value
+        elif value:
+            items = [value]
+        else:
+            items = []
+        for item in items:
+            text = _clean_text(item, limit=240)
+            if not text:
+                continue
+            text = text.replace("\\", "/")
+            if text.startswith("/home/fatih-ubuntu/dev/timus/"):
+                text = text.split("/home/fatih-ubuntu/dev/timus/", 1)[1]
+            if "/" not in text and not text.endswith(".py"):
+                continue
+            if text not in result:
+                result.append(text)
+    return result[:6]
+
+
+def _normalized_text_list(*values: Any, limit: int = 120) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        if isinstance(value, (list, tuple, set)):
+            items = value
+        elif value:
+            items = [value]
+        else:
+            items = []
+        for item in items:
+            text = _clean_text(item, limit=limit)
+            if text and text not in result:
+                result.append(text)
+    return result
+
+
+def _evidence_target_files(candidate: Mapping[str, Any]) -> list[str]:
+    return _normalized_path_list(
+        candidate.get("verified_paths"),
+        candidate.get("target_paths"),
+        candidate.get("target_files"),
+    )
+
+
+def _evidence_functions(candidate: Mapping[str, Any]) -> list[str]:
+    return _normalized_text_list(candidate.get("verified_functions"), limit=120)
+
+
+def _evidence_components(candidate: Mapping[str, Any]) -> list[str]:
+    return _normalized_text_list(candidate.get("components"), candidate.get("component"), limit=96)
+
+
+def _evidence_signals(candidate: Mapping[str, Any]) -> list[str]:
+    return _normalized_text_list(candidate.get("signals"), candidate.get("signal"), limit=96)
+
+
+def _evidence_event_types(candidate: Mapping[str, Any]) -> list[str]:
+    return _normalized_text_list(candidate.get("event_types"), candidate.get("event_type"), limit=96)
+
+
 def _target_files_for_candidate(category: str, tokens: set[str], target: str) -> list[str]:
+    evidence_paths = _evidence_target_files({"category": category, "target": target, **{}})
+    if evidence_paths:
+        return evidence_paths[:4]
     files = list(_CATEGORY_TARGET_FILES.get(category, ()))
     if category == "specialist":
         normalized_target = str(target or "").strip().lower()
@@ -180,8 +246,11 @@ def _target_files_for_candidate(category: str, tokens: set[str], target: str) ->
     return deduped[:4]
 
 
-def _test_targets_for_candidate(category: str, tokens: set[str]) -> list[str]:
+def _test_targets_for_candidate(category: str, tokens: set[str], candidate: Mapping[str, Any]) -> list[str]:
     files = list(_CATEGORY_TEST_TARGETS.get(category, ()))
+    verified_functions = _evidence_functions(candidate)
+    if verified_functions:
+        files = ["tests/test_improvement_candidates.py", *files]
     if category == "tool" and {"email", "smtp"} & tokens:
         files = ["tests/test_specialist_context_runtime.py", *files]
     deduped: list[str] = []
@@ -195,6 +264,38 @@ def _likely_root_cause(candidate: Mapping[str, Any], tokens: set[str]) -> str:
     category = str(candidate.get("category") or "").strip().lower()
     source_count = int(candidate.get("source_count") or 1)
     freshness = str(candidate.get("freshness_state") or "").strip().lower()
+    evidence_basis = str(candidate.get("evidence_basis") or "").strip().lower()
+    verified_paths = _evidence_target_files(candidate)
+    verified_functions = _evidence_functions(candidate)
+    event_types = set(item.lower() for item in _evidence_event_types(candidate))
+    components = set(item.lower() for item in _evidence_components(candidate))
+    signals = set(item.lower() for item in _evidence_signals(candidate))
+    if verified_paths or verified_functions:
+        if any("main_dispatcher.py" in path for path in verified_paths):
+            return "dispatcher_routing_path_verified"
+        if any("meta_orchestration.py" in path or "meta_response_policy.py" in path for path in verified_paths):
+            return "meta_policy_path_verified"
+        if any("specialist_context.py" in path for path in verified_paths):
+            return "specialist_context_path_verified"
+        if any("mcp_server.py" in path for path in verified_paths):
+            return "mcp_runtime_path_verified"
+        if any(path.startswith("tools/") for path in verified_paths):
+            return "tool_path_verified"
+        return "verified_code_path_evidence"
+    if "dispatcher_meta_fallback" in event_types:
+        return "dispatcher_frontdoor_fallback_pattern"
+    if "challenge_reblocked" in event_types or "challenge_reblocked" in signals:
+        return "challenge_resume_loop"
+    if "communication_task_failed" in event_types or "send_email_failed" in event_types:
+        return "communication_backend_or_delivery_gap"
+    if "context_misread_suspected" in event_types:
+        return "context_anchor_or_followup_parser_gap"
+    if evidence_basis == "self_healing_runtime":
+        return "self_healing_runtime_gap"
+    if evidence_basis == "autonomy_observation":
+        return "runtime_observation_pattern"
+    if "mcp" in components and ("health_unavailable" in signals or "health" in tokens):
+        return "mcp_health_runtime_gap"
     if category == "routing":
         return "dispatcher_or_meta_policy_drift"
     if category == "context":
@@ -300,6 +401,8 @@ def compile_improvement_task(candidate: Mapping[str, Any]) -> dict[str, Any]:
     proposed_action = _clean_text(candidate.get("proposed_action"))
     tokens = _normalize_tokens(category, target, problem, proposed_action, candidate.get("summary"))
     task_kind = _choose_task_kind(candidate, tokens)
+    target_files = _evidence_target_files(candidate) or _target_files_for_candidate(category, tokens, target)
+    verified_functions = _evidence_functions(candidate)
     required_checks = ["py_compile"]
     if task_kind in {"developer_task", "config_change_candidate", "test_gap", "shell_task"}:
         required_checks.append("pytest_targeted")
@@ -329,13 +432,18 @@ def compile_improvement_task(candidate: Mapping[str, Any]) -> dict[str, Any]:
                 for item in (candidate.get("merged_sources") or [candidate.get("source")])
                 if _clean_text(item, limit=48)
             ],
+            "verified_paths": target_files,
+            "verified_functions": verified_functions,
+            "event_types": _evidence_event_types(candidate),
+            "components": _evidence_components(candidate),
+            "signals": _evidence_signals(candidate),
         },
         "likely_root_cause": _likely_root_cause(candidate, tokens),
         "safe_fix_class": _safe_fix_class(task_kind, category),
-        "target_files": _target_files_for_candidate(category, tokens, target),
+        "target_files": target_files,
         "verification_plan": {
             "required_checks": required_checks,
-            "suggested_test_targets": _test_targets_for_candidate(category, tokens),
+            "suggested_test_targets": _test_targets_for_candidate(category, tokens, candidate),
             "success_criteria": (
                 "Der Kandidat bleibt reproduzierbar adressiert, die Ziel-Regressionen sind gruen "
                 "und es entstehen keine neuen Routing-, Policy- oder Runtime-Brueche."

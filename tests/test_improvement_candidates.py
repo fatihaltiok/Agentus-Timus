@@ -359,6 +359,97 @@ def test_compile_improvement_task_marks_stale_single_observation_as_verification
     assert compiled["safe_fix_class"] == "needs_stronger_evidence"
 
 
+def test_compile_improvement_task_prefers_verified_paths_over_category_defaults():
+    compiled = compile_improvement_task(
+        {
+            "candidate_id": "obs:verified",
+            "category": "routing",
+            "problem": "Dispatcher faellt auf Meta zurueck",
+            "proposed_action": "Fallback-Pfad absichern",
+            "priority_score": 0.88,
+            "verified_paths": [
+                "main_dispatcher.py",
+                "orchestration/meta_orchestration.py",
+            ],
+            "verified_functions": ["get_agent_decision"],
+            "event_type": "dispatcher_meta_fallback",
+        }
+    )
+
+    assert compiled["target_files"] == [
+        "main_dispatcher.py",
+        "orchestration/meta_orchestration.py",
+    ]
+    assert compiled["likely_root_cause"] == "dispatcher_routing_path_verified"
+    assert compiled["evidence"]["verified_functions"] == ["get_agent_decision"]
+
+
+def test_compile_improvement_task_uses_observation_event_for_more_specific_root_cause():
+    compiled = compile_improvement_task(
+        {
+            "candidate_id": "obs:mail",
+            "category": "tool",
+            "problem": "Communication-Lauf scheitert",
+            "proposed_action": "Backend pruefen",
+            "priority_score": 0.77,
+            "event_type": "send_email_failed",
+            "component": "communication",
+            "signal": "delivery_failed",
+            "evidence_basis": "autonomy_observation",
+        }
+    )
+
+    assert compiled["likely_root_cause"] == "communication_backend_or_delivery_gap"
+    assert compiled["evidence"]["event_types"] == ["send_email_failed"]
+    assert compiled["evidence"]["components"] == ["communication"]
+    assert compiled["evidence"]["signals"] == ["delivery_failed"]
+
+
+def test_consolidate_improvement_candidates_preserves_evidence_hints_for_compiler():
+    consolidated = consolidate_improvement_candidates(
+        [
+            {
+                "candidate_id": "obs:1",
+                "source": "autonomy_observation",
+                "category": "routing",
+                "target": "dispatcher:empty_decision",
+                "problem": "Dispatcher faellt auf Meta zurueck",
+                "proposed_action": "Fallback absichern",
+                "severity": "high",
+                "confidence": 0.8,
+                "evidence_level": "observation",
+                "evidence_basis": "autonomy_observation",
+                "event_type": "dispatcher_meta_fallback",
+                "verified_paths": ["main_dispatcher.py"],
+                "verified_functions": ["get_agent_decision"],
+                "created_at": "2026-04-11T12:00:00+00:00",
+            },
+            {
+                "candidate_id": "obs:2",
+                "source": "autonomy_observation",
+                "category": "routing",
+                "target": "dispatcher:empty_decision",
+                "problem": "Dispatcher faellt auf Meta zurueck",
+                "proposed_action": "Fallback absichern",
+                "severity": "high",
+                "confidence": 0.7,
+                "evidence_level": "observation",
+                "evidence_basis": "autonomy_observation",
+                "component": "dispatcher",
+                "signal": "empty_decision",
+                "created_at": "2026-04-11T12:10:00+00:00",
+            },
+        ]
+    )
+
+    item = consolidated[0]
+    assert item["verified_paths"] == ["main_dispatcher.py"]
+    assert item["verified_functions"] == ["get_agent_decision"]
+    assert item["event_types"] == ["dispatcher_meta_fallback"]
+    assert item["components"] == ["dispatcher"]
+    assert item["signals"] == ["empty_decision"]
+
+
 def test_compile_improvement_tasks_sorts_by_priority_score():
     compiled = compile_improvement_tasks(
         [

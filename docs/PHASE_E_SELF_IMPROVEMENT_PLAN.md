@@ -356,9 +356,44 @@ Umgesetzt:
 
 Noch offen fuer spaetere E2-Slices:
 
-- feinere Root-Cause-Heuristiken pro Kategorie und Zielmodul
-- bessere Zielpfad-Ableitung aus echten Verified Paths statt konservativer Kategorie-Mappings
+- staerkere Ableitung aus gebuendelter Multi-Source-Evidenz statt nur aus Kandidatenkategorie und Einzelhinweisen
 - spaetere Bruecke in E3, damit geeignete `developer_task`-Klassen kontrolliert in Self-Hardening-Execution uebergehen
+
+### E2.2 Evidence-aware Root-Cause- und Zielpfad-Ableitung
+
+Stand:
+
+- erster Runtime-Slice gestartet
+
+Umgesetzt:
+
+- [orchestration/improvement_candidates.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_candidates.py) traegt jetzt fuer konsolidierte Improvement-Kandidaten zusaetzliche Evidenzfelder durch:
+  - `verified_paths`
+  - `verified_functions`
+  - `components`
+  - `signals`
+  - `event_types`
+- [orchestration/improvement_task_compiler.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_task_compiler.py) bevorzugt diese Evidenz jetzt direkt:
+  - echte `verified_paths` werden vor konservativen Kategorie-Defaults als `target_files` benutzt
+  - `verified_functions` erweitern die Testziel-Ableitung
+  - Observation-/Incident-Signale beeinflussen `likely_root_cause` jetzt gezielter als nur die grobe Kategorie
+- spezifischere Root-Cause-Mappings fuer bestaetigte Evidenz:
+  - `main_dispatcher.py` -> `dispatcher_routing_path_verified`
+  - `meta_orchestration.py` / `meta_response_policy.py` -> `meta_policy_path_verified`
+  - `mcp_server.py` -> `mcp_runtime_path_verified`
+  - `tools/...` -> `tool_path_verified`
+  - `send_email_failed` / `communication_task_failed` -> `communication_backend_or_delivery_gap`
+  - `challenge_reblocked` -> `challenge_resume_loop`
+  - `dispatcher_meta_fallback` -> `dispatcher_frontdoor_fallback_pattern`
+- fuer die Compilerlogik gibt es jetzt neben normalen Pytests auch:
+  - Hypothesis-Regressionen in [tests/test_improvement_task_compiler_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_task_compiler_hypothesis.py)
+  - gezielte deal-/CrossHair-Vertraege in [tests/test_improvement_task_compiler_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_task_compiler_crosshair.py)
+
+Noch offen fuer spaetere E2-Slices:
+
+- noch feinere Root-Cause-Mappings fuer nicht-pythonische Zielartefakte und Config-/Schema-Pfade
+- staerkere Rueckbindung von `priority_reasons` und Evidenzqualitaet an die eigentliche Execution-Mode-Wahl
+- spaetere Bruecke in E3, damit nur ausreichend belastbare `developer_task`-Klassen weiterpromotet werden
 
 ### E3. Safe Self-Hardening Execution
 

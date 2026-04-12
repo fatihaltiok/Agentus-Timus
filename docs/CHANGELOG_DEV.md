@@ -2,6 +2,52 @@
 
 ---
 
+## Fortschritt 2026-04-12 - Phase E E2.2 gestartet: Evidence-aware Compiler Hardening
+
+Der naechste E2-Slice macht den Candidate-to-Task-Compiler deutlich evidenznaeher. Verbesserungsaufgaben werden jetzt nicht mehr nur aus Kategorie und groben Textsignalen abgeleitet, sondern aus bereits konsolidierten Verified Paths, Functions, Komponenten-, Signal- und Event-Hinweisen.
+
+Geaendert:
+
+- [orchestration/improvement_candidates.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_candidates.py)
+  - konsolidierte Kandidaten tragen jetzt zusaetzliche Compiler-Evidenz:
+    - `verified_paths`
+    - `verified_functions`
+    - `components`
+    - `signals`
+    - `event_types`
+- [orchestration/improvement_task_compiler.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_task_compiler.py)
+  - `target_files` bevorzugen jetzt echte `verified_paths` vor konservativen Kategorie-Mappings
+  - `likely_root_cause` nutzt bestaetigte Codepfade und Runtime-Signale jetzt gezielter
+  - `verification_plan` zieht bei vorhandenen `verified_functions` zusaetzliche Testziele nach
+  - kompilierte `evidence`-Bloecke enthalten jetzt auch:
+    - `verified_paths`
+    - `verified_functions`
+    - `event_types`
+    - `components`
+    - `signals`
+- neue/erweiterte Tests:
+  - [tests/test_improvement_candidates.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_candidates.py)
+  - [tests/test_improvement_task_compiler_contracts.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_task_compiler_contracts.py)
+  - [tests/test_improvement_task_compiler_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_task_compiler_hypothesis.py)
+  - [tests/test_improvement_task_compiler_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_task_compiler_crosshair.py)
+
+Wichtige neue Mappings:
+
+- `main_dispatcher.py` -> `dispatcher_routing_path_verified`
+- `mcp_server.py` -> `mcp_runtime_path_verified`
+- `tools/...` -> `tool_path_verified`
+- `send_email_failed` / `communication_task_failed` -> `communication_backend_or_delivery_gap`
+- `challenge_reblocked` -> `challenge_resume_loop`
+- `dispatcher_meta_fallback` -> `dispatcher_frontdoor_fallback_pattern`
+
+Verifikation:
+
+- `python -m py_compile orchestration/improvement_candidates.py orchestration/improvement_task_compiler.py tests/test_improvement_candidates.py tests/test_improvement_task_compiler_contracts.py tests/test_improvement_task_compiler_hypothesis.py tests/test_improvement_task_compiler_crosshair.py`
+- `pytest -q tests/test_improvement_candidates.py tests/test_improvement_task_compiler_contracts.py tests/test_improvement_task_compiler_hypothesis.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py`
+  - `38 passed`
+- `python -m crosshair check tests.test_improvement_task_compiler_crosshair._contract_verified_dispatcher_path_maps_to_specific_root_cause tests.test_improvement_task_compiler_crosshair._contract_send_email_failed_maps_to_specific_root_cause tests.test_improvement_task_compiler_crosshair._contract_verified_paths_are_preferred_for_target_files --analysis_kind=deal`
+  - Exit `0`
+
 ## Fortschritt 2026-04-11 - Phase E E2.1 gestartet: Candidate-to-Task Compiler
 
 Der erste E2-Slice uebersetzt priorisierte Improvement-Kandidaten jetzt in konkrete, pruefbare Arbeitspakete. Damit endet Phase E nicht mehr nur bei Befunden und Rankings, sondern beginnt, daraus strukturierte Aufgaben mit Root-Cause-, Verifikations- und Risikofeldern zu machen.
