@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+from datetime import datetime, timedelta
 from typing import Any, Iterable, Mapping
 
 
@@ -14,6 +16,30 @@ def _text(value: Any, *, limit: int = 240) -> str:
     if len(text) <= limit:
         return text
     return text[:limit].rstrip() + "..."
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)).strip())
+    except Exception:
+        return default
+
+
+def _parse_iso(value: Any) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+        if parsed.tzinfo is not None:
+            return parsed.astimezone().replace(tzinfo=None)
+        return parsed
+    except Exception:
+        return None
+
+
+def get_improvement_task_enqueue_cooldown_minutes() -> int:
+    return max(0, _env_int("AUTONOMY_IMPROVEMENT_AUTOENQUEUE_COOLDOWN_MINUTES", 180))
 
 
 def _priority_for_task(task: Mapping[str, Any]) -> int:
@@ -161,6 +187,40 @@ def _has_open_improvement_task(queue: Any, dedup_key: str) -> bool:
     return False
 
 
+def _find_recent_terminal_improvement_task(
+    queue: Any,
+    dedup_key: str,
+    *,
+    cooldown_minutes: int,
+) -> dict[str, str]:
+    if not dedup_key or cooldown_minutes <= 0:
+        return {}
+
+    now = datetime.now()
+    cooldown_window = timedelta(minutes=max(0, int(cooldown_minutes)))
+    for task in queue.get_all(limit=400):
+        status = _text(task.get("status"), limit=32).lower()
+        if status in {"pending", "in_progress"}:
+            continue
+        raw_metadata = task.get("metadata")
+        try:
+            metadata = json.loads(raw_metadata) if isinstance(raw_metadata, str) else (raw_metadata or {})
+        except Exception:
+            metadata = {}
+        if _text(metadata.get("improvement_dedup_key"), limit=240) != dedup_key:
+            continue
+        reference_dt = _parse_iso(task.get("completed_at")) or _parse_iso(task.get("created_at"))
+        if reference_dt is None:
+            continue
+        if now < (reference_dt + cooldown_window):
+            return {
+                "status": status,
+                "task_id": _text(task.get("id"), limit=80),
+                "completed_at": _text(task.get("completed_at"), limit=80),
+            }
+    return {}
+
+
 def enqueue_improvement_hardening_task(
     queue: Any,
     task: Mapping[str, Any],
@@ -188,6 +248,21 @@ def enqueue_improvement_hardening_task(
             "reason": "open_task_exists",
             "task_id": "",
             "target_agent": _text(payload.get("target_agent"), limit=64),
+        }
+
+    cooldown_minutes = get_improvement_task_enqueue_cooldown_minutes()
+    recent_terminal = _find_recent_terminal_improvement_task(
+        queue,
+        dedup_key,
+        cooldown_minutes=cooldown_minutes,
+    )
+    if recent_terminal:
+        return {
+            "status": "cooldown_active",
+            "reason": f"recent_{_text(recent_terminal.get('status'), limit=32) or 'terminal'}_task_within_cooldown",
+            "task_id": _text(recent_terminal.get("task_id"), limit=80),
+            "target_agent": _text(payload.get("target_agent"), limit=64),
+            "cooldown_minutes": int(cooldown_minutes),
         }
 
     from orchestration.task_queue import TaskType

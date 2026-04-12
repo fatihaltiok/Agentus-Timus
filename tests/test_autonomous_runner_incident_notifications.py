@@ -7,7 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from orchestration.autonomous_runner import AutonomousRunner
+from orchestration.autonomous_runner import (
+    AutonomousRunner,
+    _classify_autonomous_result_notification,
+)
 from orchestration.task_queue import TaskQueue
 
 
@@ -118,6 +121,39 @@ async def test_non_self_healing_tasks_keep_normal_notifications(monkeypatch, tmp
     await runner._execute_task(queue.claim_next())
 
     assert deliveries == {"telegram": 2, "email": 2}
+
+
+def test_improvement_task_notification_is_neutral_without_verification() -> None:
+    style = _classify_autonomous_result_notification(
+        "[PHASE E E3.2] Improvement Hardening Task fuer tool:get_all_screen_text.",
+        "tools/ocr_tool/tool.py wurde gehärtet.",
+    )
+
+    assert style["state"] == "ended"
+    assert style["telegram_header"].startswith("🛠️ *Autonomer Improvement-Task beendet*")
+    assert style["email_title"] == "Autonomer Improvement-Task beendet"
+
+
+def test_improvement_task_notification_marks_blocked_result_as_blocked() -> None:
+    style = _classify_autonomous_result_notification(
+        "[PHASE E E3.2] Improvement Hardening Task fuer tool:get_all_screen_text.",
+        "Ich konnte in dieser Runde kein Tool ausführen. Bitte gib mir die Observation der list_agent_files-Anfrage zurück.",
+    )
+
+    assert style["state"] == "blocked"
+    assert style["telegram_header"].startswith("⚠️ *Autonomer Improvement-Task blockiert*")
+    assert style["email_title"] == "Autonomer Improvement-Task blockiert"
+
+
+def test_improvement_task_notification_marks_verified_result_as_verified() -> None:
+    style = _classify_autonomous_result_notification(
+        "[PHASE E E3.2] Improvement Hardening Task fuer routing drift.",
+        "Self-hardening success: main_dispatcher.py | verification=verification passed",
+    )
+
+    assert style["state"] == "verified"
+    assert style["telegram_header"].startswith("✅ *Autonomer Improvement-Task verifiziert*")
+    assert style["email_title"] == "Autonomer Improvement-Task verifiziert"
 
 
 @pytest.mark.asyncio

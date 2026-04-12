@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock
 
 from orchestration.improvement_task_bridge import build_improvement_task_bridge
@@ -110,6 +111,76 @@ def test_enqueue_improvement_hardening_task_dedupes_open_task() -> None:
 
     assert result["status"] == "deduped"
     queue.add.assert_not_called()
+
+
+def test_enqueue_improvement_hardening_task_blocks_recent_completed_task_via_cooldown(monkeypatch) -> None:
+    monkeypatch.setenv("AUTONOMY_IMPROVEMENT_AUTOENQUEUE_COOLDOWN_MINUTES", "180")
+
+    compiled = compile_improvement_task(
+        {
+            "candidate_id": "cand:cooldown",
+            "category": "routing",
+            "problem": "Prompt routing drift",
+            "proposed_action": "Harden prompt policy",
+            "source_count": 2,
+            "freshness_state": "fresh",
+            "verified_paths": ["agent/prompts.py"],
+        }
+    )
+    promotion = evaluate_compiled_task_promotion(compiled, rollout_stage="self_modify_safe")
+    bridge = build_improvement_task_bridge(compiled, promotion)
+    payload = build_improvement_hardening_task_payload(compiled, promotion, bridge)
+
+    queue = MagicMock()
+    queue.get_all.return_value = [
+        {
+            "id": "recent-task-1",
+            "status": "completed",
+            "completed_at": datetime.now().isoformat(),
+            "metadata": "{\"improvement_dedup_key\": \"%s\"}" % payload["metadata"]["improvement_dedup_key"],
+        }
+    ]
+
+    result = enqueue_improvement_hardening_task(queue, compiled, promotion, bridge)
+
+    assert result["status"] == "cooldown_active"
+    assert result["task_id"] == "recent-task-1"
+    queue.add.assert_not_called()
+
+
+def test_enqueue_improvement_hardening_task_allows_old_completed_task_after_cooldown(monkeypatch) -> None:
+    monkeypatch.setenv("AUTONOMY_IMPROVEMENT_AUTOENQUEUE_COOLDOWN_MINUTES", "180")
+
+    compiled = compile_improvement_task(
+        {
+            "candidate_id": "cand:cooled",
+            "category": "routing",
+            "problem": "Prompt routing drift",
+            "proposed_action": "Harden prompt policy",
+            "source_count": 2,
+            "freshness_state": "fresh",
+            "verified_paths": ["agent/prompts.py"],
+        }
+    )
+    promotion = evaluate_compiled_task_promotion(compiled, rollout_stage="self_modify_safe")
+    bridge = build_improvement_task_bridge(compiled, promotion)
+    payload = build_improvement_hardening_task_payload(compiled, promotion, bridge)
+
+    queue = MagicMock()
+    queue.get_all.return_value = [
+        {
+            "id": "old-task-1",
+            "status": "completed",
+            "completed_at": (datetime.now() - timedelta(hours=5)).isoformat(),
+            "metadata": "{\"improvement_dedup_key\": \"%s\"}" % payload["metadata"]["improvement_dedup_key"],
+        }
+    ]
+    queue.add.return_value = "task-created-after-cooldown"
+
+    result = enqueue_improvement_hardening_task(queue, compiled, promotion, bridge)
+
+    assert result["status"] == "created"
+    assert result["task_id"] == "task-created-after-cooldown"
 
 
 def test_build_improvement_hardening_task_payloads_preserves_order() -> None:

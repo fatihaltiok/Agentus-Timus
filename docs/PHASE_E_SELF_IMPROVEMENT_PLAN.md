@@ -603,6 +603,14 @@ Umgesetzt:
   - exponieren jetzt:
     - `task_autonomy_settings`
     - `top_task_autonomy_decisions`
+- Folgehaertung nach erstem Livebetrieb:
+  - `enqueue_improvement_hardening_task(...)` blockiert jetzt auch frische terminale Wiederholungen desselben Improvement-Falls ueber eine konfigurierbare Cooldown-Regel
+  - neue sichtbare E3.3-Entscheidung:
+    - `enqueue_cooldown_active`
+  - autonome Improvement-Benachrichtigungen behandeln terminale Laeufe nicht mehr automatisch als verifizierten Erfolg
+    - blockierte Laeufe werden explizit als blockiert markiert
+    - sonstige Laeufe nur noch als beendet, nicht als sicher erfolgreich
+    - nur Laufbahnen mit echten Verifikationssignalen duerfen explizit als verifiziert markiert werden
 
 Wichtige Regeln:
 
@@ -611,6 +619,7 @@ Wichtige Regeln:
   - nur create-ready `development`-Tasks duerfen automatisch enqueued werden
   - `self_modify` bleibt bis zum expliziten Opt-in sichtbar, aber blockiert
 - Dedupe zaehlt nicht als echte neue Queue-Erzeugung und verbraucht den kleinen Enqueue-Budget-Slot nicht dauerhaft
+- frische terminale Vorlaeufer desselben `improvement_dedup_key` aktivieren ebenfalls einen Guardrail und blockieren Wiederholung im Cooldown-Fenster
 - alle E3.3-Entscheidungen erzeugen Observation-Signale
 - enqueue-relevante Entscheidungen spiegeln sich zusaetzlich in der Self-Hardening-Runtime
 
@@ -632,6 +641,9 @@ Bestandteile:
 - Contracts/Hypothesis/CrossHair dort, wo Logik rein und stabil ist
 - Canary oder begrenzte Runtime-Freigabe
 - Change-Memory fuer spaetere Auswertung
+- explizite Trennung zwischen:
+  - `terminal beendet`
+  - `verifiziert erfolgreich`
 - klarer Rollback bei:
   - Testfehler
   - Canary-Fehler
@@ -646,6 +658,7 @@ Technische Anker:
 Erfolgskriterium:
 
 - keine Phase-E-Aenderung ohne belastbare Verifikation und Rollback-Hook
+- ein autonomer Improvement-Task darf kommunikativ erst dann als Erfolg gelten, wenn es dafuer einen echten Verifikationsnachweis gibt, nicht nur einen terminalen Queue-Status
 
 ### E5. Memory Curation Autonomy
 

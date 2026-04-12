@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -76,6 +77,8 @@ def test_apply_improvement_task_autonomy_dedup_does_not_consume_budget() -> None
     queue = MagicMock()
     queue.get_all.side_effect = [
         [{"status": "pending", "metadata": "{\"improvement_dedup_key\": \"%s\"}" % payload_a["metadata"]["improvement_dedup_key"]}],
+        [{"status": "pending", "metadata": "{\"improvement_dedup_key\": \"%s\"}" % payload_a["metadata"]["improvement_dedup_key"]}],
+        [],
         [],
     ]
     queue.add.return_value = "task-created-b"
@@ -96,6 +99,38 @@ def test_apply_improvement_task_autonomy_dedup_does_not_consume_budget() -> None
     assert result["decisions"][1]["autoenqueue_state"] == "enqueue_created"
     _, kwargs = queue.add.call_args
     assert kwargs["target_agent"] == "development"
+
+
+def test_apply_improvement_task_autonomy_blocks_recent_completed_task_via_cooldown(monkeypatch) -> None:
+    monkeypatch.setenv("AUTONOMY_IMPROVEMENT_AUTOENQUEUE_COOLDOWN_MINUTES", "180")
+
+    compiled, promotion, bridge, payload = _payload_for("main_dispatcher.py", candidate_id="cand:cooldown")
+
+    queue = MagicMock()
+    queue.get_all.return_value = [
+        {
+            "id": "recent-task-1",
+            "status": "completed",
+            "completed_at": datetime.now().isoformat(),
+            "metadata": "{\"improvement_dedup_key\": \"%s\"}" % payload["metadata"]["improvement_dedup_key"],
+        }
+    ]
+
+    result = apply_improvement_task_autonomy(
+        queue,
+        [compiled],
+        [promotion],
+        [bridge],
+        [payload],
+        allow_self_modify=False,
+        max_autoenqueue=1,
+    )
+
+    assert result["enqueued_total"] == 0
+    assert result["blocked_total"] == 1
+    assert result["decisions"][0]["autoenqueue_state"] == "enqueue_cooldown_active"
+    assert result["decisions"][0]["existing_task_id"] == "recent-task-1"
+    queue.add.assert_not_called()
 
 
 @pytest.mark.asyncio

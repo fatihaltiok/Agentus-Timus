@@ -85,6 +85,65 @@ def _build_incident_notification_key(description: str, metadata: dict) -> str:
     return f"derived:{stable_text_digest(fingerprint_basis, hex_chars=24)}"
 
 
+def _looks_like_improvement_task_description(description: str) -> bool:
+    normalized = str(description or "").strip().lower()
+    if not normalized:
+        return False
+    return "[phase e e3.2]" in normalized or "improvement hardening task" in normalized
+
+
+_IMPROVEMENT_TASK_BLOCKED_RESULT_HINTS = (
+    "maximale anzahl an schritten erreicht",
+    "kein tool ausführen",
+    "kein tool ausfuehren",
+    "tooling blockiert",
+    "umsetzung aktuell durch tooling blockiert",
+    "ermögliche den tool-aufruf",
+    "ermoegliche den tool-aufruf",
+    "bitte gib mir die observation",
+    "400 bad request",
+)
+
+
+_IMPROVEMENT_TASK_VERIFIED_RESULT_HINTS = (
+    "verification=verification passed",
+    "verification=passed",
+    "verification=verified",
+    "verification passed",
+    "verification_status=verified",
+    "test_result=passed",
+    "canary_state=passed",
+)
+
+
+def _classify_autonomous_result_notification(description: str, result: str) -> dict[str, str]:
+    short_description = str(description or "")[:120]
+    if _looks_like_improvement_task_description(description):
+        normalized_result = str(result or "").strip().lower()
+        if any(hint in normalized_result for hint in _IMPROVEMENT_TASK_BLOCKED_RESULT_HINTS):
+            return {
+                "state": "blocked",
+                "telegram_header": f"⚠️ *Autonomer Improvement-Task blockiert*\n_{short_description}_\n\n",
+                "email_title": "Autonomer Improvement-Task blockiert",
+            }
+        if any(hint in normalized_result for hint in _IMPROVEMENT_TASK_VERIFIED_RESULT_HINTS):
+            return {
+                "state": "verified",
+                "telegram_header": f"✅ *Autonomer Improvement-Task verifiziert*\n_{short_description}_\n\n",
+                "email_title": "Autonomer Improvement-Task verifiziert",
+            }
+        return {
+            "state": "ended",
+            "telegram_header": f"🛠️ *Autonomer Improvement-Task beendet*\n_{short_description}_\n\n",
+            "email_title": "Autonomer Improvement-Task beendet",
+        }
+    return {
+        "state": "completed",
+        "telegram_header": f"✅ *Autonomer Task abgeschlossen*\n_{short_description}_\n\n",
+        "email_title": "Autonomer Task abgeschlossen",
+    }
+
+
 def _incident_notification_state_key(notification_key: str) -> str:
     clean = (notification_key or "").strip().lower()
     return f"incident_notify:{clean}"
@@ -2140,7 +2199,8 @@ class AutonomousRunner:
             chat_ids = [int(x.strip()) for x in allowed_ids.split(",") if x.strip()]
             delivered = False
 
-            header = f"✅ *Autonomer Task abgeschlossen*\n_{description[:120]}_\n\n"
+            notification_style = _classify_autonomous_result_notification(description, result)
+            header = notification_style["telegram_header"]
             MAX_TEXT = 3800
 
             for chat_id in chat_ids:
@@ -2226,8 +2286,9 @@ class AutonomousRunner:
             from utils.smtp_email import send_email_smtp
             backend = os.getenv("EMAIL_BACKEND", "resend").lower()
 
+            notification_style = _classify_autonomous_result_notification(description, result)
             subject = f"Timus: {description[:80]}"
-            body = f"Autonomer Task abgeschlossen\n\n{description}\n\n{'='*60}\n\n{result}"
+            body = f"{notification_style['email_title']}\n\n{description}\n\n{'='*60}\n\n{result}"
 
             if backend == "resend":
                 await send_email_resend(to=recipient, subject=subject, body=body)

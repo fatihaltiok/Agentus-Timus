@@ -2,6 +2,74 @@
 
 ---
 
+## Fortschritt 2026-04-12 - Phase E E3.3 Guardrails gegen Improvement-Loops und Erfolgs-Ueberbehauptung
+
+Der erste echte E3.3-Livebetrieb hat eine Governance-Luecke gezeigt: derselbe Improvement-Kandidat konnte trotz terminaler Vorlaeufer erneut autonom enqueued werden, und Telegram/E-Mail meldeten Improvement-Laeufe zu leicht als abgeschlossen. Dieser Slice haertet genau diese Kante.
+
+Geaendert:
+
+- [orchestration/improvement_task_execution.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_task_execution.py)
+  - neue Cooldown-Regel fuer terminale Improvement-Tasks ueber `AUTONOMY_IMPROVEMENT_AUTOENQUEUE_COOLDOWN_MINUTES`
+  - `enqueue_improvement_hardening_task(...)` blockiert jetzt nicht nur offene Duplikate, sondern auch frische `completed`-/`failed`-/sonstige terminale Wiederholungen desselben `improvement_dedup_key`
+  - neuer Rueckgabestatus:
+    - `cooldown_active`
+- [orchestration/improvement_task_autonomy.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_task_autonomy.py)
+  - neue sichtbare E3.3-Entscheidung:
+    - `enqueue_cooldown_active`
+  - Autonomie-/Runtime-Events tragen jetzt auch:
+    - `existing_task_id`
+    - `cooldown_minutes`
+- [orchestration/autonomous_runner.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomous_runner.py)
+  - Improvement-Resultate werden nicht mehr pauschal als `✅ Autonomer Task abgeschlossen` gemeldet
+  - blockierte Improvement-Laeufe werden jetzt als:
+    - `⚠️ Autonomer Improvement-Task blockiert`
+    markiert
+  - wirklich verifizierte Improvement-Laeufe koennen jetzt explizit als:
+    - `✅ Autonomer Improvement-Task verifiziert`
+    markiert werden, wenn der Runtime-Pfad belastbare Verifikationssignale mitliefert
+  - sonstige Improvement-Laeufe werden konservativ nur noch als:
+    - `🛠️ Autonomer Improvement-Task beendet`
+    markiert
+
+Wichtige Wirkung:
+
+- derselbe Improvement-Fall spammt die Queue nicht mehr sofort erneut, nur weil ein Vorlaeufer bereits terminal ist
+- terminales `completed` zaehlt kommunikativ nicht mehr automatisch als verifizierter Erfolg
+- der OCR-/Telegram-Befund aus dem Livebetrieb ist damit als Governance-Regel im Code verankert
+
+Tests:
+
+- erweitert:
+  - [tests/test_improvement_task_execution.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_task_execution.py)
+  - [tests/test_improvement_task_autonomy.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_task_autonomy.py)
+  - [tests/test_autonomous_runner_incident_notifications.py](/home/fatih-ubuntu/dev/timus/tests/test_autonomous_runner_incident_notifications.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/improvement_task_execution.py orchestration/improvement_task_autonomy.py orchestration/autonomous_runner.py tests/test_improvement_task_execution.py tests/test_improvement_task_autonomy.py tests/test_autonomous_runner_incident_notifications.py`
+- `pytest -q tests/test_improvement_task_execution.py tests/test_improvement_task_autonomy.py tests/test_autonomous_runner_incident_notifications.py`
+  - `18 passed`
+- `python -m crosshair check tests/test_improvement_task_execution_crosshair.py tests/test_improvement_task_autonomy_crosshair.py`
+  - Exit `0`
+
+## Fortschritt 2026-04-12 - Zwischenprojekt fuer allgemeine Mehrschritt-Planung angelegt
+
+Es gibt jetzt einen eigenen Architektur- und Ausbauplan fuer allgemeine Mehrschritt-Aufgaben, bewusst getrennt von Phase D und Phase E.
+
+Neu:
+
+- [docs/ZWISCHENPROJEKT_ALLGEMEINE_MEHRSCHRITT_PLANUNG_2026-04-12.md](/home/fatih-ubuntu/dev/timus/docs/ZWISCHENPROJEKT_ALLGEMEINE_MEHRSCHRITT_PLANUNG_2026-04-12.md)
+  - eigener Querplan fuer:
+    - allgemeine Freitext-Zerlegung
+    - explizite Teilziele
+    - Plan State ueber Turns
+    - Specialist Step Packaging
+    - Dynamic Replanning
+    - nutzerfreundliche Fortschrittskompression
+- Verlinkt in:
+  - [README.md](/home/fatih-ubuntu/dev/timus/README.md)
+  - [TIMUS_ARCHITEKTUR_BLUEPRINT_FUER_FOLGEPROJEKTE_2026-04-11.md](/home/fatih-ubuntu/dev/timus/docs/TIMUS_ARCHITEKTUR_BLUEPRINT_FUER_FOLGEPROJEKTE_2026-04-11.md)
+
 ## Fortschritt 2026-04-12 - Phase E E3.3 gestartet: Managed Autonomous Hardening
 
 Der naechste E3-Slice macht aus den create-ready Improvement-Hardening-Payloads erstmals einen kleinen echten Autonomiepfad. Timus kann jetzt einen engen Safe-Subset von `development`-Tasks selbst in die Queue einspeisen, inklusive Budget, Dedupe und Runtime-Observability. `self_modify` bleibt bewusst weiter opt-in.

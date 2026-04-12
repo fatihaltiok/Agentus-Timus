@@ -24,6 +24,7 @@ _AUTOENQUEUE_STATES = {
     "autoenqueue_ready",
     "enqueue_created",
     "enqueue_deduped",
+    "enqueue_cooldown_active",
     "enqueue_blocked",
 }
 
@@ -205,6 +206,8 @@ def _record_improvement_task_autonomy_event(decision: Mapping[str, Any]) -> None
         "enqueue_status": _text(decision.get("enqueue_status"), limit=64),
         "enqueue_reason": _text(decision.get("enqueue_reason"), limit=160),
         "enqueued_task_id": _text(decision.get("enqueued_task_id"), limit=80),
+        "existing_task_id": _text(decision.get("existing_task_id"), limit=80),
+        "cooldown_minutes": int(decision.get("cooldown_minutes") or 0),
         "allow_self_modify": bool(decision.get("allow_self_modify")),
     }
     try:
@@ -215,17 +218,19 @@ def _record_improvement_task_autonomy_event(decision: Mapping[str, Any]) -> None
 
 def _record_improvement_task_hardening_runtime(queue: Any, decision: Mapping[str, Any]) -> None:
     enqueue_status = _text(decision.get("enqueue_status"), limit=64)
-    if enqueue_status not in {"created", "deduped", "not_created"}:
+    if enqueue_status not in {"created", "deduped", "not_created", "cooldown_active"}:
         return
     stage = {
         "created": "improvement_task_enqueued",
         "deduped": "improvement_task_deduped",
         "not_created": "improvement_task_enqueue_blocked",
+        "cooldown_active": "improvement_task_enqueue_blocked",
     }[enqueue_status]
     status = {
         "created": "created",
         "deduped": "reused",
         "not_created": "blocked",
+        "cooldown_active": "blocked",
     }[enqueue_status]
     try:
         record_self_hardening_event(
@@ -285,6 +290,8 @@ def apply_improvement_task_autonomy(
                 "enqueue_status": "",
                 "enqueue_reason": "",
                 "enqueued_task_id": "",
+                "existing_task_id": "",
+                "cooldown_minutes": 0,
             }
         )
 
@@ -301,12 +308,18 @@ def apply_improvement_task_autonomy(
                 decision["enqueue_status"] = _text(result.get("status"), limit=64)
                 decision["enqueue_reason"] = _text(result.get("reason"), limit=160)
                 decision["enqueued_task_id"] = _text(result.get("task_id"), limit=80)
+                if decision["enqueue_status"] != "created":
+                    decision["existing_task_id"] = _text(result.get("task_id"), limit=80)
+                decision["cooldown_minutes"] = int(result.get("cooldown_minutes") or 0)
                 if decision["enqueue_status"] == "created":
                     decision["autoenqueue_state"] = "enqueue_created"
                     enqueued_total += 1
                 elif decision["enqueue_status"] == "deduped":
                     decision["autoenqueue_state"] = "enqueue_deduped"
                     deduped_total += 1
+                elif decision["enqueue_status"] == "cooldown_active":
+                    decision["autoenqueue_state"] = "enqueue_cooldown_active"
+                    blocked_total += 1
                 else:
                     decision["autoenqueue_state"] = "enqueue_blocked"
                     blocked_total += 1
