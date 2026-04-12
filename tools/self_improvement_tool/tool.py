@@ -304,7 +304,9 @@ async def get_e2e_release_gate_status(
 async def get_improvement_suggestions(include_applied: bool = False) -> dict:
     """Gibt Verbesserungsvorschläge zurück."""
     from orchestration.improvement_candidates import build_candidate_operator_views
+    from orchestration.improvement_task_bridge import build_improvement_task_bridges
     from orchestration.improvement_task_compiler import compile_improvement_tasks
+    from orchestration.improvement_task_promotion import evaluate_compiled_task_promotions
     from orchestration.self_improvement_engine import get_improvement_engine
     from orchestration.session_reflection import SessionReflectionLoop
 
@@ -315,6 +317,8 @@ async def get_improvement_suggestions(include_applied: bool = False) -> dict:
         combined_candidates = await SessionReflectionLoop().get_improvement_suggestions()
     except Exception:
         combined_candidates = normalized_candidates
+    compiled_tasks = compile_improvement_tasks(combined_candidates, limit=5)
+    promotion_decisions = evaluate_compiled_task_promotions(compiled_tasks, limit=5)
     return {
         "status": "ok",
         "count": len(suggestions),
@@ -322,5 +326,7 @@ async def get_improvement_suggestions(include_applied: bool = False) -> dict:
         "suggestions": suggestions,
         "normalized_candidates": combined_candidates,
         "top_candidate_insights": build_candidate_operator_views(combined_candidates, limit=5),
-        "top_compiled_tasks": compile_improvement_tasks(combined_candidates, limit=5),
+        "top_compiled_tasks": compiled_tasks,
+        "top_task_promotion_decisions": promotion_decisions,
+        "top_task_bridge_decisions": build_improvement_task_bridges(compiled_tasks, promotion_decisions, limit=5),
     }

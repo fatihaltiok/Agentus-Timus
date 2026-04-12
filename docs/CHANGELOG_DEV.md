@@ -2,6 +2,103 @@
 
 ---
 
+## Fortschritt 2026-04-12 - Phase E E3.1 gestartet: Preflight-Bridge in Self-Hardening-Execution
+
+Der erste E3-Slice fuehrt noch keine direkte Ausfuehrung aus dem Improvement-Feed ein, sondern eine kontrollierte Preflight-Bridge. Dadurch wird jetzt sichtbar, welche `e3_ready`-Tasks tatsaechlich auf `development` oder `self_modify` routbar waeren und welche an Rollout-, Policy- oder Pfadgrenzen haengen bleiben.
+
+Geaendert:
+
+- [orchestration/improvement_task_bridge.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_task_bridge.py)
+  - neue E3.1-Bridge von kompiliertem Task + Promotion-Entscheidung -> Self-Hardening-Preflight
+  - neue `bridge_state`-Klassen:
+    - `not_e3_eligible`
+    - `deferred_by_promotion`
+    - `developer_bridge_ready`
+    - `self_modify_ready`
+    - `bridge_blocked`
+  - nutzt die bestehende [orchestration/self_hardening_execution_policy.py](/home/fatih-ubuntu/dev/timus/orchestration/self_hardening_execution_policy.py) statt einen neuen Parallelpfad zu bauen
+- [tools/self_improvement_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/self_improvement_tool/tool.py)
+  - `get_improvement_suggestions(...)` liefert jetzt auch `top_task_bridge_decisions`
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - `/autonomy/improvement` exponiert jetzt ebenfalls `top_task_bridge_decisions`
+
+Wichtige Regeln:
+
+- nur `e3_ready`-Promotionen werden ueberhaupt in die Execution-Policy gespiegelt
+- `not_e3_eligible` und `deferred_by_promotion` bleiben vor der Bridge haengen
+- die Bridge trennt jetzt sauber zwischen:
+  - echten `verified_paths`
+  - blossen `resolved_target_files`
+- dadurch koennen z.B. `agent/prompts.py` als `self_modify_ready` auftauchen, waehrend gesperrte Dateien wie `main_dispatcher.py` korrekt nur als `developer_bridge_ready` enden
+
+Tests:
+
+- neu:
+  - [tests/test_improvement_task_bridge.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_task_bridge.py)
+  - [tests/test_improvement_task_bridge_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_task_bridge_hypothesis.py)
+  - [tests/test_improvement_task_bridge_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_task_bridge_crosshair.py)
+- erweitert:
+  - [tests/test_self_improvement_tool_ops.py](/home/fatih-ubuntu/dev/timus/tests/test_self_improvement_tool_ops.py)
+  - [tests/test_c2_entrypoints.py](/home/fatih-ubuntu/dev/timus/tests/test_c2_entrypoints.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/improvement_task_bridge.py tools/self_improvement_tool/tool.py server/mcp_server.py tests/test_improvement_task_bridge.py tests/test_improvement_task_bridge_hypothesis.py tests/test_improvement_task_bridge_crosshair.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py`
+- `pytest -q tests/test_improvement_candidates.py tests/test_improvement_task_compiler_contracts.py tests/test_improvement_task_compiler_hypothesis.py tests/test_improvement_task_promotion.py tests/test_improvement_task_promotion_hypothesis.py tests/test_improvement_task_bridge.py tests/test_improvement_task_bridge_hypothesis.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py`
+  - `50 passed`
+- `python -m crosshair check tests.test_improvement_task_bridge_crosshair._contract_prompt_zone_self_modify_ready tests.test_improvement_task_bridge_crosshair._contract_main_dispatcher_downgrades_to_development tests.test_improvement_task_bridge_crosshair._contract_policy_secret_task_never_enters_e3_bridge --analysis_kind=deal`
+  - Exit `0`
+
+## Fortschritt 2026-04-12 - Phase E E2.3 gestartet: Promotion-Gate zwischen Compiler und E3
+
+Der naechste E2-Slice fuehrt eine explizite Gate-Schicht zwischen kompilierten Improvement-Tasks und spaeterer Self-Hardening-Execution ein. Damit wird aus `top_compiled_tasks` jetzt nicht automatisch eine implizite E3-Eignung, sondern eine sichtbare Entscheidung darueber, was nur beobachtet, was nur manuell/developer-seitig und was ueberhaupt irgendwann in E3 weiterdarf.
+
+Geaendert:
+
+- [orchestration/improvement_task_promotion.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_task_promotion.py)
+  - neue Promotion-Entscheidung fuer kompilierte Tasks mit:
+    - `requested_fix_mode`
+    - `effective_fix_mode`
+    - `promotion_state`
+    - `e3_eligible`
+    - `e3_ready`
+    - `promotion_reasons`
+    - `blocked_by`
+  - klare Gate-Zustaende:
+    - `human_only`
+    - `observe_only`
+    - `developer_only`
+    - `deferred_by_rollout`
+    - `eligible_for_e3`
+- [orchestration/improvement_task_compiler.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_task_compiler.py)
+  - trennt jetzt sauber zwischen:
+    - `evidence.verified_paths`
+    - `evidence.resolved_target_files`
+  - damit zaehlen im Promotion-Gate nur echte Verified Paths als starke Evidenz, nicht bloss Kategorie-Defaults
+- [tools/self_improvement_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/self_improvement_tool/tool.py)
+  - `get_improvement_suggestions(...)` liefert jetzt auch `top_task_promotion_decisions`
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - `/autonomy/improvement` exponiert jetzt ebenfalls `top_task_promotion_decisions`
+
+Tests:
+
+- neu:
+  - [tests/test_improvement_task_promotion.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_task_promotion.py)
+  - [tests/test_improvement_task_promotion_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_task_promotion_hypothesis.py)
+  - [tests/test_improvement_task_promotion_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_task_promotion_crosshair.py)
+- erweitert:
+  - [tests/test_self_improvement_tool_ops.py](/home/fatih-ubuntu/dev/timus/tests/test_self_improvement_tool_ops.py)
+  - [tests/test_c2_entrypoints.py](/home/fatih-ubuntu/dev/timus/tests/test_c2_entrypoints.py)
+  - [tests/test_improvement_candidates.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_candidates.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/improvement_task_compiler.py orchestration/improvement_task_promotion.py tests/test_improvement_candidates.py tests/test_improvement_task_promotion.py tests/test_improvement_task_promotion_hypothesis.py tests/test_improvement_task_promotion_crosshair.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py`
+- `pytest -q tests/test_improvement_candidates.py tests/test_improvement_task_compiler_contracts.py tests/test_improvement_task_compiler_hypothesis.py tests/test_improvement_task_promotion.py tests/test_improvement_task_promotion_hypothesis.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py`
+  - `45 passed`
+- `python -m crosshair check tests.test_improvement_task_promotion_crosshair._contract_strong_routing_task_becomes_e3_ready tests.test_improvement_task_promotion_crosshair._contract_sensitive_policy_task_stays_human_only tests.test_improvement_task_promotion_crosshair._contract_developer_rollout_defers_self_modify_candidate --analysis_kind=deal`
+  - Exit `0`
+
 ## Fortschritt 2026-04-12 - Phase E E2.2 gestartet: Evidence-aware Compiler Hardening
 
 Der naechste E2-Slice macht den Candidate-to-Task-Compiler deutlich evidenznaeher. Verbesserungsaufgaben werden jetzt nicht mehr nur aus Kategorie und groben Textsignalen abgeleitet, sondern aus bereits konsolidierten Verified Paths, Functions, Komponenten-, Signal- und Event-Hinweisen.

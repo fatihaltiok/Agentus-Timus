@@ -168,6 +168,10 @@ def test_improvement_endpoint_returns_top_candidates(client):
     assert "prio=" in data["top_candidate_insights"][0]["summary"]
     assert data["top_compiled_tasks"][0]["candidate_id"] == "m12:1"
     assert data["top_compiled_tasks"][0]["task_kind"] == "developer_task"
+    assert data["top_task_promotion_decisions"][0]["candidate_id"] == "m12:1"
+    assert data["top_task_promotion_decisions"][0]["requested_fix_mode"] == "developer_task"
+    assert data["top_task_bridge_decisions"][0]["candidate_id"] == "m12:1"
+    assert data["top_task_bridge_decisions"][0]["bridge_state"] == "not_e3_eligible"
 
 
 def test_incident_trace_endpoint_returns_trace(client):

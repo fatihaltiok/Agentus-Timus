@@ -401,7 +401,8 @@ def compile_improvement_task(candidate: Mapping[str, Any]) -> dict[str, Any]:
     proposed_action = _clean_text(candidate.get("proposed_action"))
     tokens = _normalize_tokens(category, target, problem, proposed_action, candidate.get("summary"))
     task_kind = _choose_task_kind(candidate, tokens)
-    target_files = _evidence_target_files(candidate) or _target_files_for_candidate(category, tokens, target)
+    verified_paths = _evidence_target_files(candidate)
+    target_files = verified_paths or _target_files_for_candidate(category, tokens, target)
     verified_functions = _evidence_functions(candidate)
     required_checks = ["py_compile"]
     if task_kind in {"developer_task", "config_change_candidate", "test_gap", "shell_task"}:
@@ -432,7 +433,8 @@ def compile_improvement_task(candidate: Mapping[str, Any]) -> dict[str, Any]:
                 for item in (candidate.get("merged_sources") or [candidate.get("source")])
                 if _clean_text(item, limit=48)
             ],
-            "verified_paths": target_files,
+            "verified_paths": verified_paths,
+            "resolved_target_files": target_files,
             "verified_functions": verified_functions,
             "event_types": _evidence_event_types(candidate),
             "components": _evidence_components(candidate),

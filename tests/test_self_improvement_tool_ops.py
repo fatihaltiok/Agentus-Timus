@@ -143,3 +143,7 @@ async def test_get_improvement_suggestions_exposes_normalized_candidates(monkeyp
     assert "prio=" in result["top_candidate_insights"][0]["summary"]
     assert result["top_compiled_tasks"][0]["candidate_id"] == "m12:1"
     assert result["top_compiled_tasks"][0]["task_kind"] == "developer_task"
+    assert result["top_task_promotion_decisions"][0]["candidate_id"] == "m12:1"
+    assert result["top_task_promotion_decisions"][0]["requested_fix_mode"] == "developer_task"
+    assert result["top_task_bridge_decisions"][0]["candidate_id"] == "m12:1"
+    assert result["top_task_bridge_decisions"][0]["bridge_state"] == "not_e3_eligible"

@@ -395,6 +395,50 @@ Noch offen fuer spaetere E2-Slices:
 - staerkere Rueckbindung von `priority_reasons` und Evidenzqualitaet an die eigentliche Execution-Mode-Wahl
 - spaetere Bruecke in E3, damit nur ausreichend belastbare `developer_task`-Klassen weiterpromotet werden
 
+### E2.3 Promotion-Gate zwischen Compiler und E3
+
+Stand:
+
+- erster Runtime-Slice gestartet
+
+Umgesetzt:
+
+- neue Gate-Schicht in [orchestration/improvement_task_promotion.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_task_promotion.py)
+- kompilierte Tasks werden jetzt nicht mehr implizit als gleichwertig behandelt, sondern erhalten eine explizite Promotion-Entscheidung mit:
+  - `requested_fix_mode`
+  - `effective_fix_mode`
+  - `promotion_state`
+  - `e3_eligible`
+  - `e3_ready`
+  - `promotion_reasons`
+  - `blocked_by`
+- die Gate-Logik trennt jetzt sauber:
+  - `human_only`
+  - `observe_only`
+  - `developer_only`
+  - `deferred_by_rollout`
+  - `eligible_for_e3`
+- starke Safe-Subset-Kandidaten koennen nur dann `self_modify_safe` anfragen, wenn gleichzeitig gilt:
+  - Kategorie im E3-Safe-Subset
+  - Task-Klasse promotable
+  - kein `high` Rollback-Risk
+  - echte Compiler-Evidenz statt nur Default-`target_files`
+- die finale Entscheidung wird direkt gegen [orchestration/self_hardening_rollout.py](/home/fatih-ubuntu/dev/timus/orchestration/self_hardening_rollout.py) gespiegelt, damit Rollout-Stufen wie `observe_only` oder `developer_only` sofort sichtbar als Downgrade in der Promotion landen
+- [tools/self_improvement_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/self_improvement_tool/tool.py) und [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py) exponieren diese Entscheidungen jetzt als `top_task_promotion_decisions`
+
+Wichtige Korrektur im Slice:
+
+- [orchestration/improvement_task_compiler.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_task_compiler.py) trennt jetzt sauber zwischen:
+  - `evidence.verified_paths`
+  - `evidence.resolved_target_files`
+- damit zaehlen im Promotion-Gate nur echte Pfad-Evidenzen als "starke Evidenz", nicht bloss konservative Kategorie-Defaults
+
+Noch offen fuer spaetere E2-Slices:
+
+- feinere Promotion-Regeln fuer Config-/Schema-/Nicht-Python-Artefakte
+- staerkere Rueckbindung an echte Verifikationshistorie statt nur Compiler-Evidenz
+- direkte Bruecke in E3-Task-Erzeugung fuer wirklich `e3_ready` Kandidaten
+
 ### E3. Safe Self-Hardening Execution
 
 Ziel:
@@ -423,6 +467,54 @@ Rollout-Stufen:
 - `developer_only`
 - `self_modify_safe`
 - spaeter optional:
+
+### E3.1 Preflight-Bridge von `e3_ready` in Self-Hardening-Execution
+
+Stand:
+
+- erster Runtime-Slice gestartet
+
+Umgesetzt:
+
+- neue Preflight-Bridge in [orchestration/improvement_task_bridge.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_task_bridge.py)
+- `e3_ready`-Promotionen werden jetzt nicht direkt ausgefuehrt, sondern zuerst kontrolliert in die bestehende [orchestration/self_hardening_execution_policy.py](/home/fatih-ubuntu/dev/timus/orchestration/self_hardening_execution_policy.py) gespiegelt
+- die Bridge liefert pro kompiliertem Task jetzt:
+  - `bridge_state`
+  - `target_file_path`
+  - `change_type`
+  - `route_target`
+  - `allow_task`
+  - `allow_self_modify`
+  - `required_checks`
+  - `required_test_targets`
+- dadurch wird sichtbar unterschieden zwischen:
+  - `not_e3_eligible`
+  - `deferred_by_promotion`
+  - `developer_bridge_ready`
+  - `self_modify_ready`
+  - `bridge_blocked`
+- die Bridge nutzt nur vorhandene Governance:
+  - Promotion-Gate aus E2.3
+  - Rollout-Stufen aus [orchestration/self_hardening_rollout.py](/home/fatih-ubuntu/dev/timus/orchestration/self_hardening_rollout.py)
+  - Execution-Policy aus [orchestration/self_hardening_execution_policy.py](/home/fatih-ubuntu/dev/timus/orchestration/self_hardening_execution_policy.py)
+  - Self-Modification-Policy aus [orchestration/self_modification_policy.py](/home/fatih-ubuntu/dev/timus/orchestration/self_modification_policy.py)
+- [tools/self_improvement_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/self_improvement_tool/tool.py) und [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py) exponieren diese Preflight-Ergebnisse jetzt als `top_task_bridge_decisions`
+
+Wichtige Grenzen von E3.1:
+
+- noch keine automatische Task-Queue-Einspeisung aus dem Improvement-Feed
+- noch keine direkte Self-Modification aus E2/E3 heraus
+- nur ein kontrollierter Vorab-Check, ob ein `e3_ready`-Task heute:
+  - auf `development`
+  - auf `self_modify`
+  - oder gar nicht
+  routbar waere
+
+Noch offen fuer spaetere E3-Slices:
+
+- echte Bridge in die Self-Hardening-Task-Erzeugung nur fuer `self_modify_ready`/`developer_bridge_ready`
+- Rueckbindung von Verifikationshistorie und Failure-Budgets in die Bridge-Entscheidung
+- spaeterer Canary-/Rollback-Pfad fuer aus E2 hervorgehende Self-Hardening-Ausfuehrungen
   - `approval_required_for_high_risk`
 
 Technische Anker:
