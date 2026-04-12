@@ -141,3 +141,5 @@ async def test_get_improvement_suggestions_exposes_normalized_candidates(monkeyp
     assert result["normalized_candidates"][0]["problem"] == "Routing schwach"
     assert result["top_candidate_insights"][0]["candidate_id"] == "m12:1"
     assert "prio=" in result["top_candidate_insights"][0]["summary"]
+    assert result["top_compiled_tasks"][0]["candidate_id"] == "m12:1"
+    assert result["top_compiled_tasks"][0]["task_kind"] == "developer_task"

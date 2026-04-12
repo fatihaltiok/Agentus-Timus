@@ -325,6 +325,41 @@ Erfolgskriterium:
 
 - aus einem wiederkehrenden Fehler entsteht ein strukturierter Task mit Verifikationsplan statt nur ein Befund
 
+### E2.1 Candidate-to-Task Compiler
+
+Stand:
+
+- erster Runtime-Slice gestartet
+
+Umgesetzt:
+
+- neue Compiler-Schicht in [orchestration/improvement_task_compiler.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_task_compiler.py)
+- priorisierte Improvement-Kandidaten werden jetzt in konkrete Task-Pakete uebersetzt mit:
+  - `task_kind`
+  - `execution_mode_hint`
+  - `problem`
+  - `likely_root_cause`
+  - `safe_fix_class`
+  - `target_files`
+  - `verification_plan`
+  - `rollback_risk`
+- konservative Task-Klassen im ersten Slice:
+  - `developer_task`
+  - `shell_task`
+  - `config_change_candidate`
+  - `test_gap`
+  - `verification_needed`
+  - `do_not_autofix`
+- sensible Auth-/Secret-Erweiterungen werden dabei bewusst in `do_not_autofix` gedrueckt statt als normale Autofix-Arbeitspakete zu erscheinen
+- stale Single-Source-Observationen werden als `verification_needed` kompiliert statt direkt als Fix-Aufgabe
+- [tools/self_improvement_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/self_improvement_tool/tool.py) und [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py) exponieren diese ersten kompilierten Tasks jetzt als `top_compiled_tasks`
+
+Noch offen fuer spaetere E2-Slices:
+
+- feinere Root-Cause-Heuristiken pro Kategorie und Zielmodul
+- bessere Zielpfad-Ableitung aus echten Verified Paths statt konservativer Kategorie-Mappings
+- spaetere Bruecke in E3, damit geeignete `developer_task`-Klassen kontrolliert in Self-Hardening-Execution uebergehen
+
 ### E3. Safe Self-Hardening Execution
 
 Ziel:

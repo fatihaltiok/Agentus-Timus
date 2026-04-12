@@ -9,6 +9,10 @@ from orchestration.improvement_candidates import (
     normalize_session_reflection_candidate,
     sort_improvement_candidates,
 )
+from orchestration.improvement_task_compiler import (
+    compile_improvement_task,
+    compile_improvement_tasks,
+)
 
 
 def test_normalize_self_improvement_candidate_returns_phase_e_shape():
@@ -280,3 +284,99 @@ def test_build_candidate_operator_view_explains_priority_and_freshness():
     assert view["signal_class"] == "structural_issue"
     assert "sources=self_improvement_engine,session_reflection" in view["summary"]
     assert "prio=1.133" in view["summary"]
+
+
+def test_compile_improvement_task_emits_structured_developer_task():
+    compiled = compile_improvement_task(
+        {
+            "candidate_id": "m12:9",
+            "category": "routing",
+            "target": "research",
+            "problem": "Routing zu research ist schwach",
+            "proposed_action": "Routing haerten und Follow-up-Pruefung absichern",
+            "priority_score": 1.214,
+            "priority_reasons": ["high_severity", "multi_source"],
+            "evidence_level": "measured",
+            "evidence_basis": "runtime_analytics",
+            "signal_class": "structural_issue",
+            "source_count": 2,
+            "occurrence_count": 4,
+            "freshness_state": "fresh",
+            "merged_sources": ["self_improvement_engine", "session_reflection"],
+        }
+    )
+
+    assert compiled["candidate_id"] == "m12:9"
+    assert compiled["task_kind"] == "developer_task"
+    assert compiled["execution_mode_hint"] == "developer_task"
+    assert compiled["safe_fix_class"] == "routing_policy_hardening"
+    assert "main_dispatcher.py" in compiled["target_files"]
+    assert compiled["verification_plan"]["required_checks"] == ["py_compile", "pytest_targeted"]
+    assert "tests/test_meta_orchestration.py" in compiled["verification_plan"]["suggested_test_targets"]
+
+
+def test_compile_improvement_task_blocks_sensitive_auth_policy_as_do_not_autofix():
+    compiled = compile_improvement_task(
+        {
+            "candidate_id": "obs:1",
+            "category": "policy",
+            "target": "login",
+            "problem": "Login-Flow verlangt 2FA und Passkey-Handover",
+            "proposed_action": "Credential-Handling erweitern und Passwort direkt nutzen",
+            "priority_score": 0.91,
+            "evidence_level": "observation",
+            "signal_class": "structural_issue",
+            "source_count": 1,
+            "occurrence_count": 2,
+            "freshness_state": "fresh",
+        }
+    )
+
+    assert compiled["task_kind"] == "do_not_autofix"
+    assert compiled["execution_mode_hint"] == "human_only"
+    assert compiled["safe_fix_class"] == "human_mediated_only"
+    assert compiled["rollback_risk"] == "high"
+
+
+def test_compile_improvement_task_marks_stale_single_observation_as_verification_needed():
+    compiled = compile_improvement_task(
+        {
+            "candidate_id": "obs:stale",
+            "category": "runtime",
+            "problem": "Einmaliger Timeout im Chat-Pfad",
+            "proposed_action": "Timeout pruefen",
+            "priority_score": 0.22,
+            "evidence_level": "observation",
+            "signal_class": "transient_signal",
+            "source_count": 1,
+            "occurrence_count": 1,
+            "freshness_state": "stale",
+        }
+    )
+
+    assert compiled["task_kind"] == "verification_needed"
+    assert compiled["execution_mode_hint"] == "observe_only"
+    assert compiled["safe_fix_class"] == "needs_stronger_evidence"
+
+
+def test_compile_improvement_tasks_sorts_by_priority_score():
+    compiled = compile_improvement_tasks(
+        [
+            {
+                "candidate_id": "low",
+                "category": "runtime",
+                "problem": "Timeout",
+                "proposed_action": "Pruefen",
+                "priority_score": 0.3,
+            },
+            {
+                "candidate_id": "high",
+                "category": "routing",
+                "problem": "Routing schwach",
+                "proposed_action": "Routing haerten",
+                "priority_score": 1.1,
+            },
+        ]
+    )
+
+    assert [item["candidate_id"] for item in compiled] == ["high", "low"]

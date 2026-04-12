@@ -2,6 +2,68 @@
 
 ---
 
+## Fortschritt 2026-04-11 - Phase E E2.1 gestartet: Candidate-to-Task Compiler
+
+Der erste E2-Slice uebersetzt priorisierte Improvement-Kandidaten jetzt in konkrete, pruefbare Arbeitspakete. Damit endet Phase E nicht mehr nur bei Befunden und Rankings, sondern beginnt, daraus strukturierte Aufgaben mit Root-Cause-, Verifikations- und Risikofeldern zu machen.
+
+Geaendert:
+
+- [orchestration/improvement_task_compiler.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_task_compiler.py)
+  - neuer Compiler von Improvement-Kandidat -> Task-Paket
+  - erste konservative Task-Klassen:
+    - `developer_task`
+    - `shell_task`
+    - `config_change_candidate`
+    - `test_gap`
+    - `verification_needed`
+    - `do_not_autofix`
+  - neue strukturierte Felder:
+    - `likely_root_cause`
+    - `safe_fix_class`
+    - `target_files`
+    - `verification_plan`
+    - `rollback_risk`
+    - `execution_mode_hint`
+- [tools/self_improvement_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/self_improvement_tool/tool.py)
+  - `get_improvement_suggestions(...)` liefert jetzt auch `top_compiled_tasks`
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - `/autonomy/improvement` exponiert jetzt ebenfalls `top_compiled_tasks`
+
+Wichtige Regeln des ersten Slices:
+
+- sensible Auth-/Secret-Erweiterungen werden bewusst als `do_not_autofix` kompiliert
+- stale Single-Source-Observationen werden als `verification_needed` statt als direkter Fix-Task ausgegeben
+
+Tests:
+
+- erweitert:
+  - [tests/test_improvement_candidates.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_candidates.py)
+  - [tests/test_self_improvement_tool_ops.py](/home/fatih-ubuntu/dev/timus/tests/test_self_improvement_tool_ops.py)
+  - [tests/test_c2_entrypoints.py](/home/fatih-ubuntu/dev/timus/tests/test_c2_entrypoints.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/improvement_task_compiler.py tools/self_improvement_tool/tool.py server/mcp_server.py tests/test_improvement_candidates.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py`
+- `pytest -q tests/test_improvement_candidates.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py`
+  - `32 passed`
+
+## Fortschritt 2026-04-11 - Architektur-Blueprint fuer Folgeprojekte angelegt
+
+Es gibt jetzt ein eigenes Dokument, das Timus nicht als Feature-Chronik, sondern als wiederverwendbare Architekturvorlage fuer neue Projekte beschreibt.
+
+Neu:
+
+- [TIMUS_ARCHITEKTUR_BLUEPRINT_FUER_FOLGEPROJEKTE_2026-04-11.md](/home/fatih-ubuntu/dev/timus/docs/TIMUS_ARCHITEKTUR_BLUEPRINT_FUER_FOLGEPROJEKTE_2026-04-11.md)
+
+Der Blueprint beschreibt:
+
+- die Schichten von Timus
+- wie Runtime, Dispatcher, Meta, Spezialisten, Tools, Memory, Persoenlichkeit, Autonomie, Self-Healing, Human-in-the-Loop und Self-Improvement aufeinander aufbauen
+- welche Teile Pflichtkern und welche optionale Ausbaupunkte sind
+- in welcher Reihenfolge man ein aehnliches System sinnvoll aufbaut
+
+Zusaetzlich wurde [README.md](/home/fatih-ubuntu/dev/timus/README.md) um den direkten Link auf diesen Blueprint erweitert.
+
 ## Fortschritt 2026-04-11 - Phase E E1.6 gestartet: Operator Visibility fuer Candidate-Priorisierung
 
 Der naechste E1-Slice macht die neue Candidate-Priorisierung nach aussen erklaerbar. Nach E1.1 bis E1.5 war intern schon klar, warum ein Improvement-Kandidat hoch oder runter sortiert wird. Jetzt gibt es dafuer auch eine kompakte operator-lesbare Sicht in Tool- und MCP-Ausgaben.

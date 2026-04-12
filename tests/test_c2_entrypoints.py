@@ -166,6 +166,8 @@ def test_improvement_endpoint_returns_top_candidates(client):
     assert data["top_candidates"][0]["problem"] == "Routing schwach"
     assert data["top_candidate_insights"][0]["candidate_id"] == "m12:1"
     assert "prio=" in data["top_candidate_insights"][0]["summary"]
+    assert data["top_compiled_tasks"][0]["candidate_id"] == "m12:1"
+    assert data["top_compiled_tasks"][0]["task_kind"] == "developer_task"
 
 
 def test_incident_trace_endpoint_returns_trace(client):

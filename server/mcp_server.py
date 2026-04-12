@@ -4999,6 +4999,7 @@ async def autonomy_improvement_endpoint():
     """Gibt Self-Improvement Statistiken und Vorschläge zurück."""
     try:
         from orchestration.improvement_candidates import build_candidate_operator_views
+        from orchestration.improvement_task_compiler import compile_improvement_tasks
         from orchestration.self_improvement_engine import get_improvement_engine
         from orchestration.session_reflection import SessionReflectionLoop
         engine = get_improvement_engine()
@@ -5019,6 +5020,7 @@ async def autonomy_improvement_endpoint():
             "top_suggestions": suggestions[:5],
             "top_candidates": combined_candidates[:5],
             "top_candidate_insights": build_candidate_operator_views(combined_candidates, limit=5),
+            "top_compiled_tasks": compile_improvement_tasks(combined_candidates, limit=5),
             "candidate_count": len(combined_candidates),
         }
     except Exception as e:
