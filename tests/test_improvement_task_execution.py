@@ -113,6 +113,32 @@ def test_enqueue_improvement_hardening_task_dedupes_open_task() -> None:
     queue.add.assert_not_called()
 
 
+def test_enqueue_improvement_hardening_task_sets_max_retries_to_one() -> None:
+    compiled = compile_improvement_task(
+        {
+            "candidate_id": "cand:single-shot",
+            "category": "routing",
+            "problem": "Prompt routing drift",
+            "proposed_action": "Harden prompt policy",
+            "source_count": 2,
+            "freshness_state": "fresh",
+            "verified_paths": ["agent/prompts.py"],
+        }
+    )
+    promotion = evaluate_compiled_task_promotion(compiled, rollout_stage="self_modify_safe")
+    bridge = build_improvement_task_bridge(compiled, promotion)
+
+    queue = MagicMock()
+    queue.get_all.return_value = []
+    queue.add.return_value = "task-created-single-shot"
+
+    result = enqueue_improvement_hardening_task(queue, compiled, promotion, bridge)
+
+    assert result["status"] == "created"
+    _, kwargs = queue.add.call_args
+    assert kwargs["max_retries"] == 1
+
+
 def test_enqueue_improvement_hardening_task_blocks_recent_completed_task_via_cooldown(monkeypatch) -> None:
     monkeypatch.setenv("AUTONOMY_IMPROVEMENT_AUTOENQUEUE_COOLDOWN_MINUTES", "180")
 

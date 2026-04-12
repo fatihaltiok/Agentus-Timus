@@ -274,6 +274,7 @@ def enqueue_improvement_hardening_task(
         target_agent=_text(payload.get("target_agent"), limit=64),
         goal_id=_text(payload.get("goal_id"), limit=80) or None,
         metadata=json.dumps(metadata, ensure_ascii=True),
+        max_retries=1,
     )
     return {
         "status": "created",

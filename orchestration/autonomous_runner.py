@@ -1939,7 +1939,36 @@ class AutonomousRunner:
                             result_contract["task_outcome_state"],
                         )
                     else:
-                        queue.fail(task_id, result_str[:500])
+                        retry_scheduled = queue.fail(task_id, result_str[:500])
+                        if retry_scheduled:
+                            retried_task = queue.get_by_id(task_id) or {}
+                            if goal_id and _goals_feature_enabled():
+                                queue.refresh_goal_progress(goal_id, last_task_id=task_id, last_event="task_retry_scheduled")
+                            log.warning(
+                                "↻ Task [%s] wird erneut versucht (%s)",
+                                task_id[:8],
+                                result_contract["task_outcome_state"],
+                            )
+                            _record_runtime_correlation(
+                                "task_execution_retry",
+                                {
+                                    "request_id": request_id,
+                                    "task_id": task_id,
+                                    "session_id": session_id,
+                                    "source": source,
+                                    "incident_key": incident_key,
+                                    "goal_id": str(goal_id or ""),
+                                    "agent": agent,
+                                    "task_type": task_type,
+                                    "task_outcome_state": result_contract["task_outcome_state"],
+                                    "verification_state": result_contract["verification_state"],
+                                    "retry_count": int(retried_task.get("retry_count") or 0),
+                                    "max_retries": int(retried_task.get("max_retries") or 0),
+                                    "error_class": result_contract["error_class"],
+                                    "error": result_str[:180],
+                                },
+                            )
+                            return
                         if goal_id and _goals_feature_enabled():
                             queue.refresh_goal_progress(goal_id, last_task_id=task_id, last_event="task_failed")
                         log.warning(
