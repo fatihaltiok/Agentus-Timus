@@ -131,6 +131,15 @@ async def test_get_improvement_suggestions_exposes_normalized_candidates(monkeyp
         "orchestration.session_reflection.SessionReflectionLoop.get_improvement_suggestions",
         _fake_combined_candidates,
     )
+    monkeypatch.setattr(
+        "orchestration.improvement_task_autonomy.get_improvement_task_autonomy_settings",
+        lambda: {
+            "enabled": True,
+            "allow_self_modify": False,
+            "max_autoenqueue": 1,
+            "candidate_limit": 5,
+        },
+    )
 
     result = await get_improvement_suggestions(include_applied=False)
 
@@ -147,3 +156,8 @@ async def test_get_improvement_suggestions_exposes_normalized_candidates(monkeyp
     assert result["top_task_promotion_decisions"][0]["requested_fix_mode"] == "developer_task"
     assert result["top_task_bridge_decisions"][0]["candidate_id"] == "m12:1"
     assert result["top_task_bridge_decisions"][0]["bridge_state"] == "not_e3_eligible"
+    assert result["top_task_execution_candidates"][0]["candidate_id"] == "m12:1"
+    assert result["top_task_execution_candidates"][0]["creation_state"] == "not_creatable"
+    assert result["task_autonomy_settings"]["enabled"] is True
+    assert result["top_task_autonomy_decisions"][0]["candidate_id"] == "m12:1"
+    assert result["top_task_autonomy_decisions"][0]["autoenqueue_state"] == "not_creatable"

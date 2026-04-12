@@ -154,6 +154,14 @@ def test_improvement_endpoint_returns_top_candidates(client):
     ), patch(
         "orchestration.session_reflection.SessionReflectionLoop.get_improvement_suggestions",
         _fake_combined_candidates,
+    ), patch(
+        "orchestration.improvement_task_autonomy.get_improvement_task_autonomy_settings",
+        return_value={
+            "enabled": True,
+            "allow_self_modify": False,
+            "max_autoenqueue": 1,
+            "candidate_limit": 5,
+        },
     ):
         resp = client.get("/autonomy/improvement")
 
@@ -172,6 +180,11 @@ def test_improvement_endpoint_returns_top_candidates(client):
     assert data["top_task_promotion_decisions"][0]["requested_fix_mode"] == "developer_task"
     assert data["top_task_bridge_decisions"][0]["candidate_id"] == "m12:1"
     assert data["top_task_bridge_decisions"][0]["bridge_state"] == "not_e3_eligible"
+    assert data["top_task_execution_candidates"][0]["candidate_id"] == "m12:1"
+    assert data["top_task_execution_candidates"][0]["creation_state"] == "not_creatable"
+    assert data["task_autonomy_settings"]["enabled"] is True
+    assert data["top_task_autonomy_decisions"][0]["candidate_id"] == "m12:1"
+    assert data["top_task_autonomy_decisions"][0]["autoenqueue_state"] == "not_creatable"
 
 
 def test_incident_trace_endpoint_returns_trace(client):

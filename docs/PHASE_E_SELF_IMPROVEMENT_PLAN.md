@@ -515,6 +515,49 @@ Noch offen fuer spaetere E3-Slices:
 - echte Bridge in die Self-Hardening-Task-Erzeugung nur fuer `self_modify_ready`/`developer_bridge_ready`
 - Rueckbindung von Verifikationshistorie und Failure-Budgets in die Bridge-Entscheidung
 - spaeterer Canary-/Rollback-Pfad fuer aus E2 hervorgehende Self-Hardening-Ausfuehrungen
+
+### E3.2 Kontrollierte Hardening-Task-Erzeugung aus der Bridge
+
+Stand:
+
+- erster Runtime-Slice gestartet
+
+Umgesetzt:
+
+- neue Task-Erzeugungsschicht in [orchestration/improvement_task_execution.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_task_execution.py)
+- aus:
+  - kompiliertem Task
+  - Promotion-Entscheidung
+  - Bridge-Entscheidung
+  werden jetzt echte Hardening-Task-Payloads gebaut mit:
+  - `creation_state`
+  - `description`
+  - `priority`
+  - `task_type`
+  - `target_agent`
+  - strukturierter `metadata`
+- es gibt jetzt einen kontrollierten Queue-Helfer:
+  - `enqueue_improvement_hardening_task(...)`
+  - mit Dedupe ueber `improvement_dedup_key`
+  - nur fuer `task_payload_ready`
+- die neue Schicht bleibt bewusst konservativ:
+  - GET-/Tool-Pfade erzeugen keine Side Effects
+  - sie zeigen nur `top_task_execution_candidates`
+  - die eigentliche Queue-Erzeugung ist als expliziter Helfer vorhanden, nicht als stiller Autolauf
+- [tools/self_improvement_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/self_improvement_tool/tool.py) und [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py) exponieren diese Payloads jetzt als `top_task_execution_candidates`
+
+Wichtige Regeln:
+
+- `self_modify_ready`-Bridges koennen create-ready Payloads fuer `self_modify` ergeben
+- gesperrte, aber starke E3-Faelle wie `main_dispatcher.py` werden korrekt nur als create-ready `development`-Tasks ausgegeben
+- `not_e3_eligible` bleibt `not_creatable`
+- die neue Dedupe-Schicht verhindert doppelte offene Improvement-Hardening-Tasks
+
+Noch offen fuer spaetere E3-Slices:
+
+- automatische, aber streng begrenzte Queue-Einspeisung fuer ausgewaehlte `task_payload_ready`-Faelle
+- Rueckfluss von Queue-/Execution-Status in die Improvement-Pipeline
+- spaetere Canary-/Rollback- und Failure-Budget-Integration fuer aus Improvement-Tasks entstandene Hardening-Ausfuehrungen
   - `approval_required_for_high_risk`
 
 Technische Anker:
@@ -527,6 +570,55 @@ Technische Anker:
 Erfolgskriterium:
 
 - Timus kann eine kleine Hardening-Massnahme unter enger Rollout-Stufe ausfuehren, verifizieren und bei Bedarf sauber zuruecknehmen
+
+### E3.3 Managed Autonomous Hardening fuer kleinen Safe-Subset
+
+Stand:
+
+- erster autonomer Runtime-Slice gestartet
+
+Umgesetzt:
+
+- neue E3.3-Autonomieschicht in [orchestration/improvement_task_autonomy.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_task_autonomy.py)
+- aus `top_task_execution_candidates` werden jetzt echte Autonomie-Entscheidungen mit:
+  - `autoenqueue_state`
+  - `allow_autoenqueue`
+  - `queue_budget_remaining`
+  - `autoenqueue_reasons`
+  - `blocked_by`
+- standardmaessig duerfen nur kleine `development`-Faelle autonom in die Queue:
+  - `self_modify` bleibt bewusst opt-in ueber eigene Flags
+  - Budget ist bewusst klein und default-konservativ
+- neue Runtime-Funktion:
+  - `run_improvement_task_autonomy_cycle(...)`
+  - sammelt Kandidaten
+  - kompiliert/promovert/bridged
+  - baut Payloads
+  - enqueued nur den engen Safe-Subset
+- [orchestration/autonomous_runner.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomous_runner.py)
+  - hat jetzt einen eigenen E3.3-Heartbeat-Hook
+  - nutzt weiter die bestehende Self-Hardening-/Self-Modify-Lane statt einen Parallelpfad zu bauen
+  - `improvement_task_bridge`-Tasks mit `execution_mode=self_modify_safe` koennen jetzt in dieselbe Self-Modifier-Ausfuehrung uebergehen wie M18-Self-Hardening
+- [tools/self_improvement_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/self_improvement_tool/tool.py) und [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - exponieren jetzt:
+    - `task_autonomy_settings`
+    - `top_task_autonomy_decisions`
+
+Wichtige Regeln:
+
+- E3.3 ist absichtlich kein freier Vollautomatismus
+- standardmaessig:
+  - nur create-ready `development`-Tasks duerfen automatisch enqueued werden
+  - `self_modify` bleibt bis zum expliziten Opt-in sichtbar, aber blockiert
+- Dedupe zaehlt nicht als echte neue Queue-Erzeugung und verbraucht den kleinen Enqueue-Budget-Slot nicht dauerhaft
+- alle E3.3-Entscheidungen erzeugen Observation-Signale
+- enqueue-relevante Entscheidungen spiegeln sich zusaetzlich in der Self-Hardening-Runtime
+
+Noch offen fuer spaetere E3-Slices:
+
+- Failure-Budgets und Canary-/Rollback-Signale direkt in die Auto-Enqueue-Entscheidung ziehen
+- stillere UX fuer Low-Risk-Autonomie statt sichtbarer Workflow-Interna
+- spaetere, eng begrenzte `self_modify`-Autonomie nur nach staerkerer Verifikation
 
 ### E4. Verification, Canary und Rollback
 

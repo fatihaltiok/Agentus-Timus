@@ -304,8 +304,13 @@ async def get_e2e_release_gate_status(
 async def get_improvement_suggestions(include_applied: bool = False) -> dict:
     """Gibt Verbesserungsvorschläge zurück."""
     from orchestration.improvement_candidates import build_candidate_operator_views
+    from orchestration.improvement_task_autonomy import (
+        build_improvement_task_autonomy_decisions,
+        get_improvement_task_autonomy_settings,
+    )
     from orchestration.improvement_task_bridge import build_improvement_task_bridges
     from orchestration.improvement_task_compiler import compile_improvement_tasks
+    from orchestration.improvement_task_execution import build_improvement_hardening_task_payloads
     from orchestration.improvement_task_promotion import evaluate_compiled_task_promotions
     from orchestration.self_improvement_engine import get_improvement_engine
     from orchestration.session_reflection import SessionReflectionLoop
@@ -319,6 +324,14 @@ async def get_improvement_suggestions(include_applied: bool = False) -> dict:
         combined_candidates = normalized_candidates
     compiled_tasks = compile_improvement_tasks(combined_candidates, limit=5)
     promotion_decisions = evaluate_compiled_task_promotions(compiled_tasks, limit=5)
+    bridge_decisions = build_improvement_task_bridges(compiled_tasks, promotion_decisions, limit=5)
+    execution_candidates = build_improvement_hardening_task_payloads(
+        compiled_tasks,
+        promotion_decisions,
+        bridge_decisions,
+        limit=5,
+    )
+    autonomy_settings = get_improvement_task_autonomy_settings()
     return {
         "status": "ok",
         "count": len(suggestions),
@@ -328,5 +341,13 @@ async def get_improvement_suggestions(include_applied: bool = False) -> dict:
         "top_candidate_insights": build_candidate_operator_views(combined_candidates, limit=5),
         "top_compiled_tasks": compiled_tasks,
         "top_task_promotion_decisions": promotion_decisions,
-        "top_task_bridge_decisions": build_improvement_task_bridges(compiled_tasks, promotion_decisions, limit=5),
+        "top_task_bridge_decisions": bridge_decisions,
+        "top_task_execution_candidates": execution_candidates,
+        "task_autonomy_settings": autonomy_settings,
+        "top_task_autonomy_decisions": build_improvement_task_autonomy_decisions(
+            execution_candidates,
+            allow_self_modify=bool(autonomy_settings.get("allow_self_modify")),
+            max_autoenqueue=int(autonomy_settings.get("max_autoenqueue") or 1),
+            limit=5,
+        ),
     }

@@ -204,6 +204,12 @@ def _self_modify_feature_enabled() -> bool:
     return _env_bool("AUTONOMY_SELF_MODIFY_ENABLED", False)
 
 
+def _improvement_task_autonomy_feature_enabled() -> bool:
+    if _env_bool("AUTONOMY_COMPAT_MODE", True):
+        return False
+    return _env_bool("AUTONOMY_IMPROVEMENT_AUTOENQUEUE_ENABLED", False)
+
+
 def _ambient_context_feature_enabled() -> bool:
     if _env_bool("AUTONOMY_COMPAT_MODE", True):
         return False
@@ -259,6 +265,7 @@ class AutonomousRunner:
         self._goal_manager = None
         self._improvement_engine = None
         self._self_modifier_engine = None
+        self._improvement_task_autonomy_running = False
         # M15
         self._ambient_engine = None
         # M16
@@ -884,6 +891,16 @@ class AutonomousRunner:
                     )
             except Exception as e:
                 log.debug("SelfModifierEngine fehlgeschlagen: %s", e)
+
+        if _improvement_task_autonomy_feature_enabled():
+            try:
+                _loop = asyncio.get_event_loop()
+                if _loop.is_running() and not self._improvement_task_autonomy_running:
+                    asyncio.ensure_future(self._run_improvement_task_autonomy_cycle())
+            except RuntimeError:
+                pass
+            except Exception as e:
+                log.debug("ImprovementTaskAutonomy fehlgeschlagen: %s", e)
 
         # M15: Ambient Context Engine
         if _ambient_context_feature_enabled() and self._ambient_engine:
@@ -1934,13 +1951,14 @@ class AutonomousRunner:
         metadata: dict,
     ) -> Optional[tuple[str, str]]:
         del queue, goal_id
-        if str((metadata or {}).get("source") or "").strip() != "self_hardening":
+        source = str((metadata or {}).get("source") or "").strip()
+        if source not in {"self_hardening", "improvement_task_bridge"}:
             return None
         if str((metadata or {}).get("execution_mode") or "").strip() != "self_modify_safe":
             return None
 
-        pattern_name = str((metadata or {}).get("pattern_name") or "").strip()
-        component = str((metadata or {}).get("component") or "").strip()
+        pattern_name = str((metadata or {}).get("pattern_name") or (metadata or {}).get("candidate_id") or "").strip()
+        component = str((metadata or {}).get("component") or (metadata or {}).get("category") or "").strip()
         requested_fix_mode = str((metadata or {}).get("requested_fix_mode") or "").strip()
         rollout_stage = str((metadata or {}).get("rollout_stage") or "").strip()
         rollout_reason = str((metadata or {}).get("rollout_reason") or "").strip()
@@ -1956,7 +1974,11 @@ class AutonomousRunner:
             for item in ((metadata or {}).get("required_test_targets") or [])
             if str(item or "").strip()
         )
-        dedup_key = str((metadata or {}).get("hardening_dedup_key") or "").strip() or f"task:{task_id}"
+        dedup_key = (
+            str((metadata or {}).get("hardening_dedup_key") or "").strip()
+            or str((metadata or {}).get("improvement_dedup_key") or "").strip()
+            or f"task:{task_id}"
+        )
         if not target_file_path:
             try:
                 record_self_hardening_event(
@@ -2021,6 +2043,42 @@ class AutonomousRunner:
             except Exception:
                 pass
             return ("error", f"self_hardening:self_modify_exception:{exc}")
+
+    async def _run_improvement_task_autonomy_cycle(self) -> dict:
+        if self._improvement_task_autonomy_running:
+            return {"status": "busy"}
+        self._improvement_task_autonomy_running = True
+        try:
+            from orchestration.improvement_task_autonomy import (
+                get_improvement_task_autonomy_settings,
+                run_improvement_task_autonomy_cycle,
+            )
+
+            settings = get_improvement_task_autonomy_settings()
+            if not settings.get("enabled"):
+                return {"status": "disabled", **settings}
+
+            summary = await run_improvement_task_autonomy_cycle(
+                get_queue(),
+                limit=int(settings.get("candidate_limit") or 5),
+                allow_self_modify=bool(settings.get("allow_self_modify")),
+                max_autoenqueue=int(settings.get("max_autoenqueue") or 1),
+            )
+            if summary.get("enqueued_total", 0) or summary.get("deduped_total", 0):
+                log.info(
+                    "🧱 E3.3 Improvement Autonomy: enqueued=%s deduped=%s blocked=%s self_modify=%s",
+                    summary.get("enqueued_total", 0),
+                    summary.get("deduped_total", 0),
+                    summary.get("blocked_total", 0),
+                    bool(settings.get("allow_self_modify")),
+                )
+            return {
+                **summary,
+                "allow_self_modify": bool(settings.get("allow_self_modify")),
+                "max_autoenqueue": int(settings.get("max_autoenqueue") or 1),
+            }
+        finally:
+            self._improvement_task_autonomy_running = False
 
     async def _send_failure_alert(
         self,

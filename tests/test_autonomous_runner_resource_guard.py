@@ -177,3 +177,62 @@ async def test_self_hardening_self_modify_task_uses_self_modifier_engine(monkeyp
     assert called["file_path"] == "tools/deep_research/tool.py"
     assert called["change_type"] == "report_quality_guardrails"
     assert called["required_checks"] == "('py_compile', 'pytest_targeted', 'production_gates')"
+
+
+@pytest.mark.asyncio
+async def test_improvement_bridge_self_modify_task_uses_self_modifier_engine(monkeypatch, tmp_path: Path) -> None:
+    queue = TaskQueue(db_path=tmp_path / "task_queue.db")
+    metadata = {
+        "source": "improvement_task_bridge",
+        "candidate_id": "cand:prompt",
+        "category": "routing",
+        "requested_fix_mode": "self_modify_safe",
+        "execution_mode": "self_modify_safe",
+        "effective_fix_mode": "self_modify_safe",
+        "target_file_path": "agent/prompts.py",
+        "change_type": "prompt_policy",
+        "required_checks": ["py_compile", "pytest_targeted"],
+        "required_test_targets": ["tests/test_prompt_router.py"],
+        "improvement_dedup_key": "improvement_hardening:cand:prompt:agent/prompts.py:self_modify_safe",
+    }
+    task_id = queue.add(
+        description="Haerte Prompt-Routing aus Improvement-Bridge",
+        target_agent="self_modify",
+        priority=Priority.NORMAL,
+        max_retries=1,
+        metadata=json.dumps(metadata, ensure_ascii=True),
+    )
+    task = queue.claim_next()
+    assert task is not None and task["id"] == task_id
+
+    runner = AutonomousRunner(interval_minutes=15)
+    monkeypatch.setattr("orchestration.autonomous_runner.get_queue", lambda: queue)
+
+    called: dict[str, str] = {}
+
+    class _FakeSelfModifier:
+        def execute_self_hardening_fix(self, **kwargs):
+            called.update({k: str(v) for k, v in kwargs.items()})
+            return SimpleNamespace(
+                status="success",
+                file_path=str(kwargs["file_path"]),
+                verification_summary="pytest_targeted:passed",
+                test_result="passed",
+                audit_id="audit-bridge-123",
+                risk_reason="",
+                canary_summary="",
+            )
+
+    monkeypatch.setattr(
+        "orchestration.self_modifier_engine.get_self_modifier_engine",
+        lambda: _FakeSelfModifier(),
+    )
+
+    await runner._execute_task(task)
+
+    updated = queue.get_by_id(task_id)
+    assert updated is not None
+    assert updated["status"] == "completed"
+    assert called["file_path"] == "agent/prompts.py"
+    assert called["change_type"] == "prompt_policy"
+    assert called["pattern_name"] == "cand:prompt"

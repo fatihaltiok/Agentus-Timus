@@ -2,6 +2,119 @@
 
 ---
 
+## Fortschritt 2026-04-12 - Phase E E3.3 gestartet: Managed Autonomous Hardening
+
+Der naechste E3-Slice macht aus den create-ready Improvement-Hardening-Payloads erstmals einen kleinen echten Autonomiepfad. Timus kann jetzt einen engen Safe-Subset von `development`-Tasks selbst in die Queue einspeisen, inklusive Budget, Dedupe und Runtime-Observability. `self_modify` bleibt bewusst weiter opt-in.
+
+Geaendert:
+
+- [orchestration/improvement_task_autonomy.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_task_autonomy.py)
+  - neue E3.3-Autonomieschicht mit:
+    - `build_improvement_task_autonomy_decision(...)`
+    - `build_improvement_task_autonomy_decisions(...)`
+    - `apply_improvement_task_autonomy(...)`
+    - `run_improvement_task_autonomy_cycle(...)`
+  - neue Zustandsklassen:
+    - `autoenqueue_ready`
+    - `self_modify_opt_in_required`
+    - `queue_budget_exhausted`
+    - `enqueue_created`
+    - `enqueue_deduped`
+    - `enqueue_blocked`
+  - neue Runtime-Events:
+    - `improvement_task_autonomy_event`
+- [orchestration/autonomous_runner.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomous_runner.py)
+  - eigener Heartbeat-Hook fuer E3.3
+  - neuer Runner-Pfad `_run_improvement_task_autonomy_cycle()`
+  - `improvement_task_bridge`-Tasks mit `execution_mode=self_modify_safe` nutzen jetzt ebenfalls die bestehende Self-Modifier-Ausfuehrung
+- [tools/self_improvement_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/self_improvement_tool/tool.py)
+  - `get_improvement_suggestions(...)` liefert jetzt auch:
+    - `task_autonomy_settings`
+    - `top_task_autonomy_decisions`
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - `/autonomy/improvement` exponiert jetzt ebenfalls:
+    - `task_autonomy_settings`
+    - `top_task_autonomy_decisions`
+
+Wichtige Regeln:
+
+- standardmaessig duerfen nur create-ready `development`-Tasks automatisch enqueued werden
+- `self_modify` bleibt sichtbar, aber blockiert, bis das explizite Opt-in gesetzt ist
+- Dedupe verbraucht den kleinen Enqueue-Budget-Slot nicht dauerhaft
+- enqueue-relevante Entscheidungen werden sowohl als Observation-Event als auch in der Self-Hardening-Runtime sichtbar
+
+Tests:
+
+- neu:
+  - [tests/test_improvement_task_autonomy.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_task_autonomy.py)
+  - [tests/test_improvement_task_autonomy_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_task_autonomy_hypothesis.py)
+  - [tests/test_improvement_task_autonomy_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_task_autonomy_crosshair.py)
+- erweitert:
+  - [tests/test_autonomous_runner_resource_guard.py](/home/fatih-ubuntu/dev/timus/tests/test_autonomous_runner_resource_guard.py)
+  - [tests/test_self_improvement_tool_ops.py](/home/fatih-ubuntu/dev/timus/tests/test_self_improvement_tool_ops.py)
+  - [tests/test_c2_entrypoints.py](/home/fatih-ubuntu/dev/timus/tests/test_c2_entrypoints.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/improvement_task_autonomy.py orchestration/autonomous_runner.py tools/self_improvement_tool/tool.py server/mcp_server.py tests/test_improvement_task_autonomy.py tests/test_improvement_task_autonomy_hypothesis.py tests/test_improvement_task_autonomy_crosshair.py tests/test_autonomous_runner_resource_guard.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py`
+- `pytest -q tests/test_improvement_task_autonomy.py tests/test_improvement_task_autonomy_hypothesis.py tests/test_autonomous_runner_resource_guard.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py`
+  - `29 passed`
+- `pytest -q tests/test_improvement_candidates.py tests/test_improvement_task_compiler_contracts.py tests/test_improvement_task_compiler_hypothesis.py tests/test_improvement_task_promotion.py tests/test_improvement_task_promotion_hypothesis.py tests/test_improvement_task_bridge.py tests/test_improvement_task_bridge_hypothesis.py tests/test_improvement_task_execution.py tests/test_improvement_task_execution_hypothesis.py tests/test_improvement_task_autonomy.py tests/test_improvement_task_autonomy_hypothesis.py tests/test_autonomous_runner_resource_guard.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py`
+  - `66 passed`
+- `python -m crosshair check tests.test_improvement_task_autonomy_crosshair._contract_development_payload_becomes_autoenqueue_ready tests.test_improvement_task_autonomy_crosshair._contract_self_modify_payload_needs_opt_in_by_default --analysis_kind=deal`
+  - Exit `0`
+
+## Fortschritt 2026-04-12 - Phase E E3.2 gestartet: Kontrollierte Hardening-Task-Erzeugung
+
+Der naechste E3-Slice fuehrt aus der Bridge erstmals in create-ready Hardening-Task-Payloads. Damit endet die Improvement-Kette nicht mehr nur bei Preflight-Entscheidungen, sondern kann jetzt kontrolliert in echte Task-Definitionen fuer `development` oder `self_modify` uebergehen, weiter ohne stillen Vollautomatismus.
+
+Geaendert:
+
+- [orchestration/improvement_task_execution.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_task_execution.py)
+  - neue Payload-Erzeugung aus:
+    - kompiliertem Task
+    - Promotion-Entscheidung
+    - Bridge-Entscheidung
+  - neue Felder:
+    - `creation_state`
+    - `description`
+    - `priority`
+    - `task_type`
+    - `target_agent`
+    - strukturierte `metadata`
+  - neuer Queue-Helfer:
+    - `enqueue_improvement_hardening_task(...)`
+  - Dedupe ueber `improvement_dedup_key`
+- [tools/self_improvement_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/self_improvement_tool/tool.py)
+  - `get_improvement_suggestions(...)` liefert jetzt auch `top_task_execution_candidates`
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - `/autonomy/improvement` exponiert jetzt ebenfalls `top_task_execution_candidates`
+
+Wichtige Regeln:
+
+- `self_modify_ready` kann jetzt create-ready Payloads fuer `self_modify` ergeben
+- starke, aber policy-blockierte Self-Modify-Faelle koennen als create-ready `development`-Tasks erscheinen
+- `not_e3_eligible` bleibt `not_creatable`
+- der Tool-/MCP-Pfad bleibt read-only; die Queue-Erzeugung ist als expliziter Helfer vorhanden, nicht als stiller Hintergrundlauf
+
+Tests:
+
+- neu:
+  - [tests/test_improvement_task_execution.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_task_execution.py)
+  - [tests/test_improvement_task_execution_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_task_execution_hypothesis.py)
+  - [tests/test_improvement_task_execution_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_task_execution_crosshair.py)
+- erweitert:
+  - [tests/test_self_improvement_tool_ops.py](/home/fatih-ubuntu/dev/timus/tests/test_self_improvement_tool_ops.py)
+  - [tests/test_c2_entrypoints.py](/home/fatih-ubuntu/dev/timus/tests/test_c2_entrypoints.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/improvement_task_execution.py tools/self_improvement_tool/tool.py server/mcp_server.py tests/test_improvement_task_execution.py tests/test_improvement_task_execution_hypothesis.py tests/test_improvement_task_execution_crosshair.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py`
+- `pytest -q tests/test_improvement_candidates.py tests/test_improvement_task_compiler_contracts.py tests/test_improvement_task_compiler_hypothesis.py tests/test_improvement_task_promotion.py tests/test_improvement_task_promotion_hypothesis.py tests/test_improvement_task_bridge.py tests/test_improvement_task_bridge_hypothesis.py tests/test_improvement_task_execution.py tests/test_improvement_task_execution_hypothesis.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py`
+  - `56 passed`
+- `python -m crosshair check tests.test_improvement_task_execution_crosshair._contract_prompt_payload_becomes_self_modify_ready tests.test_improvement_task_execution_crosshair._contract_policy_secret_payload_is_not_creatable tests.test_improvement_task_execution_crosshair._contract_main_dispatcher_payload_routes_to_development --analysis_kind=deal`
+  - Exit `0`
+
 ## Fortschritt 2026-04-12 - Phase E E3.1 gestartet: Preflight-Bridge in Self-Hardening-Execution
 
 Der erste E3-Slice fuehrt noch keine direkte Ausfuehrung aus dem Improvement-Feed ein, sondern eine kontrollierte Preflight-Bridge. Dadurch wird jetzt sichtbar, welche `e3_ready`-Tasks tatsaechlich auf `development` oder `self_modify` routbar waeren und welche an Rollout-, Policy- oder Pfadgrenzen haengen bleiben.
