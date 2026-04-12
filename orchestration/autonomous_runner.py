@@ -144,6 +144,44 @@ def _classify_autonomous_result_notification(description: str, result: str) -> d
     }
 
 
+def _classify_autonomous_task_terminal_contract(description: str, result: str) -> dict[str, str]:
+    notification_style = _classify_autonomous_result_notification(description, result)
+    state = str(notification_style.get("state") or "").strip().lower()
+
+    if _looks_like_improvement_task_description(description):
+        if state == "blocked":
+            return {
+                "queue_status": "failed",
+                "runtime_event": "task_execution_failed",
+                "task_outcome_state": "blocked",
+                "verification_state": "blocked",
+                "error_class": "blocked_result",
+            }
+        if state == "verified":
+            return {
+                "queue_status": "completed",
+                "runtime_event": "task_execution_completed",
+                "task_outcome_state": "verified",
+                "verification_state": "verified",
+                "error_class": "",
+            }
+        return {
+            "queue_status": "completed",
+            "runtime_event": "task_execution_completed",
+            "task_outcome_state": "ended_unverified",
+            "verification_state": "not_verified",
+            "error_class": "",
+        }
+
+    return {
+        "queue_status": "completed",
+        "runtime_event": "task_execution_completed",
+        "task_outcome_state": "completed",
+        "verification_state": "n/a",
+        "error_class": "",
+    }
+
+
 def _incident_notification_state_key(notification_key: str) -> str:
     clean = (notification_key or "").strip().lower()
     return f"incident_notify:{clean}"
@@ -1890,10 +1928,25 @@ class AutonomousRunner:
 
                 if result is not None:
                     result_str = str(result)
-                    queue.complete(task_id, result_str[:2000])
-                    if goal_id and _goals_feature_enabled():
-                        queue.refresh_goal_progress(goal_id, last_task_id=task_id, last_event="task_completed")
-                    log.info(f"✅ Task [{task_id[:8]}] abgeschlossen")
+                    result_contract = _classify_autonomous_task_terminal_contract(description, result_str)
+                    if result_contract["queue_status"] == "completed":
+                        queue.complete(task_id, result_str[:2000])
+                        if goal_id and _goals_feature_enabled():
+                            queue.refresh_goal_progress(goal_id, last_task_id=task_id, last_event="task_completed")
+                        log.info(
+                            "✅ Task [%s] abgeschlossen (%s)",
+                            task_id[:8],
+                            result_contract["task_outcome_state"],
+                        )
+                    else:
+                        queue.fail(task_id, result_str[:500])
+                        if goal_id and _goals_feature_enabled():
+                            queue.refresh_goal_progress(goal_id, last_task_id=task_id, last_event="task_failed")
+                        log.warning(
+                            "❌ Task [%s] als nicht erfolgreich beendet (%s)",
+                            task_id[:8],
+                            result_contract["task_outcome_state"],
+                        )
                     notification_guard = self._notification_guard_decision(queue, task_id, description, metadata)
                     if notification_guard and not notification_guard.get("send", True):
                         self._record_incident_notification_state(
@@ -1923,7 +1976,7 @@ class AutonomousRunner:
                                 result_preview=result_str,
                             )
                         _record_runtime_correlation(
-                            "task_execution_completed",
+                            result_contract["runtime_event"],
                             {
                                 "request_id": request_id,
                                 "task_id": task_id,
@@ -1934,14 +1987,18 @@ class AutonomousRunner:
                                 "agent": agent,
                                 "task_type": task_type,
                                 "result_length": len(result_str),
+                                "task_outcome_state": result_contract["task_outcome_state"],
+                                "verification_state": result_contract["verification_state"],
                                 "telegram_sent": bool(telegram_sent),
                                 "email_sent": bool(email_sent),
                                 "notification_suppressed": False,
+                                "error_class": result_contract["error_class"],
+                                "error": result_str[:180] if result_contract["runtime_event"] == "task_execution_failed" else "",
                             },
                         )
                     if result is not None and notification_guard and not notification_guard.get("send", True):
                         _record_runtime_correlation(
-                            "task_execution_completed",
+                            result_contract["runtime_event"],
                             {
                                 "request_id": request_id,
                                 "task_id": task_id,
@@ -1952,9 +2009,13 @@ class AutonomousRunner:
                                 "agent": agent,
                                 "task_type": task_type,
                                 "result_length": len(result_str),
+                                "task_outcome_state": result_contract["task_outcome_state"],
+                                "verification_state": result_contract["verification_state"],
                                 "telegram_sent": False,
                                 "email_sent": False,
                                 "notification_suppressed": True,
+                                "error_class": result_contract["error_class"],
+                                "error": result_str[:180] if result_contract["runtime_event"] == "task_execution_failed" else "",
                             },
                         )
                 else:

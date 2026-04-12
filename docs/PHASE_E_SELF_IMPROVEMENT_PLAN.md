@@ -644,6 +644,7 @@ Bestandteile:
 - explizite Trennung zwischen:
   - `terminal beendet`
   - `verifiziert erfolgreich`
+- blockierte Improvement-Resultate duerfen nicht nur kommunikativ, sondern auch im Queue-Status nicht als Erfolg enden
 - klarer Rollback bei:
   - Testfehler
   - Canary-Fehler
@@ -659,6 +660,7 @@ Erfolgskriterium:
 
 - keine Phase-E-Aenderung ohne belastbare Verifikation und Rollback-Hook
 - ein autonomer Improvement-Task darf kommunikativ erst dann als Erfolg gelten, wenn es dafuer einen echten Verifikationsnachweis gibt, nicht nur einen terminalen Queue-Status
+- ein autonomer Improvement-Task mit Step-Limit, Tool-Blockade oder vergleichbarem Blocker endet technisch als Nicht-Erfolg, nicht als `completed`
 
 ### E5. Memory Curation Autonomy
 

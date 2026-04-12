@@ -2,6 +2,35 @@
 
 ---
 
+## Fortschritt 2026-04-12 - Phase E E4 haertet terminalen Improvement-Contract
+
+Der naechste E4-Slice trennt jetzt nicht mehr nur kommunikativ zwischen `blockiert`, `beendet` und `verifiziert`, sondern auch im Queue-/Runtime-Contract.
+
+Geaendert:
+
+- [orchestration/autonomous_runner.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomous_runner.py)
+  - neue Terminal-Contract-Klassifikation fuer autonome Improvement-Tasks:
+    - `blocked`
+    - `ended_unverified`
+    - `verified`
+  - Improvement-Resultate wie `Maximale Anzahl an Schritten erreicht, ohne finale Antwort.` werden jetzt nicht mehr als `completed` in die Queue geschrieben
+  - stattdessen:
+    - Queue-Status `failed`
+    - Runtime-Event `task_execution_failed`
+    - `task_outcome_state=blocked`
+    - `verification_state=blocked`
+
+Tests:
+
+- erweitert:
+  - [tests/test_autonomous_runner_incident_notifications.py](/home/fatih-ubuntu/dev/timus/tests/test_autonomous_runner_incident_notifications.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/autonomous_runner.py tests/test_autonomous_runner_incident_notifications.py`
+- `pytest -q tests/test_autonomous_runner_incident_notifications.py`
+  - `8 passed`
+
 ## Fortschritt 2026-04-12 - Phase E E3.3 Guardrails gegen Improvement-Loops und Erfolgs-Ueberbehauptung
 
 Der erste echte E3.3-Livebetrieb hat eine Governance-Luecke gezeigt: derselbe Improvement-Kandidat konnte trotz terminaler Vorlaeufer erneut autonom enqueued werden, und Telegram/E-Mail meldeten Improvement-Laeufe zu leicht als abgeschlossen. Dieser Slice haertet genau diese Kante.
