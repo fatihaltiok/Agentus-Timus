@@ -10,35 +10,28 @@ Diese README beschreibt den aktuellen Produkt- und Architekturstand. Historische
 
 ## Kurzuebersicht
 
-Stand: **11. April 2026**
+Stand: **13. April 2026**
 
 - **Phase C abgeschlossen**
   - Runtime-Haertung
   - Request-/Incident-Korrelation
   - C4-/Longrunner-Transport
   - Canvas-Runtime-Sicht
-- **D0 abgeschlossen**
-  - Conversation State
-  - Turn Understanding
-  - Topic History
-  - Preference-/Instruction-Memory
-  - State-Decay
-  - Historical Topic Retrieval
-  - Specialist Context Propagation
-- **Phase D weitgehend live**
-  - Approval-/Consent-Workflows
-  - user-mediated Login
-  - Session-Reuse
-  - Challenge-Handover
-  - Chrome Credential Broker als laufender Ausbau
-- **Phase E gestartet**
-  - Improvement Signal Pipeline
-  - Cross-Source-Kandidaten
-  - Incident-/Observation-Einzug
-  - Freshness/Decay
-  - operator-lesbare Candidate-Views
+  - C3: Vision/OCR Hot-Path-Haertung (Telemetrie, Explicit Router, OOM-Guards)
+- **Phase D abgeschlossen**
+  - D0: Conversation State, Turn Understanding, Topic History, Preference-/Instruction-Memory, State-Decay, Historical Topic Retrieval, Specialist Context Propagation
+  - D1: Auth Need Detection
+  - D2: Approval + Consent Gate
+  - D3: user-mediated Login
+  - D4: Session Reuse + Chrome Credential Broker
+  - D5: Challenge Handover + Resume
+- **Phase E aktiv (E1–E4 abgeschlossen)**
+  - E1: Improvement Signal Pipeline, Cross-Source-Kandidaten, Incident-/Observation-Einzug, Freshness/Decay, Operator-Views
+  - E2: Weakness-to-Task Compiler, Evidence-aware Promotion Gate
+  - E3: Execution Bridge, Managed Autonomy, Guardrails gegen Improvement-Loops
+  - E4: Terminaler Improvement-Contract (blocked / ended\_unverified / verified), Retry-Semantik
 
-Kurz gesagt: Timus ist heute kein stateless Chat-Agent und kein bloßer Tool-Router mehr, sondern ein persistenter Arbeitsagent mit zustandsbewusster Meta-Schicht, kontextfaehigen Spezialisten und sichtbarer Laufzeit.
+Kurz gesagt: Timus ist heute kein stateless Chat-Agent und kein bloßer Tool-Router mehr, sondern ein persistenter Arbeitsagent mit zustandsbewusster Meta-Schicht, kontextfaehigen Spezialisten, sichtbarer Laufzeit und kontrollierter Selbstverbesserungsschleife.
 
 ## Was Timus heute kann
 
@@ -55,6 +48,9 @@ Kurz gesagt: Timus ist heute kein stateless Chat-Agent und kein bloßer Tool-Rou
 - Langlaeufer, Blocker, Teilergebnisse und Fehler sichtbar transportieren
 - Approval-/Auth-/Login-Workflows als echte Zustandsmaschine behandeln statt als losen Chattext
 - Self-Improvement-Kandidaten aus Reflection, Runtime, Incidents und Observation dedupliziert und priorisiert erzeugen
+- autonome Improvement-Tasks kontrolliert enqueuen, ausfuehren und mit Governance-Guardrails gegen Loops und Ueberbehauptung absichern
+- OCR/Vision-Anfragen explizit routen (VisionStrategy), OOM-Events erkennen und telemetrisch erfassen ohne den Hot-Path zu gefaehrden
+- Social-Media-Seiten und JavaScript-schwere Quellen ueber ScrapingAnt rendern und auslesen
 
 ## Systembild
 
@@ -89,7 +85,8 @@ Querliegende Schichten:
 - Pending Workflow + Auth Session State
 - Longrunner / C4 Transport
 - Autonomy Observation
-- Improvement Candidate Pipeline
+- Improvement Candidate Pipeline (E1–E4)
+- Vision Router + Telemetrie (C3)
 ```
 
 ## Kernkomponenten
@@ -105,40 +102,35 @@ Querliegende Schichten:
 | Approval/Auth | `orchestration/approval_auth_contract.py`, `orchestration/pending_workflow_state.py`, `orchestration/auth_session_state.py` | Approval, Login-Handover, Session-Reuse, Challenge-Resume |
 | Observability | `orchestration/autonomy_observation.py` | Request-Korrelation, Runtime-Metriken, Phase-D-/Phase-E-Signale |
 | Self-Improvement | `orchestration/improvement_candidates.py`, `orchestration/self_improvement_engine.py`, `orchestration/session_reflection.py` | Improvement-Kandidaten, Dedupe, Priorisierung, Freshness, Operator-Views |
+| Improvement Execution | `orchestration/improvement_task_execution.py`, `orchestration/improvement_task_autonomy.py`, `orchestration/autonomous_runner.py` | autonome Task-Ausfuehrung, Cooldown-Guardrails, terminaler Contract |
+| Vision/OCR Router | `tools/engines/vision_router.py`, `tools/engines/vision_telemetry.py` | explizites Strategie-Routing (7 Regeln), thread-safe Telemetrie-Ringpuffer, OOM-Erkennung |
 
 ## Aktuelle Entwicklungsrichtung
 
-### Phase D
+### Phase D — abgeschlossen
 
-Phase D ist funktional weit. Der generische Approval-/Auth-/Login-Unterbau steht:
+Alle D-Slices sind live:
 
 - `D1` Auth Need Detection
 - `D2` Approval + Consent Gate
 - `D3` user-mediated Login
-- `D4` Session Reuse
-- `D5` Challenge Handover
+- `D4` Session Reuse + Chrome Credential Broker (D4b)
+- `D5` Challenge Handover + Resume
 
-Der relevante Rest liegt im spezialisierten Ausbau:
+### Phase E — E1 bis E4 abgeschlossen
 
-- `D4b Chrome Credential Broker`
-- robustere Live-Haertung fuer Passwortmanager-/Passkey-/Challenge-Faelle
+Phase E fokussiert kontrollierte Selbstverbesserung statt ungegrenzter Autonomie.
 
-### Phase E
+Abgeschlossen:
 
-Phase E ist gestartet und fokussiert kontrollierte Selbstverbesserung statt ungegrenzter Autonomie.
+- `E1` Improvement Signal Pipeline: Normalisierung, Taxonomie, Dedupe, Priorisierung, Incident-/Observation-Einzug, Freshness/Decay, Operator-Views
+- `E2` Weakness-to-Task Compiler: Evidence-aware Compiler, Promotion Gate
+- `E3` Execution Bridge + Managed Autonomy: Guardrails gegen Improvement-Loops und Erfolgs-Ueberbehauptung, Cooldown-Regeln fuer terminale Wiederholungen
+- `E4` Terminaler Improvement-Contract: `blocked` / `ended_unverified` / `verified`, Retry-Semantik, Queue-Status-Haertung
 
-Aktiv im Aufbau:
+Naechster Block:
 
-- `E1.1` Improvement Signal Normalization
-- `E1.2` Taxonomie, Dedupe und Priorisierung
-- `E1.3` Incident-Signale
-- `E1.4` Observation-Events
-- `E1.5` Candidate-Decay und Freshness
-- `E1.6` Operator Visibility fuer Candidate-Priorisierung
-
-Naechster groesserer Block:
-
-- `E2 Weakness-to-Task Compiler`
+- `E5` Verifikationsschicht und Outcome-Messung
 
 ## Kanaele
 
@@ -199,10 +191,13 @@ sudo systemctl restart timus-mcp timus-dispatcher
 7. `orchestration/approval_auth_contract.py`
 8. `orchestration/autonomy_observation.py`
 9. `orchestration/improvement_candidates.py`
+10. `orchestration/improvement_task_execution.py`
+11. `tools/engines/vision_router.py`
 
 ## Wichtige Dokumente
 
 - [Timus Architektur-Blueprint fuer Folgeprojekte](docs/TIMUS_ARCHITEKTUR_BLUEPRINT_FUER_FOLGEPROJEKTE_2026-04-11.md)
+- [Zwischenprojekt: Allgemeine Mehrschritt-Planung](docs/ZWISCHENPROJEKT_ALLGEMEINE_MEHRSCHRITT_PLANUNG_2026-04-12.md)
 - [Phase D Vorbereitung - Approval, Auth und User Handover](docs/PHASE_D_APPROVAL_AUTH_PREP.md)
 - [Phase E Plan - Self-Improvement und kontrollierte Selbstpflege](docs/PHASE_E_SELF_IMPROVEMENT_PLAN.md)
 - [Phase D0 Meta Context State Plan](docs/PHASE_D0_META_CONTEXT_STATE_PLAN.md)
