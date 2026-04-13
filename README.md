@@ -25,36 +25,67 @@ Most agent frameworks are stateless request/response wrappers. Timus is a persis
 
 ## Architecture
 
-```
-Canvas / Telegram / Android / Terminal
-              |
-              v
-     MCP Server  (FastAPI + SSE)
-              |
-              v
-      Main Dispatcher
-              |
-              v
-     Meta Orchestration  ──  Conversation State + Topic History
-              |               Preference / Instruction Memory
-    ┌─────────┼──────────┬──────────┬──────────┐
-    v         v          v          v          v
- executor  research   visual     system    shell / comm / ...
-              |
-              v
-       Tool Registry V2
-              |
-     ┌────────┴────────────────────────┐
-     v                                 v
-Browser / Web / OCR         Vision Router (C3)
-ScrapingAnt / Social         ├── vision_router.py   (7-rule strategy)
-Files / Search               └── vision_telemetry.py (ring buffer, OOM)
+```mermaid
+flowchart TD
+    subgraph CH["📡  Channels"]
+        Canvas["Canvas\n(Web UI + SSE)"]
+        Telegram["Telegram\n(Bot API)"]
+        Android["Android\n(Kotlin App)"]
+        Terminal["Terminal\n(Operator)"]
+    end
 
-Cross-cutting:
-  Improvement Candidate Pipeline  (E1–E4)
-  Autonomy Observation            (request correlation, incident signals)
-  Longrunner / C4 SSE Transport
-  Pending Workflow + Auth Session State
+    subgraph CORE["⚙️  Core Runtime"]
+        MCP["MCP Server\nFastAPI · SSE · Health"]
+        Dispatcher["Main Dispatcher\nIntent routing · Fast paths"]
+        Meta["Meta Orchestration\nTurn understanding · Handoff · Context bundle"]
+    end
+
+    subgraph SPEC["🤖  Specialists"]
+        executor["executor"]
+        research["research"]
+        visual["visual"]
+        system["system"]
+        shell["shell"]
+        comm["communication"]
+    end
+
+    subgraph TOOLS["🔧  Tool Registry V2"]
+        Browser["Browser\nPlaywright · ScrapingAnt"]
+        Search["Search\nDataForSEO · Web"]
+        VisionRouter["Vision Router C3\nOCR · Florence-2 · SAM\n7-rule strategy · OOM guards"]
+        Files["Files · Docs · Email"]
+        DeepResearch["Deep Research\nArXiv · Verification · Embedding"]
+    end
+
+    subgraph STATE["🧠  State & Memory"]
+        ConvState["Conversation State\nTopic history · Turn types · Open loops"]
+        PrefMem["Preference / Instruction Memory\nSurvives session boundary"]
+        AuthFlow["Auth & Approval Workflows\nD1 Login · D2 Consent · D3 Handover\nD4 Session Reuse · D5 Challenge"]
+        ImpPipe["Self-Improvement Pipeline E1–E4\nSignals → Compiler → Execution\nGovernance guardrails · Terminal contract"]
+        Obs["Autonomy Observation\nRequest correlation · Incident signals"]
+    end
+
+    subgraph STORAGE["💾  Storage"]
+        Qdrant[("Qdrant\nsemantic memory")]
+        SQLite[("SQLite\nstructured state")]
+        MarkdownMem[("Markdown\nSOUL · USER · MEMORY")]
+    end
+
+    subgraph VERIFY["✅  Formal Verification (CI)"]
+        Lean["Lean 4\nTheorems"]
+        CrossHair["CrossHair\nSymbolic contracts"]
+        Hypothesis["Hypothesis\nProperty tests"]
+    end
+
+    CH --> MCP
+    MCP --> Dispatcher --> Meta
+    Meta --> executor & research & visual & system & shell & comm
+    executor & research & visual & system --> TOOLS
+    Meta -. "reads / writes" .-> STATE
+    SPEC -. "reads / writes" .-> STATE
+    STATE --> Qdrant & SQLite & MarkdownMem
+    TOOLS --> Qdrant & SQLite
+    VERIFY -. "gates every merge" .-> CORE
 ```
 
 ---
