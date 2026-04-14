@@ -2,6 +2,39 @@
 
 ---
 
+## Fortschritt 2026-04-14 - Phase E E4 fuehrt Verification-Backpressure fuer Improvement-Autonomie ein
+
+Der naechste E4-Slice schliesst die verbleibende Governance-Luecke zwischen bloesser Terminal-Klassifikation und echter Laufqualitaet: Wenn die juengsten Self-Hardening-Verifikationsmetriken zu viele unverifizierte, blockierte oder zurueckgerollte Zyklen zeigen, stoppt Improvement-Auto-Enqueue jetzt proaktiv.
+
+Geaendert:
+
+- [orchestration/improvement_task_autonomy.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_task_autonomy.py)
+  - neuer Guard `verification_backpressure`
+  - basiert auf den bestehenden Runtime-Metriken:
+    - `verification_verified_total`
+    - `verification_blocked_total`
+    - `verification_rolled_back_total`
+    - `verification_error_total`
+  - blockiert neues Auto-Enqueue jetzt konservativ nur dann, wenn:
+    - genug Verification-Samples vorliegen
+    - die negative Verification-Last ueber dem Budget liegt
+    - die Verified-Rate gleichzeitig unter der Mindestschwelle liegt
+  - die Guard-Entscheidung wird wie die uebrigen Rollout-States im bestehenden Observation-Pfad sichtbar
+- [tools/self_improvement_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/self_improvement_tool/tool.py)
+  - liefert jetzt zusaetzlich `improvement_governance`
+  - damit ist der aktive Rollout-Guard inkl. `verification_backpressure` direkt operatorsichtbar
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - `/autonomy/improvement` liefert dieselbe Governance-Sicht jetzt ebenfalls direkt aus
+
+Tests:
+
+- erweitert:
+  - [tests/test_improvement_task_autonomy.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_task_autonomy.py)
+  - [tests/test_improvement_task_autonomy_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_task_autonomy_hypothesis.py)
+  - [tests/test_improvement_task_autonomy_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_task_autonomy_crosshair.py)
+  - [tests/test_self_improvement_tool_ops.py](/home/fatih-ubuntu/dev/timus/tests/test_self_improvement_tool_ops.py)
+  - [tests/test_c2_entrypoints.py](/home/fatih-ubuntu/dev/timus/tests/test_c2_entrypoints.py)
+
 ## Fortschritt 2026-04-14 - Phase E E4 macht Improvement-Runtime operatorsichtbar
 
 Der naechste E4-Slice macht die bereits live vorhandenen Improvement-Autonomie- und Ergebniszustaende erstmals als eigenen Observation-Block sichtbar, statt sie nur ueber Einzel-Events oder Queue-Status lesen zu muessen.

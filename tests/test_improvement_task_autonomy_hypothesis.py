@@ -27,6 +27,7 @@ from orchestration.improvement_task_promotion import evaluate_compiled_task_prom
             "rollback_active",
             "rollout_frozen",
             "verification_blocked",
+            "verification_backpressure",
             "runtime_critical",
         ]
     ),
@@ -75,6 +76,7 @@ def test_hypothesis_improvement_task_autonomy_decision_state_is_bounded(
         "rollback_active",
         "rollout_frozen",
         "verification_blocked",
+        "verification_backpressure",
         "runtime_critical",
         "autoenqueue_ready",
         "enqueue_created",

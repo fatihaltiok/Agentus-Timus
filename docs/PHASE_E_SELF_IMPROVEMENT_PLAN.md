@@ -653,6 +653,10 @@ Bestandteile:
 - Improvement-Resultate mit Test-/Canary-Fehler oder explizitem Rollback enden jetzt ebenfalls technisch als Nicht-Erfolg statt nur als `ended_unverified`:
   - `verification_failed`
   - `rolled_back`
+- wiederholte schlechte Verification-Lage blockiert jetzt auch proaktiv neue Improvement-Auto-Enqueues:
+  - `verification_backpressure`
+  - basiert konservativ auf Runtime-Metriken statt auf bloßer Einzelereignis-Panik
+  - verhindert neue autonome Improvement-Erzeugung, wenn zu viele unverifizierte/blockierte/zurueckgerollte Zyklen bei zu niedriger Verified-Rate auflaufen
 - die Runtime-/Operator-Sicht zieht diese Ergebnisse jetzt auch als eigenen Observation-Block zusammen:
   - Auto-Enqueue-States
   - Rollout-Guard-States

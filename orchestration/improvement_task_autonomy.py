@@ -17,6 +17,7 @@ from orchestration.self_hardening_runtime import (
     get_self_hardening_runtime_summary,
     record_self_hardening_event,
 )
+from orchestration.task_queue import get_queue
 
 
 _AUTOENQUEUE_STATES = {
@@ -28,6 +29,7 @@ _AUTOENQUEUE_STATES = {
     "rollback_active",
     "rollout_frozen",
     "verification_blocked",
+    "verification_backpressure",
     "runtime_critical",
     "autoenqueue_ready",
     "enqueue_created",
@@ -45,6 +47,13 @@ def _env_bool(name: str, default: bool) -> bool:
 def _env_int(name: str, default: int) -> int:
     try:
         return int(os.getenv(name, str(default)).strip())
+    except Exception:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)).strip())
     except Exception:
         return default
 
@@ -76,8 +85,55 @@ def _policy_runtime_state(queue: Any, key: str) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
 
+def _runtime_metrics(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _evaluate_verification_backpressure(runtime: Mapping[str, Any]) -> dict[str, Any]:
+    metrics = _runtime_metrics(runtime.get("metrics"))
+    verified_total = max(0, int(metrics.get("verification_verified_total") or 0))
+    blocked_total = max(0, int(metrics.get("verification_blocked_total") or 0))
+    rolled_back_total = max(0, int(metrics.get("verification_rolled_back_total") or 0))
+    error_total = max(0, int(metrics.get("verification_error_total") or 0))
+    negative_total = blocked_total + rolled_back_total + error_total
+    sample_total = verified_total + negative_total
+    min_sample = max(1, _env_int("AUTONOMY_IMPROVEMENT_VERIFICATION_MIN_SAMPLE", 3))
+    min_verified_rate = max(0.0, min(1.0, _env_float("AUTONOMY_IMPROVEMENT_VERIFIED_RATE_MIN", 0.34)))
+    max_negative_total = max(1, _env_int("AUTONOMY_IMPROVEMENT_VERIFICATION_NEGATIVE_BUDGET", 2))
+    verified_rate = float(verified_total / sample_total) if sample_total > 0 else 0.0
+    blocked = bool(
+        sample_total >= min_sample
+        and negative_total >= max_negative_total
+        and verified_rate < min_verified_rate
+    )
+    reasons: list[str] = []
+    if blocked:
+        reasons.extend(
+            [
+                f"verification_sample_total:{sample_total}",
+                f"verification_negative_total:{negative_total}",
+                f"verification_verified_rate:{verified_rate:.3f}",
+            ]
+        )
+    return {
+        "blocked": blocked,
+        "reasons": reasons[:3],
+        "verified_total": verified_total,
+        "blocked_total": blocked_total,
+        "rolled_back_total": rolled_back_total,
+        "error_total": error_total,
+        "negative_total": negative_total,
+        "sample_total": sample_total,
+        "verified_rate": round(verified_rate, 3),
+        "min_sample": min_sample,
+        "min_verified_rate": round(min_verified_rate, 3),
+        "max_negative_total": max_negative_total,
+    }
+
+
 def get_improvement_task_rollout_guard(queue: Any) -> dict[str, Any]:
     runtime = get_self_hardening_runtime_summary(queue)
+    verification_backpressure = _evaluate_verification_backpressure(runtime)
     strict_force_off = _is_truthy(_policy_runtime_state(queue, "strict_force_off").get("state_value"))
     freeze_active = _is_truthy(_policy_runtime_state(queue, "hardening_rollout_freeze").get("state_value"))
     scorecard_last_action = _text(_policy_runtime_state(queue, "scorecard_last_action").get("state_value"), limit=96).lower()
@@ -109,6 +165,9 @@ def get_improvement_task_rollout_guard(queue: Any) -> dict[str, Any]:
             reasons.append(f"verification_status:{verification_status}")
         if canary_state:
             reasons.append(f"canary_state:{canary_state}")
+    elif verification_backpressure["blocked"]:
+        state = "verification_backpressure"
+        reasons.extend(list(verification_backpressure.get("reasons") or [])[:3])
     elif runtime_state == "critical":
         state = "runtime_critical"
         reasons.append("self_hardening_runtime:critical")
@@ -124,6 +183,27 @@ def get_improvement_task_rollout_guard(queue: Any) -> dict[str, Any]:
         "runtime_state": runtime_state,
         "verification_status": verification_status,
         "canary_state": canary_state,
+        "verification_backpressure": verification_backpressure,
+    }
+
+
+def build_improvement_task_governance_view(queue: Any | None = None) -> dict[str, Any]:
+    active_queue = queue or get_queue()
+    rollout_guard = get_improvement_task_rollout_guard(active_queue)
+    return {
+        "rollout_guard_state": _text(rollout_guard.get("state"), limit=64),
+        "rollout_guard_blocked": bool(rollout_guard.get("blocked")),
+        "rollout_guard_reasons": [
+            _text(item, limit=96)
+            for item in (rollout_guard.get("reasons") or [])
+            if _text(item, limit=96)
+        ][:3],
+        "strict_force_off": bool(rollout_guard.get("strict_force_off")),
+        "freeze_active": bool(rollout_guard.get("freeze_active")),
+        "runtime_state": _text(rollout_guard.get("runtime_state"), limit=64),
+        "verification_status": _text(rollout_guard.get("verification_status"), limit=64),
+        "canary_state": _text(rollout_guard.get("canary_state"), limit=64),
+        "verification_backpressure": dict(rollout_guard.get("verification_backpressure") or {}),
     }
 
 

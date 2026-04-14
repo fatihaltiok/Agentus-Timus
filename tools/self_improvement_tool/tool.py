@@ -306,6 +306,7 @@ async def get_improvement_suggestions(include_applied: bool = False) -> dict:
     from orchestration.autonomy_observation import build_autonomy_observation_summary
     from orchestration.improvement_candidates import build_candidate_operator_views
     from orchestration.improvement_task_autonomy import (
+        build_improvement_task_governance_view,
         build_improvement_task_autonomy_decisions,
         get_improvement_task_autonomy_settings,
     )
@@ -346,6 +347,7 @@ async def get_improvement_suggestions(include_applied: bool = False) -> dict:
         "top_task_bridge_decisions": bridge_decisions,
         "top_task_execution_candidates": execution_candidates,
         "task_autonomy_settings": autonomy_settings,
+        "improvement_governance": build_improvement_task_governance_view(),
         "top_task_autonomy_decisions": build_improvement_task_autonomy_decisions(
             execution_candidates,
             allow_self_modify=bool(autonomy_settings.get("allow_self_modify")),

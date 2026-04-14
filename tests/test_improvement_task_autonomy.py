@@ -210,6 +210,45 @@ def test_apply_improvement_task_autonomy_blocks_when_verification_is_blocked(mon
     queue.add.assert_not_called()
 
 
+def test_apply_improvement_task_autonomy_blocks_under_verification_backpressure(monkeypatch) -> None:
+    compiled, promotion, bridge, payload = _payload_for("main_dispatcher.py", candidate_id="cand:backpressure")
+
+    monkeypatch.setattr(
+        "orchestration.improvement_task_autonomy.get_self_hardening_runtime_summary",
+        lambda queue: {
+            "state": "ok",
+            "last_verification_status": "verified",
+            "last_canary_state": "",
+            "metrics": {
+                "verification_verified_total": 0,
+                "verification_blocked_total": 1,
+                "verification_rolled_back_total": 1,
+                "verification_error_total": 1,
+            },
+        },
+    )
+
+    queue = MagicMock()
+    queue.get_policy_runtime_state.return_value = {}
+
+    result = apply_improvement_task_autonomy(
+        queue,
+        [compiled],
+        [promotion],
+        [bridge],
+        [payload],
+        allow_self_modify=False,
+        max_autoenqueue=1,
+    )
+
+    assert result["blocked_total"] == 1
+    assert result["rollout_guard"]["state"] == "verification_backpressure"
+    assert result["rollout_guard"]["verification_backpressure"]["blocked"] is True
+    assert result["decisions"][0]["autoenqueue_state"] == "verification_backpressure"
+    assert result["decisions"][0]["enqueue_reason"].startswith("verification_sample_total:")
+    queue.add.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_run_improvement_task_autonomy_cycle_enqueues_development_task(monkeypatch) -> None:
     async def _fake_combined_candidates(self):

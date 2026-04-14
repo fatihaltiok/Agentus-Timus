@@ -163,6 +163,19 @@ def test_improvement_endpoint_returns_top_candidates(client):
             "candidate_limit": 5,
         },
     ), patch(
+        "orchestration.improvement_task_autonomy.build_improvement_task_governance_view",
+        return_value={
+            "rollout_guard_state": "verification_backpressure",
+            "rollout_guard_blocked": True,
+            "rollout_guard_reasons": ["verification_sample_total:3"],
+            "verification_backpressure": {
+                "blocked": True,
+                "sample_total": 3,
+                "negative_total": 3,
+                "verified_rate": 0.0,
+            },
+        },
+    ), patch(
         "orchestration.autonomy_observation.build_autonomy_observation_summary",
         return_value={
             "improvement_runtime": {
@@ -192,6 +205,8 @@ def test_improvement_endpoint_returns_top_candidates(client):
     assert data["top_task_execution_candidates"][0]["candidate_id"] == "m12:1"
     assert data["top_task_execution_candidates"][0]["creation_state"] == "not_creatable"
     assert data["task_autonomy_settings"]["enabled"] is True
+    assert data["improvement_governance"]["rollout_guard_state"] == "verification_backpressure"
+    assert data["improvement_governance"]["rollout_guard_blocked"] is True
     assert data["top_task_autonomy_decisions"][0]["candidate_id"] == "m12:1"
     assert data["top_task_autonomy_decisions"][0]["autoenqueue_state"] == "not_creatable"
     assert data["improvement_runtime"]["execution_verified_total"] == 1

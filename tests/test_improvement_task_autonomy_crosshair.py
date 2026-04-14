@@ -83,3 +83,37 @@ def _contract_strict_force_off_guard_blocks_development_payload() -> bool:
         max_autoenqueue=1,
     )
     return decision["target_agent"] == "development" and decision["autoenqueue_state"] == "strict_force_off"
+
+
+@deal.post(lambda r: r is True)
+def _contract_verification_backpressure_guard_blocks_development_payload() -> bool:
+    compiled = compile_improvement_task(
+        {
+            "candidate_id": "crosshair:backpressure",
+            "category": "routing",
+            "problem": "Repeated unverifiable hardening",
+            "proposed_action": "Pause autonomous improvement enqueue",
+            "source_count": 2,
+            "freshness_state": "fresh",
+            "verified_paths": ["main_dispatcher.py"],
+        }
+    )
+    promotion = evaluate_compiled_task_promotion(compiled, rollout_stage="self_modify_safe")
+    bridge = build_improvement_task_bridge(compiled, promotion)
+    payload = build_improvement_hardening_task_payload(compiled, promotion, bridge)
+    decision = build_improvement_task_autonomy_decision(
+        payload,
+        rollout_guard={
+            "state": "verification_backpressure",
+            "blocked": True,
+            "reasons": [
+                "verification_sample_total:3",
+                "verification_negative_total:3",
+                "verification_verified_rate:0.000",
+            ],
+        },
+        allow_self_modify=False,
+        enqueued_this_cycle=0,
+        max_autoenqueue=1,
+    )
+    return decision["target_agent"] == "development" and decision["autoenqueue_state"] == "verification_backpressure"
