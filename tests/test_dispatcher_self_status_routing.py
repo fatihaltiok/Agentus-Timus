@@ -56,6 +56,13 @@ def test_quick_intent_keeps_colloquial_nontrivial_strategy_question_out_of_execu
     assert main_dispatcher.quick_intent_check("was meinst du wie koennte ich mein unternehmen skalieren") is None
 
 
+def test_quick_intent_routes_open_advice_dialogue_to_meta():
+    import main_dispatcher
+
+    query = "koennte ich bei siemens anfangen zu arbeiten was denkst du"
+    assert main_dispatcher.quick_intent_check(query) == "meta"
+
+
 def test_quick_intent_routes_personal_strategy_dialogue_to_meta_instead_of_reasoning():
     import main_dispatcher
 
@@ -78,10 +85,14 @@ def test_quick_intent_routes_meta_feedback_and_reference_followups_to_meta():
     import main_dispatcher
 
     assert main_dispatcher.quick_intent_check("anscheinend verstehst du mich nicht") == "meta"
+    assert main_dispatcher.quick_intent_check("du sollst nicht halluzinieren") == "meta"
     assert main_dispatcher.quick_intent_check("was machst du da das ist doch falsch") == "meta"
     assert main_dispatcher.quick_intent_check("dann uebernimm die empfehlung 2") == "meta"
     assert main_dispatcher.quick_intent_check("koenntest du damit arbeiten") == "meta"
     assert main_dispatcher.quick_intent_check("kannst du sie reparieren") == "meta"
+    assert main_dispatcher.quick_intent_check("was ist passiert") == "meta"
+    assert main_dispatcher.quick_intent_check("was gab es noch") == "meta"
+    assert main_dispatcher.quick_intent_check("ok bin drin") == "meta"
 
 
 def test_quick_intent_routes_conversational_clarification_turns_to_meta():
@@ -166,3 +177,15 @@ def test_quick_intent_routes_broad_research_via_meta_and_strict_research_direct(
         )
         == "research"
     )
+
+
+def test_build_dispatcher_llm_query_enforces_token_only_contract():
+    import main_dispatcher
+
+    query = main_dispatcher._build_dispatcher_llm_query(
+        "Bitte melde mich in Chrome bei grok.com an und nutze den Passwortmanager."
+    )
+
+    assert "Antworte ausschliesslich mit genau einem dieser Tokens" in query
+    assert "visual_login" in query
+    assert "visual_nemotron" in query

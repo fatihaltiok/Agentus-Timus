@@ -305,6 +305,35 @@ async def test_get_agent_decision_extracts_agent_from_verbose_dispatcher_respons
 
 
 @pytest.mark.asyncio
+async def test_get_agent_decision_salvages_visual_login_from_natural_language_summary(monkeypatch):
+    async def _summary(_query: str, session_id: str = "") -> str:
+        return (
+            "Der Nutzer moechte sich in Chrome bei GitHub anmelden "
+            "und dabei den Passwortmanager nutzen."
+        )
+
+    monkeypatch.setattr(main_dispatcher, "_call_dispatcher_llm", _summary)
+
+    result = await main_dispatcher.get_agent_decision(
+        "Bitte melde mich in Chrome bei GitHub an und nutze den Passwortmanager."
+    )
+
+    assert result == "visual_login"
+
+
+@pytest.mark.asyncio
+async def test_get_agent_decision_salvages_meta_from_open_reference_summary(monkeypatch):
+    async def _summary(_query: str, session_id: str = "") -> str:
+        return 'Der Nutzer fragt "was ist passiert" - das ist eine sehr kurze, offene Frage.'
+
+    monkeypatch.setattr(main_dispatcher, "_call_dispatcher_llm", _summary)
+
+    result = await main_dispatcher.get_agent_decision("was ist passiert")
+
+    assert result == "meta"
+
+
+@pytest.mark.asyncio
 async def test_get_agent_decision_records_meta_fallback_on_empty_dispatcher_decision(monkeypatch):
     observed = []
 

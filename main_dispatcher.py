@@ -82,6 +82,7 @@ from agent.providers import ModelProvider, get_provider_client
 from utils.llm_usage import build_usage_payload
 from utils.location_local_intent import analyze_location_local_intent
 from utils.meta_handoff_wrappers import strip_meta_canvas_wrappers
+from gateway.dispatcher_health_server import DispatcherHealthServer
 
 # Logger frueh definieren, damit Import-Fallbacks sicher loggen koennen.
 log = logging.getLogger("MainDispatcher")
@@ -1002,11 +1003,18 @@ Wenn sowohl `ORIGINAL USER QUERY` als auch `NORMALIZED CORE QUERY` gegeben sind:
      - "Klicke auf..."
      - "Starte Programm X"
 
-6. **vision_qwen**: Der PRÄZISE OPERATOR (Qwen2-VL lokal)
+6. **visual_login**: Der LOGIN-WORKFLOW-OPERATOR
+   - Zuständigkeit: Login-Masken, Passwortmanager, user-mediated Login, Challenge-Handover
+   - Wähle 'visual_login' bei:
+     - "Öffne github.com/login und führe mich bis zur Login-Maske"
+     - "Melde mich in Chrome bei X an und nutze den Passwortmanager"
+     - "Ich sehe jetzt eine 2FA challenge" bei offenen Login-Workflows
+
+7. **vision_qwen**: Der PRÄZISE OPERATOR (Qwen2-VL lokal)
    - Zuständigkeit: Web-Automation mit PIXEL-GENAUEN Koordinaten
    - Wähle 'vision_qwen' bei einfachen Web-Automation Tasks
 
-7. **visual_nemotron**: Der STRUKTURIERTE VISION AGENT (NEU - Nemotron + Qwen-VL)
+8. **visual_nemotron**: Der STRUKTURIERTE VISION AGENT (NEU - Nemotron + Qwen-VL)
    - Zuständigkeit: Komplexe Web-Automation mit Multi-Step Planung
    - Wähle 'visual_nemotron' bei:
      - "Starte Browser, gehe zu grok.com, akzeptiere Cookies, starte Chat"
@@ -1019,19 +1027,19 @@ Wenn sowohl `ORIGINAL USER QUERY` als auch `NORMALIZED CORE QUERY` gegeben sind:
      - Automatische Fallbacks (GPT-4 Vision bei OOM)
      - Robuste Fehlerbehandlung bei Seiten-Navigation
 
-8. **development**: Der CODER
+9. **development**: Der CODER
    - Zuständigkeit: Code schreiben, Skripte erstellen
    - Wähle 'development' bei:
      - "Schreibe ein Python-Skript"
      - "Erstelle eine Funktion für..."
 
-7. **creative**: Der KÜNSTLER
+10. **creative**: Der KÜNSTLER
    - Zuständigkeit: Bilder, Texte, kreative Inhalte
    - Wähle 'creative' bei:
      - "Male ein Bild von..."
      - "Schreibe ein Gedicht"
 
-9. **data**: Der DATENANALYST
+11. **data**: Der DATENANALYST
    - Zuständigkeit: CSV/XLSX/JSON einlesen, Statistiken berechnen, Tabellen/Berichte erstellen
    - Wähle 'data' bei:
      - "Analysiere diese CSV-Datei"
@@ -1128,7 +1136,7 @@ Wenn sowohl `ORIGINAL USER QUERY` als auch `NORMALIZED CORE QUERY` gegeben sind:
 - Ist die Aufgabe komplex, mehrstufig oder unklar welcher Spezialist zuständig ist? → 'meta'
 - BEI UNSICHERHEIT: IMMER 'meta', NIEMALS 'executor'
 
-Antworte NUR mit einem Wort: 'reasoning', 'research', 'executor', 'meta', 'visual', 'development', 'creative', 'data', 'document', 'communication', 'system', 'shell' oder 'image'.
+Antworte NUR mit einem Wort: 'reasoning', 'research', 'executor', 'meta', 'visual', 'visual_login', 'visual_nemotron', 'development', 'creative', 'data', 'document', 'communication', 'system', 'shell' oder 'image'.
 """
 
 # --- Mapping (AKTUALISIERT v3.2 - Developer Agent v2) ---
@@ -1189,6 +1197,8 @@ _DISPATCHER_ALLOWED_AGENT_NAMES = (
     "executor",
     "meta",
     "visual",
+    "visual_login",
+    "visual_nemotron",
     "development",
     "creative",
     "data",
@@ -1224,7 +1234,37 @@ def _extract_dispatcher_decision(raw_content: str) -> str:
         r"\b(" + "|".join(_DISPATCHER_ALLOWED_AGENT_NAMES) + r")\b",
         cleaned,
     )
-    return matches[-1] if matches else ""
+    if matches:
+        return matches[-1]
+
+    inferred_candidates: list[str] = []
+    inferred_candidates.extend(re.findall(r'"([^"]{1,220})"', cleaned))
+    inferred_candidates.extend(re.findall(r"'([^']{1,220})'", cleaned))
+
+    simplified = re.sub(
+        r"^\s*(?:der|die)\s+nutzer(?:in)?\s+"
+        r"(?:fragt|sagt|meint|möchte|moechte|will|braucht|bittet|ueberlegt|überlegt)\s*[:,]?\s*",
+        "",
+        cleaned,
+    ).strip()
+    simplified = re.sub(r"^\s*(?:ob|dass)\s+", "", simplified).strip()
+    simplified = re.split(r"\s+(?:-|–|—)\s+das\s+ist\b", simplified, maxsplit=1)[0].strip()
+    simplified = re.split(r"\.\s*das\s+ist\b", simplified, maxsplit=1)[0].strip()
+    simplified = simplified.strip(" .:`-")
+    if simplified and simplified != cleaned:
+        inferred_candidates.append(simplified)
+
+    inferred_candidates.append(cleaned)
+    seen_candidates: set[str] = set()
+    for candidate in inferred_candidates:
+        normalized_candidate = str(candidate or "").strip()
+        if not normalized_candidate or normalized_candidate in seen_candidates:
+            continue
+        seen_candidates.add(normalized_candidate)
+        inferred = quick_intent_check(normalized_candidate)
+        if inferred in _DISPATCHER_ALLOWED_AGENT_NAMES:
+            return inferred
+    return ""
 
 
 def _looks_like_blackboard_or_memory_query(text: str) -> bool:
@@ -1823,12 +1863,17 @@ _DISPATCHER_META_FEEDBACK_PATTERNS = (
     r"\bso\s+ist\s+das\s+falsch\b",
     r"\bdu\s+interpretierst\b",
     r"\bdu\s+verwechselst\b",
+    r"\bdu\s+sollst\s+nicht\s+halluzinier",
 )
 
 _DISPATCHER_REFERENCE_FOLLOWUP_PATTERNS = (
     r"^\s*(?:und\s+)?was\s+jetzt\b",
+    r"^\s*(?:und\s+)?was\s+ist\s+passiert\b",
+    r"^\s*(?:und\s+)?was\s+gab\s+es\s+noch\b",
+    r"^\s*(?:und\s+)?was\s+war\s+(?:nochmal|denn)\b",
     r"^\s*(?:und\s+)?mach\s+weiter\b",
     r"^\s*(?:und\s+)?weiter(?:\s+damit)?\b",
+    r"^\s*(?:ok(?:ay)?\s+)?bin\s+drin\b",
     r"^\s*(?:dann\s+)?(?:uebernimm|übernimm|nimm)\b.*\b(?:empfehlung|option)\b",
     r"^\s*die\s+(?:erste|zweite|dritte)(?:\s+option)?\b",
     r"^\s*(?:kannst|k[oö]nntest)\s+du\s+(?:damit|das|sie)\b",
@@ -1977,6 +2022,8 @@ _DISPATCHER_PERSONAL_STRATEGY_HINTS = (
     "mein job",
     "meine arbeit",
     "mein beruf",
+    "arbeiten",
+    "anfangen",
     "karriere",
     "jobwechsel",
     "selbststaendig",
@@ -1994,6 +2041,27 @@ _DISPATCHER_PERSONAL_STRATEGY_HINTS = (
     "kuendigen",
     "kündigen",
     "mobil",
+)
+
+_DISPATCHER_OPEN_ADVICE_PATTERNS = (
+    r"\bwas\s+denkst\s+du\b",
+    r"\bwas\s+meinst\s+du\b",
+    r"\bk[oö]nnte\s+ich\b",
+    r"\bsollte\s+ich\b",
+    r"\bw[aä]re\s+es\s+sinnvoll\b",
+    r"\blohnt\s+sich\s+das\b",
+)
+
+_DISPATCHER_OPEN_ADVICE_CONTEXT_HINTS = (
+    " ich ",
+    " mein ",
+    " mich ",
+    "job",
+    "arbeiten",
+    "karriere",
+    "bewerb",
+    "unternehmen",
+    "anfangen",
 )
 
 _DISPATCHER_PERSONAL_FIRST_PERSON_HINTS = (
@@ -2184,6 +2252,19 @@ def _looks_like_dispatcher_personal_strategy_dialogue(query: str) -> bool:
     return has_first_person and hint_hits >= 2
 
 
+def _looks_like_dispatcher_open_advice_dialogue(query: str) -> bool:
+    normalized = f" {str(query or '').strip().lower()} "
+    if not normalized.strip():
+        return False
+    if _has_dispatcher_technical_review_evidence(normalized):
+        return False
+    if not any(re.search(pattern, normalized) for pattern in _DISPATCHER_OPEN_ADVICE_PATTERNS):
+        return False
+    if not any(token in normalized for token in _DISPATCHER_OPEN_ADVICE_CONTEXT_HINTS):
+        return False
+    return True
+
+
 def _should_guard_dispatcher_reasoning_route(query: str) -> bool:
     normalized = str(query or "").strip().lower()
     if not normalized:
@@ -2198,14 +2279,20 @@ def _should_guard_dispatcher_reasoning_route(query: str) -> bool:
 def _build_dispatcher_llm_query(query: str) -> str:
     original = _extract_dispatcher_focus_query(query)
     core = _extract_dispatcher_core_query(query)
+    allowed_tokens = ", ".join(_DISPATCHER_ALLOWED_AGENT_NAMES)
+    header = (
+        "Waehle genau einen Ziel-Agenten fuer diese Anfrage.\n"
+        f"Erlaubte Ausgabe: {allowed_tokens}.\n"
+        "Antworte ausschliesslich mit genau einem dieser Tokens, ohne Erklaerung, ohne Satz und ohne Markdown.\n\n"
+    )
     if core and original and core.lower() != original.lower():
-        return (
+        return header + (
             "ORIGINAL USER QUERY:\n"
             f"{original}\n\n"
             "NORMALIZED CORE QUERY:\n"
             f"{core}\n"
         )
-    return original or str(query or "")
+    return header + "USER QUERY:\n" + (original or str(query or ""))
 
 
 def _looks_like_dispatcher_reference_followup(query: str) -> bool:
@@ -2272,6 +2359,8 @@ def quick_intent_check(query: str) -> Optional[str]:
     if _looks_like_dispatcher_trivial_lookup(core_lower):
         return "executor"
     if _looks_like_dispatcher_personal_strategy_dialogue(analysis_query):
+        return "meta"
+    if _looks_like_dispatcher_open_advice_dialogue(analysis_query):
         return "meta"
     if (
         analysis_query.startswith("soll ich ")
@@ -3863,60 +3952,136 @@ def _resolve_pending_approval(*, request_id: str, approved: bool, note: str | No
         print(f"   Fehler bei Freigabe-Entscheidung: {e}")
 
 
+async def _dispatcher_health_heartbeat(server: DispatcherHealthServer) -> None:
+    interval_seconds = max(2, int(os.getenv("DISPATCHER_HEALTH_HEARTBEAT_SECONDS", "5")))
+    while True:
+        server.touch_heartbeat()
+        await server.refresh_mcp_health()
+        await asyncio.sleep(interval_seconds)
+
+
 async def main_loop():
     """Hauptschleife: CLI + AutonomousRunner + Telegram parallel."""
     print("\n" + "=" * 60)
     print("🤖 TIMUS MASTER DISPATCHER (v3.4 - Autonomous + Telegram) 🤖")
     print("=" * 60)
 
-    tools_desc = await fetch_tool_descriptions_from_server()
-    if not tools_desc:
-        return
-
-    # 1. Autonomous Runner (Scheduler)
     from orchestration.autonomous_runner import AutonomousRunner
-    interval = int(os.getenv("HEARTBEAT_INTERVAL_MINUTES", "5"))
-    runner = AutonomousRunner(interval_minutes=interval)
-    await runner.start(tools_desc)
-    log.info(f"🤖 AutonomousRunner aktiv (alle {interval} min)")
-
-    # 2. Telegram Gateway (optional)
-    from gateway.telegram_gateway import TelegramGateway
-    tg_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    gateway = TelegramGateway(token=tg_token, tools_desc=tools_desc)
-    tg_active = await gateway.start()
-    if tg_active:
-        print("   📱 Telegram-Bot aktiv")
-    else:
-        print("   📱 Telegram inaktiv (TELEGRAM_BOT_TOKEN nicht gesetzt)")
-
-    # 3. Webhook-Server (optional)
-    from gateway.webhook_gateway import WebhookServer
-    webhook = WebhookServer()
-    webhook_enabled = os.getenv("WEBHOOK_ENABLED", "false").lower() in ("1", "true", "yes")
-    if webhook_enabled:
-        await webhook.start()
-        port = os.getenv("WEBHOOK_PORT", "8765")
-        print(f"   🔗 Webhook-Server aktiv auf Port {port}")
-    else:
-        print("   🔗 Webhook inaktiv (WEBHOOK_ENABLED=false)")
-
-    # 4. System-Monitor
     from gateway.system_monitor import SystemMonitor
-    monitor = SystemMonitor()
-    await monitor.start()
+    from gateway.telegram_gateway import TelegramGateway
+    from gateway.webhook_gateway import WebhookServer
 
-    # events.json Vorlage anlegen wenn nicht vorhanden
-    from gateway.event_router import init_events_config
-    init_events_config()
+    dispatcher_health = DispatcherHealthServer()
+    dispatcher_health.set_mode("interactive" if sys.stdin.isatty() else "daemon")
+    await dispatcher_health.start()
+
+    heartbeat_task: asyncio.Task[Any] | None = None
+    runner: AutonomousRunner | None = None
+    gateway: TelegramGateway | None = None
+    webhook: WebhookServer | None = None
+    monitor: SystemMonitor | None = None
 
     try:
+        dispatcher_health.set_phase("waiting_for_mcp")
+        heartbeat_task = asyncio.create_task(
+            _dispatcher_health_heartbeat(dispatcher_health),
+            name="dispatcher-health-heartbeat",
+        )
+
+        tools_desc = await fetch_tool_descriptions_from_server()
+        tool_description_count = len([line for line in str(tools_desc or "").splitlines() if line.strip()])
+        dispatcher_health.set_tools_loaded(bool(tools_desc), description_count=tool_description_count)
+        if not tools_desc:
+            dispatcher_health.set_phase("error", error="tool_descriptions_unavailable")
+            return
+
+        dispatcher_health.set_phase("starting_components")
+
+        interval = int(os.getenv("HEARTBEAT_INTERVAL_MINUTES", "5"))
+        runner = AutonomousRunner(interval_minutes=interval)
+        await runner.start(tools_desc)
+        dispatcher_health.set_component(
+            "autonomous_runner",
+            active=True,
+            required=True,
+            detail={"interval_minutes": interval},
+        )
+        log.info(f"🤖 AutonomousRunner aktiv (alle {interval} min)")
+
+        tg_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+        gateway = TelegramGateway(token=tg_token, tools_desc=tools_desc)
+        tg_active = await gateway.start()
+        dispatcher_health.set_component(
+            "telegram_gateway",
+            active=tg_active,
+            required=bool(str(tg_token or "").strip()),
+            detail={"token_configured": bool(str(tg_token or "").strip())},
+        )
+        if tg_active:
+            print("   📱 Telegram-Bot aktiv")
+        else:
+            print("   📱 Telegram inaktiv (TELEGRAM_BOT_TOKEN nicht gesetzt)")
+
+        webhook = WebhookServer()
+        webhook_enabled = os.getenv("WEBHOOK_ENABLED", "false").lower() in ("1", "true", "yes")
+        if webhook_enabled:
+            await webhook.start()
+            port = os.getenv("WEBHOOK_PORT", "8765")
+            dispatcher_health.set_component(
+                "webhook_gateway",
+                active=True,
+                required=False,
+                detail={"enabled": True, "port": str(port)},
+            )
+            print(f"   🔗 Webhook-Server aktiv auf Port {port}")
+        else:
+            dispatcher_health.set_component(
+                "webhook_gateway",
+                active=False,
+                required=False,
+                detail={"enabled": False},
+            )
+            print("   🔗 Webhook inaktiv (WEBHOOK_ENABLED=false)")
+
+        monitor = SystemMonitor()
+        await monitor.start()
+        dispatcher_health.set_component("system_monitor", active=True, required=True)
+
+        # events.json Vorlage anlegen wenn nicht vorhanden
+        from gateway.event_router import init_events_config
+
+        init_events_config()
+        dispatcher_health.mark_ready()
+
         await _cli_loop(tools_desc)
+    except Exception as e:
+        dispatcher_health.set_phase("error", error=f"{type(e).__name__}:{str(e)[:120]}")
+        raise
     finally:
-        await runner.stop()
-        await gateway.stop()
-        await webhook.stop()
-        await monitor.stop()
+        dispatcher_health.set_phase("shutting_down")
+        if runner is not None:
+            await runner.stop()
+            dispatcher_health.set_component("autonomous_runner", active=False, required=True)
+        if gateway is not None:
+            await gateway.stop()
+            dispatcher_health.set_component(
+                "telegram_gateway",
+                active=False,
+                required=bool(os.getenv("TELEGRAM_BOT_TOKEN", "").strip()),
+            )
+        if webhook is not None:
+            await webhook.stop()
+            dispatcher_health.set_component("webhook_gateway", active=False, required=False)
+        if monitor is not None:
+            await monitor.stop()
+            dispatcher_health.set_component("system_monitor", active=False, required=True)
+        if heartbeat_task is not None:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
+        await dispatcher_health.stop()
 
     print("\n👋 Bye!")
 
