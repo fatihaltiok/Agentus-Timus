@@ -2,6 +2,8 @@
 Description=Timus MCP Server (Tool Registry)
 After=network.target graphical.target qdrant.service
 Wants=network.target graphical.target qdrant.service
+Requires=qdrant.service
+PartOf=timus-stack.target
 
 [Service]
 Type=simple

@@ -2,6 +2,7 @@
 Description=Qdrant Vector Database for Timus
 After=network.target local-fs.target
 Wants=network.target local-fs.target
+PartOf=timus-stack.target
 
 [Service]
 Type=simple

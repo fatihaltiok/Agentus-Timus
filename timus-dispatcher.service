@@ -2,7 +2,8 @@
 Description=Timus Main Dispatcher (Autonomous Agent)
 After=network.target timus-mcp.service qdrant.service
 Wants=network.target qdrant.service
-Requires=timus-mcp.service
+Requires=timus-mcp.service qdrant.service
+PartOf=timus-stack.target
 
 [Service]
 Type=simple

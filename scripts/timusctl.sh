@@ -2,11 +2,18 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+INSTALLER_SCRIPT="${SCRIPT_DIR}/install_timus_stack.sh"
+PRODUCTION_GATES_SCRIPT="${SCRIPT_DIR}/run_production_gates.py"
+
 QDRANT_SERVICE="qdrant.service"
 MCP_SERVICE="timus-mcp.service"
 DISPATCHER_SERVICE="timus-dispatcher.service"
+STACK_TARGET="timus-stack.target"
 QDRANT_READY_URL="http://127.0.0.1:6333/readyz"
 MCP_HEALTH_URL="http://127.0.0.1:5000/health"
+DISPATCHER_HEALTH_URL="http://127.0.0.1:5010/health"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -27,6 +34,7 @@ Nutzung:
   ./scripts/timusctl.sh restart
   ./scripts/timusctl.sh status
   ./scripts/timusctl.sh health
+  ./scripts/timusctl.sh install [--no-start]
   ./scripts/timusctl.sh logs [qdrant|mcp|dispatcher]
 
 Befehle:
@@ -35,6 +43,7 @@ Befehle:
   restart    Neustart in sicherer Reihenfolge
   status     Zeigt kompakten Service-Status
   health     Prueft qdrant, mcp und production gates
+  install    Installiert/aktiviert den gesamten Stack; startet ihn standardmaessig direkt
   logs       Folgt den Logs eines Dienstes oder allen dreien
 EOF
 }
@@ -47,6 +56,10 @@ check_noninteractive_sudo() {
             exit 1
         fi
     done
+}
+
+stack_target_exists() {
+    systemctl cat "$STACK_TARGET" >/dev/null 2>&1
 }
 
 wait_for_http() {
@@ -82,6 +95,10 @@ stop_service() {
 
 show_status() {
     log "=== Status ==="
+    if stack_target_exists; then
+        systemctl --no-pager --full status "$STACK_TARGET" | sed -n '1,8p' || true
+        echo
+    fi
     systemctl --no-pager --full status "$QDRANT_SERVICE" | sed -n '1,8p' || true
     echo
     systemctl --no-pager --full status "$MCP_SERVICE" | sed -n '1,8p' || true
@@ -91,11 +108,17 @@ show_status() {
 
 start_stack() {
     check_noninteractive_sudo
-    start_service "$QDRANT_SERVICE"
+    if stack_target_exists; then
+        log "Starte Stack-Target $STACK_TARGET ..."
+        sudo -n systemctl start "$STACK_TARGET"
+    else
+        start_service "$QDRANT_SERVICE"
+        start_service "$MCP_SERVICE"
+        start_service "$DISPATCHER_SERVICE"
+    fi
     wait_for_http "$QDRANT_READY_URL" "Qdrant" 20 2
-    start_service "$MCP_SERVICE"
     wait_for_http "$MCP_HEALTH_URL" "MCP" 20 2
-    start_service "$DISPATCHER_SERVICE"
+    wait_for_http "$DISPATCHER_HEALTH_URL" "Dispatcher" 20 2
     sleep 2
     if systemctl is-active --quiet "$DISPATCHER_SERVICE"; then
         ok "Dispatcher laeuft"
@@ -108,6 +131,10 @@ start_stack() {
 
 stop_stack() {
     check_noninteractive_sudo
+    if stack_target_exists; then
+        log "Stoppe Stack-Target $STACK_TARGET ..."
+        sudo -n systemctl stop "$STACK_TARGET" || true
+    fi
     stop_service "$DISPATCHER_SERVICE"
     stop_service "$MCP_SERVICE"
     stop_service "$QDRANT_SERVICE"
@@ -134,7 +161,32 @@ show_health() {
         warn "MCP health fehlgeschlagen"
     fi
 
-    python scripts/run_production_gates.py
+    if curl -fsS "$DISPATCHER_HEALTH_URL" >/dev/null 2>&1; then
+        ok "Dispatcher healthy"
+    else
+        warn "Dispatcher health fehlgeschlagen"
+    fi
+
+    python "$PRODUCTION_GATES_SCRIPT"
+}
+
+install_stack() {
+    local installer_args=(--enable --start)
+    if [[ "${ARG:-}" == "--no-start" ]]; then
+        installer_args=(--enable)
+    elif [[ -n "${ARG:-}" && "${ARG:-}" != "--start" ]]; then
+        err "Unbekannte install-Option: ${ARG}"
+        usage
+        exit 1
+    fi
+
+    if [[ ! -x "$INSTALLER_SCRIPT" ]]; then
+        err "Installer fehlt: $INSTALLER_SCRIPT"
+        exit 1
+    fi
+    log "Installiere Timus-Stack ..."
+    sudo "$INSTALLER_SCRIPT" "${installer_args[@]}"
+    ok "Timus-Stack installiert"
 }
 
 show_logs() {
@@ -178,6 +230,9 @@ case "$COMMAND" in
         ;;
     health)
         show_health
+        ;;
+    install)
+        install_stack
         ;;
     logs)
         show_logs "$ARG"
