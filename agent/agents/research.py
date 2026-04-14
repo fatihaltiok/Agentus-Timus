@@ -31,6 +31,7 @@ from orchestration.specialist_context import (
     render_specialist_context_block,
 )
 from orchestration.autonomy_observation import record_autonomy_observation
+from orchestration.evidence_response_guard import build_evidence_response_guard
 from tools.deep_research.research_contracts import is_german_state_affiliated_url
 
 log = logging.getLogger("DeepResearchAgent")
@@ -272,10 +273,13 @@ class DeepResearchAgent(BaseAgent):
         context = await self._build_research_context(effective_task, policy=context_policy)
         handoff_context = self._build_delegation_research_context(handoff)
         strategy_context = self._build_specialist_strategy_context(handoff, specialist_context_payload)
+        evidence_guard = build_evidence_response_guard(task)
 
         parts = [effective_task]
         if strategy_context:
             parts.append(strategy_context)
+        if evidence_guard:
+            parts.append(evidence_guard)
         if context:
             parts.append(context)
         if handoff_context:

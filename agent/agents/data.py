@@ -18,6 +18,10 @@ from pathlib import Path
 
 from agent.base_agent import BaseAgent
 from agent.prompts import DATA_PROMPT_TEMPLATE
+from orchestration.evidence_response_guard import (
+    build_evidence_response_guard,
+    looks_like_tabular_data_task,
+)
 
 log = logging.getLogger("DataAgent")
 
@@ -57,8 +61,15 @@ class DataAgent(BaseAgent):
 
     async def run(self, task: str) -> str:
         """Reichert den Task mit bekannten Datenpfaden und aktuellen Dateien an."""
-        context = await self._build_data_context()
-        enriched_task = task + "\n\n" + context
+        parts = [task]
+        evidence_guard = build_evidence_response_guard(task)
+        if evidence_guard:
+            parts.append(evidence_guard)
+        if looks_like_tabular_data_task(task):
+            context = await self._build_data_context()
+            if context:
+                parts.append(context)
+        enriched_task = "\n\n".join(part for part in parts if part)
         return await super().run(enriched_task)
 
     # ------------------------------------------------------------------
