@@ -2,6 +2,40 @@
 
 ---
 
+## Fortschritt 2026-04-14 - Phase E E4 haertet Improvement-Verifikationsfehler und Rollback-Contract
+
+Der naechste E4-Slice schliesst eine weitere Luecke im autonomen Improvement-Terminalpfad: Test-/Canary-Fehler und explizite Rollbacks duerfen nicht mehr als bloss `ended_unverified` durchlaufen.
+
+Geaendert:
+
+- [orchestration/autonomous_runner.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomous_runner.py)
+  - neue Ergebnis-Klassifikation fuer autonome Improvement-Tasks:
+    - `verification_failed`
+    - `rolled_back`
+  - Verifikationsfehler und Rollbacks enden jetzt mit:
+    - Queue-Status `failed`
+    - Runtime-Event `task_execution_failed`
+    - sauberem `verification_state`
+      - `error`
+      - `rolled_back`
+  - Notification-Titel und Telegram-Header unterscheiden jetzt:
+    - blockiert
+    - Verifikation fehlgeschlagen
+    - zurueckgerollt
+    - verifiziert
+    - beendet
+
+Tests:
+
+- erweitert:
+  - [tests/test_autonomous_runner_incident_notifications.py](/home/fatih-ubuntu/dev/timus/tests/test_autonomous_runner_incident_notifications.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/autonomous_runner.py tests/test_autonomous_runner_incident_notifications.py`
+- `pytest -q tests/test_autonomous_runner_incident_notifications.py`
+  - `14 passed`
+
 ## Fortschritt 2026-04-14 - Phase E E4 zieht Rollout- und Verification-Gates in E3.3 Auto-Enqueue
 
 Der naechste E4-Slice schliesst eine offene E3.3-Governance-Luecke: Improvement-Auto-Enqueue haengt jetzt nicht mehr nur an Create-Readiness, Budget, Dedupe und Cooldown, sondern auch an den laufenden Rollout-/Rollback-/Verification-Signalen.

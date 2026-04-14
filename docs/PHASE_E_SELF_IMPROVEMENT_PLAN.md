@@ -650,6 +650,9 @@ Bestandteile:
   - `rollout_frozen`
   - `verification_blocked`
   - `runtime_critical`
+- Improvement-Resultate mit Test-/Canary-Fehler oder explizitem Rollback enden jetzt ebenfalls technisch als Nicht-Erfolg statt nur als `ended_unverified`:
+  - `verification_failed`
+  - `rolled_back`
 - klarer Rollback bei:
   - Testfehler
   - Canary-Fehler

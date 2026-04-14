@@ -115,6 +115,27 @@ _IMPROVEMENT_TASK_VERIFIED_RESULT_HINTS = (
     "canary_state=passed",
 )
 
+_IMPROVEMENT_TASK_VERIFICATION_FAILED_RESULT_HINTS = (
+    "verification=failed",
+    "verification failed",
+    "verification_status=error",
+    "verification_status=failed",
+    "test_result=failed",
+    "pytest failed",
+    "tests failed",
+    "test failed",
+    "canary_state=failed",
+    "canary failed",
+)
+
+_IMPROVEMENT_TASK_ROLLBACK_RESULT_HINTS = (
+    "verification_status=rolled_back",
+    "rolled back",
+    "rollback applied",
+    "rollback ausgefuehrt",
+    "rollback ausgeführt",
+)
+
 
 def _classify_autonomous_result_notification(description: str, result: str) -> dict[str, str]:
     short_description = str(description or "")[:120]
@@ -125,6 +146,18 @@ def _classify_autonomous_result_notification(description: str, result: str) -> d
                 "state": "blocked",
                 "telegram_header": f"⚠️ *Autonomer Improvement-Task blockiert*\n_{short_description}_\n\n",
                 "email_title": "Autonomer Improvement-Task blockiert",
+            }
+        if any(hint in normalized_result for hint in _IMPROVEMENT_TASK_ROLLBACK_RESULT_HINTS):
+            return {
+                "state": "rolled_back",
+                "telegram_header": f"↩️ *Autonomer Improvement-Task zurueckgerollt*\n_{short_description}_\n\n",
+                "email_title": "Autonomer Improvement-Task zurueckgerollt",
+            }
+        if any(hint in normalized_result for hint in _IMPROVEMENT_TASK_VERIFICATION_FAILED_RESULT_HINTS):
+            return {
+                "state": "verification_failed",
+                "telegram_header": f"❌ *Autonomer Improvement-Task Verifikation fehlgeschlagen*\n_{short_description}_\n\n",
+                "email_title": "Autonomer Improvement-Task Verifikation fehlgeschlagen",
             }
         if any(hint in normalized_result for hint in _IMPROVEMENT_TASK_VERIFIED_RESULT_HINTS):
             return {
@@ -164,6 +197,22 @@ def _classify_autonomous_task_terminal_contract(description: str, result: str) -
                 "task_outcome_state": "verified",
                 "verification_state": "verified",
                 "error_class": "",
+            }
+        if state == "rolled_back":
+            return {
+                "queue_status": "failed",
+                "runtime_event": "task_execution_failed",
+                "task_outcome_state": "rolled_back",
+                "verification_state": "rolled_back",
+                "error_class": "rolled_back",
+            }
+        if state == "verification_failed":
+            return {
+                "queue_status": "failed",
+                "runtime_event": "task_execution_failed",
+                "task_outcome_state": "verification_failed",
+                "verification_state": "error",
+                "error_class": "verification_failed",
             }
         return {
             "queue_status": "completed",

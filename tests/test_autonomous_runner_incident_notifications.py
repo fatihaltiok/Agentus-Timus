@@ -157,6 +157,28 @@ def test_improvement_task_notification_marks_verified_result_as_verified() -> No
     assert style["email_title"] == "Autonomer Improvement-Task verifiziert"
 
 
+def test_improvement_task_notification_marks_verification_failure() -> None:
+    style = _classify_autonomous_result_notification(
+        "[PHASE E E3.2] Improvement Hardening Task fuer routing drift.",
+        "Self-hardening failed: main_dispatcher.py | pytest failed | test_result=failed",
+    )
+
+    assert style["state"] == "verification_failed"
+    assert style["telegram_header"].startswith("❌ *Autonomer Improvement-Task Verifikation fehlgeschlagen*")
+    assert style["email_title"] == "Autonomer Improvement-Task Verifikation fehlgeschlagen"
+
+
+def test_improvement_task_notification_marks_rollback_result() -> None:
+    style = _classify_autonomous_result_notification(
+        "[PHASE E E3.2] Improvement Hardening Task fuer routing drift.",
+        "Self-hardening ended with verification_status=rolled_back after rollback applied",
+    )
+
+    assert style["state"] == "rolled_back"
+    assert style["telegram_header"].startswith("↩️ *Autonomer Improvement-Task zurueckgerollt*")
+    assert style["email_title"] == "Autonomer Improvement-Task zurueckgerollt"
+
+
 def test_improvement_task_terminal_contract_blocks_step_limit_result() -> None:
     contract = _classify_autonomous_task_terminal_contract(
         "[PHASE E E3.2] Improvement Hardening Task fuer tool:analyze_screen_verified.",
@@ -167,6 +189,32 @@ def test_improvement_task_terminal_contract_blocks_step_limit_result() -> None:
     assert contract["runtime_event"] == "task_execution_failed"
     assert contract["task_outcome_state"] == "blocked"
     assert contract["verification_state"] == "blocked"
+
+
+def test_improvement_task_terminal_contract_fails_verification_failure_result() -> None:
+    contract = _classify_autonomous_task_terminal_contract(
+        "[PHASE E E3.2] Improvement Hardening Task fuer routing drift.",
+        "Self-hardening failed: main_dispatcher.py | pytest failed | test_result=failed",
+    )
+
+    assert contract["queue_status"] == "failed"
+    assert contract["runtime_event"] == "task_execution_failed"
+    assert contract["task_outcome_state"] == "verification_failed"
+    assert contract["verification_state"] == "error"
+    assert contract["error_class"] == "verification_failed"
+
+
+def test_improvement_task_terminal_contract_fails_rollback_result() -> None:
+    contract = _classify_autonomous_task_terminal_contract(
+        "[PHASE E E3.2] Improvement Hardening Task fuer routing drift.",
+        "Self-hardening ended with verification_status=rolled_back after rollback applied",
+    )
+
+    assert contract["queue_status"] == "failed"
+    assert contract["runtime_event"] == "task_execution_failed"
+    assert contract["task_outcome_state"] == "rolled_back"
+    assert contract["verification_state"] == "rolled_back"
+    assert contract["error_class"] == "rolled_back"
 
 
 @pytest.mark.asyncio
@@ -253,6 +301,50 @@ async def test_improvement_task_blocked_result_is_failed_not_completed(monkeypat
     assert task is not None
     assert task["status"] == "failed"
     assert "Maximale Anzahl an Schritten erreicht" in str(task.get("error") or "")
+    assert deliveries == {"telegram": 1, "email": 1}
+
+
+@pytest.mark.asyncio
+async def test_improvement_task_verification_failure_is_failed_not_completed(monkeypatch, tmp_path: Path) -> None:
+    queue = TaskQueue(db_path=tmp_path / "task_queue.db")
+    task_id = queue.add(
+        description="[PHASE E E3.2] Improvement Hardening Task fuer routing drift.",
+        target_agent="development",
+        max_retries=1,
+        metadata=json.dumps({"source": "improvement_task_bridge"}, ensure_ascii=True),
+    )
+
+    runner = AutonomousRunner(interval_minutes=15)
+    monkeypatch.setattr("orchestration.autonomous_runner.get_queue", lambda: queue)
+    monkeypatch.setitem(sys.modules, "main_dispatcher", SimpleNamespace(get_agent_decision=_fake_get_agent_decision))
+
+    async def _failed_failover(*, agent_name: str, query: str, tools_description: str, session_id: str, on_alert):
+        del agent_name, query, tools_description, session_id, on_alert
+        return "Self-hardening failed: main_dispatcher.py | pytest failed | test_result=failed"
+
+    monkeypatch.setitem(sys.modules, "utils.model_failover", SimpleNamespace(failover_run_agent=_failed_failover))
+
+    deliveries = {"telegram": 0, "email": 0}
+
+    async def _send_tg(description: str, result: str) -> bool:
+        del description, result
+        deliveries["telegram"] += 1
+        return True
+
+    async def _send_mail(description: str, result: str) -> bool:
+        del description, result
+        deliveries["email"] += 1
+        return True
+
+    monkeypatch.setattr(runner, "_send_result_to_telegram", _send_tg)
+    monkeypatch.setattr(runner, "_send_result_to_email", _send_mail)
+
+    await runner._execute_task(queue.claim_next())
+
+    task = queue.get_by_id(task_id)
+    assert task is not None
+    assert task["status"] == "failed"
+    assert "pytest failed" in str(task.get("error") or "")
     assert deliveries == {"telegram": 1, "email": 1}
 
 
