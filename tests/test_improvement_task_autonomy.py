@@ -70,6 +70,23 @@ def test_build_improvement_task_autonomy_decision_requires_self_modify_opt_in() 
     assert decision["allow_autoenqueue"] is False
 
 
+def test_build_improvement_task_autonomy_decision_blocks_under_strict_force_off_guard() -> None:
+    _, _, _, payload = _payload_for("main_dispatcher.py", candidate_id="cand:strict")
+
+    decision = build_improvement_task_autonomy_decision(
+        payload,
+        rollout_guard={"state": "strict_force_off", "blocked": True, "reasons": ["policy_runtime:strict_force_off"]},
+        allow_self_modify=False,
+        enqueued_this_cycle=0,
+        max_autoenqueue=1,
+    )
+
+    assert decision["autoenqueue_state"] == "strict_force_off"
+    assert decision["allow_autoenqueue"] is False
+    assert decision["rollout_guard_blocked"] is True
+    assert "rollout_guard:strict_force_off" in decision["blocked_by"]
+
+
 def test_apply_improvement_task_autonomy_dedup_does_not_consume_budget() -> None:
     compiled_a, promotion_a, bridge_a, payload_a = _payload_for("main_dispatcher.py", candidate_id="cand:a")
     compiled_b, promotion_b, bridge_b, payload_b = _payload_for("server/mcp_server.py", candidate_id="cand:b")
@@ -133,6 +150,66 @@ def test_apply_improvement_task_autonomy_blocks_recent_completed_task_via_cooldo
     queue.add.assert_not_called()
 
 
+def test_apply_improvement_task_autonomy_blocks_under_rollout_freeze() -> None:
+    compiled, promotion, bridge, payload = _payload_for("main_dispatcher.py", candidate_id="cand:freeze")
+
+    queue = MagicMock()
+
+    def _policy_state(name: str) -> dict:
+        if name == "hardening_rollout_freeze":
+            return {"state_value": "true"}
+        return {}
+
+    queue.get_policy_runtime_state.side_effect = _policy_state
+
+    result = apply_improvement_task_autonomy(
+        queue,
+        [compiled],
+        [promotion],
+        [bridge],
+        [payload],
+        allow_self_modify=False,
+        max_autoenqueue=1,
+    )
+
+    assert result["blocked_total"] == 1
+    assert result["rollout_guard"]["state"] == "rollout_frozen"
+    assert result["decisions"][0]["autoenqueue_state"] == "rollout_frozen"
+    assert result["decisions"][0]["enqueue_status"] == "not_created"
+    queue.add.assert_not_called()
+
+
+def test_apply_improvement_task_autonomy_blocks_when_verification_is_blocked(monkeypatch) -> None:
+    compiled, promotion, bridge, payload = _payload_for("main_dispatcher.py", candidate_id="cand:verify")
+
+    monkeypatch.setattr(
+        "orchestration.improvement_task_autonomy.get_self_hardening_runtime_summary",
+        lambda queue: {
+            "state": "warn",
+            "last_verification_status": "blocked",
+            "last_canary_state": "",
+        },
+    )
+
+    queue = MagicMock()
+    queue.get_policy_runtime_state.return_value = {}
+
+    result = apply_improvement_task_autonomy(
+        queue,
+        [compiled],
+        [promotion],
+        [bridge],
+        [payload],
+        allow_self_modify=False,
+        max_autoenqueue=1,
+    )
+
+    assert result["rollout_guard"]["state"] == "verification_blocked"
+    assert result["decisions"][0]["autoenqueue_state"] == "verification_blocked"
+    assert result["decisions"][0]["enqueue_reason"] == "verification_status:blocked"
+    queue.add.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_run_improvement_task_autonomy_cycle_enqueues_development_task(monkeypatch) -> None:
     async def _fake_combined_candidates(self):
@@ -171,6 +248,55 @@ async def test_run_improvement_task_autonomy_cycle_enqueues_development_task(mon
     assert summary["status"] == "ok"
     assert summary["enqueued_total"] == 1
     assert summary["autonomy_decisions"][0]["autoenqueue_state"] == "enqueue_created"
+    assert summary["rollout_guard"]["state"] == "allow"
+
+
+@pytest.mark.asyncio
+async def test_run_improvement_task_autonomy_cycle_returns_runtime_critical_guard(monkeypatch) -> None:
+    async def _fake_combined_candidates(self):
+        return [
+            {
+                "candidate_id": "cand:critical",
+                "category": "routing",
+                "problem": "Dispatcher fallback repeated",
+                "proposed_action": "Harden dispatcher frontdoor",
+                "source_count": 2,
+                "freshness_state": "fresh",
+                "verified_paths": ["main_dispatcher.py"],
+            }
+        ]
+
+    monkeypatch.setattr(
+        "orchestration.self_improvement_engine.get_improvement_engine",
+        lambda: SimpleNamespace(get_normalized_suggestions=lambda applied=False: []),
+    )
+    monkeypatch.setattr(
+        "orchestration.session_reflection.SessionReflectionLoop.get_improvement_suggestions",
+        _fake_combined_candidates,
+    )
+    monkeypatch.setattr(
+        "orchestration.improvement_task_autonomy.get_self_hardening_runtime_summary",
+        lambda queue: {
+            "state": "critical",
+            "last_verification_status": "",
+            "last_canary_state": "",
+        },
+    )
+
+    queue = MagicMock()
+    queue.get_policy_runtime_state.return_value = {}
+
+    summary = await run_improvement_task_autonomy_cycle(
+        queue,
+        allow_self_modify=False,
+        max_autoenqueue=1,
+        rollout_stage="self_modify_safe",
+    )
+
+    assert summary["enqueued_total"] == 0
+    assert summary["rollout_guard"]["state"] == "runtime_critical"
+    assert summary["autonomy_decisions"][0]["autoenqueue_state"] == "runtime_critical"
+    queue.add.assert_not_called()
 
 
 def test_build_improvement_task_autonomy_decisions_applies_preview_budget() -> None:

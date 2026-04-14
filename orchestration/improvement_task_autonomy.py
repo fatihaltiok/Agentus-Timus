@@ -13,7 +13,10 @@ from orchestration.improvement_task_execution import (
     enqueue_improvement_hardening_task,
 )
 from orchestration.improvement_task_promotion import evaluate_compiled_task_promotions
-from orchestration.self_hardening_runtime import record_self_hardening_event
+from orchestration.self_hardening_runtime import (
+    get_self_hardening_runtime_summary,
+    record_self_hardening_event,
+)
 
 
 _AUTOENQUEUE_STATES = {
@@ -21,6 +24,11 @@ _AUTOENQUEUE_STATES = {
     "route_not_autonomous",
     "self_modify_opt_in_required",
     "queue_budget_exhausted",
+    "strict_force_off",
+    "rollback_active",
+    "rollout_frozen",
+    "verification_blocked",
+    "runtime_critical",
     "autoenqueue_ready",
     "enqueue_created",
     "enqueue_deduped",
@@ -41,6 +49,10 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _is_truthy(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _text(value: Any, *, limit: int = 160) -> str:
     text = str(value or "").strip()
     if len(text) <= limit:
@@ -51,6 +63,68 @@ def _text(value: Any, *, limit: int = 160) -> str:
 def _metadata(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     value = payload.get("metadata")
     return value if isinstance(value, Mapping) else {}
+
+
+def _policy_runtime_state(queue: Any, key: str) -> Mapping[str, Any]:
+    getter = getattr(queue, "get_policy_runtime_state", None)
+    if not callable(getter):
+        return {}
+    try:
+        value = getter(key)
+    except Exception:
+        return {}
+    return value if isinstance(value, Mapping) else {}
+
+
+def get_improvement_task_rollout_guard(queue: Any) -> dict[str, Any]:
+    runtime = get_self_hardening_runtime_summary(queue)
+    strict_force_off = _is_truthy(_policy_runtime_state(queue, "strict_force_off").get("state_value"))
+    freeze_active = _is_truthy(_policy_runtime_state(queue, "hardening_rollout_freeze").get("state_value"))
+    scorecard_last_action = _text(_policy_runtime_state(queue, "scorecard_last_action").get("state_value"), limit=96).lower()
+    hardening_last_action = _text(_policy_runtime_state(queue, "hardening_last_action").get("state_value"), limit=96).lower()
+    runtime_state = _text(runtime.get("state"), limit=64).lower()
+    verification_status = _text(runtime.get("last_verification_status"), limit=64).lower()
+    canary_state = _text(runtime.get("last_canary_state"), limit=64).lower()
+    state = "allow"
+    reasons: list[str] = []
+
+    if strict_force_off:
+        state = "strict_force_off"
+        reasons.append("policy_runtime:strict_force_off")
+    elif "rollback" in scorecard_last_action or "rollback" in hardening_last_action:
+        state = "rollback_active"
+        reasons.append(f"scorecard_action:{scorecard_last_action or 'n/a'}")
+        reasons.append(f"hardening_action:{hardening_last_action or 'n/a'}")
+    elif freeze_active or "freeze" in hardening_last_action or scorecard_last_action == "governance_hold":
+        state = "rollout_frozen"
+        reasons.append("policy_runtime:hardening_rollout_freeze" if freeze_active else "rollout_action:freeze")
+    elif verification_status in {"blocked", "rolled_back", "error"} or canary_state in {
+        "blocked",
+        "rolled_back",
+        "error",
+        "failed",
+    }:
+        state = "verification_blocked"
+        if verification_status:
+            reasons.append(f"verification_status:{verification_status}")
+        if canary_state:
+            reasons.append(f"canary_state:{canary_state}")
+    elif runtime_state == "critical":
+        state = "runtime_critical"
+        reasons.append("self_hardening_runtime:critical")
+
+    return {
+        "state": state,
+        "blocked": state != "allow",
+        "reasons": reasons[:4],
+        "strict_force_off": strict_force_off,
+        "freeze_active": freeze_active,
+        "scorecard_last_action": scorecard_last_action,
+        "hardening_last_action": hardening_last_action,
+        "runtime_state": runtime_state,
+        "verification_status": verification_status,
+        "canary_state": canary_state,
+    }
 
 
 def get_improvement_task_autonomy_settings() -> dict[str, Any]:
@@ -74,6 +148,7 @@ def get_improvement_task_autonomy_settings() -> dict[str, Any]:
 def build_improvement_task_autonomy_decision(
     payload: Mapping[str, Any],
     *,
+    rollout_guard: Mapping[str, Any] | None = None,
     allow_self_modify: bool = False,
     enqueued_this_cycle: int = 0,
     max_autoenqueue: int = 1,
@@ -88,6 +163,13 @@ def build_improvement_task_autonomy_decision(
     bridge_state = _text(payload.get("bridge_state") or metadata.get("bridge_state"), limit=64)
     requested_fix_mode = _text(metadata.get("requested_fix_mode"), limit=64)
     effective_fix_mode = _text(metadata.get("effective_fix_mode") or metadata.get("execution_mode"), limit=64)
+    guard_state = _text((rollout_guard or {}).get("state"), limit=64).lower() or "allow"
+    guard_blocked = bool((rollout_guard or {}).get("blocked")) and guard_state != "allow"
+    guard_reasons = [
+        _text(item, limit=96)
+        for item in ((rollout_guard or {}).get("reasons") or [])
+        if _text(item, limit=96)
+    ]
     reasons: list[str] = []
     blocked_by: list[str] = []
 
@@ -99,6 +181,11 @@ def build_improvement_task_autonomy_decision(
     if creation_state != "task_payload_ready":
         blocked_by.append(f"creation_state:{creation_state or 'unknown'}")
         reasons.append("payload_not_ready")
+    elif guard_blocked:
+        autoenqueue_state = guard_state
+        blocked_by.append(f"rollout_guard:{guard_state}")
+        reasons.append("rollout_guard_blocked")
+        reasons.extend(guard_reasons[:3])
     elif target_agent == "development":
         reasons.append("development_autonomy_allowed")
         if used_budget >= safe_budget:
@@ -144,6 +231,9 @@ def build_improvement_task_autonomy_decision(
         "target_agent": target_agent,
         "requested_fix_mode": requested_fix_mode,
         "effective_fix_mode": effective_fix_mode,
+        "rollout_guard_state": guard_state,
+        "rollout_guard_blocked": guard_blocked,
+        "rollout_guard_reasons": guard_reasons[:3],
         "autoenqueue_state": autoenqueue_state,
         "allow_autoenqueue": allow_autoenqueue,
         "allow_self_modify": bool(allow_self_modify),
@@ -159,6 +249,7 @@ def build_improvement_task_autonomy_decision(
 def build_improvement_task_autonomy_decisions(
     payloads: Iterable[Mapping[str, Any]],
     *,
+    rollout_guard: Mapping[str, Any] | None = None,
     allow_self_modify: bool = False,
     max_autoenqueue: int = 1,
     limit: int | None = None,
@@ -168,6 +259,7 @@ def build_improvement_task_autonomy_decisions(
     for payload in payloads:
         decision = build_improvement_task_autonomy_decision(
             payload,
+            rollout_guard=rollout_guard,
             allow_self_modify=allow_self_modify,
             enqueued_this_cycle=reserved_budget,
             max_autoenqueue=max_autoenqueue,
@@ -202,6 +294,8 @@ def _record_improvement_task_autonomy_event(decision: Mapping[str, Any]) -> None
         "bridge_state": _text(decision.get("bridge_state"), limit=64),
         "requested_fix_mode": _text(decision.get("requested_fix_mode"), limit=64),
         "effective_fix_mode": _text(decision.get("effective_fix_mode"), limit=64),
+        "rollout_guard_state": _text(decision.get("rollout_guard_state"), limit=64),
+        "rollout_guard_blocked": bool(decision.get("rollout_guard_blocked")),
         "autoenqueue_state": _text(decision.get("autoenqueue_state"), limit=64),
         "enqueue_status": _text(decision.get("enqueue_status"), limit=64),
         "enqueue_reason": _text(decision.get("enqueue_reason"), limit=160),
@@ -273,11 +367,13 @@ def apply_improvement_task_autonomy(
     enqueued_total = 0
     deduped_total = 0
     blocked_total = 0
+    rollout_guard = get_improvement_task_rollout_guard(queue)
 
     for payload in payloads:
         compiled_task_id = _text(payload.get("compiled_task_id"), limit=80)
         decision = build_improvement_task_autonomy_decision(
             payload,
+            rollout_guard=rollout_guard,
             allow_self_modify=allow_self_modify,
             enqueued_this_cycle=enqueued_total,
             max_autoenqueue=max_autoenqueue,
@@ -324,6 +420,12 @@ def apply_improvement_task_autonomy(
                     decision["autoenqueue_state"] = "enqueue_blocked"
                     blocked_total += 1
         else:
+            if decision.get("rollout_guard_blocked"):
+                decision["enqueue_status"] = "not_created"
+                decision["enqueue_reason"] = _text(
+                    "; ".join(decision.get("rollout_guard_reasons") or []) or decision.get("rollout_guard_state"),
+                    limit=160,
+                )
             blocked_total += 1
 
         _record_improvement_task_autonomy_event(decision)
@@ -336,6 +438,7 @@ def apply_improvement_task_autonomy(
         "enqueued_total": enqueued_total,
         "deduped_total": deduped_total,
         "blocked_total": blocked_total,
+        "rollout_guard": rollout_guard,
     }
 
 
@@ -391,6 +494,7 @@ async def run_improvement_task_autonomy_cycle(
         "enqueued_total": int(autonomy.get("enqueued_total") or 0),
         "deduped_total": int(autonomy.get("deduped_total") or 0),
         "blocked_total": int(autonomy.get("blocked_total") or 0),
+        "rollout_guard": autonomy.get("rollout_guard") or {"state": "allow", "blocked": False, "reasons": []},
         "compiled_tasks": compiled_tasks,
         "promotion_decisions": promotion_decisions,
         "bridge_decisions": bridge_decisions,

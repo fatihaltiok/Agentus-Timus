@@ -2,6 +2,39 @@
 
 ---
 
+## Fortschritt 2026-04-14 - Phase E E4 zieht Rollout- und Verification-Gates in E3.3 Auto-Enqueue
+
+Der naechste E4-Slice schliesst eine offene E3.3-Governance-Luecke: Improvement-Auto-Enqueue haengt jetzt nicht mehr nur an Create-Readiness, Budget, Dedupe und Cooldown, sondern auch an den laufenden Rollout-/Rollback-/Verification-Signalen.
+
+Geaendert:
+
+- [orchestration/improvement_task_autonomy.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_task_autonomy.py)
+  - neuer Rollout-Guard ueber:
+    - `strict_force_off`
+    - `hardening_rollout_freeze`
+    - `scorecard_last_action`
+    - `hardening_last_action`
+    - `get_self_hardening_runtime_summary(...)`
+  - neue sichtbare Blockzustande:
+    - `strict_force_off`
+    - `rollback_active`
+    - `rollout_frozen`
+    - `verification_blocked`
+    - `runtime_critical`
+  - Zyklen und Entscheidungen tragen den Guard jetzt im Summary mit
+- [tests/test_improvement_task_autonomy.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_task_autonomy.py)
+  - neue Regressionen fuer Strict-Force-Off, Freeze, Verification-Block und Runtime-Critical
+- [tests/test_improvement_task_autonomy_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_task_autonomy_hypothesis.py)
+  - bounded-state-Test deckt jetzt die neuen E4-Guardstates mit ab
+- [tests/test_improvement_task_autonomy_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_task_autonomy_crosshair.py)
+  - neuer Contract dafuer, dass ein Development-Payload unter `strict_force_off` nicht autoenqueued wird
+
+Verifikation:
+
+- `python -m py_compile orchestration/improvement_task_autonomy.py tests/test_improvement_task_autonomy.py tests/test_improvement_task_autonomy_hypothesis.py tests/test_improvement_task_autonomy_crosshair.py`
+- `pytest -q tests/test_improvement_task_autonomy.py tests/test_improvement_task_autonomy_hypothesis.py`
+- `python -m crosshair check tests/test_improvement_task_autonomy_crosshair.py`
+
 ## Fortschritt 2026-04-12 - Phase E E4 haertet terminalen Improvement-Contract
 
 Der naechste E4-Slice trennt jetzt nicht mehr nur kommunikativ zwischen `blockiert`, `beendet` und `verifiziert`, sondern auch im Queue-/Runtime-Contract.

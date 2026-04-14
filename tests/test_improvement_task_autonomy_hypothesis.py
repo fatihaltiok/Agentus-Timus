@@ -20,12 +20,23 @@ from orchestration.improvement_task_promotion import evaluate_compiled_task_prom
         ]
     ),
     category=st.sampled_from(["routing", "context", "runtime", "policy", "tool", "ux_handoff"]),
+    rollout_guard_state=st.sampled_from(
+        [
+            "allow",
+            "strict_force_off",
+            "rollback_active",
+            "rollout_frozen",
+            "verification_blocked",
+            "runtime_critical",
+        ]
+    ),
     allow_self_modify=st.booleans(),
     max_autoenqueue=st.integers(min_value=0, max_value=2),
 )
 def test_hypothesis_improvement_task_autonomy_decision_state_is_bounded(
     target_path: str,
     category: str,
+    rollout_guard_state: str,
     allow_self_modify: bool,
     max_autoenqueue: int,
 ) -> None:
@@ -45,6 +56,11 @@ def test_hypothesis_improvement_task_autonomy_decision_state_is_bounded(
     payload = build_improvement_hardening_task_payload(compiled, promotion, bridge)
     decision = build_improvement_task_autonomy_decision(
         payload,
+        rollout_guard=(
+            {"state": rollout_guard_state, "blocked": True, "reasons": [f"guard:{rollout_guard_state}"]}
+            if rollout_guard_state != "allow"
+            else None
+        ),
         allow_self_modify=allow_self_modify,
         enqueued_this_cycle=0,
         max_autoenqueue=max_autoenqueue,
@@ -55,9 +71,15 @@ def test_hypothesis_improvement_task_autonomy_decision_state_is_bounded(
         "route_not_autonomous",
         "self_modify_opt_in_required",
         "queue_budget_exhausted",
+        "strict_force_off",
+        "rollback_active",
+        "rollout_frozen",
+        "verification_blocked",
+        "runtime_critical",
         "autoenqueue_ready",
         "enqueue_created",
         "enqueue_deduped",
+        "enqueue_cooldown_active",
         "enqueue_blocked",
     }
     assert decision["queue_budget_remaining"] >= 0

@@ -625,7 +625,6 @@ Wichtige Regeln:
 
 Noch offen fuer spaetere E3-Slices:
 
-- Failure-Budgets und Canary-/Rollback-Signale direkt in die Auto-Enqueue-Entscheidung ziehen
 - stillere UX fuer Low-Risk-Autonomie statt sichtbarer Workflow-Interna
 - spaetere, eng begrenzte `self_modify`-Autonomie nur nach staerkerer Verifikation
 
@@ -645,6 +644,12 @@ Bestandteile:
   - `terminal beendet`
   - `verifiziert erfolgreich`
 - blockierte Improvement-Resultate duerfen nicht nur kommunikativ, sondern auch im Queue-Status nicht als Erfolg enden
+- Rollout-/Freeze-/Rollback- und Verification-Signale blockieren jetzt auch direkt die E3.3-Auto-Enqueue-Entscheidung:
+  - `strict_force_off`
+  - `rollback_active`
+  - `rollout_frozen`
+  - `verification_blocked`
+  - `runtime_critical`
 - klarer Rollback bei:
   - Testfehler
   - Canary-Fehler
