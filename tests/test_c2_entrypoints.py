@@ -162,6 +162,15 @@ def test_improvement_endpoint_returns_top_candidates(client):
             "max_autoenqueue": 1,
             "candidate_limit": 5,
         },
+    ), patch(
+        "orchestration.autonomy_observation.build_autonomy_observation_summary",
+        return_value={
+            "improvement_runtime": {
+                "execution_verified_total": 1,
+                "verified_rate": 1.0,
+                "not_verified_rate": 0.0,
+            }
+        },
     ):
         resp = client.get("/autonomy/improvement")
 
@@ -185,6 +194,8 @@ def test_improvement_endpoint_returns_top_candidates(client):
     assert data["task_autonomy_settings"]["enabled"] is True
     assert data["top_task_autonomy_decisions"][0]["candidate_id"] == "m12:1"
     assert data["top_task_autonomy_decisions"][0]["autoenqueue_state"] == "not_creatable"
+    assert data["improvement_runtime"]["execution_verified_total"] == 1
+    assert data["improvement_runtime"]["verified_rate"] == 1.0
 
 
 def test_incident_trace_endpoint_returns_trace(client):

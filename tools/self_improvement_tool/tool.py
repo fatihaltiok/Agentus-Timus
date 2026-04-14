@@ -303,6 +303,7 @@ async def get_e2e_release_gate_status(
 )
 async def get_improvement_suggestions(include_applied: bool = False) -> dict:
     """Gibt Verbesserungsvorschläge zurück."""
+    from orchestration.autonomy_observation import build_autonomy_observation_summary
     from orchestration.improvement_candidates import build_candidate_operator_views
     from orchestration.improvement_task_autonomy import (
         build_improvement_task_autonomy_decisions,
@@ -332,6 +333,7 @@ async def get_improvement_suggestions(include_applied: bool = False) -> dict:
         limit=5,
     )
     autonomy_settings = get_improvement_task_autonomy_settings()
+    observation_summary = build_autonomy_observation_summary()
     return {
         "status": "ok",
         "count": len(suggestions),
@@ -350,4 +352,5 @@ async def get_improvement_suggestions(include_applied: bool = False) -> dict:
             max_autoenqueue=int(autonomy_settings.get("max_autoenqueue") or 1),
             limit=5,
         ),
+        "improvement_runtime": dict(observation_summary.get("improvement_runtime") or {}),
     }

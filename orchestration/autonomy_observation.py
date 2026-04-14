@@ -276,6 +276,30 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
             "by_challenge_type": {},
             "by_reply_kind": {},
         },
+        "improvement_runtime": {
+            "autonomy_decisions_total": 0,
+            "autoenqueue_ready_total": 0,
+            "enqueue_created_total": 0,
+            "enqueue_deduped_total": 0,
+            "enqueue_cooldown_active_total": 0,
+            "enqueue_blocked_total": 0,
+            "execution_started_total": 0,
+            "execution_terminal_total": 0,
+            "execution_verified_total": 0,
+            "execution_ended_unverified_total": 0,
+            "execution_blocked_total": 0,
+            "execution_verification_failed_total": 0,
+            "execution_rolled_back_total": 0,
+            "execution_failed_other_total": 0,
+            "enqueue_creation_rate": 0.0,
+            "verified_rate": 0.0,
+            "not_verified_rate": 0.0,
+            "by_autoenqueue_state": {},
+            "by_target_agent": {},
+            "by_rollout_guard_state": {},
+            "by_task_outcome_state": {},
+            "by_verification_state": {},
+        },
         "top_goal_signatures": [],
         # C2: Nutzerwirkungs-Klassen — eigener Block, unabhängig von request_correlation.
         # user_visible_failures_total in request_correlation wird NICHT doppelt erhöht.
@@ -296,6 +320,7 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
     specialist_context = summary["specialist_context"]
     communication_runtime = summary["communication_runtime"]
     challenge_runtime = summary["challenge_runtime"]
+    improvement_runtime = summary["improvement_runtime"]
     user_impact = summary["user_impact"]
     recent_requests: List[Dict[str, Any]] = []
     recent_routes: List[Dict[str, Any]] = []
@@ -369,6 +394,24 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
                 "query_preview": str(payload.get("query_preview") or payload.get("description_preview") or "")[:180],
             }
         )
+
+    def _is_improvement_runtime_payload(event_type: str, payload: Dict[str, Any]) -> bool:
+        if event_type == "improvement_task_autonomy_event":
+            return True
+        source = _normalize_counter_key(payload.get("source"), fallback="")
+        if source == "improvement_task_bridge":
+            return True
+        task_outcome_state = _normalize_counter_key(payload.get("task_outcome_state"), fallback="")
+        if task_outcome_state in {
+            "verified",
+            "ended_unverified",
+            "blocked",
+            "verification_failed",
+            "rolled_back",
+        }:
+            return True
+        verification_state = _normalize_counter_key(payload.get("verification_state"), fallback="")
+        return verification_state in {"verified", "not_verified", "blocked", "error", "rolled_back"}
 
     for raw_event in events:
         event = dict(raw_event or {})
@@ -538,12 +581,24 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
         elif event_type == "task_execution_started":
             request_correlation["task_started_total"] += 1
             _bump(request_correlation["by_source"], payload.get("source"))
+            if _is_improvement_runtime_payload(event_type, payload):
+                improvement_runtime["execution_started_total"] += 1
 
         elif event_type == "task_execution_completed":
             request_correlation["task_completed_total"] += 1
             _bump(request_correlation["by_source"], payload.get("source"))
             _bump(request_correlation["by_agent"], payload.get("agent"))
             _record_recent_outcome(event_type, observed_at, payload)
+            if _is_improvement_runtime_payload(event_type, payload):
+                improvement_runtime["execution_terminal_total"] += 1
+                task_outcome_state = _normalize_counter_key(payload.get("task_outcome_state"))
+                verification_state = _normalize_counter_key(payload.get("verification_state"))
+                _bump(improvement_runtime["by_task_outcome_state"], task_outcome_state)
+                _bump(improvement_runtime["by_verification_state"], verification_state)
+                if task_outcome_state == "verified":
+                    improvement_runtime["execution_verified_total"] += 1
+                elif task_outcome_state == "ended_unverified":
+                    improvement_runtime["execution_ended_unverified_total"] += 1
 
         elif event_type == "task_execution_failed":
             request_correlation["task_failed_total"] += 1
@@ -555,6 +610,20 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
             )
             _record_recent_outcome(event_type, observed_at, payload)
             _record_recent_failure(event_type, observed_at, payload)
+            if _is_improvement_runtime_payload(event_type, payload):
+                improvement_runtime["execution_terminal_total"] += 1
+                task_outcome_state = _normalize_counter_key(payload.get("task_outcome_state"))
+                verification_state = _normalize_counter_key(payload.get("verification_state"))
+                _bump(improvement_runtime["by_task_outcome_state"], task_outcome_state)
+                _bump(improvement_runtime["by_verification_state"], verification_state)
+                if task_outcome_state == "blocked":
+                    improvement_runtime["execution_blocked_total"] += 1
+                elif task_outcome_state == "verification_failed":
+                    improvement_runtime["execution_verification_failed_total"] += 1
+                elif task_outcome_state == "rolled_back":
+                    improvement_runtime["execution_rolled_back_total"] += 1
+                else:
+                    improvement_runtime["execution_failed_other_total"] += 1
 
         elif event_type == "meta_turn_type_selected":
             meta_context_state["turn_type_selected_total"] += 1
@@ -720,6 +789,23 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
             _bump(challenge_runtime["by_challenge_type"], payload.get("challenge_type"))
             _bump(challenge_runtime["by_reply_kind"], payload.get("reply_kind"))
 
+        elif event_type == "improvement_task_autonomy_event":
+            improvement_runtime["autonomy_decisions_total"] += 1
+            autoenqueue_state = _normalize_counter_key(payload.get("autoenqueue_state"))
+            _bump(improvement_runtime["by_autoenqueue_state"], autoenqueue_state)
+            _bump(improvement_runtime["by_target_agent"], payload.get("target_agent"))
+            _bump(improvement_runtime["by_rollout_guard_state"], payload.get("rollout_guard_state"))
+            if autoenqueue_state == "autoenqueue_ready":
+                improvement_runtime["autoenqueue_ready_total"] += 1
+            elif autoenqueue_state == "enqueue_created":
+                improvement_runtime["enqueue_created_total"] += 1
+            elif autoenqueue_state == "enqueue_deduped":
+                improvement_runtime["enqueue_deduped_total"] += 1
+            else:
+                improvement_runtime["enqueue_blocked_total"] += 1
+                if autoenqueue_state == "enqueue_cooldown_active":
+                    improvement_runtime["enqueue_cooldown_active_total"] += 1
+
         elif event_type in _USER_IMPACT_EVENT_TYPES:
             # C2: Nutzerwirkungs-Klassen. Eigener Block — user_visible_failures_total
             # in request_correlation wird nicht doppelt erhöht.
@@ -823,6 +909,20 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
             min(1.0, int(challenge_runtime.get("challenge_reblocked_total") or 0) / challenge_resume_total),
             3,
         )
+    autonomy_decisions_total = int(improvement_runtime.get("autonomy_decisions_total") or 0)
+    if autonomy_decisions_total > 0:
+        improvement_runtime["enqueue_creation_rate"] = round(
+            min(1.0, int(improvement_runtime.get("enqueue_created_total") or 0) / autonomy_decisions_total),
+            3,
+        )
+    execution_terminal_total = int(improvement_runtime.get("execution_terminal_total") or 0)
+    if execution_terminal_total > 0:
+        verified_total = int(improvement_runtime.get("execution_verified_total") or 0)
+        improvement_runtime["verified_rate"] = round(min(1.0, verified_total / execution_terminal_total), 3)
+        improvement_runtime["not_verified_rate"] = round(
+            min(1.0, max(0, execution_terminal_total - verified_total) / execution_terminal_total),
+            3,
+        )
     summary["meta_context_state"]["recent_misreads"] = sorted(
         recent_misreads,
         key=lambda item: str(item.get("observed_at") or ""),
@@ -842,6 +942,7 @@ def render_autonomy_observation_markdown(summary: Dict[str, Any]) -> str:
     specialist_context = dict(summary.get("specialist_context") or {})
     communication_runtime = dict(summary.get("communication_runtime") or {})
     challenge_runtime = dict(summary.get("challenge_runtime") or {})
+    improvement_runtime = dict(summary.get("improvement_runtime") or {})
     request_correlation = dict(summary.get("request_correlation") or {})
     event_counts = dict(summary.get("event_counts") or {})
 
@@ -916,6 +1017,25 @@ def render_autonomy_observation_markdown(summary: Dict[str, Any]) -> str:
             f"- Challenge-Resolution-Rate: `{float(challenge_runtime.get('resolution_rate') or 0.0):.3f}`",
             f"- Challenge-Reblock-Rate: `{float(challenge_runtime.get('reblock_rate') or 0.0):.3f}`",
             "",
+            "## Improvement Runtime",
+            f"- Autonomy-Entscheidungen: `{int(improvement_runtime.get('autonomy_decisions_total') or 0)}`",
+            f"- Auto-Enqueue bereit: `{int(improvement_runtime.get('autoenqueue_ready_total') or 0)}`",
+            f"- Enqueue erstellt: `{int(improvement_runtime.get('enqueue_created_total') or 0)}`",
+            f"- Enqueue dedupliziert: `{int(improvement_runtime.get('enqueue_deduped_total') or 0)}`",
+            f"- Enqueue Cooldown aktiv: `{int(improvement_runtime.get('enqueue_cooldown_active_total') or 0)}`",
+            f"- Enqueue blockiert: `{int(improvement_runtime.get('enqueue_blocked_total') or 0)}`",
+            f"- Execution gestartet: `{int(improvement_runtime.get('execution_started_total') or 0)}`",
+            f"- Terminale Execution-Outcomes: `{int(improvement_runtime.get('execution_terminal_total') or 0)}`",
+            f"- Verifiziert: `{int(improvement_runtime.get('execution_verified_total') or 0)}`",
+            f"- Beendet unverifiziert: `{int(improvement_runtime.get('execution_ended_unverified_total') or 0)}`",
+            f"- Blockiert: `{int(improvement_runtime.get('execution_blocked_total') or 0)}`",
+            f"- Verifikation fehlgeschlagen: `{int(improvement_runtime.get('execution_verification_failed_total') or 0)}`",
+            f"- Zurueckgerollt: `{int(improvement_runtime.get('execution_rolled_back_total') or 0)}`",
+            f"- Sonstige Execution-Fehler: `{int(improvement_runtime.get('execution_failed_other_total') or 0)}`",
+            f"- Enqueue-Creation-Rate: `{float(improvement_runtime.get('enqueue_creation_rate') or 0.0):.3f}`",
+            f"- Verified-Rate: `{float(improvement_runtime.get('verified_rate') or 0.0):.3f}`",
+            f"- Nicht-verifiziert-Rate: `{float(improvement_runtime.get('not_verified_rate') or 0.0):.3f}`",
+            "",
             "## Recipe Outcomes",
             f"- Gesamt: `{int(recipe.get('total') or 0)}`",
             f"- Erfolg: `{int(recipe.get('success_total') or 0)}`",
@@ -955,6 +1075,14 @@ def render_autonomy_observation_markdown(summary: Dict[str, Any]) -> str:
         lines.append(f"- Challenge-Typ `{key}`: `{int(value or 0)}`")
     for key, value in sorted(dict(challenge_runtime.get("by_reply_kind") or {}).items()):
         lines.append(f"- Challenge-Reply `{key}`: `{int(value or 0)}`")
+    for key, value in sorted(dict(improvement_runtime.get("by_autoenqueue_state") or {}).items()):
+        lines.append(f"- Improvement-Autoenqueue `{key}`: `{int(value or 0)}`")
+    for key, value in sorted(dict(improvement_runtime.get("by_rollout_guard_state") or {}).items()):
+        lines.append(f"- Improvement-Rollout-Guard `{key}`: `{int(value or 0)}`")
+    for key, value in sorted(dict(improvement_runtime.get("by_task_outcome_state") or {}).items()):
+        lines.append(f"- Improvement-Outcome `{key}`: `{int(value or 0)}`")
+    for key, value in sorted(dict(improvement_runtime.get("by_verification_state") or {}).items()):
+        lines.append(f"- Improvement-Verification `{key}`: `{int(value or 0)}`")
 
     lines.extend(
         [

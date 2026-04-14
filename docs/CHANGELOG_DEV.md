@@ -2,6 +2,35 @@
 
 ---
 
+## Fortschritt 2026-04-14 - Phase E E4 macht Improvement-Runtime operatorsichtbar
+
+Der naechste E4-Slice macht die bereits live vorhandenen Improvement-Autonomie- und Ergebniszustaende erstmals als eigenen Observation-Block sichtbar, statt sie nur ueber Einzel-Events oder Queue-Status lesen zu muessen.
+
+Geaendert:
+
+- [orchestration/autonomy_observation.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomy_observation.py)
+  - neuer Summary-Block `improvement_runtime`
+  - aggregiert jetzt:
+    - Auto-Enqueue-Entscheidungen
+    - Cooldown-/Block-/Deduped-/Created-Zustaende
+    - terminale Improvement-Outcomes
+    - Verification-States
+    - `enqueue_creation_rate`
+    - `verified_rate`
+    - `not_verified_rate`
+  - Markdown-Render zeigt dafuer jetzt einen eigenen Abschnitt `Improvement Runtime`
+- [tools/self_improvement_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/self_improvement_tool/tool.py)
+  - `get_improvement_suggestions(...)` liefert jetzt auch `improvement_runtime`
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - `/autonomy/improvement` liefert jetzt ebenfalls `improvement_runtime`
+
+Tests:
+
+- erweitert:
+  - [tests/test_autonomy_observation.py](/home/fatih-ubuntu/dev/timus/tests/test_autonomy_observation.py)
+  - [tests/test_self_improvement_tool_ops.py](/home/fatih-ubuntu/dev/timus/tests/test_self_improvement_tool_ops.py)
+  - [tests/test_c2_entrypoints.py](/home/fatih-ubuntu/dev/timus/tests/test_c2_entrypoints.py)
+
 ## Fortschritt 2026-04-14 - Phase E E4 haertet Improvement-Verifikationsfehler und Rollback-Contract
 
 Der naechste E4-Slice schliesst eine weitere Luecke im autonomen Improvement-Terminalpfad: Test-/Canary-Fehler und explizite Rollbacks duerfen nicht mehr als bloss `ended_unverified` durchlaufen.

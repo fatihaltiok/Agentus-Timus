@@ -4998,6 +4998,7 @@ async def autonomy_incident_trace_endpoint(request_id: str, since: str = "", unt
 async def autonomy_improvement_endpoint():
     """Gibt Self-Improvement Statistiken und Vorschläge zurück."""
     try:
+        from orchestration.autonomy_observation import build_autonomy_observation_summary
         from orchestration.improvement_candidates import build_candidate_operator_views
         from orchestration.improvement_task_autonomy import (
             build_improvement_task_autonomy_decisions,
@@ -5028,6 +5029,7 @@ async def autonomy_improvement_endpoint():
             limit=5,
         )
         autonomy_settings = get_improvement_task_autonomy_settings()
+        observation_summary = build_autonomy_observation_summary()
         return {
             "status": "success",
             "tool_stats_count": len(tool_stats),
@@ -5048,6 +5050,7 @@ async def autonomy_improvement_endpoint():
                 max_autoenqueue=int(autonomy_settings.get("max_autoenqueue") or 1),
                 limit=5,
             ),
+            "improvement_runtime": dict(observation_summary.get("improvement_runtime") or {}),
             "candidate_count": len(combined_candidates),
         }
     except Exception as e:

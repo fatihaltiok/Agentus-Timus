@@ -653,6 +653,11 @@ Bestandteile:
 - Improvement-Resultate mit Test-/Canary-Fehler oder explizitem Rollback enden jetzt ebenfalls technisch als Nicht-Erfolg statt nur als `ended_unverified`:
   - `verification_failed`
   - `rolled_back`
+- die Runtime-/Operator-Sicht zieht diese Ergebnisse jetzt auch als eigenen Observation-Block zusammen:
+  - Auto-Enqueue-States
+  - Rollout-Guard-States
+  - terminale Improvement-Outcomes
+  - Verified-/Not-Verified-Raten
 - klarer Rollback bei:
   - Testfehler
   - Canary-Fehler

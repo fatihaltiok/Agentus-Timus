@@ -140,6 +140,16 @@ async def test_get_improvement_suggestions_exposes_normalized_candidates(monkeyp
             "candidate_limit": 5,
         },
     )
+    monkeypatch.setattr(
+        "orchestration.autonomy_observation.build_autonomy_observation_summary",
+        lambda since="", until="": {
+            "improvement_runtime": {
+                "execution_verified_total": 1,
+                "verified_rate": 1.0,
+                "not_verified_rate": 0.0,
+            }
+        },
+    )
 
     result = await get_improvement_suggestions(include_applied=False)
 
@@ -161,3 +171,5 @@ async def test_get_improvement_suggestions_exposes_normalized_candidates(monkeyp
     assert result["task_autonomy_settings"]["enabled"] is True
     assert result["top_task_autonomy_decisions"][0]["candidate_id"] == "m12:1"
     assert result["top_task_autonomy_decisions"][0]["autoenqueue_state"] == "not_creatable"
+    assert result["improvement_runtime"]["execution_verified_total"] == 1
+    assert result["improvement_runtime"]["verified_rate"] == 1.0

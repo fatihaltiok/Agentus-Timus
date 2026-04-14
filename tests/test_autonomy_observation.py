@@ -491,3 +491,127 @@ def test_autonomy_observation_summarizes_challenge_runtime(tmp_path: Path) -> No
     assert "## Challenge Runtime" in markdown
     assert "Challenge aufgeloest" in markdown
     assert "Challenge-Typ `2fa`" in markdown
+
+
+def test_autonomy_observation_summarizes_improvement_runtime(tmp_path: Path) -> None:
+    base = datetime.now().astimezone().replace(microsecond=0)
+    store = AutonomyObservationStore(
+        log_path=tmp_path / "autonomy_observation.jsonl",
+        state_path=tmp_path / "autonomy_observation_state.json",
+    )
+    store.start_session(label="e4-improvement-runtime", duration_days=1, started_at=(base - timedelta(minutes=10)).isoformat())
+
+    assert store.record_event(
+        "improvement_task_autonomy_event",
+        {
+            "candidate_id": "m12:100",
+            "target_agent": "development",
+            "rollout_guard_state": "allow",
+            "autoenqueue_state": "enqueue_created",
+        },
+        observed_at=(base - timedelta(minutes=9)).isoformat(),
+    )
+    assert store.record_event(
+        "improvement_task_autonomy_event",
+        {
+            "candidate_id": "m12:101",
+            "target_agent": "development",
+            "rollout_guard_state": "rollout_frozen",
+            "autoenqueue_state": "enqueue_cooldown_active",
+        },
+        observed_at=(base - timedelta(minutes=8)).isoformat(),
+    )
+    assert store.record_event(
+        "task_execution_started",
+        {
+            "task_id": "task_1",
+            "source": "improvement_task_bridge",
+        },
+        observed_at=(base - timedelta(minutes=7)).isoformat(),
+    )
+    assert store.record_event(
+        "task_execution_completed",
+        {
+            "task_id": "task_1",
+            "source": "improvement_task_bridge",
+            "task_outcome_state": "verified",
+            "verification_state": "verified",
+        },
+        observed_at=(base - timedelta(minutes=6)).isoformat(),
+    )
+    assert store.record_event(
+        "task_execution_completed",
+        {
+            "task_id": "task_2",
+            "source": "improvement_task_bridge",
+            "task_outcome_state": "ended_unverified",
+            "verification_state": "not_verified",
+        },
+        observed_at=(base - timedelta(minutes=5)).isoformat(),
+    )
+    assert store.record_event(
+        "task_execution_failed",
+        {
+            "task_id": "task_3",
+            "source": "improvement_task_bridge",
+            "task_outcome_state": "blocked",
+            "verification_state": "blocked",
+            "error_class": "blocked_result",
+        },
+        observed_at=(base - timedelta(minutes=4)).isoformat(),
+    )
+    assert store.record_event(
+        "task_execution_failed",
+        {
+            "task_id": "task_4",
+            "source": "improvement_task_bridge",
+            "task_outcome_state": "verification_failed",
+            "verification_state": "error",
+            "error_class": "verification_failed",
+        },
+        observed_at=(base - timedelta(minutes=3)).isoformat(),
+    )
+    assert store.record_event(
+        "task_execution_failed",
+        {
+            "task_id": "task_5",
+            "source": "improvement_task_bridge",
+            "task_outcome_state": "rolled_back",
+            "verification_state": "rolled_back",
+            "error_class": "rolled_back",
+        },
+        observed_at=(base - timedelta(minutes=2)).isoformat(),
+    )
+
+    summary = store.build_summary()
+
+    improvement = summary["improvement_runtime"]
+    assert improvement["autonomy_decisions_total"] == 2
+    assert improvement["enqueue_created_total"] == 1
+    assert improvement["enqueue_cooldown_active_total"] == 1
+    assert improvement["enqueue_blocked_total"] == 1
+    assert improvement["execution_started_total"] == 1
+    assert improvement["execution_terminal_total"] == 5
+    assert improvement["execution_verified_total"] == 1
+    assert improvement["execution_ended_unverified_total"] == 1
+    assert improvement["execution_blocked_total"] == 1
+    assert improvement["execution_verification_failed_total"] == 1
+    assert improvement["execution_rolled_back_total"] == 1
+    assert improvement["enqueue_creation_rate"] == 0.5
+    assert improvement["verified_rate"] == 0.2
+    assert improvement["not_verified_rate"] == 0.8
+    assert improvement["by_autoenqueue_state"]["enqueue_created"] == 1
+    assert improvement["by_autoenqueue_state"]["enqueue_cooldown_active"] == 1
+    assert improvement["by_rollout_guard_state"]["allow"] == 1
+    assert improvement["by_rollout_guard_state"]["rollout_frozen"] == 1
+    assert improvement["by_task_outcome_state"]["verified"] == 1
+    assert improvement["by_task_outcome_state"]["ended_unverified"] == 1
+    assert improvement["by_task_outcome_state"]["blocked"] == 1
+    assert improvement["by_task_outcome_state"]["verification_failed"] == 1
+    assert improvement["by_task_outcome_state"]["rolled_back"] == 1
+
+    markdown = render_autonomy_observation_markdown(summary)
+    assert "## Improvement Runtime" in markdown
+    assert "Enqueue Cooldown aktiv" in markdown
+    assert "Improvement-Autoenqueue `enqueue_cooldown_active`" in markdown
+    assert "Improvement-Outcome `verification_failed`" in markdown
