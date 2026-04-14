@@ -4,6 +4,7 @@ set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
+UNIT_DIR="${TIMUS_STACK_UNITS_DIR:-${PROJECT_ROOT}}"
 UNITS=(
   "qdrant.service"
   "timus-mcp.service"
@@ -17,8 +18,10 @@ usage() {
   cat <<'EOF'
 Nutzung:
   sudo ./scripts/install_timus_stack.sh [--enable] [--start]
+  sudo ./scripts/install_timus_stack.sh [--unit-dir PATH] [--enable] [--start]
 
 Optionen:
+  --unit-dir PATH  alternative Quelle fuer die Unit-Dateien
   --enable   aktiviert timus-stack.target fuer den Boot
   --start    startet timus-stack.target direkt nach der Installation
 
@@ -37,6 +40,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --start)
       START_STACK=true
+      ;;
+    --unit-dir)
+      UNIT_DIR="${2:?Fehlender Wert fuer --unit-dir}"
+      shift
       ;;
     -h|--help)
       usage
@@ -59,7 +66,7 @@ fi
 install -d "${SYSTEMD_DIR}"
 
 for unit in "${UNITS[@]}"; do
-  src="${PROJECT_ROOT}/${unit}"
+  src="${UNIT_DIR}/${unit}"
   dst="${SYSTEMD_DIR}/${unit}"
   if [[ ! -f "${src}" ]]; then
     echo "Fehlende Unit-Datei: ${src}" >&2

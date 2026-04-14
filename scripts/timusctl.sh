@@ -5,7 +5,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 INSTALLER_SCRIPT="${SCRIPT_DIR}/install_timus_stack.sh"
+HOST_SETUP_SCRIPT="${SCRIPT_DIR}/setup_timus_host.sh"
 PRODUCTION_GATES_SCRIPT="${SCRIPT_DIR}/run_production_gates.py"
+GENERATED_SYSTEMD_DIR="${PROJECT_ROOT}/.generated/systemd"
 
 QDRANT_SERVICE="qdrant.service"
 MCP_SERVICE="timus-mcp.service"
@@ -35,6 +37,7 @@ Nutzung:
   ./scripts/timusctl.sh status
   ./scripts/timusctl.sh health
   ./scripts/timusctl.sh install [--no-start]
+  ./scripts/timusctl.sh setup-host [--install]
   ./scripts/timusctl.sh logs [qdrant|mcp|dispatcher]
 
 Befehle:
@@ -44,6 +47,7 @@ Befehle:
   status     Zeigt kompakten Service-Status
   health     Prueft qdrant, mcp und production gates
   install    Installiert/aktiviert den gesamten Stack; startet ihn standardmaessig direkt
+  setup-host Rendert portable systemd-Units fuer diesen Host; mit --install direkt inklusive Installation
   logs       Folgt den Logs eines Dienstes oder allen dreien
 EOF
 }
@@ -172,8 +176,15 @@ show_health() {
 
 install_stack() {
     local installer_args=(--enable --start)
+    if [[ -d "$GENERATED_SYSTEMD_DIR" ]]; then
+        installer_args=(--unit-dir "$GENERATED_SYSTEMD_DIR" --enable --start)
+    fi
     if [[ "${ARG:-}" == "--no-start" ]]; then
-        installer_args=(--enable)
+        if [[ -d "$GENERATED_SYSTEMD_DIR" ]]; then
+            installer_args=(--unit-dir "$GENERATED_SYSTEMD_DIR" --enable)
+        else
+            installer_args=(--enable)
+        fi
     elif [[ -n "${ARG:-}" && "${ARG:-}" != "--start" ]]; then
         err "Unbekannte install-Option: ${ARG}"
         usage
@@ -187,6 +198,24 @@ install_stack() {
     log "Installiere Timus-Stack ..."
     sudo "$INSTALLER_SCRIPT" "${installer_args[@]}"
     ok "Timus-Stack installiert"
+}
+
+setup_host() {
+    local setup_args=()
+    if [[ "${ARG:-}" == "--install" ]]; then
+        setup_args=(--install --enable --start)
+    elif [[ -n "${ARG:-}" ]]; then
+        err "Unbekannte setup-host-Option: ${ARG}"
+        usage
+        exit 1
+    fi
+
+    if [[ ! -x "$HOST_SETUP_SCRIPT" ]]; then
+        err "Host-Setup fehlt: $HOST_SETUP_SCRIPT"
+        exit 1
+    fi
+
+    "$HOST_SETUP_SCRIPT" "${setup_args[@]}"
 }
 
 show_logs() {
@@ -233,6 +262,9 @@ case "$COMMAND" in
         ;;
     install)
         install_stack
+        ;;
+    setup-host)
+        setup_host
         ;;
     logs)
         show_logs "$ARG"

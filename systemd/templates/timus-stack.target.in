@@ -1,0 +1,9 @@
+[Unit]
+Description=Timus Unified Stack Target
+Requires=qdrant.service timus-mcp.service timus-dispatcher.service
+After=network.target local-fs.target qdrant.service timus-mcp.service timus-dispatcher.service
+Wants=network.target
+AllowIsolate=false
+
+[Install]
+WantedBy=multi-user.target

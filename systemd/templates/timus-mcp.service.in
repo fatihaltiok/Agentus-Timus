@@ -1,0 +1,33 @@
+[Unit]
+Description=Timus MCP Server (Tool Registry)
+After=network.target graphical.target qdrant.service
+Wants=network.target graphical.target qdrant.service
+Requires=qdrant.service
+PartOf=timus-stack.target
+
+[Service]
+Type=simple
+User=__TIMUS_SYSTEM_USER__
+WorkingDirectory=__TIMUS_PROJECT_ROOT__
+ExecStart=__TIMUS_PYTHON_UVICORN__ \
+    server.mcp_server:app \
+    --host 127.0.0.1 \
+    --port 5000 \
+    --log-level info \
+    --lifespan on \
+    --timeout-keep-alive 2 \
+    --timeout-graceful-shutdown 10
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=timus-mcp
+KillSignal=SIGINT
+TimeoutStopSec=20
+TimeoutStartSec=45
+Environment=PYTHONUNBUFFERED=1
+Environment=DISPLAY=__TIMUS_DISPLAY__
+Environment=XAUTHORITY=__TIMUS_XAUTHORITY__
+
+[Install]
+WantedBy=multi-user.target

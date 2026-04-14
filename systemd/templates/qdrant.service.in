@@ -1,0 +1,21 @@
+[Unit]
+Description=Qdrant Vector Database for Timus
+After=network.target local-fs.target
+Wants=network.target local-fs.target
+PartOf=timus-stack.target
+
+[Service]
+Type=simple
+User=__TIMUS_SYSTEM_USER__
+WorkingDirectory=__TIMUS_PROJECT_ROOT__
+ExecStart=__TIMUS_PROJECT_ROOT__/scripts/start_qdrant_server.sh
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=qdrant
+TimeoutStartSec=45
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
