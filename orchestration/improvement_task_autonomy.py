@@ -187,23 +187,29 @@ def get_improvement_task_rollout_guard(queue: Any) -> dict[str, Any]:
     }
 
 
-def build_improvement_task_governance_view(queue: Any | None = None) -> dict[str, Any]:
-    active_queue = queue or get_queue()
-    rollout_guard = get_improvement_task_rollout_guard(active_queue)
+def build_improvement_task_governance_view(
+    queue: Any | None = None,
+    *,
+    rollout_guard: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    active_rollout_guard = rollout_guard
+    if active_rollout_guard is None:
+        active_queue = queue or get_queue()
+        active_rollout_guard = get_improvement_task_rollout_guard(active_queue)
     return {
-        "rollout_guard_state": _text(rollout_guard.get("state"), limit=64),
-        "rollout_guard_blocked": bool(rollout_guard.get("blocked")),
+        "rollout_guard_state": _text(active_rollout_guard.get("state"), limit=64),
+        "rollout_guard_blocked": bool(active_rollout_guard.get("blocked")),
         "rollout_guard_reasons": [
             _text(item, limit=96)
-            for item in (rollout_guard.get("reasons") or [])
+            for item in (active_rollout_guard.get("reasons") or [])
             if _text(item, limit=96)
         ][:3],
-        "strict_force_off": bool(rollout_guard.get("strict_force_off")),
-        "freeze_active": bool(rollout_guard.get("freeze_active")),
-        "runtime_state": _text(rollout_guard.get("runtime_state"), limit=64),
-        "verification_status": _text(rollout_guard.get("verification_status"), limit=64),
-        "canary_state": _text(rollout_guard.get("canary_state"), limit=64),
-        "verification_backpressure": dict(rollout_guard.get("verification_backpressure") or {}),
+        "strict_force_off": bool(active_rollout_guard.get("strict_force_off")),
+        "freeze_active": bool(active_rollout_guard.get("freeze_active")),
+        "runtime_state": _text(active_rollout_guard.get("runtime_state"), limit=64),
+        "verification_status": _text(active_rollout_guard.get("verification_status"), limit=64),
+        "canary_state": _text(active_rollout_guard.get("canary_state"), limit=64),
+        "verification_backpressure": dict(active_rollout_guard.get("verification_backpressure") or {}),
     }
 
 

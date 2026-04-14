@@ -657,6 +657,7 @@ Bestandteile:
   - `verification_backpressure`
   - basiert konservativ auf Runtime-Metriken statt auf bloßer Einzelereignis-Panik
   - verhindert neue autonome Improvement-Erzeugung, wenn zu viele unverifizierte/blockierte/zurueckgerollte Zyklen bei zu niedriger Verified-Rate auflaufen
+- Preview-Entscheidungen fuer Auto-Enqueue und die operatorsichtbare Governance-Sicht verwenden jetzt denselben echten Rollout-Guard, statt unterschiedliche Guard-Zustaende parallel auszugeben
 - die Runtime-/Operator-Sicht zieht diese Ergebnisse jetzt auch als eigenen Observation-Block zusammen:
   - Auto-Enqueue-States
   - Rollout-Guard-States

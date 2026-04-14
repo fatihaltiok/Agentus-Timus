@@ -308,8 +308,10 @@ async def get_improvement_suggestions(include_applied: bool = False) -> dict:
     from orchestration.improvement_task_autonomy import (
         build_improvement_task_governance_view,
         build_improvement_task_autonomy_decisions,
+        get_improvement_task_rollout_guard,
         get_improvement_task_autonomy_settings,
     )
+    from orchestration.task_queue import get_queue
     from orchestration.improvement_task_bridge import build_improvement_task_bridges
     from orchestration.improvement_task_compiler import compile_improvement_tasks
     from orchestration.improvement_task_execution import build_improvement_hardening_task_payloads
@@ -335,6 +337,8 @@ async def get_improvement_suggestions(include_applied: bool = False) -> dict:
     )
     autonomy_settings = get_improvement_task_autonomy_settings()
     observation_summary = build_autonomy_observation_summary()
+    queue = get_queue()
+    rollout_guard = get_improvement_task_rollout_guard(queue)
     return {
         "status": "ok",
         "count": len(suggestions),
@@ -347,9 +351,13 @@ async def get_improvement_suggestions(include_applied: bool = False) -> dict:
         "top_task_bridge_decisions": bridge_decisions,
         "top_task_execution_candidates": execution_candidates,
         "task_autonomy_settings": autonomy_settings,
-        "improvement_governance": build_improvement_task_governance_view(),
+        "improvement_governance": build_improvement_task_governance_view(
+            queue=queue,
+            rollout_guard=rollout_guard,
+        ),
         "top_task_autonomy_decisions": build_improvement_task_autonomy_decisions(
             execution_candidates,
+            rollout_guard=rollout_guard,
             allow_self_modify=bool(autonomy_settings.get("allow_self_modify")),
             max_autoenqueue=int(autonomy_settings.get("max_autoenqueue") or 1),
             limit=5,

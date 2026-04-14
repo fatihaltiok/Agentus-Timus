@@ -25,6 +25,7 @@ Geaendert:
   - damit ist der aktive Rollout-Guard inkl. `verification_backpressure` direkt operatorsichtbar
 - [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
   - `/autonomy/improvement` liefert dieselbe Governance-Sicht jetzt ebenfalls direkt aus
+  - Preview-Entscheidungen und Governance-Sicht verwenden jetzt denselben echten Rollout-Guard statt auseinanderzulaufen
 
 Tests:
 

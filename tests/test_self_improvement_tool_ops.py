@@ -142,10 +142,24 @@ async def test_get_improvement_suggestions_exposes_normalized_candidates(monkeyp
     )
     monkeypatch.setattr(
         "orchestration.improvement_task_autonomy.build_improvement_task_governance_view",
-        lambda queue=None: {
+        lambda queue=None, rollout_guard=None: {
             "rollout_guard_state": "verification_backpressure",
             "rollout_guard_blocked": True,
             "rollout_guard_reasons": ["verification_sample_total:3"],
+            "verification_backpressure": {
+                "blocked": True,
+                "sample_total": 3,
+                "negative_total": 3,
+                "verified_rate": 0.0,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "orchestration.improvement_task_autonomy.get_improvement_task_rollout_guard",
+        lambda queue: {
+            "state": "verification_backpressure",
+            "blocked": True,
+            "reasons": ["verification_sample_total:3"],
             "verification_backpressure": {
                 "blocked": True,
                 "sample_total": 3,
@@ -186,6 +200,7 @@ async def test_get_improvement_suggestions_exposes_normalized_candidates(monkeyp
     assert result["improvement_governance"]["rollout_guard_state"] == "verification_backpressure"
     assert result["improvement_governance"]["rollout_guard_blocked"] is True
     assert result["top_task_autonomy_decisions"][0]["candidate_id"] == "m12:1"
+    assert result["top_task_autonomy_decisions"][0]["rollout_guard_state"] == "verification_backpressure"
     assert result["top_task_autonomy_decisions"][0]["autoenqueue_state"] == "not_creatable"
     assert result["improvement_runtime"]["execution_verified_total"] == 1
     assert result["improvement_runtime"]["verified_rate"] == 1.0
