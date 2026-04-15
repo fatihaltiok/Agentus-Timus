@@ -1,0 +1,127 @@
+from __future__ import annotations
+
+from hypothesis import given, strategies as st
+
+from orchestration.memory_curation import (
+    ARCHIVE_CATEGORY_PREFIX,
+    classify_memory_curation_tier,
+    decide_memory_curation_action,
+    verify_memory_curation_outcome,
+)
+
+
+@given(
+    category=st.sampled_from(["user_profile", "relationships", "self_model", "preference_memory"]),
+    importance=st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
+    confidence=st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
+    source=st.text(max_size=20),
+)
+def test_hypothesis_stable_categories_remain_stable(
+    category: str,
+    importance: float,
+    confidence: float,
+    source: str,
+) -> None:
+    assert classify_memory_curation_tier(category, importance, confidence, source) == "stable"
+
+
+@given(
+    suffix=st.text(min_size=1, max_size=20),
+    importance=st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
+    confidence=st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
+)
+def test_hypothesis_archived_prefix_always_classifies_as_archived(
+    suffix: str,
+    importance: float,
+    confidence: float,
+) -> None:
+    assert classify_memory_curation_tier(f"{ARCHIVE_CATEGORY_PREFIX}{suffix}", importance, confidence, "x") == "archived"
+
+
+@given(
+    age_days=st.integers(min_value=0, max_value=180),
+    importance=st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
+)
+def test_hypothesis_stable_and_archived_items_never_produce_mutating_actions(
+    age_days: int,
+    importance: float,
+) -> None:
+    assert decide_memory_curation_action("stable", last_used_age_days=age_days, importance=importance, group_size=4) == "keep"
+    assert decide_memory_curation_action("archived", last_used_age_days=age_days, importance=importance, group_size=4) == "keep"
+
+
+@given(
+    age_days=st.integers(min_value=14, max_value=365),
+    group_size=st.integers(min_value=2, max_value=12),
+    importance=st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
+)
+def test_hypothesis_old_multi_item_groups_are_summarized_before_other_actions(
+    age_days: int,
+    group_size: int,
+    importance: float,
+) -> None:
+    assert decide_memory_curation_action(
+        "topic_bound",
+        last_used_age_days=age_days,
+        importance=importance,
+        group_size=group_size,
+    ) == "summarize"
+
+
+@given(
+    age_days=st.integers(min_value=30, max_value=365),
+    importance=st.floats(min_value=0.0, max_value=0.55, allow_nan=False, allow_infinity=False),
+)
+def test_hypothesis_old_low_importance_ephemeral_items_archive(
+    age_days: int,
+    importance: float,
+) -> None:
+    assert decide_memory_curation_action(
+        "ephemeral",
+        last_used_age_days=age_days,
+        importance=importance,
+        group_size=1,
+    ) == "archive"
+
+
+@given(
+    before_active=st.integers(min_value=1, max_value=200),
+    before_stale=st.integers(min_value=0, max_value=50),
+    before_stable=st.integers(min_value=0, max_value=50),
+)
+def test_hypothesis_verification_accepts_non_regressive_outcomes(
+    before_active: int,
+    before_stale: int,
+    before_stable: int,
+) -> None:
+    after_stale = 0 if before_stale == 0 else before_stale - 1
+    after_active = max(0, before_active - 1)
+    after_stable = before_stable
+    assert verify_memory_curation_outcome(
+        before_active_items=before_active,
+        after_active_items=after_active,
+        before_stale_active_items=before_stale,
+        after_stale_active_items=after_stale,
+        before_stable_items=before_stable,
+        after_stable_items=after_stable,
+    )
+
+
+@given(
+    before_active=st.integers(min_value=1, max_value=200),
+    before_stale=st.integers(min_value=0, max_value=50),
+    before_stable=st.integers(min_value=0, max_value=50),
+)
+def test_hypothesis_verification_rejects_stale_or_stable_regression(
+    before_active: int,
+    before_stale: int,
+    before_stable: int,
+) -> None:
+    assert not verify_memory_curation_outcome(
+        before_active_items=before_active,
+        after_active_items=before_active + 2,
+        before_stale_active_items=before_stale,
+        after_stale_active_items=before_stale + 1,
+        before_stable_items=before_stable,
+        after_stable_items=max(0, before_stable - 1),
+    )

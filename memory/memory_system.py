@@ -628,6 +628,18 @@ class PersistentMemory:
                     last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(category, key)
                 );
+
+                CREATE TABLE IF NOT EXISTS memory_curation_snapshots (
+                    snapshot_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    metadata TEXT,
+                    before_state TEXT NOT NULL,
+                    after_state TEXT,
+                    metrics_before TEXT,
+                    metrics_after TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
                 
                 CREATE INDEX IF NOT EXISTS idx_facts_category ON facts(category);
                 CREATE INDEX IF NOT EXISTS idx_facts_key ON facts(key);
@@ -636,6 +648,7 @@ class PersistentMemory:
                 CREATE INDEX IF NOT EXISTS idx_interaction_events_created ON interaction_events(created_at);
                 CREATE INDEX IF NOT EXISTS idx_memory_category ON memory_items(category);
                 CREATE INDEX IF NOT EXISTS idx_memory_key ON memory_items(key);
+                CREATE INDEX IF NOT EXISTS idx_memory_curation_snapshots_created ON memory_curation_snapshots(created_at);
 
                 CREATE TABLE IF NOT EXISTS curiosity_sent (
                     id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -782,6 +795,184 @@ class PersistentMemory:
                     last_used=self._safe_datetime(row[9])
                 ))
         return items
+
+    def delete_memory_item(self, category: str, key: str) -> int:
+        """Loescht ein MemoryItem anhand von Kategorie und Schluessel."""
+        from memory.memory_guard import MemoryAccessGuard
+        MemoryAccessGuard.check_write_permission()
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "DELETE FROM memory_items WHERE category = ? AND key = ?",
+                (category, key),
+            )
+            return int(cursor.rowcount or 0)
+
+    def replace_all_memory_items(self, items: List[MemoryItem]) -> int:
+        """Ersetzt den gesamten `memory_items`-Bestand atomar."""
+        from memory.memory_guard import MemoryAccessGuard
+        MemoryAccessGuard.check_write_permission()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM memory_items")
+            for item in items:
+                conn.execute(
+                    """
+                    INSERT INTO memory_items (
+                        category, key, value, importance, confidence, reason, source, created_at, last_used
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        item.category,
+                        item.key,
+                        json.dumps(item.value, ensure_ascii=False),
+                        item.importance,
+                        item.confidence,
+                        item.reason,
+                        item.source,
+                        item.created_at.isoformat(),
+                        item.last_used.isoformat(),
+                    ),
+                )
+        return len(items)
+
+    def _serialize_memory_item(self, item: MemoryItem) -> Dict[str, Any]:
+        return {
+            "category": item.category,
+            "key": item.key,
+            "value": item.value,
+            "importance": item.importance,
+            "confidence": item.confidence,
+            "reason": item.reason,
+            "source": item.source,
+            "created_at": item.created_at.isoformat(),
+            "last_used": item.last_used.isoformat(),
+        }
+
+    def _deserialize_memory_item(self, raw: Dict[str, Any]) -> MemoryItem:
+        return MemoryItem(
+            category=str(raw.get("category") or ""),
+            key=str(raw.get("key") or ""),
+            value=raw.get("value"),
+            importance=float(raw.get("importance") or 0.5),
+            confidence=float(raw.get("confidence") or 1.0),
+            reason=str(raw.get("reason") or ""),
+            source=str(raw.get("source") or ""),
+            created_at=self._safe_datetime(raw.get("created_at")),
+            last_used=self._safe_datetime(raw.get("last_used")),
+        )
+
+    def store_memory_curation_snapshot(
+        self,
+        *,
+        snapshot_id: str,
+        status: str,
+        before_items: List[MemoryItem],
+        metrics_before: Dict[str, Any],
+        metadata: Optional[Dict[str, Any]] = None,
+        after_items: Optional[List[MemoryItem]] = None,
+        metrics_after: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Speichert oder aktualisiert einen Snapshot einer Memory-Curation-Runde."""
+        from memory.memory_guard import MemoryAccessGuard
+        MemoryAccessGuard.check_write_permission()
+        timestamp = datetime.now().isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO memory_curation_snapshots (
+                    snapshot_id, status, metadata, before_state, after_state, metrics_before, metrics_after, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(snapshot_id) DO UPDATE SET
+                    status = excluded.status,
+                    metadata = excluded.metadata,
+                    before_state = excluded.before_state,
+                    after_state = excluded.after_state,
+                    metrics_before = excluded.metrics_before,
+                    metrics_after = excluded.metrics_after,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    snapshot_id,
+                    status,
+                    json.dumps(metadata or {}, ensure_ascii=False),
+                    json.dumps([self._serialize_memory_item(item) for item in before_items], ensure_ascii=False),
+                    json.dumps(
+                        [self._serialize_memory_item(item) for item in (after_items or [])],
+                        ensure_ascii=False,
+                    )
+                    if after_items is not None
+                    else None,
+                    json.dumps(metrics_before or {}, ensure_ascii=False),
+                    json.dumps(metrics_after or {}, ensure_ascii=False) if metrics_after is not None else None,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+        return snapshot_id
+
+    def get_memory_curation_snapshot(self, snapshot_id: str) -> Optional[Dict[str, Any]]:
+        """Liest einen Snapshot fuer Memory-Curation inklusive deserialisierter Items."""
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT snapshot_id, status, metadata, before_state, after_state, metrics_before, metrics_after, created_at, updated_at
+                FROM memory_curation_snapshots
+                WHERE snapshot_id = ?
+                """,
+                (snapshot_id,),
+            ).fetchone()
+        if not row:
+            return None
+        metadata = self._safe_json(row[2]) or {}
+        before_state = [self._deserialize_memory_item(item) for item in (self._safe_json(row[3]) or [])]
+        after_raw = self._safe_json(row[4]) or []
+        after_state = [self._deserialize_memory_item(item) for item in after_raw]
+        metrics_before = self._safe_json(row[5]) or {}
+        metrics_after = self._safe_json(row[6]) or {}
+        return {
+            "snapshot_id": row[0],
+            "status": row[1],
+            "metadata": metadata,
+            "before_items": before_state,
+            "after_items": after_state,
+            "metrics_before": metrics_before,
+            "metrics_after": metrics_after,
+            "created_at": row[7] or "",
+            "updated_at": row[8] or "",
+        }
+
+    def list_memory_curation_snapshots(self, limit: int = 5) -> List[Dict[str, Any]]:
+        """Listet die letzten Memory-Curation-Snapshots kompakt auf."""
+        safe_limit = max(1, min(50, int(limit)))
+        rows: List[Any] = []
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT snapshot_id, status, metadata, metrics_before, metrics_after, created_at, updated_at
+                FROM memory_curation_snapshots
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+        snapshots: List[Dict[str, Any]] = []
+        for row in rows:
+            metadata = self._safe_json(row[2]) or {}
+            metrics_before = self._safe_json(row[3]) or {}
+            metrics_after = self._safe_json(row[4]) or {}
+            snapshots.append(
+                {
+                    "snapshot_id": row[0],
+                    "status": row[1],
+                    "metadata": metadata,
+                    "metrics_before": metrics_before,
+                    "metrics_after": metrics_after,
+                    "created_at": row[5] or "",
+                    "updated_at": row[6] or "",
+                }
+            )
+        return snapshots
 
     def get_all_memory_items(self) -> List[MemoryItem]:
         """Holt alle MemoryItems."""

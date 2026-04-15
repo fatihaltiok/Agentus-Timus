@@ -2,6 +2,63 @@
 
 ---
 
+## Fortschritt 2026-04-15 - Phase E E5.1 startet als Managed Memory Curation MVP
+
+E5 ist nicht mit einem reinen Policy-Slice gestartet, sondern direkt als groesserer, messbarer Runtime-Block: Timus kann Memory jetzt klassifizieren, sichere Curation-Kandidaten bauen, reversible Pflegeaktionen ausfuehren und den Bestand ueber Snapshots wiederherstellen.
+
+Geaendert:
+
+- [memory/memory_system.py](/home/fatih-ubuntu/dev/timus/memory/memory_system.py)
+  - neuer Snapshot-Speicher `memory_curation_snapshots`
+  - neue reversible Persistenzhelfer:
+    - `delete_memory_item(...)`
+    - `replace_all_memory_items(...)`
+    - Snapshot speichern/laden/listen
+- [orchestration/memory_curation.py](/home/fatih-ubuntu/dev/timus/orchestration/memory_curation.py)
+  - neue E5-Engine fuer:
+    - Tier-Klassifikation (`stable`, `topic_bound`, `ephemeral`, `archived`)
+    - Kandidatenbildung
+    - sichere Aktionen:
+      - `summarize`
+      - `archive`
+      - `devalue`
+    - Vorher-/Nachher-Metriken
+    - ehrliche Verifikation inklusive `verification_failed`
+    - Rollback ueber Snapshot
+  - neue Observation-Events:
+    - `memory_curation_started`
+    - `memory_summarized`
+    - `memory_archived`
+    - `memory_devalued`
+    - `memory_curation_completed`
+    - `memory_curation_rollback`
+- [tools/maintenance_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/maintenance_tool/tool.py)
+  - Maintenance-Tool auf den E5-MVP umgestellt:
+    - `run_memory_maintenance(...)`
+    - `get_memory_curation_status(...)`
+    - `rollback_memory_curation(...)`
+
+Tests:
+
+- neu:
+  - [tests/test_memory_curation.py](/home/fatih-ubuntu/dev/timus/tests/test_memory_curation.py)
+  - [tests/test_memory_curation_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_memory_curation_hypothesis.py)
+  - [tests/test_memory_curation_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_memory_curation_crosshair.py)
+  - [tests/test_memory_maintenance_tool.py](/home/fatih-ubuntu/dev/timus/tests/test_memory_maintenance_tool.py)
+
+Verifikation:
+
+- `python -m py_compile memory/memory_system.py orchestration/memory_curation.py tools/maintenance_tool/tool.py tests/test_memory_curation.py tests/test_memory_curation_hypothesis.py tests/test_memory_curation_crosshair.py tests/test_memory_maintenance_tool.py` gruen
+- `pytest -q tests/test_memory_curation.py tests/test_memory_curation_hypothesis.py tests/test_memory_maintenance_tool.py` -> `19 passed`
+- `python -m crosshair check tests/test_memory_curation_crosshair.py` -> Exit `0`
+
+Wichtige Grenzen des MVP:
+
+- kein blindes Delete/Pruning
+- kein autonomer Heartbeat
+- keine aggressive Mutation stabiler Memory-Klassen
+- erst sichere, reversible Pflege mit sichtbaren Vorher-/Nachher-Metriken
+
 ## Fortschritt 2026-04-15 - Phase E E4 Abschluss: Guard-Prioritaet und shadowed Backpressure live belegbar
 
 Der letzte offene E4-Restpunkt ist geschlossen: `verification_backpressure` ist jetzt nicht mehr nur als Guard-Logik vorhanden, sondern auch dann sauber beobachtbar, wenn ein haerterer Rollout-Guard wie `strict_force_off` den aktiven Block liefert.

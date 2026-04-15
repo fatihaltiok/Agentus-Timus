@@ -723,6 +723,67 @@ Erfolgskriterium:
 
 - Timus kann spaeter Memory-Pflege policy-gesteuert, beobachtbar und reversibel ausfuehren
 
+### E5.1 Managed Memory Curation MVP
+
+Stand:
+
+- erster Runtime-Slice gestartet
+
+Umgesetzt:
+
+- neue Curation-Engine in [orchestration/memory_curation.py](/home/fatih-ubuntu/dev/timus/orchestration/memory_curation.py)
+  - klassifiziert vorhandene Memory-Items in:
+    - `stable`
+    - `topic_bound`
+    - `ephemeral`
+    - `archived`
+  - baut konkrete Curation-Kandidaten statt nur abstrakter Policy-Regeln
+  - erlaubt im MVP nur sichere Aktionen:
+    - `summarize`
+    - `archive`
+    - `devalue`
+  - fuehrt bewusst kein blindes Delete/Pruning aus
+- Persistenzkern in [memory/memory_system.py](/home/fatih-ubuntu/dev/timus/memory/memory_system.py) um reversible Snapshot-/Rollback-Bausteine erweitert:
+  - `memory_curation_snapshots`
+  - `delete_memory_item(...)`
+  - `replace_all_memory_items(...)`
+  - Snapshot speichern/laden/listen
+- [tools/maintenance_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/maintenance_tool/tool.py) ist jetzt auf den E5-MVP umgestellt:
+  - `run_memory_maintenance(...)`
+  - `get_memory_curation_status(...)`
+  - `rollback_memory_curation(...)`
+- Vorher-/Nachher-Metriken fuer den MVP:
+  - `active_items`
+  - `archived_items`
+  - `summary_items`
+  - `stale_active_items`
+  - `stable_active_items`
+  - `active_average_importance`
+- eigene Observation-Events fuer:
+  - `memory_curation_started`
+  - `memory_summarized`
+  - `memory_archived`
+  - `memory_devalued`
+  - `memory_curation_completed`
+  - `memory_curation_rollback`
+
+Verifikation:
+
+- Snapshot vor Mutation ist Pflicht
+- Rollback stellt den vorherigen Memory-Bestand wieder her
+- Verifikation akzeptiert nur nicht-regressive Ergebnisse:
+  - stale aktive Erinnerungen duerfen nicht steigen
+  - stabile Erinnerungen duerfen nicht sinken
+  - aktive Menge darf nicht unkontrolliert wachsen
+- wenn diese Pruefung kippt, meldet der Lauf jetzt ehrlich `verification_failed`
+
+Noch nicht Teil von E5.1:
+
+- kein autonomer Heartbeat fuer Memory-Curation
+- kein automatisches Delete/Pruning
+- keine aggressive Umsortierung stabiler Memory-Klassen
+- keine blinde Summary-Erzeugung ohne Snapshot/Rollback
+
 ### E6. Operator Visibility und Governance
 
 Ziel:
