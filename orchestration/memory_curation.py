@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Iterable, Mapping, Protocol
+import json
+from typing import Any, Iterable, Mapping, Protocol, TypeVar
 import uuid
 
 from memory.memory_system import MemoryItem, memory_manager
@@ -16,6 +17,8 @@ _SUMMARY_SOURCE = "memory_curation"
 _STABLE_CATEGORIES = {"user_profile", "relationships", "self_model", "preference_memory"}
 _TOPIC_BOUND_CATEGORIES = {"patterns", "decisions", "extracted", "summarized", SUMMARY_CATEGORY}
 _EPHEMERAL_CATEGORIES = {"working_memory", "scratchpad", "session_memory"}
+_ROLLBACK_SEMANTIC_SYNC_CHUNK_SIZE = 64
+_T = TypeVar("_T")
 
 
 class MemoryCurationManagerLike(Protocol):
@@ -410,25 +413,148 @@ def _build_summary_item(
     )
 
 
-def _rebuild_semantic_store(
+def _iter_chunks(values: list[_T], chunk_size: int) -> Iterable[list[_T]]:
+    safe_chunk_size = max(1, _normalize_int(chunk_size, default=_ROLLBACK_SEMANTIC_SYNC_CHUNK_SIZE))
+    for index in range(0, len(values), safe_chunk_size):
+        yield values[index:index + safe_chunk_size]
+
+
+def _semantic_item_signature(item: MemoryItem) -> str:
+    payload = {
+        "category": item.category,
+        "key": item.key,
+        "value": item.value,
+        "importance": round(float(item.importance or 0.0), 6),
+        "confidence": round(float(item.confidence or 0.0), 6),
+        "reason": str(item.reason or ""),
+        "source": str(item.source or ""),
+        "created_at": item.created_at.isoformat(),
+    }
+    return stable_text_digest(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str), hex_chars=16)
+
+
+def _build_active_item_map(items: Iterable[MemoryItem]) -> dict[tuple[str, str], MemoryItem]:
+    return {
+        (item.category, item.key): item
+        for item in items
+        if not str(item.category or "").startswith(ARCHIVE_CATEGORY_PREFIX)
+    }
+
+
+def _build_semantic_sync_plan(
+    *,
+    previous_items: list[MemoryItem],
+    restored_items: list[MemoryItem],
+) -> tuple[list[tuple[str, str]], list[MemoryItem]]:
+    previous_active = _build_active_item_map(previous_items)
+    restored_active = _build_active_item_map(restored_items)
+
+    delete_refs = sorted(previous_active.keys() - restored_active.keys())
+    upsert_items: list[MemoryItem] = []
+    for ref, item in restored_active.items():
+        previous_item = previous_active.get(ref)
+        if previous_item is None or _semantic_item_signature(previous_item) != _semantic_item_signature(item):
+            upsert_items.append(item)
+    return delete_refs, upsert_items
+
+
+def _record_memory_curation_progress(
+    event_type: str,
+    *,
+    snapshot_id: str,
+    stage: str,
+    processed: int,
+    total: int,
+    chunk_size: int,
+) -> None:
+    try:
+        record_autonomy_observation(
+            event_type,
+            {
+                "snapshot_id": snapshot_id,
+                "stage": stage,
+                "processed": processed,
+                "total": total,
+                "chunk_size": chunk_size,
+            },
+        )
+    except Exception:
+        pass
+
+
+def _sync_semantic_store_diff(
     manager: MemoryCurationManagerLike,
     *,
     previous_items: list[MemoryItem],
     restored_items: list[MemoryItem],
-) -> None:
+    snapshot_id: str,
+    chunk_size: int = _ROLLBACK_SEMANTIC_SYNC_CHUNK_SIZE,
+) -> dict[str, int]:
     semantic_store = getattr(manager, "semantic_store", None)
     if not semantic_store or not hasattr(semantic_store, "is_available") or not semantic_store.is_available():
-        return
+        return {"delete_count": 0, "upsert_count": 0, "chunk_count": 0}
 
-    previous_keys = {(item.category, item.key) for item in previous_items}
-    restored_keys = {(item.category, item.key) for item in restored_items}
-    for category, key in sorted(previous_keys - restored_keys):
-        semantic_store.delete_embedding(category, key)
-    for item in restored_items:
-        if str(item.category or "").startswith(ARCHIVE_CATEGORY_PREFIX):
-            semantic_store.delete_embedding(item.category, item.key)
-            continue
-        semantic_store.store_embedding(item)
+    delete_refs, upsert_items = _build_semantic_sync_plan(
+        previous_items=previous_items,
+        restored_items=restored_items,
+    )
+    safe_chunk_size = max(1, _normalize_int(chunk_size, default=_ROLLBACK_SEMANTIC_SYNC_CHUNK_SIZE))
+    total_operations = len(delete_refs) + len(upsert_items)
+    processed = 0
+    chunk_count = 0
+
+    if total_operations:
+        _record_memory_curation_progress(
+            "memory_curation_rollback_progress",
+            snapshot_id=snapshot_id,
+            stage="semantic_sync_started",
+            processed=0,
+            total=total_operations,
+            chunk_size=safe_chunk_size,
+        )
+
+    for chunk in _iter_chunks(delete_refs, safe_chunk_size):
+        for category, key in chunk:
+            semantic_store.delete_embedding(category, key)
+        processed += len(chunk)
+        chunk_count += 1
+        _record_memory_curation_progress(
+            "memory_curation_rollback_progress",
+            snapshot_id=snapshot_id,
+            stage="semantic_delete",
+            processed=processed,
+            total=total_operations,
+            chunk_size=safe_chunk_size,
+        )
+
+    for chunk in _iter_chunks(upsert_items, safe_chunk_size):
+        for item in chunk:
+            semantic_store.store_embedding(item)
+        processed += len(chunk)
+        chunk_count += 1
+        _record_memory_curation_progress(
+            "memory_curation_rollback_progress",
+            snapshot_id=snapshot_id,
+            stage="semantic_upsert",
+            processed=processed,
+            total=total_operations,
+            chunk_size=safe_chunk_size,
+        )
+
+    if total_operations:
+        _record_memory_curation_progress(
+            "memory_curation_rollback_progress",
+            snapshot_id=snapshot_id,
+            stage="semantic_sync_completed",
+            processed=processed,
+            total=total_operations,
+            chunk_size=safe_chunk_size,
+        )
+    return {
+        "delete_count": len(delete_refs),
+        "upsert_count": len(upsert_items),
+        "chunk_count": chunk_count,
+    }
 
 
 def get_memory_curation_status(
@@ -690,8 +816,38 @@ def rollback_memory_curation(
 
     before_items = list(snapshot.get("before_items") or [])
     current_items = active_manager.persistent.get_all_memory_items()
+    current_metrics = build_memory_curation_metrics(
+        current_items,
+        manager=active_manager,
+        stale_days=int((snapshot.get("metrics_before") or {}).get("stale_days") or 30),
+    )
+    active_manager.persistent.store_memory_curation_snapshot(
+        snapshot_id=snapshot_id,
+        status="rolling_back",
+        before_items=before_items,
+        metrics_before=dict(snapshot.get("metrics_before") or {}),
+        metadata={
+            **dict(snapshot.get("metadata") or {}),
+            "rollback_started_at": _now().isoformat(),
+        },
+        after_items=current_items,
+        metrics_after=current_metrics,
+    )
+    _record_memory_curation_progress(
+        "memory_curation_rollback_started",
+        snapshot_id=snapshot_id,
+        stage="rollback_started",
+        processed=0,
+        total=max(1, len(current_items)),
+        chunk_size=_ROLLBACK_SEMANTIC_SYNC_CHUNK_SIZE,
+    )
     active_manager.persistent.replace_all_memory_items(before_items)
-    _rebuild_semantic_store(active_manager, previous_items=current_items, restored_items=before_items)
+    semantic_sync = _sync_semantic_store_diff(
+        active_manager,
+        previous_items=current_items,
+        restored_items=before_items,
+        snapshot_id=snapshot_id,
+    )
 
     metrics_after = build_memory_curation_metrics(
         before_items,
@@ -703,7 +859,11 @@ def rollback_memory_curation(
         status="rolled_back",
         before_items=before_items,
         metrics_before=dict(snapshot.get("metrics_before") or {}),
-        metadata=dict(snapshot.get("metadata") or {}),
+        metadata={
+            **dict(snapshot.get("metadata") or {}),
+            "rollback_started_at": dict(snapshot.get("metadata") or {}).get("rollback_started_at", ""),
+            "semantic_sync": semantic_sync,
+        },
         after_items=current_items,
         metrics_after=metrics_after,
     )
@@ -713,6 +873,7 @@ def rollback_memory_curation(
             {
                 "snapshot_id": snapshot_id,
                 "restored_items": len(before_items),
+                "semantic_sync": semantic_sync,
             },
         )
     except Exception:
@@ -722,4 +883,5 @@ def rollback_memory_curation(
         "snapshot_id": snapshot_id,
         "restored_items": len(before_items),
         "metrics_after": metrics_after,
+        "semantic_sync": semantic_sync,
     }

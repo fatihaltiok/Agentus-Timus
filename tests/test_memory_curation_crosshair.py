@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 import deal
 
 from orchestration.memory_curation import (
     ARCHIVE_CATEGORY_PREFIX,
+    SUMMARY_CATEGORY,
+    _build_semantic_sync_plan,
     classify_memory_curation_tier,
     decide_memory_curation_action,
     verify_memory_curation_outcome,
 )
+from memory.memory_system import MemoryItem
 
 
 @deal.post(lambda r: r is True)
@@ -52,3 +57,45 @@ def _contract_stale_regression_fails_verification() -> bool:
         before_stable_items=4,
         after_stable_items=3,
     )
+
+
+@deal.post(lambda r: r is True)
+def _contract_semantic_sync_plan_only_touches_active_diff() -> bool:
+    now = datetime(2026, 4, 15, 10, 0, 0)
+    unchanged = MemoryItem(
+        category="user_profile",
+        key="name",
+        value="Fatih",
+        importance=0.95,
+        confidence=0.95,
+        source="markdown_sync",
+        created_at=now,
+        last_used=now,
+    )
+    summary = MemoryItem(
+        category=SUMMARY_CATEGORY,
+        key="summary_x",
+        value={"summary": "old grouped memory"},
+        importance=0.7,
+        confidence=0.8,
+        source="memory_curation",
+        created_at=now,
+        last_used=now,
+    )
+    restored = MemoryItem(
+        category="working_memory",
+        key="scratch_old",
+        value="tmp",
+        importance=0.3,
+        confidence=0.7,
+        source="user_message",
+        created_at=now,
+        last_used=now,
+    )
+    delete_refs, upsert_items = _build_semantic_sync_plan(
+        previous_items=[unchanged, summary],
+        restored_items=[unchanged, restored],
+    )
+    return delete_refs == [(SUMMARY_CATEGORY, "summary_x")] and [
+        (item.category, item.key) for item in upsert_items
+    ] == [("working_memory", "scratch_old")]

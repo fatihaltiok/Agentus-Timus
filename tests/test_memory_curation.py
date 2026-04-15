@@ -8,6 +8,7 @@ from memory.memory_system import MemoryItem, PersistentMemory
 from orchestration.memory_curation import (
     ARCHIVE_CATEGORY_PREFIX,
     SUMMARY_CATEGORY,
+    _build_semantic_sync_plan,
     build_memory_curation_candidates,
     build_memory_curation_metrics,
     get_memory_curation_status,
@@ -251,12 +252,37 @@ def test_run_memory_curation_mvp_surfaces_verification_failures_honestly(tmp_pat
     assert snapshot["status"] == "verification_failed"
 
 
+def test_build_semantic_sync_plan_only_touches_changed_active_items(tmp_path: Path) -> None:
+    manager = _make_manager(tmp_path)
+    _seed_items(manager)
+
+    run_result = run_memory_curation_mvp(manager=manager, stale_days=30, max_actions=12, dry_run=False)
+    current_items = manager.persistent.get_all_memory_items()
+    snapshot = manager.persistent.get_memory_curation_snapshot(run_result["snapshot_id"])
+    assert snapshot is not None
+
+    delete_refs, upsert_items = _build_semantic_sync_plan(
+        previous_items=current_items,
+        restored_items=list(snapshot["before_items"]),
+    )
+
+    assert delete_refs == [(SUMMARY_CATEGORY, next(item.key for item in current_items if item.category == SUMMARY_CATEGORY))]
+    assert {(item.category, item.key) for item in upsert_items} == {
+        ("extracted", "extract_a"),
+        ("extracted", "extract_b"),
+        ("working_memory", "scratch_old"),
+        ("patterns", "pattern_old"),
+    }
+
+
 def test_rollback_memory_curation_restores_original_memory_items(tmp_path: Path) -> None:
     manager = _make_manager(tmp_path)
     _seed_items(manager)
     before_refs = {(item.category, item.key) for item in manager.persistent.get_all_memory_items()}
 
     run_result = run_memory_curation_mvp(manager=manager, stale_days=30, max_actions=12, dry_run=False)
+    manager.semantic_store.upserts.clear()
+    manager.semantic_store.deletes.clear()
     rollback_result = rollback_memory_curation(run_result["snapshot_id"], manager=manager)
 
     assert rollback_result["status"] == "rolled_back"
@@ -268,7 +294,13 @@ def test_rollback_memory_curation_restores_original_memory_items(tmp_path: Path)
     snapshot = manager.persistent.get_memory_curation_snapshot(run_result["snapshot_id"])
     assert snapshot is not None
     assert snapshot["status"] == "rolled_back"
+    assert rollback_result["semantic_sync"]["delete_count"] == 1
+    assert rollback_result["semantic_sync"]["upsert_count"] == 4
+    assert rollback_result["semantic_sync"]["chunk_count"] == 2
+    assert snapshot["metadata"]["semantic_sync"]["delete_count"] == 1
+    assert snapshot["metadata"]["semantic_sync"]["upsert_count"] == 4
     assert ("extracted", "extract_a") in manager.semantic_store.upserts
+    assert ("user_profile", "name") not in manager.semantic_store.upserts
     assert (SUMMARY_CATEGORY, next(item.key for item in snapshot["after_items"] if item.category == SUMMARY_CATEGORY)) in manager.semantic_store.deletes
 
 
