@@ -146,8 +146,11 @@ async def test_get_improvement_suggestions_exposes_normalized_candidates(monkeyp
             "rollout_guard_state": "verification_backpressure",
             "rollout_guard_blocked": True,
             "rollout_guard_reasons": ["verification_sample_total:3"],
+            "shadowed_guard_states": ["strict_force_off"],
             "verification_backpressure": {
                 "blocked": True,
+                "active": True,
+                "shadowed": False,
                 "sample_total": 3,
                 "negative_total": 3,
                 "verified_rate": 0.0,
@@ -160,8 +163,11 @@ async def test_get_improvement_suggestions_exposes_normalized_candidates(monkeyp
             "state": "verification_backpressure",
             "blocked": True,
             "reasons": ["verification_sample_total:3"],
+            "shadowed_guard_states": ["strict_force_off"],
             "verification_backpressure": {
                 "blocked": True,
+                "active": True,
+                "shadowed": False,
                 "sample_total": 3,
                 "negative_total": 3,
                 "verified_rate": 0.0,
@@ -199,8 +205,10 @@ async def test_get_improvement_suggestions_exposes_normalized_candidates(monkeyp
     assert result["task_autonomy_settings"]["enabled"] is True
     assert result["improvement_governance"]["rollout_guard_state"] == "verification_backpressure"
     assert result["improvement_governance"]["rollout_guard_blocked"] is True
+    assert result["improvement_governance"]["shadowed_guard_states"] == ["strict_force_off"]
     assert result["top_task_autonomy_decisions"][0]["candidate_id"] == "m12:1"
     assert result["top_task_autonomy_decisions"][0]["rollout_guard_state"] == "verification_backpressure"
+    assert result["top_task_autonomy_decisions"][0]["shadowed_guard_states"] == ["strict_force_off"]
     assert result["top_task_autonomy_decisions"][0]["autoenqueue_state"] == "not_creatable"
     assert result["improvement_runtime"]["execution_verified_total"] == 1
     assert result["improvement_runtime"]["verified_rate"] == 1.0

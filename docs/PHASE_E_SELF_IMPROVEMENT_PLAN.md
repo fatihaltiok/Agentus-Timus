@@ -658,9 +658,13 @@ Bestandteile:
   - basiert konservativ auf Runtime-Metriken statt auf bloßer Einzelereignis-Panik
   - verhindert neue autonome Improvement-Erzeugung, wenn zu viele unverifizierte/blockierte/zurueckgerollte Zyklen bei zu niedriger Verified-Rate auflaufen
 - Preview-Entscheidungen fuer Auto-Enqueue und die operatorsichtbare Governance-Sicht verwenden jetzt denselben echten Rollout-Guard, statt unterschiedliche Guard-Zustaende parallel auszugeben
+- Guard-Prioritaet und shadowed blocker sind jetzt ebenfalls sichtbar:
+  - wenn `strict_force_off` oder ein anderer haerterer Guard aktiv ist, kann `verification_backpressure` trotzdem als verdeckter Zusatzblocker beobachtbar bleiben
+  - damit laesst sich E4 live belegen, ohne harte Policy-Gates fuer einen Test oeffnen zu muessen
 - die Runtime-/Operator-Sicht zieht diese Ergebnisse jetzt auch als eigenen Observation-Block zusammen:
   - Auto-Enqueue-States
   - Rollout-Guard-States
+  - shadowed Rollout-Guard-States
   - terminale Improvement-Outcomes
   - Verified-/Not-Verified-Raten
 - klarer Rollback bei:
@@ -679,6 +683,7 @@ Erfolgskriterium:
 - keine Phase-E-Aenderung ohne belastbare Verifikation und Rollback-Hook
 - ein autonomer Improvement-Task darf kommunikativ erst dann als Erfolg gelten, wenn es dafuer einen echten Verifikationsnachweis gibt, nicht nur einen terminalen Queue-Status
 - ein autonomer Improvement-Task mit Step-Limit, Tool-Blockade oder vergleichbarem Blocker endet technisch als Nicht-Erfolg, nicht als `completed`
+- Guard-Prioritaet, Backpressure und Observation koennen auch unter aktivem `strict_force_off` gemeinsam nachvollzogen werden
 
 ### E5. Memory Curation Autonomy
 

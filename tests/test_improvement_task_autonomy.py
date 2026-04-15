@@ -10,6 +10,7 @@ from orchestration.improvement_task_autonomy import (
     apply_improvement_task_autonomy,
     build_improvement_task_autonomy_decision,
     build_improvement_task_autonomy_decisions,
+    get_improvement_task_rollout_guard,
     run_improvement_task_autonomy_cycle,
 )
 from orchestration.improvement_task_bridge import build_improvement_task_bridge
@@ -247,6 +248,41 @@ def test_apply_improvement_task_autonomy_blocks_under_verification_backpressure(
     assert result["decisions"][0]["autoenqueue_state"] == "verification_backpressure"
     assert result["decisions"][0]["enqueue_reason"].startswith("verification_sample_total:")
     queue.add.assert_not_called()
+
+
+def test_get_improvement_task_rollout_guard_reports_shadowed_verification_backpressure(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "orchestration.improvement_task_autonomy.get_self_hardening_runtime_summary",
+        lambda queue: {
+            "state": "ok",
+            "last_verification_status": "verified",
+            "last_canary_state": "",
+            "metrics": {
+                "verification_verified_total": 0,
+                "verification_blocked_total": 1,
+                "verification_rolled_back_total": 1,
+                "verification_error_total": 1,
+            },
+        },
+    )
+
+    queue = MagicMock()
+
+    def _policy_state(name: str) -> dict:
+        if name == "strict_force_off":
+            return {"state_value": "true"}
+        return {}
+
+    queue.get_policy_runtime_state.side_effect = _policy_state
+
+    guard = get_improvement_task_rollout_guard(queue)
+
+    assert guard["state"] == "strict_force_off"
+    assert guard["blocked"] is True
+    assert "verification_backpressure" in guard["shadowed_guard_states"]
+    assert guard["verification_backpressure"]["blocked"] is True
+    assert guard["verification_backpressure"]["active"] is False
+    assert guard["verification_backpressure"]["shadowed"] is True
 
 
 @pytest.mark.asyncio

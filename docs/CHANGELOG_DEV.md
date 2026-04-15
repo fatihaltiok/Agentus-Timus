@@ -2,6 +2,76 @@
 
 ---
 
+## Fortschritt 2026-04-15 - Phase E E4 Abschluss: Guard-Prioritaet und shadowed Backpressure live belegbar
+
+Der letzte offene E4-Restpunkt ist geschlossen: `verification_backpressure` ist jetzt nicht mehr nur als Guard-Logik vorhanden, sondern auch dann sauber beobachtbar, wenn ein haerterer Rollout-Guard wie `strict_force_off` den aktiven Block liefert.
+
+Geaendert:
+
+- [orchestration/improvement_task_autonomy.py](/home/fatih-ubuntu/dev/timus/orchestration/improvement_task_autonomy.py)
+  - Rollout-Guard liefert jetzt zusaetzlich:
+    - `shadowed_guard_states`
+    - `shadowed_guard_reasons`
+  - `verification_backpressure` traegt jetzt sichtbar:
+    - `active`
+    - `shadowed`
+- [orchestration/autonomy_observation.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomy_observation.py)
+  - Improvement-Runtime aggregiert jetzt auch:
+    - `by_shadowed_rollout_guard_state`
+  - Markdown-Report zeigt diese shadowed Guards explizit mit an
+- [tests/test_improvement_task_autonomy.py](/home/fatih-ubuntu/dev/timus/tests/test_improvement_task_autonomy.py)
+  - neuer Guard-Precedence-Test fuer:
+    - `strict_force_off` aktiv
+    - `verification_backpressure` zugleich als verdeckter Zusatzblocker
+- [tests/test_self_improvement_tool_ops.py](/home/fatih-ubuntu/dev/timus/tests/test_self_improvement_tool_ops.py)
+- [tests/test_c2_entrypoints.py](/home/fatih-ubuntu/dev/timus/tests/test_c2_entrypoints.py)
+- [tests/test_autonomy_observation.py](/home/fatih-ubuntu/dev/timus/tests/test_autonomy_observation.py)
+  - Tool-, MCP- und Observation-Sicht decken die neuen shadowed Guard-Felder mit ab
+
+Verifikation:
+
+- `python -m py_compile orchestration/improvement_task_autonomy.py orchestration/autonomy_observation.py tests/test_improvement_task_autonomy.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py tests/test_autonomy_observation.py` gruen
+- `pytest -q tests/test_improvement_task_autonomy.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py tests/test_autonomy_observation.py` -> `38 passed`
+
+Live:
+
+- `timus-mcp` und `timus-dispatcher` neu gestartet am **15. April 2026, 08:58:33 CEST**
+- `5000/health` und `5010/health` wieder `healthy`
+- kontrollierter, reversibler Runtime-Nachweis:
+  - unter aktivem `strict_force_off`
+  - mit temporaer gesaedeten Verification-Metriken
+  - zeigt `/autonomy/improvement` jetzt live:
+    - `rollout_guard_state = strict_force_off`
+    - `shadowed_guard_states = [verification_backpressure]`
+    - `verification_backpressure.blocked = true`
+    - `verification_backpressure.active = false`
+    - `verification_backpressure.shadowed = true`
+- anschliessend wurden die Runtime-Metriken direkt wieder restauriert
+
+Status:
+
+- E4 ist damit funktional und runtime-seitig geschlossen
+- der naechste offene Phase-E-Block ist jetzt `E5 Memory Curation Autonomy`
+
+## Fortschritt 2026-04-15 - Phase F als formaler Post-E-Betriebsblock vorbereitet
+
+Der bisher nur lose aus externen Impulsen abgeleitete Post-E-Betriebsblock ist jetzt als eigener Phase-F-Plan formalisiert. Damit ist nach Phase E nicht mehr nur grob "irgendwas mit Harness/Contracts" gemeint, sondern ein klar geschnittener Ausbaupfad mit Entscheidungspunkt danach.
+
+Neu:
+
+- [docs/PHASE_F_PLAN.md](/home/fatih-ubuntu/dev/timus/docs/PHASE_F_PLAN.md)
+  - formaler Phase-F-Plan fuer:
+    - Betriebsvertraege und `timus doctor`
+    - Typed Task Packets und Context-/Request-Preflight
+    - deterministische Mock-/Parity-Harnesses
+    - ausfuehrbare Architektur- und Verhaltensvertraege
+    - maschinenlesbares Runtime-/Lane-Board
+  - enthaelt ausserdem einen expliziten Entscheidungspunkt nach Phase F:
+    - allgemeine Mehrschritt-Planung als naechster grosser Block
+    - oder zuerst weiterer Betriebs-/Harness-Ausbau
+- [README.md](/home/fatih-ubuntu/dev/timus/README.md)
+  - Phase-F-Plan in die zentrale Doku-Liste aufgenommen
+
 ## Fortschritt 2026-04-14 - Phase E E4 fuehrt Verification-Backpressure fuer Improvement-Autonomie ein
 
 Der naechste E4-Slice schliesst die verbleibende Governance-Luecke zwischen bloesser Terminal-Klassifikation und echter Laufqualitaet: Wenn die juengsten Self-Hardening-Verifikationsmetriken zu viele unverifizierte, blockierte oder zurueckgerollte Zyklen zeigen, stoppt Improvement-Auto-Enqueue jetzt proaktiv.

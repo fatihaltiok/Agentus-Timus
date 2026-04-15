@@ -297,6 +297,7 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
             "by_autoenqueue_state": {},
             "by_target_agent": {},
             "by_rollout_guard_state": {},
+            "by_shadowed_rollout_guard_state": {},
             "by_task_outcome_state": {},
             "by_verification_state": {},
         },
@@ -795,6 +796,8 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
             _bump(improvement_runtime["by_autoenqueue_state"], autoenqueue_state)
             _bump(improvement_runtime["by_target_agent"], payload.get("target_agent"))
             _bump(improvement_runtime["by_rollout_guard_state"], payload.get("rollout_guard_state"))
+            for state in list(payload.get("shadowed_guard_states") or [])[:4]:
+                _bump(improvement_runtime["by_shadowed_rollout_guard_state"], state)
             if autoenqueue_state == "autoenqueue_ready":
                 improvement_runtime["autoenqueue_ready_total"] += 1
             elif autoenqueue_state == "enqueue_created":
@@ -1079,6 +1082,8 @@ def render_autonomy_observation_markdown(summary: Dict[str, Any]) -> str:
         lines.append(f"- Improvement-Autoenqueue `{key}`: `{int(value or 0)}`")
     for key, value in sorted(dict(improvement_runtime.get("by_rollout_guard_state") or {}).items()):
         lines.append(f"- Improvement-Rollout-Guard `{key}`: `{int(value or 0)}`")
+    for key, value in sorted(dict(improvement_runtime.get("by_shadowed_rollout_guard_state") or {}).items()):
+        lines.append(f"- Shadowed Guard `{key}`: `{int(value or 0)}`")
     for key, value in sorted(dict(improvement_runtime.get("by_task_outcome_state") or {}).items()):
         lines.append(f"- Improvement-Outcome `{key}`: `{int(value or 0)}`")
     for key, value in sorted(dict(improvement_runtime.get("by_verification_state") or {}).items()):

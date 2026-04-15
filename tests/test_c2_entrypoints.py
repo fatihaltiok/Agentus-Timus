@@ -168,8 +168,11 @@ def test_improvement_endpoint_returns_top_candidates(client):
             "rollout_guard_state": "verification_backpressure",
             "rollout_guard_blocked": True,
             "rollout_guard_reasons": ["verification_sample_total:3"],
+            "shadowed_guard_states": ["strict_force_off"],
             "verification_backpressure": {
                 "blocked": True,
+                "active": True,
+                "shadowed": False,
                 "sample_total": 3,
                 "negative_total": 3,
                 "verified_rate": 0.0,
@@ -181,8 +184,11 @@ def test_improvement_endpoint_returns_top_candidates(client):
             "state": "verification_backpressure",
             "blocked": True,
             "reasons": ["verification_sample_total:3"],
+            "shadowed_guard_states": ["strict_force_off"],
             "verification_backpressure": {
                 "blocked": True,
+                "active": True,
+                "shadowed": False,
                 "sample_total": 3,
                 "negative_total": 3,
                 "verified_rate": 0.0,
@@ -220,8 +226,10 @@ def test_improvement_endpoint_returns_top_candidates(client):
     assert data["task_autonomy_settings"]["enabled"] is True
     assert data["improvement_governance"]["rollout_guard_state"] == "verification_backpressure"
     assert data["improvement_governance"]["rollout_guard_blocked"] is True
+    assert data["improvement_governance"]["shadowed_guard_states"] == ["strict_force_off"]
     assert data["top_task_autonomy_decisions"][0]["candidate_id"] == "m12:1"
     assert data["top_task_autonomy_decisions"][0]["rollout_guard_state"] == "verification_backpressure"
+    assert data["top_task_autonomy_decisions"][0]["shadowed_guard_states"] == ["strict_force_off"]
     assert data["top_task_autonomy_decisions"][0]["autoenqueue_state"] == "not_creatable"
     assert data["improvement_runtime"]["execution_verified_total"] == 1
     assert data["improvement_runtime"]["verified_rate"] == 1.0

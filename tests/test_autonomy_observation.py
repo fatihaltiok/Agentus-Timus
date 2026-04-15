@@ -517,6 +517,7 @@ def test_autonomy_observation_summarizes_improvement_runtime(tmp_path: Path) -> 
             "candidate_id": "m12:101",
             "target_agent": "development",
             "rollout_guard_state": "rollout_frozen",
+            "shadowed_guard_states": ["verification_backpressure"],
             "autoenqueue_state": "enqueue_cooldown_active",
         },
         observed_at=(base - timedelta(minutes=8)).isoformat(),
@@ -604,6 +605,7 @@ def test_autonomy_observation_summarizes_improvement_runtime(tmp_path: Path) -> 
     assert improvement["by_autoenqueue_state"]["enqueue_cooldown_active"] == 1
     assert improvement["by_rollout_guard_state"]["allow"] == 1
     assert improvement["by_rollout_guard_state"]["rollout_frozen"] == 1
+    assert improvement["by_shadowed_rollout_guard_state"]["verification_backpressure"] == 1
     assert improvement["by_task_outcome_state"]["verified"] == 1
     assert improvement["by_task_outcome_state"]["ended_unverified"] == 1
     assert improvement["by_task_outcome_state"]["blocked"] == 1
@@ -615,3 +617,4 @@ def test_autonomy_observation_summarizes_improvement_runtime(tmp_path: Path) -> 
     assert "Enqueue Cooldown aktiv" in markdown
     assert "Improvement-Autoenqueue `enqueue_cooldown_active`" in markdown
     assert "Improvement-Outcome `verification_failed`" in markdown
+    assert "Shadowed Guard `verification_backpressure`" in markdown

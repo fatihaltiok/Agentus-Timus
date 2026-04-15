@@ -118,6 +118,8 @@ def _evaluate_verification_backpressure(runtime: Mapping[str, Any]) -> dict[str,
     return {
         "blocked": blocked,
         "reasons": reasons[:3],
+        "active": False,
+        "shadowed": False,
         "verified_total": verified_total,
         "blocked_total": blocked_total,
         "rolled_back_total": rolled_back_total,
@@ -141,41 +143,98 @@ def get_improvement_task_rollout_guard(queue: Any) -> dict[str, Any]:
     runtime_state = _text(runtime.get("state"), limit=64).lower()
     verification_status = _text(runtime.get("last_verification_status"), limit=64).lower()
     canary_state = _text(runtime.get("last_canary_state"), limit=64).lower()
-    state = "allow"
-    reasons: list[str] = []
+    blocked_guards: list[dict[str, Any]] = []
 
     if strict_force_off:
-        state = "strict_force_off"
-        reasons.append("policy_runtime:strict_force_off")
-    elif "rollback" in scorecard_last_action or "rollback" in hardening_last_action:
-        state = "rollback_active"
-        reasons.append(f"scorecard_action:{scorecard_last_action or 'n/a'}")
-        reasons.append(f"hardening_action:{hardening_last_action or 'n/a'}")
-    elif freeze_active or "freeze" in hardening_last_action or scorecard_last_action == "governance_hold":
-        state = "rollout_frozen"
-        reasons.append("policy_runtime:hardening_rollout_freeze" if freeze_active else "rollout_action:freeze")
-    elif verification_status in {"blocked", "rolled_back", "error"} or canary_state in {
+        blocked_guards.append(
+            {
+                "state": "strict_force_off",
+                "reasons": ["policy_runtime:strict_force_off"],
+            }
+        )
+    if "rollback" in scorecard_last_action or "rollback" in hardening_last_action:
+        blocked_guards.append(
+            {
+                "state": "rollback_active",
+                "reasons": [
+                    f"scorecard_action:{scorecard_last_action or 'n/a'}",
+                    f"hardening_action:{hardening_last_action or 'n/a'}",
+                ],
+            }
+        )
+    if freeze_active or "freeze" in hardening_last_action or scorecard_last_action == "governance_hold":
+        blocked_guards.append(
+            {
+                "state": "rollout_frozen",
+                "reasons": [
+                    "policy_runtime:hardening_rollout_freeze" if freeze_active else "rollout_action:freeze"
+                ],
+            }
+        )
+    if verification_status in {"blocked", "rolled_back", "error"} or canary_state in {
         "blocked",
         "rolled_back",
         "error",
         "failed",
     }:
-        state = "verification_blocked"
+        verification_reasons: list[str] = []
         if verification_status:
-            reasons.append(f"verification_status:{verification_status}")
+            verification_reasons.append(f"verification_status:{verification_status}")
         if canary_state:
-            reasons.append(f"canary_state:{canary_state}")
-    elif verification_backpressure["blocked"]:
-        state = "verification_backpressure"
-        reasons.extend(list(verification_backpressure.get("reasons") or [])[:3])
-    elif runtime_state == "critical":
-        state = "runtime_critical"
-        reasons.append("self_hardening_runtime:critical")
+            verification_reasons.append(f"canary_state:{canary_state}")
+        blocked_guards.append(
+            {
+                "state": "verification_blocked",
+                "reasons": verification_reasons[:3],
+            }
+        )
+    if verification_backpressure["blocked"]:
+        blocked_guards.append(
+            {
+                "state": "verification_backpressure",
+                "reasons": list(verification_backpressure.get("reasons") or [])[:3],
+            }
+        )
+    if runtime_state == "critical":
+        blocked_guards.append(
+            {
+                "state": "runtime_critical",
+                "reasons": ["self_hardening_runtime:critical"],
+            }
+        )
+
+    active_guard = blocked_guards[0] if blocked_guards else {"state": "allow", "reasons": []}
+    shadowed_guards = blocked_guards[1:] if len(blocked_guards) > 1 else []
+    state = _text(active_guard.get("state"), limit=64).lower() or "allow"
+    reasons = [
+        _text(item, limit=96)
+        for item in (active_guard.get("reasons") or [])
+        if _text(item, limit=96)
+    ]
+    shadowed_states = [
+        _text(item.get("state"), limit=64).lower()
+        for item in shadowed_guards
+        if _text(item.get("state"), limit=64)
+    ]
+    shadowed_reasons = {
+        _text(item.get("state"), limit=64).lower(): [
+            _text(reason, limit=96)
+            for reason in (item.get("reasons") or [])
+            if _text(reason, limit=96)
+        ][:3]
+        for item in shadowed_guards
+        if _text(item.get("state"), limit=64)
+    }
+    verification_backpressure = dict(verification_backpressure)
+    verification_backpressure["active"] = state == "verification_backpressure"
+    verification_backpressure["shadowed"] = "verification_backpressure" in shadowed_states
 
     return {
         "state": state,
         "blocked": state != "allow",
         "reasons": reasons[:4],
+        "shadowed_guard_states": shadowed_states[:4],
+        "shadowed_guard_reasons": shadowed_reasons,
         "strict_force_off": strict_force_off,
         "freeze_active": freeze_active,
         "scorecard_last_action": scorecard_last_action,
@@ -204,6 +263,20 @@ def build_improvement_task_governance_view(
             for item in (active_rollout_guard.get("reasons") or [])
             if _text(item, limit=96)
         ][:3],
+        "shadowed_guard_states": [
+            _text(item, limit=64)
+            for item in (active_rollout_guard.get("shadowed_guard_states") or [])
+            if _text(item, limit=64)
+        ][:4],
+        "shadowed_guard_reasons": {
+            _text(key, limit=64): [
+                _text(reason, limit=96)
+                for reason in (reasons or [])
+                if _text(reason, limit=96)
+            ][:3]
+            for key, reasons in dict(active_rollout_guard.get("shadowed_guard_reasons") or {}).items()
+            if _text(key, limit=64)
+        },
         "strict_force_off": bool(active_rollout_guard.get("strict_force_off")),
         "freeze_active": bool(active_rollout_guard.get("freeze_active")),
         "runtime_state": _text(active_rollout_guard.get("runtime_state"), limit=64),
@@ -320,6 +393,11 @@ def build_improvement_task_autonomy_decision(
         "rollout_guard_state": guard_state,
         "rollout_guard_blocked": guard_blocked,
         "rollout_guard_reasons": guard_reasons[:3],
+        "shadowed_guard_states": [
+            _text(item, limit=64)
+            for item in ((rollout_guard or {}).get("shadowed_guard_states") or [])
+            if _text(item, limit=64)
+        ][:4],
         "autoenqueue_state": autoenqueue_state,
         "allow_autoenqueue": allow_autoenqueue,
         "allow_self_modify": bool(allow_self_modify),
@@ -382,6 +460,11 @@ def _record_improvement_task_autonomy_event(decision: Mapping[str, Any]) -> None
         "effective_fix_mode": _text(decision.get("effective_fix_mode"), limit=64),
         "rollout_guard_state": _text(decision.get("rollout_guard_state"), limit=64),
         "rollout_guard_blocked": bool(decision.get("rollout_guard_blocked")),
+        "shadowed_guard_states": [
+            _text(item, limit=64)
+            for item in (decision.get("shadowed_guard_states") or [])
+            if _text(item, limit=64)
+        ][:4],
         "autoenqueue_state": _text(decision.get("autoenqueue_state"), limit=64),
         "enqueue_status": _text(decision.get("enqueue_status"), limit=64),
         "enqueue_reason": _text(decision.get("enqueue_reason"), limit=160),
