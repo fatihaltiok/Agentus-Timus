@@ -10,6 +10,7 @@ from orchestration.memory_curation import (
     _build_semantic_sync_plan,
     classify_memory_curation_tier,
     decide_memory_curation_action,
+    filter_memory_curation_candidates,
     verify_memory_curation_outcome,
 )
 from memory.memory_system import MemoryItem
@@ -99,3 +100,21 @@ def _contract_semantic_sync_plan_only_touches_active_diff() -> bool:
     return delete_refs == [(SUMMARY_CATEGORY, "summary_x")] and [
         (item.category, item.key) for item in upsert_items
     ] == [("working_memory", "scratch_old")]
+
+
+@deal.post(lambda r: r is True)
+def _contract_candidate_filter_respects_limit_and_allowlists() -> bool:
+    candidates = [
+        {"candidate_id": "c1", "action": "summarize", "category": "decisions"},
+        {"candidate_id": "c2", "action": "archive", "category": "working_memory"},
+        {"candidate_id": "c3", "action": "devalue", "category": "patterns"},
+    ]
+    filtered = filter_memory_curation_candidates(
+        candidates,
+        allowed_actions=["summarize", "devalue"],
+        allowed_categories=["decisions", "patterns"],
+        limit=2,
+    )
+    return len(filtered) <= 2 and [
+        (item["action"], item["category"]) for item in filtered
+    ] == [("summarize", "decisions"), ("devalue", "patterns")]

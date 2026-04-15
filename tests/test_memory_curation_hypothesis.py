@@ -6,6 +6,7 @@ from orchestration.memory_curation import (
     ARCHIVE_CATEGORY_PREFIX,
     classify_memory_curation_tier,
     decide_memory_curation_action,
+    filter_memory_curation_candidates,
     verify_memory_curation_outcome,
 )
 
@@ -125,3 +126,46 @@ def test_hypothesis_verification_rejects_stale_or_stable_regression(
         before_stable_items=before_stable,
         after_stable_items=max(0, before_stable - 1),
     )
+
+
+@given(
+    candidates=st.lists(
+        st.fixed_dictionaries(
+            {
+                "action": st.sampled_from(["summarize", "archive", "devalue", "keep"]),
+                "category": st.sampled_from(["decisions", "patterns", "working_memory", "extracted", "user_profile"]),
+                "candidate_id": st.text(max_size=12),
+            }
+        ),
+        max_size=20,
+    ),
+    allowed_actions=st.lists(
+        st.sampled_from(["summarize", "archive", "devalue", "keep"]),
+        unique=True,
+        max_size=4,
+    ),
+    allowed_categories=st.lists(
+        st.sampled_from(["decisions", "patterns", "working_memory", "extracted", "user_profile"]),
+        unique=True,
+        max_size=5,
+    ),
+    limit=st.integers(min_value=1, max_value=8),
+)
+def test_hypothesis_filter_memory_curation_candidates_respects_allowlists_and_limit(
+    candidates: list[dict[str, str]],
+    allowed_actions: list[str],
+    allowed_categories: list[str],
+    limit: int,
+) -> None:
+    filtered = filter_memory_curation_candidates(
+        candidates,
+        allowed_actions=allowed_actions,
+        allowed_categories=allowed_categories,
+        limit=limit,
+    )
+
+    assert len(filtered) <= limit
+    if allowed_actions:
+        assert {str(item["action"]) for item in filtered} <= set(allowed_actions)
+    if allowed_categories:
+        assert {str(item["category"]) for item in filtered} <= set(allowed_categories)

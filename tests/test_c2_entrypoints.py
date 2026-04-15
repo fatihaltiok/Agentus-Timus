@@ -235,6 +235,56 @@ def test_improvement_endpoint_returns_top_candidates(client):
     assert data["improvement_runtime"]["verified_rate"] == 1.0
 
 
+def test_memory_curation_endpoint_returns_governance_and_metrics(client):
+    with patch(
+        "orchestration.task_queue.get_queue",
+        return_value=type("_Queue", (), {})(),
+    ), patch(
+        "orchestration.memory_curation.get_memory_curation_autonomy_settings",
+        return_value={
+            "enabled": True,
+            "interval_heartbeats": 12,
+            "max_actions": 1,
+            "allowed_actions": ["summarize", "archive", "devalue"],
+        },
+    ), patch(
+        "orchestration.memory_curation.get_memory_curation_status",
+        return_value={
+            "status": "ok",
+            "current_metrics": {
+                "active_items": 12,
+                "archived_items": 4,
+                "summary_items": 2,
+            },
+            "last_snapshots": [{"snapshot_id": "snap-m1", "status": "completed"}],
+            "pending_candidates": [{"candidate_id": "mc:1", "action": "summarize"}],
+            "autonomy_settings": {
+                "enabled": True,
+                "interval_heartbeats": 12,
+                "max_actions": 1,
+            },
+            "autonomy_governance": {
+                "state": "cooldown_active",
+                "blocked": True,
+                "reasons": ["recent_memory_curation_run"],
+                "filtered_candidate_count": 1,
+                "cooldown_until": "2026-04-15T10:00:00",
+            },
+        },
+    ):
+        resp = client.get("/autonomy/memory_curation")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "success"
+    assert data["memory_curation"]["status"] == "ok"
+    assert data["autonomy_settings"]["enabled"] is True
+    assert data["autonomy_governance"]["state"] == "cooldown_active"
+    assert data["current_metrics"]["summary_items"] == 2
+    assert data["last_snapshots"][0]["snapshot_id"] == "snap-m1"
+    assert data["pending_candidates"][0]["candidate_id"] == "mc:1"
+
+
 def test_incident_trace_endpoint_returns_trace(client):
     with patch("orchestration.autonomy_observation.get_incident_trace", return_value=_fake_trace()):
         resp = client.get("/autonomy/incident/req-test")

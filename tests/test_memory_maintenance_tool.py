@@ -38,6 +38,7 @@ async def test_get_memory_curation_status_tool_returns_engine_status(monkeypatch
             "current_metrics": {"active_items": 2},
             "last_snapshots": [{"snapshot_id": "snap-2"}],
             "pending_candidates": [],
+            "autonomy_governance": {"state": "allow", "blocked": False},
         },
     )
 
@@ -45,6 +46,7 @@ async def test_get_memory_curation_status_tool_returns_engine_status(monkeypatch
 
     assert result["status"] == "ok"
     assert result["last_snapshots"][0]["snapshot_id"] == "snap-2"
+    assert result["autonomy_governance"]["state"] == "allow"
 
 
 @pytest.mark.asyncio

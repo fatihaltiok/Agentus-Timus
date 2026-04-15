@@ -5067,6 +5067,31 @@ async def autonomy_improvement_endpoint():
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
 
+@app.get("/autonomy/memory_curation", summary="Memory-Curation Status und Governance")
+async def autonomy_memory_curation_endpoint():
+    """Gibt E5 Memory-Curation-Status, Governance und aktuelle Kandidaten zurück."""
+    try:
+        from orchestration.task_queue import get_queue
+        from orchestration.memory_curation import (
+            get_memory_curation_autonomy_settings,
+            get_memory_curation_status,
+        )
+
+        queue = get_queue()
+        payload = get_memory_curation_status(queue=queue, stale_days=30, limit=5)
+        return {
+            "status": "success",
+            "memory_curation": payload,
+            "autonomy_settings": get_memory_curation_autonomy_settings(),
+            "autonomy_governance": dict(payload.get("autonomy_governance") or {}),
+            "current_metrics": dict(payload.get("current_metrics") or {}),
+            "last_snapshots": list(payload.get("last_snapshots") or []),
+            "pending_candidates": list(payload.get("pending_candidates") or []),
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
 # ── VOICE ENDPOINTS ───────────────────────────────────────────────────────────
 _voice_listen_task: asyncio.Task | None = None
 
@@ -5094,6 +5119,17 @@ async def get_settings():
         "AUTONOMY_PROACTIVE_TRIGGERS_ENABLED": os.getenv("AUTONOMY_PROACTIVE_TRIGGERS_ENABLED", "false"),
         "AUTONOMY_GOAL_QUEUE_ENABLED":         os.getenv("AUTONOMY_GOAL_QUEUE_ENABLED",         "true"),
         "AUTONOMY_SELF_IMPROVEMENT_ENABLED":   os.getenv("AUTONOMY_SELF_IMPROVEMENT_ENABLED",   "false"),
+        "AUTONOMY_MEMORY_CURATION_ENABLED":    os.getenv("AUTONOMY_MEMORY_CURATION_ENABLED",    "false"),
+        "AUTONOMY_MEMORY_CURATION_INTERVAL_HEARTBEATS": os.getenv("AUTONOMY_MEMORY_CURATION_INTERVAL_HEARTBEATS", "12"),
+        "AUTONOMY_MEMORY_CURATION_STALE_DAYS": os.getenv("AUTONOMY_MEMORY_CURATION_STALE_DAYS", "30"),
+        "AUTONOMY_MEMORY_CURATION_CANDIDATE_LIMIT": os.getenv("AUTONOMY_MEMORY_CURATION_CANDIDATE_LIMIT", "5"),
+        "AUTONOMY_MEMORY_CURATION_MAX_ACTIONS": os.getenv("AUTONOMY_MEMORY_CURATION_MAX_ACTIONS", "1"),
+        "AUTONOMY_MEMORY_CURATION_COOLDOWN_MINUTES": os.getenv("AUTONOMY_MEMORY_CURATION_COOLDOWN_MINUTES", "180"),
+        "AUTONOMY_MEMORY_CURATION_ROLLBACK_COOLDOWN_MINUTES": os.getenv("AUTONOMY_MEMORY_CURATION_ROLLBACK_COOLDOWN_MINUTES", "720"),
+        "AUTONOMY_MEMORY_CURATION_VERIFICATION_FAILURE_COOLDOWN_MINUTES": os.getenv("AUTONOMY_MEMORY_CURATION_VERIFICATION_FAILURE_COOLDOWN_MINUTES", "720"),
+        "AUTONOMY_MEMORY_CURATION_REQUIRE_SEMANTIC_STORE": os.getenv("AUTONOMY_MEMORY_CURATION_REQUIRE_SEMANTIC_STORE", "true"),
+        "AUTONOMY_MEMORY_CURATION_ALLOWED_CATEGORIES": os.getenv("AUTONOMY_MEMORY_CURATION_ALLOWED_CATEGORIES", ""),
+        "AUTONOMY_MEMORY_CURATION_ALLOWED_ACTIONS": os.getenv("AUTONOMY_MEMORY_CURATION_ALLOWED_ACTIONS", ""),
         "AUTONOMY_M13_ENABLED":                os.getenv("AUTONOMY_M13_ENABLED",                "false"),
         "AUTONOMY_M14_ENABLED":                os.getenv("AUTONOMY_M14_ENABLED",                "false"),
         "AUTONOMY_AMBIENT_CONTEXT_ENABLED":    os.getenv("AUTONOMY_AMBIENT_CONTEXT_ENABLED",    "true"),
@@ -5124,6 +5160,17 @@ async def update_setting(request: Request):
         "AUTONOMY_PROACTIVE_TRIGGERS_ENABLED",
         "AUTONOMY_GOAL_QUEUE_ENABLED",
         "AUTONOMY_SELF_IMPROVEMENT_ENABLED",
+        "AUTONOMY_MEMORY_CURATION_ENABLED",
+        "AUTONOMY_MEMORY_CURATION_INTERVAL_HEARTBEATS",
+        "AUTONOMY_MEMORY_CURATION_STALE_DAYS",
+        "AUTONOMY_MEMORY_CURATION_CANDIDATE_LIMIT",
+        "AUTONOMY_MEMORY_CURATION_MAX_ACTIONS",
+        "AUTONOMY_MEMORY_CURATION_COOLDOWN_MINUTES",
+        "AUTONOMY_MEMORY_CURATION_ROLLBACK_COOLDOWN_MINUTES",
+        "AUTONOMY_MEMORY_CURATION_VERIFICATION_FAILURE_COOLDOWN_MINUTES",
+        "AUTONOMY_MEMORY_CURATION_REQUIRE_SEMANTIC_STORE",
+        "AUTONOMY_MEMORY_CURATION_ALLOWED_CATEGORIES",
+        "AUTONOMY_MEMORY_CURATION_ALLOWED_ACTIONS",
         "AUTONOMY_M13_ENABLED",
         "AUTONOMY_M14_ENABLED",
         "AUTONOMY_AMBIENT_CONTEXT_ENABLED",

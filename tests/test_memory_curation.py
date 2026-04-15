@@ -4,15 +4,21 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from memory.memory_system import MemoryItem, PersistentMemory
+from orchestration.task_queue import TaskQueue
 from orchestration.memory_curation import (
     ARCHIVE_CATEGORY_PREFIX,
     SUMMARY_CATEGORY,
     _build_semantic_sync_plan,
     build_memory_curation_candidates,
+    build_memory_curation_autonomy_governance,
     build_memory_curation_metrics,
+    filter_memory_curation_candidates,
     get_memory_curation_status,
     rollback_memory_curation,
+    run_memory_curation_autonomy_cycle,
     run_memory_curation_mvp,
 )
 
@@ -142,6 +148,23 @@ def test_build_memory_curation_candidates_detects_summarize_archive_and_devalue(
     summarize = next(candidate for candidate in candidates if candidate["action"] == "summarize")
     assert summarize["category"] == "extracted"
     assert summarize["item_count"] >= 2
+
+
+def test_filter_memory_curation_candidates_respects_allowed_actions_categories_and_limit(tmp_path: Path) -> None:
+    manager = _make_manager(tmp_path)
+    _seed_items(manager)
+    candidates = build_memory_curation_candidates(manager=manager, stale_days=30, max_candidates=12)
+
+    filtered = filter_memory_curation_candidates(
+        candidates,
+        allowed_actions=["summarize", "devalue"],
+        allowed_categories=["extracted", "patterns"],
+        limit=1,
+    )
+
+    assert len(filtered) == 1
+    assert filtered[0]["action"] == "summarize"
+    assert filtered[0]["category"] == "extracted"
 
 
 def test_run_memory_curation_mvp_applies_actions_and_creates_snapshot(tmp_path: Path) -> None:
@@ -317,11 +340,162 @@ def test_get_memory_curation_status_reports_metrics_candidates_and_snapshots(tmp
     manager = _make_manager(tmp_path)
     _seed_items(manager)
     run_result = run_memory_curation_mvp(manager=manager, stale_days=30, max_actions=12, dry_run=False)
+    queue = TaskQueue(db_path=tmp_path / "task_queue.db")
+    queue.set_policy_runtime_state(
+        "memory_curation_autonomy",
+        "cooldown_active",
+        metadata_update={"last_snapshot_id": run_result["snapshot_id"]},
+    )
 
-    status = get_memory_curation_status(manager=manager, stale_days=30, limit=5)
+    status = get_memory_curation_status(manager=manager, queue=queue, stale_days=30, limit=5)
 
     assert status["status"] == "ok"
     assert status["current_metrics"]["archived_items"] >= 1
     assert status["last_snapshots"][0]["snapshot_id"] == run_result["snapshot_id"]
     assert "working_memory_last_stats" in status["current_metrics"]
     assert isinstance(status["pending_candidates"], list)
+    assert status["autonomy_settings"]["enabled"] is False
+    assert status["autonomy_governance"]["runtime_state"]["state_value"] == "cooldown_active"
+
+
+def test_build_memory_curation_autonomy_governance_blocks_busy_snapshot(tmp_path: Path) -> None:
+    manager = _make_manager(tmp_path)
+    _seed_items(manager)
+    current_items = manager.persistent.get_all_memory_items()
+    metrics = build_memory_curation_metrics(current_items, manager=manager, stale_days=30)
+    manager.persistent.store_memory_curation_snapshot(
+        snapshot_id="snap-busy",
+        status="started",
+        before_items=current_items,
+        metrics_before=metrics,
+    )
+
+    governance = build_memory_curation_autonomy_governance(
+        manager=manager,
+        settings={
+            "enabled": True,
+            "interval_heartbeats": 1,
+            "stale_days": 30,
+            "candidate_limit": 5,
+            "max_actions": 1,
+            "cooldown_minutes": 0,
+            "rollback_cooldown_minutes": 0,
+            "verification_failure_cooldown_minutes": 0,
+            "require_semantic_store": True,
+            "allowed_categories": ["decisions", "patterns", "working_memory", "extracted"],
+            "allowed_actions": ["summarize", "archive", "devalue"],
+        },
+    )
+
+    assert governance["blocked"] is True
+    assert governance["state"] == "memory_curation_busy"
+    assert "latest_snapshot_status:started" in governance["reasons"]
+
+
+@pytest.mark.asyncio
+async def test_run_memory_curation_autonomy_cycle_updates_runtime_state_and_emits_events(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("AUTONOMY_COMPAT_MODE", "false")
+    monkeypatch.setenv("AUTONOMY_MEMORY_CURATION_ENABLED", "true")
+    monkeypatch.setenv("AUTONOMY_MEMORY_CURATION_INTERVAL_HEARTBEATS", "1")
+    monkeypatch.setenv("AUTONOMY_MEMORY_CURATION_MAX_ACTIONS", "1")
+    monkeypatch.setenv("AUTONOMY_MEMORY_CURATION_CANDIDATE_LIMIT", "3")
+    monkeypatch.setenv("AUTONOMY_MEMORY_CURATION_COOLDOWN_MINUTES", "0")
+    monkeypatch.setenv("AUTONOMY_MEMORY_CURATION_ROLLBACK_COOLDOWN_MINUTES", "0")
+    monkeypatch.setenv("AUTONOMY_MEMORY_CURATION_VERIFICATION_FAILURE_COOLDOWN_MINUTES", "0")
+
+    manager = _make_manager(tmp_path)
+    _seed_items(manager)
+    queue = TaskQueue(db_path=tmp_path / "autonomy_queue.db")
+    events: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        "orchestration.memory_curation.record_autonomy_observation",
+        lambda event_type, payload, observed_at="": events.append((event_type, dict(payload))) or True,
+    )
+
+    summary = await run_memory_curation_autonomy_cycle(
+        queue=queue,
+        manager=manager,
+        heartbeat_count=1,
+    )
+
+    assert summary["status"] == "complete"
+    assert summary["action_count"] == 1
+    runtime_state = queue.get_policy_runtime_state("memory_curation_autonomy")
+    assert runtime_state is not None
+    assert runtime_state["state_value"] == "complete"
+    assert runtime_state["metadata"]["last_snapshot_id"] == summary["snapshot_id"]
+    event_types = [event_type for event_type, _ in events]
+    assert event_types[:2] == ["memory_curation_autonomy_started", "memory_curation_started"]
+    assert "memory_curation_autonomy_completed" in event_types
+
+
+@pytest.mark.asyncio
+async def test_run_memory_curation_autonomy_cycle_cadence_skip_does_not_emit_blocked_event(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("AUTONOMY_COMPAT_MODE", "false")
+    monkeypatch.setenv("AUTONOMY_MEMORY_CURATION_ENABLED", "true")
+    monkeypatch.setenv("AUTONOMY_MEMORY_CURATION_INTERVAL_HEARTBEATS", "3")
+
+    manager = _make_manager(tmp_path)
+    _seed_items(manager)
+    queue = TaskQueue(db_path=tmp_path / "cadence_queue.db")
+    events: list[str] = []
+    monkeypatch.setattr(
+        "orchestration.memory_curation.record_autonomy_observation",
+        lambda event_type, payload, observed_at="": events.append(event_type) or True,
+    )
+
+    summary = await run_memory_curation_autonomy_cycle(
+        queue=queue,
+        manager=manager,
+        heartbeat_count=1,
+    )
+
+    assert summary["status"] == "blocked"
+    assert summary["state"] == "cadence_skip"
+    runtime_state = queue.get_policy_runtime_state("memory_curation_autonomy")
+    assert runtime_state is not None
+    assert runtime_state["state_value"] == "cadence_skip"
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_run_memory_curation_autonomy_cycle_dedupes_repeated_blocked_observation(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("AUTONOMY_COMPAT_MODE", "false")
+    monkeypatch.setenv("AUTONOMY_MEMORY_CURATION_ENABLED", "true")
+    monkeypatch.setenv("AUTONOMY_MEMORY_CURATION_INTERVAL_HEARTBEATS", "1")
+
+    manager = _make_manager(tmp_path)
+    _seed_items(manager)
+    queue = TaskQueue(db_path=tmp_path / "blocked_queue.db")
+    queue.set_self_healing_runtime_state("degrade_mode", "degraded", metadata_update={"source": "test"})
+    events: list[str] = []
+    monkeypatch.setattr(
+        "orchestration.memory_curation.record_autonomy_observation",
+        lambda event_type, payload, observed_at="": events.append(event_type) or True,
+    )
+
+    first = await run_memory_curation_autonomy_cycle(
+        queue=queue,
+        manager=manager,
+        heartbeat_count=1,
+    )
+    second = await run_memory_curation_autonomy_cycle(
+        queue=queue,
+        manager=manager,
+        heartbeat_count=2,
+    )
+
+    assert first["status"] == "blocked"
+    assert first["state"] == "runtime_degraded"
+    assert second["status"] == "blocked"
+    assert second["state"] == "runtime_degraded"
+    assert events == ["memory_curation_autonomy_blocked"]

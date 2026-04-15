@@ -784,6 +784,66 @@ Noch nicht Teil von E5.1:
 - keine aggressive Umsortierung stabiler Memory-Klassen
 - keine blinde Summary-Erzeugung ohne Snapshot/Rollback
 
+### E5.2 Controlled Autonomous Memory Curation
+
+Stand:
+
+- erster kontrollierter Autonomie-Block fuer Memory-Curation ist umgesetzt
+
+Umgesetzt:
+
+- [orchestration/memory_curation.py](/home/fatih-ubuntu/dev/timus/orchestration/memory_curation.py) hat jetzt einen eigenen E5.2-Governance- und Runtime-Pfad:
+  - `get_memory_curation_autonomy_settings()`
+  - `build_memory_curation_autonomy_governance(...)`
+  - `run_memory_curation_autonomy_cycle(...)`
+- harte Autonomie-Gates fuer Memory-Curation:
+  - Feature-Flag `AUTONOMY_MEMORY_CURATION_ENABLED`
+  - Heartbeat-Cadence
+  - Semantic-Store-Verfuegbarkeit
+  - Runtime-Degrade-Mode
+  - allgemeiner Cooldown
+  - Rollback-Cooldown
+  - Verification-Failure-Cooldown
+  - Busy-Guard bei laufendem Snapshot-Status (`started`, `rolling_back`)
+- Curation-Laeufe koennen jetzt auf einen sicheren Subset eingegrenzt werden:
+  - erlaubte Kategorien
+  - erlaubte Aktionen
+  - `max_actions`
+- Runtime-State wird jetzt in der Policy-Runtime gehalten unter:
+  - `memory_curation_autonomy`
+- [orchestration/autonomous_runner.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomous_runner.py) startet dafuer jetzt einen eigenen Heartbeat-Zyklus
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py) exponiert den Block jetzt operatorsichtbar:
+  - `GET /autonomy/memory_curation`
+  - zusaetzliche Runtime-Settings fuer E5.2
+
+Observability:
+
+- neue Runtime-Events:
+  - `memory_curation_autonomy_started`
+  - `memory_curation_autonomy_completed`
+  - `memory_curation_autonomy_blocked`
+- wiederholte triviale Blockaden werden nicht blind gespammt:
+  - `cadence_skip`
+  - `no_candidates`
+  - identische Block-States werden dedupliziert
+
+Verifikation:
+
+- fokussierter Pytest-Ring fuer:
+  - Governance
+  - Cadence-/Cooldown-Guards
+  - Runner-Integration
+  - MCP-Endpoint
+- Hypothesis prueft jetzt auch den Candidate-Filter fuer E5.2
+- CrossHair deckt die neuen Filter-/Allowlist-Invarianten ab
+
+Wichtige Grenzen von E5.2:
+
+- kein aggressives autonomes Delete/Pruning
+- keine blinde Mutation ausserhalb der erlaubten Aktionen/Kategorien
+- noch kein eigener Quality-Score fuer Retrieval-Verbesserung ueber mehrere Laeufe
+- noch kein autonomer Rollback-Entscheider
+
 ### E6. Operator Visibility und Governance
 
 Ziel:

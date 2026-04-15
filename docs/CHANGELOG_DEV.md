@@ -2,6 +2,61 @@
 
 ---
 
+## Fortschritt 2026-04-15 - Phase E E5.2 Controlled Autonomous Memory Curation
+
+E5 ist ueber den manuellen MVP hinaus auf einen ersten kontrollierten Autonomiepfad erweitert: Memory-Curation kann jetzt ueber den Heartbeat laufen, bleibt aber an harte Gates, Cooldowns und einen kleinen sicheren Aktionsraum gebunden.
+
+Geaendert:
+
+- [orchestration/memory_curation.py](/home/fatih-ubuntu/dev/timus/orchestration/memory_curation.py)
+  - neue E5.2-Autonomiebausteine:
+    - `get_memory_curation_autonomy_settings()`
+    - `build_memory_curation_autonomy_governance(...)`
+    - `run_memory_curation_autonomy_cycle(...)`
+  - neue Gates fuer:
+    - Cadence
+    - Semantic-Store-Verfuegbarkeit
+    - Runtime-Degrade-Mode
+    - allgemeine Run-Cooldowns
+    - Rollback-Cooldown
+    - Verification-Failure-Cooldown
+    - Busy-Snapshot-Status
+  - wiederholte triviale Blockzustande werden nicht blind ins Observation-Log gespammt
+- [orchestration/autonomous_runner.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomous_runner.py)
+  - eigener Heartbeat-Zyklus fuer E5.2
+  - klare Runner-Klassifikation fuer:
+    - `complete`
+    - `verification_failed`
+    - `blocked`
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - neuer Operator-Endpoint:
+    - `GET /autonomy/memory_curation`
+  - erweiterter Settings-Surface fuer E5.2:
+    - Intervall
+    - Stale-Days
+    - Candidate-Limit
+    - Max-Actions
+    - Cooldowns
+    - Semantic-Store-Pflicht
+    - erlaubte Aktionen/Kategorien
+
+Tests:
+
+- erweitert:
+  - [tests/test_memory_curation.py](/home/fatih-ubuntu/dev/timus/tests/test_memory_curation.py)
+  - [tests/test_memory_curation_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_memory_curation_hypothesis.py)
+  - [tests/test_memory_curation_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_memory_curation_crosshair.py)
+  - [tests/test_memory_maintenance_tool.py](/home/fatih-ubuntu/dev/timus/tests/test_memory_maintenance_tool.py)
+  - [tests/test_c2_entrypoints.py](/home/fatih-ubuntu/dev/timus/tests/test_c2_entrypoints.py)
+- neu:
+  - [tests/test_autonomous_runner_memory_curation.py](/home/fatih-ubuntu/dev/timus/tests/test_autonomous_runner_memory_curation.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/memory_curation.py orchestration/autonomous_runner.py server/mcp_server.py tests/test_memory_curation.py tests/test_memory_curation_hypothesis.py tests/test_memory_curation_crosshair.py tests/test_memory_maintenance_tool.py tests/test_autonomous_runner_memory_curation.py tests/test_c2_entrypoints.py` gruen
+- `pytest -q tests/test_memory_curation.py tests/test_memory_curation_hypothesis.py tests/test_memory_maintenance_tool.py tests/test_autonomous_runner_memory_curation.py tests/test_c2_entrypoints.py` -> `47 passed`
+- `python -m crosshair check tests/test_memory_curation_crosshair.py` -> Exit `0`
+
 ## Fortschritt 2026-04-15 - Phase E E5.1 startet als Managed Memory Curation MVP
 
 E5 ist nicht mit einem reinen Policy-Slice gestartet, sondern direkt als groesserer, messbarer Runtime-Block: Timus kann Memory jetzt klassifizieren, sichere Curation-Kandidaten bauen, reversible Pflegeaktionen ausfuehren und den Bestand ueber Snapshots wiederherstellen.

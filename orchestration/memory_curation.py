@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
+import os
 from typing import Any, Iterable, Mapping, Protocol, TypeVar
 import uuid
 
@@ -19,6 +21,9 @@ _TOPIC_BOUND_CATEGORIES = {"patterns", "decisions", "extracted", "summarized", S
 _EPHEMERAL_CATEGORIES = {"working_memory", "scratchpad", "session_memory"}
 _ROLLBACK_SEMANTIC_SYNC_CHUNK_SIZE = 64
 _T = TypeVar("_T")
+_AUTONOMY_STATE_KEY = "memory_curation_autonomy"
+_DEFAULT_AUTONOMY_ALLOWED_CATEGORIES = ("decisions", "patterns", "working_memory", "extracted", "test")
+_DEFAULT_AUTONOMY_ALLOWED_ACTIONS = ("summarize", "archive", "devalue")
 
 
 class MemoryCurationManagerLike(Protocol):
@@ -57,12 +62,41 @@ def _normalize_int(value: Any, *, default: int = 0) -> int:
         return int(default)
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = str(os.getenv(name, "true" if default else "false")).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _env_csv(name: str, default: Iterable[str]) -> list[str]:
+    raw = str(os.getenv(name) or "").strip()
+    if not raw:
+        return [str(value).strip().lower() for value in default if str(value).strip()]
+    values = []
+    for part in raw.split(","):
+        clean = str(part or "").strip().lower()
+        if clean and clean not in values:
+            values.append(clean)
+    return values
+
+
 def _now() -> datetime:
     return datetime.now()
 
 
 def _days_since(value: datetime, now: datetime) -> int:
     return max(0, int((now - value).days))
+
+
+def _cooldown_active(updated_at: str, *, now: datetime, minutes: int) -> tuple[bool, str]:
+    safe_minutes = max(0, _normalize_int(minutes, default=0))
+    if safe_minutes <= 0:
+        return False, ""
+    try:
+        parsed = datetime.fromisoformat(str(updated_at or "").strip())
+    except Exception:
+        return False, ""
+    cooldown_until = parsed + timedelta(minutes=safe_minutes)
+    return now < cooldown_until, cooldown_until.isoformat()
 
 
 def _value_preview(value: Any, *, limit: int = 120) -> str:
@@ -153,6 +187,15 @@ def _active_average_importance(items: Iterable[MemoryItem]) -> float:
     if not materialized:
         return 0.0
     return round(sum(float(item.importance or 0.0) for item in materialized) / len(materialized), 3)
+
+
+def _normalize_allowed_set(values: Iterable[str] | None) -> set[str]:
+    normalized: set[str] = set()
+    for value in values or []:
+        clean = str(value or "").strip().lower()
+        if clean:
+            normalized.add(clean)
+    return normalized
 
 
 def build_memory_curation_metrics(
@@ -315,6 +358,31 @@ def build_memory_curation_candidates(
             }
         )
     return result
+
+
+def filter_memory_curation_candidates(
+    candidates: Iterable[Mapping[str, Any]],
+    *,
+    allowed_actions: Iterable[str] | None = None,
+    allowed_categories: Iterable[str] | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    action_allow = _normalize_allowed_set(allowed_actions)
+    category_allow = _normalize_allowed_set(allowed_categories)
+    safe_limit = None if limit is None else max(1, _normalize_int(limit, default=1))
+
+    filtered: list[dict[str, Any]] = []
+    for candidate in candidates:
+        action = str(candidate.get("action") or "").strip().lower()
+        category = str(candidate.get("category") or "").strip().lower()
+        if action_allow and action not in action_allow:
+            continue
+        if category_allow and category not in category_allow:
+            continue
+        filtered.append(dict(candidate))
+        if safe_limit is not None and len(filtered) >= safe_limit:
+            break
+    return filtered
 
 
 def _store_active_item(manager: MemoryCurationManagerLike, item: MemoryItem) -> None:
@@ -482,6 +550,281 @@ def _record_memory_curation_progress(
         pass
 
 
+def _memory_curation_runtime_state(queue) -> dict[str, Any]:
+    if queue is None or not hasattr(queue, "get_policy_runtime_state"):
+        return {}
+    state = queue.get_policy_runtime_state(_AUTONOMY_STATE_KEY) or {}
+    return dict(state)
+
+
+def _set_memory_curation_runtime_state(queue, state_value: str, *, metadata_update: dict[str, Any], observed_at: str | None = None) -> dict[str, Any]:
+    if queue is None or not hasattr(queue, "set_policy_runtime_state"):
+        return {}
+    return queue.set_policy_runtime_state(
+        _AUTONOMY_STATE_KEY,
+        state_value,
+        metadata_update=metadata_update,
+        observed_at=observed_at,
+    )
+
+
+def get_memory_curation_autonomy_settings() -> dict[str, Any]:
+    enabled = _env_bool("AUTONOMY_MEMORY_CURATION_ENABLED", False) and not _env_bool("AUTONOMY_COMPAT_MODE", True)
+    return {
+        "enabled": enabled,
+        "interval_heartbeats": max(1, _normalize_int(os.getenv("AUTONOMY_MEMORY_CURATION_INTERVAL_HEARTBEATS"), default=12)),
+        "stale_days": max(7, _normalize_int(os.getenv("AUTONOMY_MEMORY_CURATION_STALE_DAYS"), default=30)),
+        "candidate_limit": max(1, _normalize_int(os.getenv("AUTONOMY_MEMORY_CURATION_CANDIDATE_LIMIT"), default=5)),
+        "max_actions": max(1, _normalize_int(os.getenv("AUTONOMY_MEMORY_CURATION_MAX_ACTIONS"), default=1)),
+        "cooldown_minutes": max(0, _normalize_int(os.getenv("AUTONOMY_MEMORY_CURATION_COOLDOWN_MINUTES"), default=180)),
+        "rollback_cooldown_minutes": max(0, _normalize_int(os.getenv("AUTONOMY_MEMORY_CURATION_ROLLBACK_COOLDOWN_MINUTES"), default=720)),
+        "verification_failure_cooldown_minutes": max(0, _normalize_int(os.getenv("AUTONOMY_MEMORY_CURATION_VERIFICATION_FAILURE_COOLDOWN_MINUTES"), default=720)),
+        "require_semantic_store": _env_bool("AUTONOMY_MEMORY_CURATION_REQUIRE_SEMANTIC_STORE", True),
+        "allowed_categories": _env_csv("AUTONOMY_MEMORY_CURATION_ALLOWED_CATEGORIES", _DEFAULT_AUTONOMY_ALLOWED_CATEGORIES),
+        "allowed_actions": _env_csv("AUTONOMY_MEMORY_CURATION_ALLOWED_ACTIONS", _DEFAULT_AUTONOMY_ALLOWED_ACTIONS),
+    }
+
+
+def build_memory_curation_autonomy_governance(
+    *,
+    queue=None,
+    manager: MemoryCurationManagerLike | None = None,
+    heartbeat_count: int | None = None,
+    settings: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    active_manager = _manager(manager)
+    queue_state = _memory_curation_runtime_state(queue)
+    current = _now()
+    settings_payload = dict(settings or get_memory_curation_autonomy_settings())
+    latest_snapshot = next(iter(active_manager.persistent.list_memory_curation_snapshots(limit=1)), None)
+    candidate_limit = int(settings_payload.get("candidate_limit") or 5)
+    raw_candidates = build_memory_curation_candidates(
+        manager=active_manager,
+        stale_days=int(settings_payload.get("stale_days") or 30),
+        max_candidates=max(candidate_limit * 3, candidate_limit),
+        now=current,
+    )
+    filtered_candidates = filter_memory_curation_candidates(
+        raw_candidates,
+        allowed_actions=settings_payload.get("allowed_actions"),
+        allowed_categories=settings_payload.get("allowed_categories"),
+        limit=candidate_limit,
+    )
+
+    state = "allow"
+    blocked = False
+    reasons: list[str] = []
+    cooldown_until = ""
+
+    if not bool(settings_payload.get("enabled")):
+        state = "disabled"
+        blocked = True
+        reasons.append("feature_disabled")
+    elif heartbeat_count is not None and heartbeat_count > 0:
+        interval = max(1, int(settings_payload.get("interval_heartbeats") or 1))
+        if heartbeat_count % interval != 0:
+            state = "cadence_skip"
+            blocked = True
+            reasons.append(f"heartbeat:{heartbeat_count}/{interval}")
+
+    semantic_store = getattr(active_manager, "semantic_store", None)
+    semantic_available = bool(semantic_store and hasattr(semantic_store, "is_available") and semantic_store.is_available())
+    if not blocked and bool(settings_payload.get("require_semantic_store")) and not semantic_available:
+        state = "storage_degraded"
+        blocked = True
+        reasons.append("semantic_store_unavailable")
+
+    latest_status = str((latest_snapshot or {}).get("status") or "").strip().lower()
+    if not blocked and latest_status in {"started", "rolling_back"}:
+        state = "memory_curation_busy"
+        blocked = True
+        reasons.append(f"latest_snapshot_status:{latest_status}")
+
+    degrade_state = queue.get_self_healing_runtime_state("degrade_mode") if queue and hasattr(queue, "get_self_healing_runtime_state") else None
+    degrade_value = str((degrade_state or {}).get("state_value") or "normal").strip().lower()
+    if not blocked and degrade_value in {"degraded", "emergency"}:
+        state = "runtime_degraded"
+        blocked = True
+        reasons.append(f"degrade_mode={degrade_value}")
+
+    if not blocked and latest_snapshot:
+        snapshot_status = str(latest_snapshot.get("status") or "").strip().lower()
+        updated_at = str(latest_snapshot.get("updated_at") or latest_snapshot.get("created_at") or "")
+        if snapshot_status == "rolled_back":
+            active, until = _cooldown_active(
+                updated_at,
+                now=current,
+                minutes=int(settings_payload.get("rollback_cooldown_minutes") or 0),
+            )
+            if active:
+                state = "rollback_cooldown"
+                blocked = True
+                reasons.append("recent_rollback")
+                cooldown_until = until
+        elif snapshot_status == "verification_failed":
+            active, until = _cooldown_active(
+                updated_at,
+                now=current,
+                minutes=int(settings_payload.get("verification_failure_cooldown_minutes") or 0),
+            )
+            if active:
+                state = "verification_failure_cooldown"
+                blocked = True
+                reasons.append("recent_verification_failure")
+                cooldown_until = until
+        if not blocked and snapshot_status in {"completed", "rolled_back", "verification_failed"}:
+            active, until = _cooldown_active(
+                updated_at,
+                now=current,
+                minutes=int(settings_payload.get("cooldown_minutes") or 0),
+            )
+            if active:
+                state = "cooldown_active"
+                blocked = True
+                reasons.append("recent_memory_curation_run")
+                cooldown_until = until
+
+    if not blocked and not filtered_candidates:
+        state = "no_candidates"
+        blocked = True
+        reasons.append("no_allowed_candidates")
+
+    return {
+        "state": state,
+        "blocked": blocked,
+        "reasons": reasons,
+        "cooldown_until": cooldown_until,
+        "heartbeat_count": int(heartbeat_count or 0),
+        "settings": settings_payload,
+        "semantic_store_available": semantic_available,
+        "degrade_mode": degrade_value,
+        "runtime_state": queue_state,
+        "latest_snapshot": latest_snapshot or {},
+        "raw_candidate_count": len(raw_candidates),
+        "filtered_candidate_count": len(filtered_candidates),
+        "filtered_candidates": filtered_candidates,
+    }
+
+
+async def run_memory_curation_autonomy_cycle(
+    *,
+    queue=None,
+    manager: MemoryCurationManagerLike | None = None,
+    heartbeat_count: int = 0,
+) -> dict[str, Any]:
+    active_manager = _manager(manager)
+    settings = get_memory_curation_autonomy_settings()
+    governance = build_memory_curation_autonomy_governance(
+        queue=queue,
+        manager=active_manager,
+        heartbeat_count=heartbeat_count,
+        settings=settings,
+    )
+    latest_snapshot = dict(governance.get("latest_snapshot") or {})
+    filtered_candidates = list(governance.get("filtered_candidates") or [])
+    runtime_state = dict(governance.get("runtime_state") or {})
+    now_iso = _now().isoformat()
+
+    if governance.get("blocked"):
+        _set_memory_curation_runtime_state(
+            queue,
+            str(governance.get("state") or "blocked"),
+            metadata_update={
+                "last_guard_state": governance.get("state", ""),
+                "last_guard_reasons": list(governance.get("reasons") or []),
+                "last_snapshot_id": latest_snapshot.get("snapshot_id", ""),
+                "last_snapshot_status": latest_snapshot.get("status", ""),
+                "last_candidate_count": int(governance.get("filtered_candidate_count") or 0),
+                "cooldown_until": governance.get("cooldown_until", ""),
+                "last_heartbeat_count": int(heartbeat_count or 0),
+            },
+            observed_at=now_iso,
+        )
+        previous_state = str(runtime_state.get("state_value") or "").strip().lower()
+        current_state = str(governance.get("state") or "").strip().lower()
+        should_emit_blocked = current_state not in {"disabled", "cadence_skip", "no_candidates"} and current_state != previous_state
+        if should_emit_blocked:
+            try:
+                record_autonomy_observation(
+                    "memory_curation_autonomy_blocked",
+                    {
+                        "state": governance.get("state", ""),
+                        "reasons": list(governance.get("reasons") or []),
+                        "snapshot_id": latest_snapshot.get("snapshot_id", ""),
+                        "candidate_count": int(governance.get("filtered_candidate_count") or 0),
+                    },
+                )
+            except Exception:
+                pass
+        return {
+            "status": "blocked",
+            "state": governance.get("state", ""),
+            "reasons": list(governance.get("reasons") or []),
+            "candidate_count": int(governance.get("filtered_candidate_count") or 0),
+            "cooldown_until": governance.get("cooldown_until", ""),
+        }
+
+    try:
+        record_autonomy_observation(
+            "memory_curation_autonomy_started",
+            {
+                "candidate_count": int(governance.get("filtered_candidate_count") or 0),
+                "heartbeat_count": int(heartbeat_count or 0),
+                "max_actions": int(settings.get("max_actions") or 1),
+            },
+        )
+    except Exception:
+        pass
+
+    result = await asyncio.to_thread(
+        run_memory_curation_mvp,
+        manager=active_manager,
+        stale_days=int(settings.get("stale_days") or 30),
+        max_actions=int(settings.get("max_actions") or 1),
+        dry_run=False,
+        allowed_actions=settings.get("allowed_actions"),
+        allowed_categories=settings.get("allowed_categories"),
+    )
+
+    state_value = str(result.get("status") or "completed")
+    _set_memory_curation_runtime_state(
+        queue,
+        state_value,
+        metadata_update={
+            "last_guard_state": "allow",
+            "last_guard_reasons": [],
+            "last_snapshot_id": result.get("snapshot_id", ""),
+            "last_snapshot_status": result.get("status", ""),
+            "last_candidate_count": int(result.get("candidate_count") or 0),
+            "last_action_count": len(result.get("actions_applied") or []),
+            "last_heartbeat_count": int(heartbeat_count or 0),
+            "cooldown_until": "",
+        },
+        observed_at=now_iso,
+    )
+    try:
+        record_autonomy_observation(
+            "memory_curation_autonomy_completed",
+            {
+                "status": state_value,
+                "snapshot_id": result.get("snapshot_id", ""),
+                "candidate_count": int(result.get("candidate_count") or 0),
+                "action_count": len(result.get("actions_applied") or []),
+                "verification_passed": bool((result.get("verification") or {}).get("passed")),
+            },
+        )
+    except Exception:
+        pass
+    return {
+        "status": state_value,
+        "snapshot_id": result.get("snapshot_id", ""),
+        "candidate_count": int(result.get("candidate_count") or 0),
+        "action_count": len(result.get("actions_applied") or []),
+        "verification": dict(result.get("verification") or {}),
+        "actions_applied": list(result.get("actions_applied") or []),
+    }
+
+
 def _sync_semantic_store_diff(
     manager: MemoryCurationManagerLike,
     *,
@@ -560,11 +903,19 @@ def _sync_semantic_store_diff(
 def get_memory_curation_status(
     *,
     manager: MemoryCurationManagerLike | None = None,
+    queue=None,
     stale_days: int = 30,
     limit: int = 5,
 ) -> dict[str, Any]:
     active_manager = _manager(manager)
     items = active_manager.persistent.get_all_memory_items()
+    runtime_queue = queue
+    if runtime_queue is None:
+        try:
+            from orchestration.task_queue import get_queue
+            runtime_queue = get_queue()
+        except Exception:
+            runtime_queue = None
     return {
         "status": "ok",
         "current_metrics": build_memory_curation_metrics(
@@ -578,6 +929,11 @@ def get_memory_curation_status(
             stale_days=stale_days,
             max_candidates=limit,
         ),
+        "autonomy_settings": get_memory_curation_autonomy_settings(),
+        "autonomy_governance": build_memory_curation_autonomy_governance(
+            queue=runtime_queue,
+            manager=active_manager,
+        ),
     }
 
 
@@ -587,6 +943,8 @@ def run_memory_curation_mvp(
     stale_days: int = 30,
     max_actions: int = 12,
     dry_run: bool = False,
+    allowed_actions: Iterable[str] | None = None,
+    allowed_categories: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     active_manager = _manager(manager)
     current = _now()
@@ -605,6 +963,12 @@ def run_memory_curation_mvp(
         stale_days=safe_stale_days,
         max_candidates=safe_max_actions,
         now=current,
+    )
+    candidates = filter_memory_curation_candidates(
+        candidates,
+        allowed_actions=allowed_actions,
+        allowed_categories=allowed_categories,
+        limit=safe_max_actions,
     )
 
     if dry_run or not candidates:

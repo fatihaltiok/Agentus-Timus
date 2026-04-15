@@ -356,6 +356,12 @@ def _improvement_task_autonomy_feature_enabled() -> bool:
     return _env_bool("AUTONOMY_IMPROVEMENT_AUTOENQUEUE_ENABLED", False)
 
 
+def _memory_curation_autonomy_feature_enabled() -> bool:
+    if _env_bool("AUTONOMY_COMPAT_MODE", True):
+        return False
+    return _env_bool("AUTONOMY_MEMORY_CURATION_ENABLED", False)
+
+
 def _ambient_context_feature_enabled() -> bool:
     if _env_bool("AUTONOMY_COMPAT_MODE", True):
         return False
@@ -412,6 +418,7 @@ class AutonomousRunner:
         self._improvement_engine = None
         self._self_modifier_engine = None
         self._improvement_task_autonomy_running = False
+        self._memory_curation_autonomy_running = False
         # M15
         self._ambient_engine = None
         # M16
@@ -1047,6 +1054,16 @@ class AutonomousRunner:
                 pass
             except Exception as e:
                 log.debug("ImprovementTaskAutonomy fehlgeschlagen: %s", e)
+
+        if _memory_curation_autonomy_feature_enabled():
+            try:
+                _loop = asyncio.get_event_loop()
+                if _loop.is_running() and not self._memory_curation_autonomy_running:
+                    asyncio.ensure_future(self._run_memory_curation_autonomy_cycle())
+            except RuntimeError:
+                pass
+            except Exception as e:
+                log.debug("MemoryCurationAutonomy fehlgeschlagen: %s", e)
 
         # M15: Ambient Context Engine
         if _ambient_context_feature_enabled() and self._ambient_engine:
@@ -2277,6 +2294,47 @@ class AutonomousRunner:
             }
         finally:
             self._improvement_task_autonomy_running = False
+
+    async def _run_memory_curation_autonomy_cycle(self) -> dict:
+        if self._memory_curation_autonomy_running:
+            return {"status": "busy"}
+        self._memory_curation_autonomy_running = True
+        try:
+            from orchestration.memory_curation import (
+                get_memory_curation_autonomy_settings,
+                run_memory_curation_autonomy_cycle,
+            )
+
+            settings = get_memory_curation_autonomy_settings()
+            if not settings.get("enabled"):
+                return {"status": "disabled", **settings}
+
+            summary = await run_memory_curation_autonomy_cycle(
+                queue=get_queue(),
+                heartbeat_count=int(self._heartbeat_count or 0),
+            )
+            if summary.get("status") == "complete":
+                log.info(
+                    "🧠 E5.2 Memory Curation: snapshot=%s actions=%s candidates=%s",
+                    summary.get("snapshot_id", ""),
+                    summary.get("action_count", 0),
+                    summary.get("candidate_count", 0),
+                )
+            elif summary.get("status") == "verification_failed":
+                log.warning(
+                    "🧠 E5.2 Memory Curation verification failed: snapshot=%s candidates=%s",
+                    summary.get("snapshot_id", ""),
+                    summary.get("candidate_count", 0),
+                )
+            elif summary.get("status") == "blocked" and summary.get("state") not in {"cadence_skip", "no_candidates"}:
+                log.info(
+                    "🧠 E5.2 Memory Curation blockiert: state=%s reasons=%s",
+                    summary.get("state", ""),
+                    ",".join(summary.get("reasons") or []),
+                )
+            return {**settings, **summary}
+        finally:
+            self._memory_curation_autonomy_running = False
 
     async def _send_failure_alert(
         self,
