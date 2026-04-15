@@ -7,6 +7,7 @@ from orchestration.memory_curation import (
     classify_memory_curation_tier,
     decide_memory_curation_action,
     filter_memory_curation_candidates,
+    verify_memory_curation_retrieval_quality,
     verify_memory_curation_outcome,
 )
 
@@ -169,3 +170,67 @@ def test_hypothesis_filter_memory_curation_candidates_respects_allowlists_and_li
         assert {str(item["action"]) for item in filtered} <= set(allowed_actions)
     if allowed_categories:
         assert {str(item["category"]) for item in filtered} <= set(allowed_categories)
+
+
+@given(
+    avg_score=st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
+    hit_rate_at_3=st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
+    useful_rate=st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
+    wrong_top1_rate=st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
+    forbidden_top1_rate=st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
+)
+def test_hypothesis_retrieval_quality_accepts_equal_or_better_outcomes(
+    avg_score: float,
+    hit_rate_at_3: float,
+    useful_rate: float,
+    wrong_top1_rate: float,
+    forbidden_top1_rate: float,
+) -> None:
+    before = {
+        "total_cases": 3,
+        "avg_score": avg_score,
+        "hit_rate_at_3": hit_rate_at_3,
+        "useful_rate": useful_rate,
+        "wrong_top1_rate": wrong_top1_rate,
+        "forbidden_top1_rate": forbidden_top1_rate,
+    }
+    after = {
+        "total_cases": 3,
+        "avg_score": min(1.0, avg_score + 0.05),
+        "hit_rate_at_3": min(1.0, hit_rate_at_3 + 0.05),
+        "useful_rate": min(1.0, useful_rate + 0.05),
+        "wrong_top1_rate": max(0.0, wrong_top1_rate - 0.05),
+        "forbidden_top1_rate": max(0.0, forbidden_top1_rate - 0.05),
+    }
+
+    assert verify_memory_curation_retrieval_quality(before_summary=before, after_summary=after)
+
+
+@given(
+    avg_score=st.floats(min_value=0.2, max_value=1.0, allow_nan=False, allow_infinity=False),
+    hit_rate_at_3=st.floats(min_value=0.2, max_value=1.0, allow_nan=False, allow_infinity=False),
+    useful_rate=st.floats(min_value=0.2, max_value=1.0, allow_nan=False, allow_infinity=False),
+)
+def test_hypothesis_retrieval_quality_rejects_clear_score_and_hit_regressions(
+    avg_score: float,
+    hit_rate_at_3: float,
+    useful_rate: float,
+) -> None:
+    before = {
+        "total_cases": 4,
+        "avg_score": avg_score,
+        "hit_rate_at_3": hit_rate_at_3,
+        "useful_rate": useful_rate,
+        "wrong_top1_rate": 0.0,
+        "forbidden_top1_rate": 0.0,
+    }
+    after = {
+        "total_cases": 4,
+        "avg_score": max(0.0, avg_score - 0.3),
+        "hit_rate_at_3": max(0.0, hit_rate_at_3 - 0.4),
+        "useful_rate": max(0.0, useful_rate - 0.4),
+        "wrong_top1_rate": 0.6,
+        "forbidden_top1_rate": 0.3,
+    }
+
+    assert not verify_memory_curation_retrieval_quality(before_summary=before, after_summary=after)

@@ -5087,6 +5087,8 @@ async def autonomy_memory_curation_endpoint():
             "current_metrics": dict(payload.get("current_metrics") or {}),
             "last_snapshots": list(payload.get("last_snapshots") or []),
             "pending_candidates": list(payload.get("pending_candidates") or []),
+            "pending_retrieval_probes": list(payload.get("pending_retrieval_probes") or []),
+            "latest_retrieval_quality": dict(payload.get("latest_retrieval_quality") or {}),
         }
     except Exception as e:
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})

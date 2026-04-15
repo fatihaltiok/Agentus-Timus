@@ -2,6 +2,52 @@
 
 ---
 
+## Fortschritt 2026-04-15 - Phase E E5.3 Retrieval-Quality Gates
+
+E5 prueft jetzt nicht mehr nur Bestandsmetriken, sondern auch den echten Recall-Pfad: Memory-Curation baut Retrieval-Probes aus den laufenden Kandidaten, evaluiert `unified_recall(...)` vor und nach der Mutation und rollt den Lauf bei klarer Recall-Regression automatisch ueber den Snapshot zurueck.
+
+Geaendert:
+
+- [orchestration/memory_curation.py](/home/fatih-ubuntu/dev/timus/orchestration/memory_curation.py)
+  - neue Retrieval-Probes fuer Curation-Kandidaten mit Recall-Erwartung:
+    - `build_memory_curation_retrieval_probes(...)`
+    - `evaluate_memory_curation_retrieval_probes(...)`
+    - `verify_memory_curation_retrieval_quality(...)`
+    - `build_memory_curation_retrieval_quality_verdict(...)`
+  - `run_memory_curation_mvp(...)` fuehrt jetzt:
+    - Recall-Summary vor der Mutation
+    - Recall-Summary nach der Mutation
+    - Retrieval-Gate-Verdict
+    - automatischen Snapshot-Rollback bei Verification-Fehlern
+  - Statuspayload erweitert um:
+    - `retrieval_quality`
+    - `pending_retrieval_probes`
+    - `latest_retrieval_quality`
+  - neue Observation:
+    - `memory_curation_retrieval_quality`
+- [orchestration/autonomous_runner.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomous_runner.py)
+  - erkennt jetzt auch `rolled_back` sauber im E5-Runtime-Log
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - `GET /autonomy/memory_curation` exponiert jetzt:
+    - `pending_retrieval_probes`
+    - `latest_retrieval_quality`
+
+Tests:
+
+- erweitert:
+  - [tests/test_memory_curation.py](/home/fatih-ubuntu/dev/timus/tests/test_memory_curation.py)
+  - [tests/test_memory_curation_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_memory_curation_hypothesis.py)
+  - [tests/test_memory_curation_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_memory_curation_crosshair.py)
+  - [tests/test_memory_maintenance_tool.py](/home/fatih-ubuntu/dev/timus/tests/test_memory_maintenance_tool.py)
+  - [tests/test_c2_entrypoints.py](/home/fatih-ubuntu/dev/timus/tests/test_c2_entrypoints.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/memory_curation.py orchestration/autonomous_runner.py server/mcp_server.py tests/test_memory_curation.py tests/test_memory_curation_hypothesis.py tests/test_memory_curation_crosshair.py tests/test_memory_maintenance_tool.py tests/test_c2_entrypoints.py` gruen
+- `pytest -q tests/test_memory_curation.py tests/test_memory_maintenance_tool.py tests/test_c2_entrypoints.py tests/test_autonomous_runner_memory_curation.py` -> `43 passed`
+- `pytest -q tests/test_memory_curation_hypothesis.py` -> `10 passed`
+- `python -m crosshair check tests/test_memory_curation_crosshair.py` -> Exit `0`
+
 ## Fortschritt 2026-04-15 - Phase E E5.2 Controlled Autonomous Memory Curation
 
 E5 ist ueber den manuellen MVP hinaus auf einen ersten kontrollierten Autonomiepfad erweitert: Memory-Curation kann jetzt ueber den Heartbeat laufen, bleibt aber an harte Gates, Cooldowns und einen kleinen sicheren Aktionsraum gebunden.

@@ -844,6 +844,55 @@ Wichtige Grenzen von E5.2:
 - noch kein eigener Quality-Score fuer Retrieval-Verbesserung ueber mehrere Laeufe
 - noch kein autonomer Rollback-Entscheider
 
+### E5.3 Retrieval-Quality Gates
+
+Stand:
+
+- Retrieval-Qualitaet wird jetzt vor und nach Curation-Laeufen explizit gemessen und gated
+
+Umgesetzt:
+
+- [orchestration/memory_curation.py](/home/fatih-ubuntu/dev/timus/orchestration/memory_curation.py) baut jetzt echte Retrieval-Probes aus den aktuellen Curation-Kandidaten:
+  - Probe-Building nur fuer Aktionen mit Recall-Erwartung:
+    - `summarize`
+    - `devalue`
+  - Probe-Auswertung laeuft ueber den realen Recall-Pfad `unified_recall(...)`
+- Vor und nach jeder Memory-Curation werden jetzt Recall-Summaries berechnet:
+  - `avg_score`
+  - `hit_rate_at_3`
+  - `useful_rate`
+  - `wrong_top1_rate`
+  - `forbidden_top1_rate`
+- daraus entsteht jetzt ein explizites Retrieval-Gate:
+  - kleine Verschiebungen werden toleriert
+  - klare Recall-Regressions faellen den Lauf auf `verification_failed`
+- Verifikationsfehler bleiben nicht mehr als mutierter Live-Zustand liegen:
+  - fehlgeschlagene E5-Laeufe werden jetzt ueber den Snapshot direkt zurueckgerollt
+  - finaler Status wird dann `rolled_back`
+- Status-Surface erweitert:
+  - [tools/maintenance_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/maintenance_tool/tool.py) liefert die neuen Felder implizit ueber `get_memory_curation_status(...)`
+  - [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py) exponiert jetzt:
+    - `latest_retrieval_quality`
+    - `pending_retrieval_probes`
+- neue Observation:
+  - `memory_curation_retrieval_quality`
+
+Verifikation:
+
+- Pytest deckt jetzt ab:
+  - Probe-Building
+  - Retrieval-Verdict
+  - automatischen Rollback bei Recall-Regression
+  - Status-/Endpoint-Surface
+- Hypothesis prueft die Retrieval-Gate-Toleranzen gegen klare Verbesserungen und klare Regressionen
+- CrossHair prueft die neuen Retrieval-Contracts ebenfalls
+
+Wirkung:
+
+- E5 optimiert jetzt nicht mehr nur den Memory-Bestand
+- E5 prueft jetzt auch, ob die Pflege den echten Recall-Pfad fuer Timus stabil haelt
+- schlechte Curation-Runden bleiben nicht still im Live-Gedaechtnis stehen, sondern werden rueckgaengig gemacht
+
 ### E6. Operator Visibility und Governance
 
 Ziel:

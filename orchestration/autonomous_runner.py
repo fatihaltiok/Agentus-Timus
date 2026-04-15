@@ -2320,6 +2320,12 @@ class AutonomousRunner:
                     summary.get("action_count", 0),
                     summary.get("candidate_count", 0),
                 )
+            elif summary.get("status") == "rolled_back":
+                log.warning(
+                    "🧠 E5.3 Memory Curation rolled back: snapshot=%s candidates=%s",
+                    summary.get("snapshot_id", ""),
+                    summary.get("candidate_count", 0),
+                )
             elif summary.get("status") == "verification_failed":
                 log.warning(
                     "🧠 E5.2 Memory Curation verification failed: snapshot=%s candidates=%s",

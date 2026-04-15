@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import json
 from pathlib import Path
+import re
 
 import pytest
 
@@ -12,6 +14,8 @@ from orchestration.memory_curation import (
     ARCHIVE_CATEGORY_PREFIX,
     SUMMARY_CATEGORY,
     _build_semantic_sync_plan,
+    build_memory_curation_retrieval_probes,
+    build_memory_curation_retrieval_quality_verdict,
     build_memory_curation_candidates,
     build_memory_curation_autonomy_governance,
     build_memory_curation_metrics,
@@ -20,6 +24,7 @@ from orchestration.memory_curation import (
     rollback_memory_curation,
     run_memory_curation_autonomy_cycle,
     run_memory_curation_mvp,
+    verify_memory_curation_retrieval_quality,
 )
 
 
@@ -48,6 +53,33 @@ class _FakeManager:
 
     def get_last_working_memory_stats(self) -> dict:
         return dict(self.working_stats)
+
+    def unified_recall(self, query: str, n_results: int = 5, session_id: str | None = None) -> dict:
+        query_terms = [token for token in re.findall(r"[a-z0-9äöüß_-]{4,}", str(query or "").lower())]
+        rows = []
+        for item in self.persistent.get_all_memory_items():
+            if str(item.category or "").startswith(ARCHIVE_CATEGORY_PREFIX):
+                continue
+            if isinstance(item.value, str):
+                text = item.value
+            else:
+                text = json.dumps(item.value, ensure_ascii=False)
+            haystack = text.lower()
+            score = sum(1 for token in query_terms if token in haystack)
+            if score <= 0:
+                continue
+            rows.append(
+                {
+                    "id": f"{item.category}:{item.key}",
+                    "text": text,
+                    "relevance_score": round(score + float(item.importance or 0.0), 3),
+                    "source": item.source,
+                    "created_at": item.created_at.isoformat(),
+                    "session_id": session_id or "",
+                }
+            )
+        rows.sort(key=lambda item: item["relevance_score"], reverse=True)
+        return {"status": "success", "memories": rows[: max(1, int(n_results))]}
 
 
 def _make_manager(tmp_path: Path) -> _FakeManager:
@@ -261,18 +293,105 @@ def test_build_memory_curation_metrics_distinguishes_active_archived_and_stale(t
     assert metrics["working_memory_last_stats"]["related_selected"] == 6
 
 
-def test_run_memory_curation_mvp_surfaces_verification_failures_honestly(tmp_path: Path, monkeypatch) -> None:
+def test_build_memory_curation_retrieval_probes_targets_pending_candidates(tmp_path: Path) -> None:
+    manager = _make_manager(tmp_path)
+    _seed_items(manager)
+
+    candidates = build_memory_curation_candidates(manager=manager, stale_days=30, max_candidates=4)
+    probes = build_memory_curation_retrieval_probes(
+        items=manager.persistent.get_all_memory_items(),
+        candidates=candidates,
+        max_probes=6,
+    )
+
+    assert probes
+    assert {probe["action"] for probe in probes} <= {"summarize", "archive", "devalue"}
+    assert all(probe["query"] for probe in probes)
+    assert all(probe["expected_markers"] for probe in probes)
+
+
+def test_retrieval_quality_verdict_rejects_clear_regression() -> None:
+    before = {
+        "total_cases": 2,
+        "avg_score": 1.0,
+        "hit_rate_at_3": 1.0,
+        "useful_rate": 1.0,
+        "wrong_top1_rate": 0.0,
+        "forbidden_top1_rate": 0.0,
+    }
+    after = {
+        "total_cases": 2,
+        "avg_score": 0.1,
+        "hit_rate_at_3": 0.0,
+        "useful_rate": 0.0,
+        "wrong_top1_rate": 1.0,
+        "forbidden_top1_rate": 0.5,
+    }
+
+    assert not verify_memory_curation_retrieval_quality(before_summary=before, after_summary=after)
+    verdict = build_memory_curation_retrieval_quality_verdict(before_summary=before, after_summary=after)
+    assert verdict["passed"] is False
+    assert verdict["reason"] == "retrieval_quality_regressed"
+
+
+def test_run_memory_curation_mvp_records_retrieval_quality_and_keeps_live_state_on_success(tmp_path: Path) -> None:
+    manager = _make_manager(tmp_path)
+    _seed_items(manager)
+
+    result = run_memory_curation_mvp(manager=manager, stale_days=30, max_actions=1, dry_run=False)
+
+    assert result["status"] == "complete"
+    assert result["retrieval_quality"]["verdict"]["passed"] is True
+    assert result["retrieval_quality"]["before"]["probe_count"] >= 1
+    snapshot = manager.persistent.get_memory_curation_snapshot(result["snapshot_id"])
+    assert snapshot is not None
+    assert snapshot["status"] == "completed"
+    assert snapshot["metadata"]["retrieval_quality"]["verdict"]["passed"] is True
+
+
+def test_run_memory_curation_mvp_rolls_back_on_verification_failure(tmp_path: Path, monkeypatch) -> None:
     manager = _make_manager(tmp_path)
     _seed_items(manager)
     monkeypatch.setattr("orchestration.memory_curation.verify_memory_curation_outcome", lambda **_: False)
 
     result = run_memory_curation_mvp(manager=manager, stale_days=30, max_actions=12, dry_run=False)
 
-    assert result["status"] == "verification_failed"
+    assert result["status"] == "rolled_back"
     assert result["verification"]["passed"] is False
+    assert result["verification"]["rollback_performed"] is True
     snapshot = manager.persistent.get_memory_curation_snapshot(result["snapshot_id"])
     assert snapshot is not None
-    assert snapshot["status"] == "verification_failed"
+    assert snapshot["status"] == "rolled_back"
+
+
+def test_run_memory_curation_mvp_rolls_back_when_retrieval_quality_regresses(tmp_path: Path, monkeypatch) -> None:
+    manager = _make_manager(tmp_path)
+    _seed_items(manager)
+    original_unified_recall = manager.unified_recall
+
+    def _regressing_unified_recall(query: str, n_results: int = 5, session_id: str | None = None) -> dict:
+        has_summary = any(
+            item.category == SUMMARY_CATEGORY
+            for item in manager.persistent.get_all_memory_items()
+        )
+        if has_summary:
+            return {
+                "status": "success",
+                "memories": [{"text": "allgemeiner systemstatus ohne passende marker"}],
+            }
+        return original_unified_recall(query, n_results=n_results, session_id=session_id)
+
+    monkeypatch.setattr(manager, "unified_recall", _regressing_unified_recall)
+
+    result = run_memory_curation_mvp(manager=manager, stale_days=30, max_actions=1, dry_run=False)
+
+    assert result["status"] == "rolled_back"
+    assert result["verification"]["passed"] is False
+    assert result["verification"]["reason"] == "retrieval_quality_regression"
+    assert result["retrieval_quality"]["verdict"]["passed"] is False
+    assert result["rollback"]["status"] == "rolled_back"
+    assert result["metrics_after"]["summary_items"] == 0
+    assert result["metrics_after"]["archived_items"] == 0
 
 
 def test_build_semantic_sync_plan_only_touches_changed_active_items(tmp_path: Path) -> None:
@@ -336,7 +455,9 @@ def test_rollback_memory_curation_returns_missing_snapshot_for_unknown_id(tmp_pa
     assert result["snapshot_id"] == "missing-snapshot"
 
 
-def test_get_memory_curation_status_reports_metrics_candidates_and_snapshots(tmp_path: Path) -> None:
+def test_get_memory_curation_status_reports_metrics_candidates_and_snapshots(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AUTONOMY_COMPAT_MODE", "false")
+    monkeypatch.setenv("AUTONOMY_MEMORY_CURATION_ENABLED", "false")
     manager = _make_manager(tmp_path)
     _seed_items(manager)
     run_result = run_memory_curation_mvp(manager=manager, stale_days=30, max_actions=12, dry_run=False)
@@ -354,6 +475,8 @@ def test_get_memory_curation_status_reports_metrics_candidates_and_snapshots(tmp
     assert status["last_snapshots"][0]["snapshot_id"] == run_result["snapshot_id"]
     assert "working_memory_last_stats" in status["current_metrics"]
     assert isinstance(status["pending_candidates"], list)
+    assert isinstance(status["pending_retrieval_probes"], list)
+    assert "latest_retrieval_quality" in status
     assert status["autonomy_settings"]["enabled"] is False
     assert status["autonomy_governance"]["runtime_state"]["state_value"] == "cooldown_active"
 

@@ -8,9 +8,11 @@ from orchestration.memory_curation import (
     ARCHIVE_CATEGORY_PREFIX,
     SUMMARY_CATEGORY,
     _build_semantic_sync_plan,
+    build_memory_curation_retrieval_quality_verdict,
     classify_memory_curation_tier,
     decide_memory_curation_action,
     filter_memory_curation_candidates,
+    verify_memory_curation_retrieval_quality,
     verify_memory_curation_outcome,
 )
 from memory.memory_system import MemoryItem
@@ -118,3 +120,49 @@ def _contract_candidate_filter_respects_limit_and_allowlists() -> bool:
     return len(filtered) <= 2 and [
         (item["action"], item["category"]) for item in filtered
     ] == [("summarize", "decisions"), ("devalue", "patterns")]
+
+
+@deal.post(lambda r: r is True)
+def _contract_retrieval_quality_accepts_equal_or_better_summary() -> bool:
+    before = {
+        "total_cases": 2,
+        "avg_score": 0.7,
+        "hit_rate_at_3": 1.0,
+        "useful_rate": 1.0,
+        "wrong_top1_rate": 0.0,
+        "forbidden_top1_rate": 0.0,
+    }
+    after = {
+        "total_cases": 2,
+        "avg_score": 0.75,
+        "hit_rate_at_3": 1.0,
+        "useful_rate": 1.0,
+        "wrong_top1_rate": 0.0,
+        "forbidden_top1_rate": 0.0,
+    }
+    return verify_memory_curation_retrieval_quality(before_summary=before, after_summary=after)
+
+
+@deal.post(lambda r: r is True)
+def _contract_retrieval_quality_verdict_flags_clear_regression() -> bool:
+    before = {
+        "total_cases": 2,
+        "avg_score": 1.0,
+        "hit_rate_at_3": 1.0,
+        "useful_rate": 1.0,
+        "wrong_top1_rate": 0.0,
+        "forbidden_top1_rate": 0.0,
+    }
+    after = {
+        "total_cases": 2,
+        "avg_score": 0.2,
+        "hit_rate_at_3": 0.0,
+        "useful_rate": 0.0,
+        "wrong_top1_rate": 1.0,
+        "forbidden_top1_rate": 0.5,
+    }
+    verdict = build_memory_curation_retrieval_quality_verdict(
+        before_summary=before,
+        after_summary=after,
+    )
+    return verdict["passed"] is False and verdict["reason"] == "retrieval_quality_regressed"

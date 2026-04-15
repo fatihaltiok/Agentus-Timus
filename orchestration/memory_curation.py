@@ -5,11 +5,16 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 import json
 import os
+import re
 from typing import Any, Iterable, Mapping, Protocol, TypeVar
 import uuid
 
 from memory.memory_system import MemoryItem, memory_manager
 from orchestration.autonomy_observation import record_autonomy_observation
+from orchestration.conversation_recall_eval import (
+    ConversationRecallEvalCase,
+    summarize_conversation_recall_evals,
+)
 from utils.stable_hash import stable_text_digest
 
 
@@ -24,6 +29,72 @@ _T = TypeVar("_T")
 _AUTONOMY_STATE_KEY = "memory_curation_autonomy"
 _DEFAULT_AUTONOMY_ALLOWED_CATEGORIES = ("decisions", "patterns", "working_memory", "extracted", "test")
 _DEFAULT_AUTONOMY_ALLOWED_ACTIONS = ("summarize", "archive", "devalue")
+_RETRIEVAL_PROBE_STOPWORDS = {
+    "aber",
+    "alle",
+    "auch",
+    "auf",
+    "aus",
+    "bei",
+    "damit",
+    "dann",
+    "dass",
+    "deine",
+    "deiner",
+    "deinem",
+    "deinen",
+    "dein",
+    "dieser",
+    "dieses",
+    "eine",
+    "einer",
+    "einem",
+    "einen",
+    "eines",
+    "euch",
+    "fuer",
+    "have",
+    "hier",
+    "ihnen",
+    "ihnen",
+    "ihrer",
+    "ihres",
+    "ihre",
+    "ihren",
+    "ihr",
+    "mehr",
+    "mein",
+    "meine",
+    "meinem",
+    "meinen",
+    "meiner",
+    "noch",
+    "oder",
+    "schon",
+    "seine",
+    "seiner",
+    "seinem",
+    "seinen",
+    "sein",
+    "sowie",
+    "that",
+    "their",
+    "there",
+    "these",
+    "this",
+    "ueber",
+    "unter",
+    "user",
+    "value",
+    "werden",
+    "wieder",
+    "with",
+}
+_RETRIEVAL_MIN_AVG_SCORE_DELTA = -0.05
+_RETRIEVAL_MIN_HIT_AT_3_DELTA = -0.2
+_RETRIEVAL_MIN_USEFUL_RATE_DELTA = -0.2
+_RETRIEVAL_MAX_WRONG_TOP1_INCREASE = 0.2
+_RETRIEVAL_MAX_FORBIDDEN_TOP1_INCREASE = 0.2
 
 
 class MemoryCurationManagerLike(Protocol):
@@ -31,6 +102,14 @@ class MemoryCurationManagerLike(Protocol):
     semantic_store: Any
 
     def get_last_working_memory_stats(self) -> dict[str, Any]:
+        ...
+
+    def unified_recall(
+        self,
+        query: str,
+        n_results: int = 5,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
         ...
 
 
@@ -46,6 +125,18 @@ class MemoryCurationCandidate:
     item_count: int
     last_used_age_days: int
     average_importance: float
+
+
+@dataclass(frozen=True)
+class MemoryCurationRetrievalProbe:
+    probe_id: str
+    label: str
+    query: str
+    expected_markers: tuple[str, ...]
+    forbidden_markers: tuple[str, ...]
+    action: str
+    category: str
+    item_keys: tuple[str, ...]
 
 
 def _normalize_float(value: Any, *, default: float = 0.0) -> float:
@@ -196,6 +287,256 @@ def _normalize_allowed_set(values: Iterable[str] | None) -> set[str]:
         if clean:
             normalized.add(clean)
     return normalized
+
+
+def _flatten_memory_value_segments(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if isinstance(value, Mapping):
+        ordered_keys: list[str] = []
+        for preferred in ("summary", "original_value", "value", "source_category", "source", "original_key"):
+            if preferred in value:
+                ordered_keys.append(preferred)
+        for key in value.keys():
+            key_text = str(key or "")
+            if key_text not in ordered_keys:
+                ordered_keys.append(key_text)
+        segments: list[str] = []
+        for key in ordered_keys:
+            segments.extend(_flatten_memory_value_segments(value.get(key)))
+        return segments
+    if isinstance(value, (list, tuple, set)):
+        segments: list[str] = []
+        for item in value:
+            segments.extend(_flatten_memory_value_segments(item))
+        return segments
+    text = str(value).strip()
+    return [text] if text else []
+
+
+def _memory_item_probe_text(item: MemoryItem) -> str:
+    parts = _flatten_memory_value_segments(item.value)
+    joined = " | ".join(part for part in parts if part).strip()
+    return _value_preview(joined, limit=220)
+
+
+def _extract_retrieval_probe_terms(text: str, *, limit: int = 4) -> list[str]:
+    normalized = str(text or "").lower()
+    terms: list[str] = []
+    for token in re.findall(r"[a-z0-9äöüß_-]{4,}", normalized):
+        clean = token.strip("_-")
+        if not clean or clean in _RETRIEVAL_PROBE_STOPWORDS or clean in terms:
+            continue
+        terms.append(clean)
+        if len(terms) >= limit:
+            break
+    return terms
+
+
+def _build_retrieval_probe_for_item(
+    *,
+    item: MemoryItem,
+    action: str,
+    category: str,
+    item_keys: tuple[str, ...],
+) -> MemoryCurationRetrievalProbe | None:
+    raw_text = _memory_item_probe_text(item)
+    probe_terms = _extract_retrieval_probe_terms(raw_text, limit=4)
+    if not raw_text or not probe_terms:
+        return None
+    expected_markers = tuple(probe_terms[:2]) or (raw_text.lower(),)
+    return MemoryCurationRetrievalProbe(
+        probe_id=f"{action}:{category}:{item.key}",
+        label=f"{action}:{category}:{item.key}",
+        query=" ".join(probe_terms[:3]),
+        expected_markers=expected_markers,
+        forbidden_markers=(),
+        action=action,
+        category=category,
+        item_keys=item_keys,
+    )
+
+
+def build_memory_curation_retrieval_probes(
+    *,
+    items: Iterable[MemoryItem],
+    candidates: Iterable[Mapping[str, Any]],
+    max_probes: int = 6,
+) -> list[dict[str, Any]]:
+    item_map = {(item.category, item.key): item for item in items}
+    safe_limit = max(1, _normalize_int(max_probes, default=6))
+    probes: list[MemoryCurationRetrievalProbe] = []
+    seen_probe_ids: set[str] = set()
+
+    for candidate in candidates:
+        action = str(candidate.get("action") or "").strip().lower()
+        category = str(candidate.get("category") or "").strip()
+        keys = tuple(str(key) for key in (candidate.get("item_keys") or []) if str(key))
+        if not action or not category or not keys or action == "archive":
+            continue
+
+        if action == "summarize":
+            probe_items = [
+                item_map[(category, key)]
+                for key in keys
+                if (category, key) in item_map
+            ][:2]
+        else:
+            item = item_map.get((category, keys[0]))
+            probe_items = [item] if item is not None else []
+
+        for item in probe_items:
+            probe = _build_retrieval_probe_for_item(
+                item=item,
+                action=action,
+                category=category,
+                item_keys=keys,
+            )
+            if probe is None or probe.probe_id in seen_probe_ids:
+                continue
+            seen_probe_ids.add(probe.probe_id)
+            probes.append(probe)
+            if len(probes) >= safe_limit:
+                break
+        if len(probes) >= safe_limit:
+            break
+
+    return [
+        {
+            "probe_id": probe.probe_id,
+            "label": probe.label,
+            "query": probe.query,
+            "expected_markers": list(probe.expected_markers),
+            "forbidden_markers": list(probe.forbidden_markers),
+            "action": probe.action,
+            "category": probe.category,
+            "item_keys": list(probe.item_keys),
+        }
+        for probe in probes
+    ]
+
+
+def evaluate_memory_curation_retrieval_probes(
+    *,
+    manager: MemoryCurationManagerLike | None = None,
+    probes: Iterable[Mapping[str, Any]],
+    n_results: int = 5,
+) -> dict[str, Any]:
+    active_manager = _manager(manager)
+    safe_results = max(1, min(8, _normalize_int(n_results, default=5)))
+    materialized_probes = [dict(probe) for probe in probes]
+    cases: list[ConversationRecallEvalCase] = []
+
+    for probe in materialized_probes:
+        recall_payload = active_manager.unified_recall(
+            str(probe.get("query") or "").strip(),
+            n_results=safe_results,
+        )
+        recalled_items = list((recall_payload or {}).get("memories") or [])
+        cases.append(
+            ConversationRecallEvalCase(
+                query=str(probe.get("query") or ""),
+                recalled_items=recalled_items,
+                expected_markers=list(probe.get("expected_markers") or []),
+                forbidden_markers=list(probe.get("forbidden_markers") or []),
+                label=str(probe.get("label") or probe.get("probe_id") or ""),
+            )
+        )
+
+    summary = summarize_conversation_recall_evals(cases)
+    summary["probe_count"] = len(materialized_probes)
+    summary["probe_labels"] = [str(probe.get("label") or probe.get("probe_id") or "") for probe in materialized_probes]
+    summary["probes"] = materialized_probes
+    return summary
+
+
+def verify_memory_curation_retrieval_quality(
+    *,
+    before_summary: Mapping[str, Any],
+    after_summary: Mapping[str, Any],
+    min_avg_score_delta: float = _RETRIEVAL_MIN_AVG_SCORE_DELTA,
+    min_hit_rate_at_3_delta: float = _RETRIEVAL_MIN_HIT_AT_3_DELTA,
+    min_useful_rate_delta: float = _RETRIEVAL_MIN_USEFUL_RATE_DELTA,
+    max_wrong_top1_increase: float = _RETRIEVAL_MAX_WRONG_TOP1_INCREASE,
+    max_forbidden_top1_increase: float = _RETRIEVAL_MAX_FORBIDDEN_TOP1_INCREASE,
+) -> bool:
+    before_total = _normalize_int(before_summary.get("total_cases"), default=0)
+    after_total = _normalize_int(after_summary.get("total_cases"), default=0)
+    if before_total <= 0 or after_total <= 0:
+        return True
+
+    avg_score_delta = _normalize_float(after_summary.get("avg_score")) - _normalize_float(before_summary.get("avg_score"))
+    hit_at_3_delta = _normalize_float(after_summary.get("hit_rate_at_3")) - _normalize_float(before_summary.get("hit_rate_at_3"))
+    useful_rate_delta = _normalize_float(after_summary.get("useful_rate")) - _normalize_float(before_summary.get("useful_rate"))
+    wrong_top1_increase = _normalize_float(after_summary.get("wrong_top1_rate")) - _normalize_float(before_summary.get("wrong_top1_rate"))
+    forbidden_top1_increase = _normalize_float(after_summary.get("forbidden_top1_rate")) - _normalize_float(before_summary.get("forbidden_top1_rate"))
+
+    return (
+        avg_score_delta >= float(min_avg_score_delta)
+        and hit_at_3_delta >= float(min_hit_rate_at_3_delta)
+        and useful_rate_delta >= float(min_useful_rate_delta)
+        and wrong_top1_increase <= float(max_wrong_top1_increase)
+        and forbidden_top1_increase <= float(max_forbidden_top1_increase)
+    )
+
+
+def build_memory_curation_retrieval_quality_verdict(
+    *,
+    before_summary: Mapping[str, Any],
+    after_summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    before_total = _normalize_int(before_summary.get("total_cases"), default=0)
+    after_total = _normalize_int(after_summary.get("total_cases"), default=0)
+    if before_total <= 0 or after_total <= 0:
+        return {
+            "passed": True,
+            "reason": "no_retrieval_probes",
+            "probe_count": max(before_total, after_total),
+            "avg_score_delta": 0.0,
+            "hit_rate_at_3_delta": 0.0,
+            "useful_rate_delta": 0.0,
+            "wrong_top1_increase": 0.0,
+            "forbidden_top1_increase": 0.0,
+        }
+
+    avg_score_delta = round(
+        _normalize_float(after_summary.get("avg_score")) - _normalize_float(before_summary.get("avg_score")),
+        3,
+    )
+    hit_rate_at_3_delta = round(
+        _normalize_float(after_summary.get("hit_rate_at_3")) - _normalize_float(before_summary.get("hit_rate_at_3")),
+        3,
+    )
+    useful_rate_delta = round(
+        _normalize_float(after_summary.get("useful_rate")) - _normalize_float(before_summary.get("useful_rate")),
+        3,
+    )
+    wrong_top1_increase = round(
+        _normalize_float(after_summary.get("wrong_top1_rate")) - _normalize_float(before_summary.get("wrong_top1_rate")),
+        3,
+    )
+    forbidden_top1_increase = round(
+        _normalize_float(after_summary.get("forbidden_top1_rate")) - _normalize_float(before_summary.get("forbidden_top1_rate")),
+        3,
+    )
+    passed = verify_memory_curation_retrieval_quality(
+        before_summary=before_summary,
+        after_summary=after_summary,
+    )
+
+    return {
+        "passed": passed,
+        "reason": "retrieval_quality_stable" if passed else "retrieval_quality_regressed",
+        "probe_count": min(before_total, after_total),
+        "avg_score_delta": avg_score_delta,
+        "hit_rate_at_3_delta": hit_rate_at_3_delta,
+        "useful_rate_delta": useful_rate_delta,
+        "wrong_top1_increase": wrong_top1_increase,
+        "forbidden_top1_increase": forbidden_top1_increase,
+    }
 
 
 def build_memory_curation_metrics(
@@ -909,6 +1250,18 @@ def get_memory_curation_status(
 ) -> dict[str, Any]:
     active_manager = _manager(manager)
     items = active_manager.persistent.get_all_memory_items()
+    pending_candidates = build_memory_curation_candidates(
+        manager=active_manager,
+        stale_days=stale_days,
+        max_candidates=limit,
+    )
+    pending_retrieval_probes = build_memory_curation_retrieval_probes(
+        items=items,
+        candidates=pending_candidates,
+        max_probes=max(1, limit * 2),
+    )
+    last_snapshots = active_manager.persistent.list_memory_curation_snapshots(limit=limit)
+    latest_snapshot = next(iter(last_snapshots), {})
     runtime_queue = queue
     if runtime_queue is None:
         try:
@@ -923,12 +1276,10 @@ def get_memory_curation_status(
             manager=active_manager,
             stale_days=stale_days,
         ),
-        "last_snapshots": active_manager.persistent.list_memory_curation_snapshots(limit=limit),
-        "pending_candidates": build_memory_curation_candidates(
-            manager=active_manager,
-            stale_days=stale_days,
-            max_candidates=limit,
-        ),
+        "last_snapshots": last_snapshots,
+        "latest_retrieval_quality": dict((latest_snapshot.get("metadata") or {}).get("retrieval_quality") or {}),
+        "pending_candidates": pending_candidates,
+        "pending_retrieval_probes": pending_retrieval_probes,
         "autonomy_settings": get_memory_curation_autonomy_settings(),
         "autonomy_governance": build_memory_curation_autonomy_governance(
             queue=runtime_queue,
@@ -970,6 +1321,15 @@ def run_memory_curation_mvp(
         allowed_categories=allowed_categories,
         limit=safe_max_actions,
     )
+    retrieval_probes = build_memory_curation_retrieval_probes(
+        items=before_items,
+        candidates=candidates,
+        max_probes=max(1, safe_max_actions * 2),
+    )
+    retrieval_before = evaluate_memory_curation_retrieval_probes(
+        manager=active_manager,
+        probes=retrieval_probes,
+    )
 
     if dry_run or not candidates:
         return {
@@ -980,6 +1340,20 @@ def run_memory_curation_mvp(
             "candidates": candidates,
             "metrics_before": metrics_before,
             "metrics_after": metrics_before,
+            "retrieval_quality": {
+                "before": retrieval_before,
+                "after": retrieval_before,
+                "verdict": {
+                    "passed": True,
+                    "reason": "no_mutation",
+                    "probe_count": int(retrieval_before.get("probe_count") or 0),
+                    "avg_score_delta": 0.0,
+                    "hit_rate_at_3_delta": 0.0,
+                    "useful_rate_delta": 0.0,
+                    "wrong_top1_increase": 0.0,
+                    "forbidden_top1_increase": 0.0,
+                },
+            },
             "verification": {
                 "passed": True,
                 "reason": "no_mutation",
@@ -997,6 +1371,7 @@ def run_memory_curation_mvp(
             "stale_days": safe_stale_days,
             "max_actions": safe_max_actions,
             "candidate_count": len(candidates),
+            "retrieval_probe_count": int(retrieval_before.get("probe_count") or 0),
         },
     )
     try:
@@ -1113,7 +1488,7 @@ def run_memory_curation_mvp(
         stale_days=safe_stale_days,
         now=current,
     )
-    verification_passed = verify_memory_curation_outcome(
+    metrics_gate_passed = verify_memory_curation_outcome(
         before_active_items=int(metrics_before.get("active_items") or 0),
         after_active_items=int(metrics_after.get("active_items") or 0),
         before_stale_active_items=int(metrics_before.get("stale_active_items") or 0),
@@ -1121,10 +1496,50 @@ def run_memory_curation_mvp(
         before_stable_items=int(metrics_before.get("stable_active_items") or 0),
         after_stable_items=int(metrics_after.get("stable_active_items") or 0),
     )
+    retrieval_after = evaluate_memory_curation_retrieval_probes(
+        manager=active_manager,
+        probes=retrieval_probes,
+    )
+    retrieval_verdict = build_memory_curation_retrieval_quality_verdict(
+        before_summary=retrieval_before,
+        after_summary=retrieval_after,
+    )
+    verification_passed = metrics_gate_passed and bool(retrieval_verdict.get("passed"))
     verification = {
         "passed": verification_passed,
-        "reason": "metrics_improved_or_stable" if verification_passed else "stale_or_stable_regression",
+        "reason": (
+            "metrics_and_retrieval_stable"
+            if verification_passed
+            else (
+                "retrieval_quality_regression"
+                if not retrieval_verdict.get("passed")
+                else "stale_or_stable_regression"
+            )
+        ),
+        "metrics_gate_passed": metrics_gate_passed,
+        "retrieval_gate_passed": bool(retrieval_verdict.get("passed")),
+        "rollback_recommended": not verification_passed,
     }
+    retrieval_quality = {
+        "before": retrieval_before,
+        "after": retrieval_after,
+        "verdict": retrieval_verdict,
+    }
+    try:
+        record_autonomy_observation(
+            "memory_curation_retrieval_quality",
+            {
+                "snapshot_id": snapshot_id,
+                "probe_count": int(retrieval_verdict.get("probe_count") or 0),
+                "passed": bool(retrieval_verdict.get("passed")),
+                "avg_score_delta": float(retrieval_verdict.get("avg_score_delta") or 0.0),
+                "hit_rate_at_3_delta": float(retrieval_verdict.get("hit_rate_at_3_delta") or 0.0),
+                "useful_rate_delta": float(retrieval_verdict.get("useful_rate_delta") or 0.0),
+                "wrong_top1_increase": float(retrieval_verdict.get("wrong_top1_increase") or 0.0),
+            },
+        )
+    except Exception:
+        pass
 
     active_manager.persistent.store_memory_curation_snapshot(
         snapshot_id=snapshot_id,
@@ -1136,10 +1551,26 @@ def run_memory_curation_mvp(
             "max_actions": safe_max_actions,
             "candidate_count": len(candidates),
             "actions_applied": actions_applied,
+            "retrieval_quality": retrieval_quality,
+            "verification": verification,
         },
         after_items=after_items,
         metrics_after=metrics_after,
     )
+    rollback_result: dict[str, Any] = {}
+    final_status = "complete"
+    final_metrics_after = metrics_after
+    if not verification_passed:
+        rollback_result = rollback_memory_curation(snapshot_id, manager=active_manager)
+        if rollback_result.get("status") == "rolled_back":
+            final_status = "rolled_back"
+            final_metrics_after = dict(rollback_result.get("metrics_after") or metrics_after)
+            verification["rollback_performed"] = True
+            verification["rollback_snapshot_status"] = "rolled_back"
+        else:
+            final_status = "verification_failed"
+            verification["rollback_performed"] = False
+            verification["rollback_snapshot_status"] = str(rollback_result.get("status") or "")
     try:
         record_autonomy_observation(
             "memory_curation_completed",
@@ -1147,21 +1578,25 @@ def run_memory_curation_mvp(
                 "snapshot_id": snapshot_id,
                 "actions_applied": len(actions_applied),
                 "verification_passed": verification_passed,
+                "final_status": final_status,
             },
         )
     except Exception:
         pass
 
     return {
-        "status": "complete" if verification_passed else "verification_failed",
+        "status": final_status,
         "dry_run": False,
         "snapshot_id": snapshot_id,
         "candidate_count": len(candidates),
         "candidates": candidates,
         "actions_applied": actions_applied,
         "metrics_before": metrics_before,
-        "metrics_after": metrics_after,
+        "metrics_after": final_metrics_after,
+        "metrics_after_mutation": metrics_after,
+        "retrieval_quality": retrieval_quality,
         "verification": verification,
+        "rollback": rollback_result,
     }
 
 

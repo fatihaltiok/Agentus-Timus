@@ -258,6 +258,10 @@ def test_memory_curation_endpoint_returns_governance_and_metrics(client):
             },
             "last_snapshots": [{"snapshot_id": "snap-m1", "status": "completed"}],
             "pending_candidates": [{"candidate_id": "mc:1", "action": "summarize"}],
+            "pending_retrieval_probes": [{"probe_id": "probe-m1", "query": "robotik safety"}],
+            "latest_retrieval_quality": {
+                "verdict": {"passed": True, "reason": "retrieval_quality_stable"},
+            },
             "autonomy_settings": {
                 "enabled": True,
                 "interval_heartbeats": 12,
@@ -283,6 +287,8 @@ def test_memory_curation_endpoint_returns_governance_and_metrics(client):
     assert data["current_metrics"]["summary_items"] == 2
     assert data["last_snapshots"][0]["snapshot_id"] == "snap-m1"
     assert data["pending_candidates"][0]["candidate_id"] == "mc:1"
+    assert data["pending_retrieval_probes"][0]["probe_id"] == "probe-m1"
+    assert data["latest_retrieval_quality"]["verdict"]["passed"] is True
 
 
 def test_incident_trace_endpoint_returns_trace(client):
