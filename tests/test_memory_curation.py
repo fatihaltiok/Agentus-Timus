@@ -14,6 +14,7 @@ from orchestration.memory_curation import (
     ARCHIVE_CATEGORY_PREFIX,
     SUMMARY_CATEGORY,
     _build_semantic_sync_plan,
+    build_memory_curation_retrieval_backpressure_governance,
     build_memory_curation_retrieval_probes,
     build_memory_curation_retrieval_quality_verdict,
     build_memory_curation_candidates,
@@ -24,6 +25,8 @@ from orchestration.memory_curation import (
     rollback_memory_curation,
     run_memory_curation_autonomy_cycle,
     run_memory_curation_mvp,
+    summarize_memory_curation_quality_history,
+    should_block_memory_curation_retrieval_backpressure,
     verify_memory_curation_retrieval_quality,
 )
 
@@ -349,6 +352,114 @@ def test_run_memory_curation_mvp_records_retrieval_quality_and_keeps_live_state_
     assert snapshot["metadata"]["retrieval_quality"]["verdict"]["passed"] is True
 
 
+def test_summarize_memory_curation_quality_history_counts_recent_eval_runs() -> None:
+    snapshots = [
+        {
+            "snapshot_id": "snap-a",
+            "status": "completed",
+            "metadata": {
+                "retrieval_quality": {"verdict": {"passed": True, "reason": "retrieval_quality_stable"}}
+            },
+        },
+        {
+            "snapshot_id": "snap-b",
+            "status": "rolled_back",
+            "metadata": {
+                "retrieval_quality": {"verdict": {"passed": False, "reason": "retrieval_quality_regressed"}}
+            },
+        },
+        {
+            "snapshot_id": "snap-c",
+            "status": "completed",
+            "metadata": {},
+        },
+    ]
+
+    summary = summarize_memory_curation_quality_history(snapshots, lookback_runs=3)
+
+    assert summary["evaluated_runs"] == 2
+    assert summary["passed_runs"] == 1
+    assert summary["failed_runs"] == 1
+    assert summary["rolled_back_runs"] == 1
+    assert summary["retrieval_regression_runs"] == 1
+    assert summary["pass_rate"] == 0.5
+
+
+def test_retrieval_backpressure_blocks_after_multiple_recent_failures() -> None:
+    assert should_block_memory_curation_retrieval_backpressure(
+        evaluated_runs=3,
+        pass_rate=0.333,
+        failed_runs=2,
+        rolled_back_runs=2,
+        min_evaluated_runs=3,
+        min_pass_rate=0.67,
+        max_failed_runs=1,
+        max_rolled_back_runs=1,
+    ) is True
+
+    governance = build_memory_curation_retrieval_backpressure_governance(
+        [
+            {
+                "snapshot_id": "snap-1",
+                "status": "rolled_back",
+                "metadata": {
+                    "retrieval_quality": {"verdict": {"passed": False, "reason": "retrieval_quality_regressed"}}
+                },
+            },
+            {
+                "snapshot_id": "snap-2",
+                "status": "rolled_back",
+                "metadata": {
+                    "retrieval_quality": {"verdict": {"passed": False, "reason": "retrieval_quality_regressed"}}
+                },
+            },
+            {
+                "snapshot_id": "snap-3",
+                "status": "completed",
+                "metadata": {
+                    "retrieval_quality": {"verdict": {"passed": True, "reason": "retrieval_quality_stable"}}
+                },
+            },
+        ],
+        settings={
+            "retrieval_backpressure_enabled": True,
+            "retrieval_backpressure_lookback_runs": 6,
+            "retrieval_backpressure_min_evaluated_runs": 3,
+            "retrieval_backpressure_min_pass_rate": 0.67,
+            "retrieval_backpressure_max_failed_runs": 1,
+            "retrieval_backpressure_max_rolled_back_runs": 1,
+        },
+    )
+
+    assert governance["blocked"] is True
+    assert governance["state"] == "retrieval_backpressure"
+
+
+def test_retrieval_backpressure_stays_open_with_insufficient_history() -> None:
+    governance = build_memory_curation_retrieval_backpressure_governance(
+        [
+            {
+                "snapshot_id": "snap-1",
+                "status": "completed",
+                "metadata": {
+                    "retrieval_quality": {"verdict": {"passed": False, "reason": "retrieval_quality_regressed"}}
+                },
+            },
+        ],
+        settings={
+            "retrieval_backpressure_enabled": True,
+            "retrieval_backpressure_lookback_runs": 6,
+            "retrieval_backpressure_min_evaluated_runs": 3,
+            "retrieval_backpressure_min_pass_rate": 0.67,
+            "retrieval_backpressure_max_failed_runs": 1,
+            "retrieval_backpressure_max_rolled_back_runs": 1,
+        },
+    )
+
+    assert governance["blocked"] is False
+    assert governance["state"] == "insufficient_history"
+
+
 def test_run_memory_curation_mvp_rolls_back_on_verification_failure(tmp_path: Path, monkeypatch) -> None:
     manager = _make_manager(tmp_path)
     _seed_items(manager)
@@ -477,6 +588,7 @@ def test_get_memory_curation_status_reports_metrics_candidates_and_snapshots(tmp
     assert isinstance(status["pending_candidates"], list)
     assert isinstance(status["pending_retrieval_probes"], list)
     assert "latest_retrieval_quality" in status
+    assert "quality_governance" in status
     assert status["autonomy_settings"]["enabled"] is False
     assert status["autonomy_governance"]["runtime_state"]["state_value"] == "cooldown_active"
 
@@ -513,6 +625,62 @@ def test_build_memory_curation_autonomy_governance_blocks_busy_snapshot(tmp_path
     assert governance["blocked"] is True
     assert governance["state"] == "memory_curation_busy"
     assert "latest_snapshot_status:started" in governance["reasons"]
+
+
+def test_build_memory_curation_autonomy_governance_blocks_retrieval_backpressure(tmp_path: Path) -> None:
+    manager = _make_manager(tmp_path)
+    _seed_items(manager)
+    current_items = manager.persistent.get_all_memory_items()
+    metrics = build_memory_curation_metrics(current_items, manager=manager, stale_days=30)
+
+    for snapshot_id, status_value, passed in (
+        ("snap-r1", "rolled_back", False),
+        ("snap-r2", "rolled_back", False),
+        ("snap-r3", "completed", True),
+    ):
+        manager.persistent.store_memory_curation_snapshot(
+            snapshot_id=snapshot_id,
+            status=status_value,
+            before_items=current_items,
+            metrics_before=metrics,
+            metadata={
+                "retrieval_quality": {
+                    "verdict": {
+                        "passed": passed,
+                        "reason": "retrieval_quality_stable" if passed else "retrieval_quality_regressed",
+                    }
+                }
+            },
+            after_items=current_items,
+            metrics_after=metrics,
+        )
+
+    governance = build_memory_curation_autonomy_governance(
+        manager=manager,
+        settings={
+            "enabled": True,
+            "interval_heartbeats": 1,
+            "stale_days": 30,
+            "candidate_limit": 5,
+            "max_actions": 1,
+            "cooldown_minutes": 0,
+            "rollback_cooldown_minutes": 0,
+            "verification_failure_cooldown_minutes": 0,
+            "require_semantic_store": True,
+            "allowed_categories": ["decisions", "patterns", "working_memory", "extracted"],
+            "allowed_actions": ["summarize", "archive", "devalue"],
+            "retrieval_backpressure_enabled": True,
+            "retrieval_backpressure_lookback_runs": 6,
+            "retrieval_backpressure_min_evaluated_runs": 3,
+            "retrieval_backpressure_min_pass_rate": 0.67,
+            "retrieval_backpressure_max_failed_runs": 1,
+            "retrieval_backpressure_max_rolled_back_runs": 1,
+        },
+    )
+
+    assert governance["blocked"] is True
+    assert governance["state"] == "retrieval_backpressure"
+    assert governance["retrieval_backpressure"]["blocked"] is True
 
 
 @pytest.mark.asyncio

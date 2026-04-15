@@ -262,6 +262,11 @@ def test_memory_curation_endpoint_returns_governance_and_metrics(client):
             "latest_retrieval_quality": {
                 "verdict": {"passed": True, "reason": "retrieval_quality_stable"},
             },
+            "quality_governance": {
+                "state": "allow",
+                "blocked": False,
+                "summary": {"evaluated_runs": 3, "pass_rate": 1.0},
+            },
             "autonomy_settings": {
                 "enabled": True,
                 "interval_heartbeats": 12,
@@ -289,6 +294,8 @@ def test_memory_curation_endpoint_returns_governance_and_metrics(client):
     assert data["pending_candidates"][0]["candidate_id"] == "mc:1"
     assert data["pending_retrieval_probes"][0]["probe_id"] == "probe-m1"
     assert data["latest_retrieval_quality"]["verdict"]["passed"] is True
+    assert data["quality_governance"]["state"] == "allow"
+    assert data["memory_curation"]["quality_governance"]["summary"]["evaluated_runs"] == 3
 
 
 def test_incident_trace_endpoint_returns_trace(client):

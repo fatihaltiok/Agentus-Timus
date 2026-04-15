@@ -2,6 +2,47 @@
 
 ---
 
+## Fortschritt 2026-04-15 - Phase E E5.4 Retrieval-Backpressure Governance
+
+E5 bewertet jetzt nicht mehr nur den einzelnen Curation-Lauf, sondern auch die juengste Retrieval-Historie als Serie: Wenn zu viele der letzten Retrieval-evaluierten Memory-Curation-Runden kippen oder zurueckrollen, blockiert Timus die autonome Memory-Curation vor dem naechsten Lauf.
+
+Geaendert:
+
+- [orchestration/memory_curation.py](/home/fatih-ubuntu/dev/timus/orchestration/memory_curation.py)
+  - neue E5.4-Helfer:
+    - `summarize_memory_curation_quality_history(...)`
+    - `should_block_memory_curation_retrieval_backpressure(...)`
+    - `build_memory_curation_retrieval_backpressure_governance(...)`
+  - neue Runtime-Settings fuer Retrieval-Backpressure:
+    - `AUTONOMY_MEMORY_CURATION_RETRIEVAL_BACKPRESSURE_ENABLED`
+    - Lookback-Runs
+    - Mindesthistorie
+    - Mindest-Pass-Rate
+    - Fehler-/Rollback-Budgets
+  - `build_memory_curation_autonomy_governance(...)` blockiert jetzt mit:
+    - `state = retrieval_backpressure`
+    - wenn die juengste Retrieval-Historie das Budget sprengt
+  - Statuspayload erweitert um:
+    - `quality_governance`
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - `GET /autonomy/memory_curation` liefert `quality_governance` jetzt auch top-level
+
+Tests:
+
+- erweitert:
+  - [tests/test_memory_curation.py](/home/fatih-ubuntu/dev/timus/tests/test_memory_curation.py)
+  - [tests/test_memory_curation_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_memory_curation_hypothesis.py)
+  - [tests/test_memory_curation_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_memory_curation_crosshair.py)
+  - [tests/test_memory_maintenance_tool.py](/home/fatih-ubuntu/dev/timus/tests/test_memory_maintenance_tool.py)
+  - [tests/test_c2_entrypoints.py](/home/fatih-ubuntu/dev/timus/tests/test_c2_entrypoints.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/memory_curation.py server/mcp_server.py tests/test_memory_curation.py tests/test_memory_curation_hypothesis.py tests/test_memory_curation_crosshair.py tests/test_memory_maintenance_tool.py tests/test_c2_entrypoints.py` gruen
+- `pytest -q tests/test_memory_curation.py tests/test_memory_maintenance_tool.py tests/test_c2_entrypoints.py` -> `44 passed`
+- `pytest -q tests/test_memory_curation_hypothesis.py` -> `12 passed`
+- `python -m crosshair check tests/test_memory_curation_crosshair.py` -> Exit `0`
+
 ## Fortschritt 2026-04-15 - Phase E E5.3 Retrieval-Quality Gates
 
 E5 prueft jetzt nicht mehr nur Bestandsmetriken, sondern auch den echten Recall-Pfad: Memory-Curation baut Retrieval-Probes aus den laufenden Kandidaten, evaluiert `unified_recall(...)` vor und nach der Mutation und rollt den Lauf bei klarer Recall-Regression automatisch ueber den Snapshot zurueck.

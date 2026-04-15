@@ -40,6 +40,7 @@ async def test_get_memory_curation_status_tool_returns_engine_status(monkeypatch
             "pending_candidates": [],
             "pending_retrieval_probes": [{"probe_id": "probe-1"}],
             "latest_retrieval_quality": {"verdict": {"passed": True}},
+            "quality_governance": {"state": "allow", "blocked": False},
             "autonomy_governance": {"state": "allow", "blocked": False},
         },
     )
@@ -50,6 +51,7 @@ async def test_get_memory_curation_status_tool_returns_engine_status(monkeypatch
     assert result["last_snapshots"][0]["snapshot_id"] == "snap-2"
     assert result["pending_retrieval_probes"][0]["probe_id"] == "probe-1"
     assert result["latest_retrieval_quality"]["verdict"]["passed"] is True
+    assert result["quality_governance"]["state"] == "allow"
     assert result["autonomy_governance"]["state"] == "allow"
 
 

@@ -893,6 +893,48 @@ Wirkung:
 - E5 prueft jetzt auch, ob die Pflege den echten Recall-Pfad fuer Timus stabil haelt
 - schlechte Curation-Runden bleiben nicht still im Live-Gedaechtnis stehen, sondern werden rueckgaengig gemacht
 
+### E5.4 Retrieval-Backpressure Governance
+
+Stand:
+
+- autonome Memory-Curation stoppt jetzt auch auf Basis der juengsten Retrieval-Qualitaetshistorie
+
+Umgesetzt:
+
+- [orchestration/memory_curation.py](/home/fatih-ubuntu/dev/timus/orchestration/memory_curation.py) wertet jetzt die letzten E5.3-Laeufe zusammenfassend aus:
+  - `summarize_memory_curation_quality_history(...)`
+  - `should_block_memory_curation_retrieval_backpressure(...)`
+  - `build_memory_curation_retrieval_backpressure_governance(...)`
+- neue Governance-Settings fuer den autonomen E5-Pfad:
+  - Lookback-Runs
+  - minimale Zahl evaluierter Retrieval-Laeufe
+  - minimale Pass-Rate
+  - maximales Fehlerbudget
+  - maximales Rollback-Budget
+- [orchestration/memory_curation.py](/home/fatih-ubuntu/dev/timus/orchestration/memory_curation.py) zieht diese Governance jetzt direkt in `build_memory_curation_autonomy_governance(...)` ein:
+  - wenn juengste Retrieval-Laeufe zu oft kippen oder zurueckrollen, wird der Zustand `retrieval_backpressure`
+  - der autonome Heartbeat-Pfad stoppt dann vor dem naechsten Lauf
+- Status-Surface erweitert:
+  - `quality_governance` in `get_memory_curation_status(...)`
+  - `quality_governance` jetzt auch auf [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py) im Endpoint `GET /autonomy/memory_curation`
+
+Verifikation:
+
+- Pytest deckt jetzt ab:
+  - History-Summary
+  - Backpressure-Block bei schlechter juengster Laufhistorie
+  - Status-/Endpoint-Surface fuer `quality_governance`
+- Hypothesis prueft:
+  - kein Backpressure vor Mindesthistorie
+  - Block bei genuegend schlechter juengster Retrieval-Historie
+- CrossHair prueft dieselben Guard-Invarianten fuer den reinen Entscheidungshelfer
+
+Wirkung:
+
+- E5.4 macht die autonome Memory-Curation robuster ueber mehrere Laeufe hinweg
+- Timus reagiert nicht mehr nur auf einen einzelnen schlechten Lauf
+- Timus stoppt die Memory-Autonomie jetzt selbst, wenn die juengste Retrieval-Qualitaet zu instabil wird
+
 ### E6. Operator Visibility und Governance
 
 Ziel:

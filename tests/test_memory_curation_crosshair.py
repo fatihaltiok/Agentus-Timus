@@ -12,6 +12,7 @@ from orchestration.memory_curation import (
     classify_memory_curation_tier,
     decide_memory_curation_action,
     filter_memory_curation_candidates,
+    should_block_memory_curation_retrieval_backpressure,
     verify_memory_curation_retrieval_quality,
     verify_memory_curation_outcome,
 )
@@ -166,3 +167,31 @@ def _contract_retrieval_quality_verdict_flags_clear_regression() -> bool:
         after_summary=after,
     )
     return verdict["passed"] is False and verdict["reason"] == "retrieval_quality_regressed"
+
+
+@deal.post(lambda r: r is True)
+def _contract_retrieval_backpressure_needs_minimum_history() -> bool:
+    return not should_block_memory_curation_retrieval_backpressure(
+        evaluated_runs=2,
+        pass_rate=0.0,
+        failed_runs=5,
+        rolled_back_runs=5,
+        min_evaluated_runs=3,
+        min_pass_rate=0.67,
+        max_failed_runs=1,
+        max_rolled_back_runs=1,
+    )
+
+
+@deal.post(lambda r: r is True)
+def _contract_retrieval_backpressure_blocks_low_pass_rate_after_negative_budget_exhausted() -> bool:
+    return should_block_memory_curation_retrieval_backpressure(
+        evaluated_runs=3,
+        pass_rate=0.33,
+        failed_runs=2,
+        rolled_back_runs=2,
+        min_evaluated_runs=3,
+        min_pass_rate=0.67,
+        max_failed_runs=1,
+        max_rolled_back_runs=1,
+    )

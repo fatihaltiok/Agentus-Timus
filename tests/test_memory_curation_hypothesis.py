@@ -7,6 +7,7 @@ from orchestration.memory_curation import (
     classify_memory_curation_tier,
     decide_memory_curation_action,
     filter_memory_curation_candidates,
+    should_block_memory_curation_retrieval_backpressure,
     verify_memory_curation_retrieval_quality,
     verify_memory_curation_outcome,
 )
@@ -234,3 +235,49 @@ def test_hypothesis_retrieval_quality_rejects_clear_score_and_hit_regressions(
     }
 
     assert not verify_memory_curation_retrieval_quality(before_summary=before, after_summary=after)
+
+
+@given(
+    evaluated_runs=st.integers(min_value=0, max_value=2),
+    pass_rate=st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
+    failed_runs=st.integers(min_value=0, max_value=5),
+    rolled_back_runs=st.integers(min_value=0, max_value=5),
+)
+def test_hypothesis_retrieval_backpressure_never_blocks_before_minimum_history(
+    evaluated_runs: int,
+    pass_rate: float,
+    failed_runs: int,
+    rolled_back_runs: int,
+) -> None:
+    assert not should_block_memory_curation_retrieval_backpressure(
+        evaluated_runs=evaluated_runs,
+        pass_rate=pass_rate,
+        failed_runs=failed_runs,
+        rolled_back_runs=rolled_back_runs,
+        min_evaluated_runs=3,
+        min_pass_rate=0.67,
+        max_failed_runs=1,
+        max_rolled_back_runs=1,
+    )
+
+
+@given(
+    pass_rate=st.floats(min_value=0.0, max_value=0.66, allow_nan=False, allow_infinity=False),
+    failed_runs=st.integers(min_value=2, max_value=5),
+    rolled_back_runs=st.integers(min_value=2, max_value=5),
+)
+def test_hypothesis_retrieval_backpressure_blocks_after_enough_bad_recent_runs(
+    pass_rate: float,
+    failed_runs: int,
+    rolled_back_runs: int,
+) -> None:
+    assert should_block_memory_curation_retrieval_backpressure(
+        evaluated_runs=3,
+        pass_rate=pass_rate,
+        failed_runs=failed_runs,
+        rolled_back_runs=rolled_back_runs,
+        min_evaluated_runs=3,
+        min_pass_rate=0.67,
+        max_failed_runs=1,
+        max_rolled_back_runs=1,
+    )

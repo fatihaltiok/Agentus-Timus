@@ -95,6 +95,11 @@ _RETRIEVAL_MIN_HIT_AT_3_DELTA = -0.2
 _RETRIEVAL_MIN_USEFUL_RATE_DELTA = -0.2
 _RETRIEVAL_MAX_WRONG_TOP1_INCREASE = 0.2
 _RETRIEVAL_MAX_FORBIDDEN_TOP1_INCREASE = 0.2
+_DEFAULT_RETRIEVAL_BACKPRESSURE_LOOKBACK_RUNS = 6
+_DEFAULT_RETRIEVAL_BACKPRESSURE_MIN_EVALUATED_RUNS = 3
+_DEFAULT_RETRIEVAL_BACKPRESSURE_MIN_PASS_RATE = 0.67
+_DEFAULT_RETRIEVAL_BACKPRESSURE_MAX_FAILED_RUNS = 1
+_DEFAULT_RETRIEVAL_BACKPRESSURE_MAX_ROLLED_BACK_RUNS = 1
 
 
 class MemoryCurationManagerLike(Protocol):
@@ -287,6 +292,10 @@ def _normalize_allowed_set(values: Iterable[str] | None) -> set[str]:
         if clean:
             normalized.add(clean)
     return normalized
+
+
+def _normalize_ratio(value: Any, *, default: float = 0.0) -> float:
+    return max(0.0, min(1.0, _normalize_float(value, default=default)))
 
 
 def _flatten_memory_value_segments(value: Any) -> list[str]:
@@ -536,6 +545,169 @@ def build_memory_curation_retrieval_quality_verdict(
         "useful_rate_delta": useful_rate_delta,
         "wrong_top1_increase": wrong_top1_increase,
         "forbidden_top1_increase": forbidden_top1_increase,
+    }
+
+
+def summarize_memory_curation_quality_history(
+    snapshots: Iterable[Mapping[str, Any]],
+    *,
+    lookback_runs: int = _DEFAULT_RETRIEVAL_BACKPRESSURE_LOOKBACK_RUNS,
+) -> dict[str, Any]:
+    safe_lookback = max(1, _normalize_int(lookback_runs, default=_DEFAULT_RETRIEVAL_BACKPRESSURE_LOOKBACK_RUNS))
+    recent_snapshots = [dict(snapshot) for snapshot in list(snapshots)[:safe_lookback]]
+
+    evaluated_runs = 0
+    passed_runs = 0
+    failed_runs = 0
+    rolled_back_runs = 0
+    retrieval_regression_runs = 0
+    snapshot_ids: list[str] = []
+
+    for snapshot in recent_snapshots:
+        snapshot_ids.append(str(snapshot.get("snapshot_id") or ""))
+        status = str(snapshot.get("status") or "").strip().lower()
+        metadata = dict(snapshot.get("metadata") or {})
+        retrieval_quality = dict(metadata.get("retrieval_quality") or {})
+        verdict = dict(retrieval_quality.get("verdict") or {})
+
+        if verdict:
+            evaluated_runs += 1
+            if bool(verdict.get("passed")):
+                passed_runs += 1
+            else:
+                failed_runs += 1
+            if str(verdict.get("reason") or "").strip().lower() == "retrieval_quality_regressed":
+                retrieval_regression_runs += 1
+        if status == "rolled_back":
+            rolled_back_runs += 1
+
+    pass_rate = round(passed_runs / evaluated_runs, 3) if evaluated_runs > 0 else 1.0
+    return {
+        "lookback_runs": safe_lookback,
+        "recent_snapshot_count": len(recent_snapshots),
+        "evaluated_runs": evaluated_runs,
+        "passed_runs": passed_runs,
+        "failed_runs": failed_runs,
+        "rolled_back_runs": rolled_back_runs,
+        "retrieval_regression_runs": retrieval_regression_runs,
+        "pass_rate": pass_rate,
+        "recent_snapshot_ids": [snapshot_id for snapshot_id in snapshot_ids if snapshot_id],
+    }
+
+
+def should_block_memory_curation_retrieval_backpressure(
+    *,
+    evaluated_runs: int,
+    pass_rate: float,
+    failed_runs: int,
+    rolled_back_runs: int,
+    min_evaluated_runs: int,
+    min_pass_rate: float,
+    max_failed_runs: int,
+    max_rolled_back_runs: int,
+) -> bool:
+    safe_evaluated_runs = max(0, _normalize_int(evaluated_runs, default=0))
+    safe_failed_runs = max(0, _normalize_int(failed_runs, default=0))
+    safe_rolled_back_runs = max(0, _normalize_int(rolled_back_runs, default=0))
+    safe_min_runs = max(1, _normalize_int(min_evaluated_runs, default=_DEFAULT_RETRIEVAL_BACKPRESSURE_MIN_EVALUATED_RUNS))
+    safe_pass_rate = _normalize_ratio(pass_rate, default=1.0)
+    safe_min_pass_rate = _normalize_ratio(min_pass_rate, default=_DEFAULT_RETRIEVAL_BACKPRESSURE_MIN_PASS_RATE)
+    safe_max_failed_runs = max(0, _normalize_int(max_failed_runs, default=_DEFAULT_RETRIEVAL_BACKPRESSURE_MAX_FAILED_RUNS))
+    safe_max_rolled_back_runs = max(0, _normalize_int(max_rolled_back_runs, default=_DEFAULT_RETRIEVAL_BACKPRESSURE_MAX_ROLLED_BACK_RUNS))
+
+    if safe_evaluated_runs < safe_min_runs:
+        return False
+
+    negative_budget_exhausted = (
+        safe_failed_runs > safe_max_failed_runs
+        or safe_rolled_back_runs > safe_max_rolled_back_runs
+    )
+    return negative_budget_exhausted and safe_pass_rate < safe_min_pass_rate
+
+
+def build_memory_curation_retrieval_backpressure_governance(
+    snapshots: Iterable[Mapping[str, Any]],
+    *,
+    settings: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    settings_payload = dict(settings or {})
+    backpressure_settings = {
+        "enabled": bool(settings_payload.get("retrieval_backpressure_enabled", True)),
+        "lookback_runs": max(
+            1,
+            _normalize_int(
+                settings_payload.get("retrieval_backpressure_lookback_runs"),
+                default=_DEFAULT_RETRIEVAL_BACKPRESSURE_LOOKBACK_RUNS,
+            ),
+        ),
+        "min_evaluated_runs": max(
+            1,
+            _normalize_int(
+                settings_payload.get("retrieval_backpressure_min_evaluated_runs"),
+                default=_DEFAULT_RETRIEVAL_BACKPRESSURE_MIN_EVALUATED_RUNS,
+            ),
+        ),
+        "min_pass_rate": _normalize_ratio(
+            settings_payload.get("retrieval_backpressure_min_pass_rate"),
+            default=_DEFAULT_RETRIEVAL_BACKPRESSURE_MIN_PASS_RATE,
+        ),
+        "max_failed_runs": max(
+            0,
+            _normalize_int(
+                settings_payload.get("retrieval_backpressure_max_failed_runs"),
+                default=_DEFAULT_RETRIEVAL_BACKPRESSURE_MAX_FAILED_RUNS,
+            ),
+        ),
+        "max_rolled_back_runs": max(
+            0,
+            _normalize_int(
+                settings_payload.get("retrieval_backpressure_max_rolled_back_runs"),
+                default=_DEFAULT_RETRIEVAL_BACKPRESSURE_MAX_ROLLED_BACK_RUNS,
+            ),
+        ),
+    }
+    summary = summarize_memory_curation_quality_history(
+        snapshots,
+        lookback_runs=int(backpressure_settings["lookback_runs"]),
+    )
+
+    state = "allow"
+    blocked = False
+    reasons: list[str] = []
+    if not bool(backpressure_settings["enabled"]):
+        state = "disabled"
+    elif int(summary["evaluated_runs"]) < int(backpressure_settings["min_evaluated_runs"]):
+        state = "insufficient_history"
+        reasons.append(
+            f"evaluated_runs={summary['evaluated_runs']}/{backpressure_settings['min_evaluated_runs']}"
+        )
+    else:
+        blocked = should_block_memory_curation_retrieval_backpressure(
+            evaluated_runs=int(summary["evaluated_runs"]),
+            pass_rate=float(summary["pass_rate"]),
+            failed_runs=int(summary["failed_runs"]),
+            rolled_back_runs=int(summary["rolled_back_runs"]),
+            min_evaluated_runs=int(backpressure_settings["min_evaluated_runs"]),
+            min_pass_rate=float(backpressure_settings["min_pass_rate"]),
+            max_failed_runs=int(backpressure_settings["max_failed_runs"]),
+            max_rolled_back_runs=int(backpressure_settings["max_rolled_back_runs"]),
+        )
+        if blocked:
+            state = "retrieval_backpressure"
+            reasons.extend(
+                [
+                    f"pass_rate={summary['pass_rate']}",
+                    f"failed_runs={summary['failed_runs']}",
+                    f"rolled_back_runs={summary['rolled_back_runs']}",
+                ]
+            )
+
+    return {
+        "state": state,
+        "blocked": blocked,
+        "reasons": reasons,
+        "settings": backpressure_settings,
+        "summary": summary,
     }
 
 
@@ -923,6 +1095,39 @@ def get_memory_curation_autonomy_settings() -> dict[str, Any]:
         "require_semantic_store": _env_bool("AUTONOMY_MEMORY_CURATION_REQUIRE_SEMANTIC_STORE", True),
         "allowed_categories": _env_csv("AUTONOMY_MEMORY_CURATION_ALLOWED_CATEGORIES", _DEFAULT_AUTONOMY_ALLOWED_CATEGORIES),
         "allowed_actions": _env_csv("AUTONOMY_MEMORY_CURATION_ALLOWED_ACTIONS", _DEFAULT_AUTONOMY_ALLOWED_ACTIONS),
+        "retrieval_backpressure_enabled": _env_bool("AUTONOMY_MEMORY_CURATION_RETRIEVAL_BACKPRESSURE_ENABLED", True),
+        "retrieval_backpressure_lookback_runs": max(
+            1,
+            _normalize_int(
+                os.getenv("AUTONOMY_MEMORY_CURATION_RETRIEVAL_BACKPRESSURE_LOOKBACK_RUNS"),
+                default=_DEFAULT_RETRIEVAL_BACKPRESSURE_LOOKBACK_RUNS,
+            ),
+        ),
+        "retrieval_backpressure_min_evaluated_runs": max(
+            1,
+            _normalize_int(
+                os.getenv("AUTONOMY_MEMORY_CURATION_RETRIEVAL_BACKPRESSURE_MIN_EVALUATED_RUNS"),
+                default=_DEFAULT_RETRIEVAL_BACKPRESSURE_MIN_EVALUATED_RUNS,
+            ),
+        ),
+        "retrieval_backpressure_min_pass_rate": _normalize_ratio(
+            os.getenv("AUTONOMY_MEMORY_CURATION_RETRIEVAL_BACKPRESSURE_MIN_PASS_RATE"),
+            default=_DEFAULT_RETRIEVAL_BACKPRESSURE_MIN_PASS_RATE,
+        ),
+        "retrieval_backpressure_max_failed_runs": max(
+            0,
+            _normalize_int(
+                os.getenv("AUTONOMY_MEMORY_CURATION_RETRIEVAL_BACKPRESSURE_MAX_FAILED_RUNS"),
+                default=_DEFAULT_RETRIEVAL_BACKPRESSURE_MAX_FAILED_RUNS,
+            ),
+        ),
+        "retrieval_backpressure_max_rolled_back_runs": max(
+            0,
+            _normalize_int(
+                os.getenv("AUTONOMY_MEMORY_CURATION_RETRIEVAL_BACKPRESSURE_MAX_ROLLED_BACK_RUNS"),
+                default=_DEFAULT_RETRIEVAL_BACKPRESSURE_MAX_ROLLED_BACK_RUNS,
+            ),
+        ),
     }
 
 
@@ -937,7 +1142,19 @@ def build_memory_curation_autonomy_governance(
     queue_state = _memory_curation_runtime_state(queue)
     current = _now()
     settings_payload = dict(settings or get_memory_curation_autonomy_settings())
-    latest_snapshot = next(iter(active_manager.persistent.list_memory_curation_snapshots(limit=1)), None)
+    recent_snapshots = list(
+        active_manager.persistent.list_memory_curation_snapshots(
+            limit=max(
+                5,
+                int(settings_payload.get("retrieval_backpressure_lookback_runs") or _DEFAULT_RETRIEVAL_BACKPRESSURE_LOOKBACK_RUNS),
+            ),
+        )
+    )
+    latest_snapshot = next(iter(recent_snapshots), None)
+    retrieval_backpressure = build_memory_curation_retrieval_backpressure_governance(
+        recent_snapshots,
+        settings=settings_payload,
+    )
     candidate_limit = int(settings_payload.get("candidate_limit") or 5)
     raw_candidates = build_memory_curation_candidates(
         manager=active_manager,
@@ -1025,6 +1242,11 @@ def build_memory_curation_autonomy_governance(
                 reasons.append("recent_memory_curation_run")
                 cooldown_until = until
 
+    if not blocked and bool(retrieval_backpressure.get("blocked")):
+        state = str(retrieval_backpressure.get("state") or "retrieval_backpressure")
+        blocked = True
+        reasons.extend(list(retrieval_backpressure.get("reasons") or []))
+
     if not blocked and not filtered_candidates:
         state = "no_candidates"
         blocked = True
@@ -1041,6 +1263,7 @@ def build_memory_curation_autonomy_governance(
         "degrade_mode": degrade_value,
         "runtime_state": queue_state,
         "latest_snapshot": latest_snapshot or {},
+        "retrieval_backpressure": retrieval_backpressure,
         "raw_candidate_count": len(raw_candidates),
         "filtered_candidate_count": len(filtered_candidates),
         "filtered_candidates": filtered_candidates,
@@ -1284,6 +1507,10 @@ def get_memory_curation_status(
         "autonomy_governance": build_memory_curation_autonomy_governance(
             queue=runtime_queue,
             manager=active_manager,
+        ),
+        "quality_governance": build_memory_curation_retrieval_backpressure_governance(
+            last_snapshots,
+            settings=get_memory_curation_autonomy_settings(),
         ),
     }
 
