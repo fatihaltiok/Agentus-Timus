@@ -178,6 +178,7 @@ curl -sS http://127.0.0.1:5000/health
 - [Dev Changelog](docs/CHANGELOG_DEV.md)
 - [Architecture Blueprint](docs/TIMUS_ARCHITEKTUR_BLUEPRINT_FUER_FOLGEPROJEKTE_2026-04-11.md)
 - [Phase E Plan](docs/PHASE_E_SELF_IMPROVEMENT_PLAN.md)
+- [Phase E6 Plan](docs/PHASE_E6_OPERATOR_VISIBILITY_GOVERNANCE_PLAN.md)
 - [Phase F Plan](docs/PHASE_F_PLAN.md)
 - [Phase D Plan](docs/PHASE_D_APPROVAL_AUTH_PREP.md)
 - [Multi-step Planning](docs/ZWISCHENPROJEKT_ALLGEMEINE_MEHRSCHRITT_PLANUNG_2026-04-12.md)

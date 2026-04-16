@@ -5061,9 +5061,23 @@ async def autonomy_improvement_endpoint():
                 limit=5,
             ),
             "improvement_runtime": dict(observation_summary.get("improvement_runtime") or {}),
+            "memory_curation_runtime": dict(observation_summary.get("memory_curation_runtime") or {}),
             "candidate_count": len(combined_candidates),
         }
     except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.get("/autonomy/operator_snapshot", summary="Unified Phase-E Operator Snapshot")
+async def autonomy_operator_snapshot_endpoint(limit: int = 5):
+    """Gibt eine gemeinsame Operatorsicht ueber Improvement, Memory-Curation und Systemkontext zurueck."""
+    try:
+        from orchestration.phase_e_operator_snapshot import collect_phase_e_operator_snapshot
+
+        snapshot = await collect_phase_e_operator_snapshot(limit=max(1, min(10, int(limit or 5))))
+        return {"status": "success", **snapshot}
+    except Exception as e:
+        log.error(f"Phase-E Operator Snapshot Fehler: {e}", exc_info=True)
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
 
@@ -5071,6 +5085,7 @@ async def autonomy_improvement_endpoint():
 async def autonomy_memory_curation_endpoint():
     """Gibt E5 Memory-Curation-Status, Governance und aktuelle Kandidaten zurück."""
     try:
+        from orchestration.autonomy_observation import build_autonomy_observation_summary
         from orchestration.task_queue import get_queue
         from orchestration.memory_curation import (
             get_memory_curation_autonomy_settings,
@@ -5079,6 +5094,7 @@ async def autonomy_memory_curation_endpoint():
 
         queue = get_queue()
         payload = get_memory_curation_status(queue=queue, stale_days=30, limit=5)
+        observation_summary = build_autonomy_observation_summary()
         return {
             "status": "success",
             "memory_curation": payload,
@@ -5090,6 +5106,7 @@ async def autonomy_memory_curation_endpoint():
             "pending_retrieval_probes": list(payload.get("pending_retrieval_probes") or []),
             "latest_retrieval_quality": dict(payload.get("latest_retrieval_quality") or {}),
             "quality_governance": dict(payload.get("quality_governance") or {}),
+            "memory_curation_runtime": dict(observation_summary.get("memory_curation_runtime") or {}),
         }
     except Exception as e:
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})

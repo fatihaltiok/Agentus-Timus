@@ -935,11 +935,54 @@ Wirkung:
 - Timus reagiert nicht mehr nur auf einen einzelnen schlechten Lauf
 - Timus stoppt die Memory-Autonomie jetzt selbst, wenn die juengste Retrieval-Qualitaet zu instabil wird
 
+### E5.5 Central Runtime Closeout
+
+Stand:
+
+- E5 ist jetzt auch als zusammenhaengender Runtime-Block zentral sichtbar und damit abgeschlossen
+
+Umgesetzt:
+
+- [orchestration/autonomy_observation.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomy_observation.py) aggregiert jetzt E5 als eigenen Observation-Block:
+  - `memory_curation_runtime`
+  - Autonomiezyklen
+  - Curation-Laeufe
+  - Retrieval-Gates
+  - Rollback-Stufen
+- der zentrale Observation-Report zeigt jetzt:
+  - Autonomy-Starts / Blockaden / Abschluesse
+  - finale Curation-Status
+  - Action-Typen (`summarize`, `archive`, `devalue`)
+  - Retrieval-Pass-Rate
+  - Rollback-Rate
+  - Block- und Rollback-Stufen
+- zentrale Operatorsicht erweitert:
+  - [tools/self_improvement_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/self_improvement_tool/tool.py)
+    - `get_improvement_suggestions(...)` liefert jetzt auch `memory_curation_runtime`
+  - [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+    - `GET /autonomy/improvement` liefert `memory_curation_runtime`
+    - `GET /autonomy/memory_curation` liefert die aggregierte Laufzeitsicht ebenfalls
+
+Verifikation:
+
+- E5 ist damit nicht mehr nur im dedizierten Memory-Curation-Endpoint sichtbar
+- E5 ist jetzt auch in der zentralen Autonomy-Observation und in der uebergreifenden Improvement-Sicht operatorsichtbar
+- policy-gesteuert, beobachtbar und reversibel ist fuer E5 damit vollstaendig eingelöst
+
+Wirkung:
+
+- E5 ist als Phase-E-Block jetzt funktional abgeschlossen
+- der naechste offene Block in Phase E ist damit nicht mehr Memory-Curation, sondern E6 Operator Visibility und Governance
+
 ### E6. Operator Visibility und Governance
 
 Ziel:
 
 - Phase E bleibt fuer dich sichtbar und steuerbar
+
+Detaillierter Arbeitsplan:
+
+- [Phase E6 Plan - Operator Visibility und Governance](/home/fatih-ubuntu/dev/timus/docs/PHASE_E6_OPERATOR_VISIBILITY_GOVERNANCE_PLAN.md)
 
 Schwerpunkte:
 
@@ -955,6 +998,30 @@ Schwerpunkte:
 Erfolgskriterium:
 
 - du kannst sehen, was Timus verbessern will, was er getan hat und warum etwas blockiert oder zurueckgerollt wurde
+
+### E6.1 Unified Operator Snapshot
+
+Stand:
+
+- erster Runtime-Slice umgesetzt
+
+Umgesetzt:
+
+- neuer Builder in [orchestration/phase_e_operator_snapshot.py](/home/fatih-ubuntu/dev/timus/orchestration/phase_e_operator_snapshot.py)
+  - vereinheitlicht jetzt:
+    - `system`
+    - `lanes.improvement`
+    - `lanes.memory_curation`
+    - `summary`
+- neue Tool-Surface in [tools/self_improvement_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/self_improvement_tool/tool.py)
+  - `get_phase_e_operator_snapshot(...)`
+- neuer MCP-Endpoint in [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - `GET /autonomy/operator_snapshot`
+
+Verifikation:
+
+- `pytest -q tests/test_phase_e_operator_snapshot.py tests/test_phase_e_operator_snapshot_hypothesis.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py` -> `25 passed`
+- `python -m crosshair check tests/test_phase_e_operator_snapshot_crosshair.py` -> Exit `0`
 
 ## Arbeitsreihenfolge
 

@@ -10,6 +10,7 @@ tools/self_improvement_tool/tool.py — M12: Self-Improvement MCP-Tools
 - get_e2e_regression_matrix: produktionskritische Kernflows als Matrix
 - get_e2e_release_gate_status: Eskalations- und Canary/Release-Entscheidung aus E2E
 - get_improvement_suggestions: Verbesserungsvorschläge
+- get_phase_e_operator_snapshot: einheitliche Operatorsicht über Improvement- und Memory-Curation-Lanes
 """
 
 import logging
@@ -210,6 +211,26 @@ async def get_ops_observability(days: int = 7, limit: int = 5) -> dict:
 
 
 @tool(
+    name="get_phase_e_operator_snapshot",
+    description=(
+        "Gibt einen einheitlichen Phase-E-Operatorsnapshot zurueck: Improvement-Lane, "
+        "Memory-Curation-Lane und Systemkontext in einer gemeinsamen Sicht."
+    ),
+    parameters=[
+        P("limit", "integer", "Maximale Anzahl naechster Kandidaten pro Lane (default: 5)", required=False, default=5),
+    ],
+    capabilities=["analysis", "system"],
+    category=C.SYSTEM,
+)
+async def get_phase_e_operator_snapshot(limit: int = 5) -> dict:
+    """Gibt den einheitlichen Phase-E-Operatorsnapshot zurueck."""
+    from orchestration.phase_e_operator_snapshot import collect_phase_e_operator_snapshot
+
+    snapshot = await collect_phase_e_operator_snapshot(limit=max(1, min(10, limit)))
+    return {"status": "ok", **snapshot}
+
+
+@tool(
     name="get_e2e_regression_matrix",
     description=(
         "Gibt eine zentrale E2E-Regressionsmatrix fuer produktionskritische Kernflows "
@@ -363,4 +384,5 @@ async def get_improvement_suggestions(include_applied: bool = False) -> dict:
             limit=5,
         ),
         "improvement_runtime": dict(observation_summary.get("improvement_runtime") or {}),
+        "memory_curation_runtime": dict(observation_summary.get("memory_curation_runtime") or {}),
     }

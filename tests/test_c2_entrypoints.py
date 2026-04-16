@@ -201,7 +201,11 @@ def test_improvement_endpoint_returns_top_candidates(client):
                 "execution_verified_total": 1,
                 "verified_rate": 1.0,
                 "not_verified_rate": 0.0,
-            }
+            },
+            "memory_curation_runtime": {
+                "curation_completed_total": 2,
+                "verification_pass_rate": 1.0,
+            },
         },
     ):
         resp = client.get("/autonomy/improvement")
@@ -233,10 +237,20 @@ def test_improvement_endpoint_returns_top_candidates(client):
     assert data["top_task_autonomy_decisions"][0]["autoenqueue_state"] == "not_creatable"
     assert data["improvement_runtime"]["execution_verified_total"] == 1
     assert data["improvement_runtime"]["verified_rate"] == 1.0
+    assert data["memory_curation_runtime"]["curation_completed_total"] == 2
+    assert data["memory_curation_runtime"]["verification_pass_rate"] == 1.0
 
 
 def test_memory_curation_endpoint_returns_governance_and_metrics(client):
     with patch(
+        "orchestration.autonomy_observation.build_autonomy_observation_summary",
+        return_value={
+            "memory_curation_runtime": {
+                "autonomy_completed_total": 3,
+                "verification_pass_rate": 1.0,
+            }
+        },
+    ), patch(
         "orchestration.task_queue.get_queue",
         return_value=type("_Queue", (), {})(),
     ), patch(
@@ -295,7 +309,40 @@ def test_memory_curation_endpoint_returns_governance_and_metrics(client):
     assert data["pending_retrieval_probes"][0]["probe_id"] == "probe-m1"
     assert data["latest_retrieval_quality"]["verdict"]["passed"] is True
     assert data["quality_governance"]["state"] == "allow"
+    assert data["memory_curation_runtime"]["autonomy_completed_total"] == 3
     assert data["memory_curation"]["quality_governance"]["summary"]["evaluated_runs"] == 3
+
+
+def test_operator_snapshot_endpoint_returns_unified_view(client):
+    async def _fake_snapshot(limit: int = 5):
+        return {
+            "generated_at": "2026-04-16T00:40:00+02:00",
+            "summary": {
+                "blocked_lane_count": 1,
+                "blocked_lanes": ["memory_curation"],
+            },
+            "system": {
+                "state": "healthy",
+            },
+            "lanes": {
+                "improvement": {"state": "allow", "blocked": False},
+                "memory_curation": {"state": "cooldown_active", "blocked": True},
+            },
+        }
+
+    with patch(
+        "orchestration.phase_e_operator_snapshot.collect_phase_e_operator_snapshot",
+        _fake_snapshot,
+    ):
+        resp = client.get("/autonomy/operator_snapshot?limit=4")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "success"
+    assert data["summary"]["blocked_lane_count"] == 1
+    assert data["system"]["state"] == "healthy"
+    assert data["lanes"]["improvement"]["state"] == "allow"
+    assert data["lanes"]["memory_curation"]["blocked"] is True
 
 
 def test_incident_trace_endpoint_returns_trace(client):

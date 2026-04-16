@@ -301,6 +301,36 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
             "by_task_outcome_state": {},
             "by_verification_state": {},
         },
+        "memory_curation_runtime": {
+            "autonomy_started_total": 0,
+            "autonomy_completed_total": 0,
+            "autonomy_blocked_total": 0,
+            "curation_started_total": 0,
+            "curation_completed_total": 0,
+            "curation_completed_success_total": 0,
+            "curation_completed_rolled_back_total": 0,
+            "curation_completed_verification_failed_total": 0,
+            "actions_total": 0,
+            "summarized_total": 0,
+            "archived_total": 0,
+            "devalued_total": 0,
+            "retrieval_quality_total": 0,
+            "retrieval_quality_passed_total": 0,
+            "retrieval_quality_failed_total": 0,
+            "rollback_started_total": 0,
+            "rollback_progress_total": 0,
+            "rollback_completed_total": 0,
+            "autonomy_completion_rate": 0.0,
+            "verification_pass_rate": 0.0,
+            "retrieval_pass_rate": 0.0,
+            "rollback_rate": 0.0,
+            "by_autonomy_block_state": {},
+            "by_autonomy_result_status": {},
+            "by_final_status": {},
+            "by_action": {},
+            "by_block_reason": {},
+            "by_rollback_stage": {},
+        },
         "top_goal_signatures": [],
         # C2: Nutzerwirkungs-Klassen — eigener Block, unabhängig von request_correlation.
         # user_visible_failures_total in request_correlation wird NICHT doppelt erhöht.
@@ -322,6 +352,7 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
     communication_runtime = summary["communication_runtime"]
     challenge_runtime = summary["challenge_runtime"]
     improvement_runtime = summary["improvement_runtime"]
+    memory_curation_runtime = summary["memory_curation_runtime"]
     user_impact = summary["user_impact"]
     recent_requests: List[Dict[str, Any]] = []
     recent_routes: List[Dict[str, Any]] = []
@@ -809,6 +840,66 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
                 if autoenqueue_state == "enqueue_cooldown_active":
                     improvement_runtime["enqueue_cooldown_active_total"] += 1
 
+        elif event_type == "memory_curation_autonomy_started":
+            memory_curation_runtime["autonomy_started_total"] += 1
+
+        elif event_type == "memory_curation_autonomy_blocked":
+            memory_curation_runtime["autonomy_blocked_total"] += 1
+            _bump(memory_curation_runtime["by_autonomy_block_state"], payload.get("state"))
+            for reason in list(payload.get("reasons") or [])[:6]:
+                _bump(memory_curation_runtime["by_block_reason"], reason)
+
+        elif event_type == "memory_curation_autonomy_completed":
+            memory_curation_runtime["autonomy_completed_total"] += 1
+            _bump(memory_curation_runtime["by_autonomy_result_status"], payload.get("status"))
+
+        elif event_type == "memory_curation_started":
+            memory_curation_runtime["curation_started_total"] += 1
+
+        elif event_type == "memory_summarized":
+            memory_curation_runtime["actions_total"] += 1
+            memory_curation_runtime["summarized_total"] += 1
+            _bump(memory_curation_runtime["by_action"], "summarize")
+
+        elif event_type == "memory_archived":
+            memory_curation_runtime["actions_total"] += 1
+            memory_curation_runtime["archived_total"] += 1
+            _bump(memory_curation_runtime["by_action"], "archive")
+
+        elif event_type == "memory_devalued":
+            memory_curation_runtime["actions_total"] += 1
+            memory_curation_runtime["devalued_total"] += 1
+            _bump(memory_curation_runtime["by_action"], "devalue")
+
+        elif event_type == "memory_curation_retrieval_quality":
+            memory_curation_runtime["retrieval_quality_total"] += 1
+            if bool(payload.get("passed")):
+                memory_curation_runtime["retrieval_quality_passed_total"] += 1
+            else:
+                memory_curation_runtime["retrieval_quality_failed_total"] += 1
+
+        elif event_type == "memory_curation_completed":
+            memory_curation_runtime["curation_completed_total"] += 1
+            final_status = _normalize_counter_key(payload.get("final_status"))
+            _bump(memory_curation_runtime["by_final_status"], final_status)
+            if bool(payload.get("verification_passed")) or final_status == "complete":
+                memory_curation_runtime["curation_completed_success_total"] += 1
+            elif final_status == "rolled_back":
+                memory_curation_runtime["curation_completed_rolled_back_total"] += 1
+            elif final_status == "verification_failed":
+                memory_curation_runtime["curation_completed_verification_failed_total"] += 1
+
+        elif event_type == "memory_curation_rollback_started":
+            memory_curation_runtime["rollback_started_total"] += 1
+            _bump(memory_curation_runtime["by_rollback_stage"], payload.get("stage"))
+
+        elif event_type == "memory_curation_rollback_progress":
+            memory_curation_runtime["rollback_progress_total"] += 1
+            _bump(memory_curation_runtime["by_rollback_stage"], payload.get("stage"))
+
+        elif event_type == "memory_curation_rollback":
+            memory_curation_runtime["rollback_completed_total"] += 1
+
         elif event_type in _USER_IMPACT_EVENT_TYPES:
             # C2: Nutzerwirkungs-Klassen. Eigener Block — user_visible_failures_total
             # in request_correlation wird nicht doppelt erhöht.
@@ -926,6 +1017,28 @@ def summarize_autonomy_events(events: Iterable[Dict[str, Any]]) -> Dict[str, Any
             min(1.0, max(0, execution_terminal_total - verified_total) / execution_terminal_total),
             3,
         )
+    memory_curation_autonomy_started_total = int(memory_curation_runtime.get("autonomy_started_total") or 0)
+    if memory_curation_autonomy_started_total > 0:
+        memory_curation_runtime["autonomy_completion_rate"] = round(
+            min(1.0, int(memory_curation_runtime.get("autonomy_completed_total") or 0) / memory_curation_autonomy_started_total),
+            3,
+        )
+    memory_curation_completed_total = int(memory_curation_runtime.get("curation_completed_total") or 0)
+    if memory_curation_completed_total > 0:
+        memory_curation_runtime["verification_pass_rate"] = round(
+            min(1.0, int(memory_curation_runtime.get("curation_completed_success_total") or 0) / memory_curation_completed_total),
+            3,
+        )
+        memory_curation_runtime["rollback_rate"] = round(
+            min(1.0, int(memory_curation_runtime.get("curation_completed_rolled_back_total") or 0) / memory_curation_completed_total),
+            3,
+        )
+    memory_curation_retrieval_total = int(memory_curation_runtime.get("retrieval_quality_total") or 0)
+    if memory_curation_retrieval_total > 0:
+        memory_curation_runtime["retrieval_pass_rate"] = round(
+            min(1.0, int(memory_curation_runtime.get("retrieval_quality_passed_total") or 0) / memory_curation_retrieval_total),
+            3,
+        )
     summary["meta_context_state"]["recent_misreads"] = sorted(
         recent_misreads,
         key=lambda item: str(item.get("observed_at") or ""),
@@ -946,6 +1059,7 @@ def render_autonomy_observation_markdown(summary: Dict[str, Any]) -> str:
     communication_runtime = dict(summary.get("communication_runtime") or {})
     challenge_runtime = dict(summary.get("challenge_runtime") or {})
     improvement_runtime = dict(summary.get("improvement_runtime") or {})
+    memory_curation_runtime = dict(summary.get("memory_curation_runtime") or {})
     request_correlation = dict(summary.get("request_correlation") or {})
     event_counts = dict(summary.get("event_counts") or {})
 
@@ -1039,6 +1153,30 @@ def render_autonomy_observation_markdown(summary: Dict[str, Any]) -> str:
             f"- Verified-Rate: `{float(improvement_runtime.get('verified_rate') or 0.0):.3f}`",
             f"- Nicht-verifiziert-Rate: `{float(improvement_runtime.get('not_verified_rate') or 0.0):.3f}`",
             "",
+            "## Memory Curation Runtime",
+            f"- Autonomy gestartet: `{int(memory_curation_runtime.get('autonomy_started_total') or 0)}`",
+            f"- Autonomy abgeschlossen: `{int(memory_curation_runtime.get('autonomy_completed_total') or 0)}`",
+            f"- Autonomy blockiert: `{int(memory_curation_runtime.get('autonomy_blocked_total') or 0)}`",
+            f"- Curation gestartet: `{int(memory_curation_runtime.get('curation_started_total') or 0)}`",
+            f"- Curation abgeschlossen: `{int(memory_curation_runtime.get('curation_completed_total') or 0)}`",
+            f"- Erfolgreich abgeschlossen: `{int(memory_curation_runtime.get('curation_completed_success_total') or 0)}`",
+            f"- Mit Rollback beendet: `{int(memory_curation_runtime.get('curation_completed_rolled_back_total') or 0)}`",
+            f"- Verifikation fehlgeschlagen: `{int(memory_curation_runtime.get('curation_completed_verification_failed_total') or 0)}`",
+            f"- Aktionen gesamt: `{int(memory_curation_runtime.get('actions_total') or 0)}`",
+            f"- Summaries erzeugt: `{int(memory_curation_runtime.get('summarized_total') or 0)}`",
+            f"- Archive-Aktionen: `{int(memory_curation_runtime.get('archived_total') or 0)}`",
+            f"- Devalue-Aktionen: `{int(memory_curation_runtime.get('devalued_total') or 0)}`",
+            f"- Retrieval-Checks: `{int(memory_curation_runtime.get('retrieval_quality_total') or 0)}`",
+            f"- Retrieval bestanden: `{int(memory_curation_runtime.get('retrieval_quality_passed_total') or 0)}`",
+            f"- Retrieval fehlgeschlagen: `{int(memory_curation_runtime.get('retrieval_quality_failed_total') or 0)}`",
+            f"- Rollback gestartet: `{int(memory_curation_runtime.get('rollback_started_total') or 0)}`",
+            f"- Rollback-Progress-Events: `{int(memory_curation_runtime.get('rollback_progress_total') or 0)}`",
+            f"- Rollback abgeschlossen: `{int(memory_curation_runtime.get('rollback_completed_total') or 0)}`",
+            f"- Autonomy-Completion-Rate: `{float(memory_curation_runtime.get('autonomy_completion_rate') or 0.0):.3f}`",
+            f"- Verification-Pass-Rate: `{float(memory_curation_runtime.get('verification_pass_rate') or 0.0):.3f}`",
+            f"- Retrieval-Pass-Rate: `{float(memory_curation_runtime.get('retrieval_pass_rate') or 0.0):.3f}`",
+            f"- Rollback-Rate: `{float(memory_curation_runtime.get('rollback_rate') or 0.0):.3f}`",
+            "",
             "## Recipe Outcomes",
             f"- Gesamt: `{int(recipe.get('total') or 0)}`",
             f"- Erfolg: `{int(recipe.get('success_total') or 0)}`",
@@ -1088,6 +1226,18 @@ def render_autonomy_observation_markdown(summary: Dict[str, Any]) -> str:
         lines.append(f"- Improvement-Outcome `{key}`: `{int(value or 0)}`")
     for key, value in sorted(dict(improvement_runtime.get("by_verification_state") or {}).items()):
         lines.append(f"- Improvement-Verification `{key}`: `{int(value or 0)}`")
+    for key, value in sorted(dict(memory_curation_runtime.get("by_autonomy_block_state") or {}).items()):
+        lines.append(f"- Memory-Curation-Block-State `{key}`: `{int(value or 0)}`")
+    for key, value in sorted(dict(memory_curation_runtime.get("by_autonomy_result_status") or {}).items()):
+        lines.append(f"- Memory-Curation-Result `{key}`: `{int(value or 0)}`")
+    for key, value in sorted(dict(memory_curation_runtime.get("by_final_status") or {}).items()):
+        lines.append(f"- Memory-Curation-Final-Status `{key}`: `{int(value or 0)}`")
+    for key, value in sorted(dict(memory_curation_runtime.get("by_action") or {}).items()):
+        lines.append(f"- Memory-Curation-Action `{key}`: `{int(value or 0)}`")
+    for key, value in sorted(dict(memory_curation_runtime.get("by_block_reason") or {}).items()):
+        lines.append(f"- Memory-Curation-Block-Reason `{key}`: `{int(value or 0)}`")
+    for key, value in sorted(dict(memory_curation_runtime.get("by_rollback_stage") or {}).items()):
+        lines.append(f"- Memory-Curation-Rollback-Stage `{key}`: `{int(value or 0)}`")
 
     lines.extend(
         [

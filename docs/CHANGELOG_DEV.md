@@ -2,6 +2,101 @@
 
 ---
 
+## Fortschritt 2026-04-16 - Phase E E6.1 Unified Operator Snapshot
+
+E6 ist jetzt nicht mehr nur ein Planblock. Mit E6.1 gibt es eine erste einheitliche Operatorsicht ueber Systemzustand, Improvement-Lane und Memory-Curation-Lane.
+
+Geaendert:
+
+- neu:
+  - [orchestration/phase_e_operator_snapshot.py](/home/fatih-ubuntu/dev/timus/orchestration/phase_e_operator_snapshot.py)
+    - baut jetzt einen gemeinsamen Snapshot mit:
+      - `summary`
+      - `system`
+      - `lanes.improvement`
+      - `lanes.memory_curation`
+- erweitert:
+  - [tools/self_improvement_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/self_improvement_tool/tool.py)
+    - neues Tool:
+      - `get_phase_e_operator_snapshot(...)`
+  - [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+    - neuer Endpoint:
+      - `GET /autonomy/operator_snapshot`
+
+Tests:
+
+- neu:
+  - [tests/test_phase_e_operator_snapshot.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_e_operator_snapshot.py)
+  - [tests/test_phase_e_operator_snapshot_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_e_operator_snapshot_hypothesis.py)
+  - [tests/test_phase_e_operator_snapshot_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_e_operator_snapshot_crosshair.py)
+- erweitert:
+  - [tests/test_self_improvement_tool_ops.py](/home/fatih-ubuntu/dev/timus/tests/test_self_improvement_tool_ops.py)
+  - [tests/test_c2_entrypoints.py](/home/fatih-ubuntu/dev/timus/tests/test_c2_entrypoints.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/phase_e_operator_snapshot.py tools/self_improvement_tool/tool.py server/mcp_server.py tests/test_phase_e_operator_snapshot.py tests/test_phase_e_operator_snapshot_hypothesis.py tests/test_phase_e_operator_snapshot_crosshair.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py` gruen
+- `pytest -q tests/test_phase_e_operator_snapshot.py tests/test_phase_e_operator_snapshot_hypothesis.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py` -> `25 passed`
+- `python -m crosshair check tests/test_phase_e_operator_snapshot_crosshair.py` -> Exit `0`
+
+## Fortschritt 2026-04-16 - E6-Plan vorbereitet
+
+Nach dem Abschluss von E5 ist der naechste offene Phase-E-Block jetzt formal als eigener Plan geschnitten.
+
+Geaendert:
+
+- neue Detailplanung:
+  - [docs/PHASE_E6_OPERATOR_VISIBILITY_GOVERNANCE_PLAN.md](/home/fatih-ubuntu/dev/timus/docs/PHASE_E6_OPERATOR_VISIBILITY_GOVERNANCE_PLAN.md)
+- Verlinkung nachgezogen in:
+  - [docs/PHASE_E_SELF_IMPROVEMENT_PLAN.md](/home/fatih-ubuntu/dev/timus/docs/PHASE_E_SELF_IMPROVEMENT_PLAN.md)
+  - [README.md](/home/fatih-ubuntu/dev/timus/README.md)
+
+Inhalt des Plans:
+
+- E6.1 Unified Operator Snapshot
+- E6.2 Governance-Risk Surface
+- E6.3 Approval Paths for Higher Risk Classes
+- E6.4 Recent Action and Incident Explainability
+- E6.5 Surface Closeout for Canvas / MCP / Tooling
+
+## Fortschritt 2026-04-16 - Phase E E5 abgeschlossen mit zentraler Runtime-Sicht
+
+E5 ist jetzt nicht mehr nur ueber den dedizierten Memory-Curation-Status sichtbar, sondern auch als zentral aggregierter Runtime-Block. Damit ist die autonome Gedaechtnispflege fuer Timus policy-gesteuert, retrieval-gated, rollback-faehig und operatorsichtbar als zusammenhaengender Block abgeschlossen.
+
+Geaendert:
+
+- [orchestration/autonomy_observation.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomy_observation.py)
+  - neuer zentraler Observation-Block:
+    - `memory_curation_runtime`
+  - aggregiert jetzt:
+    - Autonomy-Starts / Blockaden / Abschluesse
+    - Curation-Starts / finale Status
+    - Action-Typen
+    - Retrieval-Qualitaetschecks
+    - Rollback-Stufen
+    - Pass-/Rollback-Raten
+  - Markdown-Report zeigt dafuer jetzt einen eigenen Abschnitt:
+    - `Memory Curation Runtime`
+- [tools/self_improvement_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/self_improvement_tool/tool.py)
+  - `get_improvement_suggestions(...)` liefert jetzt auch:
+    - `memory_curation_runtime`
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - `GET /autonomy/improvement` liefert `memory_curation_runtime`
+  - `GET /autonomy/memory_curation` liefert die aggregierte Laufzeitsicht ebenfalls
+
+Tests:
+
+- erweitert:
+  - [tests/test_autonomy_observation.py](/home/fatih-ubuntu/dev/timus/tests/test_autonomy_observation.py)
+  - [tests/test_self_improvement_tool_ops.py](/home/fatih-ubuntu/dev/timus/tests/test_self_improvement_tool_ops.py)
+  - [tests/test_c2_entrypoints.py](/home/fatih-ubuntu/dev/timus/tests/test_c2_entrypoints.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/autonomy_observation.py tools/self_improvement_tool/tool.py server/mcp_server.py tests/test_autonomy_observation.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py` gruen
+- `pytest -q tests/test_autonomy_observation.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py` -> `28 passed`
+- `python -m crosshair check tests/test_memory_curation_crosshair.py` -> Exit `0`
+
 ## Fortschritt 2026-04-15 - Phase E E5.4 Retrieval-Backpressure Governance
 
 E5 bewertet jetzt nicht mehr nur den einzelnen Curation-Lauf, sondern auch die juengste Retrieval-Historie als Serie: Wenn zu viele der letzten Retrieval-evaluierten Memory-Curation-Runden kippen oder zurueckrollen, blockiert Timus die autonome Memory-Curation vor dem naechsten Lauf.

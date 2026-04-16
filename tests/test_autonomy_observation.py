@@ -618,3 +618,173 @@ def test_autonomy_observation_summarizes_improvement_runtime(tmp_path: Path) -> 
     assert "Improvement-Autoenqueue `enqueue_cooldown_active`" in markdown
     assert "Improvement-Outcome `verification_failed`" in markdown
     assert "Shadowed Guard `verification_backpressure`" in markdown
+
+
+def test_autonomy_observation_summarizes_memory_curation_runtime(tmp_path: Path) -> None:
+    base = datetime.now().astimezone().replace(microsecond=0)
+    store = AutonomyObservationStore(
+        log_path=tmp_path / "autonomy_observation.jsonl",
+        state_path=tmp_path / "autonomy_observation_state.json",
+    )
+    store.start_session(label="e5-memory-curation-runtime", duration_days=1, started_at=(base - timedelta(minutes=10)).isoformat())
+
+    assert store.record_event(
+        "memory_curation_autonomy_started",
+        {
+            "candidate_count": 2,
+            "heartbeat_count": 41,
+            "max_actions": 1,
+        },
+        observed_at=(base - timedelta(minutes=9)).isoformat(),
+    )
+    assert store.record_event(
+        "memory_curation_autonomy_blocked",
+        {
+            "state": "retrieval_backpressure",
+            "reasons": ["failed_runs_budget_exhausted"],
+            "snapshot_id": "snap-b1",
+            "candidate_count": 1,
+        },
+        observed_at=(base - timedelta(minutes=8)).isoformat(),
+    )
+    assert store.record_event(
+        "memory_curation_started",
+        {
+            "snapshot_id": "snap-1",
+            "candidate_count": 2,
+            "stale_days": 30,
+            "max_actions": 1,
+        },
+        observed_at=(base - timedelta(minutes=7)).isoformat(),
+    )
+    assert store.record_event(
+        "memory_summarized",
+        {
+            "snapshot_id": "snap-1",
+            "summary_key": "summary_1",
+            "source_category": "working_memory",
+            "source_count": 3,
+        },
+        observed_at=(base - timedelta(minutes=6)).isoformat(),
+    )
+    assert store.record_event(
+        "memory_archived",
+        {
+            "snapshot_id": "snap-1",
+            "archived_category": "archived:decisions",
+            "archived_key": "dec-1",
+            "source_category": "decisions",
+        },
+        observed_at=(base - timedelta(minutes=5)).isoformat(),
+    )
+    assert store.record_event(
+        "memory_devalued",
+        {
+            "snapshot_id": "snap-1",
+            "category": "patterns",
+            "key": "pat-1",
+            "importance": 0.2,
+            "confidence": 0.4,
+        },
+        observed_at=(base - timedelta(minutes=4)).isoformat(),
+    )
+    assert store.record_event(
+        "memory_curation_retrieval_quality",
+        {
+            "snapshot_id": "snap-1",
+            "probe_count": 2,
+            "passed": True,
+            "avg_score_delta": 0.0,
+        },
+        observed_at=(base - timedelta(minutes=3, seconds=30)).isoformat(),
+    )
+    assert store.record_event(
+        "memory_curation_completed",
+        {
+            "snapshot_id": "snap-1",
+            "actions_applied": 3,
+            "verification_passed": True,
+            "final_status": "complete",
+        },
+        observed_at=(base - timedelta(minutes=3)).isoformat(),
+    )
+    assert store.record_event(
+        "memory_curation_rollback_started",
+        {
+            "snapshot_id": "snap-2",
+            "stage": "rollback_started",
+            "processed": 0,
+            "total": 5,
+            "chunk_size": 4,
+        },
+        observed_at=(base - timedelta(minutes=2)).isoformat(),
+    )
+    assert store.record_event(
+        "memory_curation_rollback_progress",
+        {
+            "snapshot_id": "snap-2",
+            "stage": "semantic_sync_completed",
+            "processed": 5,
+            "total": 5,
+            "chunk_size": 4,
+        },
+        observed_at=(base - timedelta(minutes=1, seconds=30)).isoformat(),
+    )
+    assert store.record_event(
+        "memory_curation_rollback",
+        {
+            "snapshot_id": "snap-2",
+            "restored_items": 5,
+            "semantic_sync": {"delete_count": 1, "upsert_count": 4, "chunk_count": 2},
+        },
+        observed_at=(base - timedelta(minutes=1)).isoformat(),
+    )
+    assert store.record_event(
+        "memory_curation_autonomy_completed",
+        {
+            "status": "complete",
+            "snapshot_id": "snap-1",
+            "candidate_count": 2,
+            "action_count": 3,
+            "verification_passed": True,
+        },
+        observed_at=(base - timedelta(seconds=30)).isoformat(),
+    )
+
+    summary = store.build_summary()
+
+    runtime = summary["memory_curation_runtime"]
+    assert runtime["autonomy_started_total"] == 1
+    assert runtime["autonomy_completed_total"] == 1
+    assert runtime["autonomy_blocked_total"] == 1
+    assert runtime["curation_started_total"] == 1
+    assert runtime["curation_completed_total"] == 1
+    assert runtime["curation_completed_success_total"] == 1
+    assert runtime["actions_total"] == 3
+    assert runtime["summarized_total"] == 1
+    assert runtime["archived_total"] == 1
+    assert runtime["devalued_total"] == 1
+    assert runtime["retrieval_quality_total"] == 1
+    assert runtime["retrieval_quality_passed_total"] == 1
+    assert runtime["rollback_started_total"] == 1
+    assert runtime["rollback_progress_total"] == 1
+    assert runtime["rollback_completed_total"] == 1
+    assert runtime["autonomy_completion_rate"] == 1.0
+    assert runtime["verification_pass_rate"] == 1.0
+    assert runtime["retrieval_pass_rate"] == 1.0
+    assert runtime["rollback_rate"] == 0.0
+    assert runtime["by_autonomy_block_state"]["retrieval_backpressure"] == 1
+    assert runtime["by_autonomy_result_status"]["complete"] == 1
+    assert runtime["by_final_status"]["complete"] == 1
+    assert runtime["by_action"]["summarize"] == 1
+    assert runtime["by_action"]["archive"] == 1
+    assert runtime["by_action"]["devalue"] == 1
+    assert runtime["by_block_reason"]["failed_runs_budget_exhausted"] == 1
+    assert runtime["by_rollback_stage"]["rollback_started"] == 1
+    assert runtime["by_rollback_stage"]["semantic_sync_completed"] == 1
+
+    markdown = render_autonomy_observation_markdown(summary)
+    assert "## Memory Curation Runtime" in markdown
+    assert "Retrieval-Pass-Rate" in markdown
+    assert "Memory-Curation-Block-State `retrieval_backpressure`" in markdown
+    assert "Memory-Curation-Action `summarize`" in markdown

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from tools.self_improvement_tool.tool import (
+    get_phase_e_operator_snapshot,
     get_improvement_suggestions,
     get_ops_observability,
 )
@@ -181,7 +182,11 @@ async def test_get_improvement_suggestions_exposes_normalized_candidates(monkeyp
                 "execution_verified_total": 1,
                 "verified_rate": 1.0,
                 "not_verified_rate": 0.0,
-            }
+            },
+            "memory_curation_runtime": {
+                "curation_completed_total": 2,
+                "verification_pass_rate": 1.0,
+            },
         },
     )
 
@@ -212,3 +217,32 @@ async def test_get_improvement_suggestions_exposes_normalized_candidates(monkeyp
     assert result["top_task_autonomy_decisions"][0]["autoenqueue_state"] == "not_creatable"
     assert result["improvement_runtime"]["execution_verified_total"] == 1
     assert result["improvement_runtime"]["verified_rate"] == 1.0
+    assert result["memory_curation_runtime"]["curation_completed_total"] == 2
+    assert result["memory_curation_runtime"]["verification_pass_rate"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_get_phase_e_operator_snapshot_returns_unified_snapshot(monkeypatch):
+    async def _fake_snapshot(limit: int = 5):
+        return {
+            "generated_at": "2026-04-16T00:30:00+02:00",
+            "summary": {"blocked_lane_count": 1, "blocked_lanes": ["improvement"]},
+            "system": {"state": "degraded"},
+            "lanes": {
+                "improvement": {"state": "strict_force_off", "blocked": True},
+                "memory_curation": {"state": "allow", "blocked": False},
+            },
+        }
+
+    monkeypatch.setattr(
+        "orchestration.phase_e_operator_snapshot.collect_phase_e_operator_snapshot",
+        _fake_snapshot,
+    )
+
+    result = await get_phase_e_operator_snapshot(limit=4)
+
+    assert result["status"] == "ok"
+    assert result["summary"]["blocked_lane_count"] == 1
+    assert result["system"]["state"] == "degraded"
+    assert result["lanes"]["improvement"]["state"] == "strict_force_off"
+    assert result["lanes"]["memory_curation"]["blocked"] is False
