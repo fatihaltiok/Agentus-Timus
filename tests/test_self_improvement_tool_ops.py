@@ -226,7 +226,11 @@ async def test_get_phase_e_operator_snapshot_returns_unified_snapshot(monkeypatc
     async def _fake_snapshot(limit: int = 5):
         return {
             "generated_at": "2026-04-16T00:30:00+02:00",
-            "summary": {"blocked_lane_count": 1, "blocked_lanes": ["improvement"]},
+            "summary": {
+                "blocked_lane_count": 1,
+                "blocked_lanes": ["improvement"],
+                "explainability_count": 2,
+            },
             "system": {"state": "degraded"},
             "governance": {
                 "state": "strict_force_off",
@@ -239,6 +243,16 @@ async def test_get_phase_e_operator_snapshot_returns_unified_snapshot(monkeypatc
                 "pending_count": 1,
                 "highest_risk_class": "high",
                 "items": [{"request_id": "req-1", "requested_action": "promote_canary"}],
+            },
+            "explainability": {
+                "count": 2,
+                "latest_by_lane": {
+                    "improvement": {"action": "autonomy_decision", "result": "strict_force_off"},
+                    "memory_curation": {"action": "autonomy_cycle", "result": "cooldown_active"},
+                },
+                "latest_block": {"lane": "memory_curation", "result": "cooldown_active"},
+                "latest_failure": {},
+                "recent_feed": [{"lane": "memory_curation", "result": "cooldown_active"}],
             },
             "lanes": {
                 "improvement": {"state": "strict_force_off", "blocked": True},
@@ -260,5 +274,7 @@ async def test_get_phase_e_operator_snapshot_returns_unified_snapshot(monkeypatc
     assert result["governance"]["highest_risk_class"] == "critical"
     assert result["approval"]["pending_count"] == 1
     assert result["approval"]["items"][0]["requested_action"] == "promote_canary"
+    assert result["explainability"]["count"] == 2
+    assert result["explainability"]["latest_block"]["result"] == "cooldown_active"
     assert result["lanes"]["improvement"]["state"] == "strict_force_off"
     assert result["lanes"]["memory_curation"]["blocked"] is False

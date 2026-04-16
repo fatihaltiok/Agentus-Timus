@@ -27,6 +27,20 @@ _NAMED_GOVERNANCE_SIGNALS = (
     "degraded_mode",
 )
 
+_EXPLAINABILITY_FAILURE_RESULTS = {"failed", "verification_failed", "error"}
+_EXPLAINABILITY_BLOCK_RESULTS = {
+    "blocked",
+    "strict_force_off",
+    "cooldown_active",
+    "verification_backpressure",
+    "retrieval_backpressure",
+    "rollout_frozen",
+    "rollback_active",
+    "runtime_degraded",
+    "storage_degraded",
+}
+_EXPLAINABILITY_ROLLBACK_RESULTS = {"rolled_back", "rollback", "rollback_started", "rollback_progress"}
+
 
 def _iso_now() -> str:
     return datetime.now().astimezone().replace(microsecond=0).isoformat()
@@ -133,6 +147,179 @@ def _normalized_event_payload(event: Mapping[str, Any]) -> tuple[str, str, Mappi
     observed_at = _text(event.get("observed_at"), limit=64)
     payload = event.get("payload")
     return event_type, observed_at, payload if isinstance(payload, Mapping) else {}
+
+
+def _explainability_refs(payload: Mapping[str, Any], *, ref_id: str = "") -> dict[str, Any]:
+    request_id = _text(payload.get("request_id"), limit=64)
+    incident_key = _text(payload.get("incident_key"), limit=96)
+    task_id = _text(payload.get("task_id"), limit=64)
+    snapshot_id = _text(payload.get("snapshot_id"), limit=64)
+    refs = {
+        "request_id": request_id,
+        "incident_key": incident_key,
+        "task_id": task_id,
+        "snapshot_id": snapshot_id,
+        "ref_id": _text(ref_id, limit=64),
+    }
+    return {key: value for key, value in refs.items() if value}
+
+
+def _improvement_explainability_entry(event: Mapping[str, Any]) -> dict[str, Any]:
+    event_type, observed_at, payload = _normalized_event_payload(event)
+    result = (
+        _text(payload.get("task_outcome_state"), limit=64).lower()
+        or _text(payload.get("verification_state"), limit=64).lower()
+        or _text(payload.get("autoenqueue_state"), limit=64).lower()
+        or _text(payload.get("rollout_guard_state"), limit=64).lower()
+        or event_type
+    )
+    if event_type == "improvement_task_autonomy_event":
+        action = "autonomy_decision"
+        why = _text(
+            (list(payload.get("rollout_guard_reasons") or [])[:1] or [payload.get("rollout_guard_state") or payload.get("autoenqueue_state")])[0],
+            limit=120,
+        )
+        what_changed = _text(payload.get("candidate_id") or payload.get("compiled_task_id"), limit=120)
+        ref_id = _text(payload.get("candidate_id") or payload.get("compiled_task_id"), limit=64)
+    else:
+        action = "task_execution"
+        why = _text(payload.get("error_class") or payload.get("verification_state") or payload.get("task_outcome_state"), limit=120)
+        what_changed = _text(payload.get("task_id") or payload.get("compiled_task_id") or payload.get("candidate_id"), limit=120)
+        ref_id = _text(payload.get("task_id") or payload.get("compiled_task_id"), limit=64)
+    return {
+        "when": observed_at,
+        "lane": "improvement",
+        "event_type": event_type,
+        "action": action,
+        "result": result,
+        "why": why,
+        "what_changed": what_changed,
+        "refs": _explainability_refs(payload, ref_id=ref_id),
+    }
+
+
+def _memory_explainability_entry(event: Mapping[str, Any]) -> dict[str, Any]:
+    event_type, observed_at, payload = _normalized_event_payload(event)
+    action = "memory_event"
+    result = event_type
+    why = ""
+    what_changed = ""
+    if event_type == "memory_curation_autonomy_started":
+        action = "autonomy_cycle"
+        result = "started"
+        what_changed = _text(f"candidate_count:{payload.get('candidate_count')}", limit=120)
+    elif event_type == "memory_curation_autonomy_completed":
+        action = "autonomy_cycle"
+        result = _text(payload.get("status"), limit=64).lower() or "completed"
+        why = _text(payload.get("status"), limit=120)
+        what_changed = _text(f"snapshot:{payload.get('snapshot_id')}", limit=120)
+    elif event_type == "memory_curation_autonomy_blocked":
+        action = "autonomy_cycle"
+        result = _text(payload.get("state"), limit=64).lower() or "blocked"
+        why = _text((list(payload.get("reasons") or [])[:1] or [payload.get("state")])[0], limit=120)
+        what_changed = _text(f"snapshot:{payload.get('snapshot_id')}", limit=120)
+    elif event_type == "memory_curation_started":
+        action = "curation_run"
+        result = "started"
+        what_changed = _text(f"snapshot:{payload.get('snapshot_id')}", limit=120)
+    elif event_type == "memory_curation_completed":
+        action = "curation_run"
+        result = _text(payload.get("final_status"), limit=64).lower() or "completed"
+        why = _text("verification_passed" if bool(payload.get("verification_passed")) else payload.get("final_status"), limit=120)
+        what_changed = _text(f"actions:{payload.get('actions_applied')} snapshot:{payload.get('snapshot_id')}", limit=120)
+    elif event_type == "memory_summarized":
+        action = "summarize"
+        result = "applied"
+        what_changed = _text(payload.get("summary_key") or payload.get("source_category"), limit=120)
+    elif event_type == "memory_archived":
+        action = "archive"
+        result = "applied"
+        what_changed = _text(payload.get("archived_key") or payload.get("archived_category"), limit=120)
+    elif event_type == "memory_devalued":
+        action = "devalue"
+        result = "applied"
+        what_changed = _text(payload.get("key") or payload.get("category"), limit=120)
+    elif event_type == "memory_curation_rollback_started":
+        action = "rollback"
+        result = "rollback_started"
+        what_changed = _text(payload.get("snapshot_id"), limit=120)
+    elif event_type == "memory_curation_rollback_progress":
+        action = "rollback"
+        result = "rollback_progress"
+        why = _text(payload.get("stage"), limit=120)
+        what_changed = _text(payload.get("snapshot_id"), limit=120)
+    elif event_type == "memory_curation_rollback":
+        action = "rollback"
+        result = "rolled_back"
+        what_changed = _text(payload.get("snapshot_id"), limit=120)
+    return {
+        "when": observed_at,
+        "lane": "memory_curation",
+        "event_type": event_type,
+        "action": action,
+        "result": result,
+        "why": why,
+        "what_changed": what_changed,
+        "refs": _explainability_refs(payload, ref_id=_text(payload.get("snapshot_id"), limit=64)),
+    }
+
+
+def _explainability_entry(event: Mapping[str, Any]) -> dict[str, Any]:
+    if _is_improvement_event(event):
+        return _improvement_explainability_entry(event)
+    if _is_memory_curation_event(event):
+        return _memory_explainability_entry(event)
+    return {}
+
+
+def summarize_phase_e_explainability_entries(entries: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    items = list(entries or [])
+    lanes = _merge_unique_texts([_text(item.get("lane"), limit=64) for item in items], limit=4)
+    latest_at = max([_text(item.get("when"), limit=64) for item in items if _text(item.get("when"), limit=64)] or [""])
+    failure_count = sum(1 for item in items if _text(item.get("result"), limit=64).lower() in _EXPLAINABILITY_FAILURE_RESULTS)
+    blocked_count = sum(1 for item in items if _text(item.get("result"), limit=64).lower() in _EXPLAINABILITY_BLOCK_RESULTS)
+    rollback_count = sum(1 for item in items if _text(item.get("result"), limit=64).lower() in _EXPLAINABILITY_ROLLBACK_RESULTS)
+    return {
+        "count": len(items),
+        "lanes": lanes,
+        "latest_at": latest_at,
+        "failure_count": failure_count,
+        "blocked_count": blocked_count,
+        "rollback_count": rollback_count,
+    }
+
+
+def build_phase_e_explainability(*, recent_events: Sequence[Mapping[str, Any]], limit: int = 6) -> dict[str, Any]:
+    normalized_items = [
+        item
+        for item in (_explainability_entry(event) for event in list(recent_events or []))
+        if item
+    ]
+    normalized_items = sorted(normalized_items, key=lambda item: _text(item.get("when"), limit=64), reverse=True)
+    recent_feed = normalized_items[: max(1, int(limit))]
+
+    def _first_matching(predicate) -> dict[str, Any]:
+        for item in recent_feed:
+            if predicate(item):
+                return dict(item)
+        return {}
+
+    latest_by_lane = {
+        lane: _first_matching(lambda item, lane_name=lane: _text(item.get("lane"), limit=64) == lane_name)
+        for lane in ("improvement", "memory_curation")
+    }
+    latest_block = _first_matching(lambda item: _text(item.get("result"), limit=64).lower() in _EXPLAINABILITY_BLOCK_RESULTS)
+    latest_failure = _first_matching(lambda item: _text(item.get("result"), limit=64).lower() in _EXPLAINABILITY_FAILURE_RESULTS)
+    latest_rollback = _first_matching(lambda item: _text(item.get("result"), limit=64).lower() in _EXPLAINABILITY_ROLLBACK_RESULTS)
+
+    return {
+        **summarize_phase_e_explainability_entries(recent_feed),
+        "latest_by_lane": latest_by_lane,
+        "latest_block": latest_block,
+        "latest_failure": latest_failure,
+        "latest_rollback": latest_rollback,
+        "recent_feed": recent_feed,
+    }
 
 
 def _is_improvement_event(event: Mapping[str, Any]) -> bool:
@@ -905,6 +1092,7 @@ def build_phase_e_operator_snapshot(
     }
     system_view = _system_view(system_snapshot)
     lane_summary = summarize_phase_e_operator_lanes(lanes)
+    explainability = build_phase_e_explainability(recent_events=recent_events, limit=6)
     governance = build_phase_e_governance_surface(
         system_view=system_view,
         improvement_governance=improvement_governance,
@@ -920,11 +1108,14 @@ def build_phase_e_operator_snapshot(
             "governance_risk_class": _text(governance.get("highest_risk_class"), limit=32),
             "approval_pending_count": int(approval_surface.get("pending_count") or 0),
             "approval_highest_risk_class": _text(approval_surface.get("highest_risk_class"), limit=32),
+            "explainability_latest_at": _text(explainability.get("latest_at"), limit=64),
+            "explainability_count": int(explainability.get("count") or 0),
         },
         "system": system_view,
         "lanes": lanes,
         "governance": governance,
         "approval": dict(approval_surface or {}),
+        "explainability": explainability,
     }
 
 

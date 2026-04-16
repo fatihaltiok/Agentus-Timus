@@ -7,6 +7,7 @@ import pytest
 from orchestration.phase_e_operator_snapshot import (
     build_phase_e_operator_snapshot,
     collect_phase_e_operator_snapshot,
+    summarize_phase_e_explainability_entries,
     summarize_phase_e_pending_approvals,
 )
 
@@ -56,17 +57,28 @@ def test_build_phase_e_operator_snapshot_unifies_lanes_and_system() -> None:
                     "task_id": "task-1",
                     "task_outcome_state": "blocked",
                     "verification_state": "blocked",
+                    "request_id": "req-1",
+                    "incident_key": "incident-improvement-1",
                 },
             },
             {
                 "event_type": "memory_curation_autonomy_blocked",
                 "observed_at": "2026-04-16T00:12:00+02:00",
-                "payload": {"state": "cooldown_active", "reasons": ["recent_memory_curation_run"], "snapshot_id": "snap-1"},
+                "payload": {
+                    "state": "cooldown_active",
+                    "reasons": ["recent_memory_curation_run"],
+                    "snapshot_id": "snap-1",
+                    "request_id": "req-mem-1",
+                },
             },
             {
                 "event_type": "memory_curation_completed",
                 "observed_at": "2026-04-16T00:13:00+02:00",
-                "payload": {"snapshot_id": "snap-2", "final_status": "complete", "verification_passed": True},
+                "payload": {
+                    "snapshot_id": "snap-2",
+                    "final_status": "complete",
+                    "verification_passed": True,
+                },
             },
         ],
         improvement_governance={
@@ -160,8 +172,18 @@ def test_build_phase_e_operator_snapshot_unifies_lanes_and_system() -> None:
     assert snapshot["governance"]["lanes"]["system"]["blocked"] is True
     assert snapshot["summary"]["approval_pending_count"] == 1
     assert snapshot["summary"]["approval_highest_risk_class"] == "critical"
+    assert snapshot["summary"]["explainability_count"] == 4
+    assert snapshot["summary"]["explainability_latest_at"] == "2026-04-16T00:13:00+02:00"
     assert snapshot["approval"]["state"] == "approval_required"
     assert snapshot["approval"]["items"][0]["requested_action"] == "rollback"
+    assert snapshot["explainability"]["count"] == 4
+    assert snapshot["explainability"]["latest_by_lane"]["improvement"]["lane"] == "improvement"
+    assert snapshot["explainability"]["latest_by_lane"]["memory_curation"]["result"] == "complete"
+    assert snapshot["explainability"]["latest_block"]["result"] == "cooldown_active"
+    assert snapshot["explainability"]["latest_failure"] == {}
+    assert snapshot["explainability"]["recent_feed"][0]["refs"]["ref_id"] == "snap-2"
+    assert snapshot["explainability"]["recent_feed"][1]["refs"]["request_id"] == "req-mem-1"
+    assert any(item.get("refs", {}).get("request_id") == "req-1" for item in snapshot["explainability"]["recent_feed"])
 
 
 @pytest.mark.asyncio
@@ -255,6 +277,9 @@ async def test_collect_phase_e_operator_snapshot_uses_live_builders(monkeypatch)
     assert snapshot["governance"]["highest_risk_class"] == "none"
     assert snapshot["approval"]["pending_count"] == 0
     assert snapshot["approval"]["state"] == "clear"
+    assert snapshot["explainability"]["count"] == 1
+    assert snapshot["explainability"]["latest_by_lane"]["memory_curation"]["result"] == "complete"
+    assert snapshot["explainability"]["latest_by_lane"]["improvement"] == {}
 
 
 def test_summarize_phase_e_pending_approvals_tracks_risk_and_oldest_pending() -> None:
@@ -280,3 +305,32 @@ def test_summarize_phase_e_pending_approvals_tracks_risk_and_oldest_pending() ->
     assert summary["requested_actions"] == ["promote_canary", "rollback"]
     assert summary["lanes"] == ["improvement"]
     assert summary["oldest_pending_minutes"] == 42.0
+
+
+def test_summarize_phase_e_explainability_entries_tracks_latest_and_counts() -> None:
+    summary = summarize_phase_e_explainability_entries(
+        [
+            {
+                "when": "2026-04-16T00:10:00+02:00",
+                "lane": "improvement",
+                "result": "blocked",
+            },
+            {
+                "when": "2026-04-16T00:11:00+02:00",
+                "lane": "memory_curation",
+                "result": "rolled_back",
+            },
+            {
+                "when": "2026-04-16T00:12:00+02:00",
+                "lane": "improvement",
+                "result": "error",
+            },
+        ]
+    )
+
+    assert summary["count"] == 3
+    assert summary["lanes"] == ["improvement", "memory_curation"]
+    assert summary["latest_at"] == "2026-04-16T00:12:00+02:00"
+    assert summary["failure_count"] == 1
+    assert summary["blocked_count"] == 1
+    assert summary["rollback_count"] == 1

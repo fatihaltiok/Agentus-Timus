@@ -321,6 +321,7 @@ def test_operator_snapshot_endpoint_returns_unified_view(client):
                 "blocked_lane_count": 1,
                 "blocked_lanes": ["memory_curation"],
                 "approval_pending_count": 1,
+                "explainability_count": 2,
             },
             "system": {
                 "state": "healthy",
@@ -336,6 +337,16 @@ def test_operator_snapshot_endpoint_returns_unified_view(client):
                 "pending_count": 1,
                 "highest_risk_class": "high",
                 "items": [{"request_id": "req-1", "requested_action": "promote_canary"}],
+            },
+            "explainability": {
+                "count": 2,
+                "latest_by_lane": {
+                    "improvement": {"result": "strict_force_off"},
+                    "memory_curation": {"result": "cooldown_active"},
+                },
+                "latest_block": {"lane": "memory_curation", "result": "cooldown_active"},
+                "latest_failure": {},
+                "recent_feed": [{"lane": "memory_curation", "result": "cooldown_active"}],
             },
             "lanes": {
                 "improvement": {"state": "allow", "blocked": False},
@@ -354,11 +365,13 @@ def test_operator_snapshot_endpoint_returns_unified_view(client):
     assert data["status"] == "success"
     assert data["summary"]["blocked_lane_count"] == 1
     assert data["summary"]["approval_pending_count"] == 1
+    assert data["summary"]["explainability_count"] == 2
     assert data["system"]["state"] == "healthy"
     assert data["governance"]["action"] == "hold"
     assert data["governance"]["highest_risk_class"] == "medium"
     assert data["approval"]["state"] == "approval_required"
     assert data["approval"]["items"][0]["requested_action"] == "promote_canary"
+    assert data["explainability"]["latest_block"]["result"] == "cooldown_active"
     assert data["lanes"]["improvement"]["state"] == "allow"
     assert data["lanes"]["memory_curation"]["blocked"] is True
 

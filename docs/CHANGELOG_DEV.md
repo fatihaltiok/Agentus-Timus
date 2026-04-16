@@ -2,6 +2,53 @@
 
 ---
 
+## Fortschritt 2026-04-16 - Phase E E6.4 Recent Action and Incident Explainability
+
+E6 zeigt jetzt nicht mehr nur Lane-, Governance- und Approval-Zustaende, sondern auch die juengste autonome Wirkung und die juengsten Problemfaelle als kurzen Explainability-Feed.
+
+Geaendert:
+
+- [orchestration/phase_e_operator_snapshot.py](/home/fatih-ubuntu/dev/timus/orchestration/phase_e_operator_snapshot.py)
+  - neuer `explainability`-Block im Operator-Snapshot
+  - zeigt jetzt:
+    - `latest_by_lane`
+    - `latest_block`
+    - `latest_failure`
+    - `latest_rollback`
+    - `recent_feed`
+  - jede Explainability-Entry enthaelt:
+    - `when`
+    - `lane`
+    - `action`
+    - `result`
+    - `why`
+    - `what_changed`
+    - `refs`
+  - `refs` traegt:
+    - `request_id`
+    - `incident_key`
+    - `task_id`
+    - `snapshot_id`
+    - `ref_id`
+  - Summary erweitert um:
+    - `explainability_latest_at`
+    - `explainability_count`
+
+Tests:
+
+- erweitert:
+  - [tests/test_phase_e_operator_snapshot.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_e_operator_snapshot.py)
+  - [tests/test_phase_e_operator_snapshot_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_e_operator_snapshot_hypothesis.py)
+  - [tests/test_phase_e_operator_snapshot_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_e_operator_snapshot_crosshair.py)
+  - [tests/test_self_improvement_tool_ops.py](/home/fatih-ubuntu/dev/timus/tests/test_self_improvement_tool_ops.py)
+  - [tests/test_c2_entrypoints.py](/home/fatih-ubuntu/dev/timus/tests/test_c2_entrypoints.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/phase_e_operator_snapshot.py tests/test_phase_e_operator_snapshot.py tests/test_phase_e_operator_snapshot_hypothesis.py tests/test_phase_e_operator_snapshot_crosshair.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py` gruen
+- `pytest -q tests/test_phase_e_operator_snapshot.py tests/test_phase_e_operator_snapshot_hypothesis.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py` -> `30 passed`
+- `python -m crosshair check tests/test_phase_e_operator_snapshot_crosshair.py` -> Exit `0`
+
 ## Fortschritt 2026-04-16 - Phase E E6.3 Approval Paths for Higher Risk Classes
 
 E6 zeigt jetzt nicht mehr nur die Governance-Lage, sondern auch konkrete Pending-Approval-Faelle fuer hoehere Risikoklassen.

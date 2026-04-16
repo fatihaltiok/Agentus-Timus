@@ -3,6 +3,7 @@ from __future__ import annotations
 from hypothesis import given, strategies as st
 
 from orchestration.phase_e_operator_snapshot import (
+    summarize_phase_e_explainability_entries,
     summarize_phase_e_governance_lanes,
     summarize_phase_e_operator_lanes,
     summarize_phase_e_pending_approvals,
@@ -100,3 +101,31 @@ def test_hypothesis_summarize_phase_e_pending_approvals_counts_items_correctly(i
     assert summary["pending_count"] == len(items)
     assert set(summary["lanes"]).issubset({"improvement", "memory_curation", "system"})
     assert set(summary["requested_actions"]).issubset({"hold", "promote_canary", "rollback"})
+
+
+@given(
+    items=st.lists(
+        st.fixed_dictionaries(
+            {
+                "when": st.one_of(st.just(""), st.datetimes().map(lambda dt: dt.isoformat())),
+                "lane": st.sampled_from(["improvement", "memory_curation"]),
+                "result": st.sampled_from(
+                    [
+                        "strict_force_off",
+                        "blocked",
+                        "cooldown_active",
+                        "complete",
+                        "rolled_back",
+                        "error",
+                    ]
+                ),
+            }
+        ),
+        max_size=8,
+    )
+)
+def test_hypothesis_summarize_phase_e_explainability_entries_counts_items_correctly(items: list[dict[str, object]]) -> None:
+    summary = summarize_phase_e_explainability_entries(items)
+
+    assert summary["count"] == len(items)
+    assert set(summary["lanes"]).issubset({"improvement", "memory_curation"})

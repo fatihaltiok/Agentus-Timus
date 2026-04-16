@@ -1089,6 +1089,39 @@ Verifikation:
 - `pytest -q tests/test_phase_e_operator_snapshot.py tests/test_phase_e_operator_snapshot_hypothesis.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py` -> `28 passed`
 - `python -m crosshair check tests/test_phase_e_operator_snapshot_crosshair.py` -> Exit `0`
 
+### E6.4 Recent Action and Incident Explainability
+
+Stand:
+
+- erster Runtime-Slice umgesetzt
+
+Umgesetzt:
+
+- [orchestration/phase_e_operator_snapshot.py](/home/fatih-ubuntu/dev/timus/orchestration/phase_e_operator_snapshot.py)
+  - neuer `explainability`-Block im Operator-Snapshot
+  - zeigt jetzt:
+    - `latest_by_lane`
+    - `latest_block`
+    - `latest_failure`
+    - `latest_rollback`
+    - `recent_feed`
+  - jede Explainability-Entry enthaelt:
+    - `when`
+    - `lane`
+    - `action`
+    - `result`
+    - `why`
+    - `what_changed`
+    - `refs`
+  - Summary erweitert um:
+    - `explainability_latest_at`
+    - `explainability_count`
+
+Verifikation:
+
+- `pytest -q tests/test_phase_e_operator_snapshot.py tests/test_phase_e_operator_snapshot_hypothesis.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py` -> `30 passed`
+- `python -m crosshair check tests/test_phase_e_operator_snapshot_crosshair.py` -> Exit `0`
+
 ## Arbeitsreihenfolge
 
 ### Phase-E-Start

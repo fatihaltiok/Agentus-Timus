@@ -3,6 +3,7 @@ from __future__ import annotations
 import deal
 
 from orchestration.phase_e_operator_snapshot import (
+    summarize_phase_e_explainability_entries,
     summarize_phase_e_governance_lanes,
     summarize_phase_e_operator_lanes,
     summarize_phase_e_pending_approvals,
@@ -149,3 +150,25 @@ def _contract_pending_approval_risk_prefers_critical_crosshair() -> str:
         ]
     )
     return str(summary["highest_risk_class"])
+
+
+@deal.post(lambda r: r == 2)
+def _contract_explainability_count_matches_items_crosshair() -> int:
+    summary = summarize_phase_e_explainability_entries(
+        [
+            {"when": "2026-04-16T00:10:00+02:00", "lane": "improvement", "result": "blocked"},
+            {"when": "2026-04-16T00:11:00+02:00", "lane": "memory_curation", "result": "rolled_back"},
+        ]
+    )
+    return int(summary["count"])
+
+
+@deal.post(lambda r: r == 1)
+def _contract_explainability_failure_count_tracks_errors_crosshair() -> int:
+    summary = summarize_phase_e_explainability_entries(
+        [
+            {"when": "2026-04-16T00:10:00+02:00", "lane": "improvement", "result": "error"},
+            {"when": "2026-04-16T00:11:00+02:00", "lane": "memory_curation", "result": "complete"},
+        ]
+    )
+    return int(summary["failure_count"])

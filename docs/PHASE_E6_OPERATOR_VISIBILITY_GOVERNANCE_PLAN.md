@@ -304,6 +304,10 @@ Ziel:
 
 - juengste autonome Wirkung und juengste Problemfaelle kurz und belastbar erklaerbar machen
 
+Stand:
+
+- erster Runtime-Slice umgesetzt
+
 Schwerpunkte:
 
 - operator-orientierter Feed fuer:
@@ -329,6 +333,46 @@ Technische Anker:
 Erfolgskriterium:
 
 - der Operator kann die letzte autonome Wirkung in wenigen Zeilen rekonstruieren
+
+Umgesetzt:
+
+- [orchestration/phase_e_operator_snapshot.py](/home/fatih-ubuntu/dev/timus/orchestration/phase_e_operator_snapshot.py)
+  - neuer zentraler `explainability`-Block im Operator-Snapshot
+  - zeigt jetzt:
+    - `latest_by_lane`
+    - `latest_block`
+    - `latest_failure`
+    - `latest_rollback`
+    - `recent_feed`
+  - jede Explainability-Entry enthaelt:
+    - `when`
+    - `lane`
+    - `action`
+    - `result`
+    - `why`
+    - `what_changed`
+    - `refs`
+  - `refs` traegt:
+    - `request_id`
+    - `incident_key`
+    - `task_id`
+    - `snapshot_id`
+    - `ref_id`
+- Summary erweitert um:
+  - `explainability_latest_at`
+  - `explainability_count`
+- vorhandene MCP-/Tool-Surface liefert den Explainability-Block jetzt automatisch mit
+- Contract-Abdeckung erweitert in:
+  - [tests/test_phase_e_operator_snapshot.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_e_operator_snapshot.py)
+  - [tests/test_phase_e_operator_snapshot_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_e_operator_snapshot_hypothesis.py)
+  - [tests/test_phase_e_operator_snapshot_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_e_operator_snapshot_crosshair.py)
+  - [tests/test_self_improvement_tool_ops.py](/home/fatih-ubuntu/dev/timus/tests/test_self_improvement_tool_ops.py)
+  - [tests/test_c2_entrypoints.py](/home/fatih-ubuntu/dev/timus/tests/test_c2_entrypoints.py)
+
+Verifikation:
+
+- `pytest -q tests/test_phase_e_operator_snapshot.py tests/test_phase_e_operator_snapshot_hypothesis.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py` -> `30 passed`
+- `python -m crosshair check tests/test_phase_e_operator_snapshot_crosshair.py` -> Exit `0`
 
 ### E6.5 Surface Closeout for Canvas / MCP / Tooling
 
