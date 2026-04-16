@@ -2,6 +2,53 @@
 
 ---
 
+## Fortschritt 2026-04-16 - Phase F F1 Betriebsvertraege und timus doctor
+
+Phase F ist jetzt mit einem ersten echten Diagnosepfad gestartet. Timus hat damit nicht nur einzelne Health-Endpoints, sondern einen gemeinsamen `timus doctor`-Vertrag fuer den Stack.
+
+Geaendert:
+
+- [orchestration/timus_doctor.py](/home/fatih-ubuntu/dev/timus/orchestration/timus_doctor.py)
+  - neuer `timus_doctor_v1`-Diagnosevertrag
+  - aggregiert:
+    - Service-Zustaende
+    - MCP-Runtime
+    - Dispatcher-Health/Readiness
+    - Request-Runtime
+    - Stability-/Ops-Gate
+    - Budget- und Provider-Hinweise
+  - liefert:
+    - `state`
+    - `ready`
+    - `summary`
+    - `stack`
+    - `issues`
+    - `actions`
+- [scripts/timus_doctor.py](/home/fatih-ubuntu/dev/timus/scripts/timus_doctor.py)
+  - CLI fuer menschenlesbare und JSON-Ausgabe
+  - unterstuetzt:
+    - `--json`
+    - `--strict`
+- [scripts/timusctl.sh](/home/fatih-ubuntu/dev/timus/scripts/timusctl.sh)
+  - neuer Einstiegspunkt:
+    - `./scripts/timusctl.sh doctor`
+
+Tests:
+
+- neu:
+  - [tests/test_timus_doctor.py](/home/fatih-ubuntu/dev/timus/tests/test_timus_doctor.py)
+  - [tests/test_timus_doctor_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_timus_doctor_hypothesis.py)
+  - [tests/test_timus_doctor_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_timus_doctor_crosshair.py)
+- erweitert:
+  - [tests/test_timus_stack_assets.py](/home/fatih-ubuntu/dev/timus/tests/test_timus_stack_assets.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/timus_doctor.py scripts/timus_doctor.py tests/test_timus_doctor.py tests/test_timus_doctor_hypothesis.py tests/test_timus_doctor_crosshair.py tests/test_timus_stack_assets.py` gruen
+- `bash -n scripts/timusctl.sh`
+- `pytest -q tests/test_timus_doctor.py tests/test_timus_doctor_hypothesis.py tests/test_timus_stack_assets.py` -> `8 passed`
+- `python -m crosshair check tests/test_timus_doctor_crosshair.py` -> Exit `0`
+
 ## Fortschritt 2026-04-16 - Phase E E6.5 Surface Closeout for Canvas / MCP / Tooling
 
 E6 benutzt jetzt auf Snapshot-, Improvement-, Memory-Curation- und Tool-Surfaces denselben kleinen Operator-Contract statt paralleler Sonderbegriffe.

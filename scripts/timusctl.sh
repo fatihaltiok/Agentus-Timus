@@ -7,6 +7,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 INSTALLER_SCRIPT="${SCRIPT_DIR}/install_timus_stack.sh"
 HOST_SETUP_SCRIPT="${SCRIPT_DIR}/setup_timus_host.sh"
 PRODUCTION_GATES_SCRIPT="${SCRIPT_DIR}/run_production_gates.py"
+DOCTOR_SCRIPT="${SCRIPT_DIR}/timus_doctor.py"
 GENERATED_SYSTEMD_DIR="${PROJECT_ROOT}/.generated/systemd"
 
 QDRANT_SERVICE="qdrant.service"
@@ -36,6 +37,7 @@ Nutzung:
   ./scripts/timusctl.sh restart
   ./scripts/timusctl.sh status
   ./scripts/timusctl.sh health
+  ./scripts/timusctl.sh doctor [--json|--strict]
   ./scripts/timusctl.sh install [--no-start]
   ./scripts/timusctl.sh setup-host [--install]
   ./scripts/timusctl.sh logs [qdrant|mcp|dispatcher]
@@ -46,6 +48,7 @@ Befehle:
   restart    Neustart in sicherer Reihenfolge
   status     Zeigt kompakten Service-Status
   health     Prueft qdrant, mcp und production gates
+  doctor     Gibt einen einheitlichen Diagnose- und Lifecycle-Report fuer den Stack aus
   install    Installiert/aktiviert den gesamten Stack; startet ihn standardmaessig direkt
   setup-host Rendert portable systemd-Units fuer diesen Host; mit --install direkt inklusive Installation
   logs       Folgt den Logs eines Dienstes oder allen dreien
@@ -174,6 +177,16 @@ show_health() {
     python "$PRODUCTION_GATES_SCRIPT"
 }
 
+show_doctor() {
+    local doctor_arg="${1:-}"
+    if [[ -n "$doctor_arg" && "$doctor_arg" != "--json" && "$doctor_arg" != "--strict" ]]; then
+        err "Unbekannte doctor-Option: $doctor_arg"
+        usage
+        exit 1
+    fi
+    python "$DOCTOR_SCRIPT" ${doctor_arg:+"$doctor_arg"}
+}
+
 install_stack() {
     local installer_args=(--enable --start)
     if [[ -d "$GENERATED_SYSTEMD_DIR" ]]; then
@@ -259,6 +272,9 @@ case "$COMMAND" in
         ;;
     health)
         show_health
+        ;;
+    doctor)
+        show_doctor "$ARG"
         ;;
     install)
         install_stack
