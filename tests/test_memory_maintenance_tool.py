@@ -44,6 +44,22 @@ async def test_get_memory_curation_status_tool_returns_engine_status(monkeypatch
             "autonomy_governance": {"state": "allow", "blocked": False},
         },
     )
+    async def _fake_operator_snapshot(*, limit: int = 5, queue=None):
+        return {
+            "summary": {"blocked_lane_count": 1, "blocked_lanes": ["memory_curation"]},
+            "governance": {"state": "cooldown_active", "action": "hold"},
+            "approval": {"pending_count": 0, "highest_risk_class": "none"},
+            "explainability": {"count": 1},
+            "lanes": {
+                "improvement": {"lane": "improvement", "state": "allow", "blocked": False},
+                "memory_curation": {"lane": "memory_curation", "state": "cooldown_active", "blocked": True},
+            },
+        }
+
+    monkeypatch.setattr(
+        "orchestration.phase_e_operator_snapshot.collect_phase_e_operator_snapshot",
+        _fake_operator_snapshot,
+    )
 
     result = await get_memory_curation_status(days_old_threshold=14, limit=3)
 
@@ -53,6 +69,9 @@ async def test_get_memory_curation_status_tool_returns_engine_status(monkeypatch
     assert result["latest_retrieval_quality"]["verdict"]["passed"] is True
     assert result["quality_governance"]["state"] == "allow"
     assert result["autonomy_governance"]["state"] == "allow"
+    assert result["operator_surface"]["contract_version"] == "phase_e_operator_v1"
+    assert result["operator_surface"]["focus_lane"] == "memory_curation"
+    assert result["operator_surface"]["focused_lane"]["lane"] == "memory_curation"
 
 
 @pytest.mark.asyncio

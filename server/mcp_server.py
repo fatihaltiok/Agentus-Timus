@@ -5011,6 +5011,10 @@ async def autonomy_improvement_endpoint():
         from orchestration.improvement_task_compiler import compile_improvement_tasks
         from orchestration.improvement_task_execution import build_improvement_hardening_task_payloads
         from orchestration.improvement_task_promotion import evaluate_compiled_task_promotions
+        from orchestration.phase_e_operator_snapshot import (
+            build_phase_e_operator_surface,
+            collect_phase_e_operator_snapshot,
+        )
         from orchestration.self_improvement_engine import get_improvement_engine
         from orchestration.session_reflection import SessionReflectionLoop
         engine = get_improvement_engine()
@@ -5035,6 +5039,7 @@ async def autonomy_improvement_endpoint():
         observation_summary = build_autonomy_observation_summary()
         queue = get_queue()
         rollout_guard = get_improvement_task_rollout_guard(queue)
+        operator_snapshot = await collect_phase_e_operator_snapshot(limit=5, queue=queue)
         return {
             "status": "success",
             "tool_stats_count": len(tool_stats),
@@ -5063,6 +5068,7 @@ async def autonomy_improvement_endpoint():
             "improvement_runtime": dict(observation_summary.get("improvement_runtime") or {}),
             "memory_curation_runtime": dict(observation_summary.get("memory_curation_runtime") or {}),
             "candidate_count": len(combined_candidates),
+            "operator_surface": build_phase_e_operator_surface(operator_snapshot, focus_lane="improvement"),
         }
     except Exception as e:
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
@@ -5072,9 +5078,13 @@ async def autonomy_improvement_endpoint():
 async def autonomy_operator_snapshot_endpoint(limit: int = 5):
     """Gibt eine gemeinsame Operatorsicht ueber Improvement, Memory-Curation und Systemkontext zurueck."""
     try:
-        from orchestration.phase_e_operator_snapshot import collect_phase_e_operator_snapshot
+        from orchestration.phase_e_operator_snapshot import (
+            build_phase_e_operator_surface,
+            collect_phase_e_operator_snapshot,
+        )
 
         snapshot = await collect_phase_e_operator_snapshot(limit=max(1, min(10, int(limit or 5))))
+        snapshot["operator_surface"] = build_phase_e_operator_surface(snapshot)
         return {"status": "success", **snapshot}
     except Exception as e:
         log.error(f"Phase-E Operator Snapshot Fehler: {e}", exc_info=True)
@@ -5086,6 +5096,10 @@ async def autonomy_memory_curation_endpoint():
     """Gibt E5 Memory-Curation-Status, Governance und aktuelle Kandidaten zurück."""
     try:
         from orchestration.autonomy_observation import build_autonomy_observation_summary
+        from orchestration.phase_e_operator_snapshot import (
+            build_phase_e_operator_surface,
+            collect_phase_e_operator_snapshot,
+        )
         from orchestration.task_queue import get_queue
         from orchestration.memory_curation import (
             get_memory_curation_autonomy_settings,
@@ -5095,6 +5109,7 @@ async def autonomy_memory_curation_endpoint():
         queue = get_queue()
         payload = get_memory_curation_status(queue=queue, stale_days=30, limit=5)
         observation_summary = build_autonomy_observation_summary()
+        operator_snapshot = await collect_phase_e_operator_snapshot(limit=5, queue=queue)
         return {
             "status": "success",
             "memory_curation": payload,
@@ -5107,6 +5122,7 @@ async def autonomy_memory_curation_endpoint():
             "latest_retrieval_quality": dict(payload.get("latest_retrieval_quality") or {}),
             "quality_governance": dict(payload.get("quality_governance") or {}),
             "memory_curation_runtime": dict(observation_summary.get("memory_curation_runtime") or {}),
+            "operator_surface": build_phase_e_operator_surface(operator_snapshot, focus_lane="memory_curation"),
         }
     except Exception as e:
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})

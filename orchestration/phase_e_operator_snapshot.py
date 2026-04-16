@@ -27,6 +27,8 @@ _NAMED_GOVERNANCE_SIGNALS = (
     "degraded_mode",
 )
 
+_OPERATOR_SURFACE_CONTRACT_VERSION = "phase_e_operator_v1"
+
 _EXPLAINABILITY_FAILURE_RESULTS = {"failed", "verification_failed", "error"}
 _EXPLAINABILITY_BLOCK_RESULTS = {
     "blocked",
@@ -1098,7 +1100,7 @@ def build_phase_e_operator_snapshot(
         improvement_governance=improvement_governance,
         memory_curation_status=memory_curation_status,
     )
-    return {
+    snapshot = {
         "generated_at": _iso_now(),
         "summary": {
             **lane_summary,
@@ -1116,6 +1118,30 @@ def build_phase_e_operator_snapshot(
         "governance": governance,
         "approval": dict(approval_surface or {}),
         "explainability": explainability,
+    }
+    snapshot["operator_surface"] = build_phase_e_operator_surface(snapshot)
+    return snapshot
+
+
+def build_phase_e_operator_surface(
+    snapshot: Mapping[str, Any],
+    *,
+    focus_lane: str = "",
+) -> dict[str, Any]:
+    lanes_payload = snapshot.get("lanes")
+    lanes = lanes_payload if isinstance(lanes_payload, Mapping) else {}
+    safe_focus_lane = _text(focus_lane, limit=64).lower()
+    if safe_focus_lane not in lanes:
+        safe_focus_lane = ""
+    return {
+        "contract_version": _OPERATOR_SURFACE_CONTRACT_VERSION,
+        "focus_lane": safe_focus_lane,
+        "summary": dict(snapshot.get("summary") or {}),
+        "governance": dict(snapshot.get("governance") or {}),
+        "approval": dict(snapshot.get("approval") or {}),
+        "explainability": dict(snapshot.get("explainability") or {}),
+        "available_lanes": sorted(str(name) for name in lanes.keys()),
+        "focused_lane": dict(lanes.get(safe_focus_lane) or {}),
     }
 
 

@@ -189,6 +189,22 @@ async def test_get_improvement_suggestions_exposes_normalized_candidates(monkeyp
             },
         },
     )
+    async def _fake_operator_snapshot(*, limit: int = 5, queue=None):
+        return {
+            "summary": {"blocked_lane_count": 1, "blocked_lanes": ["improvement"]},
+            "governance": {"state": "verification_backpressure", "action": "hold"},
+            "approval": {"pending_count": 0, "highest_risk_class": "none"},
+            "explainability": {"count": 1},
+            "lanes": {
+                "improvement": {"lane": "improvement", "state": "verification_backpressure", "blocked": True},
+                "memory_curation": {"lane": "memory_curation", "state": "allow", "blocked": False},
+            },
+        }
+
+    monkeypatch.setattr(
+        "orchestration.phase_e_operator_snapshot.collect_phase_e_operator_snapshot",
+        _fake_operator_snapshot,
+    )
 
     result = await get_improvement_suggestions(include_applied=False)
 
@@ -218,6 +234,9 @@ async def test_get_improvement_suggestions_exposes_normalized_candidates(monkeyp
     assert result["improvement_runtime"]["execution_verified_total"] == 1
     assert result["improvement_runtime"]["verified_rate"] == 1.0
     assert result["memory_curation_runtime"]["curation_completed_total"] == 2
+    assert result["operator_surface"]["contract_version"] == "phase_e_operator_v1"
+    assert result["operator_surface"]["focus_lane"] == "improvement"
+    assert result["operator_surface"]["focused_lane"]["lane"] == "improvement"
     assert result["memory_curation_runtime"]["verification_pass_rate"] == 1.0
 
 
@@ -278,3 +297,6 @@ async def test_get_phase_e_operator_snapshot_returns_unified_snapshot(monkeypatc
     assert result["explainability"]["latest_block"]["result"] == "cooldown_active"
     assert result["lanes"]["improvement"]["state"] == "strict_force_off"
     assert result["lanes"]["memory_curation"]["blocked"] is False
+    assert result["operator_surface"]["contract_version"] == "phase_e_operator_v1"
+    assert result["operator_surface"]["focus_lane"] == ""
+    assert result["operator_surface"]["available_lanes"] == ["improvement", "memory_curation"]

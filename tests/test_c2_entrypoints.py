@@ -207,6 +207,18 @@ def test_improvement_endpoint_returns_top_candidates(client):
                 "verification_pass_rate": 1.0,
             },
         },
+    ), patch(
+        "orchestration.phase_e_operator_snapshot.collect_phase_e_operator_snapshot",
+        return_value={
+            "summary": {"blocked_lane_count": 1, "blocked_lanes": ["improvement"]},
+            "governance": {"state": "verification_backpressure", "action": "hold"},
+            "approval": {"pending_count": 0, "highest_risk_class": "none"},
+            "explainability": {"count": 1},
+            "lanes": {
+                "improvement": {"lane": "improvement", "state": "verification_backpressure", "blocked": True},
+                "memory_curation": {"lane": "memory_curation", "state": "allow", "blocked": False},
+            },
+        },
     ):
         resp = client.get("/autonomy/improvement")
 
@@ -239,6 +251,9 @@ def test_improvement_endpoint_returns_top_candidates(client):
     assert data["improvement_runtime"]["verified_rate"] == 1.0
     assert data["memory_curation_runtime"]["curation_completed_total"] == 2
     assert data["memory_curation_runtime"]["verification_pass_rate"] == 1.0
+    assert data["operator_surface"]["contract_version"] == "phase_e_operator_v1"
+    assert data["operator_surface"]["focus_lane"] == "improvement"
+    assert data["operator_surface"]["focused_lane"]["lane"] == "improvement"
 
 
 def test_memory_curation_endpoint_returns_governance_and_metrics(client):
@@ -294,6 +309,18 @@ def test_memory_curation_endpoint_returns_governance_and_metrics(client):
                 "cooldown_until": "2026-04-15T10:00:00",
             },
         },
+    ), patch(
+        "orchestration.phase_e_operator_snapshot.collect_phase_e_operator_snapshot",
+        return_value={
+            "summary": {"blocked_lane_count": 1, "blocked_lanes": ["memory_curation"]},
+            "governance": {"state": "cooldown_active", "action": "hold"},
+            "approval": {"pending_count": 0, "highest_risk_class": "none"},
+            "explainability": {"count": 1},
+            "lanes": {
+                "improvement": {"lane": "improvement", "state": "allow", "blocked": False},
+                "memory_curation": {"lane": "memory_curation", "state": "cooldown_active", "blocked": True},
+            },
+        },
     ):
         resp = client.get("/autonomy/memory_curation")
 
@@ -311,6 +338,9 @@ def test_memory_curation_endpoint_returns_governance_and_metrics(client):
     assert data["quality_governance"]["state"] == "allow"
     assert data["memory_curation_runtime"]["autonomy_completed_total"] == 3
     assert data["memory_curation"]["quality_governance"]["summary"]["evaluated_runs"] == 3
+    assert data["operator_surface"]["contract_version"] == "phase_e_operator_v1"
+    assert data["operator_surface"]["focus_lane"] == "memory_curation"
+    assert data["operator_surface"]["focused_lane"]["lane"] == "memory_curation"
 
 
 def test_operator_snapshot_endpoint_returns_unified_view(client):
@@ -374,6 +404,8 @@ def test_operator_snapshot_endpoint_returns_unified_view(client):
     assert data["explainability"]["latest_block"]["result"] == "cooldown_active"
     assert data["lanes"]["improvement"]["state"] == "allow"
     assert data["lanes"]["memory_curation"]["blocked"] is True
+    assert data["operator_surface"]["contract_version"] == "phase_e_operator_v1"
+    assert data["operator_surface"]["focus_lane"] == ""
 
 
 def test_incident_trace_endpoint_returns_trace(client):

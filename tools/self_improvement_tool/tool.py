@@ -224,9 +224,13 @@ async def get_ops_observability(days: int = 7, limit: int = 5) -> dict:
 )
 async def get_phase_e_operator_snapshot(limit: int = 5) -> dict:
     """Gibt den einheitlichen Phase-E-Operatorsnapshot zurueck."""
-    from orchestration.phase_e_operator_snapshot import collect_phase_e_operator_snapshot
+    from orchestration.phase_e_operator_snapshot import (
+        build_phase_e_operator_surface,
+        collect_phase_e_operator_snapshot,
+    )
 
     snapshot = await collect_phase_e_operator_snapshot(limit=max(1, min(10, limit)))
+    snapshot["operator_surface"] = build_phase_e_operator_surface(snapshot)
     return {"status": "ok", **snapshot}
 
 
@@ -337,6 +341,10 @@ async def get_improvement_suggestions(include_applied: bool = False) -> dict:
     from orchestration.improvement_task_compiler import compile_improvement_tasks
     from orchestration.improvement_task_execution import build_improvement_hardening_task_payloads
     from orchestration.improvement_task_promotion import evaluate_compiled_task_promotions
+    from orchestration.phase_e_operator_snapshot import (
+        build_phase_e_operator_surface,
+        collect_phase_e_operator_snapshot,
+    )
     from orchestration.self_improvement_engine import get_improvement_engine
     from orchestration.session_reflection import SessionReflectionLoop
 
@@ -360,6 +368,7 @@ async def get_improvement_suggestions(include_applied: bool = False) -> dict:
     observation_summary = build_autonomy_observation_summary()
     queue = get_queue()
     rollout_guard = get_improvement_task_rollout_guard(queue)
+    operator_snapshot = await collect_phase_e_operator_snapshot(limit=5, queue=queue)
     return {
         "status": "ok",
         "count": len(suggestions),
@@ -385,4 +394,5 @@ async def get_improvement_suggestions(include_applied: bool = False) -> dict:
         ),
         "improvement_runtime": dict(observation_summary.get("improvement_runtime") or {}),
         "memory_curation_runtime": dict(observation_summary.get("memory_curation_runtime") or {}),
+        "operator_surface": build_phase_e_operator_surface(operator_snapshot, focus_lane="improvement"),
     }

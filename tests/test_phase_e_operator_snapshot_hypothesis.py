@@ -3,6 +3,7 @@ from __future__ import annotations
 from hypothesis import given, strategies as st
 
 from orchestration.phase_e_operator_snapshot import (
+    build_phase_e_operator_surface,
     summarize_phase_e_explainability_entries,
     summarize_phase_e_governance_lanes,
     summarize_phase_e_operator_lanes,
@@ -129,3 +130,32 @@ def test_hypothesis_summarize_phase_e_explainability_entries_counts_items_correc
 
     assert summary["count"] == len(items)
     assert set(summary["lanes"]).issubset({"improvement", "memory_curation"})
+
+
+@given(
+    focus_lane=st.text(max_size=24),
+    improvement_blocked=st.booleans(),
+    memory_blocked=st.booleans(),
+)
+def test_hypothesis_build_phase_e_operator_surface_normalizes_unknown_focus_lane(
+    focus_lane: str,
+    improvement_blocked: bool,
+    memory_blocked: bool,
+) -> None:
+    surface = build_phase_e_operator_surface(
+        {
+            "summary": {"blocked_lane_count": int(improvement_blocked) + int(memory_blocked)},
+            "governance": {"state": "allow"},
+            "approval": {"pending_count": 0},
+            "explainability": {"count": 0},
+            "lanes": {
+                "improvement": {"lane": "improvement", "blocked": improvement_blocked},
+                "memory_curation": {"lane": "memory_curation", "blocked": memory_blocked},
+            },
+        },
+        focus_lane=focus_lane,
+    )
+
+    assert surface["contract_version"] == "phase_e_operator_v1"
+    assert surface["available_lanes"] == ["improvement", "memory_curation"]
+    assert surface["focus_lane"] in {"", "improvement", "memory_curation"}

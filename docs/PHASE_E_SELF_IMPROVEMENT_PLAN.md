@@ -1122,6 +1122,40 @@ Verifikation:
 - `pytest -q tests/test_phase_e_operator_snapshot.py tests/test_phase_e_operator_snapshot_hypothesis.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py` -> `30 passed`
 - `python -m crosshair check tests/test_phase_e_operator_snapshot_crosshair.py` -> Exit `0`
 
+### E6.5 Surface Closeout for Canvas / MCP / Tooling
+
+Stand:
+
+- erster Runtime-Slice umgesetzt
+
+Umgesetzt:
+
+- [orchestration/phase_e_operator_snapshot.py](/home/fatih-ubuntu/dev/timus/orchestration/phase_e_operator_snapshot.py)
+  - gemeinsamer `operator_surface`-Contract jetzt direkt am Snapshot
+  - enthaelt:
+    - `contract_version`
+    - `focus_lane`
+    - `available_lanes`
+    - `summary`
+    - `governance`
+    - `approval`
+    - `explainability`
+    - `focused_lane`
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - `/autonomy/operator_snapshot` liefert jetzt denselben `operator_surface`
+  - `/autonomy/improvement` liefert denselben `operator_surface` fokussiert auf `improvement`
+  - `/autonomy/memory_curation` liefert denselben `operator_surface` fokussiert auf `memory_curation`
+- [tools/self_improvement_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/self_improvement_tool/tool.py)
+  - `get_phase_e_operator_snapshot(...)` liefert jetzt denselben `operator_surface`
+  - `get_improvement_suggestions(...)` liefert denselben `operator_surface` fokussiert auf `improvement`
+- [tools/maintenance_tool/tool.py](/home/fatih-ubuntu/dev/timus/tools/maintenance_tool/tool.py)
+  - `get_memory_curation_status(...)` liefert denselben `operator_surface` fokussiert auf `memory_curation`
+
+Verifikation:
+
+- `pytest -q tests/test_phase_e_operator_snapshot.py tests/test_phase_e_operator_snapshot_hypothesis.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py tests/test_memory_maintenance_tool.py` -> `35 passed`
+- `python -m crosshair check tests/test_phase_e_operator_snapshot_crosshair.py` -> Exit `0`
+
 ## Arbeitsreihenfolge
 
 ### Phase-E-Start

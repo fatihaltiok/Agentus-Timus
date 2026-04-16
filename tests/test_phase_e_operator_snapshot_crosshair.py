@@ -3,6 +3,7 @@ from __future__ import annotations
 import deal
 
 from orchestration.phase_e_operator_snapshot import (
+    build_phase_e_operator_surface,
     summarize_phase_e_explainability_entries,
     summarize_phase_e_governance_lanes,
     summarize_phase_e_operator_lanes,
@@ -172,3 +173,21 @@ def _contract_explainability_failure_count_tracks_errors_crosshair() -> int:
         ]
     )
     return int(summary["failure_count"])
+
+
+@deal.post(lambda r: r == 1)
+def _contract_operator_surface_unknown_focus_lane_falls_back_to_empty_crosshair() -> int:
+    surface = build_phase_e_operator_surface(
+        {
+            "summary": {"blocked_lane_count": 1},
+            "governance": {"state": "allow"},
+            "approval": {"pending_count": 0},
+            "explainability": {"count": 0},
+            "lanes": {
+                "improvement": {"lane": "improvement", "blocked": True},
+                "memory_curation": {"lane": "memory_curation", "blocked": False},
+            },
+        },
+        focus_lane="system",
+    )
+    return 1 if surface["focus_lane"] == "" and surface["focused_lane"] == {} else 0

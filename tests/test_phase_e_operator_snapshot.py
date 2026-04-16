@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from orchestration.phase_e_operator_snapshot import (
+    build_phase_e_operator_surface,
     build_phase_e_operator_snapshot,
     collect_phase_e_operator_snapshot,
     summarize_phase_e_explainability_entries,
@@ -177,6 +178,9 @@ def test_build_phase_e_operator_snapshot_unifies_lanes_and_system() -> None:
     assert snapshot["approval"]["state"] == "approval_required"
     assert snapshot["approval"]["items"][0]["requested_action"] == "rollback"
     assert snapshot["explainability"]["count"] == 4
+    assert snapshot["operator_surface"]["contract_version"] == "phase_e_operator_v1"
+    assert snapshot["operator_surface"]["focus_lane"] == ""
+    assert snapshot["operator_surface"]["available_lanes"] == ["improvement", "memory_curation"]
     assert snapshot["explainability"]["latest_by_lane"]["improvement"]["lane"] == "improvement"
     assert snapshot["explainability"]["latest_by_lane"]["memory_curation"]["result"] == "complete"
     assert snapshot["explainability"]["latest_block"]["result"] == "cooldown_active"
@@ -184,6 +188,29 @@ def test_build_phase_e_operator_snapshot_unifies_lanes_and_system() -> None:
     assert snapshot["explainability"]["recent_feed"][0]["refs"]["ref_id"] == "snap-2"
     assert snapshot["explainability"]["recent_feed"][1]["refs"]["request_id"] == "req-mem-1"
     assert any(item.get("refs", {}).get("request_id") == "req-1" for item in snapshot["explainability"]["recent_feed"])
+
+
+def test_build_phase_e_operator_surface_focuses_known_lane_only() -> None:
+    snapshot = {
+        "summary": {"blocked_lane_count": 1},
+        "governance": {"state": "strict_force_off"},
+        "approval": {"pending_count": 0},
+        "explainability": {"count": 2},
+        "lanes": {
+            "improvement": {"lane": "improvement", "state": "strict_force_off", "blocked": True},
+            "memory_curation": {"lane": "memory_curation", "state": "cooldown_active", "blocked": True},
+        },
+    }
+
+    focused = build_phase_e_operator_surface(snapshot, focus_lane="memory_curation")
+    invalid = build_phase_e_operator_surface(snapshot, focus_lane="system")
+
+    assert focused["contract_version"] == "phase_e_operator_v1"
+    assert focused["focus_lane"] == "memory_curation"
+    assert focused["focused_lane"]["lane"] == "memory_curation"
+    assert focused["available_lanes"] == ["improvement", "memory_curation"]
+    assert invalid["focus_lane"] == ""
+    assert invalid["focused_lane"] == {}
 
 
 @pytest.mark.asyncio
@@ -280,6 +307,8 @@ async def test_collect_phase_e_operator_snapshot_uses_live_builders(monkeypatch)
     assert snapshot["explainability"]["count"] == 1
     assert snapshot["explainability"]["latest_by_lane"]["memory_curation"]["result"] == "complete"
     assert snapshot["explainability"]["latest_by_lane"]["improvement"] == {}
+    assert snapshot["operator_surface"]["contract_version"] == "phase_e_operator_v1"
+    assert snapshot["operator_surface"]["focus_lane"] == ""
 
 
 def test_summarize_phase_e_pending_approvals_tracks_risk_and_oldest_pending() -> None:

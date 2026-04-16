@@ -65,10 +65,18 @@ async def run_memory_maintenance(
     category=C.MEMORY,
 )
 async def get_memory_curation_status(days_old_threshold: int = 30, limit: int = 5) -> dict:
-    return _get_memory_curation_status(
+    from orchestration.phase_e_operator_snapshot import (
+        build_phase_e_operator_surface,
+        collect_phase_e_operator_snapshot,
+    )
+
+    status = _get_memory_curation_status(
         stale_days=max(1, int(days_old_threshold)),
         limit=max(1, int(limit)),
     )
+    operator_snapshot = await collect_phase_e_operator_snapshot(limit=max(1, min(10, int(limit))))
+    status["operator_surface"] = build_phase_e_operator_surface(operator_snapshot, focus_lane="memory_curation")
+    return status
 
 
 @tool(
