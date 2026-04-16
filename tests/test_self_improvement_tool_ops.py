@@ -234,6 +234,12 @@ async def test_get_phase_e_operator_snapshot_returns_unified_snapshot(monkeypatc
                 "highest_risk_class": "critical",
                 "blocked": True,
             },
+            "approval": {
+                "state": "approval_required",
+                "pending_count": 1,
+                "highest_risk_class": "high",
+                "items": [{"request_id": "req-1", "requested_action": "promote_canary"}],
+            },
             "lanes": {
                 "improvement": {"state": "strict_force_off", "blocked": True},
                 "memory_curation": {"state": "allow", "blocked": False},
@@ -252,5 +258,7 @@ async def test_get_phase_e_operator_snapshot_returns_unified_snapshot(monkeypatc
     assert result["system"]["state"] == "degraded"
     assert result["governance"]["action"] == "freeze"
     assert result["governance"]["highest_risk_class"] == "critical"
+    assert result["approval"]["pending_count"] == 1
+    assert result["approval"]["items"][0]["requested_action"] == "promote_canary"
     assert result["lanes"]["improvement"]["state"] == "strict_force_off"
     assert result["lanes"]["memory_curation"]["blocked"] is False

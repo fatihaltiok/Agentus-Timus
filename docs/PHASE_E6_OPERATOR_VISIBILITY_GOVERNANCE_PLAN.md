@@ -235,6 +235,10 @@ Ziel:
 
 - hoehere Risikoklassen nicht nur blocken, sondern als entscheidbare Approval-Faelle fuehren
 
+Stand:
+
+- erster Runtime-Slice umgesetzt
+
 Schwerpunkte:
 
 - Risk-Klassen fuer Approval explizit schneiden:
@@ -260,6 +264,39 @@ Technische Anker:
 Erfolgskriterium:
 
 - hoehere Risikoklassen tauchen als explizite Pending-Entscheidungen statt als diffuse interne Sperren auf
+
+Umgesetzt:
+
+- [orchestration/phase_e_operator_snapshot.py](/home/fatih-ubuntu/dev/timus/orchestration/phase_e_operator_snapshot.py)
+  - neuer zentraler `approval`-Block im Operator-Snapshot
+  - zeigt jetzt:
+    - `pending_count`
+    - `highest_risk_class`
+    - `requested_actions`
+    - `lanes`
+    - `oldest_pending_minutes`
+    - konkrete `items`
+  - pro Approval-Fall sichtbar:
+    - `lane`
+    - `risk_class`
+    - `requested_action`
+    - `approval_reason`
+    - `rationale`
+    - `evidence`
+    - `rollback_path`
+  - nutzt dafuer die bestehenden Pending-Approval-Requests aus [orchestration/autonomy_change_control.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomy_change_control.py)
+- vorhandene MCP-/Tool-Surface aus E6.1/E6.2 liefert den Approval-Block jetzt automatisch mit
+- Contract-Abdeckung erweitert in:
+  - [tests/test_phase_e_operator_snapshot.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_e_operator_snapshot.py)
+  - [tests/test_phase_e_operator_snapshot_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_e_operator_snapshot_hypothesis.py)
+  - [tests/test_phase_e_operator_snapshot_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_e_operator_snapshot_crosshair.py)
+  - [tests/test_self_improvement_tool_ops.py](/home/fatih-ubuntu/dev/timus/tests/test_self_improvement_tool_ops.py)
+  - [tests/test_c2_entrypoints.py](/home/fatih-ubuntu/dev/timus/tests/test_c2_entrypoints.py)
+
+Verifikation:
+
+- `pytest -q tests/test_phase_e_operator_snapshot.py tests/test_phase_e_operator_snapshot_hypothesis.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py` -> `28 passed`
+- `python -m crosshair check tests/test_phase_e_operator_snapshot_crosshair.py` -> Exit `0`
 
 ### E6.4 Recent Action and Incident Explainability
 

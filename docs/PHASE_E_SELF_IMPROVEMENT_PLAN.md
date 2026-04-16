@@ -1057,6 +1057,38 @@ Verifikation:
 - `pytest -q tests/test_phase_e_operator_snapshot.py tests/test_phase_e_operator_snapshot_hypothesis.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py` -> `26 passed`
 - `python -m crosshair check tests/test_phase_e_operator_snapshot_crosshair.py` -> Exit `0`
 
+### E6.3 Approval Paths for Higher Risk Classes
+
+Stand:
+
+- erster Runtime-Slice umgesetzt
+
+Umgesetzt:
+
+- [orchestration/phase_e_operator_snapshot.py](/home/fatih-ubuntu/dev/timus/orchestration/phase_e_operator_snapshot.py)
+  - neuer `approval`-Block im Operator-Snapshot
+  - zeigt jetzt:
+    - `pending_count`
+    - `highest_risk_class`
+    - `requested_actions`
+    - `lanes`
+    - `oldest_pending_minutes`
+    - konkrete `items`
+  - pro Approval-Fall sichtbar:
+    - `lane`
+    - `risk_class`
+    - `requested_action`
+    - `approval_reason`
+    - `rationale`
+    - `evidence`
+    - `rollback_path`
+  - basiert auf den bestehenden Pending-Approval-Requests aus [orchestration/autonomy_change_control.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomy_change_control.py)
+
+Verifikation:
+
+- `pytest -q tests/test_phase_e_operator_snapshot.py tests/test_phase_e_operator_snapshot_hypothesis.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py` -> `28 passed`
+- `python -m crosshair check tests/test_phase_e_operator_snapshot_crosshair.py` -> Exit `0`
+
 ## Arbeitsreihenfolge
 
 ### Phase-E-Start

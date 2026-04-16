@@ -297,6 +297,84 @@ def _memory_candidate_view(candidate: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _approval_risk_class(*, recommendation: Any, requested_action: Any, approval_reason: Any) -> str:
+    rec = _text(recommendation, limit=64).lower()
+    action = _text(requested_action, limit=64).lower()
+    reason = _text(approval_reason, limit=96).lower()
+    if rec == "rollback" or action == "rollback":
+        return "critical"
+    if rec == "promote" or action == "promote_canary":
+        return "high"
+    if "approval" in reason or action == "hold":
+        return "medium"
+    return "low"
+
+
+def _approval_lane(payload: Mapping[str, Any], *, recommendation: Any, requested_action: Any) -> str:
+    explicit_lane = _text(payload.get("lane") or payload.get("approval_scope"), limit=64).lower()
+    if explicit_lane:
+        return explicit_lane
+    rec = _text(recommendation, limit=64).lower()
+    action = _text(requested_action, limit=64).lower()
+    if rec in {"rollback", "promote"} or action in {"rollback", "promote_canary"}:
+        return "improvement"
+    return "system"
+
+
+def _approval_evidence_view(
+    *,
+    row: Mapping[str, Any],
+    payload: Mapping[str, Any],
+    limit: int = 3,
+) -> dict[str, Any]:
+    scorecard = payload.get("scorecard")
+    scorecard_payload = scorecard if isinstance(scorecard, Mapping) else {}
+    evidence: dict[str, Any] = {
+        "audit_id": _text(row.get("audit_id"), limit=64),
+        "report_path": _text(row.get("report_path"), limit=160),
+        "overall_score": scorecard_payload.get("overall_score"),
+        "autonomy_level": _text(scorecard_payload.get("autonomy_level"), limit=32),
+        "window_days": payload.get("window_days"),
+        "baseline_days": payload.get("baseline_days"),
+    }
+    compact: dict[str, Any] = {}
+    count = 0
+    for key, value in evidence.items():
+        if value in {None, "", []}:
+            continue
+        compact[key] = value
+        count += 1
+        if count >= limit:
+            break
+    return compact
+
+
+def _approval_rollback_path(plan: Mapping[str, Any]) -> dict[str, Any]:
+    action = _text(plan.get("action"), limit=64).lower()
+    current_canary = int(plan.get("current_canary") or 0)
+    next_canary = int(plan.get("next_canary") or 0)
+    if action == "promote_canary":
+        return {
+            "available": True,
+            "action": "rollback",
+            "target_canary": current_canary,
+            "strict_force_off": True,
+        }
+    if action == "rollback":
+        return {
+            "available": False,
+            "action": "manual_recovery",
+            "target_canary": next_canary,
+            "strict_force_off": bool(plan.get("strict_force_off")),
+        }
+    return {
+        "available": False,
+        "action": "none",
+        "target_canary": current_canary,
+        "strict_force_off": bool(plan.get("strict_force_off")),
+    }
+
+
 def _build_improvement_governance_lane(governance: Mapping[str, Any]) -> dict[str, Any]:
     state = _text(governance.get("rollout_guard_state"), limit=64).lower() or "allow"
     blocked = bool(governance.get("rollout_guard_blocked"))
@@ -452,6 +530,94 @@ def _build_system_governance_lane(system_view: Mapping[str, Any]) -> dict[str, A
                 reasons=reasons,
             ),
         },
+    }
+
+
+def summarize_phase_e_pending_approvals(items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    pending_items = list(items or [])
+    requested_actions = _merge_unique_texts(
+        [_text(item.get("requested_action"), limit=64).lower() for item in pending_items],
+        limit=6,
+    )
+    lanes = _merge_unique_texts(
+        [_text(item.get("lane"), limit=64).lower() for item in pending_items],
+        limit=6,
+    )
+    risk_classes = [
+        _text(item.get("risk_class"), limit=32).lower()
+        for item in pending_items
+        if _text(item.get("risk_class"), limit=32)
+    ]
+    pending_minutes_values = [
+        float(item.get("pending_minutes") or 0.0)
+        for item in pending_items
+        if item.get("pending_minutes") not in {None, ""}
+    ]
+    return {
+        "pending_count": len(pending_items),
+        "highest_risk_class": _pick_highest(risk_classes, ranking=_RISK_PRIORITY, default="none"),
+        "requested_actions": requested_actions,
+        "lanes": lanes,
+        "oldest_pending_minutes": max(pending_minutes_values or [0.0]),
+    }
+
+
+def build_phase_e_approval_surface(*, queue: Any, limit: int = 5) -> dict[str, Any]:
+    if queue is None or not hasattr(queue, "list_autonomy_change_requests"):
+        items: list[dict[str, Any]] = []
+        summary = summarize_phase_e_pending_approvals(items)
+        return {
+            "state": "clear",
+            "blocked": False,
+            **summary,
+            "items": items,
+        }
+
+    rows = list(queue.list_autonomy_change_requests(statuses=["pending_approval"], limit=max(1, int(limit))) or [])
+    rows = list(reversed(rows))
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        payload_value = row.get("payload")
+        payload = payload_value if isinstance(payload_value, Mapping) else {}
+        plan_value = payload.get("proposed_plan")
+        plan = plan_value if isinstance(plan_value, Mapping) else {}
+        recommendation = _text(row.get("recommendation"), limit=64).lower() or _text(plan.get("recommendation"), limit=64).lower()
+        requested_action = _text(plan.get("action"), limit=64).lower() or recommendation or "hold"
+        approval_reason = _text(payload.get("approval_reason") or row.get("reason"), limit=120)
+        risk_class = _approval_risk_class(
+            recommendation=recommendation,
+            requested_action=requested_action,
+            approval_reason=approval_reason,
+        )
+        items.append(
+            {
+                "request_id": _text(row.get("id"), limit=64),
+                "audit_id": _text(row.get("audit_id"), limit=64),
+                "lane": _approval_lane(payload, recommendation=recommendation, requested_action=requested_action),
+                "risk_class": risk_class,
+                "requested_action": requested_action or "hold",
+                "recommendation": recommendation or "hold",
+                "status": _text(row.get("status"), limit=32) or "pending_approval",
+                "pending_minutes": float(row.get("pending_minutes") or 0.0) if row.get("pending_minutes") not in {None, ""} else None,
+                "pending_since": _text(payload.get("pending_since") or row.get("updated_at"), limit=64),
+                "updated_at": _text(row.get("updated_at"), limit=64),
+                "approval_reason": approval_reason,
+                "approval_required_actions": [
+                    _text(item, limit=32).lower()
+                    for item in list(payload.get("approval_required_actions") or [])
+                    if _text(item, limit=32)
+                ][:4],
+                "rationale": _text(plan.get("reason") or approval_reason, limit=160),
+                "evidence": _approval_evidence_view(row=row, payload=payload, limit=4),
+                "rollback_path": _approval_rollback_path(plan),
+            }
+        )
+    summary = summarize_phase_e_pending_approvals(items)
+    return {
+        "state": "approval_required" if summary["pending_count"] > 0 else "clear",
+        "blocked": summary["pending_count"] > 0,
+        **summary,
+        "items": items,
     }
 
 
@@ -717,6 +883,7 @@ def build_phase_e_operator_snapshot(
     improvement_governance: Mapping[str, Any],
     improvement_candidate_views: Sequence[Mapping[str, Any]],
     memory_curation_status: Mapping[str, Any],
+    approval_surface: Mapping[str, Any],
 ) -> dict[str, Any]:
     improvement_runtime_payload = observation_summary.get("improvement_runtime")
     improvement_runtime = improvement_runtime_payload if isinstance(improvement_runtime_payload, Mapping) else {}
@@ -751,10 +918,13 @@ def build_phase_e_operator_snapshot(
             "governance_state": _text(governance.get("state"), limit=64),
             "governance_action": _text(governance.get("action"), limit=32),
             "governance_risk_class": _text(governance.get("highest_risk_class"), limit=32),
+            "approval_pending_count": int(approval_surface.get("pending_count") or 0),
+            "approval_highest_risk_class": _text(approval_surface.get("highest_risk_class"), limit=32),
         },
         "system": system_view,
         "lanes": lanes,
         "governance": governance,
+        "approval": dict(approval_surface or {}),
     }
 
 
@@ -799,6 +969,7 @@ async def collect_phase_e_operator_snapshot(*, limit: int = 5, queue: Any | None
         stale_days=30,
         limit=safe_limit,
     )
+    approval_surface = build_phase_e_approval_surface(queue=active_queue, limit=safe_limit)
 
     return build_phase_e_operator_snapshot(
         system_snapshot=system_snapshot,
@@ -807,4 +978,5 @@ async def collect_phase_e_operator_snapshot(*, limit: int = 5, queue: Any | None
         improvement_governance=improvement_governance,
         improvement_candidate_views=build_candidate_operator_views(combined_candidates, limit=safe_limit),
         memory_curation_status=memory_curation_status,
+        approval_surface=approval_surface,
     )

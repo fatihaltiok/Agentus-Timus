@@ -7,6 +7,7 @@ import pytest
 from orchestration.phase_e_operator_snapshot import (
     build_phase_e_operator_snapshot,
     collect_phase_e_operator_snapshot,
+    summarize_phase_e_pending_approvals,
 )
 
 
@@ -111,6 +112,24 @@ def test_build_phase_e_operator_snapshot_unifies_lanes_and_system() -> None:
                 "reasons": ["pass_rate=0.25", "failed_runs=2"],
             },
         },
+        approval_surface={
+            "state": "approval_required",
+            "blocked": True,
+            "pending_count": 1,
+            "highest_risk_class": "critical",
+            "requested_actions": ["rollback"],
+            "lanes": ["improvement"],
+            "oldest_pending_minutes": 42.0,
+            "items": [
+                {
+                    "request_id": "req-1",
+                    "lane": "improvement",
+                    "risk_class": "critical",
+                    "requested_action": "rollback",
+                    "approval_reason": "rollback_requires_approval",
+                }
+            ],
+        },
     )
 
     assert snapshot["summary"]["blocked_lane_count"] == 2
@@ -139,6 +158,10 @@ def test_build_phase_e_operator_snapshot_unifies_lanes_and_system() -> None:
     assert snapshot["governance"]["lanes"]["improvement"]["action"] == "freeze"
     assert snapshot["governance"]["lanes"]["memory_curation"]["action"] == "hold"
     assert snapshot["governance"]["lanes"]["system"]["blocked"] is True
+    assert snapshot["summary"]["approval_pending_count"] == 1
+    assert snapshot["summary"]["approval_highest_risk_class"] == "critical"
+    assert snapshot["approval"]["state"] == "approval_required"
+    assert snapshot["approval"]["items"][0]["requested_action"] == "rollback"
 
 
 @pytest.mark.asyncio
@@ -230,3 +253,30 @@ async def test_collect_phase_e_operator_snapshot_uses_live_builders(monkeypatch)
     assert snapshot["governance"]["blocked"] is False
     assert snapshot["governance"]["action"] == "allow"
     assert snapshot["governance"]["highest_risk_class"] == "none"
+    assert snapshot["approval"]["pending_count"] == 0
+    assert snapshot["approval"]["state"] == "clear"
+
+
+def test_summarize_phase_e_pending_approvals_tracks_risk_and_oldest_pending() -> None:
+    summary = summarize_phase_e_pending_approvals(
+        [
+            {
+                "lane": "improvement",
+                "risk_class": "high",
+                "requested_action": "promote_canary",
+                "pending_minutes": 12.5,
+            },
+            {
+                "lane": "improvement",
+                "risk_class": "critical",
+                "requested_action": "rollback",
+                "pending_minutes": 42.0,
+            },
+        ]
+    )
+
+    assert summary["pending_count"] == 2
+    assert summary["highest_risk_class"] == "critical"
+    assert summary["requested_actions"] == ["promote_canary", "rollback"]
+    assert summary["lanes"] == ["improvement"]
+    assert summary["oldest_pending_minutes"] == 42.0

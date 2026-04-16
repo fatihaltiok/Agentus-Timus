@@ -5,6 +5,7 @@ from hypothesis import given, strategies as st
 from orchestration.phase_e_operator_snapshot import (
     summarize_phase_e_governance_lanes,
     summarize_phase_e_operator_lanes,
+    summarize_phase_e_pending_approvals,
 )
 
 
@@ -78,3 +79,24 @@ def test_hypothesis_summarize_phase_e_governance_lanes_counts_blocked_lanes_corr
 
     assert summary["blocked_lane_count"] == len(summary["blocked_lanes"])
     assert set(summary["blocked_lanes"]).issubset({"improvement", "memory_curation", "system"})
+
+
+@given(
+    items=st.lists(
+        st.fixed_dictionaries(
+            {
+                "lane": st.sampled_from(["improvement", "memory_curation", "system"]),
+                "risk_class": st.sampled_from(["none", "low", "medium", "high", "critical"]),
+                "requested_action": st.sampled_from(["hold", "promote_canary", "rollback"]),
+                "pending_minutes": st.floats(min_value=0.0, max_value=5000.0, allow_nan=False, allow_infinity=False),
+            }
+        ),
+        max_size=8,
+    )
+)
+def test_hypothesis_summarize_phase_e_pending_approvals_counts_items_correctly(items: list[dict[str, object]]) -> None:
+    summary = summarize_phase_e_pending_approvals(items)
+
+    assert summary["pending_count"] == len(items)
+    assert set(summary["lanes"]).issubset({"improvement", "memory_curation", "system"})
+    assert set(summary["requested_actions"]).issubset({"hold", "promote_canary", "rollback"})

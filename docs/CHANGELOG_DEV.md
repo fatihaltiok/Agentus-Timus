@@ -2,6 +2,46 @@
 
 ---
 
+## Fortschritt 2026-04-16 - Phase E E6.3 Approval Paths for Higher Risk Classes
+
+E6 zeigt jetzt nicht mehr nur die Governance-Lage, sondern auch konkrete Pending-Approval-Faelle fuer hoehere Risikoklassen.
+
+Geaendert:
+
+- [orchestration/phase_e_operator_snapshot.py](/home/fatih-ubuntu/dev/timus/orchestration/phase_e_operator_snapshot.py)
+  - neuer `approval`-Block im Operator-Snapshot
+  - zeigt jetzt:
+    - `pending_count`
+    - `highest_risk_class`
+    - `requested_actions`
+    - `lanes`
+    - `oldest_pending_minutes`
+    - konkrete `items`
+  - pro Approval-Fall sichtbar:
+    - `lane`
+    - `risk_class`
+    - `requested_action`
+    - `approval_reason`
+    - `rationale`
+    - `evidence`
+    - `rollback_path`
+  - liest dafuer die bestehenden `pending_approval`-Requests aus [orchestration/autonomy_change_control.py](/home/fatih-ubuntu/dev/timus/orchestration/autonomy_change_control.py)
+
+Tests:
+
+- erweitert:
+  - [tests/test_phase_e_operator_snapshot.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_e_operator_snapshot.py)
+  - [tests/test_phase_e_operator_snapshot_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_e_operator_snapshot_hypothesis.py)
+  - [tests/test_phase_e_operator_snapshot_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_e_operator_snapshot_crosshair.py)
+  - [tests/test_self_improvement_tool_ops.py](/home/fatih-ubuntu/dev/timus/tests/test_self_improvement_tool_ops.py)
+  - [tests/test_c2_entrypoints.py](/home/fatih-ubuntu/dev/timus/tests/test_c2_entrypoints.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/phase_e_operator_snapshot.py tests/test_phase_e_operator_snapshot.py tests/test_phase_e_operator_snapshot_hypothesis.py tests/test_phase_e_operator_snapshot_crosshair.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py` gruen
+- `pytest -q tests/test_phase_e_operator_snapshot.py tests/test_phase_e_operator_snapshot_hypothesis.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py` -> `28 passed`
+- `python -m crosshair check tests/test_phase_e_operator_snapshot_crosshair.py` -> Exit `0`
+
 ## Fortschritt 2026-04-16 - Phase E E6.2 Governance-Risk Surface
 
 E6 zeigt jetzt nicht mehr nur die beiden Phase-E-Lanes, sondern auch die gemeinsame Governance-Lage als eigenen Risk-Surface.

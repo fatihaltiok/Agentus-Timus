@@ -5,6 +5,7 @@ import deal
 from orchestration.phase_e_operator_snapshot import (
     summarize_phase_e_governance_lanes,
     summarize_phase_e_operator_lanes,
+    summarize_phase_e_pending_approvals,
 )
 
 
@@ -106,3 +107,45 @@ def _contract_governance_action_prefers_freeze_over_hold_crosshair() -> str:
         }
     )
     return str(summary["action"])
+
+
+@deal.post(lambda r: r == 2)
+def _contract_pending_approval_count_matches_items_crosshair() -> int:
+    summary = summarize_phase_e_pending_approvals(
+        [
+            {
+                "lane": "improvement",
+                "risk_class": "high",
+                "requested_action": "promote_canary",
+                "pending_minutes": 10.0,
+            },
+            {
+                "lane": "improvement",
+                "risk_class": "critical",
+                "requested_action": "rollback",
+                "pending_minutes": 30.0,
+            },
+        ]
+    )
+    return int(summary["pending_count"])
+
+
+@deal.post(lambda r: r == "critical")
+def _contract_pending_approval_risk_prefers_critical_crosshair() -> str:
+    summary = summarize_phase_e_pending_approvals(
+        [
+            {
+                "lane": "memory_curation",
+                "risk_class": "medium",
+                "requested_action": "hold",
+                "pending_minutes": 5.0,
+            },
+            {
+                "lane": "improvement",
+                "risk_class": "critical",
+                "requested_action": "rollback",
+                "pending_minutes": 25.0,
+            },
+        ]
+    )
+    return str(summary["highest_risk_class"])

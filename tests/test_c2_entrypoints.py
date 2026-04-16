@@ -320,6 +320,7 @@ def test_operator_snapshot_endpoint_returns_unified_view(client):
             "summary": {
                 "blocked_lane_count": 1,
                 "blocked_lanes": ["memory_curation"],
+                "approval_pending_count": 1,
             },
             "system": {
                 "state": "healthy",
@@ -329,6 +330,12 @@ def test_operator_snapshot_endpoint_returns_unified_view(client):
                 "action": "hold",
                 "highest_risk_class": "medium",
                 "blocked": True,
+            },
+            "approval": {
+                "state": "approval_required",
+                "pending_count": 1,
+                "highest_risk_class": "high",
+                "items": [{"request_id": "req-1", "requested_action": "promote_canary"}],
             },
             "lanes": {
                 "improvement": {"state": "allow", "blocked": False},
@@ -346,9 +353,12 @@ def test_operator_snapshot_endpoint_returns_unified_view(client):
     data = resp.json()
     assert data["status"] == "success"
     assert data["summary"]["blocked_lane_count"] == 1
+    assert data["summary"]["approval_pending_count"] == 1
     assert data["system"]["state"] == "healthy"
     assert data["governance"]["action"] == "hold"
     assert data["governance"]["highest_risk_class"] == "medium"
+    assert data["approval"]["state"] == "approval_required"
+    assert data["approval"]["items"][0]["requested_action"] == "promote_canary"
     assert data["lanes"]["improvement"]["state"] == "allow"
     assert data["lanes"]["memory_curation"]["blocked"] is True
 
