@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import deal
 
-from orchestration.phase_e_operator_snapshot import summarize_phase_e_operator_lanes
+from orchestration.phase_e_operator_snapshot import (
+    summarize_phase_e_governance_lanes,
+    summarize_phase_e_operator_lanes,
+)
 
 
 @deal.post(lambda r: r == 1)
@@ -37,3 +40,69 @@ def _contract_last_activity_uses_latest_observed_at_crosshair() -> str:
         }
     )
     return str(summary["last_activity_at"])
+
+
+@deal.post(lambda r: r == 1)
+def _contract_governance_blocked_lane_count_matches_names_crosshair() -> int:
+    summary = summarize_phase_e_governance_lanes(
+        {
+            "improvement": {
+                "blocked": True,
+                "state": "strict_force_off",
+                "action": "freeze",
+                "risk_class": "critical",
+                "reasons": ["policy_runtime:strict_force_off"],
+                "active_states": ["strict_force_off"],
+            },
+            "memory_curation": {
+                "blocked": False,
+                "state": "allow",
+                "action": "allow",
+                "risk_class": "none",
+                "reasons": [],
+                "active_states": [],
+            },
+            "system": {
+                "blocked": False,
+                "state": "healthy",
+                "action": "allow",
+                "risk_class": "none",
+                "reasons": [],
+                "active_states": [],
+            },
+        }
+    )
+    return 1 if summary["blocked_lane_count"] == len(summary["blocked_lanes"]) == 1 else 0
+
+
+@deal.post(lambda r: r == "freeze")
+def _contract_governance_action_prefers_freeze_over_hold_crosshair() -> str:
+    summary = summarize_phase_e_governance_lanes(
+        {
+            "improvement": {
+                "blocked": True,
+                "state": "strict_force_off",
+                "action": "freeze",
+                "risk_class": "critical",
+                "reasons": ["policy_runtime:strict_force_off"],
+                "active_states": ["strict_force_off"],
+            },
+            "memory_curation": {
+                "blocked": True,
+                "state": "cooldown_active",
+                "action": "hold",
+                "risk_class": "medium",
+                "reasons": ["recent_memory_curation_run"],
+                "active_states": ["cooldown_active"],
+            },
+            "system": {
+                "blocked": False,
+                "state": "healthy",
+                "action": "allow",
+                "risk_class": "none",
+                "reasons": [],
+                "active_states": [],
+            },
+        }
+    )
+    return str(summary["action"])

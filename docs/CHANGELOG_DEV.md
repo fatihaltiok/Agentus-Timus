@@ -2,6 +2,50 @@
 
 ---
 
+## Fortschritt 2026-04-16 - Phase E E6.2 Governance-Risk Surface
+
+E6 zeigt jetzt nicht mehr nur die beiden Phase-E-Lanes, sondern auch die gemeinsame Governance-Lage als eigenen Risk-Surface.
+
+Geaendert:
+
+- [orchestration/phase_e_operator_snapshot.py](/home/fatih-ubuntu/dev/timus/orchestration/phase_e_operator_snapshot.py)
+  - neuer zentraler `governance`-Block im Operator-Snapshot
+  - vereinheitlicht jetzt:
+    - `strict_force_off`
+    - `rollout_frozen`
+    - `rollback_active`
+    - `verification_backpressure`
+    - `retrieval_backpressure`
+    - `degraded_mode`
+  - zeigt pro Lane:
+    - `state`
+    - `action`
+    - `risk_class`
+    - `active_states`
+    - `shadowed_states`
+    - `signals`
+  - zeigt zentral:
+    - `state`
+    - `action`
+    - `highest_risk_class`
+    - `blocked_lanes`
+    - `active_states`
+
+Tests:
+
+- erweitert:
+  - [tests/test_phase_e_operator_snapshot.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_e_operator_snapshot.py)
+  - [tests/test_phase_e_operator_snapshot_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_e_operator_snapshot_hypothesis.py)
+  - [tests/test_phase_e_operator_snapshot_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_e_operator_snapshot_crosshair.py)
+  - [tests/test_self_improvement_tool_ops.py](/home/fatih-ubuntu/dev/timus/tests/test_self_improvement_tool_ops.py)
+  - [tests/test_c2_entrypoints.py](/home/fatih-ubuntu/dev/timus/tests/test_c2_entrypoints.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/phase_e_operator_snapshot.py tests/test_phase_e_operator_snapshot.py tests/test_phase_e_operator_snapshot_hypothesis.py tests/test_phase_e_operator_snapshot_crosshair.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py` gruen
+- `pytest -q tests/test_phase_e_operator_snapshot.py tests/test_phase_e_operator_snapshot_hypothesis.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py` -> `26 passed`
+- `python -m crosshair check tests/test_phase_e_operator_snapshot_crosshair.py` -> Exit `0`
+
 ## Fortschritt 2026-04-16 - Phase E E6.1 Unified Operator Snapshot
 
 E6 ist jetzt nicht mehr nur ein Planblock. Mit E6.1 gibt es eine erste einheitliche Operatorsicht ueber Systemzustand, Improvement-Lane und Memory-Curation-Lane.

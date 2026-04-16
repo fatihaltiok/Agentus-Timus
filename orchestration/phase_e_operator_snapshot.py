@@ -3,6 +3,30 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Mapping, Sequence
 
+_ACTION_PRIORITY = {
+    "allow": 0,
+    "hold": 1,
+    "freeze": 2,
+    "rollback": 3,
+}
+
+_RISK_PRIORITY = {
+    "none": 0,
+    "low": 1,
+    "medium": 2,
+    "high": 3,
+    "critical": 4,
+}
+
+_NAMED_GOVERNANCE_SIGNALS = (
+    "strict_force_off",
+    "rollout_frozen",
+    "rollback_active",
+    "verification_backpressure",
+    "retrieval_backpressure",
+    "degraded_mode",
+)
+
 
 def _iso_now() -> str:
     return datetime.now().astimezone().replace(microsecond=0).isoformat()
@@ -21,6 +45,87 @@ def _normalize_reason_list(values: Sequence[Any] | None, *, limit: int = 4) -> l
         for value in list(values or [])
         if _text(value, limit=96)
     ][:limit]
+
+
+def _merge_unique_texts(values: Sequence[Any] | None, *, limit: int = 6) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for value in list(values or []):
+        item = _text(value, limit=96)
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        merged.append(item)
+        if len(merged) >= limit:
+            break
+    return merged
+
+
+def _pick_highest(values: Sequence[str] | None, *, ranking: Mapping[str, int], default: str) -> str:
+    best_value = default
+    best_rank = int(ranking.get(default, 0))
+    for raw_value in list(values or []):
+        value = _text(raw_value, limit=64).lower()
+        rank = int(ranking.get(value, -1))
+        if rank > best_rank:
+            best_value = value
+            best_rank = rank
+    return best_value
+
+
+def _governance_action_for_state(state: Any) -> str:
+    normalized = _text(state, limit=64).lower()
+    if normalized in {"allow", "healthy", "ok", "pass"}:
+        return "allow"
+    if normalized in {"strict_force_off", "rollout_frozen"}:
+        return "freeze"
+    if normalized in {"rollback_active", "rollback_cooldown", "rolled_back"}:
+        return "rollback"
+    return "hold"
+
+
+def _governance_risk_for_state(state: Any) -> str:
+    normalized = _text(state, limit=64).lower()
+    if normalized in {"", "allow", "healthy", "ok", "pass"}:
+        return "none"
+    if normalized in {"disabled", "cadence_skip", "no_candidates", "insufficient_history"}:
+        return "low"
+    if normalized in {"cooldown_active", "startup_grace", "warn"}:
+        return "medium"
+    if normalized in {
+        "rollout_frozen",
+        "rollback_active",
+        "rollback_cooldown",
+        "verification_blocked",
+        "verification_backpressure",
+        "retrieval_backpressure",
+        "runtime_degraded",
+        "storage_degraded",
+        "degraded",
+    }:
+        return "high"
+    if normalized in {"strict_force_off", "runtime_critical", "critical"}:
+        return "critical"
+    return "medium"
+
+
+def _build_signal_view(
+    *,
+    lane: str,
+    signal: str,
+    active: bool = False,
+    shadowed: bool = False,
+    reasons: Sequence[Any] | None = None,
+) -> dict[str, Any]:
+    effective_state = signal if active else "allow"
+    return {
+        "active": bool(active),
+        "shadowed": bool(shadowed),
+        "lane": _text(lane, limit=64),
+        "reasons": _merge_unique_texts(reasons),
+        "action": _governance_action_for_state(effective_state),
+        "risk_class": _governance_risk_for_state(effective_state),
+    }
 
 
 def _normalized_event_payload(event: Mapping[str, Any]) -> tuple[str, str, Mapping[str, Any]]:
@@ -192,6 +297,277 @@ def _memory_candidate_view(candidate: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _build_improvement_governance_lane(governance: Mapping[str, Any]) -> dict[str, Any]:
+    state = _text(governance.get("rollout_guard_state"), limit=64).lower() or "allow"
+    blocked = bool(governance.get("rollout_guard_blocked"))
+    reasons = _normalize_reason_list(governance.get("rollout_guard_reasons") or [])
+    shadowed_states = [
+        _text(item, limit=64).lower()
+        for item in list(governance.get("shadowed_guard_states") or [])
+        if _text(item, limit=64)
+    ]
+    shadowed_reason_map = {
+        _text(key, limit=64).lower(): _normalize_reason_list(values, limit=3)
+        for key, values in dict(governance.get("shadowed_guard_reasons") or {}).items()
+        if _text(key, limit=64)
+    }
+    verification_backpressure = dict(governance.get("verification_backpressure") or {})
+    signals = {
+        "strict_force_off": _build_signal_view(
+            lane="improvement",
+            signal="strict_force_off",
+            active=state == "strict_force_off",
+            shadowed="strict_force_off" in shadowed_states,
+            reasons=reasons if state == "strict_force_off" else shadowed_reason_map.get("strict_force_off", []),
+        ),
+        "rollout_frozen": _build_signal_view(
+            lane="improvement",
+            signal="rollout_frozen",
+            active=state == "rollout_frozen",
+            shadowed="rollout_frozen" in shadowed_states,
+            reasons=reasons if state == "rollout_frozen" else shadowed_reason_map.get("rollout_frozen", []),
+        ),
+        "rollback_active": _build_signal_view(
+            lane="improvement",
+            signal="rollback_active",
+            active=state == "rollback_active",
+            shadowed="rollback_active" in shadowed_states,
+            reasons=reasons if state == "rollback_active" else shadowed_reason_map.get("rollback_active", []),
+        ),
+        "verification_backpressure": _build_signal_view(
+            lane="improvement",
+            signal="verification_backpressure",
+            active=bool(verification_backpressure.get("active")),
+            shadowed=bool(verification_backpressure.get("shadowed")) or "verification_backpressure" in shadowed_states,
+            reasons=(
+                list(verification_backpressure.get("reasons") or [])
+                or (reasons if state == "verification_backpressure" else shadowed_reason_map.get("verification_backpressure", []))
+            ),
+        ),
+        "retrieval_backpressure": _build_signal_view(lane="improvement", signal="retrieval_backpressure"),
+        "degraded_mode": _build_signal_view(lane="improvement", signal="degraded_mode"),
+    }
+    active_states = [state] if blocked and state != "allow" else []
+    return {
+        "lane": "improvement",
+        "state": state,
+        "blocked": blocked,
+        "action": _governance_action_for_state(state),
+        "risk_class": _governance_risk_for_state(state),
+        "reasons": reasons,
+        "active_states": active_states,
+        "shadowed_states": shadowed_states[:4],
+        "signals": signals,
+    }
+
+
+def _build_memory_governance_lane(status_payload: Mapping[str, Any]) -> dict[str, Any]:
+    autonomy_governance_payload = status_payload.get("autonomy_governance")
+    autonomy_governance = autonomy_governance_payload if isinstance(autonomy_governance_payload, Mapping) else {}
+    quality_governance_payload = status_payload.get("quality_governance")
+    quality_governance = quality_governance_payload if isinstance(quality_governance_payload, Mapping) else {}
+    state = _text(autonomy_governance.get("state"), limit=64).lower() or "allow"
+    blocked = bool(autonomy_governance.get("blocked"))
+    reasons = _normalize_reason_list(autonomy_governance.get("reasons") or [])
+    retrieval_state = _text(quality_governance.get("state"), limit=64).lower()
+    retrieval_blocked = bool(quality_governance.get("blocked"))
+    degrade_mode = _text(autonomy_governance.get("degrade_mode"), limit=64).lower()
+    semantic_store_available = bool(autonomy_governance.get("semantic_store_available", True))
+    retrieval_active = state == "retrieval_backpressure" or retrieval_state == "retrieval_backpressure"
+    retrieval_shadowed = retrieval_blocked and not retrieval_active
+    rollback_active = state in {"rollback_cooldown"}
+    degraded_active = (
+        state in {"runtime_degraded", "storage_degraded"}
+        or degrade_mode in {"degraded", "emergency"}
+        or not semantic_store_available
+    )
+    signals = {
+        "strict_force_off": _build_signal_view(lane="memory_curation", signal="strict_force_off"),
+        "rollout_frozen": _build_signal_view(lane="memory_curation", signal="rollout_frozen"),
+        "rollback_active": _build_signal_view(
+            lane="memory_curation",
+            signal="rollback_active",
+            active=rollback_active,
+            reasons=reasons if rollback_active else [],
+        ),
+        "verification_backpressure": _build_signal_view(lane="memory_curation", signal="verification_backpressure"),
+        "retrieval_backpressure": _build_signal_view(
+            lane="memory_curation",
+            signal="retrieval_backpressure",
+            active=retrieval_active,
+            shadowed=retrieval_shadowed,
+            reasons=list(quality_governance.get("reasons") or []),
+        ),
+        "degraded_mode": _build_signal_view(
+            lane="memory_curation",
+            signal="degraded_mode",
+            active=degraded_active,
+            reasons=(
+                reasons
+                if degraded_active and state in {"runtime_degraded", "storage_degraded"}
+                else [f"degrade_mode:{degrade_mode}"] if degrade_mode in {"degraded", "emergency"} else []
+            )
+            + ([] if semantic_store_available else ["semantic_store_unavailable"]),
+        ),
+    }
+    active_states = [state] if blocked and state != "allow" else []
+    shadowed_states = ["retrieval_backpressure"] if retrieval_shadowed else []
+    return {
+        "lane": "memory_curation",
+        "state": state,
+        "blocked": blocked,
+        "action": _governance_action_for_state(state),
+        "risk_class": _governance_risk_for_state(state),
+        "reasons": reasons,
+        "active_states": active_states,
+        "shadowed_states": shadowed_states,
+        "signals": signals,
+    }
+
+
+def _build_system_governance_lane(system_view: Mapping[str, Any]) -> dict[str, Any]:
+    state = _text(system_view.get("state"), limit=64).lower() or "unknown"
+    reasons = _normalize_reason_list(system_view.get("degraded_reasons") or [], limit=6)
+    blocked = state not in {"healthy", "ok", "pass", ""}
+    active_states = ["degraded_mode"] if blocked else []
+    return {
+        "lane": "system",
+        "state": state,
+        "blocked": blocked,
+        "action": _governance_action_for_state(state),
+        "risk_class": _governance_risk_for_state(state),
+        "reasons": reasons,
+        "active_states": active_states,
+        "shadowed_states": [],
+        "signals": {
+            "strict_force_off": _build_signal_view(lane="system", signal="strict_force_off"),
+            "rollout_frozen": _build_signal_view(lane="system", signal="rollout_frozen"),
+            "rollback_active": _build_signal_view(lane="system", signal="rollback_active"),
+            "verification_backpressure": _build_signal_view(lane="system", signal="verification_backpressure"),
+            "retrieval_backpressure": _build_signal_view(lane="system", signal="retrieval_backpressure"),
+            "degraded_mode": _build_signal_view(
+                lane="system",
+                signal="degraded_mode",
+                active=blocked,
+                reasons=reasons,
+            ),
+        },
+    }
+
+
+def _aggregate_governance_signals(lanes: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    aggregated: dict[str, Any] = {}
+    for signal_name in _NAMED_GOVERNANCE_SIGNALS:
+        lanes_with_signal: list[str] = []
+        reasons: list[str] = []
+        actions: list[str] = []
+        risks: list[str] = []
+        active = False
+        shadowed = False
+        for lane_name, lane in dict(lanes or {}).items():
+            signal = dict((lane or {}).get("signals") or {}).get(signal_name)
+            if not isinstance(signal, Mapping):
+                continue
+            if bool(signal.get("active")) or bool(signal.get("shadowed")):
+                lanes_with_signal.append(_text(lane_name, limit=64))
+            if bool(signal.get("active")):
+                active = True
+            if bool(signal.get("shadowed")):
+                shadowed = True
+            reasons.extend(list(signal.get("reasons") or []))
+            actions.append(_text(signal.get("action"), limit=32).lower())
+            risks.append(_text(signal.get("risk_class"), limit=32).lower())
+        aggregated[signal_name] = {
+            "active": active,
+            "shadowed": shadowed,
+            "lanes": _merge_unique_texts(lanes_with_signal, limit=4),
+            "reasons": _merge_unique_texts(reasons, limit=6),
+            "action": _pick_highest(actions, ranking=_ACTION_PRIORITY, default="allow"),
+            "risk_class": _pick_highest(risks, ranking=_RISK_PRIORITY, default="none"),
+        }
+    return aggregated
+
+
+def summarize_phase_e_governance_lanes(lanes: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    blocked_lanes = [
+        _text(name, limit=64)
+        for name, lane in dict(lanes or {}).items()
+        if bool((lane or {}).get("blocked"))
+    ]
+    active_states = _merge_unique_texts(
+        [
+            item
+            for lane in dict(lanes or {}).values()
+            for item in list((lane or {}).get("active_states") or [])
+        ],
+        limit=8,
+    )
+    prefixed_reasons = [
+        f"{_text(name, limit=64)}:{reason}"
+        for name, lane in dict(lanes or {}).items()
+        for reason in list((lane or {}).get("reasons") or [])
+    ]
+    lane_actions = [
+        _text((lane or {}).get("action"), limit=32).lower()
+        for lane in dict(lanes or {}).values()
+        if _text((lane or {}).get("action"), limit=32)
+    ]
+    lane_risks = [
+        _text((lane or {}).get("risk_class"), limit=32).lower()
+        for lane in dict(lanes or {}).values()
+        if _text((lane or {}).get("risk_class"), limit=32)
+    ]
+    best_state = "allow"
+    best_state_score = (-1, -1)
+    for lane in dict(lanes or {}).values():
+        if not bool((lane or {}).get("blocked")):
+            continue
+        state = _text((lane or {}).get("state"), limit=64).lower()
+        if not state:
+            continue
+        state_score = (
+            int(_RISK_PRIORITY.get(_governance_risk_for_state(state), 0)),
+            int(_ACTION_PRIORITY.get(_governance_action_for_state(state), 0)),
+        )
+        if state_score > best_state_score:
+            best_state = state
+            best_state_score = state_score
+    return {
+        "blocked_lanes": blocked_lanes,
+        "blocked_lane_count": len(blocked_lanes),
+        "active_states": active_states,
+        "state": best_state,
+        "action": _pick_highest(lane_actions, ranking=_ACTION_PRIORITY, default="allow"),
+        "highest_risk_class": _pick_highest(lane_risks, ranking=_RISK_PRIORITY, default="none"),
+        "reasons": _merge_unique_texts(prefixed_reasons, limit=6),
+    }
+
+
+def build_phase_e_governance_surface(
+    *,
+    system_view: Mapping[str, Any],
+    improvement_governance: Mapping[str, Any],
+    memory_curation_status: Mapping[str, Any],
+) -> dict[str, Any]:
+    lanes = {
+        "improvement": _build_improvement_governance_lane(improvement_governance),
+        "memory_curation": _build_memory_governance_lane(memory_curation_status),
+        "system": _build_system_governance_lane(system_view),
+    }
+    summary = summarize_phase_e_governance_lanes(lanes)
+    signals = _aggregate_governance_signals(lanes)
+    active_signal_count = sum(1 for signal in signals.values() if bool((signal or {}).get("active")))
+    shadowed_signal_count = sum(1 for signal in signals.values() if bool((signal or {}).get("shadowed")))
+    return {
+        **summary,
+        "blocked": bool(summary.get("blocked_lane_count")),
+        "active_signal_count": active_signal_count,
+        "shadowed_signal_count": shadowed_signal_count,
+        "signals": signals,
+        "lanes": lanes,
+    }
+
+
 def _improvement_lane_view(
     *,
     governance: Mapping[str, Any],
@@ -360,15 +736,25 @@ def build_phase_e_operator_snapshot(
             events=recent_events,
         ),
     }
+    system_view = _system_view(system_snapshot)
     lane_summary = summarize_phase_e_operator_lanes(lanes)
+    governance = build_phase_e_governance_surface(
+        system_view=system_view,
+        improvement_governance=improvement_governance,
+        memory_curation_status=memory_curation_status,
+    )
     return {
         "generated_at": _iso_now(),
         "summary": {
             **lane_summary,
             "system_state": _text((system_snapshot.get("ops") or {}).get("state"), limit=32).lower() or "unknown",
+            "governance_state": _text(governance.get("state"), limit=64),
+            "governance_action": _text(governance.get("action"), limit=32),
+            "governance_risk_class": _text(governance.get("highest_risk_class"), limit=32),
         },
-        "system": _system_view(system_snapshot),
+        "system": system_view,
         "lanes": lanes,
+        "governance": governance,
     }
 
 

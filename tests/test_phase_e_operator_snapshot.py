@@ -72,6 +72,17 @@ def test_build_phase_e_operator_snapshot_unifies_lanes_and_system() -> None:
             "rollout_guard_state": "strict_force_off",
             "rollout_guard_blocked": True,
             "rollout_guard_reasons": ["policy_runtime:strict_force_off"],
+            "shadowed_guard_states": ["verification_backpressure"],
+            "shadowed_guard_reasons": {
+                "verification_backpressure": ["verification_sample_total:3"],
+            },
+            "strict_force_off": True,
+            "verification_backpressure": {
+                "blocked": True,
+                "active": False,
+                "shadowed": True,
+                "reasons": ["verification_sample_total:3"],
+            },
         },
         improvement_candidate_views=[
             {"candidate_id": "m12:1", "summary": "tool:find_text_coordinates | prio=1.320"},
@@ -94,6 +105,11 @@ def test_build_phase_e_operator_snapshot_unifies_lanes_and_system() -> None:
                 "blocked": True,
                 "reasons": ["recent_memory_curation_run"],
             },
+            "quality_governance": {
+                "state": "retrieval_backpressure",
+                "blocked": True,
+                "reasons": ["pass_rate=0.25", "failed_runs=2"],
+            },
         },
     )
 
@@ -110,6 +126,19 @@ def test_build_phase_e_operator_snapshot_unifies_lanes_and_system() -> None:
     assert snapshot["lanes"]["memory_curation"]["last_snapshot_id"] == "snap-2"
     assert snapshot["lanes"]["memory_curation"]["last_completed_at"] == "2026-04-16T00:13:00+02:00"
     assert snapshot["lanes"]["memory_curation"]["next_candidates"][0]["candidate_id"] == "mc:1"
+    assert snapshot["summary"]["governance_state"] == "strict_force_off"
+    assert snapshot["summary"]["governance_action"] == "freeze"
+    assert snapshot["summary"]["governance_risk_class"] == "critical"
+    assert snapshot["governance"]["action"] == "freeze"
+    assert snapshot["governance"]["highest_risk_class"] == "critical"
+    assert snapshot["governance"]["blocked_lane_count"] == 3
+    assert snapshot["governance"]["signals"]["strict_force_off"]["active"] is True
+    assert snapshot["governance"]["signals"]["verification_backpressure"]["shadowed"] is True
+    assert snapshot["governance"]["signals"]["retrieval_backpressure"]["active"] is True
+    assert snapshot["governance"]["signals"]["degraded_mode"]["active"] is True
+    assert snapshot["governance"]["lanes"]["improvement"]["action"] == "freeze"
+    assert snapshot["governance"]["lanes"]["memory_curation"]["action"] == "hold"
+    assert snapshot["governance"]["lanes"]["system"]["blocked"] is True
 
 
 @pytest.mark.asyncio
@@ -176,6 +205,8 @@ async def test_collect_phase_e_operator_snapshot_uses_live_builders(monkeypatch)
             "rollout_guard_state": "allow",
             "rollout_guard_blocked": False,
             "rollout_guard_reasons": [],
+            "strict_force_off": False,
+            "verification_backpressure": {"blocked": False, "active": False, "shadowed": False},
         },
     )
     monkeypatch.setattr(
@@ -185,6 +216,7 @@ async def test_collect_phase_e_operator_snapshot_uses_live_builders(monkeypatch)
             "last_snapshots": [{"snapshot_id": "snap-live", "status": "completed"}],
             "pending_candidates": [],
             "autonomy_governance": {"state": "allow", "blocked": False, "reasons": []},
+            "quality_governance": {"state": "allow", "blocked": False, "reasons": []},
         },
     )
     monkeypatch.setattr("orchestration.task_queue.get_queue", lambda: object())
@@ -195,3 +227,6 @@ async def test_collect_phase_e_operator_snapshot_uses_live_builders(monkeypatch)
     assert snapshot["lanes"]["improvement"]["blocked"] is False
     assert snapshot["lanes"]["memory_curation"]["last_snapshot_id"] == "snap-live"
     assert snapshot["summary"]["blocked_lane_count"] == 0
+    assert snapshot["governance"]["blocked"] is False
+    assert snapshot["governance"]["action"] == "allow"
+    assert snapshot["governance"]["highest_risk_class"] == "none"

@@ -1023,6 +1023,40 @@ Verifikation:
 - `pytest -q tests/test_phase_e_operator_snapshot.py tests/test_phase_e_operator_snapshot_hypothesis.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py` -> `25 passed`
 - `python -m crosshair check tests/test_phase_e_operator_snapshot_crosshair.py` -> Exit `0`
 
+### E6.2 Governance-Risk Surface
+
+Stand:
+
+- erster Runtime-Slice umgesetzt
+
+Umgesetzt:
+
+- [orchestration/phase_e_operator_snapshot.py](/home/fatih-ubuntu/dev/timus/orchestration/phase_e_operator_snapshot.py)
+  - neuer zentraler `governance`-Block im Snapshot
+  - vereinheitlicht jetzt die wichtigsten Governance-Signale:
+    - `strict_force_off`
+    - `rollout_frozen`
+    - `rollback_active`
+    - `verification_backpressure`
+    - `retrieval_backpressure`
+    - `degraded_mode`
+  - zeigt pro Lane:
+    - `action`
+    - `risk_class`
+    - `active_states`
+    - `shadowed_states`
+    - `signals`
+  - zeigt zentral:
+    - `action`
+    - `highest_risk_class`
+    - `blocked_lanes`
+    - `active_states`
+
+Verifikation:
+
+- `pytest -q tests/test_phase_e_operator_snapshot.py tests/test_phase_e_operator_snapshot_hypothesis.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py` -> `26 passed`
+- `python -m crosshair check tests/test_phase_e_operator_snapshot_crosshair.py` -> Exit `0`
+
 ## Arbeitsreihenfolge
 
 ### Phase-E-Start

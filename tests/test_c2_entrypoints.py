@@ -324,6 +324,12 @@ def test_operator_snapshot_endpoint_returns_unified_view(client):
             "system": {
                 "state": "healthy",
             },
+            "governance": {
+                "state": "cooldown_active",
+                "action": "hold",
+                "highest_risk_class": "medium",
+                "blocked": True,
+            },
             "lanes": {
                 "improvement": {"state": "allow", "blocked": False},
                 "memory_curation": {"state": "cooldown_active", "blocked": True},
@@ -341,6 +347,8 @@ def test_operator_snapshot_endpoint_returns_unified_view(client):
     assert data["status"] == "success"
     assert data["summary"]["blocked_lane_count"] == 1
     assert data["system"]["state"] == "healthy"
+    assert data["governance"]["action"] == "hold"
+    assert data["governance"]["highest_risk_class"] == "medium"
     assert data["lanes"]["improvement"]["state"] == "allow"
     assert data["lanes"]["memory_curation"]["blocked"] is True
 

@@ -228,6 +228,12 @@ async def test_get_phase_e_operator_snapshot_returns_unified_snapshot(monkeypatc
             "generated_at": "2026-04-16T00:30:00+02:00",
             "summary": {"blocked_lane_count": 1, "blocked_lanes": ["improvement"]},
             "system": {"state": "degraded"},
+            "governance": {
+                "state": "strict_force_off",
+                "action": "freeze",
+                "highest_risk_class": "critical",
+                "blocked": True,
+            },
             "lanes": {
                 "improvement": {"state": "strict_force_off", "blocked": True},
                 "memory_curation": {"state": "allow", "blocked": False},
@@ -244,5 +250,7 @@ async def test_get_phase_e_operator_snapshot_returns_unified_snapshot(monkeypatc
     assert result["status"] == "ok"
     assert result["summary"]["blocked_lane_count"] == 1
     assert result["system"]["state"] == "degraded"
+    assert result["governance"]["action"] == "freeze"
+    assert result["governance"]["highest_risk_class"] == "critical"
     assert result["lanes"]["improvement"]["state"] == "strict_force_off"
     assert result["lanes"]["memory_curation"]["blocked"] is False

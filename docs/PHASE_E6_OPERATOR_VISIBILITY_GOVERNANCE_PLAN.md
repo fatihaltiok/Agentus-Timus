@@ -163,6 +163,10 @@ Ziel:
 
 - Risk-, Freeze- und Rollback-Entscheidungen als explizite Governance-Sicht sichtbar machen
 
+Stand:
+
+- erster Runtime-Slice umgesetzt
+
 Schwerpunkte:
 
 - gemeinsame Darstellung fuer:
@@ -188,6 +192,42 @@ Technische Anker:
 Erfolgskriterium:
 
 - die aktuelle Governance-Lage von Phase E ist ohne Log-Lesen ablesbar
+
+Umgesetzt:
+
+- [orchestration/phase_e_operator_snapshot.py](/home/fatih-ubuntu/dev/timus/orchestration/phase_e_operator_snapshot.py)
+  - neuer zentraler `governance`-Block im Operator-Snapshot
+  - vereinheitlicht jetzt:
+    - `strict_force_off`
+    - `rollout_frozen`
+    - `rollback_active`
+    - `verification_backpressure`
+    - `retrieval_backpressure`
+    - `degraded_mode`
+  - zeigt pro Lane:
+    - `state`
+    - `action`
+    - `risk_class`
+    - `active_states`
+    - `shadowed_states`
+    - `signals`
+  - zeigt zentral:
+    - `action`
+    - `highest_risk_class`
+    - `active_states`
+    - `blocked_lanes`
+- vorhandene MCP-/Tool-Surface aus E6.1 liefert diesen Governance-Block jetzt automatisch mit
+- Contract-Abdeckung erweitert in:
+  - [tests/test_phase_e_operator_snapshot.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_e_operator_snapshot.py)
+  - [tests/test_phase_e_operator_snapshot_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_e_operator_snapshot_hypothesis.py)
+  - [tests/test_phase_e_operator_snapshot_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_e_operator_snapshot_crosshair.py)
+  - [tests/test_self_improvement_tool_ops.py](/home/fatih-ubuntu/dev/timus/tests/test_self_improvement_tool_ops.py)
+  - [tests/test_c2_entrypoints.py](/home/fatih-ubuntu/dev/timus/tests/test_c2_entrypoints.py)
+
+Verifikation:
+
+- `pytest -q tests/test_phase_e_operator_snapshot.py tests/test_phase_e_operator_snapshot_hypothesis.py tests/test_self_improvement_tool_ops.py tests/test_c2_entrypoints.py` -> `26 passed`
+- `python -m crosshair check tests/test_phase_e_operator_snapshot_crosshair.py` -> Exit `0`
 
 ### E6.3 Approval Paths for Higher Risk Classes
 
