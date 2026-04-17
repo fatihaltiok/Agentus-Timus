@@ -8,6 +8,7 @@ INSTALLER_SCRIPT="${SCRIPT_DIR}/install_timus_stack.sh"
 HOST_SETUP_SCRIPT="${SCRIPT_DIR}/setup_timus_host.sh"
 PRODUCTION_GATES_SCRIPT="${SCRIPT_DIR}/run_production_gates.py"
 DOCTOR_SCRIPT="${SCRIPT_DIR}/timus_doctor.py"
+CONTRACT_EVAL_SCRIPT="${SCRIPT_DIR}/run_phase_f_contract_eval.py"
 GENERATED_SYSTEMD_DIR="${PROJECT_ROOT}/.generated/systemd"
 
 QDRANT_SERVICE="qdrant.service"
@@ -38,6 +39,7 @@ Nutzung:
   ./scripts/timusctl.sh status
   ./scripts/timusctl.sh health
   ./scripts/timusctl.sh doctor [--json|--strict]
+  ./scripts/timusctl.sh contracts [--json|--strict]
   ./scripts/timusctl.sh install [--no-start]
   ./scripts/timusctl.sh setup-host [--install]
   ./scripts/timusctl.sh logs [qdrant|mcp|dispatcher]
@@ -49,6 +51,7 @@ Befehle:
   status     Zeigt kompakten Service-Status
   health     Prueft qdrant, mcp und production gates
   doctor     Gibt einen einheitlichen Diagnose- und Lifecycle-Report fuer den Stack aus
+  contracts  Fuehrt die deterministischen Phase-F-Vertragschecks aus
   install    Installiert/aktiviert den gesamten Stack; startet ihn standardmaessig direkt
   setup-host Rendert portable systemd-Units fuer diesen Host; mit --install direkt inklusive Installation
   logs       Folgt den Logs eines Dienstes oder allen dreien
@@ -187,6 +190,16 @@ show_doctor() {
     python "$DOCTOR_SCRIPT" ${doctor_arg:+"$doctor_arg"}
 }
 
+show_contracts() {
+    local contract_arg="${1:-}"
+    if [[ -n "$contract_arg" && "$contract_arg" != "--json" && "$contract_arg" != "--strict" ]]; then
+        err "Unbekannte contracts-Option: $contract_arg"
+        usage
+        exit 1
+    fi
+    python "$CONTRACT_EVAL_SCRIPT" ${contract_arg:+"$contract_arg"}
+}
+
 install_stack() {
     local installer_args=(--enable --start)
     if [[ -d "$GENERATED_SYSTEMD_DIR" ]]; then
@@ -275,6 +288,9 @@ case "$COMMAND" in
         ;;
     doctor)
         show_doctor "$ARG"
+        ;;
+    contracts)
+        show_contracts "$ARG"
         ;;
     install)
         install_stack

@@ -306,6 +306,40 @@ Erfolgskriterium:
 
 - zentrale Architekturclaims koennen als Contracts oder Evals gegen das System geprueft werden
 
+Stand:
+
+- erster Runtime-Slice umgesetzt
+
+Umgesetzt:
+
+- [orchestration/phase_f_contract_eval.py](/home/fatih-ubuntu/dev/timus/orchestration/phase_f_contract_eval.py)
+  - neuer maschinenlesbarer `phase_f_contract_eval_v1`-Report
+  - prueft deterministisch vier Kernclaims:
+    - `Phase D` Approval-/Auth-Workflow-Vertrag
+    - Longrunner-Blocker-/Terminal-Vertrag
+    - `F2` Typed-Handoff-/Preflight-Vertrag
+    - `Phase E` Runtime-Lane-/Operator-Surface-Vertrag
+  - liefert:
+    - `contract_version`
+    - `results`
+    - `summary`
+- [scripts/run_phase_f_contract_eval.py](/home/fatih-ubuntu/dev/timus/scripts/run_phase_f_contract_eval.py)
+  - CLI fuer Text- und JSON-Ausgabe
+  - unterstuetzt:
+    - `--json`
+    - `--strict`
+- [scripts/timusctl.sh](/home/fatih-ubuntu/dev/timus/scripts/timusctl.sh)
+  - neuer Einstiegspunkt:
+    - `./scripts/timusctl.sh contracts`
+
+Verifikation:
+
+- `python -m py_compile orchestration/phase_f_contract_eval.py scripts/run_phase_f_contract_eval.py tests/test_phase_f_contract_eval.py tests/test_phase_f_contract_eval_hypothesis.py tests/test_phase_f_contract_eval_crosshair.py` gruen
+- `bash -n scripts/timusctl.sh`
+- `pytest -q tests/test_phase_f_contract_eval.py tests/test_phase_f_contract_eval_hypothesis.py` -> gruen
+- `python -m crosshair check tests/test_phase_f_contract_eval_crosshair.py` -> Exit `0`
+- `python scripts/run_phase_f_contract_eval.py --json` -> `passed=4 failed=0`
+
 ### F5. Maschinenlesbares Runtime-/Lane-Board
 
 Ziel:

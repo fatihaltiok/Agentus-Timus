@@ -2,6 +2,47 @@
 
 ---
 
+## Fortschritt 2026-04-17 - Phase F F4 Ausfuehrbare Architektur- und Verhaltensvertraege
+
+F4 ist mit einem ersten maschinenlesbaren Contract-Runner gestartet. Timus prueft zentrale Architekturclaims jetzt nicht mehr nur indirekt ueber verstreute Tests, sondern ueber einen eigenen ausfuehrbaren Report fuer Approval/Auth, Longrunner, Typed Handoffs und Runtime-Lanes.
+
+Geaendert:
+
+- [orchestration/phase_f_contract_eval.py](/home/fatih-ubuntu/dev/timus/orchestration/phase_f_contract_eval.py)
+  - neuer `phase_f_contract_eval_v1`-Report
+  - evaluiert deterministisch:
+    - `Phase D` Approval-/Auth-Workflow-Vertrag
+    - Longrunner-Blocker-/Terminal-Vertrag
+    - `F2` Typed-Handoff-/Preflight-Vertrag
+    - `Phase E` Runtime-Lane-/Operator-Surface-Vertrag
+  - liefert:
+    - `contract_version`
+    - `results`
+    - `summary`
+- [scripts/run_phase_f_contract_eval.py](/home/fatih-ubuntu/dev/timus/scripts/run_phase_f_contract_eval.py)
+  - CLI fuer Text- und JSON-Reports
+  - unterstuetzt:
+    - `--json`
+    - `--strict`
+- [scripts/timusctl.sh](/home/fatih-ubuntu/dev/timus/scripts/timusctl.sh)
+  - neuer Bedienpfad:
+    - `./scripts/timusctl.sh contracts`
+
+Tests:
+
+- neu:
+  - [tests/test_phase_f_contract_eval.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_f_contract_eval.py)
+  - [tests/test_phase_f_contract_eval_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_f_contract_eval_hypothesis.py)
+  - [tests/test_phase_f_contract_eval_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_f_contract_eval_crosshair.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/phase_f_contract_eval.py scripts/run_phase_f_contract_eval.py tests/test_phase_f_contract_eval.py tests/test_phase_f_contract_eval_hypothesis.py tests/test_phase_f_contract_eval_crosshair.py` gruen
+- `bash -n scripts/timusctl.sh`
+- `pytest -q tests/test_phase_f_contract_eval.py tests/test_phase_f_contract_eval_hypothesis.py` -> gruen
+- `python -m crosshair check tests/test_phase_f_contract_eval_crosshair.py` -> Exit `0`
+- `python scripts/run_phase_f_contract_eval.py --json` -> `passed=4 failed=0`
+
 ## Fortschritt 2026-04-17 - Phase F F3 Canvas Chat Parity Harness
 
 F3 ist mit einem ersten echten Runtime-Harness gestartet. Timus kann den `/chat`-Pfad jetzt nicht nur live benutzen, sondern deterministisch in klaren Szenarien nachstellen.
