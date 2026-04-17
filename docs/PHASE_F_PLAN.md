@@ -179,7 +179,7 @@ Erfolgskriterium:
 
 Stand:
 
-- erster Runtime-Slice umgesetzt
+- als zusammenhaengender Closeout-Block umgesetzt
 
 Umgesetzt:
 
@@ -291,6 +291,58 @@ Umgesetzt:
   - unterstuetzt:
     - `--json`
     - `--strict`
+- [delegation_parity_harness.py](/home/fatih-ubuntu/dev/timus/orchestration/delegation_parity_harness.py)
+  - neuer deterministischer Delegation-Parity-Harness
+  - deckt reproduzierbar die echten Delegationsausgaenge ab:
+    - `success`
+    - `partial` ueber Phase-D-Workflow-Rueckgabe
+    - `partial` ueber Research-Timeout
+    - `error`
+  - prueft je Szenario:
+    - Delegationsergebnis
+    - Transport-Hook-Signale
+    - SSE-Terminalstatus
+    - Timeout-Metadaten
+  - liefert:
+    - `contract_version`
+    - `results`
+    - `summary`
+- [longrunner_queue_parity_harness.py](/home/fatih-ubuntu/dev/timus/orchestration/longrunner_queue_parity_harness.py)
+  - neuer deterministischer Longrunner-/Queue-Parity-Harness
+  - deckt reproduzierbar ab:
+    - erfolgreicher Longrunner-Terminalpfad
+    - fehlgeschlagener Longrunner-Terminalpfad
+    - Pending-Workflow-Resume
+    - Pending-Challenge-Resolution
+    - Queue-Retry-zu-Complete
+    - Queue-Stale-Recovery
+  - prueft je Szenario:
+    - Eventfolge
+    - Blocker-/Reply-Paritaet
+    - Queue-Statusuebergaenge
+    - Recovery-Verhalten
+  - liefert:
+    - `contract_version`
+    - `results`
+    - `summary`
+- [phase_f_parity_harness_suite.py](/home/fatih-ubuntu/dev/timus/orchestration/phase_f_parity_harness_suite.py)
+  - gemeinsame F3-Suite ueber alle Harnesses:
+    - `/chat`
+    - Approval/Auth/Handover
+    - Delegation
+    - Longrunner/Queue
+  - liefert:
+    - `contract_version`
+    - `results`
+    - `summary`
+- [run_phase_f_parity_harness_suite.py](/home/fatih-ubuntu/dev/timus/scripts/run_phase_f_parity_harness_suite.py)
+  - gemeinsamer CLI-Runner fuer den gesamten F3-Block
+  - unterstuetzt:
+    - `--json`
+    - `--strict`
+- [timusctl.sh](/home/fatih-ubuntu/dev/timus/scripts/timusctl.sh)
+  - neuer Bedienpfad:
+    - `./scripts/timusctl.sh parity`
 
 Verifikation:
 
@@ -302,6 +354,10 @@ Verifikation:
 - `pytest -q tests/test_approval_auth_handover_parity_harness.py tests/test_approval_auth_handover_parity_harness_hypothesis.py` -> `4 passed`
 - `python -m crosshair check tests/test_approval_auth_handover_parity_harness_crosshair.py` -> Exit `0`
 - `python scripts/run_approval_auth_handover_parity_harness.py --json` -> `passed=4 failed=0`
+- `python -m py_compile orchestration/delegation_parity_harness.py orchestration/longrunner_queue_parity_harness.py orchestration/phase_f_parity_harness_suite.py scripts/run_phase_f_parity_harness_suite.py tests/test_delegation_parity_harness.py tests/test_delegation_parity_harness_hypothesis.py tests/test_delegation_parity_harness_crosshair.py tests/test_longrunner_queue_parity_harness.py tests/test_longrunner_queue_parity_harness_hypothesis.py tests/test_longrunner_queue_parity_harness_crosshair.py tests/test_phase_f_parity_harness_suite.py tests/test_phase_f_parity_harness_suite_hypothesis.py tests/test_phase_f_parity_harness_suite_crosshair.py` gruen
+- `pytest -q tests/test_delegation_parity_harness.py tests/test_delegation_parity_harness_hypothesis.py tests/test_longrunner_queue_parity_harness.py tests/test_longrunner_queue_parity_harness_hypothesis.py tests/test_phase_f_parity_harness_suite.py tests/test_phase_f_parity_harness_suite_hypothesis.py` -> erwartet gruen
+- `python -m crosshair check tests/test_delegation_parity_harness_crosshair.py tests/test_longrunner_queue_parity_harness_crosshair.py tests/test_phase_f_parity_harness_suite_crosshair.py` -> erwartet Exit `0`
+- `python scripts/run_phase_f_parity_harness_suite.py --json` -> erwartet `suite_failed=0`
 
 ### F4. Ausfuehrbare Architektur- und Verhaltensvertraege
 

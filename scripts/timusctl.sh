@@ -10,6 +10,7 @@ PRODUCTION_GATES_SCRIPT="${SCRIPT_DIR}/run_production_gates.py"
 DOCTOR_SCRIPT="${SCRIPT_DIR}/timus_doctor.py"
 CONTRACT_EVAL_SCRIPT="${SCRIPT_DIR}/run_phase_f_contract_eval.py"
 RUNTIME_BOARD_SCRIPT="${SCRIPT_DIR}/run_phase_f_runtime_board.py"
+PARITY_SUITE_SCRIPT="${SCRIPT_DIR}/run_phase_f_parity_harness_suite.py"
 GENERATED_SYSTEMD_DIR="${PROJECT_ROOT}/.generated/systemd"
 
 QDRANT_SERVICE="qdrant.service"
@@ -42,6 +43,7 @@ Nutzung:
   ./scripts/timusctl.sh doctor [--json|--strict]
   ./scripts/timusctl.sh contracts [--json|--strict]
   ./scripts/timusctl.sh board [--json|--strict]
+  ./scripts/timusctl.sh parity [--json|--strict]
   ./scripts/timusctl.sh install [--no-start]
   ./scripts/timusctl.sh setup-host [--install]
   ./scripts/timusctl.sh logs [qdrant|mcp|dispatcher]
@@ -55,6 +57,7 @@ Befehle:
   doctor     Gibt einen einheitlichen Diagnose- und Lifecycle-Report fuer den Stack aus
   contracts  Fuehrt die deterministischen Phase-F-Vertragschecks aus
   board      Gibt das maschinenlesbare Runtime-/Lane-Board aus
+  parity     Fuehrt die deterministische Phase-F-Parity-Harness-Suite aus
   install    Installiert/aktiviert den gesamten Stack; startet ihn standardmaessig direkt
   setup-host Rendert portable systemd-Units fuer diesen Host; mit --install direkt inklusive Installation
   logs       Folgt den Logs eines Dienstes oder allen dreien
@@ -213,6 +216,16 @@ show_board() {
     python "$RUNTIME_BOARD_SCRIPT" ${board_arg:+"$board_arg"}
 }
 
+show_parity() {
+    local parity_arg="${1:-}"
+    if [[ -n "$parity_arg" && "$parity_arg" != "--json" && "$parity_arg" != "--strict" ]]; then
+        err "Unbekannte parity-Option: $parity_arg"
+        usage
+        exit 1
+    fi
+    python "$PARITY_SUITE_SCRIPT" ${parity_arg:+"$parity_arg"}
+}
+
 install_stack() {
     local installer_args=(--enable --start)
     if [[ -d "$GENERATED_SYSTEMD_DIR" ]]; then
@@ -307,6 +320,9 @@ case "$COMMAND" in
         ;;
     board)
         show_board "$ARG"
+        ;;
+    parity)
+        show_parity "$ARG"
         ;;
     install)
         install_stack

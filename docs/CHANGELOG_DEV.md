@@ -2,6 +2,64 @@
 
 ---
 
+## Fortschritt 2026-04-17 - Phase F F3 Harness Closeout
+
+F3 ist jetzt als zusammenhaengender Block geschlossen. Timus kann nicht mehr nur `/chat` und die Phase-D-Blockerpfade deterministisch pruefen, sondern den gesamten relevanten Parity-Bereich von Delegation ueber Longrunner-/Queue-Pfade bis zur gemeinsamen F3-Suite in einem Lauf reproduzierbar auswerten.
+
+Geaendert:
+
+- [orchestration/delegation_parity_harness.py](/home/fatih-ubuntu/dev/timus/orchestration/delegation_parity_harness.py)
+  - neuer deterministischer Delegation-Parity-Harness
+  - deckt die realen Delegationsausgaenge ab:
+    - `success`
+    - `partial` durch Workflow-Rueckgabe
+    - `partial` durch Research-Timeout
+    - `error`
+  - prueft:
+    - Ergebnisstatus
+    - Transport-Hook-Signale
+    - SSE-Terminalstatus
+    - Timeout-Metadaten
+- [orchestration/longrunner_queue_parity_harness.py](/home/fatih-ubuntu/dev/timus/orchestration/longrunner_queue_parity_harness.py)
+  - neuer deterministischer Longrunner-/Queue-Parity-Harness
+  - deckt reproduzierbar ab:
+    - Longrunner success/failure
+    - Pending-Workflow-Resume
+    - Pending-Challenge-Resolution
+    - Queue-Retry-zu-Complete
+    - Queue-Stale-Recovery
+- [orchestration/phase_f_parity_harness_suite.py](/home/fatih-ubuntu/dev/timus/orchestration/phase_f_parity_harness_suite.py)
+  - gemeinsame F3-Suite ueber:
+    - `canvas_chat`
+    - `approval_auth_handover`
+    - `delegation`
+    - `longrunner_queue`
+- [scripts/run_phase_f_parity_harness_suite.py](/home/fatih-ubuntu/dev/timus/scripts/run_phase_f_parity_harness_suite.py)
+  - neuer gemeinsamer CLI-Runner fuer den gesamten F3-Block
+- [scripts/timusctl.sh](/home/fatih-ubuntu/dev/timus/scripts/timusctl.sh)
+  - neuer Bedienpfad:
+    - `./scripts/timusctl.sh parity`
+
+Tests:
+
+- neu:
+  - [tests/test_delegation_parity_harness.py](/home/fatih-ubuntu/dev/timus/tests/test_delegation_parity_harness.py)
+  - [tests/test_delegation_parity_harness_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_delegation_parity_harness_hypothesis.py)
+  - [tests/test_delegation_parity_harness_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_delegation_parity_harness_crosshair.py)
+  - [tests/test_longrunner_queue_parity_harness.py](/home/fatih-ubuntu/dev/timus/tests/test_longrunner_queue_parity_harness.py)
+  - [tests/test_longrunner_queue_parity_harness_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_longrunner_queue_parity_harness_hypothesis.py)
+  - [tests/test_longrunner_queue_parity_harness_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_longrunner_queue_parity_harness_crosshair.py)
+  - [tests/test_phase_f_parity_harness_suite.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_f_parity_harness_suite.py)
+  - [tests/test_phase_f_parity_harness_suite_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_f_parity_harness_suite_hypothesis.py)
+  - [tests/test_phase_f_parity_harness_suite_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_f_parity_harness_suite_crosshair.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/delegation_parity_harness.py orchestration/longrunner_queue_parity_harness.py orchestration/phase_f_parity_harness_suite.py scripts/run_phase_f_parity_harness_suite.py tests/test_delegation_parity_harness.py tests/test_delegation_parity_harness_hypothesis.py tests/test_delegation_parity_harness_crosshair.py tests/test_longrunner_queue_parity_harness.py tests/test_longrunner_queue_parity_harness_hypothesis.py tests/test_longrunner_queue_parity_harness_crosshair.py tests/test_phase_f_parity_harness_suite.py tests/test_phase_f_parity_harness_suite_hypothesis.py tests/test_phase_f_parity_harness_suite_crosshair.py` gruen
+- `pytest -q tests/test_delegation_parity_harness.py tests/test_delegation_parity_harness_hypothesis.py tests/test_longrunner_queue_parity_harness.py tests/test_longrunner_queue_parity_harness_hypothesis.py tests/test_phase_f_parity_harness_suite.py tests/test_phase_f_parity_harness_suite_hypothesis.py` -> erwartet gruen
+- `python -m crosshair check tests/test_delegation_parity_harness_crosshair.py tests/test_longrunner_queue_parity_harness_crosshair.py tests/test_phase_f_parity_harness_suite_crosshair.py` -> erwartet Exit `0`
+- `python scripts/run_phase_f_parity_harness_suite.py --json` -> erwartet `suite_failed=0`
+
 ## Fortschritt 2026-04-17 - Phase F F3 Approval/Auth/Handover Parity Harness
 
 F3 ist im zweiten Slice jetzt nicht mehr nur auf `/chat` begrenzt. Timus kann die zentralen Phase-D-Blockerpfade fuer Approval, Login-Wall, nutzergesteuerten Login-Handover und Security-Challenges jetzt ebenfalls deterministisch und wiederholbar pruefen.
