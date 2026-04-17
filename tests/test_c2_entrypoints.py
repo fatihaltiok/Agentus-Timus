@@ -110,6 +110,36 @@ def test_observation_endpoint_has_user_impact_block(client):
     assert "misroute_recovered_total" in ui
 
 
+def test_runtime_board_endpoint_returns_success(client):
+    async def _fake_runtime_board():
+        return {
+            "contract_version": "phase_f_runtime_board_v1",
+            "generated_at": "2026-04-17T11:30:00+02:00",
+            "summary": {
+                "state": "warn",
+                "lane_count": 8,
+                "blocked_lane_count": 2,
+                "degraded_lane_count": 3,
+                "recommended_action": "hold",
+            },
+            "lanes": {
+                "request_flow": {"lane": "request_flow", "state": "warn", "blocked": False, "degraded": True},
+                "approval_auth": {"lane": "approval_auth", "state": "approval_required", "blocked": True, "degraded": True},
+            },
+            "system": {"ops_state": "warn"},
+        }
+
+    with patch("orchestration.phase_f_runtime_board.collect_phase_f_runtime_board", _fake_runtime_board):
+        resp = client.get("/autonomy/runtime_board")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "success"
+    assert data["contract_version"] == "phase_f_runtime_board_v1"
+    assert data["summary"]["lane_count"] == 8
+    assert data["lanes"]["approval_auth"]["blocked"] is True
+
+
 def test_improvement_endpoint_returns_top_candidates(client):
     async def _fake_combined_candidates(self):
         return [

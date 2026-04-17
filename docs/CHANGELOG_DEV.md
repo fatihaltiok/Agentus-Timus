@@ -2,6 +2,57 @@
 
 ---
 
+## Fortschritt 2026-04-17 - Phase F F5 Runtime-Lane-Board
+
+F5 ist mit einem ersten gemeinsamen Runtime-/Lane-Board gestartet. Timus hat damit jetzt nicht mehr nur verteilte Einzel-Snapshots fuer Request-, Approval-, Improvement- und Recovery-Zustaende, sondern einen einheitlichen maschinenlesbaren Board-Report fuer Operator, Eval und spaetere Governance.
+
+Geaendert:
+
+- [orchestration/phase_f_runtime_board.py](/home/fatih-ubuntu/dev/timus/orchestration/phase_f_runtime_board.py)
+  - neuer `phase_f_runtime_board_v1`-Snapshot
+  - vereinheitlicht die Lanes:
+    - `stack`
+    - `request_flow`
+    - `communication`
+    - `approval_auth`
+    - `improvement`
+    - `memory_curation`
+    - `recovery`
+    - `providers`
+  - liefert:
+    - `contract_version`
+    - `summary`
+    - `lanes`
+    - `system`
+- [scripts/run_phase_f_runtime_board.py](/home/fatih-ubuntu/dev/timus/scripts/run_phase_f_runtime_board.py)
+  - CLI fuer Text- und JSON-Reports
+  - unterstuetzt:
+    - `--json`
+    - `--strict`
+- [scripts/timusctl.sh](/home/fatih-ubuntu/dev/timus/scripts/timusctl.sh)
+  - neuer Bedienpfad:
+    - `./scripts/timusctl.sh board`
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - neuer HTTP-Pfad:
+    - `GET /autonomy/runtime_board`
+
+Tests:
+
+- neu:
+  - [tests/test_phase_f_runtime_board.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_f_runtime_board.py)
+  - [tests/test_phase_f_runtime_board_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_f_runtime_board_hypothesis.py)
+  - [tests/test_phase_f_runtime_board_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_phase_f_runtime_board_crosshair.py)
+- erweitert:
+  - [tests/test_c2_entrypoints.py](/home/fatih-ubuntu/dev/timus/tests/test_c2_entrypoints.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/phase_f_runtime_board.py scripts/run_phase_f_runtime_board.py tests/test_phase_f_runtime_board.py tests/test_phase_f_runtime_board_hypothesis.py tests/test_phase_f_runtime_board_crosshair.py tests/test_c2_entrypoints.py` gruen
+- `pytest -q tests/test_phase_f_runtime_board.py tests/test_phase_f_runtime_board_hypothesis.py tests/test_c2_entrypoints.py` -> `24 passed`
+- `python -m crosshair check tests/test_phase_f_runtime_board_crosshair.py` -> Exit `0`
+- `bash -n scripts/timusctl.sh`
+- `python scripts/run_phase_f_runtime_board.py --json` -> Live-Board erfolgreich
+
 ## Fortschritt 2026-04-17 - Phase F F4 Ausfuehrbare Architektur- und Verhaltensvertraege
 
 F4 ist mit einem ersten maschinenlesbaren Contract-Runner gestartet. Timus prueft zentrale Architekturclaims jetzt nicht mehr nur indirekt ueber verstreute Tests, sondern ueber einen eigenen ausfuehrbaren Report fuer Approval/Auth, Longrunner, Typed Handoffs und Runtime-Lanes.

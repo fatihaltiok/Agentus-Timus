@@ -5128,6 +5128,19 @@ async def autonomy_memory_curation_endpoint():
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
 
+@app.get("/autonomy/runtime_board", summary="Phase-F Runtime-/Lane-Board")
+async def autonomy_runtime_board_endpoint():
+    """Gibt den gemeinsamen Phase-F Runtime-/Lane-Board-Snapshot zurueck."""
+    try:
+        from orchestration.phase_f_runtime_board import collect_phase_f_runtime_board
+
+        board = await collect_phase_f_runtime_board()
+        return {"status": "success", **board}
+    except Exception as e:
+        log.error(f"Phase-F Runtime Board Fehler: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
 # ── VOICE ENDPOINTS ───────────────────────────────────────────────────────────
 _voice_listen_task: asyncio.Task | None = None
 

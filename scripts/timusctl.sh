@@ -9,6 +9,7 @@ HOST_SETUP_SCRIPT="${SCRIPT_DIR}/setup_timus_host.sh"
 PRODUCTION_GATES_SCRIPT="${SCRIPT_DIR}/run_production_gates.py"
 DOCTOR_SCRIPT="${SCRIPT_DIR}/timus_doctor.py"
 CONTRACT_EVAL_SCRIPT="${SCRIPT_DIR}/run_phase_f_contract_eval.py"
+RUNTIME_BOARD_SCRIPT="${SCRIPT_DIR}/run_phase_f_runtime_board.py"
 GENERATED_SYSTEMD_DIR="${PROJECT_ROOT}/.generated/systemd"
 
 QDRANT_SERVICE="qdrant.service"
@@ -40,6 +41,7 @@ Nutzung:
   ./scripts/timusctl.sh health
   ./scripts/timusctl.sh doctor [--json|--strict]
   ./scripts/timusctl.sh contracts [--json|--strict]
+  ./scripts/timusctl.sh board [--json|--strict]
   ./scripts/timusctl.sh install [--no-start]
   ./scripts/timusctl.sh setup-host [--install]
   ./scripts/timusctl.sh logs [qdrant|mcp|dispatcher]
@@ -52,6 +54,7 @@ Befehle:
   health     Prueft qdrant, mcp und production gates
   doctor     Gibt einen einheitlichen Diagnose- und Lifecycle-Report fuer den Stack aus
   contracts  Fuehrt die deterministischen Phase-F-Vertragschecks aus
+  board      Gibt das maschinenlesbare Runtime-/Lane-Board aus
   install    Installiert/aktiviert den gesamten Stack; startet ihn standardmaessig direkt
   setup-host Rendert portable systemd-Units fuer diesen Host; mit --install direkt inklusive Installation
   logs       Folgt den Logs eines Dienstes oder allen dreien
@@ -200,6 +203,16 @@ show_contracts() {
     python "$CONTRACT_EVAL_SCRIPT" ${contract_arg:+"$contract_arg"}
 }
 
+show_board() {
+    local board_arg="${1:-}"
+    if [[ -n "$board_arg" && "$board_arg" != "--json" && "$board_arg" != "--strict" ]]; then
+        err "Unbekannte board-Option: $board_arg"
+        usage
+        exit 1
+    fi
+    python "$RUNTIME_BOARD_SCRIPT" ${board_arg:+"$board_arg"}
+}
+
 install_stack() {
     local installer_args=(--enable --start)
     if [[ -d "$GENERATED_SYSTEMD_DIR" ]]; then
@@ -291,6 +304,9 @@ case "$COMMAND" in
         ;;
     contracts)
         show_contracts "$ARG"
+        ;;
+    board)
+        show_board "$ARG"
         ;;
     install)
         install_stack

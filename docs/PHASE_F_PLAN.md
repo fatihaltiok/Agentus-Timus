@@ -367,6 +367,48 @@ Erfolgskriterium:
 
 - Timus kann seine aktiven Betriebs- und Arbeitslanes als stabilen, maschinenlesbaren Snapshot ausgeben
 
+Stand:
+
+- erster Runtime-Slice umgesetzt
+
+Umgesetzt:
+
+- [orchestration/phase_f_runtime_board.py](/home/fatih-ubuntu/dev/timus/orchestration/phase_f_runtime_board.py)
+  - neuer gemeinsamer `phase_f_runtime_board_v1`-Snapshot
+  - vereinheitlicht jetzt:
+    - `stack`
+    - `request_flow`
+    - `communication`
+    - `approval_auth`
+    - `improvement`
+    - `memory_curation`
+    - `recovery`
+    - `providers`
+  - liefert:
+    - `contract_version`
+    - `summary`
+    - `lanes`
+    - `system`
+- [scripts/run_phase_f_runtime_board.py](/home/fatih-ubuntu/dev/timus/scripts/run_phase_f_runtime_board.py)
+  - CLI fuer Text- und JSON-Ausgabe
+  - unterstuetzt:
+    - `--json`
+    - `--strict`
+- [scripts/timusctl.sh](/home/fatih-ubuntu/dev/timus/scripts/timusctl.sh)
+  - neuer Einstiegspunkt:
+    - `./scripts/timusctl.sh board`
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - neuer HTTP-Pfad:
+    - `GET /autonomy/runtime_board`
+
+Verifikation:
+
+- `python -m py_compile orchestration/phase_f_runtime_board.py scripts/run_phase_f_runtime_board.py tests/test_phase_f_runtime_board.py tests/test_phase_f_runtime_board_hypothesis.py tests/test_phase_f_runtime_board_crosshair.py tests/test_c2_entrypoints.py` gruen
+- `pytest -q tests/test_phase_f_runtime_board.py tests/test_phase_f_runtime_board_hypothesis.py tests/test_c2_entrypoints.py` -> gruen
+- `python -m crosshair check tests/test_phase_f_runtime_board_crosshair.py` -> Exit `0`
+- `bash -n scripts/timusctl.sh`
+- `python scripts/run_phase_f_runtime_board.py --json` -> Live-Board erfolgreich
+
 ## Nicht Ziel von Phase F
 
 - keine allgemeine Mehrschritt-Planung aus beliebigem Freitext
