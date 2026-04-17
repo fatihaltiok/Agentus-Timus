@@ -249,6 +249,35 @@ Erfolgskriterium:
 
 - wiederkehrende Fehlerbilder koennen kontrolliert nachgestellt werden, statt nur im Live-Betrieb gejagt zu werden
 
+Stand:
+
+- erster Runtime-Slice umgesetzt
+
+Umgesetzt:
+
+- [canvas_chat_parity_harness.py](/home/fatih-ubuntu/dev/timus/orchestration/canvas_chat_parity_harness.py)
+  - neuer deterministischer `/chat`-Parity-Harness
+  - deckt drei reale Runtime-Pfade ab:
+    - erfolgreicher `/chat`-Lauf mit Progress-/Longrun-Events
+    - `Phase D`-Workflow-/Handover-Fallback mit `awaiting_user`
+    - kontrollierter Fehlerpfad mit `run_failed`
+  - liefert:
+    - `contract_version`
+    - `results`
+    - `summary`
+- [run_canvas_chat_parity_harness.py](/home/fatih-ubuntu/dev/timus/scripts/run_canvas_chat_parity_harness.py)
+  - CLI fuer Text- und JSON-Ausgabe
+  - unterstuetzt:
+    - `--json`
+    - `--strict`
+
+Verifikation:
+
+- `python -m py_compile orchestration/canvas_chat_parity_harness.py scripts/run_canvas_chat_parity_harness.py tests/test_canvas_chat_parity_harness.py tests/test_canvas_chat_parity_harness_hypothesis.py tests/test_canvas_chat_parity_harness_crosshair.py` gruen
+- `pytest -q tests/test_canvas_chat_parity_harness.py tests/test_canvas_chat_parity_harness_hypothesis.py` -> `5 passed`
+- `python -m crosshair check tests/test_canvas_chat_parity_harness_crosshair.py` -> Exit `0`
+- `python scripts/run_canvas_chat_parity_harness.py --json` -> `passed=3 failed=0`
+
 ### F4. Ausfuehrbare Architektur- und Verhaltensvertraege
 
 Ziel:

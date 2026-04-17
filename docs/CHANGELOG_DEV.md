@@ -2,6 +2,42 @@
 
 ---
 
+## Fortschritt 2026-04-17 - Phase F F3 Canvas Chat Parity Harness
+
+F3 ist mit einem ersten echten Runtime-Harness gestartet. Timus kann den `/chat`-Pfad jetzt nicht nur live benutzen, sondern deterministisch in klaren Szenarien nachstellen.
+
+Geaendert:
+
+- [orchestration/canvas_chat_parity_harness.py](/home/fatih-ubuntu/dev/timus/orchestration/canvas_chat_parity_harness.py)
+  - neuer `/chat`-Parity-Harness
+  - deckt reproduzierbar ab:
+    - Erfolgsfall mit `run_started` / `progress` / `run_completed`
+    - `Phase D`-Workflow-Fallback mit `awaiting_user`
+    - Fehlerfall mit `run_failed`
+  - liefert:
+    - `contract_version`
+    - `results`
+    - `summary`
+- [scripts/run_canvas_chat_parity_harness.py](/home/fatih-ubuntu/dev/timus/scripts/run_canvas_chat_parity_harness.py)
+  - CLI fuer Harness-Report
+  - unterstuetzt:
+    - `--json`
+    - `--strict`
+
+Tests:
+
+- neu:
+  - [tests/test_canvas_chat_parity_harness.py](/home/fatih-ubuntu/dev/timus/tests/test_canvas_chat_parity_harness.py)
+  - [tests/test_canvas_chat_parity_harness_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_canvas_chat_parity_harness_hypothesis.py)
+  - [tests/test_canvas_chat_parity_harness_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_canvas_chat_parity_harness_crosshair.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/canvas_chat_parity_harness.py scripts/run_canvas_chat_parity_harness.py tests/test_canvas_chat_parity_harness.py tests/test_canvas_chat_parity_harness_hypothesis.py tests/test_canvas_chat_parity_harness_crosshair.py` gruen
+- `pytest -q tests/test_canvas_chat_parity_harness.py tests/test_canvas_chat_parity_harness_hypothesis.py` -> `5 passed`
+- `python -m crosshair check tests/test_canvas_chat_parity_harness_crosshair.py` -> Exit `0`
+- `python scripts/run_canvas_chat_parity_harness.py --json` -> `passed=3 failed=0`
+
 ## Fortschritt 2026-04-17 - Phase F F2 Typed Task Packets und Request-Preflight
 
 F2 ist mit einem echten Runtime-Slice gestartet. Timus uebergibt Meta- und Rezept-Stage-Tasks jetzt nicht mehr nur als freie Textblende, sondern mit einem kleinen expliziten Packet- und Preflight-Vertrag.
