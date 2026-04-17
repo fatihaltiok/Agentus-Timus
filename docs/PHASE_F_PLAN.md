@@ -177,6 +177,51 @@ Erfolgskriterium:
 
 - Handoffs sind reproduzierbarer, duerfen weniger implizite Annahmen tragen und scheitern seltener an Kontextueberladung
 
+Stand:
+
+- erster Runtime-Slice umgesetzt
+
+Umgesetzt:
+
+- [orchestration/typed_task_packet.py](/home/fatih-ubuntu/dev/timus/orchestration/typed_task_packet.py)
+  - neuer gemeinsamer `typed_task_packet`-Vertrag
+  - Pflichtfelder jetzt explizit normalisiert:
+    - `objective`
+    - `scope`
+    - `acceptance_criteria`
+    - `allowed_tools`
+    - `reporting_contract`
+    - `escalation_policy`
+    - `state_context`
+  - neuer `request_preflight`-Vertrag fuer:
+    - `original_request_chars`
+    - `packet_chars`
+    - `handoff_chars`
+    - `provider_token_limit`
+    - `state`
+    - `issues`
+    - `actions`
+- [main_dispatcher.py](/home/fatih-ubuntu/dev/timus/main_dispatcher.py)
+  - Meta-Handoff enthaelt jetzt:
+    - `task_packet_json`
+    - `request_preflight_json`
+  - Original-User-Task wird vor dem kritischen Meta-Call bei Bedarf kompakt begrenzt
+  - Runtime-Metadaten tragen jetzt:
+    - `meta_handoff_preflight`
+    - `meta_original_user_query_compacted`
+- [agent/agents/meta.py](/home/fatih-ubuntu/dev/timus/agent/agents/meta.py)
+  - Meta-Parser liest `task_packet_json` und `request_preflight_json`
+  - Rezept-Stage-Delegation erzeugt jetzt ebenfalls:
+    - `task_packet_json`
+    - `request_preflight_json`
+  - `__new__`-basierte Test-/Runtime-Pfade wurden gegen fehlenden Active-Handoff gehaertet
+
+Verifikation:
+
+- `python -m py_compile orchestration/typed_task_packet.py main_dispatcher.py agent/agents/meta.py tests/test_meta_handoff.py tests/test_meta_recipe_execution.py tests/test_typed_task_packet.py tests/test_typed_task_packet_hypothesis.py tests/test_typed_task_packet_crosshair.py` gruen
+- `pytest -q tests/test_meta_handoff.py tests/test_meta_recipe_execution.py tests/test_typed_task_packet.py tests/test_typed_task_packet_hypothesis.py` -> `38 passed`
+- `python -m crosshair check tests/test_typed_task_packet_crosshair.py` -> Exit `0`
+
 ### F3. Deterministische Mock-/Parity-Harnesses
 
 Ziel:

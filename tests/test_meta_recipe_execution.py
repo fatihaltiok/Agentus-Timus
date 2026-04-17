@@ -112,6 +112,10 @@ async def test_meta_recipe_execution_runs_stages_sequentially(monkeypatch):
     assert len(calls) == 2
     assert calls[0]["agent_type"] == "visual"
     assert calls[1]["agent_type"] == "research"
+    assert "task_packet_json:" in calls[0]["task"]
+    assert "request_preflight_json:" in calls[0]["task"]
+    assert "task_packet_json:" in calls[1]["task"]
+    assert "request_preflight_json:" in calls[1]["task"]
     assert "previous_blackboard_key: delegation:visual:1" in calls[1]["task"]
     assert "previous_stage_result: YouTube-Seite erreicht" in calls[1]["task"]
     assert "Finales Ergebnis:" in result
@@ -165,6 +169,8 @@ async def test_meta_recipe_execution_returns_direct_result_for_simple_live_looku
         assert method == "delegate_to_agent"
         assert params["agent_type"] == "executor"
         assert "task_type: simple_live_lookup" in params["task"]
+        assert "task_packet_json:" in params["task"]
+        assert "request_preflight_json:" in params["task"]
         return {
             "status": "success",
             "agent": "executor",
@@ -207,6 +213,8 @@ async def test_meta_recipe_execution_returns_direct_result_for_lookup_document_r
         assert method == "delegate_to_agent"
         calls.append(dict(params))
         if params["agent_type"] == "executor":
+            assert "task_packet_json:" in params["task"]
+            assert "request_preflight_json:" in params["task"]
             return {
                 "status": "success",
                 "agent": "executor",
@@ -224,6 +232,8 @@ async def test_meta_recipe_execution_returns_direct_result_for_lookup_document_r
         assert "output_format: XLSX" in params["task"]
         assert "artifact_name: LLM_Preise_Vergleich" in params["task"]
         assert "source_material:" in params["task"]
+        assert "task_packet_json:" in params["task"]
+        assert "request_preflight_json:" in params["task"]
         return {
             "status": "success",
             "agent": "document",

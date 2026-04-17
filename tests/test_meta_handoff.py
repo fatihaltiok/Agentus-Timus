@@ -107,6 +107,8 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert "planner_resolution_json:" in result
     assert "task_profile_json:" in result
     assert "selected_strategy_json:" in result
+    assert "task_packet_json:" in result
+    assert "request_preflight_json:" in result
     assert "meta_self_state_json:" in result
     assert "specialist_context_seed_json:" in result
     assert "meta_policy_decision_json:" in result
@@ -130,6 +132,9 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert meta["planner_resolution"]["state"] in {"fallback_current", "rejected", "adopted"}
     assert meta["task_profile"]["intent"] == "content_extraction"
     assert meta["selected_strategy"]["strategy_id"] == "layered_youtube_extraction"
+    assert meta["task_packet"]["packet_type"] == "meta_orchestration"
+    assert meta["task_packet"]["objective"]
+    assert meta["request_preflight"]["blocked"] is False
     assert [item["recipe_id"] for item in meta["alternative_recipes"]] == [
         "youtube_search_then_visual",
         "youtube_research_only",
@@ -158,6 +163,8 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert parsed["planner_resolution"]["state"] in {"fallback_current", "rejected", "adopted"}
     assert parsed["task_profile"]["intent"] == "content_extraction"
     assert parsed["selected_strategy"]["strategy_id"] == "layered_youtube_extraction"
+    assert parsed["task_packet"]["packet_type"] == "meta_orchestration"
+    assert parsed["request_preflight"]["state"] in {"ok", "warn"}
     assert parsed["meta_self_state"]["runtime_constraints"]["budget_state"] == "soft_limit"
 
 
@@ -214,6 +221,43 @@ async def test_run_agent_meta_handoff_skips_model_validation_for_structured_reci
 
     assert result.startswith("captured:# META ORCHESTRATION HANDOFF")
     assert _CapturingMetaAgent.last_init_kwargs == {"skip_model_validation": True}
+
+
+@pytest.mark.asyncio
+async def test_run_agent_meta_handoff_marks_compacted_original_task_when_preflight_limit_is_small(monkeypatch):
+    import main_dispatcher
+
+    _patch_dispatcher_dependencies(monkeypatch)
+    monkeypatch.setitem(main_dispatcher.AGENT_CLASS_MAP, "meta", _DummyMetaAgent)
+    monkeypatch.setenv("TIMUS_REQUEST_PREFLIGHT_MAX_REQUEST_CHARS", "120")
+
+    calls = []
+    monkeypatch.setattr(
+        main_dispatcher,
+        "_log_interaction_deterministic",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    long_query = (
+        "Bitte plane diese mehrteilige Analyse sehr strukturiert und beachte alle Randbedingungen. "
+        "Ich brauche einen Bericht, Quellen, Einordnung, Risiken, Alternativen, Gegenargumente, "
+        "historischen Kontext und einen knappen Abschluss fuer ein YouTube-Video ueber KI-Agenten "
+        "im Unternehmenskontext mit Fokus auf Produktivsysteme, Sicherheit und Governance."
+    )
+
+    result = await main_dispatcher.run_agent(
+        agent_name="meta",
+        query=long_query,
+        tools_description="tools",
+        session_id="sess_meta_compacted",
+    )
+
+    assert result.startswith("dummy:# META ORCHESTRATION HANDOFF")
+    assert long_query not in result
+    assert "# ORIGINAL USER TASK" in result
+    assert "..." in result
+    assert calls[0]["metadata"]["meta_original_user_query_compacted"] is True
+    assert calls[0]["metadata"]["meta_handoff_preflight"]["state"] == "warn"
 
 
 @pytest.mark.asyncio

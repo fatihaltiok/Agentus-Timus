@@ -69,6 +69,11 @@ from orchestration.specialist_context import (
     build_specialist_context_payload,
     parse_specialist_context_payload,
 )
+from orchestration.typed_task_packet import (
+    build_request_preflight,
+    build_typed_task_packet,
+    shorten_for_preflight,
+)
 from orchestration.meta_self_state import build_meta_self_state
 from orchestration.self_improvement_engine import LLMUsageRecord, get_improvement_engine
 from utils.dashscope_native import (
@@ -2667,7 +2672,109 @@ def _build_meta_handoff_payload(query: str) -> dict:
     payload["feedback_targets"] = build_meta_feedback_targets(payload)
     payload["learning_snapshot"] = _build_meta_learning_snapshot(payload)
     payload["meta_self_state"] = build_meta_self_state(payload, payload["learning_snapshot"])
+    payload["task_packet"] = _build_meta_task_packet(payload, clean_query)
     return payload
+
+
+def _collect_meta_allowed_tools(payload: dict) -> list[str]:
+    seen: set[str] = set()
+    collected: list[str] = []
+
+    for item in payload.get("tool_affordances") or []:
+        name = str(item.get("name") if isinstance(item, dict) else item or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        collected.append(name)
+
+    strategy = dict(payload.get("selected_strategy") or {})
+    for key in ("preferred_tools", "fallback_tools"):
+        for item in strategy.get(key) or []:
+            name = str(item or "").strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            collected.append(name)
+
+    return collected
+
+
+def _build_meta_task_packet(payload: dict, original_user_task: str) -> dict:
+    goal_spec = dict(payload.get("goal_spec") or {})
+    specialist_context = dict(payload.get("specialist_context_seed") or {})
+    meta_context_bundle = dict(payload.get("meta_context_bundle") or {})
+    meta_policy = dict(payload.get("meta_policy_decision") or {})
+    planner_resolution = dict(payload.get("planner_resolution") or {})
+    recipe_stages = list(payload.get("recipe_stages") or [])
+    recipe_id = str(payload.get("recommended_recipe_id") or "").strip()
+    allowed_tools = _collect_meta_allowed_tools(payload)
+
+    acceptance_criteria: list[str] = []
+    if recipe_id:
+        acceptance_criteria.append(f"Folge dem Rezept '{recipe_id}' diszipliniert.")
+    if goal_spec.get("freshness"):
+        acceptance_criteria.append(f"Beachte freshness={goal_spec['freshness']}.")
+    if goal_spec.get("evidence_level"):
+        acceptance_criteria.append(f"Beachte evidence_level={goal_spec['evidence_level']}.")
+    if goal_spec.get("output_mode"):
+        acceptance_criteria.append(f"Liefere output_mode={goal_spec['output_mode']}.")
+    stage_outputs = ", ".join(
+        str(item.get("expected_output") or "").strip()
+        for item in recipe_stages
+        if str(item.get("expected_output") or "").strip()
+    )
+    if stage_outputs:
+        acceptance_criteria.append(f"Erreiche die Stage-Outputs: {stage_outputs}.")
+
+    reporting_contract = {
+        "result_mode": "recipe_or_direct_answer",
+        "must_include": [
+            "selected_recipe_or_chain",
+            "final_answer_or_blocker",
+        ],
+    }
+    if goal_spec.get("freshness") == "live":
+        reporting_contract["must_include"].append("sources_for_live_claims")
+    if goal_spec.get("output_mode") in {"artifact", "table", "report"}:
+        reporting_contract["must_include"].append("artifact_or_report_summary")
+
+    escalation_policy = {
+        "on_context_mismatch": "reframe_or_ask_for_clarification",
+        "on_missing_live_data": "state_verified_failure_without_guessing",
+        "on_recipe_failure": "use_recovery_or_stop_cleanly",
+        "on_login_required": "request_user_login_explicitly",
+    }
+
+    state_context = {
+        "active_topic": meta_context_bundle.get("active_topic"),
+        "active_goal": meta_context_bundle.get("active_goal"),
+        "open_loop": meta_context_bundle.get("open_loop"),
+        "next_expected_step": meta_context_bundle.get("next_expected_step"),
+        "turn_type": meta_context_bundle.get("turn_type") or payload.get("dominant_turn_type"),
+        "response_mode": meta_context_bundle.get("response_mode") or payload.get("response_mode"),
+        "user_preferences": specialist_context.get("user_preferences"),
+        "recent_corrections": specialist_context.get("recent_corrections"),
+        "planner_state": planner_resolution.get("state"),
+        "policy_mode": meta_policy.get("response_mode"),
+    }
+
+    return build_typed_task_packet(
+        packet_type="meta_orchestration",
+        objective=original_user_task,
+        scope={
+            "task_type": payload.get("task_type"),
+            "site_kind": payload.get("site_kind"),
+            "recommended_recipe_id": payload.get("recommended_recipe_id"),
+            "recommended_agent_chain": payload.get("recommended_agent_chain"),
+            "response_mode": payload.get("response_mode"),
+            "required_capabilities": payload.get("required_capabilities"),
+        },
+        acceptance_criteria=acceptance_criteria,
+        allowed_tools=allowed_tools,
+        reporting_contract=reporting_contract,
+        escalation_policy=escalation_policy,
+        state_context=state_context,
+    )
 
 
 def _build_meta_learning_snapshot(payload: dict) -> dict:
@@ -2874,6 +2981,16 @@ def _render_meta_handoff_block(payload: dict) -> str:
         lines.append(
             "selected_strategy_json: "
             + json.dumps(payload["selected_strategy"], ensure_ascii=False, sort_keys=True)
+        )
+    if payload.get("task_packet"):
+        lines.append(
+            "task_packet_json: "
+            + json.dumps(payload["task_packet"], ensure_ascii=False, sort_keys=True)
+        )
+    if payload.get("request_preflight"):
+        lines.append(
+            "request_preflight_json: "
+            + json.dumps(payload["request_preflight"], ensure_ascii=False, sort_keys=True)
         )
     if payload.get("alternative_recipes"):
         lines.append(
@@ -3185,12 +3302,28 @@ async def run_agent(
         else:
             clean_meta_query = _strip_meta_canvas_wrappers(query)
             meta_handoff = _build_meta_handoff_payload(clean_meta_query)
+            safe_original_task = shorten_for_preflight(
+                clean_meta_query,
+                task_type=meta_handoff.get("task_type"),
+                recipe_id=meta_handoff.get("recommended_recipe_id"),
+                allowed_tools=(meta_handoff.get("task_packet") or {}).get("allowed_tools") or (),
+            )
+            meta_handoff_preview = _render_meta_handoff_block(meta_handoff)
+            meta_handoff["request_preflight"] = build_request_preflight(
+                packet=meta_handoff.get("task_packet"),
+                original_request=safe_original_task,
+                rendered_handoff=meta_handoff_preview,
+                task_type=meta_handoff.get("task_type"),
+                recipe_id=meta_handoff.get("recommended_recipe_id"),
+            )
             runtime_metadata["meta_orchestration"] = meta_handoff
             runtime_metadata["meta_original_user_query"] = clean_meta_query
+            runtime_metadata["meta_handoff_preflight"] = dict(meta_handoff.get("request_preflight") or {})
+            runtime_metadata["meta_original_user_query_compacted"] = safe_original_task != clean_meta_query
             runtime_metadata["meta_query_wrapped"] = clean_meta_query != query
             agent_query = (
                 _render_meta_handoff_block(meta_handoff)
-                + f"\n\n# ORIGINAL USER TASK\n{clean_meta_query}"
+                + f"\n\n# ORIGINAL USER TASK\n{safe_original_task}"
             )
     elif agent_name == "visual_login":
         runtime_metadata["phase_d_visual_login"] = {

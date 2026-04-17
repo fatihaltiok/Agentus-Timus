@@ -2,6 +2,54 @@
 
 ---
 
+## Fortschritt 2026-04-17 - Phase F F2 Typed Task Packets und Request-Preflight
+
+F2 ist mit einem echten Runtime-Slice gestartet. Timus uebergibt Meta- und Rezept-Stage-Tasks jetzt nicht mehr nur als freie Textblende, sondern mit einem kleinen expliziten Packet- und Preflight-Vertrag.
+
+Geaendert:
+
+- [orchestration/typed_task_packet.py](/home/fatih-ubuntu/dev/timus/orchestration/typed_task_packet.py)
+  - neuer `typed_task_packet`-Vertrag mit:
+    - `objective`
+    - `scope`
+    - `acceptance_criteria`
+    - `allowed_tools`
+    - `reporting_contract`
+    - `escalation_policy`
+    - `state_context`
+  - neuer `request_preflight`-Vertrag mit:
+    - Handoff-/Packet-/Request-Groessen
+    - Provider-Fensterdruck
+    - `state`, `issues`, `actions`
+- [main_dispatcher.py](/home/fatih-ubuntu/dev/timus/main_dispatcher.py)
+  - Meta-Handoff fuehrt jetzt:
+    - `task_packet_json`
+    - `request_preflight_json`
+  - uebergrosse Original-Requests werden vor dem kritischen Meta-Call kompakt begrenzt
+  - Runtime-Metadaten enthalten jetzt:
+    - `meta_handoff_preflight`
+    - `meta_original_user_query_compacted`
+- [agent/agents/meta.py](/home/fatih-ubuntu/dev/timus/agent/agents/meta.py)
+  - Meta-Handoff-Parser liest die neuen F2-Felder
+  - Rezept-Stage-Delegation erzeugt jetzt ebenfalls Packet + Preflight fuer Spezialisten
+  - robuste `getattr(...)`-Haertung fuer `__new__`-Test- und Spezialpfade
+
+Tests:
+
+- erweitert:
+  - [tests/test_meta_handoff.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_handoff.py)
+  - [tests/test_meta_recipe_execution.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_recipe_execution.py)
+- neu:
+  - [tests/test_typed_task_packet.py](/home/fatih-ubuntu/dev/timus/tests/test_typed_task_packet.py)
+  - [tests/test_typed_task_packet_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_typed_task_packet_hypothesis.py)
+  - [tests/test_typed_task_packet_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_typed_task_packet_crosshair.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/typed_task_packet.py main_dispatcher.py agent/agents/meta.py tests/test_meta_handoff.py tests/test_meta_recipe_execution.py tests/test_typed_task_packet.py tests/test_typed_task_packet_hypothesis.py tests/test_typed_task_packet_crosshair.py` gruen
+- `pytest -q tests/test_meta_handoff.py tests/test_meta_recipe_execution.py tests/test_typed_task_packet.py tests/test_typed_task_packet_hypothesis.py` -> `38 passed`
+- `python -m crosshair check tests/test_typed_task_packet_crosshair.py` -> Exit `0`
+
 ## Fortschritt 2026-04-16 - Phase F F1 Betriebsvertraege und timus doctor
 
 Phase F ist jetzt mit einem ersten echten Diagnosepfad gestartet. Timus hat damit nicht nur einzelne Health-Endpoints, sondern einen gemeinsamen `timus doctor`-Vertrag fuer den Stack.

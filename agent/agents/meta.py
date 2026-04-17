@@ -36,6 +36,11 @@ from orchestration.specialist_context import (
     build_specialist_context_payload,
     parse_specialist_context_payload,
 )
+from orchestration.typed_task_packet import (
+    build_request_preflight,
+    build_typed_task_packet,
+    parse_typed_task_packet,
+)
 from orchestration.self_selected_strategy import classify_strategy_error
 from utils.location_local_intent import is_location_local_query, is_location_route_query
 
@@ -1202,6 +1207,13 @@ class MetaAgent(BaseAgent):
                     payload["selected_strategy"] = json.loads(normalized_value)
                 except json.JSONDecodeError:
                     payload["selected_strategy"] = {"raw": normalized_value}
+            elif normalized_key == "task_packet_json":
+                payload["task_packet"] = parse_typed_task_packet(normalized_value)
+            elif normalized_key == "request_preflight_json":
+                try:
+                    payload["request_preflight"] = json.loads(normalized_value)
+                except json.JSONDecodeError:
+                    payload["request_preflight"] = {"raw": normalized_value}
             elif normalized_key == "alternative_recipes_json":
                 try:
                     loaded = json.loads(normalized_value)
@@ -1910,6 +1922,7 @@ class MetaAgent(BaseAgent):
         stage_history: List[Dict[str, Any]],
     ) -> str:
         constraints = ["folge_dem_rezept_und_erfinde_keine_neuen_stages"]
+        stage_allowed_tools: list[str] = []
         raw_task_type = str(handoff.get("task_type") or "").strip().lower() or "single_lane"
         stage_agent = str(stage.get("agent") or "").strip().lower()
         site_kind = str(handoff.get("site_kind") or "").strip()
@@ -1973,8 +1986,10 @@ class MetaAgent(BaseAgent):
             ]
         if preferred_tools:
             payload_lines.append("- preferred_tools: " + ", ".join(str(item) for item in preferred_tools))
+            stage_allowed_tools.extend(str(item) for item in preferred_tools)
         if fallback_tools:
             payload_lines.append("- fallback_tools: " + ", ".join(str(item) for item in fallback_tools))
+            stage_allowed_tools.extend(str(item) for item in fallback_tools)
         if avoid_tools:
             payload_lines.append("- avoid_tools: " + ", ".join(str(item) for item in avoid_tools))
         if site_kind:
@@ -1993,6 +2008,7 @@ class MetaAgent(BaseAgent):
             and stage_agent == "executor"
         ):
             payload_lines.append("- preferred_search_tool: search_youtube")
+            stage_allowed_tools.append("search_youtube")
             payload_lines.append("- search_mode: live")
             payload_lines.append("- avoid_deep_research: yes")
             payload_lines.append("- max_results: 5")
@@ -2002,10 +2018,12 @@ class MetaAgent(BaseAgent):
             and not source_aware_live_lookup
         ):
             payload_lines.append("- preferred_search_tool: search_web")
+            stage_allowed_tools.append("search_web")
             fallback_tool_line = ["search_news", "fetch_url"]
             if location_allowed_for_lookup:
                 fallback_tool_line.append("search_google_maps_places")
             payload_lines.append("- fallback_tools: " + ", ".join(fallback_tool_line))
+            stage_allowed_tools.extend(fallback_tool_line)
             payload_lines.append("- avoid_deep_research: yes")
             payload_lines.append("- max_results: 5")
         if (
@@ -2014,10 +2032,12 @@ class MetaAgent(BaseAgent):
             and not source_aware_live_lookup
         ):
             payload_lines.append("- preferred_search_tool: search_web")
+            stage_allowed_tools.append("search_web")
             fallback_tool_line = ["search_news", "fetch_url"]
             if location_allowed_for_lookup:
                 fallback_tool_line.append("search_google_maps_places")
             payload_lines.append("- fallback_tools: " + ", ".join(fallback_tool_line))
+            stage_allowed_tools.extend(fallback_tool_line)
             payload_lines.append("- avoid_deep_research: yes")
             payload_lines.append("- max_results: 5")
         if source_aware_live_lookup:
@@ -2033,8 +2053,10 @@ class MetaAgent(BaseAgent):
                 "social_media",
             }:
                 payload_lines.append("- preferred_tools: search_web, fetch_social_media, fetch_page_with_js")
+                stage_allowed_tools.extend(["search_web", "fetch_social_media", "fetch_page_with_js"])
             else:
                 payload_lines.append("- preferred_tools: search_web, fetch_url")
+                stage_allowed_tools.extend(["search_web", "fetch_url"])
             payload_lines.append("- avoid_tools: search_news_as_primary_step")
             payload_lines.append("- avoid_deep_research: yes")
             payload_lines.append("- max_results: 5")
@@ -2073,6 +2095,63 @@ class MetaAgent(BaseAgent):
         prior_keys = [entry.get("blackboard_key") for entry in stage_history if entry.get("blackboard_key")]
         if prior_keys:
             payload_lines.append(f"- prior_blackboard_keys: {', '.join(prior_keys)}")
+
+        stage_reporting_contract = {
+            "expected_output": stage.get("expected_output", "Spezialistenergebnis"),
+            "must_include": [
+                "stage_result_or_blocker",
+                "previous_blackboard_key_when_available",
+            ],
+        }
+        if stage_agent in {"document", "communication"}:
+            stage_reporting_contract["must_include"].append("artifacts_or_delivery_status")
+
+        stage_escalation_policy = {
+            "on_context_mismatch": "emit_specialist_signal",
+            "on_missing_input": "return_blocker",
+            "on_recipe_violation": "stop_and_report_blocker",
+        }
+
+        stage_state_context = {
+            "recipe_id": handoff.get("recommended_recipe_id"),
+            "task_type": effective_task_type,
+            "stage_id": stage.get("stage_id"),
+            "site_kind": site_kind,
+            "specialist_context": specialist_context,
+            "previous_stage_id": previous_stage_result.get("stage_id") if previous_stage_result else "",
+            "previous_stage_agent": previous_stage_result.get("agent") if previous_stage_result else "",
+            "prior_blackboard_keys": prior_keys,
+        }
+
+        stage_task_packet = build_typed_task_packet(
+            packet_type="recipe_stage_delegation",
+            objective=stage_goal,
+            scope={
+                "recipe_id": handoff.get("recommended_recipe_id"),
+                "task_type": effective_task_type,
+                "stage_id": stage.get("stage_id"),
+                "agent": stage.get("agent"),
+                "site_kind": site_kind,
+            },
+            acceptance_criteria=[
+                f"Liefere expected_output={stage.get('expected_output', 'Spezialistenergebnis')}.",
+                f"Erreiche success_signal fuer Stage '{stage.get('stage_id', 'stage')}'.",
+            ],
+            allowed_tools=stage_allowed_tools,
+            reporting_contract=stage_reporting_contract,
+            escalation_policy=stage_escalation_policy,
+            state_context=stage_state_context,
+        )
+        stage_handoff_preview = "\n".join([*payload_lines, "", "# TASK", stage_goal])
+        stage_request_preflight = build_request_preflight(
+            packet=stage_task_packet,
+            original_request=stage_goal,
+            rendered_handoff=stage_handoff_preview,
+            task_type=effective_task_type,
+            recipe_id=handoff.get("recommended_recipe_id"),
+        )
+        payload_lines.append("- task_packet_json: " + cls._format_handoff_value(stage_task_packet))
+        payload_lines.append("- request_preflight_json: " + cls._format_handoff_value(stage_request_preflight))
 
         payload_lines.extend(["", "# TASK", stage_goal])
         return "\n".join(payload_lines)
@@ -2852,7 +2931,7 @@ class MetaAgent(BaseAgent):
             task = self._build_specialist_delegation_task(method, params)
             if task:
                 specialist_context = self._resolve_specialist_context_seed(
-                    self._active_meta_orchestration_handoff
+                    getattr(self, "_active_meta_orchestration_handoff", None)
                 )
                 structured_task = self._render_structured_delegation_task(
                     specialist_agent=specialist_agent,
@@ -2978,7 +3057,7 @@ class MetaAgent(BaseAgent):
         log.info(f"MetaAgent mit Kontext + Skill-Orchestrierung: {task[:50]}...")
 
         active_handoff = self._parse_meta_orchestration_handoff(task, require_recipe_stages=False)
-        previous_active_handoff = self._active_meta_orchestration_handoff
+        previous_active_handoff = getattr(self, "_active_meta_orchestration_handoff", None)
         self._active_meta_orchestration_handoff = dict(active_handoff or {}) if active_handoff else None
         try:
             recipe_handoff = active_handoff if active_handoff and active_handoff.get("recipe_stages") else None
