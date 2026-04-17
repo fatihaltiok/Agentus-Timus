@@ -2,6 +2,14 @@
 
 Stand: 2026-04-15
 
+Status-Update 2026-04-17:
+
+- Phase F ist im Kern abgeschlossen.
+- F1 bis F5 haben belastbare Runtime-/Contract-/Harness-Slices.
+- Offene Restarbeit in F ist nur noch Nachschaerfung, nicht mehr Kernaufbau.
+- Empfohlener naechster Hauptblock:
+  - [ZWISCHENPROJEKT_ALLGEMEINE_MEHRSCHRITT_PLANUNG_2026-04-12.md](/home/fatih-ubuntu/dev/timus/docs/ZWISCHENPROJEKT_ALLGEMEINE_MEHRSCHRITT_PLANUNG_2026-04-12.md)
+
 ## Ziel
 
 Phase F baut auf D0, Phase D und Phase E auf und macht aus Timus nicht nur ein semantisch staerkeres und kontrolliert selbstverbesserndes System, sondern auch ein betrieblich belastbareres Operatorsystem.
@@ -537,9 +545,26 @@ Dann folgt zuerst:
 
 - ein weiterer Betriebs-/Harness-Nachblock auf Basis von F
 
+Aktuelle Einordnung 2026-04-17:
+
+- der Kern von Phase F ist jetzt erfuellt:
+  - `timus doctor`
+  - typed handoffs und request preflight
+  - deterministische parity harnesses
+  - ausfuehrbare contracts
+  - runtime-/lane-board
+- die aktuell sinnvollste Fortsetzung ist deshalb:
+  - [ZWISCHENPROJEKT_ALLGEMEINE_MEHRSCHRITT_PLANUNG_2026-04-12.md](/home/fatih-ubuntu/dev/timus/docs/ZWISCHENPROJEKT_ALLGEMEINE_MEHRSCHRITT_PLANUNG_2026-04-12.md)
+- ein weiterer Phase-F-Nachblock ist nur dann noetig, wenn spaeter neue Betriebs- oder Harness-Luecken sichtbar werden
+
 ## Erfolgskriterium fuer Phase F insgesamt
 
 - Timus ist nicht nur funktional staerker, sondern betrieblich deutlich besser pruefbar
 - zentrale Laufzeit-, Handoff- und Governance-Pfade haben reproduzierbare Contracts
 - Operatoren koennen Stack- und Lane-Zustand ohne manuelle Log-Jagd zusammenhaengend sehen
 - die Entscheidung fuer den naechsten grossen Ausbau nach E ist dadurch datenbasiert statt intuitiv
+
+Status 2026-04-17:
+
+- diese Erfolgskriterien sind im Kern erreicht
+- Phase F gilt damit als geschlossen

@@ -2,6 +2,23 @@
 
 ---
 
+## Fortschritt 2026-04-17 - Phase F formal abgeschlossen
+
+Phase F ist jetzt nicht mehr nur eine Sammlung einzelner Runtime-Slices, sondern als zusammenhaengender Betriebs- und Contract-Block geschlossen. Die Kernziele sind erreicht:
+
+- `timus doctor` fuer Diagnose und Betriebsvertrag
+- typed handoffs und request preflight
+- deterministische parity harnesses fuer die wichtigsten Runtime-Pfade
+- ausfuehrbare contracts fuer zentrale Architektur- und Verhaltensannahmen
+- gemeinsames runtime-/lane-board
+
+Einordnung:
+
+- offene Restarbeit in Phase F ist jetzt nur noch Nachschaerfung
+- kein weiterer grosser F-Block ist aktuell noetig
+- der naechste empfohlene Hauptblock ist:
+  - [ZWISCHENPROJEKT_ALLGEMEINE_MEHRSCHRITT_PLANUNG_2026-04-12.md](/home/fatih-ubuntu/dev/timus/docs/ZWISCHENPROJEKT_ALLGEMEINE_MEHRSCHRITT_PLANUNG_2026-04-12.md)
+
 ## Fortschritt 2026-04-17 - Phase F F3 Harness Closeout
 
 F3 ist jetzt als zusammenhaengender Block geschlossen. Timus kann nicht mehr nur `/chat` und die Phase-D-Blockerpfade deterministisch pruefen, sondern den gesamten relevanten Parity-Bereich von Delegation ueber Longrunner-/Queue-Pfade bis zur gemeinsamen F3-Suite in einem Lauf reproduzierbar auswerten.
