@@ -108,7 +108,7 @@ Erfolgskriterium:
 
 Stand:
 
-- erster Runtime-Slice umgesetzt
+- zwei Runtime-Slices umgesetzt
 
 Umgesetzt:
 
@@ -270,6 +270,27 @@ Umgesetzt:
   - unterstuetzt:
     - `--json`
     - `--strict`
+- [approval_auth_handover_parity_harness.py](/home/fatih-ubuntu/dev/timus/orchestration/approval_auth_handover_parity_harness.py)
+  - neuer deterministischer Approval/Auth/Handover-Parity-Harness
+  - deckt vier reale Phase-D-Blockerpfade ab:
+    - `approval_required`
+    - `auth_required`
+    - `awaiting_user`
+    - `challenge_required`
+  - prueft dabei jeweils:
+    - normalisierten Workflow-Payload
+    - passenden Longrunner-`blocker`
+    - `blocker_reason`
+    - Resume-/User-Action-Felder
+  - liefert:
+    - `contract_version`
+    - `results`
+    - `summary`
+- [run_approval_auth_handover_parity_harness.py](/home/fatih-ubuntu/dev/timus/scripts/run_approval_auth_handover_parity_harness.py)
+  - CLI fuer Text- und JSON-Ausgabe
+  - unterstuetzt:
+    - `--json`
+    - `--strict`
 
 Verifikation:
 
@@ -277,6 +298,10 @@ Verifikation:
 - `pytest -q tests/test_canvas_chat_parity_harness.py tests/test_canvas_chat_parity_harness_hypothesis.py` -> `5 passed`
 - `python -m crosshair check tests/test_canvas_chat_parity_harness_crosshair.py` -> Exit `0`
 - `python scripts/run_canvas_chat_parity_harness.py --json` -> `passed=3 failed=0`
+- `python -m py_compile orchestration/approval_auth_handover_parity_harness.py scripts/run_approval_auth_handover_parity_harness.py tests/test_approval_auth_handover_parity_harness.py tests/test_approval_auth_handover_parity_harness_hypothesis.py tests/test_approval_auth_handover_parity_harness_crosshair.py` gruen
+- `pytest -q tests/test_approval_auth_handover_parity_harness.py tests/test_approval_auth_handover_parity_harness_hypothesis.py` -> `4 passed`
+- `python -m crosshair check tests/test_approval_auth_handover_parity_harness_crosshair.py` -> Exit `0`
+- `python scripts/run_approval_auth_handover_parity_harness.py --json` -> `passed=4 failed=0`
 
 ### F4. Ausfuehrbare Architektur- und Verhaltensvertraege
 

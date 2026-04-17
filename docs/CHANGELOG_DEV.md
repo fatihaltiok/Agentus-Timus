@@ -2,6 +2,48 @@
 
 ---
 
+## Fortschritt 2026-04-17 - Phase F F3 Approval/Auth/Handover Parity Harness
+
+F3 ist im zweiten Slice jetzt nicht mehr nur auf `/chat` begrenzt. Timus kann die zentralen Phase-D-Blockerpfade fuer Approval, Login-Wall, nutzergesteuerten Login-Handover und Security-Challenges jetzt ebenfalls deterministisch und wiederholbar pruefen.
+
+Geaendert:
+
+- [orchestration/approval_auth_handover_parity_harness.py](/home/fatih-ubuntu/dev/timus/orchestration/approval_auth_handover_parity_harness.py)
+  - neuer Approval/Auth/Handover-Parity-Harness
+  - deckt reproduzierbar vier reale Workflow-Pfade ab:
+    - `approval_required`
+    - `auth_required`
+    - `awaiting_user`
+    - `challenge_required`
+  - prueft je Szenario:
+    - normalisierten Workflow-Payload
+    - passenden Longrunner-`blocker`
+    - `blocker_reason`
+    - Resume-/User-Action-Felder
+  - liefert:
+    - `contract_version`
+    - `results`
+    - `summary`
+- [scripts/run_approval_auth_handover_parity_harness.py](/home/fatih-ubuntu/dev/timus/scripts/run_approval_auth_handover_parity_harness.py)
+  - CLI fuer Text- und JSON-Reports
+  - unterstuetzt:
+    - `--json`
+    - `--strict`
+
+Tests:
+
+- neu:
+  - [tests/test_approval_auth_handover_parity_harness.py](/home/fatih-ubuntu/dev/timus/tests/test_approval_auth_handover_parity_harness.py)
+  - [tests/test_approval_auth_handover_parity_harness_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_approval_auth_handover_parity_harness_hypothesis.py)
+  - [tests/test_approval_auth_handover_parity_harness_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_approval_auth_handover_parity_harness_crosshair.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/approval_auth_handover_parity_harness.py scripts/run_approval_auth_handover_parity_harness.py tests/test_approval_auth_handover_parity_harness.py tests/test_approval_auth_handover_parity_harness_hypothesis.py tests/test_approval_auth_handover_parity_harness_crosshair.py` gruen
+- `pytest -q tests/test_approval_auth_handover_parity_harness.py tests/test_approval_auth_handover_parity_harness_hypothesis.py` -> `4 passed`
+- `python -m crosshair check tests/test_approval_auth_handover_parity_harness_crosshair.py` -> Exit `0`
+- `python scripts/run_approval_auth_handover_parity_harness.py --json` -> `passed=4 failed=0`
+
 ## Fortschritt 2026-04-17 - Phase F F5 Runtime-Lane-Board
 
 F5 ist mit einem ersten gemeinsamen Runtime-/Lane-Board gestartet. Timus hat damit jetzt nicht mehr nur verteilte Einzel-Snapshots fuer Request-, Approval-, Improvement- und Recovery-Zustaende, sondern einen einheitlichen maschinenlesbaren Board-Report fuer Operator, Eval und spaetere Governance.
