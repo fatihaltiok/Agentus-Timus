@@ -179,6 +179,20 @@ def test_quick_intent_routes_broad_research_via_meta_and_strict_research_direct(
     )
 
 
+def test_quick_intent_routes_research_plus_setup_to_meta():
+    import main_dispatcher
+
+    query = "Recherchiere eine passende Home Assistant Kamera und richte sie danach bei mir ein"
+    assert main_dispatcher.quick_intent_check(query) == "meta"
+
+
+def test_quick_intent_keeps_explicit_shell_execution_out_of_planning_meta():
+    import main_dispatcher
+
+    query = "pip install homeassistant und starte danach systemctl restart mosquitto"
+    assert main_dispatcher.quick_intent_check(query) == "shell"
+
+
 def test_build_dispatcher_llm_query_enforces_token_only_contract():
     import main_dispatcher
 

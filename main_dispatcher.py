@@ -65,6 +65,7 @@ from orchestration.meta_orchestration import (
     meta_site_recipe_key,
     resolve_adaptive_plan_adoption,
 )
+from orchestration.task_decomposition_contract import build_task_decomposition
 from orchestration.specialist_context import (
     build_specialist_context_payload,
     parse_specialist_context_payload,
@@ -2344,6 +2345,16 @@ def quick_intent_check(query: str) -> Optional[str]:
     analysis_query = core_lower or focus_lower
     location_intent = analyze_location_local_intent(analysis_query)
     orchestration_policy = evaluate_query_orchestration(analysis_query)
+    task_decomposition = build_task_decomposition(
+        source_query=analysis_query,
+        orchestration_policy=orchestration_policy,
+    )
+    intent_family = str(task_decomposition.get("intent_family") or "single_step").strip().lower()
+    planning_needed = bool(task_decomposition.get("planning_needed"))
+    decomposition_metadata = dict(task_decomposition.get("metadata") or {})
+    explicit_shell_execution = (
+        str(decomposition_metadata.get("explicit_shell_execution") or "").strip().lower() == "yes"
+    )
 
     if any(re.search(pattern, focus_lower) for pattern in _DISPATCHER_META_SELF_MODEL_PATTERNS):
         return "meta"
@@ -2426,6 +2437,9 @@ def quick_intent_check(query: str) -> Optional[str]:
             return "meta"
         return "visual_nemotron"
 
+    if explicit_shell_execution:
+        return "shell"
+
     if orchestration_policy.get("route_to_meta"):
         return "meta"
 
@@ -2457,6 +2471,13 @@ def quick_intent_check(query: str) -> Optional[str]:
     _has_non_camera_hint = any(keyword in focus_lower for keyword in CAMERA_NON_INTENT_HINTS)
     if _camera_shortcut and not _has_non_camera_hint and _has_any_local_camera_device():
         return "image"
+
+    if (
+        planning_needed
+        and intent_family in {"build_setup", "plan_only", "execute_multistep"}
+        and not explicit_shell_execution
+    ):
+        return "meta"
 
     # HÖCHSTE PRIORITÄT: Compound Multi-Step Tasks → immer META
     # (verhindert dass "architektur" REASONING triggert wenn "danach"/"erstelle" auch da ist)
@@ -2613,6 +2634,10 @@ def _build_meta_handoff_payload(query: str) -> dict:
     """Erzeugt ein kompaktes, strukturiertes Handoff fuer Meta."""
     clean_query = _strip_meta_canvas_wrappers(query)
     policy = evaluate_query_orchestration(clean_query)
+    task_decomposition = build_task_decomposition(
+        source_query=clean_query,
+        orchestration_policy=policy,
+    )
     payload = {
         "task_type": policy.get("task_type", "single_lane"),
         "site_kind": policy.get("site_kind"),
@@ -2672,6 +2697,9 @@ def _build_meta_handoff_payload(query: str) -> dict:
     payload["feedback_targets"] = build_meta_feedback_targets(payload)
     payload["learning_snapshot"] = _build_meta_learning_snapshot(payload)
     payload["meta_self_state"] = build_meta_self_state(payload, payload["learning_snapshot"])
+    payload["task_decomposition"] = task_decomposition
+    payload["intent_family"] = task_decomposition.get("intent_family", "single_step")
+    payload["planning_needed"] = bool(task_decomposition.get("planning_needed"))
     payload["task_packet"] = _build_meta_task_packet(payload, clean_query)
     return payload
 
@@ -2705,6 +2733,7 @@ def _build_meta_task_packet(payload: dict, original_user_task: str) -> dict:
     meta_context_bundle = dict(payload.get("meta_context_bundle") or {})
     meta_policy = dict(payload.get("meta_policy_decision") or {})
     planner_resolution = dict(payload.get("planner_resolution") or {})
+    task_decomposition = dict(payload.get("task_decomposition") or {})
     recipe_stages = list(payload.get("recipe_stages") or [])
     recipe_id = str(payload.get("recommended_recipe_id") or "").strip()
     allowed_tools = _collect_meta_allowed_tools(payload)
@@ -2756,6 +2785,7 @@ def _build_meta_task_packet(payload: dict, original_user_task: str) -> dict:
         "recent_corrections": specialist_context.get("recent_corrections"),
         "planner_state": planner_resolution.get("state"),
         "policy_mode": meta_policy.get("response_mode"),
+        "goal_satisfaction_mode": task_decomposition.get("goal_satisfaction_mode"),
     }
 
     return build_typed_task_packet(
@@ -2768,6 +2798,8 @@ def _build_meta_task_packet(payload: dict, original_user_task: str) -> dict:
             "recommended_agent_chain": payload.get("recommended_agent_chain"),
             "response_mode": payload.get("response_mode"),
             "required_capabilities": payload.get("required_capabilities"),
+            "intent_family": payload.get("intent_family"),
+            "planning_needed": "yes" if payload.get("planning_needed") else "no",
         },
         acceptance_criteria=acceptance_criteria,
         allowed_tools=allowed_tools,
@@ -2867,10 +2899,38 @@ def _build_meta_learning_snapshot(payload: dict) -> dict:
         return baseline
 
 
+def _compact_meta_task_decomposition(
+    decomposition: dict | None,
+    compacted_source_query: str,
+) -> dict:
+    payload = dict(decomposition or {})
+    if not payload:
+        return {}
+
+    previous_source_query = str(payload.get("source_query") or "").strip()
+    payload["source_query"] = compacted_source_query
+
+    goal_text = str(payload.get("goal") or "").strip()
+    if (
+        goal_text == previous_source_query
+        or (previous_source_query and goal_text.startswith(previous_source_query[:80]))
+        or len(goal_text) > len(compacted_source_query)
+    ):
+        payload["goal"] = compacted_source_query
+
+    return payload
+
+
 def _render_meta_handoff_block(payload: dict) -> str:
     """Formatiert den Dispatcher-zu-Meta-Handoff fuer den Prompt."""
     lines = ["# META ORCHESTRATION HANDOFF"]
     lines.append(f"task_type: {payload.get('task_type', 'single_lane')}")
+    if payload.get("intent_family"):
+        lines.append(f"intent_family: {payload['intent_family']}")
+    lines.append(
+        "planning_needed: "
+        + ("yes" if payload.get("planning_needed") else "no")
+    )
     if payload.get("site_kind"):
         lines.append(f"site_kind: {payload['site_kind']}")
     capabilities = list(payload.get("required_capabilities") or [])
@@ -2931,6 +2991,11 @@ def _render_meta_handoff_block(payload: dict) -> str:
         lines.append(
             "meta_self_state_json: "
             + json.dumps(payload["meta_self_state"], ensure_ascii=False, sort_keys=True)
+        )
+    if payload.get("task_decomposition"):
+        lines.append(
+            "task_decomposition_json: "
+            + json.dumps(payload["task_decomposition"], ensure_ascii=False, sort_keys=True)
         )
     if payload.get("meta_context_bundle"):
         lines.append(
@@ -3308,6 +3373,11 @@ async def run_agent(
                 recipe_id=meta_handoff.get("recommended_recipe_id"),
                 allowed_tools=(meta_handoff.get("task_packet") or {}).get("allowed_tools") or (),
             )
+            if safe_original_task != clean_meta_query:
+                meta_handoff["task_decomposition"] = _compact_meta_task_decomposition(
+                    meta_handoff.get("task_decomposition"),
+                    safe_original_task,
+                )
             meta_handoff_preview = _render_meta_handoff_block(meta_handoff)
             meta_handoff["request_preflight"] = build_request_preflight(
                 packet=meta_handoff.get("task_packet"),

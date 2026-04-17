@@ -36,6 +36,7 @@ from orchestration.specialist_context import (
     build_specialist_context_payload,
     parse_specialist_context_payload,
 )
+from orchestration.task_decomposition_contract import parse_task_decomposition
 from orchestration.typed_task_packet import (
     build_request_preflight,
     build_typed_task_packet,
@@ -1152,6 +1153,8 @@ class MetaAgent(BaseAgent):
                     for item in normalized_value.split("->")
                     if item.strip()
                 ]
+            elif normalized_key == "planning_needed":
+                payload[normalized_key] = normalized_value.lower() == "yes"
             elif normalized_key == "needs_structured_handoff":
                 payload[normalized_key] = normalized_value.lower() == "yes"
             elif normalized_key == "meta_self_state_json":
@@ -1159,6 +1162,8 @@ class MetaAgent(BaseAgent):
                     payload["meta_self_state"] = json.loads(normalized_value)
                 except json.JSONDecodeError:
                     payload["meta_self_state"] = {"raw": normalized_value}
+            elif normalized_key == "task_decomposition_json":
+                payload["task_decomposition"] = parse_task_decomposition(normalized_value)
             elif normalized_key == "meta_context_bundle_json":
                 try:
                     payload["meta_context_bundle"] = json.loads(normalized_value)

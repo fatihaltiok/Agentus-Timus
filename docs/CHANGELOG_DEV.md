@@ -2,6 +2,78 @@
 
 ---
 
+## Fortschritt 2026-04-17 - Z1 erster Runtime-Slice fuer allgemeine Mehrschritt-Planung
+
+Z1 ist nicht mehr nur als Startplan dokumentiert, sondern im ersten echten Runtime-Slice umgesetzt. Timus hat jetzt einen kanonischen `task_decomposition_v1`-Vertrag, ein fruehes Frontdoor-Signal `planning_needed`, eine schaerfere Abgrenzung von `build_setup` gegenueber reinem `research` und einen erweiterten Typed-Meta-Handoff mit `task_decomposition_json`.
+
+Geaendert:
+
+- [orchestration/task_decomposition_contract.py](/home/fatih-ubuntu/dev/timus/orchestration/task_decomposition_contract.py)
+  - neuer kanonischer Vertrag `task_decomposition_v1`
+  - liefert:
+    - `intent_family`
+    - `goal`
+    - `constraints`
+    - `subtasks`
+    - `completion_signals`
+    - `goal_satisfaction_mode`
+    - `planning_needed`
+    - normalisierte `metadata`
+- [main_dispatcher.py](/home/fatih-ubuntu/dev/timus/main_dispatcher.py)
+  - Frontdoor baut jetzt frueh ein Decomposition-Objekt
+  - neue Routing-Schaerfung:
+    - `build_setup`, `plan_only` und `execute_multistep` mit `planning_needed=true` gehen an `meta`
+    - explizite Shell-Ausfuehrung wird nicht von der Planungslogik verschluckt
+  - Meta-Handoff traegt jetzt:
+    - `intent_family`
+    - `planning_needed`
+    - `task_decomposition_json`
+  - kompaktierter Original-Request wird auch im Decomposition-Handoff konsistent begrenzt
+- [agent/agents/meta.py](/home/fatih-ubuntu/dev/timus/agent/agents/meta.py)
+  - Meta-Parser liest jetzt:
+    - `planning_needed`
+    - `task_decomposition_json`
+- Tests:
+  - neu:
+    - [tests/test_task_decomposition_contract.py](/home/fatih-ubuntu/dev/timus/tests/test_task_decomposition_contract.py)
+    - [tests/test_task_decomposition_contract_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_task_decomposition_contract_hypothesis.py)
+    - [tests/test_task_decomposition_contract_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_task_decomposition_contract_crosshair.py)
+  - erweitert:
+    - [tests/test_meta_handoff.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_handoff.py)
+    - [tests/test_dispatcher_self_status_routing.py](/home/fatih-ubuntu/dev/timus/tests/test_dispatcher_self_status_routing.py)
+- Doku:
+  - [docs/Z1_TASK_DECOMPOSITION_STARTPLAN_2026-04-17.md](/home/fatih-ubuntu/dev/timus/docs/Z1_TASK_DECOMPOSITION_STARTPLAN_2026-04-17.md)
+  - [docs/ZWISCHENPROJEKT_ALLGEMEINE_MEHRSCHRITT_PLANUNG_2026-04-12.md](/home/fatih-ubuntu/dev/timus/docs/ZWISCHENPROJEKT_ALLGEMEINE_MEHRSCHRITT_PLANUNG_2026-04-12.md)
+
+Verifikation:
+
+- `python -m py_compile orchestration/task_decomposition_contract.py main_dispatcher.py agent/agents/meta.py tests/test_task_decomposition_contract.py tests/test_task_decomposition_contract_hypothesis.py tests/test_task_decomposition_contract_crosshair.py tests/test_meta_handoff.py tests/test_dispatcher_self_status_routing.py` gruen
+- `pytest -q tests/test_task_decomposition_contract.py tests/test_task_decomposition_contract_hypothesis.py -x` -> `4 passed`
+- `pytest -q tests/test_meta_handoff.py tests/test_dispatcher_self_status_routing.py -x` -> `30 passed`
+- `python -m crosshair check tests/test_task_decomposition_contract_crosshair.py` -> Exit `0`
+
+## Fortschritt 2026-04-17 - Mehrschritt-Planung gestartet mit Z1-Startplan
+
+Nach dem Abschluss von Phase F ist der naechste grosse Ausbaupfad jetzt formal gestartet: die allgemeine Mehrschritt-Planung. Der Einstieg wurde bewusst nicht als lose Notiz gelassen, sondern als konkreter Startplan fuer `Z1 Task Decomposition Contract` geschnitten.
+
+Neu:
+
+- [Z1_TASK_DECOMPOSITION_STARTPLAN_2026-04-17.md](/home/fatih-ubuntu/dev/timus/docs/Z1_TASK_DECOMPOSITION_STARTPLAN_2026-04-17.md)
+  - konkreter Startplan fuer:
+    - `task_decomposition_v1`
+    - Frontdoor-Signal `planning_needed`
+    - Routing-Schaerfung fuer `build_setup` vs `research`
+    - typed Meta-Handoff mit `task_decomposition_json`
+    - Pytest-/Hypothesis-/CrossHair-Block
+
+Nachgezogen:
+
+- [ZWISCHENPROJEKT_ALLGEMEINE_MEHRSCHRITT_PLANUNG_2026-04-12.md](/home/fatih-ubuntu/dev/timus/docs/ZWISCHENPROJEKT_ALLGEMEINE_MEHRSCHRITT_PLANUNG_2026-04-12.md)
+  - Statusupdate fuer den Start nach Phase F
+  - direkter Link auf den neuen Z1-Startplan
+- [README.md](/home/fatih-ubuntu/dev/timus/README.md)
+  - Link auf den Z1-Startplan
+
 ## Fortschritt 2026-04-17 - Phase F formal abgeschlossen
 
 Phase F ist jetzt nicht mehr nur eine Sammlung einzelner Runtime-Slices, sondern als zusammenhaengender Betriebs- und Contract-Block geschlossen. Die Kernziele sind erreicht:

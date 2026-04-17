@@ -98,6 +98,8 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
 
     assert result.startswith("dummy:# META ORCHESTRATION HANDOFF")
     assert "task_type: youtube_content_extraction" in result
+    assert "intent_family: execute_multistep" in result
+    assert "planning_needed: yes" in result
     assert "site_kind: youtube" in result
     assert "recommended_agent_chain: meta -> visual -> research -> document" in result
     assert "recommended_recipe_id: youtube_content_extraction" in result
@@ -110,6 +112,7 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert "task_packet_json:" in result
     assert "request_preflight_json:" in result
     assert "meta_self_state_json:" in result
+    assert "task_decomposition_json:" in result
     assert "specialist_context_seed_json:" in result
     assert "meta_policy_decision_json:" in result
     assert "alternative_recipes_json:" in result
@@ -127,14 +130,21 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert meta["recommended_agent_chain"] == ["meta", "visual", "research", "document"]
     assert meta["needs_structured_handoff"] is True
     assert meta["recommended_recipe_id"] == "youtube_content_extraction"
+    assert meta["intent_family"] == "execute_multistep"
+    assert meta["planning_needed"] is True
     assert meta["goal_spec"]["output_mode"] == "report"
     assert meta["adaptive_plan"]["planner_mode"] == "advisory"
     assert meta["planner_resolution"]["state"] in {"fallback_current", "rejected", "adopted"}
     assert meta["task_profile"]["intent"] == "content_extraction"
     assert meta["selected_strategy"]["strategy_id"] == "layered_youtube_extraction"
     assert meta["task_packet"]["packet_type"] == "meta_orchestration"
+    assert meta["task_packet"]["scope"]["intent_family"] == "execute_multistep"
+    assert meta["task_packet"]["scope"]["planning_needed"] == "yes"
+    assert meta["task_packet"]["state_context"]["goal_satisfaction_mode"] == "goal_satisfied"
     assert meta["task_packet"]["objective"]
     assert meta["request_preflight"]["blocked"] is False
+    assert meta["task_decomposition"]["intent_family"] == "execute_multistep"
+    assert meta["task_decomposition"]["planning_needed"] is True
     assert [item["recipe_id"] for item in meta["alternative_recipes"]] == [
         "youtube_search_then_visual",
         "youtube_research_only",
@@ -165,6 +175,9 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert parsed["selected_strategy"]["strategy_id"] == "layered_youtube_extraction"
     assert parsed["task_packet"]["packet_type"] == "meta_orchestration"
     assert parsed["request_preflight"]["state"] in {"ok", "warn"}
+    assert parsed["intent_family"] == "execute_multistep"
+    assert parsed["planning_needed"] is True
+    assert parsed["task_decomposition"]["goal_satisfaction_mode"] == "goal_satisfied"
     assert parsed["meta_self_state"]["runtime_constraints"]["budget_state"] == "soft_limit"
 
 
