@@ -2948,6 +2948,48 @@ def _compact_meta_task_decomposition(
     return payload
 
 
+def _prepare_direct_research_request(query: str) -> tuple[str, dict, dict]:
+    research_packet = build_typed_task_packet(
+        packet_type="research_specialist_request",
+        objective=query,
+        scope={
+            "task_kind": "direct_research",
+            "delivery": "evidence_first_answer",
+        },
+        acceptance_criteria=(
+            "liefert belastbare Quellen oder einen klaren Recherche-Blocker",
+            "nennt Unsicherheit explizit statt still zu halluzinieren",
+        ),
+        allowed_tools=(
+            "start_deep_research",
+            "generate_research_report",
+            "verify_fact",
+            "search_web",
+            "fetch_url",
+        ),
+        reporting_contract={
+            "must_include": "sources_or_blocker",
+            "style": "evidence_first",
+        },
+        escalation_policy={
+            "on_provider_pressure": "compact_context",
+            "on_missing_sources": "report_gap",
+        },
+    )
+    safe_query = shorten_for_preflight(
+        query,
+        task_type="deep_research",
+        allowed_tools=research_packet.get("allowed_tools") or (),
+    )
+    preflight = build_request_preflight(
+        packet=research_packet,
+        original_request=safe_query,
+        rendered_handoff=safe_query,
+        task_type="deep_research",
+    )
+    return safe_query, research_packet, preflight
+
+
 def _render_meta_handoff_block(payload: dict) -> str:
     """Formatiert den Dispatcher-zu-Meta-Handoff fuer den Prompt."""
     lines = ["# META ORCHESTRATION HANDOFF"]
@@ -3450,6 +3492,13 @@ async def run_agent(
         else:
             visual_login_handoff = _build_visual_login_handoff(query)
             agent_query = visual_login_handoff
+    elif agent_name == "research" and "# DELEGATION HANDOFF" not in query:
+        safe_research_query, research_packet, research_preflight = _prepare_direct_research_request(query)
+        runtime_metadata["research_request_preflight"] = research_preflight
+        runtime_metadata["research_task_packet"] = research_packet
+        runtime_metadata["research_original_user_query"] = query
+        runtime_metadata["research_original_user_query_compacted"] = safe_research_query != query
+        agent_query = safe_research_query
 
     log.info(f"\n🚀 Starte Agent: {agent_name.upper()}")
     _emit_dispatcher_status(agent_name, "start", "Initialisiere Agent")

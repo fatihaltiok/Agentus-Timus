@@ -343,6 +343,7 @@ class BaseAgent(DynamicToolMixin):
         self._task_action_history: List[Dict[str, Any]] = []
         self._working_memory_last_meta: Dict[str, Any] = {}
         self._memory_recall_last_meta: Dict[str, Any] = {}
+        self._context_budget_last_meta: Dict[str, Any] = {}
         self._run_started_at: float = 0.0
         self._live_status_enabled = (
             os.getenv("TIMUS_LIVE_STATUS", "true").lower() in {"1", "true", "yes", "on"}
@@ -458,6 +459,157 @@ class BaseAgent(DynamicToolMixin):
         elif isinstance(obs, str) and len(obs) > 2000:
             return obs[:2000] + "..."
         return obs
+
+    def _compact_message_content_for_budget(self, content: Any, *, max_tokens: int) -> Any:
+        if isinstance(content, str):
+            return self._context_guard.compress(content, max_tokens=max_tokens)
+        if isinstance(content, list):
+            compacted: list[Any] = []
+            for item in content:
+                if isinstance(item, dict) and isinstance(item.get("text"), str):
+                    normalized = dict(item)
+                    normalized["text"] = self._context_guard.compress(
+                        item["text"],
+                        max_tokens=max_tokens,
+                    )
+                    compacted.append(normalized)
+                else:
+                    compacted.append(item)
+            return compacted
+        return content
+
+    def _context_budget_message_cap(
+        self,
+        message: Dict[str, Any],
+        *,
+        index: int,
+        total: int,
+    ) -> int:
+        role = str(message.get("role") or "").strip().lower()
+        content = message.get("content", "")
+        is_recent = index >= max(0, total - 4)
+        default_cap = 900 if is_recent else 420
+        if role == "assistant":
+            default_cap = 700 if is_recent else 320
+        if isinstance(content, str) and content.startswith("Observation:"):
+            default_cap = min(
+                default_cap,
+                max(120, int(os.getenv("AGENT_OBSERVATION_HISTORY_MAX_TOKENS", "320"))),
+            )
+        elif isinstance(content, str) and content.startswith("Fehler:"):
+            default_cap = min(default_cap, 220)
+        return max(120, default_cap)
+
+    def _build_context_budget_summary_message(
+        self,
+        middle_messages: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        if not middle_messages:
+            return None
+        lines = ["Frueherer Verlauf komprimiert:"]
+        for msg in middle_messages[-8:]:
+            role = str(msg.get("role") or "user").strip().lower() or "user"
+            preview = self._preview_value(msg.get("content", ""), 160)
+            if preview:
+                lines.append(f"- {role}: {preview}")
+        summary_text = "\n".join(lines)
+        return {
+            "role": "system",
+            "content": self._context_guard.compress(
+                summary_text,
+                max_tokens=max(160, int(os.getenv("AGENT_CONTEXT_SUMMARY_MAX_TOKENS", "320"))),
+            ),
+        }
+
+    def _enforce_context_budget(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        status = self._context_guard.get_status(messages)
+        initial_status = status.value if isinstance(status, ContextStatus) else str(status)
+        initial_tokens = int(self._context_guard.stats.total_tokens_used or 0)
+        meta: Dict[str, Any] = {
+            "initial_status": initial_status,
+            "initial_tokens": initial_tokens,
+            "actions": [],
+            "compressed_messages": 0,
+        }
+        if status == ContextStatus.OK:
+            meta.update(
+                {
+                    "final_status": initial_status,
+                    "final_tokens": initial_tokens,
+                    "message_count": len(messages),
+                }
+            )
+            self._context_budget_last_meta = meta
+            return messages
+
+        compacted: List[Dict[str, Any]] = []
+        for index, message in enumerate(messages):
+            if not isinstance(message, dict):
+                continue
+            normalized = dict(message)
+            if index > 0:
+                compacted_content = self._compact_message_content_for_budget(
+                    normalized.get("content", ""),
+                    max_tokens=self._context_budget_message_cap(
+                        normalized,
+                        index=index,
+                        total=len(messages),
+                    ),
+                )
+                if compacted_content != normalized.get("content", ""):
+                    meta["compressed_messages"] = int(meta["compressed_messages"]) + 1
+                normalized["content"] = compacted_content
+            compacted.append(normalized)
+
+        if int(meta["compressed_messages"]) > 0:
+            meta["actions"].append("compress_messages")
+
+        status = self._context_guard.get_status(compacted)
+        if status in {ContextStatus.CRITICAL, ContextStatus.OVERFLOW} and len(compacted) > 7:
+            prefix = compacted[:2]
+            suffix = compacted[-4:]
+            middle = compacted[2:-4]
+            summary_message = self._build_context_budget_summary_message(middle)
+            compacted = prefix + ([summary_message] if summary_message else []) + suffix
+            meta["actions"].append("collapse_middle_history")
+            status = self._context_guard.get_status(compacted)
+
+        if status == ContextStatus.OVERFLOW and len(compacted) > 3:
+            tightened: List[Dict[str, Any]] = []
+            for index, message in enumerate(compacted):
+                if not isinstance(message, dict):
+                    continue
+                normalized = dict(message)
+                if index > 0:
+                    cap = 360 if index >= max(0, len(compacted) - 2) else 220
+                    normalized["content"] = self._compact_message_content_for_budget(
+                        normalized.get("content", ""),
+                        max_tokens=cap,
+                    )
+                tightened.append(normalized)
+            compacted = tightened
+            meta["actions"].append("tighten_remaining_messages")
+            status = self._context_guard.get_status(compacted)
+
+        final_status = status.value if isinstance(status, ContextStatus) else str(status)
+        final_tokens = int(self._context_guard.stats.total_tokens_used or 0)
+        meta.update(
+            {
+                "final_status": final_status,
+                "final_tokens": final_tokens,
+                "message_count": len(compacted),
+            }
+        )
+        self._context_budget_last_meta = meta
+        if meta["actions"]:
+            log.warning(
+                "ContextGuard fuer %s: %s -> %s tokens | actions=%s",
+                self.agent_type,
+                initial_tokens,
+                final_tokens,
+                ",".join(str(item) for item in meta["actions"]),
+            )
+        return compacted
 
     @staticmethod
     def _format_jsonrpc_error(error: Any) -> str:
@@ -1116,12 +1268,10 @@ class BaseAgent(DynamicToolMixin):
         )
 
     def _current_task_type_for_analytics(self) -> str:
-        task_text = self._extract_primary_task_text(
-            str(getattr(self, "_current_task_text", "") or "")
-        ).strip()
-        if not task_text:
+        raw_task_text = str(getattr(self, "_current_task_text", "") or "").strip()
+        if not raw_task_text:
             return ""
-        handoff = parse_delegation_handoff(task_text)
+        handoff = parse_delegation_handoff(raw_task_text)
         if handoff:
             task_type = str(
                 handoff.handoff_data.get("task_type")
@@ -1130,6 +1280,15 @@ class BaseAgent(DynamicToolMixin):
             ).strip()
             if task_type:
                 return task_type[:120]
+        for line in raw_task_text.splitlines():
+            match = re.match(r"^\s*-?\s*task_type:\s*(.+?)\s*$", str(line or ""), re.IGNORECASE)
+            if match:
+                parsed_task_type = str(match.group(1) or "").strip()
+                if parsed_task_type:
+                    return parsed_task_type[:120]
+        task_text = self._extract_primary_task_text(raw_task_text).strip()
+        if not task_text:
+            return ""
         first_line = task_text.splitlines()[0].strip()
         return first_line[:120]
 
@@ -2526,6 +2685,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             "conversation_session_id": self.conversation_session_id or "",
             "memory_recall": self._memory_recall_last_meta,
             "working_memory": self._working_memory_last_meta,
+            "context_budget": self._context_budget_last_meta,
         }
 
     # ------------------------------------------------------------------
@@ -2542,6 +2702,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         self._run_started_at = time.time()
         self._active_tool_name = None
         self._memory_recall_last_meta = {}
+        self._context_budget_last_meta = {}
         self._current_task_text = task or ""
         self._emit_live_status(
             phase="start",
@@ -2678,6 +2839,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         empty_reply_streak = 0
 
         for step in range(1, self.max_iterations + 1):
+            messages = self._enforce_context_budget(messages)
             self._emit_live_status(
                 phase="thinking",
                 step=step,
@@ -2952,6 +3114,13 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             self._handle_file_artifacts(obs)
 
             obs_text = f"Observation: {json.dumps(self._sanitize_observation(obs), ensure_ascii=False)}"
+            obs_text = self._compact_message_content_for_budget(
+                obs_text,
+                max_tokens=max(
+                    120,
+                    int(os.getenv("AGENT_OBSERVATION_HISTORY_MAX_TOKENS", "320")),
+                ),
+            )
             if use_vision:
                 screenshot_b64 = await asyncio.to_thread(
                     self._capture_screenshot_base64

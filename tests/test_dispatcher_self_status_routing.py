@@ -203,3 +203,17 @@ def test_build_dispatcher_llm_query_enforces_token_only_contract():
     assert "Antworte ausschliesslich mit genau einem dieser Tokens" in query
     assert "visual_login" in query
     assert "visual_nemotron" in query
+
+
+def test_prepare_direct_research_request_compacts_and_marks_preflight():
+    import main_dispatcher
+
+    raw_query = "Recherchiere aktuelle LLM-Preise mit Quellen. " * 500
+
+    safe_query, packet, preflight = main_dispatcher._prepare_direct_research_request(raw_query)
+
+    assert len(safe_query) < len(raw_query)
+    assert packet["packet_type"] == "research_specialist_request"
+    assert "start_deep_research" in list(packet.get("allowed_tools") or [])
+    assert preflight["schema_version"] == 1
+    assert preflight["metrics"]["original_request_chars"] == len(safe_query)

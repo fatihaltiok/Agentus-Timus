@@ -6,6 +6,7 @@ import pytest
 
 from agent.base_agent import BaseAgent
 from agent.dynamic_tool_mixin import DynamicToolMixin
+from utils.context_guard import ContextGuard
 
 
 def _minimal_base_agent() -> BaseAgent:
@@ -19,6 +20,12 @@ def _minimal_base_agent() -> BaseAgent:
     agent._emit_live_status = lambda **kwargs: None
     agent.should_skip_action = lambda method, params: (False, None)
     agent._ensure_remote_tool_names = AsyncMock(return_value=None)
+    agent._context_guard = ContextGuard(
+        max_tokens=1000,
+        max_output_tokens=200,
+        compression_threshold=100,
+    )
+    agent._context_budget_last_meta = {}
     agent._get_lane = AsyncMock(
         return_value=SimpleNamespace(
             lane_id="test-lane",
@@ -70,6 +77,32 @@ def test_handle_file_artifacts_blocks_protected_logs_in_service(monkeypatch):
     agent._handle_file_artifacts(observation)
 
     open_call.assert_not_called()
+
+
+def test_enforce_context_budget_collapses_middle_history():
+    agent = _minimal_base_agent()
+    long_observation = "Observation: " + ("Sehr langer Recherchezwischenstand mit vielen Details. " * 80)
+    messages = [
+        {"role": "system", "content": "Systemprompt"},
+        {"role": "user", "content": "Recherchiere aktuelle LLM-Preise mit Quellen."},
+        {"role": "assistant", "content": "Action: {\"method\": \"search_web\", \"params\": {\"query\": \"LLM Preise\"}}"},
+        {"role": "user", "content": long_observation},
+        {"role": "assistant", "content": "Action: {\"method\": \"verify_fact\", \"params\": {\"claim\": \"Preis A\"}}"},
+        {"role": "user", "content": long_observation},
+        {"role": "assistant", "content": "Action: {\"method\": \"generate_research_report\", \"params\": {\"title\": \"LLM Preise\"}}"},
+        {"role": "user", "content": long_observation},
+    ]
+
+    compacted = agent._enforce_context_budget(messages)
+
+    assert len(compacted) < len(messages)
+    assert any(
+        isinstance(msg, dict)
+        and msg.get("role") == "system"
+        and "Frueherer Verlauf komprimiert" in str(msg.get("content") or "")
+        for msg in compacted[1:]
+    )
+    assert "collapse_middle_history" in list(agent._context_budget_last_meta.get("actions") or [])
 
 
 @pytest.mark.asyncio
