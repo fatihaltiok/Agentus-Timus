@@ -15,9 +15,11 @@ from orchestration.diagnosis_records import (
     compile_developer_task_brief,
     select_lead_diagnosis,
 )
+from orchestration.meta_plan_compiler import build_meta_execution_plan
 from orchestration.preference_instruction_memory import select_stored_preference_memory_with_summary
 from orchestration.meta_response_policy import build_meta_policy_input, resolve_meta_response_policy
 from orchestration.specialist_context import build_specialist_context_payload
+from orchestration.task_decomposition_contract import build_task_decomposition
 from orchestration.topic_state_history import parse_historical_topic_recall_hint, select_historical_topic_memory
 from orchestration.goal_spec import derive_goal_spec
 from orchestration.root_cause_tasks import build_root_cause_task_payload
@@ -1592,6 +1594,38 @@ def _extract_meta_followup_conversation_state(raw: str) -> Dict[str, Any]:
     turn_type_hint = _extract_meta_followup_field(raw, "conversation_state_turn_type_hint")
     preferences = _extract_meta_followup_list(raw, "conversation_state_preferences", limit=4)
     recent_corrections = _extract_meta_followup_list(raw, "conversation_state_recent_corrections", limit=4)
+    plan_blocked_by_raw = _extract_meta_followup_field(raw, "conversation_plan_blocked_by")
+    plan_blocked_by = [item.strip() for item in plan_blocked_by_raw.split("||") if item.strip()]
+    plan_step_count_raw = _extract_meta_followup_field(raw, "conversation_plan_step_count")
+    try:
+        plan_step_count = max(0, min(int(plan_step_count_raw), 32))
+    except (TypeError, ValueError):
+        plan_step_count = 0
+    active_plan = {
+        "plan_id": _extract_meta_followup_field(raw, "conversation_plan_id"),
+        "plan_mode": _extract_meta_followup_field(raw, "conversation_plan_mode"),
+        "goal": _extract_meta_followup_field(raw, "conversation_plan_goal"),
+        "goal_satisfaction_mode": _extract_meta_followup_field(raw, "conversation_plan_goal_satisfaction_mode"),
+        "next_step_id": _extract_meta_followup_field(raw, "conversation_plan_next_step_id"),
+        "next_step_title": _extract_meta_followup_field(raw, "conversation_plan_next_step_title"),
+        "next_step_agent": _extract_meta_followup_field(raw, "conversation_plan_next_step_agent"),
+        "last_completed_step_id": _extract_meta_followup_field(raw, "conversation_plan_last_completed_step_id"),
+        "last_completed_step_title": _extract_meta_followup_field(raw, "conversation_plan_last_completed_step_title"),
+        "blocked_by": plan_blocked_by,
+        "step_count": plan_step_count,
+        "status": _extract_meta_followup_field(raw, "conversation_plan_status"),
+    }
+    if not any(
+        active_plan.get(key)
+        for key in (
+            "plan_id",
+            "goal",
+            "next_step_id",
+            "next_step_title",
+            "last_completed_step_id",
+        )
+    ) and not active_plan.get("blocked_by") and not active_plan.get("step_count"):
+        active_plan = {}
     payload = {
         "active_topic": _clean_meta_state_fragment(active_topic, max_chars=220),
         "active_goal": _clean_meta_state_fragment(active_goal, max_chars=220),
@@ -1600,6 +1634,7 @@ def _extract_meta_followup_conversation_state(raw: str) -> Dict[str, Any]:
         "turn_type_hint": _clean_meta_state_fragment(turn_type_hint, max_chars=64).lower(),
         "preferences": preferences,
         "recent_corrections": recent_corrections,
+        "active_plan": active_plan,
     }
     return {key: value for key, value in payload.items() if value}
 
@@ -2173,6 +2208,9 @@ def build_meta_context_bundle(
         "recent_corrections": explicit_state.get("recent_corrections")
         or followup_state.get("recent_corrections")
         or (),
+        "active_plan": explicit_state.get("active_plan")
+        or followup_state.get("active_plan")
+        or {},
         "topic_confidence": explicit_state.get("topic_confidence") or 0.0,
     }
     turn = dict(turn_understanding or {})
@@ -2547,6 +2585,29 @@ def _should_apply_meta_context_anchor(current_query: str, context_anchor: str) -
     return False
 
 
+def _looks_like_plan_resume_query(query: str) -> bool:
+    lowered = str(query or "").strip().lower()
+    if not lowered:
+        return False
+    return any(
+        token in lowered
+        for token in (
+            "weiter",
+            "weiter machen",
+            "mach weiter",
+            "naechster schritt",
+            "nächster schritt",
+            "next step",
+            "und jetzt",
+            "was jetzt",
+            "setz fort",
+            "fortsetzen",
+            "ueberspring",
+            "überspring",
+        )
+    )
+
+
 def classify_meta_task(
     query: str,
     *,
@@ -2674,6 +2735,14 @@ def classify_meta_task(
     active_topic = meta_context_bundle.active_topic or active_topic
     open_goal = meta_context_bundle.active_goal or open_goal or meta_context_bundle.open_loop
     next_step = meta_context_bundle.next_expected_step or dialog_state.get("next_step")
+    active_plan = dict((conversation_state or {}).get("active_plan") or {})
+    if _looks_like_plan_resume_query(effective_query):
+        plan_goal = str(active_plan.get("goal") or "").strip()
+        plan_next_step = str(active_plan.get("next_step_title") or active_plan.get("goal") or "").strip()
+        if plan_goal and not open_goal:
+            open_goal = plan_goal
+        if plan_next_step:
+            next_step = plan_next_step
     topic_transition = derive_topic_state_transition(
         conversation_state,
         session_id=str((conversation_state or {}).get("session_id") or "default"),
@@ -2874,6 +2943,61 @@ def classify_meta_task(
                 payload = _build_recipe_payload(candidate_id)
                 if payload and payload["recipe_id"] != preferred_recipe["recipe_id"]:
                     alternatives.append(payload)
+    plan_handoff_payload = {
+        "task_type": final_task_type,
+        "site_kind": site_kind,
+        "response_mode": final_response_mode,
+        "required_capabilities": sorted(set(required_capabilities)),
+        "recommended_agent_chain": final_chain,
+        "recommended_recipe_id": None if not recipe else recipe["recipe_id"],
+        "recipe_stages": [] if not recipe else recipe["recipe_stages"],
+        "recipe_recoveries": [] if not recipe else recipe.get("recipe_recoveries", []),
+    }
+    task_decomposition = build_task_decomposition(
+        source_query=effective_query,
+        orchestration_policy=plan_handoff_payload,
+    )
+    if active_plan and _looks_like_plan_resume_query(effective_query):
+        task_decomposition["planning_needed"] = True
+        task_decomposition["planning_reason"] = "resume_active_plan"
+        if str(active_plan.get("goal") or "").strip():
+            task_decomposition["goal"] = str(active_plan.get("goal") or "").strip()
+    meta_execution_plan = build_meta_execution_plan(
+        source_query=effective_query,
+        handoff_payload=plan_handoff_payload,
+        task_decomposition=task_decomposition,
+    )
+    if active_plan and _looks_like_plan_resume_query(effective_query):
+        if str(active_plan.get("plan_id") or "").strip():
+            meta_execution_plan["plan_id"] = str(active_plan.get("plan_id") or "").strip()
+        if str(active_plan.get("goal") or "").strip():
+            meta_execution_plan["goal"] = str(active_plan.get("goal") or "").strip()
+        if str(active_plan.get("plan_mode") or "").strip():
+            meta_execution_plan["plan_mode"] = str(active_plan.get("plan_mode") or "").strip()
+        if str(active_plan.get("next_step_id") or "").strip():
+            meta_execution_plan["next_step_id"] = str(active_plan.get("next_step_id") or "").strip()
+        if not any(
+            str(step.get("id") or "").strip() == str(active_plan.get("next_step_id") or "").strip()
+            for step in (meta_execution_plan.get("steps") or [])
+            if isinstance(step, dict)
+        ) and str(active_plan.get("next_step_id") or "").strip():
+            meta_execution_plan["steps"] = [
+                {
+                    "id": str(active_plan.get("next_step_id") or "").strip(),
+                    "title": str(active_plan.get("next_step_title") or active_plan.get("goal") or "").strip(),
+                    "step_kind": "resume",
+                    "assigned_agent": str(active_plan.get("next_step_agent") or "meta").strip().lower() or "meta",
+                    "status": "pending",
+                    "depends_on": [],
+                    "optional": False,
+                    "completion_signals": ["step_completed"],
+                    "recipe_stage_id": "",
+                    "expected_output": "",
+                    "source_subtask_id": "",
+                    "delegation_mode": "resume_active_plan",
+                },
+                *list(meta_execution_plan.get("steps") or []),
+            ]
     classification = {
         "task_type": final_task_type,
         "site_kind": site_kind,
@@ -2900,6 +3024,8 @@ def classify_meta_task(
         "response_mode": final_response_mode,
         "state_effects": turn_interpretation.state_effects.to_dict(),
         "turn_understanding": turn_interpretation.to_dict(),
+        "task_decomposition": task_decomposition,
+        "meta_execution_plan": meta_execution_plan,
         "meta_policy_decision": policy_decision.to_dict(),
         "topic_shift_detected": topic_transition.topic_shift_detected,
         "topic_state_transition": topic_transition.to_dict(),

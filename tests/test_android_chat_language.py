@@ -476,6 +476,19 @@ def test_followup_capsule_serializes_conversation_state_into_query_block(tmp_pat
         "active_goal": "Echtzeit-Agenturmeldungen priorisieren",
         "open_loop": "Reuters und AP priorisieren",
         "next_expected_step": "Praeferenz bestaetigen",
+        "active_plan": {
+            "plan_id": "news-plan-1",
+            "plan_mode": "multi_step_execution",
+            "goal": "Echtzeit-Agenturmeldungen priorisieren",
+            "next_step_id": "confirm_preference",
+            "next_step_title": "Praeferenz bestaetigen",
+            "next_step_agent": "meta",
+            "last_completed_step_id": "collect_sources",
+            "last_completed_step_title": "Reuters und AP identifizieren",
+            "blocked_by": ["approval_pending"],
+            "step_count": 3,
+            "status": "blocked",
+        },
         "turn_type_hint": "behavior_instruction",
         "preferences": ["Reuters zuerst", "AP zuerst"],
         "recent_corrections": ["Nicht auf Standort abdriften"],
@@ -488,6 +501,10 @@ def test_followup_capsule_serializes_conversation_state_into_query_block(tmp_pat
     assert "conversation_state_active_topic: Weltlage und News-Qualitaet" in augmented
     assert "conversation_state_active_goal: Echtzeit-Agenturmeldungen priorisieren" in augmented
     assert "conversation_state_open_loop: Reuters und AP priorisieren" in augmented
+    assert "conversation_plan_id: news-plan-1" in augmented
+    assert "conversation_plan_next_step_title: Praeferenz bestaetigen" in augmented
+    assert "conversation_plan_last_completed_step_title: Reuters und AP identifizieren" in augmented
+    assert "conversation_plan_blocked_by: approval_pending" in augmented
     assert "conversation_state_turn_type_hint: behavior_instruction" in augmented
     assert "conversation_state_preferences: Reuters zuerst || AP zuerst" in augmented
     assert "conversation_state_recent_corrections: Nicht auf Standort abdriften" in augmented

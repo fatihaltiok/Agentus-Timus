@@ -235,6 +235,20 @@ Erfolg:
 
 - `weiter`, `mach den naechsten Schritt`, `ueberspring das Login` binden an einen echten Plan
 
+Status 2026-04-18:
+
+- erster Runtime-Slice umgesetzt
+- `active_plan` lebt jetzt im Conversation State
+- Follow-up-Capsules serialisieren und rekonstruieren Planzustand turnuebergreifend
+- Resume-Queries wie `weiter` und `naechster Schritt` binden jetzt an:
+  - `goal`
+  - `next_step`
+  - `blocked_by`
+  - `last_completed_step`
+- noch offen fuer Z4+:
+  - planbasierte Specialist-Step-Pakete
+  - Runtime-Replanning und Goal-Satisfaction
+
 ### Z4. Specialist Step Packaging
 
 Ziel:

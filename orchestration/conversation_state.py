@@ -7,9 +7,11 @@ from typing import Any, Iterable, Mapping
 
 
 _SCHEMA_VERSION = 1
+_PLAN_STATE_SCHEMA_VERSION = 1
 _MAX_TEXT_LEN = 280
 _MAX_LIST_ITEMS = 8
 _MAX_SOURCE_ITEMS = 12
+_MAX_PLAN_BLOCKERS = 6
 _ALLOWED_TURN_TYPE_HINTS = {
     "",
     "new_task",
@@ -23,6 +25,19 @@ _ALLOWED_TURN_TYPE_HINTS = {
     "auth_response",
     "result_extraction",
     "handover_resume",
+}
+_ALLOWED_PLAN_MODES = {
+    "",
+    "direct_response",
+    "lightweight_lookup",
+    "plan_only",
+    "multi_step_execution",
+}
+_ALLOWED_PLAN_STATUSES = {
+    "",
+    "active",
+    "blocked",
+    "completed",
 }
 _TOPIC_STOPWORDS = {
     "aber",
@@ -125,6 +140,40 @@ def _append_source(sources: tuple[str, ...], value: str) -> tuple[str, ...]:
     return tuple(merged[:_MAX_SOURCE_ITEMS])
 
 
+def _normalize_step_count(value: Any) -> int:
+    try:
+        return max(0, min(int(value), 32))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _normalize_plan_mode(value: Any) -> str:
+    mode = _normalize_text(value, limit=48).lower()
+    return mode if mode in _ALLOWED_PLAN_MODES else ""
+
+
+def _normalize_plan_status(value: Any, *, blocked_by: tuple[str, ...]) -> str:
+    status = _normalize_text(value, limit=32).lower()
+    if status in _ALLOWED_PLAN_STATUSES and status:
+        return status
+    return "blocked" if blocked_by else "active"
+
+
+def _normalize_blocked_by(values: Any) -> tuple[str, ...]:
+    return _normalize_text_list(values, limit_items=_MAX_PLAN_BLOCKERS, limit_chars=120)
+
+
+def _resolve_plan_step(steps: Any, step_id: str) -> Mapping[str, Any]:
+    if not step_id or not isinstance(steps, list):
+        return {}
+    for raw_step in steps:
+        if not isinstance(raw_step, Mapping):
+            continue
+        if _normalize_text(raw_step.get("id"), limit=64) == step_id:
+            return raw_step
+    return {}
+
+
 def _topic_terms(text: str) -> set[str]:
     normalized = str(text or "").lower()
     return {
@@ -176,6 +225,7 @@ class ConversationState:
     recent_corrections: tuple[str, ...]
     constraints: tuple[str, ...]
     open_questions: tuple[str, ...]
+    active_plan: ConversationPlanState | None
     state_source: tuple[str, ...]
     topic_confidence: float
     updated_at: str
@@ -193,8 +243,45 @@ class ConversationState:
             "recent_corrections": list(self.recent_corrections),
             "constraints": list(self.constraints),
             "open_questions": list(self.open_questions),
+            "active_plan": self.active_plan.to_dict() if self.active_plan else {},
             "state_source": list(self.state_source),
             "topic_confidence": self.topic_confidence,
+            "updated_at": self.updated_at,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationPlanState:
+    schema_version: int
+    plan_id: str
+    plan_mode: str
+    goal: str
+    goal_satisfaction_mode: str
+    step_count: int
+    next_step_id: str
+    next_step_title: str
+    next_step_agent: str
+    last_completed_step_id: str
+    last_completed_step_title: str
+    blocked_by: tuple[str, ...]
+    status: str
+    updated_at: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "plan_id": self.plan_id,
+            "plan_mode": self.plan_mode,
+            "goal": self.goal,
+            "goal_satisfaction_mode": self.goal_satisfaction_mode,
+            "step_count": self.step_count,
+            "next_step_id": self.next_step_id,
+            "next_step_title": self.next_step_title,
+            "next_step_agent": self.next_step_agent,
+            "last_completed_step_id": self.last_completed_step_id,
+            "last_completed_step_title": self.last_completed_step_title,
+            "blocked_by": list(self.blocked_by),
+            "status": self.status,
             "updated_at": self.updated_at,
         }
 
@@ -225,6 +312,83 @@ class TopicStateTransition:
         }
 
 
+def normalize_conversation_plan_state(
+    payload: ConversationPlanState | Mapping[str, Any] | None,
+    *,
+    updated_at: str = "",
+    previous: ConversationPlanState | Mapping[str, Any] | None = None,
+) -> ConversationPlanState | None:
+    raw = payload.to_dict() if isinstance(payload, ConversationPlanState) else dict(payload or {})
+    if not raw:
+        return None
+
+    previous_plan = (
+        previous
+        if isinstance(previous, ConversationPlanState)
+        else normalize_conversation_plan_state(previous, updated_at=updated_at)
+        if isinstance(previous, Mapping)
+        else None
+    )
+    plan_id = _normalize_text(raw.get("plan_id"), limit=80)
+    plan_mode = _normalize_plan_mode(raw.get("plan_mode"))
+    goal = _normalize_text(raw.get("goal"))
+    goal_satisfaction_mode = _normalize_text(raw.get("goal_satisfaction_mode"), limit=64)
+    steps = raw.get("steps")
+    step_count = _normalize_step_count(raw.get("step_count") if raw.get("step_count") is not None else len(steps or []))
+    next_step_id = _normalize_text(raw.get("next_step_id"), limit=64)
+    next_step = _resolve_plan_step(steps, next_step_id)
+    next_step_title = _normalize_text(raw.get("next_step_title") or next_step.get("title"))
+    next_step_agent = _normalize_text(raw.get("next_step_agent") or next_step.get("assigned_agent"), limit=64)
+    last_completed_step_id = _normalize_text(raw.get("last_completed_step_id"), limit=64)
+    last_completed_step_title = _normalize_text(raw.get("last_completed_step_title"))
+    blocked_by = _normalize_blocked_by(raw.get("blocked_by"))
+
+    if (
+        previous_plan
+        and plan_id
+        and plan_id == previous_plan.plan_id
+        and previous_plan.next_step_id
+        and next_step_id
+        and next_step_id != previous_plan.next_step_id
+        and not last_completed_step_id
+    ):
+        last_completed_step_id = previous_plan.next_step_id
+        last_completed_step_title = previous_plan.next_step_title
+
+    if not next_step_title and goal and step_count <= 1:
+        next_step_title = goal
+
+    if not any(
+        (
+            plan_id,
+            goal,
+            next_step_id,
+            next_step_title,
+            last_completed_step_id,
+            blocked_by,
+            step_count,
+        )
+    ):
+        return None
+
+    return ConversationPlanState(
+        schema_version=_PLAN_STATE_SCHEMA_VERSION,
+        plan_id=plan_id,
+        plan_mode=plan_mode,
+        goal=goal,
+        goal_satisfaction_mode=goal_satisfaction_mode,
+        step_count=step_count,
+        next_step_id=next_step_id,
+        next_step_title=next_step_title,
+        next_step_agent=next_step_agent,
+        last_completed_step_id=last_completed_step_id,
+        last_completed_step_title=last_completed_step_title,
+        blocked_by=blocked_by,
+        status=_normalize_plan_status(raw.get("status"), blocked_by=blocked_by),
+        updated_at=_normalize_text(updated_at or raw.get("updated_at"), limit=64),
+    )
+
+
 def normalize_conversation_state(
     payload: Mapping[str, Any] | None,
     *,
@@ -236,9 +400,20 @@ def normalize_conversation_state(
     normalized_session_id = _normalize_text(session_id, limit=120) or "default"
     prompt = _normalize_text(pending_followup_prompt)
     state_source = _normalize_state_source(raw.get("state_source"))
+    active_plan = normalize_conversation_plan_state(
+        raw.get("active_plan"),
+        updated_at=last_updated or raw.get("updated_at") or "",
+    )
 
     open_loop = _normalize_text(raw.get("open_loop"))
     next_expected_step = _normalize_text(raw.get("next_expected_step"))
+
+    if active_plan:
+        if not next_expected_step:
+            next_expected_step = active_plan.next_step_title or active_plan.goal
+        if not open_loop:
+            open_loop = active_plan.next_step_title or active_plan.goal
+        state_source = _append_source(state_source, "active_plan")
 
     if prompt:
         if not open_loop:
@@ -259,6 +434,7 @@ def normalize_conversation_state(
         recent_corrections=_normalize_text_list(raw.get("recent_corrections")),
         constraints=_normalize_text_list(raw.get("constraints")),
         open_questions=_normalize_text_list(raw.get("open_questions")),
+        active_plan=active_plan,
         state_source=state_source,
         topic_confidence=_normalize_confidence(raw.get("topic_confidence")),
         updated_at=_normalize_text(raw.get("updated_at") or last_updated, limit=64),
@@ -290,6 +466,7 @@ def touch_conversation_state(
         recent_corrections=current.recent_corrections,
         constraints=current.constraints,
         open_questions=current.open_questions,
+        active_plan=current.active_plan,
         state_source=current.state_source,
         topic_confidence=current.topic_confidence,
         updated_at=_normalize_text(updated_at, limit=64),
@@ -323,6 +500,7 @@ def decay_conversation_state(
     open_loop = current.open_loop
     next_expected_step = current.next_expected_step
     open_questions = list(current.open_questions)
+    active_plan = current.active_plan
     topic_confidence = current.topic_confidence
     sources = tuple(item for item in current.state_source if item != "state_decay")
 
@@ -330,6 +508,9 @@ def decay_conversation_state(
         open_loop = ""
         next_expected_step = ""
         reasons.append("stale_open_loop")
+    if age_hours >= 72.0 and active_plan:
+        active_plan = None
+        reasons.append("stale_active_plan")
     if age_hours >= 72.0 and open_questions:
         open_questions = []
         reasons.append("stale_open_questions")
@@ -353,6 +534,7 @@ def decay_conversation_state(
         recent_corrections=current.recent_corrections,
         constraints=current.constraints,
         open_questions=tuple(open_questions),
+        active_plan=active_plan,
         state_source=sources,
         topic_confidence=topic_confidence,
         updated_at=current.updated_at,
@@ -397,6 +579,7 @@ def apply_pending_followup_prompt(
         recent_corrections=current.recent_corrections,
         constraints=current.constraints,
         open_questions=current.open_questions,
+        active_plan=current.active_plan,
         state_source=sources,
         topic_confidence=current.topic_confidence,
         updated_at=_normalize_text(updated_at or current.updated_at, limit=64),
@@ -533,6 +716,7 @@ def apply_turn_interpretation(
     active_goal: str = "",
     dialog_constraints: Iterable[str] | None = None,
     next_step: str = "",
+    active_plan: Mapping[str, Any] | None = None,
     confidence: float | int = 0.0,
     updated_at: str = "",
 ) -> ConversationState:
@@ -553,6 +737,13 @@ def apply_turn_interpretation(
     preferences = list(current.preferences)
     corrections = list(current.recent_corrections)
     open_questions = list(current.open_questions)
+    current_plan = normalize_conversation_plan_state(current.active_plan, updated_at=current.updated_at)
+    incoming_plan = normalize_conversation_plan_state(
+        active_plan,
+        updated_at=updated_at or current.updated_at,
+        previous=current_plan,
+    )
+    active_plan_state = current_plan
     sources = _append_source(current.state_source, "turn_understanding")
     if cleaned_topic:
         sources = _append_source(sources, "meta_dialog_state")
@@ -612,8 +803,24 @@ def apply_turn_interpretation(
         active_goal_value = transition.next_goal or cleaned_query or active_goal_value
         open_loop = ""
         next_expected_step = ""
+        active_plan_state = None
         open_questions = []
         sources = _append_source(sources, "topic_shift")
+
+    if incoming_plan and not transition.topic_shift_detected:
+        active_plan_state = incoming_plan
+        sources = _append_source(sources, "active_plan")
+        if not active_goal_value:
+            active_goal_value = incoming_plan.goal
+        if not next_expected_step or next_expected_step == cleaned_query:
+            next_expected_step = incoming_plan.next_step_title or incoming_plan.goal
+        if not open_loop:
+            open_loop = incoming_plan.next_step_title or incoming_plan.goal
+    elif active_plan_state and response_mode == "resume_open_loop":
+        if not next_expected_step:
+            next_expected_step = active_plan_state.next_step_title or active_plan_state.goal
+        if not open_loop:
+            open_loop = active_plan_state.next_step_title or active_plan_state.goal
 
     if dominant_turn_type == "clarification":
         candidate_question = cleaned_query or cleaned_next_step or next_expected_step or open_loop
@@ -648,6 +855,7 @@ def apply_turn_interpretation(
         recent_corrections=tuple(corrections),
         constraints=merged_constraints,
         open_questions=tuple(open_questions),
+        active_plan=active_plan_state,
         state_source=sources,
         topic_confidence=max(current.topic_confidence, _normalize_confidence(confidence)),
         updated_at=_normalize_text(updated_at or current.updated_at, limit=64),

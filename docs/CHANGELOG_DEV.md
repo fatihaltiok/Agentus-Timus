@@ -2,6 +2,52 @@
 
 ---
 
+## Fortschritt 2026-04-18 - Z3 erster Runtime-Slice fuer Plan State in Conversation State
+
+Z3 ist nicht mehr nur als naechster Mehrschritt-Block dokumentiert, sondern im ersten echten Runtime-Slice umgesetzt. Timus haelt jetzt einen `active_plan` turnuebergreifend im Conversation State, serialisiert ihn in Follow-up-Capsules und bindet Resume-Queries wie `weiter` oder `naechster Schritt` an den laufenden Plan statt nur an losen Open-Loop-Text.
+
+Geaendert:
+
+- [orchestration/conversation_state.py](/home/fatih-ubuntu/dev/timus/orchestration/conversation_state.py)
+  - neuer `ConversationPlanState` fuer:
+    - `plan_id`
+    - `plan_mode`
+    - `goal`
+    - `goal_satisfaction_mode`
+    - `next_step`
+    - `last_completed_step`
+    - `blocked_by`
+    - `status`
+  - `normalize_conversation_state(...)` promoted jetzt `active_plan` in:
+    - `next_expected_step`
+    - `open_loop`
+  - Resume-/Decay-Pfade halten bzw. verwerfen Plan-State jetzt explizit
+- [orchestration/meta_orchestration.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_orchestration.py)
+  - Follow-up-Extraktion rekonstruiert `active_plan` aus Capsule-Feldern
+  - Resume-Queries wie `weiter`, `setz fort`, `naechster Schritt` binden an den aktiven Plan
+  - `task_decomposition` und `meta_execution_plan` werden fuer Resume-Faelle planbasiert ueberlagert
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+  - Persistenz von Meta-Turn-Understanding schreibt jetzt `meta_execution_plan` in den Conversation State
+  - Follow-up-Capsules serialisieren Planfelder wie:
+    - `conversation_plan_id`
+    - `conversation_plan_next_step_title`
+    - `conversation_plan_last_completed_step_title`
+    - `conversation_plan_blocked_by`
+- Tests:
+  - neu:
+    - [tests/test_conversation_plan_state_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_conversation_plan_state_hypothesis.py)
+    - [tests/test_conversation_plan_state_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_conversation_plan_state_crosshair.py)
+  - erweitert:
+    - [tests/test_conversation_state.py](/home/fatih-ubuntu/dev/timus/tests/test_conversation_state.py)
+    - [tests/test_android_chat_language.py](/home/fatih-ubuntu/dev/timus/tests/test_android_chat_language.py)
+    - [tests/test_meta_orchestration.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_orchestration.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/conversation_state.py orchestration/meta_orchestration.py server/mcp_server.py tests/test_conversation_state.py tests/test_android_chat_language.py tests/test_meta_orchestration.py tests/test_conversation_plan_state_hypothesis.py tests/test_conversation_plan_state_crosshair.py` gruen
+- `pytest -q tests/test_conversation_state.py tests/test_android_chat_language.py tests/test_meta_orchestration.py tests/test_conversation_plan_state_hypothesis.py -x`
+- `python -m crosshair check tests/test_conversation_plan_state_crosshair.py` -> Exit `0`
+
 ## Fortschritt 2026-04-18 - Z2 erster Runtime-Slice fuer Meta Plan Compiler
 
 Z2 ist nicht mehr nur als naechster Block im Mehrschritt-Plan dokumentiert, sondern im ersten echten Runtime-Slice umgesetzt. Timus baut jetzt einen expliziten `meta_execution_plan`, gibt ihn im Dispatcher-Handoff an Meta weiter und bindet ihn bis in die Rezept-Stage-Delegationen hinein.

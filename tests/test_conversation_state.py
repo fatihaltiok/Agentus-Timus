@@ -89,6 +89,32 @@ def test_touch_conversation_state_only_updates_timestamp_and_preserves_fields():
     assert touched.updated_at == "2026-04-06T16:44:00Z"
 
 
+def test_normalize_conversation_state_promotes_active_plan_into_open_loop_and_next_step():
+    state = normalize_conversation_state(
+        {
+            "active_goal": "YouTube-Inhalt extrahieren",
+            "active_plan": {
+                "plan_id": "yt-plan-1",
+                "plan_mode": "multi_step_execution",
+                "goal": "YouTube-Inhalt extrahieren",
+                "next_step_id": "visual_access",
+                "next_step_title": "YouTube-Seite oeffnen",
+                "next_step_agent": "visual",
+                "step_count": 3,
+            },
+        },
+        session_id="canvas_plan",
+        last_updated="2026-04-18T10:00:00Z",
+    )
+
+    assert state.active_plan is not None
+    assert state.active_plan.plan_id == "yt-plan-1"
+    assert state.active_plan.next_step_title == "YouTube-Seite oeffnen"
+    assert state.open_loop == "YouTube-Seite oeffnen"
+    assert state.next_expected_step == "YouTube-Seite oeffnen"
+    assert "active_plan" in state.state_source
+
+
 def test_apply_turn_interpretation_updates_preferences_and_turn_hint():
     updated = apply_turn_interpretation(
         None,
@@ -116,6 +142,41 @@ def test_apply_turn_interpretation_updates_preferences_and_turn_hint():
     assert updated.next_expected_step == "bei News Agenturquellen zuerst nutzen"
     assert "turn_understanding" in updated.state_source
     assert updated.topic_confidence == 0.86
+
+
+def test_apply_turn_interpretation_persists_active_plan_and_resumes_next_step():
+    updated = apply_turn_interpretation(
+        {
+            "active_topic": "YouTube-Analyse",
+            "active_goal": "Videoinhalt sammeln",
+        },
+        session_id="canvas_plan",
+        dominant_turn_type="followup",
+        response_mode="resume_open_loop",
+        state_effects={"keep_active_topic": True},
+        effective_query="weiter",
+        active_topic="YouTube-Analyse",
+        active_goal="Videoinhalt sammeln",
+        next_step="",
+        active_plan={
+            "plan_id": "yt-plan-1",
+            "plan_mode": "multi_step_execution",
+            "goal": "Videoinhalt sammeln",
+            "next_step_id": "research_synthesis",
+            "next_step_title": "Quellen und Transcript verdichten",
+            "next_step_agent": "research",
+            "step_count": 3,
+        },
+        confidence=0.82,
+        updated_at="2026-04-18T10:01:00Z",
+    )
+
+    assert updated.active_plan is not None
+    assert updated.active_plan.plan_id == "yt-plan-1"
+    assert updated.active_plan.next_step_id == "research_synthesis"
+    assert updated.next_expected_step == "Quellen und Transcript verdichten"
+    assert updated.open_loop == "Quellen und Transcript verdichten"
+    assert "active_plan" in updated.state_source
 
 
 def test_derive_topic_state_transition_detects_clean_topic_shift():
@@ -239,3 +300,27 @@ def test_decay_conversation_state_clears_stale_open_loop_after_three_days():
     assert "state_decay" in decayed.state_source
     assert summary["applied"] is True
     assert "stale_open_loop" in summary["reasons"]
+
+
+def test_decay_conversation_state_clears_stale_active_plan_after_three_days():
+    decayed, summary = decay_conversation_state(
+        {
+            "active_topic": "YouTube-Analyse",
+            "active_goal": "Videoinhalt sammeln",
+            "active_plan": {
+                "plan_id": "yt-plan-1",
+                "plan_mode": "multi_step_execution",
+                "goal": "Videoinhalt sammeln",
+                "next_step_id": "visual_access",
+                "next_step_title": "YouTube-Seite oeffnen",
+                "step_count": 3,
+            },
+            "updated_at": "2026-04-10T09:00:00Z",
+        },
+        session_id="canvas_plan",
+        now="2026-04-13T10:00:00Z",
+    )
+
+    assert decayed.active_plan is None
+    assert summary["applied"] is True
+    assert "stale_active_plan" in summary["reasons"]

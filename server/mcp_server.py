@@ -1375,6 +1375,7 @@ def _persist_meta_turn_understanding(
         active_goal=str(classification.get("open_goal") or ""),
         dialog_constraints=classification.get("dialog_constraints") or [],
         next_step=str(classification.get("next_step") or ""),
+        active_plan=classification.get("meta_execution_plan") if isinstance(classification.get("meta_execution_plan"), dict) else None,
         confidence=float(turn_understanding.get("confidence") or 0.0),
         updated_at=updated_at,
     ).to_dict()
@@ -2434,6 +2435,7 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
             for item in (conversation_state.get("recent_corrections") or [])
             if str(item).strip()
         ]
+        active_plan = conversation_state.get("active_plan") if isinstance(conversation_state.get("active_plan"), dict) else {}
         if active_topic:
             parts.append(f"conversation_state_active_topic: {active_topic[:240]}")
         if active_goal:
@@ -2454,6 +2456,50 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
                 "conversation_state_recent_corrections: "
                 + " || ".join(item[:140] for item in recent_corrections[:4])
             )
+        if isinstance(active_plan, dict):
+            plan_id = str(active_plan.get("plan_id") or "").strip()
+            plan_mode = str(active_plan.get("plan_mode") or "").strip()
+            plan_goal = str(active_plan.get("goal") or "").strip()
+            plan_goal_mode = str(active_plan.get("goal_satisfaction_mode") or "").strip()
+            plan_next_step_id = str(active_plan.get("next_step_id") or "").strip()
+            plan_next_step_title = str(active_plan.get("next_step_title") or "").strip()
+            plan_next_step_agent = str(active_plan.get("next_step_agent") or "").strip()
+            plan_last_completed_step_id = str(active_plan.get("last_completed_step_id") or "").strip()
+            plan_last_completed_step_title = str(active_plan.get("last_completed_step_title") or "").strip()
+            plan_status = str(active_plan.get("status") or "").strip()
+            plan_step_count = str(active_plan.get("step_count") or "").strip()
+            plan_blocked_by = [
+                str(item).strip()
+                for item in (active_plan.get("blocked_by") or [])
+                if str(item).strip()
+            ]
+            if plan_id:
+                parts.append(f"conversation_plan_id: {plan_id[:96]}")
+            if plan_mode:
+                parts.append(f"conversation_plan_mode: {plan_mode[:48]}")
+            if plan_goal:
+                parts.append(f"conversation_plan_goal: {plan_goal[:240]}")
+            if plan_goal_mode:
+                parts.append(f"conversation_plan_goal_satisfaction_mode: {plan_goal_mode[:64]}")
+            if plan_next_step_id:
+                parts.append(f"conversation_plan_next_step_id: {plan_next_step_id[:96]}")
+            if plan_next_step_title:
+                parts.append(f"conversation_plan_next_step_title: {plan_next_step_title[:240]}")
+            if plan_next_step_agent:
+                parts.append(f"conversation_plan_next_step_agent: {plan_next_step_agent[:64]}")
+            if plan_last_completed_step_id:
+                parts.append(f"conversation_plan_last_completed_step_id: {plan_last_completed_step_id[:96]}")
+            if plan_last_completed_step_title:
+                parts.append(f"conversation_plan_last_completed_step_title: {plan_last_completed_step_title[:240]}")
+            if plan_status:
+                parts.append(f"conversation_plan_status: {plan_status[:32]}")
+            if plan_step_count:
+                parts.append(f"conversation_plan_step_count: {plan_step_count[:8]}")
+            if plan_blocked_by:
+                parts.append(
+                    "conversation_plan_blocked_by: "
+                    + " || ".join(item[:140] for item in plan_blocked_by[:4])
+                )
     parts.extend(["", "# CURRENT USER QUERY", query])
     return "\n".join(parts)
 

@@ -1080,6 +1080,34 @@ def test_classify_meta_task_keeps_topic_for_live_news_reframing_followup():
     assert result["topic_state_transition"]["next_topic"] == "aktuelle Weltlage und News-Qualitaet"
 
 
+def test_classify_meta_task_uses_active_plan_next_step_for_resume_followup():
+    result = classify_meta_task(
+        "und jetzt weiter",
+        action_count=0,
+        conversation_state={
+            "session_id": "canvas_z3_plan",
+            "active_topic": "YouTube-Analyse",
+            "active_goal": "Videoinhalt sammeln",
+            "open_loop": "YouTube-Seite oeffnen",
+            "next_expected_step": "YouTube-Seite oeffnen",
+            "active_plan": {
+                "plan_id": "yt-plan-1",
+                "plan_mode": "multi_step_execution",
+                "goal": "Videoinhalt sammeln",
+                "next_step_id": "research_synthesis",
+                "next_step_title": "Quellen und Transcript verdichten",
+                "next_step_agent": "research",
+                "step_count": 3,
+            },
+        },
+    )
+
+    assert result["response_mode"] == "resume_open_loop"
+    assert result["next_step"] == "Quellen und Transcript verdichten"
+    assert result["task_decomposition"]["planning_needed"] is True
+    assert result["meta_execution_plan"]["next_step_id"] == "research_synthesis"
+
+
 def test_classify_meta_task_treats_short_contextual_reframe_as_followup_from_state():
     result = classify_meta_task(
         "so aber mit live-news",
