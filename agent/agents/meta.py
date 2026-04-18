@@ -36,6 +36,10 @@ from orchestration.meta_plan_compiler import (
     build_meta_execution_plan,
     parse_meta_execution_plan,
 )
+from orchestration.meta_runtime_plan import (
+    advance_meta_execution_plan,
+    insert_runtime_stage_into_meta_execution_plan,
+)
 from orchestration.specialist_context import (
     build_specialist_context_payload,
     parse_specialist_context_payload,
@@ -216,6 +220,8 @@ class MetaAgent(BaseAgent):
         self.skill_registry = None
         self.active_skills: list = []
         self._active_meta_orchestration_handoff: Dict[str, Any] | None = None
+        self._runtime_plan_state: Dict[str, Any] = {}
+        self._runtime_plan_events: list[Dict[str, Any]] = []
         self._init_skill_system()
 
     @staticmethod
@@ -1922,6 +1928,46 @@ class MetaAgent(BaseAgent):
         except Exception:
             pass
 
+    @staticmethod
+    def _extract_runtime_step_signal(metadata: Mapping[str, Any] | None) -> tuple[str, str]:
+        payload = dict(metadata or {})
+        return (
+            str(payload.get("specialist_step_signal") or "").strip().lower(),
+            str(payload.get("specialist_step_reason") or "").strip().lower(),
+        )
+
+    def _remember_runtime_plan_state(
+        self,
+        plan: Mapping[str, Any] | None,
+        update: Mapping[str, Any] | None,
+        *,
+        stage_id: str = "",
+        agent: str = "",
+        stage_status: str = "",
+    ) -> None:
+        if not hasattr(self, "_runtime_plan_state"):
+            self._runtime_plan_state = {}
+        if not hasattr(self, "_runtime_plan_events"):
+            self._runtime_plan_events = []
+        parsed_plan = parse_meta_execution_plan(plan or {})
+        self._runtime_plan_state = dict(plan or parsed_plan or {})
+        if not update:
+            return
+        event = {
+            "stage_id": str(stage_id or "").strip(),
+            "agent": str(agent or "").strip().lower(),
+            "stage_status": str(stage_status or "").strip().lower(),
+            **dict(update or {}),
+        }
+        self._runtime_plan_events.append(event)
+        self._runtime_plan_events = self._runtime_plan_events[-12:]
+
+    def get_runtime_telemetry(self) -> Dict[str, Any]:
+        telemetry = super().get_runtime_telemetry()
+        telemetry["meta_runtime_plan_state"] = dict(self._runtime_plan_state or {})
+        telemetry["meta_runtime_plan_events"] = [dict(item) for item in (self._runtime_plan_events or [])[-8:]]
+        return telemetry
+
     @classmethod
     def _should_execute_optional_recipe_stage(
         cls, handoff: Dict[str, Any], stage: Dict[str, Any]
@@ -2698,6 +2744,14 @@ class MetaAgent(BaseAgent):
         ]
         if runtime_agent and runtime_agent not in chain:
             handoff["recommended_agent_chain"] = [*chain, runtime_agent]
+        updated_plan, plan_update = insert_runtime_stage_into_meta_execution_plan(
+            handoff.get("meta_execution_plan"),
+            runtime_stage,
+            before_step_id=str(dict(handoff.get("meta_execution_plan") or {}).get("next_step_id") or ""),
+            depends_on_step_id=str((previous_stage_result or {}).get("plan_step_id") or ""),
+        )
+        if updated_plan:
+            handoff["meta_execution_plan"] = updated_plan
         try:
             record_autonomy_observation(
                 "runtime_goal_gap_inserted",
@@ -2709,6 +2763,8 @@ class MetaAgent(BaseAgent):
                     "agent": runtime_agent,
                     "adaptive_reason": str(runtime_stage.get("adaptive_reason") or ""),
                     "insert_at": insert_at,
+                    "plan_step_id": str(plan_update.get("inserted_step_id") or ""),
+                    "plan_next_step_id": str(plan_update.get("next_step_id") or ""),
                     "previous_stage_agent": str((previous_stage_result or {}).get("agent") or ""),
                     "previous_stage_status": str((previous_stage_result or {}).get("status") or ""),
                 },
@@ -2819,9 +2875,28 @@ class MetaAgent(BaseAgent):
                 "artifacts": normalized.get("artifacts", []) if isinstance(normalized, dict) else [],
                 "recovery_for": failed_stage.get("stage_id", ""),
                 "terminal": bool(recovery.get("terminal")),
+                "plan_step_id": str(failed_stage.get("plan_step_id") or "").strip(),
             }
             stage_history.append(history_entry)
             if history_entry["status"] == "success":
+                updated_plan, plan_update = advance_meta_execution_plan(
+                    handoff.get("meta_execution_plan"),
+                    stage_id=failed_stage.get("stage_id"),
+                    plan_step_id=failed_stage.get("plan_step_id"),
+                    stage_status="success",
+                    specialist_step_signal="step_completed",
+                    specialist_step_reason="recovery_success",
+                )
+                if updated_plan:
+                    handoff["meta_execution_plan"] = updated_plan
+                history_entry["plan_runtime"] = plan_update
+                self._remember_runtime_plan_state(
+                    updated_plan,
+                    plan_update,
+                    stage_id=str(history_entry.get("stage_id") or ""),
+                    agent=str(history_entry.get("agent") or ""),
+                    stage_status="success",
+                )
                 failed_stage["status"] = "recovered"
                 failed_stage["recovered_by"] = history_entry["stage_id"]
                 return history_entry
@@ -2852,6 +2927,16 @@ class MetaAgent(BaseAgent):
         handoff_for_recipe["recipe_recoveries"] = list(selected_recipe.get("recipe_recoveries") or [])
         if selected_recipe.get("recommended_agent_chain"):
             handoff_for_recipe["recommended_agent_chain"] = list(selected_recipe.get("recommended_agent_chain") or [])
+        self._remember_runtime_plan_state(
+            self._ensure_meta_execution_plan(
+                handoff_for_recipe,
+                source_query=original_user_task,
+            ),
+            {"applied": False, "state": "recipe_started"},
+            stage_id="",
+            agent="meta",
+            stage_status="active",
+        )
         stage_history: List[Dict[str, Any]] = []
         previous_stage_result: Optional[Dict[str, Any]] = None
         recipe_started_at = time.monotonic()
@@ -2866,6 +2951,17 @@ class MetaAgent(BaseAgent):
             )
             stage = stages[stage_index]
             if not self._should_execute_optional_recipe_stage(handoff_for_recipe, stage):
+                plan_step = self._resolve_meta_plan_step(handoff_for_recipe, stage, stage_history)
+                updated_plan, plan_update = advance_meta_execution_plan(
+                    handoff_for_recipe.get("meta_execution_plan"),
+                    stage_id=stage.get("stage_id"),
+                    plan_step_id=plan_step.get("id"),
+                    stage_status="skipped",
+                    specialist_step_signal="step_unnecessary",
+                    specialist_step_reason="optional_stage_skipped",
+                )
+                if updated_plan:
+                    handoff_for_recipe["meta_execution_plan"] = updated_plan
                 stage_history.append(
                     {
                         "stage_id": stage.get("stage_id", "stage"),
@@ -2873,11 +2969,21 @@ class MetaAgent(BaseAgent):
                         "status": "skipped",
                         "result_preview": "Optionale Stage fuer diese Anfrage uebersprungen.",
                         "adaptive_reason": str(stage.get("adaptive_reason") or ""),
+                        "plan_step_id": str(plan_step.get("id") or "").strip(),
+                        "plan_runtime": plan_update,
                     }
+                )
+                self._remember_runtime_plan_state(
+                    updated_plan,
+                    plan_update,
+                    stage_id=str(stage.get("stage_id") or ""),
+                    agent=str(stage.get("agent") or ""),
+                    stage_status="skipped",
                 )
                 stage_index += 1
                 continue
 
+            plan_step = self._resolve_meta_plan_step(handoff_for_recipe, stage, stage_history)
             stage_task = self._build_recipe_stage_delegation_task(
                 handoff=handoff_for_recipe,
                 stage=stage,
@@ -2913,17 +3019,52 @@ class MetaAgent(BaseAgent):
                 "metadata": normalized.get("metadata", {}) if isinstance(normalized, dict) else {},
                 "artifacts": normalized.get("artifacts", []) if isinstance(normalized, dict) else [],
                 "adaptive_reason": str(stage.get("adaptive_reason") or ""),
-                "plan_step_id": str(
-                    self._resolve_meta_plan_step(handoff_for_recipe, stage, stage_history).get("id") or ""
-                ).strip(),
+                "plan_step_id": str(plan_step.get("id") or "").strip(),
             }
+            step_signal, step_reason = self._extract_runtime_step_signal(history_entry.get("metadata"))
+            updated_plan, plan_update = advance_meta_execution_plan(
+                handoff_for_recipe.get("meta_execution_plan"),
+                stage_id=stage.get("stage_id"),
+                plan_step_id=history_entry.get("plan_step_id"),
+                stage_status=history_entry.get("status"),
+                specialist_step_signal=step_signal,
+                specialist_step_reason=step_reason,
+            )
+            if updated_plan:
+                handoff_for_recipe["meta_execution_plan"] = updated_plan
+            history_entry["plan_runtime"] = plan_update
+            if step_signal:
+                history_entry["specialist_step_signal"] = step_signal
+            if step_reason:
+                history_entry["specialist_step_reason"] = step_reason
             if history_entry["status"] != "success":
                 history_entry["error_signal"] = classify_strategy_error(
                     handoff=handoff_for_recipe,
                     failed_stage=history_entry,
                 )
             stage_history.append(history_entry)
+            self._remember_runtime_plan_state(
+                updated_plan,
+                plan_update,
+                stage_id=str(history_entry.get("stage_id") or ""),
+                agent=str(history_entry.get("agent") or ""),
+                stage_status=str(history_entry.get("status") or ""),
+            )
             previous_stage_result = history_entry
+
+            if plan_update.get("goal_satisfied"):
+                self._record_recipe_execution_outcome(
+                    handoff=handoff_for_recipe,
+                    recipe_payload=selected_recipe,
+                    success=True,
+                    stage_history=stage_history,
+                    duration_ms=int((time.monotonic() - recipe_started_at) * 1000),
+                )
+                return self._render_recipe_execution_summary(
+                    recipe_id=recipe_id,
+                    original_user_task=original_user_task,
+                    stage_history=stage_history,
+                )
 
             if history_entry["status"] != "success":
                 if stage.get("optional"):
@@ -3229,6 +3370,8 @@ class MetaAgent(BaseAgent):
 
     async def run(self, task: str) -> str:
         log.info(f"MetaAgent mit Kontext + Skill-Orchestrierung: {task[:50]}...")
+        self._runtime_plan_state = {}
+        self._runtime_plan_events = []
 
         active_handoff = self._parse_meta_orchestration_handoff(task, require_recipe_stages=False)
         previous_active_handoff = getattr(self, "_active_meta_orchestration_handoff", None)

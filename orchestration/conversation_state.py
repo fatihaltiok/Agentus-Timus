@@ -586,6 +586,83 @@ def apply_pending_followup_prompt(
     )
 
 
+def apply_runtime_plan_state(
+    payload: ConversationState | Mapping[str, Any] | None,
+    *,
+    session_id: str,
+    active_plan: Mapping[str, Any] | None,
+    updated_at: str = "",
+) -> ConversationState:
+    current = normalize_conversation_state(
+        payload.to_dict() if isinstance(payload, ConversationState) else payload,
+        session_id=session_id,
+        last_updated=updated_at,
+    )
+    incoming_plan = normalize_conversation_plan_state(
+        active_plan,
+        updated_at=updated_at or current.updated_at,
+        previous=current.active_plan,
+    )
+    sources = _append_source(tuple(item for item in current.state_source if item != "state_decay"), "runtime_plan")
+
+    if incoming_plan is None:
+        return ConversationState(
+            schema_version=current.schema_version,
+            session_id=current.session_id,
+            active_topic=current.active_topic,
+            active_goal=current.active_goal,
+            open_loop=current.open_loop,
+            next_expected_step=current.next_expected_step,
+            turn_type_hint=current.turn_type_hint,
+            preferences=current.preferences,
+            recent_corrections=current.recent_corrections,
+            constraints=current.constraints,
+            open_questions=current.open_questions,
+            active_plan=current.active_plan,
+            state_source=sources,
+            topic_confidence=current.topic_confidence,
+            updated_at=_normalize_text(updated_at or current.updated_at, limit=64),
+        )
+
+    if incoming_plan.status == "completed":
+        return ConversationState(
+            schema_version=current.schema_version,
+            session_id=current.session_id,
+            active_topic=current.active_topic,
+            active_goal=incoming_plan.goal or current.active_goal,
+            open_loop="",
+            next_expected_step="",
+            turn_type_hint=current.turn_type_hint,
+            preferences=current.preferences,
+            recent_corrections=current.recent_corrections,
+            constraints=current.constraints,
+            open_questions=(),
+            active_plan=None,
+            state_source=sources,
+            topic_confidence=current.topic_confidence,
+            updated_at=_normalize_text(updated_at or current.updated_at, limit=64),
+        )
+
+    next_step = incoming_plan.next_step_title or incoming_plan.goal or current.next_expected_step
+    return ConversationState(
+        schema_version=current.schema_version,
+        session_id=current.session_id,
+        active_topic=current.active_topic,
+        active_goal=incoming_plan.goal or current.active_goal,
+        open_loop=next_step,
+        next_expected_step=next_step,
+        turn_type_hint=current.turn_type_hint,
+        preferences=current.preferences,
+        recent_corrections=current.recent_corrections,
+        constraints=current.constraints,
+        open_questions=current.open_questions,
+        active_plan=incoming_plan,
+        state_source=sources,
+        topic_confidence=current.topic_confidence,
+        updated_at=_normalize_text(updated_at or current.updated_at, limit=64),
+    )
+
+
 def conversation_state_to_dict(
     payload: ConversationState | Mapping[str, Any] | None,
     *,

@@ -124,6 +124,7 @@ from orchestration.auth_session_state import (
     upsert_auth_session_index,
 )
 from orchestration.conversation_state import (
+    apply_runtime_plan_state,
     apply_turn_interpretation,
     apply_pending_followup_prompt,
     conversation_state_to_dict,
@@ -1388,6 +1389,40 @@ def _persist_meta_turn_understanding(
         topic_transition=classification.get("topic_state_transition"),
         updated_at=updated_at,
     )
+    _store_session_capsule(capsule)
+    return updated_state
+
+
+def _persist_meta_runtime_plan_state(
+    *,
+    session_id: str,
+    runtime_metadata: Mapping[str, Any] | None,
+    updated_at: str,
+) -> dict | None:
+    if not session_id or not isinstance(runtime_metadata, Mapping):
+        return None
+    agent_runtime = runtime_metadata.get("agent_runtime")
+    if not isinstance(agent_runtime, Mapping):
+        return None
+    runtime_plan = agent_runtime.get("meta_runtime_plan_state")
+    if not isinstance(runtime_plan, Mapping) or not runtime_plan:
+        return None
+
+    capsule = _load_session_capsule(session_id)
+    previous_state = conversation_state_to_dict(
+        capsule.get("conversation_state"),
+        session_id=session_id,
+        last_updated=str(capsule.get("last_updated") or ""),
+        pending_followup_prompt=str(capsule.get("pending_followup_prompt") or ""),
+        decay_now=updated_at,
+    )
+    updated_state = apply_runtime_plan_state(
+        previous_state,
+        session_id=session_id,
+        active_plan=runtime_plan,
+        updated_at=updated_at,
+    ).to_dict()
+    capsule["conversation_state"] = updated_state
     _store_session_capsule(capsule)
     return updated_state
 
@@ -4628,6 +4663,18 @@ async def canvas_chat(request: Request):
                     tools_description=tools_desc,
                     session_id=session_id,
                 )
+                if agent == "meta":
+                    try:
+                        from main_dispatcher import pop_last_agent_runtime_metadata
+
+                        runtime_state = pop_last_agent_runtime_metadata(session_id)
+                        _persist_meta_runtime_plan_state(
+                            session_id=session_id,
+                            runtime_metadata=runtime_state,
+                            updated_at=datetime.utcnow().isoformat() + "Z",
+                        )
+                    except Exception as runtime_plan_exc:
+                        log.debug("Meta runtime plan state konnte nicht persistiert werden: %s", runtime_plan_exc)
                 _emit_longrun_event(
                     "run_completed",
                     request_id=request_id,

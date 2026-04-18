@@ -94,6 +94,21 @@ from gateway.dispatcher_health_server import DispatcherHealthServer
 # Logger frueh definieren, damit Import-Fallbacks sicher loggen koennen.
 log = logging.getLogger("MainDispatcher")
 _agent_progress_hook: Optional[Callable[[dict[str, Any]], None]] = None
+_last_agent_runtime_metadata: dict[str, dict[str, Any]] = {}
+
+
+def _store_last_agent_runtime_metadata(session_id: str, payload: dict[str, Any]) -> None:
+    cleaned_session_id = str(session_id or "").strip()
+    if not cleaned_session_id:
+        return
+    _last_agent_runtime_metadata[cleaned_session_id] = dict(payload or {})
+
+
+def pop_last_agent_runtime_metadata(session_id: str) -> dict[str, Any]:
+    cleaned_session_id = str(session_id or "").strip()
+    if not cleaned_session_id:
+        return {}
+    return dict(_last_agent_runtime_metadata.pop(cleaned_session_id, {}) or {})
 
 
 def _emit_top_level_agent_progress(
@@ -3269,6 +3284,10 @@ async def run_agent(
         final_output = None if value is None else str(value)
         if isinstance(extra_metadata, dict):
             runtime_metadata.update(extra_metadata)
+        try:
+            _store_last_agent_runtime_metadata(effective_session_id, runtime_metadata)
+        except Exception:
+            pass
         return value
 
     lane_manager.set_registry(registry_v2)

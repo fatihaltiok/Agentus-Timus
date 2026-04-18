@@ -7313,3 +7313,8 @@ Status:
 - `/health` gruen
 - noch nicht committed
 - noch nicht gepusht
+- 2026-04-18: Z5 erster Runtime-Slice fuer allgemeine Mehrschritt-Planung eingebaut.
+  - Neuer Laufzeit-Helper [meta_runtime_plan.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_runtime_plan.py) fuer Schrittfortschreibung, `goal_satisfied`, `step_unnecessary`, `step_blocked` und Runtime-Stage-Insertion.
+  - [meta.py](/home/fatih-ubuntu/dev/timus/agent/agents/meta.py) schreibt den `meta_execution_plan` jetzt waehrend Rezept- und Recovery-Laeufen fort und behandelt `goal_satisfied` als terminalen Pfad.
+  - [conversation_state.py](/home/fatih-ubuntu/dev/timus/orchestration/conversation_state.py), [main_dispatcher.py](/home/fatih-ubuntu/dev/timus/main_dispatcher.py) und [mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py) reichen den aktualisierten Runtime-Plan bis in den Session-State durch.
+  - Neue Z5-Tests fuer Runtime-Plan, Conversation-State und Meta-Rezeptpfad; gezielte Verifikation grün.

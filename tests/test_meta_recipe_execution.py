@@ -421,6 +421,9 @@ async def test_meta_recipe_execution_runtime_replan_inserts_verification_stage_a
             }
         assert params["agent_type"] == "research"
         assert "previous_stage_result:" in params["task"]
+        assert '"id": "verification_output"' in params["task"]
+        assert "next_step_id" in params["task"]
+        assert "verification_output" in params["task"]
         return {
             "status": "success",
             "agent": "research",
@@ -462,6 +465,51 @@ async def test_meta_recipe_execution_runtime_replan_inserts_verification_stage_a
 
     assert [call["agent_type"] for call in calls] == ["executor", "research"]
     assert result == "Verifizierte Preisübersicht mit belastbaren Quellen erstellt."
+
+
+@pytest.mark.asyncio
+async def test_meta_recipe_execution_stops_early_when_specialist_reports_goal_satisfied(monkeypatch):
+    from agent.agents.meta import MetaAgent
+    from agent.base_agent import BaseAgent
+
+    calls = []
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        assert method == "delegate_to_agent"
+        calls.append(dict(params))
+        assert params["agent_type"] == "visual"
+        return {
+            "status": "success",
+            "agent": "visual",
+            "result": "Das Video ist bereits offen und der relevante Zielzustand ist erreicht.",
+            "blackboard_key": "delegation:visual:goal",
+            "metadata": {
+                "page_state": "video_page",
+                "specialist_step_signal": "goal_satisfied",
+                "specialist_step_reason": "already_on_target",
+            },
+            "artifacts": [],
+        }
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = MetaAgent.__new__(MetaAgent)
+    agent.conversation_session_id = "sess-meta-goal-satisfied"
+
+    task = _build_meta_task(
+        recipe_id="youtube_content_extraction",
+        chain="meta -> visual -> research",
+        stages=[
+            ("visual_access", "visual", "Oeffne YouTube", "page_state", False),
+            ("research_synthesis", "research", "Verdichte den Inhalt", "summary", False),
+        ],
+        original_task="Hole maximal viel Inhalt aus dem YouTube-Video.",
+    )
+
+    result = await MetaAgent.run(agent, task)
+
+    assert len(calls) == 1
+    assert "zielzustand ist erreicht" in result.lower()
 
 
 @pytest.mark.asyncio

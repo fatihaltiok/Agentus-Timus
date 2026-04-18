@@ -308,6 +308,22 @@ Erfolg:
 - weniger starres Rezeptverhalten
 - mehr zielorientierte Ausfuehrung
 
+Status:
+
+- erster echter Runtime-Slice ist jetzt eingebaut
+- neuer Laufzeitpfad in [orchestration/meta_runtime_plan.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_runtime_plan.py)
+  - markiert Schritte nach realem Spezialisten-Outcome als `completed`, `blocked` oder `skipped`
+  - behandelt `goal_satisfied` als eigenen terminalen Runtime-Pfad
+  - fuegt Runtime-Gap-Stages als echte Planschritte in den laufenden `meta_execution_plan` ein
+- Meta aktualisiert den aktiven Plan jetzt waehrend der Rezeptausfuehrung in [agent/agents/meta.py](/home/fatih-ubuntu/dev/timus/agent/agents/meta.py)
+  - Spezialisten-Signale treiben den naechsten Schritt
+  - Recovery-Laeufe schreiben den Plan ebenfalls fort
+- der aktualisierte Runtime-Plan wird nach dem Meta-Run ueber [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py) in den Conversation State zurueckgeschrieben
+  - dadurch landet `weiter` nicht mehr auf dem alten initialen Planstand
+- Kontrakte und State-Helfer wurden entsprechend erweitert in
+  - [orchestration/meta_plan_compiler.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_plan_compiler.py)
+  - [orchestration/conversation_state.py](/home/fatih-ubuntu/dev/timus/orchestration/conversation_state.py)
+
 ### Z6. User-Facing Progress Compression
 
 Ziel:

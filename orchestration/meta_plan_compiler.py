@@ -144,6 +144,9 @@ def _normalize_plan(
     steps: Iterable[Any] | None = None,
     next_step_id: Any = "",
     blocked_by: Iterable[Any] | None = None,
+    status: Any = "",
+    last_completed_step_id: Any = "",
+    last_completed_step_title: Any = "",
     metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     normalized_plan_mode = _clean_text(plan_mode, limit=48).lower() or "direct_response"
@@ -171,6 +174,9 @@ def _normalize_plan(
         "steps": normalized_steps,
         "next_step_id": normalized_next_step_id,
         "blocked_by": _normalize_text_list(blocked_by, limit_items=6, limit_chars=96),
+        "status": _clean_text(status, limit=32).lower() or ("completed" if not normalized_steps else "active"),
+        "last_completed_step_id": _clean_text(last_completed_step_id, limit=64).lower().replace(" ", "_"),
+        "last_completed_step_title": _clean_text(last_completed_step_title, limit=180),
         "metadata": _normalize_metadata(metadata),
     }
 
@@ -550,6 +556,7 @@ def build_meta_execution_plan(
         steps=normalized_steps,
         next_step_id=next_step_id,
         blocked_by=[],
+        status="active" if normalized_steps else "completed",
         metadata={
             "task_type": handoff.get("task_type"),
             "site_kind": handoff.get("site_kind"),
@@ -595,6 +602,9 @@ def parse_meta_execution_plan(raw: Any) -> dict[str, Any]:
         steps=loaded.get("steps"),
         next_step_id=loaded.get("next_step_id"),
         blocked_by=loaded.get("blocked_by"),
+        status=loaded.get("status"),
+        last_completed_step_id=loaded.get("last_completed_step_id"),
+        last_completed_step_title=loaded.get("last_completed_step_title"),
         metadata=loaded.get("metadata"),
     )
     if not any(

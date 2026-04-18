@@ -1,4 +1,5 @@
 from orchestration.conversation_state import (
+    apply_runtime_plan_state,
     apply_turn_interpretation,
     apply_pending_followup_prompt,
     conversation_state_to_dict,
@@ -177,6 +178,83 @@ def test_apply_turn_interpretation_persists_active_plan_and_resumes_next_step():
     assert updated.next_expected_step == "Quellen und Transcript verdichten"
     assert updated.open_loop == "Quellen und Transcript verdichten"
     assert "active_plan" in updated.state_source
+
+
+def test_apply_runtime_plan_state_advances_open_loop_to_new_next_step():
+    updated = apply_runtime_plan_state(
+        {
+            "active_topic": "YouTube-Analyse",
+            "active_goal": "Videoinhalt sammeln",
+            "active_plan": {
+                "plan_id": "yt-plan-1",
+                "plan_mode": "multi_step_execution",
+                "goal": "Videoinhalt sammeln",
+                "next_step_id": "visual_access",
+                "next_step_title": "YouTube-Seite oeffnen",
+                "next_step_agent": "visual",
+                "step_count": 3,
+            },
+        },
+        session_id="canvas_plan",
+        active_plan={
+            "plan_id": "yt-plan-1",
+            "plan_mode": "multi_step_execution",
+            "goal": "Videoinhalt sammeln",
+            "next_step_id": "research_synthesis",
+            "next_step_title": "Quellen und Transcript verdichten",
+            "next_step_agent": "research",
+            "last_completed_step_id": "visual_access",
+            "last_completed_step_title": "YouTube-Seite oeffnen",
+            "step_count": 3,
+            "status": "active",
+        },
+        updated_at="2026-04-18T20:45:00Z",
+    )
+
+    assert updated.active_plan is not None
+    assert updated.active_plan.next_step_id == "research_synthesis"
+    assert updated.active_plan.last_completed_step_id == "visual_access"
+    assert updated.open_loop == "Quellen und Transcript verdichten"
+    assert updated.next_expected_step == "Quellen und Transcript verdichten"
+    assert "runtime_plan" in updated.state_source
+
+
+def test_apply_runtime_plan_state_clears_completed_plan_from_state():
+    updated = apply_runtime_plan_state(
+        {
+            "active_topic": "YouTube-Analyse",
+            "active_goal": "Videoinhalt sammeln",
+            "open_loop": "Quellen und Transcript verdichten",
+            "next_expected_step": "Quellen und Transcript verdichten",
+            "active_plan": {
+                "plan_id": "yt-plan-1",
+                "plan_mode": "multi_step_execution",
+                "goal": "Videoinhalt sammeln",
+                "next_step_id": "research_synthesis",
+                "next_step_title": "Quellen und Transcript verdichten",
+                "next_step_agent": "research",
+                "step_count": 3,
+            },
+        },
+        session_id="canvas_plan",
+        active_plan={
+            "plan_id": "yt-plan-1",
+            "plan_mode": "multi_step_execution",
+            "goal": "Videoinhalt sammeln",
+            "next_step_id": "",
+            "last_completed_step_id": "document_output",
+            "last_completed_step_title": "Dokument ausgeben",
+            "step_count": 3,
+            "status": "completed",
+        },
+        updated_at="2026-04-18T20:46:00Z",
+    )
+
+    assert updated.active_plan is None
+    assert updated.active_goal == "Videoinhalt sammeln"
+    assert updated.open_loop == ""
+    assert updated.next_expected_step == ""
+    assert "runtime_plan" in updated.state_source
 
 
 def test_derive_topic_state_transition_detects_clean_topic_shift():
