@@ -2,6 +2,55 @@
 
 ---
 
+## Fortschritt 2026-04-18 - Z2 erster Runtime-Slice fuer Meta Plan Compiler
+
+Z2 ist nicht mehr nur als naechster Block im Mehrschritt-Plan dokumentiert, sondern im ersten echten Runtime-Slice umgesetzt. Timus baut jetzt einen expliziten `meta_execution_plan`, gibt ihn im Dispatcher-Handoff an Meta weiter und bindet ihn bis in die Rezept-Stage-Delegationen hinein.
+
+Geaendert:
+
+- [orchestration/meta_plan_compiler.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_plan_compiler.py)
+  - neuer Compiler fuer `meta_execution_plan`
+  - liefert:
+    - `goal`
+    - `constraints`
+    - `agent_chain`
+    - `steps`
+    - `next_step_id`
+    - `plan_mode`
+    - `goal_satisfaction_mode`
+- [main_dispatcher.py](/home/fatih-ubuntu/dev/timus/main_dispatcher.py)
+  - Meta-Handoff traegt jetzt:
+    - `meta_execution_plan_json`
+  - kompaktierte Original-Requests aktualisieren jetzt konsistent:
+    - `task_decomposition`
+    - `meta_execution_plan`
+    - `task_packet`
+- [agent/agents/meta.py](/home/fatih-ubuntu/dev/timus/agent/agents/meta.py)
+  - Meta-Parser liest jetzt:
+    - `meta_execution_plan_json`
+  - Rezept-Stage-Delegationen tragen jetzt:
+    - `plan_summary_json`
+    - `plan_step_json`
+  - Stage-Kontext und Reporting werden an den kompilierten Planschritt gebunden
+- [orchestration/typed_task_packet.py](/home/fatih-ubuntu/dev/timus/orchestration/typed_task_packet.py)
+  - `state_context` erweitert, damit Z2-Felder wie `next_step_id` nicht vorzeitig abgeschnitten werden
+- Tests:
+  - neu:
+    - [tests/test_meta_plan_compiler.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_plan_compiler.py)
+    - [tests/test_meta_plan_compiler_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_plan_compiler_hypothesis.py)
+    - [tests/test_meta_plan_compiler_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_plan_compiler_crosshair.py)
+  - erweitert:
+    - [tests/test_meta_handoff.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_handoff.py)
+    - [tests/test_meta_recipe_execution.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_recipe_execution.py)
+- Doku:
+  - [docs/ZWISCHENPROJEKT_ALLGEMEINE_MEHRSCHRITT_PLANUNG_2026-04-12.md](/home/fatih-ubuntu/dev/timus/docs/ZWISCHENPROJEKT_ALLGEMEINE_MEHRSCHRITT_PLANUNG_2026-04-12.md)
+
+Verifikation:
+
+- `python -m py_compile orchestration/typed_task_packet.py orchestration/meta_plan_compiler.py main_dispatcher.py agent/agents/meta.py tests/test_meta_plan_compiler.py tests/test_meta_plan_compiler_hypothesis.py tests/test_meta_plan_compiler_crosshair.py tests/test_meta_handoff.py tests/test_meta_recipe_execution.py` gruen
+- `pytest -q tests/test_meta_plan_compiler.py tests/test_meta_plan_compiler_hypothesis.py tests/test_meta_handoff.py tests/test_meta_recipe_execution.py -x`
+- `python -m crosshair check tests/test_meta_plan_compiler_crosshair.py` -> Exit `0`
+
 ## Fortschritt 2026-04-17 - Z1 erster Runtime-Slice fuer allgemeine Mehrschritt-Planung
 
 Z1 ist nicht mehr nur als Startplan dokumentiert, sondern im ersten echten Runtime-Slice umgesetzt. Timus hat jetzt einen kanonischen `task_decomposition_v1`-Vertrag, ein fruehes Frontdoor-Signal `planning_needed`, eine schaerfere Abgrenzung von `build_setup` gegenueber reinem `research` und einen erweiterten Typed-Meta-Handoff mit `task_decomposition_json`.

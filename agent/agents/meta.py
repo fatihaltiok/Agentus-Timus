@@ -32,6 +32,10 @@ from orchestration.meta_orchestration import (
     resolve_runtime_goal_gap_stage,
     resolve_orchestration_recipe,
 )
+from orchestration.meta_plan_compiler import (
+    build_meta_execution_plan,
+    parse_meta_execution_plan,
+)
 from orchestration.specialist_context import (
     build_specialist_context_payload,
     parse_specialist_context_payload,
@@ -1162,6 +1166,8 @@ class MetaAgent(BaseAgent):
                     payload["meta_self_state"] = json.loads(normalized_value)
                 except json.JSONDecodeError:
                     payload["meta_self_state"] = {"raw": normalized_value}
+            elif normalized_key == "meta_execution_plan_json":
+                payload["meta_execution_plan"] = parse_meta_execution_plan(normalized_value)
             elif normalized_key == "task_decomposition_json":
                 payload["task_decomposition"] = parse_task_decomposition(normalized_value)
             elif normalized_key == "meta_context_bundle_json":
@@ -1237,6 +1243,65 @@ class MetaAgent(BaseAgent):
         if require_recipe_stages and not payload.get("recipe_stages"):
             return None
         return payload
+
+    @classmethod
+    def _ensure_meta_execution_plan(
+        cls,
+        handoff: Dict[str, Any] | None,
+        *,
+        source_query: str = "",
+    ) -> Dict[str, Any]:
+        if not isinstance(handoff, dict):
+            return {}
+        plan = parse_meta_execution_plan(handoff.get("meta_execution_plan") or {})
+        if plan:
+            handoff["meta_execution_plan"] = plan
+            return plan
+
+        compiled = build_meta_execution_plan(
+            source_query=source_query or handoff.get("original_user_task") or "",
+            handoff_payload=handoff,
+            task_decomposition=handoff.get("task_decomposition"),
+        )
+        handoff["meta_execution_plan"] = compiled
+        return compiled
+
+    @classmethod
+    def _resolve_meta_plan_step(
+        cls,
+        handoff: Dict[str, Any],
+        stage: Dict[str, Any],
+        stage_history: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        plan = cls._ensure_meta_execution_plan(
+            handoff,
+            source_query=str(handoff.get("original_user_task") or ""),
+        )
+        steps = list(plan.get("steps") or [])
+        if not steps:
+            return {}
+
+        consumed_ids = {
+            str(entry.get("plan_step_id") or "").strip()
+            for entry in stage_history
+            if str(entry.get("plan_step_id") or "").strip()
+        }
+        stage_id = str(stage.get("stage_id") or "").strip()
+        for step in steps:
+            if (
+                str(step.get("recipe_stage_id") or "").strip() == stage_id
+                and str(step.get("id") or "").strip() not in consumed_ids
+            ):
+                return dict(step)
+
+        stage_agent = str(stage.get("agent") or "").strip().lower()
+        for step in steps:
+            if (
+                str(step.get("assigned_agent") or "").strip().lower() == stage_agent
+                and str(step.get("id") or "").strip() not in consumed_ids
+            ):
+                return dict(step)
+        return {}
 
     @classmethod
     def _resolve_specialist_context_seed(cls, handoff: Dict[str, Any] | None) -> Dict[str, Any]:
@@ -1939,6 +2004,15 @@ class MetaAgent(BaseAgent):
         source_aware_live_lookup = bool(source_hint)
         effective_task_type = "single_lane" if source_aware_live_lookup else raw_task_type
         goal_spec = dict(handoff.get("goal_spec") or {})
+        compiled_plan = cls._ensure_meta_execution_plan(
+            handoff,
+            source_query=original_user_task,
+        )
+        plan_step = cls._resolve_meta_plan_step(
+            handoff,
+            stage,
+            stage_history,
+        )
         normalized_original_task = str(original_user_task or "").lower()
         location_allowed_for_lookup = bool(goal_spec.get("uses_location")) or is_location_local_query(
             normalized_original_task
@@ -1964,6 +2038,21 @@ class MetaAgent(BaseAgent):
             f"- stage_id: {stage.get('stage_id', '')}",
             f"- original_user_task: {cls._shorten(original_user_task, limit=500)}",
         ]
+        if compiled_plan:
+            payload_lines.append(
+                "- plan_summary_json: "
+                + cls._format_handoff_value(
+                    {
+                        "plan_id": compiled_plan.get("plan_id"),
+                        "plan_mode": compiled_plan.get("plan_mode"),
+                        "goal_satisfaction_mode": compiled_plan.get("goal_satisfaction_mode"),
+                        "next_step_id": compiled_plan.get("next_step_id"),
+                        "step_count": len(compiled_plan.get("steps") or []),
+                    }
+                )
+            )
+        if plan_step:
+            payload_lines.append("- plan_step_json: " + cls._format_handoff_value(plan_step))
         specialist_context = cls._resolve_specialist_context_seed(handoff)
         if specialist_context:
             payload_lines.append("- specialist_context_json: " + cls._format_handoff_value(specialist_context))
@@ -2108,6 +2197,8 @@ class MetaAgent(BaseAgent):
                 "previous_blackboard_key_when_available",
             ],
         }
+        if plan_step:
+            stage_reporting_contract["must_include"].append("plan_step_signal")
         if stage_agent in {"document", "communication"}:
             stage_reporting_contract["must_include"].append("artifacts_or_delivery_status")
 
@@ -2126,7 +2217,18 @@ class MetaAgent(BaseAgent):
             "previous_stage_id": previous_stage_result.get("stage_id") if previous_stage_result else "",
             "previous_stage_agent": previous_stage_result.get("agent") if previous_stage_result else "",
             "prior_blackboard_keys": prior_keys,
+            "plan_id": compiled_plan.get("plan_id"),
+            "plan_mode": compiled_plan.get("plan_mode"),
+            "plan_step_id": plan_step.get("id") if plan_step else "",
+            "plan_next_step_id": compiled_plan.get("next_step_id"),
         }
+
+        stage_acceptance_criteria = [
+            f"Liefere expected_output={stage.get('expected_output', 'Spezialistenergebnis')}.",
+            f"Erreiche success_signal fuer Stage '{stage.get('stage_id', 'stage')}'.",
+        ]
+        for signal in plan_step.get("completion_signals") or []:
+            stage_acceptance_criteria.append(f"Erfuelle completion_signal={signal}.")
 
         stage_task_packet = build_typed_task_packet(
             packet_type="recipe_stage_delegation",
@@ -2137,11 +2239,10 @@ class MetaAgent(BaseAgent):
                 "stage_id": stage.get("stage_id"),
                 "agent": stage.get("agent"),
                 "site_kind": site_kind,
+                "plan_step_id": plan_step.get("id") if plan_step else "",
+                "plan_mode": compiled_plan.get("plan_mode"),
             },
-            acceptance_criteria=[
-                f"Liefere expected_output={stage.get('expected_output', 'Spezialistenergebnis')}.",
-                f"Erreiche success_signal fuer Stage '{stage.get('stage_id', 'stage')}'.",
-            ],
+            acceptance_criteria=stage_acceptance_criteria,
             allowed_tools=stage_allowed_tools,
             reporting_contract=stage_reporting_contract,
             escalation_policy=stage_escalation_policy,
@@ -2754,6 +2855,9 @@ class MetaAgent(BaseAgent):
                 "metadata": normalized.get("metadata", {}) if isinstance(normalized, dict) else {},
                 "artifacts": normalized.get("artifacts", []) if isinstance(normalized, dict) else [],
                 "adaptive_reason": str(stage.get("adaptive_reason") or ""),
+                "plan_step_id": str(
+                    self._resolve_meta_plan_step(handoff_for_recipe, stage, stage_history).get("id") or ""
+                ).strip(),
             }
             if history_entry["status"] != "success":
                 history_entry["error_signal"] = classify_strategy_error(
@@ -3063,6 +3167,11 @@ class MetaAgent(BaseAgent):
 
         active_handoff = self._parse_meta_orchestration_handoff(task, require_recipe_stages=False)
         previous_active_handoff = getattr(self, "_active_meta_orchestration_handoff", None)
+        if active_handoff:
+            self._ensure_meta_execution_plan(
+                active_handoff,
+                source_query=str(active_handoff.get("original_user_task") or ""),
+            )
         self._active_meta_orchestration_handoff = dict(active_handoff or {}) if active_handoff else None
         try:
             recipe_handoff = active_handoff if active_handoff and active_handoff.get("recipe_stages") else None

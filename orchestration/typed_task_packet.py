@@ -125,7 +125,7 @@ def build_typed_task_packet(
         "state_context": _normalize_mapping(
             state_context,
             value_limit=180,
-            item_limit=12,
+            item_limit=16,
         ),
     }
 

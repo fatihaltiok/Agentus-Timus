@@ -65,6 +65,7 @@ from orchestration.meta_orchestration import (
     meta_site_recipe_key,
     resolve_adaptive_plan_adoption,
 )
+from orchestration.meta_plan_compiler import build_meta_execution_plan
 from orchestration.task_decomposition_contract import build_task_decomposition
 from orchestration.specialist_context import (
     build_specialist_context_payload,
@@ -2700,6 +2701,11 @@ def _build_meta_handoff_payload(query: str) -> dict:
     payload["task_decomposition"] = task_decomposition
     payload["intent_family"] = task_decomposition.get("intent_family", "single_step")
     payload["planning_needed"] = bool(task_decomposition.get("planning_needed"))
+    payload["meta_execution_plan"] = build_meta_execution_plan(
+        source_query=clean_query,
+        handoff_payload=payload,
+        task_decomposition=task_decomposition,
+    )
     payload["task_packet"] = _build_meta_task_packet(payload, clean_query)
     return payload
 
@@ -2734,6 +2740,7 @@ def _build_meta_task_packet(payload: dict, original_user_task: str) -> dict:
     meta_policy = dict(payload.get("meta_policy_decision") or {})
     planner_resolution = dict(payload.get("planner_resolution") or {})
     task_decomposition = dict(payload.get("task_decomposition") or {})
+    meta_execution_plan = dict(payload.get("meta_execution_plan") or {})
     recipe_stages = list(payload.get("recipe_stages") or [])
     recipe_id = str(payload.get("recommended_recipe_id") or "").strip()
     allowed_tools = _collect_meta_allowed_tools(payload)
@@ -2786,6 +2793,10 @@ def _build_meta_task_packet(payload: dict, original_user_task: str) -> dict:
         "planner_state": planner_resolution.get("state"),
         "policy_mode": meta_policy.get("response_mode"),
         "goal_satisfaction_mode": task_decomposition.get("goal_satisfaction_mode"),
+        "plan_id": meta_execution_plan.get("plan_id"),
+        "plan_mode": meta_execution_plan.get("plan_mode"),
+        "next_step_id": meta_execution_plan.get("next_step_id"),
+        "step_count": len(meta_execution_plan.get("steps") or []),
     }
 
     return build_typed_task_packet(
@@ -2800,6 +2811,7 @@ def _build_meta_task_packet(payload: dict, original_user_task: str) -> dict:
             "required_capabilities": payload.get("required_capabilities"),
             "intent_family": payload.get("intent_family"),
             "planning_needed": "yes" if payload.get("planning_needed") else "no",
+            "plan_mode": meta_execution_plan.get("plan_mode"),
         },
         acceptance_criteria=acceptance_criteria,
         allowed_tools=allowed_tools,
@@ -2991,6 +3003,11 @@ def _render_meta_handoff_block(payload: dict) -> str:
         lines.append(
             "meta_self_state_json: "
             + json.dumps(payload["meta_self_state"], ensure_ascii=False, sort_keys=True)
+        )
+    if payload.get("meta_execution_plan"):
+        lines.append(
+            "meta_execution_plan_json: "
+            + json.dumps(payload["meta_execution_plan"], ensure_ascii=False, sort_keys=True)
         )
     if payload.get("task_decomposition"):
         lines.append(
@@ -3376,6 +3393,15 @@ async def run_agent(
             if safe_original_task != clean_meta_query:
                 meta_handoff["task_decomposition"] = _compact_meta_task_decomposition(
                     meta_handoff.get("task_decomposition"),
+                    safe_original_task,
+                )
+                meta_handoff["meta_execution_plan"] = build_meta_execution_plan(
+                    source_query=safe_original_task,
+                    handoff_payload=meta_handoff,
+                    task_decomposition=meta_handoff.get("task_decomposition"),
+                )
+                meta_handoff["task_packet"] = _build_meta_task_packet(
+                    meta_handoff,
                     safe_original_task,
                 )
             meta_handoff_preview = _render_meta_handoff_block(meta_handoff)

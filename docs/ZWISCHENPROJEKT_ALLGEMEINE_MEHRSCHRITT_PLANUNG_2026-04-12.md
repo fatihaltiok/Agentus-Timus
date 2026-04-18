@@ -2,7 +2,7 @@
 
 Stand: 2026-04-12
 
-Status-Update 2026-04-17:
+Status-Update 2026-04-18:
 
 - dieses Zwischenprojekt ist jetzt der empfohlene naechste Hauptblock nach Phase F
 - der konkrete Einstieg ist:
@@ -15,6 +15,11 @@ Status-Update 2026-04-17:
   - `planning_needed`
   - Frontdoor-Schaerfung `build_setup` vs `research`
   - Typed-Meta-Handoff mit `task_decomposition_json`
+- Z2 steht jetzt ebenfalls im ersten Runtime-Slice:
+  - explizites `meta_execution_plan` in [orchestration/meta_plan_compiler.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_plan_compiler.py)
+  - Typed-Meta-Handoff mit `meta_execution_plan_json`
+  - Rezept-Stage-Handoffs mit `plan_summary_json` und `plan_step_json`
+  - kompaktierte Original-Requests aktualisieren Decomposition, Plan und Task-Packet konsistent
 
 ## Zweck
 
@@ -201,6 +206,16 @@ Umfang:
 Erfolg:
 
 - mehrschrittige Aufgaben werden reproduzierbar in Teilpakete zerlegt
+
+Status 2026-04-18:
+
+- erster Runtime-Slice umgesetzt
+- Meta baut jetzt einen expliziten `meta_execution_plan`
+- der Plan wird im Dispatcher-Handoff, im Typed Packet und in Rezept-Stage-Delegationen weitergereicht
+- noch offen fuer Z3+:
+  - turnuebergreifender Plan-State
+  - Schrittstatus ueber mehrere Turns
+  - Replanning / Goal-Satisfaction auf Runtime-Ebene
 
 ### Z3. Plan State in Conversation State
 

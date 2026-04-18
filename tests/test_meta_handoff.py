@@ -112,6 +112,7 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert "task_packet_json:" in result
     assert "request_preflight_json:" in result
     assert "meta_self_state_json:" in result
+    assert "meta_execution_plan_json:" in result
     assert "task_decomposition_json:" in result
     assert "specialist_context_seed_json:" in result
     assert "meta_policy_decision_json:" in result
@@ -132,6 +133,10 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert meta["recommended_recipe_id"] == "youtube_content_extraction"
     assert meta["intent_family"] == "execute_multistep"
     assert meta["planning_needed"] is True
+    assert meta["meta_execution_plan"]["plan_mode"] == "multi_step_execution"
+    assert meta["meta_execution_plan"]["next_step_id"]
+    assert meta["meta_execution_plan"]["steps"][0]["assigned_agent"] == "meta"
+    assert meta["meta_execution_plan"]["steps"][1]["assigned_agent"] == "visual"
     assert meta["goal_spec"]["output_mode"] == "report"
     assert meta["adaptive_plan"]["planner_mode"] == "advisory"
     assert meta["planner_resolution"]["state"] in {"fallback_current", "rejected", "adopted"}
@@ -140,7 +145,10 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert meta["task_packet"]["packet_type"] == "meta_orchestration"
     assert meta["task_packet"]["scope"]["intent_family"] == "execute_multistep"
     assert meta["task_packet"]["scope"]["planning_needed"] == "yes"
+    assert meta["task_packet"]["scope"]["plan_mode"] == "multi_step_execution"
     assert meta["task_packet"]["state_context"]["goal_satisfaction_mode"] == "goal_satisfied"
+    assert meta["task_packet"]["state_context"]["plan_id"]
+    assert meta["task_packet"]["state_context"]["next_step_id"]
     assert meta["task_packet"]["objective"]
     assert meta["request_preflight"]["blocked"] is False
     assert meta["task_decomposition"]["intent_family"] == "execute_multistep"
@@ -177,6 +185,7 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert parsed["request_preflight"]["state"] in {"ok", "warn"}
     assert parsed["intent_family"] == "execute_multistep"
     assert parsed["planning_needed"] is True
+    assert parsed["meta_execution_plan"]["plan_mode"] == "multi_step_execution"
     assert parsed["task_decomposition"]["goal_satisfaction_mode"] == "goal_satisfied"
     assert parsed["meta_self_state"]["runtime_constraints"]["budget_state"] == "soft_limit"
 
@@ -405,6 +414,7 @@ def test_build_meta_handoff_payload_exposes_learning_snapshot(monkeypatch):
     assert "site_recipe_feedback_score: 0.78 (evidence=5)" in rendered
     assert "recommended_agent_chain_key: meta__visual__research__document" in rendered
     assert "meta_self_state_json:" in rendered
+    assert "meta_execution_plan_json:" in rendered
     assert "meta_policy_decision_json:" in rendered
     assert "specialist_context_seed_json:" in rendered
     assert "goal_spec_json:" in rendered
@@ -504,4 +514,6 @@ def test_build_meta_handoff_payload_adopts_safe_adaptive_plan(monkeypatch):
     assert payload["recommended_recipe_id"] == "simple_live_lookup_document"
     assert payload["recommended_agent_chain"] == ["meta", "executor", "document"]
     assert payload["planner_resolution"]["state"] == "adopted"
+    assert payload["meta_execution_plan"]["plan_mode"] == "multi_step_execution"
+    assert payload["meta_execution_plan"]["steps"][-1]["assigned_agent"] == "document"
     assert payload["alternative_recipes"][0]["recipe_id"] == "simple_live_lookup"
