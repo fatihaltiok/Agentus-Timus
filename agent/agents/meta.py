@@ -40,6 +40,7 @@ from orchestration.specialist_context import (
     build_specialist_context_payload,
     parse_specialist_context_payload,
 )
+from orchestration.specialist_step_package import build_specialist_step_package_payload
 from orchestration.task_decomposition_contract import parse_task_decomposition
 from orchestration.typed_task_packet import (
     build_request_preflight,
@@ -905,6 +906,7 @@ class MetaAgent(BaseAgent):
         task: str,
         *,
         specialist_context: Dict[str, Any] | None = None,
+        specialist_step_package: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "target_agent": specialist_agent,
@@ -996,6 +998,8 @@ class MetaAgent(BaseAgent):
         parsed_specialist_context = parse_specialist_context_payload(specialist_context or {})
         if parsed_specialist_context:
             payload["handoff_data"]["specialist_context_json"] = parsed_specialist_context
+        if specialist_step_package:
+            payload["handoff_data"]["specialist_step_package_json"] = specialist_step_package
 
         return payload
 
@@ -1008,6 +1012,7 @@ class MetaAgent(BaseAgent):
         task: str,
         *,
         specialist_context: Dict[str, Any] | None = None,
+        specialist_step_package: Dict[str, Any] | None = None,
     ) -> str:
         payload = cls._build_specialist_handoff_payload(
             specialist_agent,
@@ -1015,6 +1020,7 @@ class MetaAgent(BaseAgent):
             params,
             task,
             specialist_context=specialist_context,
+            specialist_step_package=specialist_step_package,
         )
         task_text = payload["goal"] if specialist_agent == "developer" else task
         lines = ["# DELEGATION HANDOFF"]
@@ -1035,6 +1041,44 @@ class MetaAgent(BaseAgent):
         lines.append("# TASK")
         lines.append(task_text)
         return "\n".join(lines)
+
+    @classmethod
+    def _resolve_active_specialist_step_package(
+        cls,
+        handoff: Dict[str, Any] | None,
+        *,
+        specialist_agent: str,
+        task: str,
+        specialist_context: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        if not isinstance(handoff, dict):
+            return {}
+        compiled_plan = cls._ensure_meta_execution_plan(
+            handoff,
+            source_query=str(handoff.get("original_user_task") or task or ""),
+        )
+        if not compiled_plan:
+            return {}
+
+        next_step_id = str(compiled_plan.get("next_step_id") or "").strip()
+        plan_step: Dict[str, Any] = {}
+        for step in compiled_plan.get("steps") or []:
+            if next_step_id and str(step.get("id") or "").strip() == next_step_id:
+                plan_step = dict(step)
+                break
+        if not plan_step:
+            for step in compiled_plan.get("steps") or []:
+                if str(step.get("assigned_agent") or "").strip().lower() == specialist_agent:
+                    plan_step = dict(step)
+                    break
+
+        return build_specialist_step_package_payload(
+            plan_summary=compiled_plan,
+            plan_step=plan_step,
+            specialist_context=specialist_context or {},
+            original_user_task=handoff.get("original_user_task") or task,
+            current_goal=handoff.get("open_goal") or task,
+        )
 
     @classmethod
     def _parse_meta_orchestration_handoff(
@@ -2056,6 +2100,20 @@ class MetaAgent(BaseAgent):
         specialist_context = cls._resolve_specialist_context_seed(handoff)
         if specialist_context:
             payload_lines.append("- specialist_context_json: " + cls._format_handoff_value(specialist_context))
+        specialist_step_package = build_specialist_step_package_payload(
+            plan_summary=compiled_plan,
+            plan_step=plan_step,
+            specialist_context=specialist_context,
+            original_user_task=original_user_task,
+            current_goal=handoff.get("open_goal") or stage_goal,
+            previous_stage_result=(previous_stage_result or {}).get("result") if previous_stage_result else "",
+            captured_context=(previous_stage_result or {}).get("captured_context") if previous_stage_result else "",
+            source_urls=(previous_stage_result or {}).get("source_urls") if previous_stage_result else (),
+        )
+        if specialist_step_package:
+            payload_lines.append(
+                "- specialist_step_package_json: " + cls._format_handoff_value(specialist_step_package)
+            )
         selected_strategy = dict(handoff.get("selected_strategy") or {})
         if selected_strategy.get("strategy_id"):
             payload_lines.append(f"- strategy_id: {selected_strategy['strategy_id']}")
@@ -3042,12 +3100,19 @@ class MetaAgent(BaseAgent):
                 specialist_context = self._resolve_specialist_context_seed(
                     getattr(self, "_active_meta_orchestration_handoff", None)
                 )
+                specialist_step_package = self._resolve_active_specialist_step_package(
+                    getattr(self, "_active_meta_orchestration_handoff", None),
+                    specialist_agent=specialist_agent,
+                    task=task,
+                    specialist_context=specialist_context,
+                )
                 structured_task = self._render_structured_delegation_task(
                     specialist_agent=specialist_agent,
                     method=method,
                     params=params,
                     task=task,
                     specialist_context=specialist_context,
+                    specialist_step_package=specialist_step_package,
                 )
                 result = await super()._call_tool(
                     "delegate_to_agent",

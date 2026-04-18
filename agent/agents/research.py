@@ -30,6 +30,10 @@ from orchestration.specialist_context import (
     format_specialist_signal_response,
     render_specialist_context_block,
 )
+from orchestration.specialist_step_package import (
+    extract_specialist_step_package_from_handoff_data,
+    render_specialist_step_package_block,
+)
 from orchestration.autonomy_observation import record_autonomy_observation
 from orchestration.evidence_response_guard import build_evidence_response_guard
 from tools.deep_research.research_contracts import is_german_state_affiliated_url
@@ -470,6 +474,11 @@ class DeepResearchAgent(BaseAgent):
         )
         if specialist_context:
             lines.append(specialist_context)
+        specialist_step_package = render_specialist_step_package_block(
+            extract_specialist_step_package_from_handoff_data(handoff.handoff_data)
+        )
+        if specialist_step_package:
+            lines.append(specialist_step_package)
 
         for key, label in (
             ("recipe_id", "Rezept"),

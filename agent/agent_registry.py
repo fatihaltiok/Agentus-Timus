@@ -29,6 +29,7 @@ from orchestration.specialist_context import (
     extract_specialist_context_from_handoff_data,
     parse_specialist_signal_response,
 )
+from orchestration.specialist_step_package import parse_specialist_step_signal_response
 from orchestration.autonomy_observation import record_autonomy_observation
 from orchestration.request_correlation import get_current_request_correlation
 
@@ -498,6 +499,21 @@ class AgentRegistry:
             "specialist_context": specialist_context,
         }
 
+    @staticmethod
+    def _classify_specialist_step_signal(signal_payload: Dict[str, Any]) -> tuple[str, str]:
+        signal = str(signal_payload.get("signal") or "").strip().lower()
+        message = str(signal_payload.get("message") or "").strip()
+        if signal in {"step_completed", "goal_satisfied"}:
+            return "success", message
+        if signal in {"step_blocked", "step_unnecessary"}:
+            fallback = (
+                "Spezialist meldet einen Blocker fuer den aktuellen Arbeitsschritt."
+                if signal == "step_blocked"
+                else "Spezialist meldet, dass der aktuelle Arbeitsschritt unnoetig ist."
+            )
+            return "partial", message or fallback
+        return "partial", message
+
     @classmethod
     def _make_progress_callback(
         cls,
@@ -788,9 +804,14 @@ class AgentRegistry:
 
             raw_result_str = AgentRegistry._stringify_delegation_result(raw)
             explicit_specialist_signal = parse_specialist_signal_response(raw_result_str)
+            explicit_step_signal = parse_specialist_step_signal_response(raw_result_str)
             result_str = raw_result_str
             if explicit_specialist_signal:
                 cleaned_text = str(explicit_specialist_signal.get("cleaned_text") or "").strip()
+                if cleaned_text:
+                    result_str = cleaned_text
+            elif explicit_step_signal:
+                cleaned_text = str(explicit_step_signal.get("cleaned_text") or "").strip()
                 if cleaned_text:
                     result_str = cleaned_text
             _meta, _artifacts = AgentRegistry._build_result_metadata_and_artifacts(
@@ -812,6 +833,14 @@ class AgentRegistry:
                     ),
                     "signal_source": "agent",
                 }
+            step_signal: Dict[str, Any] = {}
+            if explicit_step_signal:
+                step_signal = {
+                    "signal": str(explicit_step_signal.get("signal") or ""),
+                    "reason": str(explicit_step_signal.get("reason") or ""),
+                    "message": str(explicit_step_signal.get("message") or ""),
+                    "signal_source": "agent",
+                }
             if specialist_signal:
                 _meta = dict(_meta or {})
                 _meta["specialist_return_signal"] = str(specialist_signal.get("signal") or "")
@@ -819,11 +848,18 @@ class AgentRegistry:
                 _meta["specialist_signal_source"] = str(specialist_signal.get("signal_source") or "heuristic")
                 if specialist_signal.get("specialist_context"):
                     _meta["specialist_context"] = dict(specialist_signal.get("specialist_context") or {})
+            if step_signal:
+                _meta = dict(_meta or {})
+                _meta["specialist_step_signal"] = str(step_signal.get("signal") or "")
+                _meta["specialist_step_reason"] = str(step_signal.get("reason") or "")
+                _meta["specialist_step_signal_source"] = str(step_signal.get("signal_source") or "agent")
             if explicit_specialist_signal:
                 outcome_status, outcome_error = "partial", str(
                     explicit_specialist_signal.get("message")
                     or "Spezialist fordert eine Meta-Neurahmung."
                 )
+            elif step_signal:
+                outcome_status, outcome_error = AgentRegistry._classify_specialist_step_signal(step_signal)
             else:
                 outcome_status, outcome_error = AgentRegistry._classify_delegation_outcome(
                     raw,
@@ -882,6 +918,32 @@ class AgentRegistry:
                         "note": "Aufgabe nicht vollstaendig abgeschlossen",
                     },
                 )
+            if step_signal:
+                signal_name = str(step_signal.get("signal") or "")
+                record_autonomy_observation(
+                    "specialist_step_signal_emitted",
+                    {
+                        "from_agent": from_agent,
+                        "agent": to_agent,
+                        "signal": signal_name,
+                        "reason": str(step_signal.get("reason") or ""),
+                        "signal_source": str(step_signal.get("signal_source") or "agent"),
+                        "session_id": effective_session_id or "",
+                    },
+                )
+                self._emit_transport_progress(
+                    from_agent=from_agent,
+                    to_agent=to_agent,
+                    session_id=effective_session_id or "",
+                    stage=f"delegation_{signal_name}",
+                    payload={
+                        "kind": signal_name,
+                        "signal": signal_name,
+                        "reason": str(step_signal.get("reason") or ""),
+                        "message": str(step_signal.get("message") or ""),
+                    },
+                )
+            if outcome_status == "partial":
                 status = "partial"
                 self._log_canvas_delegation(
                     from_agent=from_agent,

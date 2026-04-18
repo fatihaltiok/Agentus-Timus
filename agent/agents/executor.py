@@ -18,6 +18,10 @@ from orchestration.specialist_context import (
     format_specialist_signal_response,
     render_specialist_context_block,
 )
+from orchestration.specialist_step_package import (
+    extract_specialist_step_package_from_handoff_data,
+    render_specialist_step_package_block,
+)
 from utils.location_local_intent import analyze_location_local_intent, analyze_location_route_intent
 from utils.location_route import build_google_maps_directions_url, normalize_route_travel_mode
 
@@ -393,6 +397,11 @@ class ExecutorAgent(BaseAgent):
         )
         if specialist_context:
             lines.append(specialist_context)
+        specialist_step_package = render_specialist_step_package_block(
+            extract_specialist_step_package_from_handoff_data(handoff.handoff_data)
+        )
+        if specialist_step_package:
+            lines.append(specialist_step_package)
 
         for key, label in (
             ("task_type", "Task-Typ"),

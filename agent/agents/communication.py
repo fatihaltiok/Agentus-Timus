@@ -21,6 +21,10 @@ from typing import Any, Dict, Optional
 from agent.base_agent import BaseAgent
 from agent.prompts import COMMUNICATION_PROMPT_TEMPLATE
 from agent.shared.delegation_handoff import DelegationHandoff, parse_delegation_handoff
+from orchestration.specialist_step_package import (
+    extract_specialist_step_package_from_handoff_data,
+    render_specialist_step_package_block,
+)
 
 log = logging.getLogger("CommunicationAgent")
 
@@ -86,6 +90,11 @@ class CommunicationAgent(BaseAgent):
             lines.append(f"Erfolgssignal: {handoff.success_signal}")
         if handoff.constraints:
             lines.append("Constraints: " + " | ".join(handoff.constraints))
+        specialist_step_package = render_specialist_step_package_block(
+            extract_specialist_step_package_from_handoff_data(handoff.handoff_data)
+        )
+        if specialist_step_package:
+            lines.append(specialist_step_package)
 
         for key, label in (
             ("recipe_id", "Rezept"),

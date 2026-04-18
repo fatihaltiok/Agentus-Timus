@@ -270,6 +270,26 @@ Erfolg:
 - weniger implizite Spezialistenlogik
 - sauberere Agentenkette
 
+Status 2026-04-18:
+
+- erster Runtime-Slice umgesetzt
+- Meta baut jetzt ein explizites `specialist_step_package_json`
+- das Schritt-Paket traegt fokussiert:
+  - `plan_goal`
+  - `step_title`
+  - `expected_output`
+  - `completion_signals`
+  - engen `focus_context`
+- Spezialisten rendern das Schritt-Paket jetzt als eigenen Kontextblock statt nur lose `plan_step_json`-Fragmente zu sehen
+- neue Ruecksignale sind jetzt transport- und runtime-seitig auswertbar:
+  - `step_completed`
+  - `step_blocked`
+  - `step_unnecessary`
+  - `goal_satisfied`
+- noch offen fuer Z5+:
+  - echte Runtime-Replanung auf Basis dieser Signale
+  - formale Planfortschreibung ueber mehrere Spezialistenlaeufe
+
 ### Z5. Dynamic Replanning and Goal Satisfaction
 
 Ziel:

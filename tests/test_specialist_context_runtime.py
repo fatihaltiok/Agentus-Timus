@@ -154,6 +154,58 @@ async def test_agent_registry_treats_explicit_specialist_signal_as_partial(monke
 
 
 @pytest.mark.asyncio
+async def test_agent_registry_treats_explicit_step_blocked_signal_as_partial(monkeypatch):
+    from agent.agent_registry import AgentRegistry
+    import agent.agent_registry as agent_registry_mod
+    from orchestration.specialist_step_package import format_specialist_step_signal_response
+
+    registry = AgentRegistry()
+
+    async def _fake_tools():
+        return "tools"
+
+    registry._get_tools_description = _fake_tools
+    emitted: list[dict] = []
+    observed: list[tuple[str, dict]] = []
+    monkeypatch.setattr(agent_registry_mod, "_delegation_transport_hook", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        agent_registry_mod,
+        "record_autonomy_observation",
+        lambda event, payload: observed.append((event, dict(payload))),
+    )
+
+    class _ShellAgent:
+        conversation_session_id = None
+
+        async def run(self, task: str) -> str:
+            return format_specialist_step_signal_response(
+                "step_blocked",
+                reason="missing_credentials",
+                message="Die Twilio-Nummer fehlt noch.",
+            )
+
+    registry.register_spec(
+        "shell",
+        "shell",
+        ["shell"],
+        lambda tools_description_string: _ShellAgent(),
+    )
+
+    result = await registry.delegate(
+        from_agent="meta",
+        to_agent="shell",
+        task="bitte einrichten",
+        session_id="z4_step_signal",
+    )
+
+    assert result["status"] == "partial"
+    assert result["metadata"]["specialist_step_signal"] == "step_blocked"
+    assert result["metadata"]["specialist_step_reason"] == "missing_credentials"
+    assert any(event.get("kind") == "step_blocked" for event in emitted)
+    assert any(name == "specialist_step_signal_emitted" for name, _payload in observed)
+
+
+@pytest.mark.asyncio
 async def test_agent_registry_emits_email_observation_events_for_communication_success(monkeypatch):
     from agent.agent_registry import AgentRegistry
     import agent.agent_registry as agent_registry_mod

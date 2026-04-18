@@ -18,6 +18,7 @@ from agent.agents.visual import VisualAgent
 from agent.base_agent import BaseAgent
 from agent.shared.delegation_handoff import parse_delegation_handoff
 from orchestration.specialist_context import build_specialist_context_payload
+from orchestration.specialist_step_package import build_specialist_step_package_payload
 
 
 @pytest.fixture(autouse=True)
@@ -38,6 +39,23 @@ def _sample_handoff() -> str:
         user_preferences=["Quellen zuerst"],
         recent_corrections=["Nicht in Deep Research kippen"],
     )
+    specialist_step_package = build_specialist_step_package_payload(
+        plan_summary={
+            "plan_id": "yt_plan_1",
+            "plan_mode": "multi_step_execution",
+            "goal": "Video oeffnen und Hauptthesen sichern",
+        },
+        plan_step={
+            "id": "visual_access",
+            "title": "YouTube-Seite oeffnen",
+            "step_kind": "execution",
+            "assigned_agent": "visual",
+            "expected_output": "page_state",
+        },
+        specialist_context=specialist_context,
+        original_user_task="Hole Hauptthesen aus dem YouTube-Video.",
+        previous_stage_result="Suchergebnisse fuer Modellvergleich",
+    )
     return (
         "# DELEGATION HANDOFF\n"
         "target_agent: visual\n"
@@ -55,6 +73,7 @@ def _sample_handoff() -> str:
         "- previous_stage_result: Suchergebnisse fuer Modellvergleich\n"
         "- previous_blackboard_key: bb-meta-42\n"
         f"- specialist_context_json: {json.dumps(specialist_context, ensure_ascii=False, sort_keys=True)}\n"
+        f"- specialist_step_package_json: {json.dumps(specialist_step_package, ensure_ascii=False, sort_keys=True)}\n"
     )
 
 
@@ -67,6 +86,19 @@ def _handoff_for(agent: str, goal: str, extra: str = "") -> str:
         response_mode="execute",
         user_preferences=["Bleibe knapp und kontexttreu"],
         recent_corrections=["Nicht vom eigentlichen Ziel abdriften"],
+    )
+    specialist_step_package = build_specialist_step_package_payload(
+        plan_summary={"plan_id": "test_plan", "plan_mode": "multi_step_execution", "goal": goal},
+        plan_step={
+            "id": "stage_alpha",
+            "title": goal,
+            "step_kind": "execution",
+            "assigned_agent": agent,
+            "expected_output": "strukturierter Output",
+        },
+        specialist_context=specialist_context,
+        original_user_task=goal,
+        previous_stage_result="vorgaenger ok",
     )
     return (
         "# DELEGATION HANDOFF\n"
@@ -81,6 +113,7 @@ def _handoff_for(agent: str, goal: str, extra: str = "") -> str:
         "- stage_id: stage_alpha\n"
         "- previous_stage_result: vorgaenger ok\n"
         f"- specialist_context_json: {json.dumps(specialist_context, ensure_ascii=False, sort_keys=True)}\n"
+        f"- specialist_step_package_json: {json.dumps(specialist_step_package, ensure_ascii=False, sort_keys=True)}\n"
         + extra
     )
 
@@ -109,7 +142,9 @@ def test_visual_prepare_task_uses_goal_and_handoff_state():
     assert "recipe_id=youtube_content_extraction" in context
     assert "previous_stage_result=Suchergebnisse fuer Modellvergleich" in context
     assert "SPEZIALISTENKONTEXT:" in context
+    assert "ARBEITSSCHRITT-PAKET:" in context
     assert "Aktuelles Thema: YouTube-Modellvergleich" in context
+    assert "Aktueller Arbeitsschritt: YouTube-Seite oeffnen" in context
     assert agent.current_browser_url == "https://www.youtube.com/watch?v=abc123"
 
 
@@ -124,6 +159,25 @@ async def test_research_run_uses_structured_handoff_context(monkeypatch):
         response_mode="execute",
         user_preferences=["Bleibe knapp und kontexttreu"],
         recent_corrections=["Nicht vom eigentlichen Ziel abdriften"],
+    )
+    specialist_step_package = build_specialist_step_package_payload(
+        plan_summary={
+            "plan_id": "yt_plan_research",
+            "plan_mode": "multi_step_execution",
+            "goal": "Hauptthesen und Quellen sichern",
+        },
+        plan_step={
+            "id": "research_synthesis",
+            "title": "Hauptthesen aus dem Video verdichten",
+            "step_kind": "research",
+            "assigned_agent": "research",
+            "expected_output": "summary, sources, extracted_content",
+        },
+        specialist_context=specialist_context,
+        original_user_task="Analysiere das YouTube-Video und extrahiere die Hauptthesen.",
+        previous_stage_result="YouTube-Seite erfolgreich geoeffnet",
+        captured_context="Titel und Beschreibung bereits gesichert",
+        source_urls=["https://www.youtube.com/watch?v=abc123"],
     )
 
     async def _fake_context(self, task: str, policy=None) -> str:
@@ -147,9 +201,11 @@ handoff_data:
 - captured_context: Titel und Beschreibung bereits gesichert
 - previous_stage_result: YouTube-Seite erfolgreich geoeffnet
 - specialist_context_json: {specialist_context_json}
+- specialist_step_package_json: {specialist_step_package_json}
 """
     handoff_task = handoff_task.format(
-        specialist_context_json=json.dumps(specialist_context, ensure_ascii=False, sort_keys=True)
+        specialist_context_json=json.dumps(specialist_context, ensure_ascii=False, sort_keys=True),
+        specialist_step_package_json=json.dumps(specialist_step_package, ensure_ascii=False, sort_keys=True),
     )
 
     monkeypatch.setattr(DeepResearchAgent, "_build_research_context", _fake_context)
@@ -167,7 +223,9 @@ handoff_data:
     assert captured["enriched_task"].startswith("Analysiere das YouTube-Video")
     assert "# STRUKTURIERTER RESEARCH-HANDOFF" in captured["enriched_task"]
     assert "# SPEZIALISTENKONTEXT" in captured["enriched_task"]
+    assert "# ARBEITSSCHRITT-PAKET" in captured["enriched_task"]
     assert "Nutzerpraeferenzen: Bleibe knapp und kontexttreu" in captured["enriched_task"]
+    assert "Aktueller Arbeitsschritt:" in captured["enriched_task"]
     assert "Quell-URLs: https://www.youtube.com/watch?v=abc123" in captured["enriched_task"]
     assert "Bereits erfasster Kontext: Titel und Beschreibung bereits gesichert" in captured["enriched_task"]
 

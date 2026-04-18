@@ -114,9 +114,11 @@ async def test_meta_recipe_execution_runs_stages_sequentially(monkeypatch):
     assert calls[1]["agent_type"] == "research"
     assert "plan_summary_json:" in calls[0]["task"]
     assert "plan_step_json:" in calls[0]["task"]
+    assert "specialist_step_package_json:" in calls[0]["task"]
     assert "task_packet_json:" in calls[0]["task"]
     assert "request_preflight_json:" in calls[0]["task"]
     assert "plan_step_json:" in calls[1]["task"]
+    assert "specialist_step_package_json:" in calls[1]["task"]
     assert "task_packet_json:" in calls[1]["task"]
     assert "request_preflight_json:" in calls[1]["task"]
     assert "previous_blackboard_key: delegation:visual:1" in calls[1]["task"]
@@ -217,6 +219,7 @@ async def test_meta_recipe_execution_returns_direct_result_for_lookup_document_r
         calls.append(dict(params))
         if params["agent_type"] == "executor":
             assert "plan_step_json:" in params["task"]
+            assert "specialist_step_package_json:" in params["task"]
             assert "task_packet_json:" in params["task"]
             assert "request_preflight_json:" in params["task"]
             return {
@@ -237,6 +240,7 @@ async def test_meta_recipe_execution_returns_direct_result_for_lookup_document_r
         assert "artifact_name: LLM_Preise_Vergleich" in params["task"]
         assert "source_material:" in params["task"]
         assert "plan_step_json:" in params["task"]
+        assert "specialist_step_package_json:" in params["task"]
         assert "task_packet_json:" in params["task"]
         assert "request_preflight_json:" in params["task"]
         return {

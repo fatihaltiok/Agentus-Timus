@@ -33,6 +33,10 @@ from orchestration.specialist_context import (
     format_specialist_signal_response,
     render_specialist_context_block,
 )
+from orchestration.specialist_step_package import (
+    extract_specialist_step_package_from_handoff_data,
+    render_specialist_step_package_block,
+)
 from orchestration.autonomy_observation import record_autonomy_observation
 from orchestration.browser_workflow_plan import (
     _looks_like_login_intent,
@@ -492,6 +496,12 @@ class VisualAgent(BaseAgent):
         )
         if specialist_context:
             lines.append(specialist_context)
+        specialist_step_package = render_specialist_step_package_block(
+            extract_specialist_step_package_from_handoff_data(handoff.handoff_data),
+            header="ARBEITSSCHRITT-PAKET:",
+        )
+        if specialist_step_package:
+            lines.append(specialist_step_package)
 
         for key in (
             "recipe_id",

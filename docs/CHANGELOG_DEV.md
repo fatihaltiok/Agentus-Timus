@@ -2,6 +2,63 @@
 
 ---
 
+## Fortschritt 2026-04-18 - Z4 erster Runtime-Slice fuer Specialist Step Packaging
+
+Z4 ist nicht mehr nur als naechster Mehrschritt-Block dokumentiert, sondern im ersten echten Runtime-Slice umgesetzt. Spezialisten bekommen jetzt nicht mehr nur rohen Handoff-Kontext plus loses `plan_step_json`, sondern ein explizites `specialist_step_package_json` mit fokussiertem Arbeitsschritt und einem klaren Ruecksignalvertrag.
+
+Geaendert:
+
+- [orchestration/specialist_step_package.py](/home/fatih-ubuntu/dev/timus/orchestration/specialist_step_package.py)
+  - neuer Z4-Vertrag fuer:
+    - `plan_goal`
+    - `step_title`
+    - `expected_output`
+    - `completion_signals`
+    - `focus_context`
+    - `return_signal_contract`
+  - neue explizite Ruecksignale:
+    - `step_completed`
+    - `step_blocked`
+    - `step_unnecessary`
+    - `goal_satisfied`
+- [agent/agents/meta.py](/home/fatih-ubuntu/dev/timus/agent/agents/meta.py)
+  - Rezept-Stage-Handoffs tragen jetzt:
+    - `specialist_step_package_json`
+  - auch direkte Spezialisten-Delegationen aus einem aktiven Meta-Handoff ziehen jetzt ein fokussiertes Schritt-Paket aus dem laufenden Plan
+- Spezialisten rendern das Schritt-Paket jetzt direkt in ihren strukturierten Handoff-Kontexten:
+  - [agent/agents/research.py](/home/fatih-ubuntu/dev/timus/agent/agents/research.py)
+  - [agent/agents/executor.py](/home/fatih-ubuntu/dev/timus/agent/agents/executor.py)
+  - [agent/agents/visual.py](/home/fatih-ubuntu/dev/timus/agent/agents/visual.py)
+  - [agent/agents/system.py](/home/fatih-ubuntu/dev/timus/agent/agents/system.py)
+  - [agent/agents/document.py](/home/fatih-ubuntu/dev/timus/agent/agents/document.py)
+  - [agent/agents/shell.py](/home/fatih-ubuntu/dev/timus/agent/agents/shell.py)
+  - [agent/agents/communication.py](/home/fatih-ubuntu/dev/timus/agent/agents/communication.py)
+- [agent/agent_registry.py](/home/fatih-ubuntu/dev/timus/agent/agent_registry.py)
+  - wertet neue explizite Step-Signale aus
+  - emittiert dazu Transport- und Observation-Events
+  - behandelt `step_blocked` und `step_unnecessary` als partielle Rueckgabe statt blindem Erfolg
+
+Tests:
+
+- neu:
+  - [tests/test_specialist_step_package.py](/home/fatih-ubuntu/dev/timus/tests/test_specialist_step_package.py)
+  - [tests/test_specialist_step_package_hypothesis.py](/home/fatih-ubuntu/dev/timus/tests/test_specialist_step_package_hypothesis.py)
+  - [tests/test_specialist_step_package_crosshair.py](/home/fatih-ubuntu/dev/timus/tests/test_specialist_step_package_crosshair.py)
+- erweitert:
+  - [tests/test_specialist_handoffs.py](/home/fatih-ubuntu/dev/timus/tests/test_specialist_handoffs.py)
+  - [tests/test_meta_recipe_execution.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_recipe_execution.py)
+  - [tests/test_specialist_context_runtime.py](/home/fatih-ubuntu/dev/timus/tests/test_specialist_context_runtime.py)
+
+Verifikation:
+
+- `python -m py_compile orchestration/specialist_step_package.py agent/agents/meta.py agent/agent_registry.py agent/agents/research.py agent/agents/executor.py agent/agents/visual.py agent/agents/system.py agent/agents/document.py agent/agents/shell.py agent/agents/communication.py ...` gruen
+- `pytest -q tests/test_specialist_step_package.py tests/test_specialist_step_package_hypothesis.py tests/test_specialist_handoffs.py::test_parse_delegation_handoff_extracts_structured_fields tests/test_specialist_handoffs.py::test_visual_prepare_task_uses_goal_and_handoff_state tests/test_specialist_handoffs.py::test_research_run_uses_structured_handoff_context tests/test_meta_recipe_execution.py tests/test_specialist_context_runtime.py -x` -> `39 passed`
+- `python -m crosshair check tests/test_specialist_step_package_crosshair.py` -> Exit `0`
+
+Hinweis:
+
+- ein breiter Lauf ueber die komplette Datei [tests/test_specialist_handoffs.py](/home/fatih-ubuntu/dev/timus/tests/test_specialist_handoffs.py) trifft weiterhin auf einen bestehenden, nicht von Z4 verursachten Visual-Auth-Session-Testfall; der Z4-relevante Subset ist gruen
+
 ## Fortschritt 2026-04-18 - Z3 erster Runtime-Slice fuer Plan State in Conversation State
 
 Z3 ist nicht mehr nur als naechster Mehrschritt-Block dokumentiert, sondern im ersten echten Runtime-Slice umgesetzt. Timus haelt jetzt einen `active_plan` turnuebergreifend im Conversation State, serialisiert ihn in Follow-up-Capsules und bindet Resume-Queries wie `weiter` oder `naechster Schritt` an den laufenden Plan statt nur an losen Open-Loop-Text.
