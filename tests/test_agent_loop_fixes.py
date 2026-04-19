@@ -270,6 +270,64 @@ async def test_run_executes_safe_embedded_action_before_finalizing(monkeypatch):
     ]
 
 
+@pytest.mark.asyncio
+async def test_run_uses_compact_working_memory_query_for_meta_handoff(monkeypatch):
+    captured = {}
+
+    async def _fake_detect(self, task: str) -> bool:
+        return False
+
+    async def _fake_working_memory(self, task: str) -> str:
+        captured["query"] = task
+        return ""
+
+    def _fake_inject(self, task: str, working_memory_context: str) -> str:
+        return task
+
+    async def _fake_llm(self, messages):
+        return "Final Answer: Erster Schritt ist definiert."
+
+    async def _fake_reflection(self, task: str, result: str, success: bool = True) -> None:
+        return None
+
+    monkeypatch.setattr(BaseAgent, "_detect_dynamic_ui_and_set_roi", _fake_detect)
+    monkeypatch.setattr(BaseAgent, "_build_working_memory_context", _fake_working_memory)
+    monkeypatch.setattr(BaseAgent, "_inject_working_memory_into_task", _fake_inject)
+    monkeypatch.setattr(BaseAgent, "_call_llm", _fake_llm)
+    monkeypatch.setattr(BaseAgent, "_run_reflection", _fake_reflection)
+
+    agent = BaseAgent(
+        system_prompt_template="Du bist ein Test-Agent.",
+        tools_description_string="",
+        max_iterations=2,
+        agent_type="reasoning",
+        skip_model_validation=True,
+    )
+    task = (
+        "# META ORCHESTRATION HANDOFF\n"
+        "task_type: single_lane\n"
+        "intent_family: plan_only\n"
+        "planning_needed: yes\n"
+        "meta_execution_plan_json: "
+        '{"next_step_id":"plan_frame_goal","steps":[{"id":"plan_frame_goal","title":"Ziel und Scope festziehen","expected_output":"Ein knapper erster Arbeitsschritt","completion_signals":["step_completed"]}]}\n'
+        "task_decomposition_json: "
+        '{"goal":"Richte eine Twilio-Inworld-Anruffunktion ein","intent_family":"build_setup","planning_needed":true}\n'
+        "\n"
+        "# ORIGINAL USER TASK\n"
+        "Richte fuer mich eine Anruffunktion ein. Du sollst mich ueber Twilio anrufen koennen.\n"
+    )
+
+    try:
+        result = await agent.run(task)
+    finally:
+        await agent.http_client.aclose()
+
+    assert result == "Erster Schritt ist definiert."
+    assert "Twilio" in captured["query"]
+    assert "Aktueller Planschritt: Ziel und Scope festziehen" in captured["query"]
+    assert "meta_execution_plan_json" not in captured["query"]
+
+
 # ── 4. Prompt-Korrektheit ─────────────────────────────────────────────────
 
 def test_reasoning_prompt_mentions_qwq():

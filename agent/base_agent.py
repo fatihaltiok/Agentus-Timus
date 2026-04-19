@@ -1244,6 +1244,115 @@ class BaseAgent(DynamicToolMixin):
 
         return segment.strip()
 
+    @classmethod
+    def _extract_working_memory_query(cls, task_text: str) -> str:
+        """Leitet eine kompakte Recall-Query aus dem aktuellen Task ab.
+
+        Der eigentliche Nutzerprompt darf im Agentenlauf reichhaltig bleiben.
+        Für Working-Memory-Retrieval ist ein aufgeblähter Meta-/Skill-/Plan-Prompt
+        aber kontraproduktiv: er vergrößert Embedding- und Recall-Kosten und
+        verwässert die Suchterme. Deshalb bevorzugen wir hier das eigentliche
+        Nutzerziel plus optional den aktuellen Planschritt.
+        """
+        text = str(task_text or "").strip()
+        if not text:
+            return ""
+
+        primary = cls._extract_primary_task_text(text).strip()
+        if not primary:
+            primary = text
+
+        meta_query = cls._extract_meta_working_memory_query(primary)
+        if meta_query:
+            return meta_query
+
+        return primary
+
+    @staticmethod
+    def _extract_meta_working_memory_query(task_text: str) -> str:
+        marker = "# META ORCHESTRATION HANDOFF"
+        text = str(task_text or "").strip()
+        if marker not in text:
+            return ""
+
+        _, after_header = text.split(marker, 1)
+        if "# ORIGINAL USER TASK" in after_header:
+            handoff_block, original_task = after_header.split("# ORIGINAL USER TASK", 1)
+        else:
+            handoff_block, original_task = after_header, ""
+
+        parts: list[str] = []
+        seen: set[str] = set()
+
+        def add_part(value: Any, *, prefix: str = "", limit: int = 280) -> None:
+            raw = str(value or "").strip()
+            if not raw:
+                return
+            cleaned = re.sub(r"\s+", " ", raw).strip()
+            if len(cleaned) > limit:
+                clipped = cleaned[:limit].rsplit(" ", 1)[0].strip()
+                cleaned = f"{clipped or cleaned[:limit]}..."
+            lowered = cleaned.lower()
+            if lowered in seen:
+                return
+            seen.add(lowered)
+            if prefix:
+                parts.append(f"{prefix}{cleaned}")
+            else:
+                parts.append(cleaned)
+
+        add_part(original_task, limit=420)
+
+        plan_payload: dict[str, Any] = {}
+        decomposition_payload: dict[str, Any] = {}
+        for raw_line in handoff_block.splitlines():
+            stripped = str(raw_line or "").strip()
+            if not stripped or ":" not in stripped:
+                continue
+            key, value = stripped.split(":", 1)
+            normalized_key = key.strip()
+            normalized_value = value.strip()
+            if normalized_key == "meta_execution_plan_json":
+                try:
+                    loaded = json.loads(normalized_value)
+                    if isinstance(loaded, dict):
+                        plan_payload = loaded
+                except Exception:
+                    plan_payload = {}
+            elif normalized_key == "task_decomposition_json":
+                try:
+                    loaded = json.loads(normalized_value)
+                    if isinstance(loaded, dict):
+                        decomposition_payload = loaded
+                except Exception:
+                    decomposition_payload = {}
+
+        add_part(decomposition_payload.get("goal"), prefix="Ziel: ")
+
+        next_step_id = str(plan_payload.get("next_step_id") or "").strip().lower()
+        next_step: dict[str, Any] = {}
+        for step in plan_payload.get("steps") or []:
+            if not isinstance(step, dict):
+                continue
+            step_id = str(step.get("id") or "").strip().lower()
+            if next_step_id and step_id == next_step_id:
+                next_step = step
+                break
+        if not next_step and isinstance(plan_payload.get("steps"), list) and plan_payload.get("steps"):
+            first_step = plan_payload["steps"][0]
+            if isinstance(first_step, dict):
+                next_step = first_step
+
+        add_part(next_step.get("title"), prefix="Aktueller Planschritt: ")
+        add_part(next_step.get("expected_output"), prefix="Erwartetes Ergebnis: ")
+
+        completion_signals = next_step.get("completion_signals") or []
+        if isinstance(completion_signals, list) and completion_signals:
+            signal_text = ", ".join(str(item or "").strip() for item in completion_signals if str(item or "").strip())
+            add_part(signal_text, prefix="Abschlusssignal: ", limit=180)
+
+        return "\n".join(parts).strip()
+
     def _has_explicit_restart_intent(self) -> bool:
         task_text = self._task_text_for_restart_guard()
         if not task_text:
@@ -2808,13 +2917,18 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
 
         # Clear action history for new task
         self._task_action_history = []
-        working_memory_context = await self._build_working_memory_context(task)
+        working_memory_query = self._extract_working_memory_query(task)
+        working_memory_context = await self._build_working_memory_context(
+            working_memory_query or task
+        )
         task_with_context = self._inject_working_memory_into_task(
             task, working_memory_context
         )
         self._emit_step_trace(
             action="working_memory_injected",
             output_data={
+                "query_chars": len(working_memory_query or ""),
+                "query_preview": self._preview_value(working_memory_query, 500),
                 "context_chars": len(working_memory_context or ""),
                 "context_preview": self._preview_value(working_memory_context, 700),
             },
