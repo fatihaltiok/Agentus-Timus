@@ -944,6 +944,117 @@ _META_COMPRESSED_FOLLOWUP_HINTS = (
 )
 
 _META_CONTEXT_SCHEMA_VERSION = 1
+_META_CONTEXT_STOPWORDS = {
+    "aber",
+    "aktuelle",
+    "aktuellen",
+    "alle",
+    "auch",
+    "bitte",
+    "bzw",
+    "dann",
+    "danach",
+    "darauf",
+    "darin",
+    "darueber",
+    "darüber",
+    "das",
+    "dass",
+    "dem",
+    "den",
+    "der",
+    "des",
+    "die",
+    "dir",
+    "doch",
+    "dort",
+    "drei",
+    "eine",
+    "einer",
+    "eines",
+    "einen",
+    "einem",
+    "etwas",
+    "fuer",
+    "für",
+    "genau",
+    "hier",
+    "http",
+    "https",
+    "ich",
+    "immer",
+    "jetzt",
+    "kann",
+    "kannst",
+    "koennte",
+    "könnte",
+    "mach",
+    "mehr",
+    "mein",
+    "meine",
+    "mit",
+    "nach",
+    "neuen",
+    "noch",
+    "oder",
+    "ohne",
+    "sagt",
+    "schon",
+    "sein",
+    "sind",
+    "soll",
+    "sollst",
+    "statt",
+    "the",
+    "und",
+    "uns",
+    "unter",
+    "use",
+    "was",
+    "weil",
+    "weiter",
+    "welche",
+    "wenn",
+    "wie",
+    "wir",
+    "wird",
+    "wirst",
+    "wollen",
+    "wollen",
+    "you",
+    "zum",
+    "zur",
+}
+_META_CONTEXT_DEPENDENT_MARKERS = (
+    "da ",
+    "damit",
+    "daran",
+    "darauf",
+    "darueber",
+    "darüber",
+    "dort",
+    "erste option",
+    "fuss fassen",
+    "fuß fassen",
+    "hier",
+    "kann ich da",
+    "koennte ich da",
+    "könnte ich da",
+    "setz fort",
+    "weiter",
+)
+
+_META_CONTEXT_LOCATION_MARKERS = (
+    "maps",
+    "standort",
+    "route",
+    "naehe",
+    "nähe",
+    "offenbach",
+    "marktplatz",
+    "latitude",
+    "longitude",
+)
 
 
 def get_agent_capability_map() -> Dict[str, Dict[str, Any]]:
@@ -1675,6 +1786,10 @@ def _tokenize_meta_context_terms(text: str) -> List[str]:
         stripped = token.strip("_-")
         if len(stripped) < 3:
             continue
+        if stripped in _META_CONTEXT_STOPWORDS:
+            continue
+        if stripped.isdigit():
+            continue
         cleaned.append(stripped)
     return cleaned
 
@@ -1685,6 +1800,91 @@ def _meta_context_overlap_size(left: str, right: str) -> int:
     if not left_terms or not right_terms:
         return 0
     return len(left_terms.intersection(right_terms))
+
+
+def _is_context_dependent_meta_query(
+    query: str,
+    *,
+    turn_type: str = "",
+    conversation_state: Mapping[str, Any] | None = None,
+) -> bool:
+    lowered = str(query or "").strip().lower()
+    if not lowered:
+        return False
+    if turn_type in {
+        "followup",
+        "clarification",
+        "correction",
+        "handover_resume",
+        "approval_response",
+        "auth_response",
+    }:
+        return True
+    if any(marker in lowered for marker in _META_CONTEXT_DEPENDENT_MARKERS):
+        return True
+
+    terms = _tokenize_meta_context_terms(lowered)
+    if len(terms) > 6:
+        return False
+
+    state = dict(conversation_state or {})
+    return any(
+        str(state.get(field) or "").strip()
+        for field in ("active_topic", "active_goal", "open_loop", "next_expected_step")
+    )
+
+
+def _build_meta_context_reference_texts(
+    *,
+    current_query: str,
+    dialog_state: Mapping[str, Any],
+    conversation_state: Mapping[str, Any],
+    recent_user_turns: Iterable[str] | None = None,
+    turn_type: str = "",
+) -> List[str]:
+    refs = _dedupe_meta_state_fragments(
+        [current_query],
+        limit=1,
+        max_chars=220,
+    )
+    if not _is_context_dependent_meta_query(
+        current_query,
+        turn_type=turn_type,
+        conversation_state=conversation_state,
+    ):
+        return refs
+
+    bridge_parts = [
+        conversation_state.get("active_topic"),
+        conversation_state.get("active_goal"),
+        conversation_state.get("open_loop"),
+        conversation_state.get("next_expected_step"),
+        dialog_state.get("active_topic"),
+        dialog_state.get("open_goal"),
+        *(recent_user_turns or ()),
+    ]
+    refs.extend(
+        item
+        for item in _dedupe_meta_state_fragments(bridge_parts, limit=4, max_chars=220)
+        if item and item not in refs
+    )
+    return refs[:5]
+
+
+def _meta_context_reference_overlap(item: str, reference_texts: Iterable[str]) -> int:
+    best = 0
+    for ref in reference_texts:
+        overlap = _meta_context_overlap_size(item, ref)
+        if overlap > best:
+            best = overlap
+    return best
+
+
+def _looks_like_location_meta_context(text: str) -> bool:
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return False
+    return any(marker in lowered for marker in _META_CONTEXT_LOCATION_MARKERS)
 
 
 def _normalize_meta_context_fragments(
@@ -1729,6 +1929,8 @@ def _select_relevant_topic_memory(
     effective_query: str,
     dialog_state: Mapping[str, Any],
     conversation_state: Mapping[str, Any],
+    recent_user_turns: Iterable[str] | None,
+    turn_type: str,
     provided_hits: Iterable[Any] | None,
 ) -> List[str]:
     if provided_hits is not None:
@@ -1757,6 +1959,13 @@ def _select_relevant_topic_memory(
     focus_terms = set(_tokenize_meta_context_terms(recall_query))
     if not focus_terms:
         focus_terms = set(_tokenize_meta_context_terms(effective_query))
+    reference_texts = _build_meta_context_reference_texts(
+        current_query=effective_query,
+        dialog_state=dialog_state,
+        conversation_state=conversation_state,
+        recent_user_turns=recent_user_turns,
+        turn_type=turn_type,
+    )
 
     try:
         related = memory_manager.find_related_memories(recall_query, n_results=6)
@@ -1775,10 +1984,16 @@ def _select_relevant_topic_memory(
             continue
         rendered = f"{category or 'memory'} => {content}"
         overlap = len(focus_terms.intersection(_tokenize_meta_context_terms(content)))
+        reference_overlap = _meta_context_reference_overlap(content, reference_texts)
         relevance = float(item.get("relevance") or 0.0)
-        if overlap <= 0 and relevance < 0.45:
-            continue
-        scored.append((overlap, relevance, rendered))
+        if reference_overlap <= 0:
+            if _looks_like_location_meta_context(rendered) and not (
+                is_location_local_query(effective_query.lower()) or is_location_route_query(effective_query.lower())
+            ):
+                continue
+            if relevance < 0.8:
+                continue
+        scored.append(((reference_overlap * 2) + overlap + (1 if relevance >= 0.8 else 0), relevance, rendered))
 
     scored.sort(key=lambda row: (-row[0], -row[1], len(row[2])))
     return _normalize_meta_context_fragments((row[2] for row in scored), limit=2)
@@ -1787,7 +2002,9 @@ def _select_relevant_topic_memory(
 def _select_relevant_preference_memory(
     *,
     effective_query: str,
+    dialog_state: Mapping[str, Any],
     conversation_state: Mapping[str, Any],
+    recent_user_turns: Iterable[str] | None,
     turn_type: str,
     provided_hits: Iterable[Any] | None,
 ) -> Tuple[List[str], Dict[str, Any]]:
@@ -1834,6 +2051,13 @@ def _select_relevant_preference_memory(
     focus_terms = set(_tokenize_meta_context_terms(focus_text))
     normalized_query = focus_text.lower()
     preference_mode = turn_type in {"behavior_instruction", "preference_update", "complaint_about_last_answer"}
+    reference_texts = _build_meta_context_reference_texts(
+        current_query=effective_query,
+        dialog_state=dialog_state,
+        conversation_state=conversation_state,
+        recent_user_turns=recent_user_turns,
+        turn_type=turn_type,
+    )
 
     candidates: List[str] = []
     try:
@@ -1893,8 +2117,33 @@ def _select_relevant_preference_memory(
         seen.add(cleaned)
         if len(selected) >= 2:
             break
-    normalized_selected = _normalize_meta_context_fragments(selected, limit=2)
+    explicit_preference_turn = any(
+        token in normalized_query
+        for token in (
+            "bevorzug",
+            "präferenz",
+            "praeferenz",
+            "merk dir",
+            "merke dir",
+            "in zukunft",
+            "kuenftig",
+            "künftig",
+            "antwort",
+            "quellen",
+            "news",
+            "nachrichten",
+        )
+    )
+    filtered_selected = [
+        item
+        for item in selected
+        if explicit_preference_turn or _meta_context_reference_overlap(item, reference_texts) > 0
+    ]
+    normalized_selected = _normalize_meta_context_fragments(filtered_selected, limit=2)
     selection_summary["selected"] = list(normalized_selected)
+    selection_summary["filtered_irrelevant"] = [
+        item for item in selected if item not in normalized_selected
+    ]
     return normalized_selected, selection_summary
 
 
@@ -2233,11 +2482,15 @@ def build_meta_context_bundle(
         effective_query=effective_query,
         dialog_state=dialog,
         conversation_state=merged_state,
+        recent_user_turns=recent_users,
+        turn_type=turn_type,
         provided_hits=topic_memory_hits,
     )
     preference_memory, preference_selection = _select_relevant_preference_memory(
         effective_query=effective_query,
+        dialog_state=dialog,
         conversation_state=merged_state,
+        recent_user_turns=recent_users,
         turn_type=turn_type,
         provided_hits=preference_memory_hits,
     )
@@ -2363,6 +2616,32 @@ def build_meta_context_bundle(
         topic_memory=topic_memory,
         preference_memory=preference_memory,
     )
+    suppressed_pairs = []
+    for item in suppressed_context:
+        suppressed_source = str(item.get("source") or "").strip()
+        preview = str(item.get("content_preview") or "").strip().lower()
+        if not suppressed_source or not preview:
+            continue
+        if suppressed_source == "assistant_reply":
+            allowed_sources = {"recent_assistant_replies"}
+        else:
+            allowed_sources = {suppressed_source}
+        suppressed_pairs.append((allowed_sources, preview))
+    if suppressed_pairs:
+        filtered_slots: List[MetaContextSlot] = []
+        for slot in slots:
+            source = str(slot.source or "").strip()
+            content = str(slot.content or "").strip().lower()
+            should_skip = False
+            for allowed_sources, preview in suppressed_pairs:
+                if source not in allowed_sources or not preview:
+                    continue
+                if preview in content or content in preview:
+                    should_skip = True
+                    break
+            if not should_skip:
+                filtered_slots.append(slot)
+        slots = filtered_slots
     confidence = max(
         float(turn.get("confidence") or 0.0),
         float(merged_state.get("topic_confidence") or 0.0),

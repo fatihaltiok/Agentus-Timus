@@ -993,6 +993,119 @@ def test_classify_meta_task_loads_topic_and_preference_memory_from_memory_system
     assert all("tee" not in slot["content"].lower() for slot in preference_slots)
 
 
+def test_classify_meta_task_filters_irrelevant_location_and_voice_memory_from_meta_bundle(monkeypatch):
+    def _get_memory_items(category):
+        if category == "preference_memory":
+            return [
+                SimpleNamespace(
+                    key="topic::voice::twilio",
+                    value={
+                        "scope": "topic",
+                        "instruction": "Bei Telefonie immer zuerst Twilio und Inworld pruefen.",
+                        "topic_anchor": "telefonie twilio inworld",
+                        "session_id": "default",
+                        "stability": 0.94,
+                        "evidence_count": 3,
+                    },
+                )
+            ]
+        return []
+
+    fake_memory_manager = SimpleNamespace(
+        find_related_memories=lambda query, n_results=6: [
+            {
+                "content": "Dein letzter bekannter Standort war in Offenbach am Main in der Naehe des Marktplatzes.",
+                "category": "location_memory",
+                "relevance": 0.99,
+            },
+            {
+                "content": "Phase F Runtime-Board und CHANGELOG wurden zuletzt fuer Betriebsvertraege erweitert.",
+                "category": "project_notes",
+                "relevance": 0.82,
+            },
+        ],
+        get_behavior_hooks=lambda: [
+            "Bei Telefonie immer zuerst Twilio und Inworld pruefen.",
+        ],
+        get_self_model_prompt=lambda: "Praeferenzen: Bei Telefonie immer zuerst Twilio und Inworld pruefen.",
+        persistent=SimpleNamespace(get_memory_items=_get_memory_items),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "memory.memory_system",
+        SimpleNamespace(memory_manager=fake_memory_manager),
+    )
+
+    result = classify_meta_task(
+        "lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht",
+        action_count=2,
+        recent_assistant_turns=["Dein letzter bekannter Standort war in Offenbach am Main."],
+    )
+
+    bundle = result["meta_context_bundle"]
+    rendered_context = " || ".join(slot["content"] for slot in bundle["context_slots"])
+    topic_slots = [slot for slot in bundle["context_slots"] if slot["slot"] == "topic_memory"]
+
+    assert "offenbach" not in rendered_context.lower()
+    assert "twilio" not in rendered_context.lower()
+    assert topic_slots
+    assert "phase f runtime-board" in topic_slots[0]["content"].lower()
+    assert any(
+        item["reason"] == "location_context_without_current_evidence"
+        for item in bundle["suppressed_context"]
+    )
+
+
+def test_classify_meta_task_keeps_canada_context_for_context_dependent_footing_query(monkeypatch):
+    fake_memory_manager = SimpleNamespace(
+        find_related_memories=lambda query, n_results=6: [
+            {
+                "content": "Du wolltest pruefen, ob du in Kanada ein neues Leben aufbauen und beruflich Fuss fassen kannst.",
+                "category": "goal_memory",
+                "relevance": 0.88,
+            },
+            {
+                "content": "Dein letzter bekannter Standort war in Offenbach am Main.",
+                "category": "location_memory",
+                "relevance": 0.98,
+            },
+        ],
+        get_behavior_hooks=lambda: [],
+        get_self_model_prompt=lambda: "",
+        persistent=SimpleNamespace(get_memory_items=lambda category: []),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "memory.memory_system",
+        SimpleNamespace(memory_manager=fake_memory_manager),
+    )
+
+    result = classify_meta_task(
+        "koennte ich da fuss fassen",
+        action_count=0,
+        conversation_state={
+            "session_id": "canvas_canada_context",
+            "active_topic": "Auswanderung nach Kanada",
+            "active_goal": "Pruefen ob du in Kanada ein neues Leben aufbauen kannst",
+            "open_loop": "Einwanderungs- und Jobchancen bewerten",
+            "next_expected_step": "Visa- und Arbeitsmarktchancen einschaetzen",
+            "turn_type_hint": "followup",
+        },
+        recent_user_turns=[
+            "Ich ueberlege, ob ich nach Kanada auswandern und dort beruflich Fuss fassen kann."
+        ],
+    )
+
+    bundle = result["meta_context_bundle"]
+    rendered_context = " || ".join(slot["content"] for slot in bundle["context_slots"])
+    topic_slots = [slot for slot in bundle["context_slots"] if slot["slot"] == "topic_memory"]
+
+    assert "kanada" in (result["active_topic"] or "").lower()
+    assert topic_slots
+    assert "kanada" in topic_slots[0]["content"].lower()
+    assert "offenbach" not in rendered_context.lower()
+
+
 def test_classify_meta_task_suppresses_topic_mismatched_assistant_context():
     result = classify_meta_task(
         "# FOLLOW-UP CONTEXT "
