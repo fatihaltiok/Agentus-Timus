@@ -602,6 +602,74 @@ async def test_meta_clarity_redirects_wrong_direct_answer_delegate_to_allowed_ev
     assert "erlaubte_delegate_agents: shell, document" in llm_last_messages[1]
 
 
+@pytest.mark.asyncio
+async def test_meta_direct_answer_mode_skips_blackboard_enrichment(monkeypatch):
+    import memory.agent_blackboard as blackboard_module
+
+    captured = {}
+
+    async def _fake_detect(self, task: str) -> bool:
+        return False
+
+    async def _fake_working_memory(self, task: str) -> str:
+        return ""
+
+    def _fake_inject(self, task: str, working_memory_context: str) -> str:
+        return task
+
+    async def _fake_llm(self, messages):
+        captured["initial_user_content"] = messages[1]["content"]
+        return "Final Answer: Als Naechstes kommt das Zwischenprojekt zur allgemeinen Mehrschritt-Planung."
+
+    async def _fake_reflection(self, task: str, result: str, success: bool = True) -> None:
+        return None
+
+    class _FakeBlackboard:
+        def search(self, query, limit=3):
+            return [
+                {
+                    "agent": "meta",
+                    "topic": "skills",
+                    "key": "skill_creator",
+                    "value": "skill-creator ist ein Skill zum Erstellen und Aktualisieren von Skills.",
+                }
+            ]
+
+    monkeypatch.setattr(BaseAgent, "_detect_dynamic_ui_and_set_roi", _fake_detect)
+    monkeypatch.setattr(BaseAgent, "_build_working_memory_context", _fake_working_memory)
+    monkeypatch.setattr(BaseAgent, "_inject_working_memory_into_task", _fake_inject)
+    monkeypatch.setattr(BaseAgent, "_call_llm", _fake_llm)
+    monkeypatch.setattr(BaseAgent, "_run_reflection", _fake_reflection)
+    monkeypatch.setattr(blackboard_module, "get_blackboard", lambda: _FakeBlackboard())
+
+    agent = BaseAgent(
+        system_prompt_template="Du bist ein Test-Agent.",
+        tools_description_string="",
+        max_iterations=2,
+        agent_type="meta",
+        skip_model_validation=True,
+    )
+    task = (
+        "# META ORCHESTRATION HANDOFF\n"
+        "meta_clarity_contract_json: "
+        '{"primary_objective":"lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht",'
+        '"request_kind":"direct_recommendation","answer_obligation":"answer_now_with_single_recommendation",'
+        '"completion_condition":"next_recommended_block_or_step_named","direct_answer_required":true}\n'
+        "\n"
+        "# ORIGINAL USER TASK\n"
+        "lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht\n"
+    )
+
+    try:
+        result = await agent.run(task)
+    finally:
+        await agent.http_client.aclose()
+
+    assert "Zwischenprojekt" in result
+    assert "# Bekannte Informationen (Agent-Blackboard):" not in captured["initial_user_content"]
+    assert "skill-creator" not in captured["initial_user_content"]
+
+
 # ── 4. Prompt-Korrektheit ─────────────────────────────────────────────────
 
 def test_reasoning_prompt_mentions_qwq():

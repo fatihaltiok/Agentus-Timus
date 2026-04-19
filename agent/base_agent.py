@@ -3168,9 +3168,17 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         )
 
         roi_set = await self._detect_dynamic_ui_and_set_roi(task)
+        clarity_contract_for_turn = self._extract_meta_clarity_contract(task)
+        skip_blackboard_enrichment = (
+            str(self.agent_type or "").strip().lower() == "meta"
+            and bool(clarity_contract_for_turn.get("direct_answer_required"))
+        )
 
         # M9: Blackboard-Kontext anreichern
-        if os.getenv("AUTONOMY_BLACKBOARD_ENABLED", "true").lower() == "true":
+        if (
+            not skip_blackboard_enrichment
+            and os.getenv("AUTONOMY_BLACKBOARD_ENABLED", "true").lower() == "true"
+        ):
             try:
                 from memory.agent_blackboard import get_blackboard
                 bb_entries = get_blackboard().search(task[:80], limit=3)
