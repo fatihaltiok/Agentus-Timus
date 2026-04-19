@@ -1468,11 +1468,21 @@ class BaseAgent(DynamicToolMixin):
         return self._extract_meta_clarity_contract(task_text)
 
     def _current_meta_delegate_count(self) -> int:
-        return sum(
-            1
-            for item in (self._task_action_history or [])
-            if str((item or {}).get("method") or "").strip().lower() == "delegate_to_agent"
-        )
+        count = 0
+        for item in (self._task_action_history or []):
+            if str((item or {}).get("method") or "").strip().lower() != "delegate_to_agent":
+                continue
+            observation = (item or {}).get("observation")
+            blocked_reason = ""
+            if isinstance(observation, dict):
+                blocked_reason = str(observation.get("blocked_reason") or "").strip().lower()
+            if blocked_reason in {
+                "meta_clarity_delegate_agent_not_allowed",
+                "meta_clarity_objective_mismatch",
+            }:
+                continue
+            count += 1
+        return count
 
     def _build_meta_clarity_closeout_prompt(self, task: str, method: str, obs: Any) -> str | None:
         contract = self._current_meta_clarity_contract()
@@ -1497,7 +1507,6 @@ class BaseAgent(DynamicToolMixin):
             self._current_meta_delegate_count() < max_delegate_calls
             and blocked_reason not in {
                 "meta_clarity_delegate_budget_exhausted",
-                "meta_clarity_delegate_agent_not_allowed",
             }
         ):
             return None
@@ -1517,6 +1526,45 @@ class BaseAgent(DynamicToolMixin):
             "Die notwendige Evidenz liegt jetzt vor oder weiteres Delegieren ist nicht erlaubt.\n"
             "Kein weiterer Toolcall. Kein delegate_to_agent. Antworte jetzt direkt im Format:\n"
             "Final Answer: ..."
+        )
+
+    def _build_meta_clarity_delegate_redirect_prompt(self, task: str, method: str, obs: Any) -> str | None:
+        if str(method or "").strip().lower() != "delegate_to_agent":
+            return None
+        if not isinstance(obs, dict):
+            return None
+        blocked_reason = str(obs.get("blocked_reason") or "").strip().lower()
+        if blocked_reason != "meta_clarity_delegate_agent_not_allowed":
+            return None
+
+        contract = self._current_meta_clarity_contract()
+        if not contract:
+            return None
+
+        max_delegate_raw = contract.get("max_delegate_calls", -1)
+        max_delegate_calls = -1 if max_delegate_raw in (None, "") else int(max_delegate_raw)
+        if max_delegate_calls >= 0 and self._current_meta_delegate_count() >= max_delegate_calls:
+            return None
+
+        allowed_agents = [
+            str(item or "").strip().lower()
+            for item in (contract.get("allowed_delegate_agents") or ())
+            if str(item or "").strip()
+        ]
+        if not allowed_agents:
+            return None
+
+        primary_objective = str(
+            contract.get("primary_objective")
+            or self._extract_primary_task_text(task)
+            or ""
+        ).strip()
+        return (
+            "Meta-Clarity Korrektur:\n"
+            f"- primary_objective: {primary_objective}\n"
+            f"- erlaubte_delegate_agents: {', '.join(allowed_agents)}\n"
+            "Waehle jetzt entweder einen dieser erlaubten Evidenzpfade oder beantworte direkt.\n"
+            "Kein anderer delegate_to_agent."
         )
 
     def _check_meta_clarity_tool_intent(self, method: str, params: dict) -> Optional[Tuple[str, str]]:
@@ -3002,13 +3050,14 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         max_related = int(settings["max_related"])
         max_recent_events = int(settings["max_recent_events"])
         clarity_contract = self._extract_meta_clarity_contract(task)
+        memory_query = self._extract_working_memory_query(task) or task
 
         try:
             from memory.memory_system import memory_manager
 
             context = await asyncio.to_thread(
                 memory_manager.build_working_memory_context,
-                task,
+                memory_query,
                 max_chars,
                 max_related,
                 max_recent_events,
@@ -3041,6 +3090,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 "memory_stats": wm_stats,
                 "memory_snapshot": memory_snapshot,
                 "meta_clarity_contract": clarity_contract,
+                "memory_query_preview": self._preview_value(memory_query, 400),
             }
             if filtered_context:
                 log.info(f"Working-Memory-Kontext injiziert ({len(filtered_context)} chars)")
@@ -3202,9 +3252,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         # Clear action history for new task
         self._task_action_history = []
         working_memory_query = self._extract_working_memory_query(task)
-        working_memory_context = await self._build_working_memory_context(
-            working_memory_query or task
-        )
+        working_memory_context = await self._build_working_memory_context(task)
         task_with_context = self._inject_working_memory_into_task(
             task, working_memory_context
         )
@@ -3526,6 +3574,19 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 messages.append(self._build_vision_message(obs_text, screenshot_b64))
             else:
                 messages.append({"role": "user", "content": obs_text})
+
+            redirect_prompt = self._build_meta_clarity_delegate_redirect_prompt(task, method, obs)
+            if redirect_prompt:
+                messages.append({"role": "user", "content": redirect_prompt})
+                self._emit_step_trace(
+                    action="meta_clarity_delegate_redirect",
+                    output_data={
+                        "step": step,
+                        "method": method,
+                        "redirect_preview": self._preview_value(redirect_prompt, 500),
+                    },
+                    status="warning",
+                )
 
             closeout_prompt = self._build_meta_clarity_closeout_prompt(task, method, obs)
             if closeout_prompt:
