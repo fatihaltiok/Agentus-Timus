@@ -53,6 +53,36 @@ def test_meta_response_policy_uses_summary_mode_for_status_requests():
     assert decision.recipe_enabled is False
 
 
+def test_meta_response_policy_uses_direct_recommendation_for_next_step_questions():
+    decision = resolve_meta_response_policy(
+        _build_policy_input(
+            effective_query="lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht",
+            dominant_turn_type="new_task",
+            baseline_response_mode="execute",
+            task_type="single_lane",
+            meta_context_bundle={
+                "context_slots": [
+                    {
+                        "slot": "current_query",
+                        "content": "lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht",
+                    },
+                    {"slot": "conversation_state", "content": "active_topic: Phase F"},
+                ],
+                "suppressed_context": [],
+            },
+            recommended_agent_chain=("meta", "executor"),
+        )
+    )
+
+    assert decision.response_mode == "summarize_state"
+    assert decision.override_applied is True
+    assert decision.task_type_override == "single_lane"
+    assert decision.agent_chain_override == ("meta",)
+    assert decision.recipe_enabled is False
+    assert decision.answer_shape == "direct_recommendation"
+    assert "next_step_summary_language" in decision.policy_signals
+
+
 def test_meta_response_policy_clarifies_broad_action_hint_when_context_is_unreliable():
     decision = resolve_meta_response_policy(
         _build_policy_input(

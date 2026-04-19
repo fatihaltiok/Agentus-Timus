@@ -220,6 +220,27 @@ def test_classify_meta_task_uses_state_summary_policy_for_status_question():
     assert result["meta_policy_decision"]["should_summarize_state"] is True
 
 
+def test_classify_meta_task_uses_direct_recommendation_policy_for_next_step_question():
+    result = classify_meta_task(
+        "lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht",
+        action_count=2,
+        conversation_state={
+            "session_id": "canvas_phase_f_closeout",
+            "active_topic": "Phase F Abschluss",
+            "active_goal": "Naechsten Hauptblock festlegen",
+            "open_loop": "Nachfolger von Phase F bestimmen",
+            "next_expected_step": "Mehrschritt-Planungsblock starten",
+        },
+    )
+
+    assert result["task_type"] == "single_lane"
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["response_mode"] == "summarize_state"
+    assert result["reason"] == "meta_policy:next_step_summary_request"
+    assert result["meta_policy_decision"]["override_applied"] is True
+    assert result["meta_policy_decision"]["answer_shape"] == "direct_recommendation"
+
+
 def test_classify_meta_task_uses_historical_topic_recall_policy_for_time_anchored_memory_queries():
     result = classify_meta_task(
         "weisst du noch was wir vor 6 monaten ueber die agentenarchitektur besprochen hatten",

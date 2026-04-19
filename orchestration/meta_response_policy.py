@@ -21,6 +21,19 @@ _STATE_SUMMARY_PATTERNS = (
     r"\bwie\s+ist\s+der\s+stand\b",
 )
 
+_NEXT_STEP_SUMMARY_PATTERNS = (
+    r"\bwas\s+kommt\s+als\s+naechstes\b",
+    r"\bwas\s+kommt\s+als\s+nächstes\b",
+    r"\bwas\s+ist\s+als\s+naechstes\s+dran\b",
+    r"\bwas\s+ist\s+als\s+nächstes\s+dran\b",
+    r"\bwelcher\s+schritt\s+ist\s+als\s+naechstes\s+dran\b",
+    r"\bwelcher\s+schritt\s+ist\s+als\s+nächstes\s+dran\b",
+    r"\bsag\b.*\bwas\s+als\s+naechstes\s+ansteht\b",
+    r"\bsag\b.*\bwas\s+als\s+nächstes\s+ansteht\b",
+    r"\bnaechster\s+schritt\b",
+    r"\bnächster\s+schritt\b",
+)
+
 _SELF_MODEL_STATUS_PATTERNS = (
     r"\bbist\s+du\s+anpassungsf(?:aehig|[aä]hig)\b",
     r"\bbist\s+du\s+ein\s+funktionierendes?\s+ki(?:-| )?system\b",
@@ -203,6 +216,10 @@ def _looks_like_state_summary(query: str) -> bool:
     return _matches_any(query, _STATE_SUMMARY_PATTERNS)
 
 
+def _looks_like_next_step_summary(query: str) -> bool:
+    return _matches_any(query, _NEXT_STEP_SUMMARY_PATTERNS)
+
+
 def _looks_like_self_model_status(query: str) -> bool:
     return _matches_any(query, _SELF_MODEL_STATUS_PATTERNS)
 
@@ -299,6 +316,25 @@ def resolve_meta_response_policy(policy_input: MetaPolicyInput) -> MetaPolicyDec
             policy_reason="historical_topic_recall",
             policy_confidence=0.89,
             answer_shape="historical_topic_state",
+            should_delegate=False,
+            should_store_preference=False,
+            should_resume_open_loop=False,
+            should_summarize_state=True,
+            self_model_bound_applied=False,
+            policy_signals=tuple(signals),
+            override_applied=(baseline != "summarize_state"),
+            agent_chain_override=("meta",),
+            task_type_override="single_lane",
+            recipe_enabled=False,
+        )
+
+    if _looks_like_next_step_summary(policy_input.effective_query):
+        signals.append("next_step_summary_language")
+        return MetaPolicyDecision(
+            response_mode="summarize_state",
+            policy_reason="next_step_summary_request",
+            policy_confidence=0.92,
+            answer_shape="direct_recommendation",
             should_delegate=False,
             should_store_preference=False,
             should_resume_open_loop=False,
