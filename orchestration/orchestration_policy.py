@@ -229,6 +229,7 @@ def evaluate_query_orchestration(query: str) -> Dict[str, Any]:
         "goal_spec": dict(meta_task.get("goal_spec") or {}),
         "capability_graph": dict(meta_task.get("capability_graph") or {}),
         "adaptive_plan": dict(meta_task.get("adaptive_plan") or {}),
+        "meta_clarity_contract": dict(meta_task.get("meta_clarity_contract") or {}),
         "meta_context_bundle": dict(meta_task.get("meta_context_bundle") or {}),
         "specialist_context_seed": dict(meta_task.get("specialist_context_seed") or {}),
         "task_profile": task_profile,

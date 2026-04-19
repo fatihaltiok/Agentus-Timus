@@ -9,6 +9,10 @@ from typing import Any, Dict, Iterable, List, Mapping, Tuple
 from orchestration.adaptive_plan_memory import get_adaptive_plan_memory
 from orchestration.adaptive_planner import build_adaptive_plan
 from orchestration.capability_graph import build_capability_graph
+from orchestration.meta_clarity_contract import (
+    apply_meta_clarity_to_bundle,
+    build_meta_clarity_contract,
+)
 from orchestration.conversation_state import derive_topic_state_transition
 from orchestration.diagnosis_records import (
     build_diagnosis_records,
@@ -3188,19 +3192,6 @@ def classify_meta_task(
     if not final_chain:
         final_chain = ["meta"]
 
-    conversation_state_map = dict(conversation_state or {})
-    specialist_context_seed = build_specialist_context_payload(
-        current_topic=active_topic,
-        active_goal=open_goal,
-        open_loop=meta_context_bundle.open_loop or meta_context_bundle.next_expected_step,
-        next_expected_step=meta_context_bundle.next_expected_step or next_step,
-        turn_type=turn_interpretation.dominant_turn_type,
-        response_mode=final_response_mode,
-        user_preferences=list(conversation_state_map.get("preferences") or [])
-        + list((preference_memory_selection or {}).get("selected") or []),
-        recent_corrections=list(conversation_state_map.get("recent_corrections") or []),
-    )
-
     prefer_youtube_research_only = (
         final_task_type == "youtube_content_extraction"
         and has_direct_youtube_url
@@ -3277,6 +3268,32 @@ def classify_meta_task(
                 },
                 *list(meta_execution_plan.get("steps") or []),
             ]
+    clarity_contract = build_meta_clarity_contract(
+        effective_query=effective_query,
+        response_mode=final_response_mode,
+        policy_decision=policy_decision.to_dict(),
+        task_type=final_task_type,
+        goal_spec={},
+        task_decomposition=task_decomposition,
+        meta_execution_plan=meta_execution_plan,
+    )
+    filtered_meta_context_bundle = apply_meta_clarity_to_bundle(
+        meta_context_bundle.to_dict(),
+        clarity_contract.to_dict(),
+    )
+    conversation_state_map = dict(conversation_state or {})
+    specialist_context_seed = build_specialist_context_payload(
+        current_topic=filtered_meta_context_bundle.get("active_topic") or active_topic,
+        active_goal=filtered_meta_context_bundle.get("active_goal") or open_goal,
+        open_loop=filtered_meta_context_bundle.get("open_loop")
+        or filtered_meta_context_bundle.get("next_expected_step"),
+        next_expected_step=filtered_meta_context_bundle.get("next_expected_step") or next_step,
+        turn_type=turn_interpretation.dominant_turn_type,
+        response_mode=final_response_mode,
+        user_preferences=list(conversation_state_map.get("preferences") or [])
+        + list((preference_memory_selection or {}).get("selected") or []),
+        recent_corrections=list(conversation_state_map.get("recent_corrections") or []),
+    )
     classification = {
         "task_type": final_task_type,
         "site_kind": site_kind,
@@ -3308,17 +3325,30 @@ def classify_meta_task(
         "meta_policy_decision": policy_decision.to_dict(),
         "topic_shift_detected": topic_transition.topic_shift_detected,
         "topic_state_transition": topic_transition.to_dict(),
-        "meta_context_bundle": meta_context_bundle.to_dict(),
+        "meta_context_bundle": filtered_meta_context_bundle,
         "preference_memory_selection": preference_memory_selection,
         "historical_topic_selection": historical_topic_selection,
         "specialist_context_seed": specialist_context_seed,
-        "meta_context_slot_types": [slot.slot for slot in meta_context_bundle.context_slots],
-        "meta_context_suppressed_count": len(meta_context_bundle.suppressed_context),
+        "meta_context_slot_types": [
+            str(item.get("slot") or "").strip()
+            for item in (filtered_meta_context_bundle.get("context_slots") or [])
+            if str(item.get("slot") or "").strip()
+        ],
+        "meta_context_suppressed_count": len(filtered_meta_context_bundle.get("suppressed_context") or []),
     }
     classification = _apply_semantic_review_override(classification, semantic_review)
     classification = _apply_turn_understanding_override(classification, turn_interpretation)
     classification.update(semantic_review)
     goal_spec = derive_goal_spec(query, classification)
+    clarity_contract = build_meta_clarity_contract(
+        effective_query=effective_query,
+        response_mode=final_response_mode,
+        policy_decision=policy_decision.to_dict(),
+        task_type=final_task_type,
+        goal_spec=goal_spec,
+        task_decomposition=task_decomposition,
+        meta_execution_plan=meta_execution_plan,
+    )
     capability_graph = build_capability_graph(
         goal_spec,
         get_agent_capability_map(),
@@ -3341,6 +3371,7 @@ def classify_meta_task(
     return {
         **classification,
         "goal_spec": goal_spec,
+        "meta_clarity_contract": clarity_contract.to_dict(),
         "capability_graph": capability_graph,
         "learned_chain_stats": learned_chain_stats,
         "adaptive_plan": adaptive_plan,

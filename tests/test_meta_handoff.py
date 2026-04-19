@@ -114,6 +114,7 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert "meta_self_state_json:" in result
     assert "meta_execution_plan_json:" in result
     assert "task_decomposition_json:" in result
+    assert "meta_clarity_contract_json:" in result
     assert "specialist_context_seed_json:" in result
     assert "meta_policy_decision_json:" in result
     assert "alternative_recipes_json:" in result
@@ -147,8 +148,11 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert meta["task_packet"]["scope"]["planning_needed"] == "yes"
     assert meta["task_packet"]["scope"]["plan_mode"] == "multi_step_execution"
     assert meta["task_packet"]["state_context"]["goal_satisfaction_mode"] == "goal_satisfied"
+    assert meta["task_packet"]["state_context"]["clarity_request_kind"] == "execute_task"
+    assert meta["task_packet"]["state_context"]["clarity_answer_obligation"] == "decide_and_act"
+    assert meta["task_packet"]["state_context"]["clarity_completion_condition"] == "requested_output_prepared"
     assert meta["task_packet"]["state_context"]["plan_id"]
-    assert meta["task_packet"]["state_context"]["next_step_id"]
+    assert meta["task_packet"]["state_context"]["plan_mode"] == "multi_step_execution"
     assert meta["task_packet"]["objective"]
     assert meta["request_preflight"]["blocked"] is False
     assert meta["task_decomposition"]["intent_family"] == "execute_multistep"
@@ -160,6 +164,8 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert meta["meta_self_state"]["identity"] == "Timus"
     assert any(item["name"] == "get_youtube_subtitles" for item in meta["tool_affordances"])
     assert meta["meta_self_state"]["strategy_posture"] in {"neutral", "preferred", "conservative"}
+    assert meta["meta_clarity_contract"]["request_kind"] == "execute_task"
+    assert meta["meta_clarity_contract"]["direct_answer_required"] is False
     assert isinstance(meta["meta_self_state"]["current_capabilities"], list)
     assert isinstance(meta["meta_self_state"]["confidence_bounds"], list)
     assert isinstance(meta["meta_self_state"]["autonomy_limits"], list)
@@ -181,6 +187,7 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert parsed["planner_resolution"]["state"] in {"fallback_current", "rejected", "adopted"}
     assert parsed["task_profile"]["intent"] == "content_extraction"
     assert parsed["selected_strategy"]["strategy_id"] == "layered_youtube_extraction"
+    assert parsed["meta_clarity_contract"]["request_kind"] == "execute_task"
     assert parsed["task_packet"]["packet_type"] == "meta_orchestration"
     assert parsed["request_preflight"]["state"] in {"ok", "warn"}
     assert parsed["intent_family"] == "execute_multistep"

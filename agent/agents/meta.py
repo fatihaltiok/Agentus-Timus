@@ -32,6 +32,7 @@ from orchestration.meta_orchestration import (
     resolve_runtime_goal_gap_stage,
     resolve_orchestration_recipe,
 )
+from orchestration.meta_clarity_contract import parse_meta_clarity_contract
 from orchestration.meta_plan_compiler import (
     build_meta_execution_plan,
     parse_meta_execution_plan,
@@ -1225,6 +1226,11 @@ class MetaAgent(BaseAgent):
                     payload["meta_context_bundle"] = json.loads(normalized_value)
                 except json.JSONDecodeError:
                     payload["meta_context_bundle"] = {"raw": normalized_value}
+            elif normalized_key == "meta_clarity_contract_json":
+                try:
+                    payload["meta_clarity_contract"] = parse_meta_clarity_contract(json.loads(normalized_value))
+                except json.JSONDecodeError:
+                    payload["meta_clarity_contract"] = {"raw": normalized_value}
             elif normalized_key == "specialist_context_seed_json":
                 payload["specialist_context_seed"] = parse_specialist_context_payload(normalized_value)
             elif normalized_key in {"meta_policy_decision_json", "meta_policy_json"}:

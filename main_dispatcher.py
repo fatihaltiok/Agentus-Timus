@@ -2672,6 +2672,7 @@ def _build_meta_handoff_payload(query: str) -> dict:
         "goal_spec": dict(policy.get("goal_spec") or {}),
         "capability_graph": dict(policy.get("capability_graph") or {}),
         "adaptive_plan": dict(policy.get("adaptive_plan") or {}),
+        "meta_clarity_contract": dict(policy.get("meta_clarity_contract") or {}),
         "meta_context_bundle": dict(policy.get("meta_context_bundle") or {}),
         "specialist_context_seed": parse_specialist_context_payload(
             policy.get("specialist_context_seed") or {}
@@ -2753,6 +2754,7 @@ def _build_meta_task_packet(payload: dict, original_user_task: str) -> dict:
     specialist_context = dict(payload.get("specialist_context_seed") or {})
     meta_context_bundle = dict(payload.get("meta_context_bundle") or {})
     meta_policy = dict(payload.get("meta_policy_decision") or {})
+    meta_clarity = dict(payload.get("meta_clarity_contract") or {})
     planner_resolution = dict(payload.get("planner_resolution") or {})
     task_decomposition = dict(payload.get("task_decomposition") or {})
     meta_execution_plan = dict(payload.get("meta_execution_plan") or {})
@@ -2807,6 +2809,9 @@ def _build_meta_task_packet(payload: dict, original_user_task: str) -> dict:
         "recent_corrections": specialist_context.get("recent_corrections"),
         "planner_state": planner_resolution.get("state"),
         "policy_mode": meta_policy.get("response_mode"),
+        "clarity_request_kind": meta_clarity.get("request_kind"),
+        "clarity_answer_obligation": meta_clarity.get("answer_obligation"),
+        "clarity_completion_condition": meta_clarity.get("completion_condition"),
         "goal_satisfaction_mode": task_decomposition.get("goal_satisfaction_mode"),
         "plan_id": meta_execution_plan.get("plan_id"),
         "plan_mode": meta_execution_plan.get("plan_mode"),
@@ -3075,6 +3080,11 @@ def _render_meta_handoff_block(payload: dict) -> str:
         lines.append(
             "meta_context_bundle_json: "
             + json.dumps(payload["meta_context_bundle"], ensure_ascii=False, sort_keys=True)
+        )
+    if payload.get("meta_clarity_contract"):
+        lines.append(
+            "meta_clarity_contract_json: "
+            + json.dumps(payload["meta_clarity_contract"], ensure_ascii=False, sort_keys=True)
         )
     if payload.get("specialist_context_seed"):
         lines.append(

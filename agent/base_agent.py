@@ -45,6 +45,10 @@ from utils.policy_gate import (
 from agent.dynamic_tool_mixin import DynamicToolMixin
 from tools.tool_registry_v2 import registry_v2, ValidationError
 from orchestration.lane_manager import lane_manager, Lane, LaneStatus
+from orchestration.meta_clarity_contract import (
+    filter_working_memory_context,
+    parse_meta_clarity_contract,
+)
 from orchestration.llm_budget_guard import (
     BudgetModelOverride,
     LLMBudgetDecision,
@@ -1269,7 +1273,29 @@ class BaseAgent(DynamicToolMixin):
         return primary
 
     @staticmethod
-    def _extract_meta_working_memory_query(task_text: str) -> str:
+    def _extract_meta_clarity_contract(task_text: str) -> Dict[str, Any]:
+        marker = "# META ORCHESTRATION HANDOFF"
+        text = str(task_text or "").strip()
+        if marker not in text:
+            return {}
+
+        _, after_header = text.split(marker, 1)
+        handoff_block = after_header.split("# ORIGINAL USER TASK", 1)[0]
+        for raw_line in handoff_block.splitlines():
+            stripped = str(raw_line or "").strip()
+            if not stripped or ":" not in stripped:
+                continue
+            key, value = stripped.split(":", 1)
+            if key.strip() != "meta_clarity_contract_json":
+                continue
+            try:
+                return parse_meta_clarity_contract(json.loads(value.strip()))
+            except Exception:
+                return {}
+        return {}
+
+    @classmethod
+    def _extract_meta_working_memory_query(cls, task_text: str) -> str:
         marker = "# META ORCHESTRATION HANDOFF"
         text = str(task_text or "").strip()
         if marker not in text:
@@ -1283,6 +1309,7 @@ class BaseAgent(DynamicToolMixin):
 
         parts: list[str] = []
         seen: set[str] = set()
+        clarity_contract = cls._extract_meta_clarity_contract(text)
 
         def add_part(value: Any, *, prefix: str = "", limit: int = 280) -> None:
             raw = str(value or "").strip()
@@ -1301,6 +1328,7 @@ class BaseAgent(DynamicToolMixin):
             else:
                 parts.append(cleaned)
 
+        add_part(clarity_contract.get("primary_objective"), prefix="Pflichtziel: ", limit=320)
         add_part(original_task, limit=420)
 
         plan_payload: dict[str, Any] = {}
@@ -1350,6 +1378,7 @@ class BaseAgent(DynamicToolMixin):
         if isinstance(completion_signals, list) and completion_signals:
             signal_text = ", ".join(str(item or "").strip() for item in completion_signals if str(item or "").strip())
             add_part(signal_text, prefix="Abschlusssignal: ", limit=180)
+        add_part(clarity_contract.get("completion_condition"), prefix="Abschlussbedingung: ", limit=180)
 
         return "\n".join(parts).strip()
 
@@ -2680,13 +2709,26 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             )
         )
 
+        clarity_contract = cls._extract_meta_clarity_contract(task)
+        allowed_sections = tuple(clarity_contract.get("allowed_working_memory_sections") or ())
+
         if not followup_context:
-            return {
+            settings: Dict[str, int | bool | tuple[str, ...]] = {
                 "max_chars": max(600, base_chars),
                 "max_related": max(0, base_related),
                 "max_recent_events": max(0, base_recent_events),
                 "followup_context": False,
+                "allowed_sections": allowed_sections,
             }
+            clarity_related_raw = clarity_contract.get("max_related_memories", -1)
+            clarity_recent_raw = clarity_contract.get("max_recent_events", -1)
+            clarity_related = -1 if clarity_related_raw in (None, "") else int(clarity_related_raw)
+            clarity_recent = -1 if clarity_recent_raw in (None, "") else int(clarity_recent_raw)
+            if clarity_related >= 0:
+                settings["max_related"] = clarity_related
+            if clarity_recent >= 0:
+                settings["max_recent_events"] = clarity_recent
+            return settings
 
         boosted_chars = cls._env_int_with_aliases(
             ["WORKING_MEMORY_FOLLOWUP_CHAR_BUDGET"],
@@ -2700,12 +2742,22 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             ["WORKING_MEMORY_FOLLOWUP_MAX_RECENT_EVENTS"],
             min(max(base_recent_events + 4, base_recent_events), 24),
         )
-        return {
+        settings = {
             "max_chars": max(600, boosted_chars),
             "max_related": max(0, boosted_related),
             "max_recent_events": max(0, boosted_recent),
             "followup_context": True,
+            "allowed_sections": allowed_sections,
         }
+        clarity_related_raw = clarity_contract.get("max_related_memories", -1)
+        clarity_recent_raw = clarity_contract.get("max_recent_events", -1)
+        clarity_related = -1 if clarity_related_raw in (None, "") else int(clarity_related_raw)
+        clarity_recent = -1 if clarity_recent_raw in (None, "") else int(clarity_recent_raw)
+        if clarity_related >= 0:
+            settings["max_related"] = clarity_related
+        if clarity_recent >= 0:
+            settings["max_recent_events"] = clarity_recent
+        return settings
 
     async def _build_working_memory_context(self, task: str) -> str:
         enabled = os.getenv("WORKING_MEMORY_INJECTION_ENABLED", "true").lower()
@@ -2721,6 +2773,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         max_chars = int(settings["max_chars"])
         max_related = int(settings["max_related"])
         max_recent_events = int(settings["max_recent_events"])
+        clarity_contract = self._extract_meta_clarity_contract(task)
 
         try:
             from memory.memory_system import memory_manager
@@ -2746,21 +2799,24 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                         memory_snapshot = snapshot
                 except Exception:
                     memory_snapshot = {}
+            filtered_context = filter_working_memory_context(context or "", clarity_contract)
             self._working_memory_last_meta = {
                 "enabled": True,
-                "context_chars": len(context or ""),
+                "context_chars": len(filtered_context or ""),
                 "settings": {
                     "max_chars": max_chars,
                     "max_related": max_related,
                     "max_recent_events": max_recent_events,
                     "followup_context": bool(settings["followup_context"]),
+                    "allowed_sections": list(settings.get("allowed_sections") or ()),
                 },
                 "memory_stats": wm_stats,
                 "memory_snapshot": memory_snapshot,
+                "meta_clarity_contract": clarity_contract,
             }
-            if context:
-                log.info(f"Working-Memory-Kontext injiziert ({len(context)} chars)")
-            return context or ""
+            if filtered_context:
+                log.info(f"Working-Memory-Kontext injiziert ({len(filtered_context)} chars)")
+            return filtered_context or ""
         except Exception as e:
             log.debug(f"Working-Memory-Kontext nicht verfügbar (non-critical): {e}")
             self._working_memory_last_meta = {

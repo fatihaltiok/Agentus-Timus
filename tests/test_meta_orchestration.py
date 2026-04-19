@@ -239,6 +239,10 @@ def test_classify_meta_task_uses_direct_recommendation_policy_for_next_step_ques
     assert result["reason"] == "meta_policy:next_step_summary_request"
     assert result["meta_policy_decision"]["override_applied"] is True
     assert result["meta_policy_decision"]["answer_shape"] == "direct_recommendation"
+    assert result["meta_clarity_contract"]["request_kind"] == "direct_recommendation"
+    assert result["meta_clarity_contract"]["direct_answer_required"] is True
+    assert result["meta_clarity_contract"]["answer_obligation"] == "answer_now_with_single_recommendation"
+    assert result["meta_clarity_contract"]["completion_condition"] == "next_recommended_block_or_step_named"
 
 
 def test_classify_meta_task_uses_historical_topic_recall_policy_for_time_anchored_memory_queries():
@@ -902,12 +906,11 @@ def test_classify_meta_task_builds_meta_context_bundle_with_state_priority_and_s
     assert result["open_goal"] == "Echtzeit-Agenturmeldungen priorisieren"
     assert bundle["active_topic"] == "Weltlage und News-Qualitaet"
     assert bundle["open_loop"] == "Praeferenz bestaetigen"
-    assert slot_types[:4] == [
-        "current_query",
-        "conversation_state",
-        "open_loop",
-        "recent_user_turn",
-    ]
+    assert result["meta_clarity_contract"]["request_kind"] == "acknowledgment"
+    assert slot_types[:2] == ["current_query", "conversation_state"]
+    assert "recent_user_turn" in slot_types
+    assert "preference_memory" in slot_types
+    assert "open_loop" not in slot_types
     assert any(
         item["reason"] == "location_context_without_current_evidence"
         for item in bundle["suppressed_context"]
@@ -1003,8 +1006,8 @@ def test_classify_meta_task_loads_topic_and_preference_memory_from_memory_system
     topic_slots = [slot for slot in bundle["context_slots"] if slot["slot"] == "topic_memory"]
     preference_slots = [slot for slot in bundle["context_slots"] if slot["slot"] == "preference_memory"]
 
-    assert topic_slots
-    assert "news_archive => Reuters meldete neue Entwicklungen" in topic_slots[0]["content"]
+    assert result["meta_clarity_contract"]["request_kind"] == "acknowledgment"
+    assert topic_slots == []
     assert preference_slots
     assert any(slot["content"].startswith("stored_preference:topic[news]") for slot in preference_slots)
     assert any(
@@ -1066,13 +1069,71 @@ def test_classify_meta_task_filters_irrelevant_location_and_voice_memory_from_me
     bundle = result["meta_context_bundle"]
     rendered_context = " || ".join(slot["content"] for slot in bundle["context_slots"])
     topic_slots = [slot for slot in bundle["context_slots"] if slot["slot"] == "topic_memory"]
+    slot_types = [slot["slot"] for slot in bundle["context_slots"]]
+    clarity = result["meta_clarity_contract"]
 
     assert "offenbach" not in rendered_context.lower()
     assert "twilio" not in rendered_context.lower()
-    assert topic_slots
-    assert "phase f runtime-board" in topic_slots[0]["content"].lower()
+    assert topic_slots == []
+    assert clarity["request_kind"] == "direct_recommendation"
+    assert "topic_memory" in clarity["forbidden_context_slots"]
+    assert "preference_memory" not in slot_types
+    assert "semantic_recall" not in slot_types
     assert any(
         item["reason"] == "location_context_without_current_evidence"
+        for item in bundle["suppressed_context"]
+    )
+
+
+def test_classify_meta_task_applies_clarity_filter_for_direct_recommendation_bundle(monkeypatch):
+    fake_memory_manager = SimpleNamespace(
+        find_related_memories=lambda query, n_results=6: [
+            {
+                "content": "Dein letzter bekannter Standort war in Offenbach am Main in der Naehe des Marktplatzes.",
+                "category": "location_memory",
+                "relevance": 0.99,
+            },
+            {
+                "content": "Phase F ist im Kern abgeschlossen; als naechstes folgt die allgemeine Mehrschritt-Planung.",
+                "category": "project_notes",
+                "relevance": 0.83,
+            },
+        ],
+        get_behavior_hooks=lambda: ["Bei Telefonie zuerst Twilio pruefen."],
+        get_self_model_prompt=lambda: "Praeferenzen: Bei Telefonie zuerst Twilio pruefen.",
+        persistent=SimpleNamespace(get_memory_items=lambda category: []),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "memory.memory_system",
+        SimpleNamespace(memory_manager=fake_memory_manager),
+    )
+
+    result = classify_meta_task(
+        "lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht",
+        action_count=2,
+        conversation_state={
+            "session_id": "canvas_phase_f_closeout",
+            "active_topic": "Phase F Abschluss",
+            "active_goal": "Naechsten Hauptblock festlegen",
+            "open_loop": "Nachfolger von Phase F bestimmen",
+            "next_expected_step": "Mehrschritt-Planungsblock starten",
+        },
+        recent_assistant_turns=["Dein letzter bekannter Standort war in Offenbach am Main."],
+    )
+
+    bundle = result["meta_context_bundle"]
+    slot_types = [slot["slot"] for slot in bundle["context_slots"]]
+    clarity = result["meta_clarity_contract"]
+
+    assert clarity["request_kind"] == "direct_recommendation"
+    assert clarity["direct_answer_required"] is True
+    assert clarity["allowed_working_memory_sections"] == ["KURZZEITKONTEXT"]
+    assert "topic_memory" not in slot_types
+    assert "preference_memory" not in slot_types
+    assert "historical_topic_memory" not in slot_types
+    assert any(
+        item["reason"] == "clarity_contract_filtered_context"
         for item in bundle["suppressed_context"]
     )
 

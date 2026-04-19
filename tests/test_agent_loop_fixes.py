@@ -308,6 +308,8 @@ async def test_run_uses_compact_working_memory_query_for_meta_handoff(monkeypatc
         "task_type: single_lane\n"
         "intent_family: plan_only\n"
         "planning_needed: yes\n"
+        "meta_clarity_contract_json: "
+        '{"primary_objective":"Twilio-Inworld-Anruffunktion als ersten sauberen Arbeitsschritt einordnen","completion_condition":"next_recommended_block_or_step_named"}\n'
         "meta_execution_plan_json: "
         '{"next_step_id":"plan_frame_goal","steps":[{"id":"plan_frame_goal","title":"Ziel und Scope festziehen","expected_output":"Ein knapper erster Arbeitsschritt","completion_signals":["step_completed"]}]}\n'
         "task_decomposition_json: "
@@ -324,7 +326,9 @@ async def test_run_uses_compact_working_memory_query_for_meta_handoff(monkeypatc
 
     assert result == "Erster Schritt ist definiert."
     assert "Twilio" in captured["query"]
+    assert "Pflichtziel: Twilio-Inworld-Anruffunktion" in captured["query"]
     assert "Aktueller Planschritt: Ziel und Scope festziehen" in captured["query"]
+    assert "Abschlussbedingung: next_recommended_block_or_step_named" in captured["query"]
     assert "meta_execution_plan_json" not in captured["query"]
 
 
@@ -372,6 +376,14 @@ def test_meta_prompt_requires_cautious_negative_summary_language():
     assert "NEGATIVBEFUND-DISZIPLIN" in META_SYSTEM_PROMPT
     assert "keine belastbaren Belege" in META_SYSTEM_PROMPT
     assert "nicht als vollstaendiger Ausschluss" in META_SYSTEM_PROMPT
+
+
+def test_meta_prompt_mentions_meta_clarity_contract():
+    from agent.prompts import META_SYSTEM_PROMPT
+
+    assert "META-CLARITY-VERTRAG" in META_SYSTEM_PROMPT
+    assert "direct_answer_required=true" in META_SYSTEM_PROMPT
+    assert "primary_objective" in META_SYSTEM_PROMPT
 
 def test_soften_unproven_verdict_language_rewrites_overhard_fake_news_claims():
     raw = (
@@ -442,3 +454,26 @@ def test_working_memory_settings_boost_followup_context(monkeypatch):
     assert followup_settings["max_chars"] > plain_settings["max_chars"]
     assert followup_settings["max_related"] > plain_settings["max_related"]
     assert followup_settings["max_recent_events"] > plain_settings["max_recent_events"]
+
+
+def test_working_memory_settings_respect_meta_clarity_contract_limits(monkeypatch):
+    monkeypatch.delenv("WORKING_MEMORY_CHAR_BUDGET", raising=False)
+    monkeypatch.delenv("WORKING_MEMORY_MAX_RELATED", raising=False)
+    monkeypatch.delenv("WORKING_MEMORY_MAX_RECENT_EVENTS", raising=False)
+    monkeypatch.setenv("WM_MAX_CHARS", "10000")
+    monkeypatch.setenv("WM_MAX_RELATED", "8")
+    monkeypatch.setenv("WM_MAX_EVENTS", "15")
+
+    settings = BaseAgent._resolve_working_memory_settings(
+        "# META ORCHESTRATION HANDOFF\n"
+        "meta_clarity_contract_json: "
+        '{"allowed_working_memory_sections":["KURZZEITKONTEXT"],"max_related_memories":0,"max_recent_events":4}\n'
+        "\n# ORIGINAL USER TASK\n"
+        "lies docs/PHASE_F_PLAN.md und sag was als naechstes ansteht\n"
+    )
+
+    assert settings["followup_context"] is False
+    assert settings["max_chars"] == 10000
+    assert settings["max_related"] == 0
+    assert settings["max_recent_events"] == 4
+    assert settings["allowed_sections"] == ("KURZZEITKONTEXT",)
