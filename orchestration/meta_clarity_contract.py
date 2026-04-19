@@ -13,6 +13,30 @@ _DIRECT_ANSWER_REQUEST_KINDS = {
     "self_model_status",
 }
 
+_DOC_STATUS_PATTERNS = (
+    "docs/",
+    "changelog",
+    "phase_",
+    "phase ",
+    "plan.md",
+    "naechstes ansteht",
+    "nächstes ansteht",
+    "next step",
+    "wo stehen wir",
+    "status",
+)
+_LOCATION_ROUTE_PATTERNS = (
+    "route",
+    "weg nach",
+    "anfahrt",
+    "maps",
+    "google maps",
+    "travel_mode",
+    "destination_query",
+    "mit dem auto",
+    "driving",
+)
+
 
 @dataclass(frozen=True)
 class MetaClarityContract:
@@ -27,6 +51,10 @@ class MetaClarityContract:
     allowed_working_memory_sections: Tuple[str, ...]
     max_related_memories: int
     max_recent_events: int
+    delegation_mode: str
+    max_delegate_calls: int
+    allowed_delegate_agents: Tuple[str, ...]
+    force_answer_after_delegate_budget: bool
     rationale: str
 
     def to_dict(self) -> Dict[str, Any]:
@@ -59,6 +87,7 @@ def parse_meta_clarity_contract(value: Any) -> Dict[str, Any]:
         "answer_obligation": _clean_text(value.get("answer_obligation"), limit=120),
         "completion_condition": _clean_text(value.get("completion_condition"), limit=120),
         "direct_answer_required": bool(value.get("direct_answer_required")),
+        "delegation_mode": _clean_text(value.get("delegation_mode"), limit=64).lower(),
         "allowed_context_slots": [
             _clean_text(item, limit=64)
             for item in (value.get("allowed_context_slots") or [])
@@ -74,6 +103,11 @@ def parse_meta_clarity_contract(value: Any) -> Dict[str, Any]:
             for item in (value.get("allowed_working_memory_sections") or [])
             if _clean_text(item, limit=64)
         ],
+        "allowed_delegate_agents": [
+            _clean_text(item, limit=64).lower()
+            for item in (value.get("allowed_delegate_agents") or [])
+            if _clean_text(item, limit=64)
+        ],
         "max_related_memories": max(
             -1,
             -1 if max_related_raw in (None, "") else int(max_related_raw),
@@ -82,9 +116,25 @@ def parse_meta_clarity_contract(value: Any) -> Dict[str, Any]:
             -1,
             -1 if max_recent_raw in (None, "") else int(max_recent_raw),
         ),
+        "max_delegate_calls": max(
+            -1,
+            -1 if value.get("max_delegate_calls") in (None, "") else int(value.get("max_delegate_calls")),
+        ),
+        "force_answer_after_delegate_budget": bool(value.get("force_answer_after_delegate_budget")),
         "rationale": _clean_text(value.get("rationale"), limit=220),
     }
     return {key: item for key, item in payload.items() if item not in ("", [], None)}
+
+
+def _detect_objective_domain(text: Any) -> str:
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return ""
+    if any(pattern in lowered for pattern in _DOC_STATUS_PATTERNS):
+        return "docs_status"
+    if any(pattern in lowered for pattern in _LOCATION_ROUTE_PATTERNS):
+        return "location_route"
+    return ""
 
 
 def build_meta_clarity_contract(
@@ -137,7 +187,12 @@ def build_meta_clarity_contract(
     allowed_working_memory_sections = ("KURZZEITKONTEXT", "LANGZEITKONTEXT", "STABILER_KONTEXT")
     max_related_memories = -1
     max_recent_events = -1
+    delegation_mode = "full_orchestration"
+    max_delegate_calls = -1
+    allowed_delegate_agents: Tuple[str, ...] = ()
+    force_answer_after_delegate_budget = False
     rationale = "Default-Orchestrierung mit vollem Kontextbudget."
+    objective_domain = _detect_objective_domain(goal) or _detect_objective_domain(effective_query)
 
     if answer_shape == "direct_recommendation" or policy_reason == "next_step_summary_request":
         request_kind = "direct_recommendation"
@@ -159,6 +214,13 @@ def build_meta_clarity_contract(
         allowed_working_memory_sections = ("KURZZEITKONTEXT",)
         max_related_memories = 0
         max_recent_events = 4
+        delegation_mode = "single_evidence_fetch"
+        max_delegate_calls = 1
+        force_answer_after_delegate_budget = True
+        if objective_domain == "docs_status":
+            allowed_delegate_agents = ("shell", "document")
+        else:
+            allowed_delegate_agents = ("shell", "document", "research", "system")
         rationale = "Direkte Empfehlung braucht aktuelle Frage und kurze Verlaufsanker, aber kein breites Altgedaechtnis."
     elif answer_shape == "state_summary" or policy_reason == "state_summary_request":
         request_kind = "state_summary"
@@ -178,6 +240,10 @@ def build_meta_clarity_contract(
         allowed_working_memory_sections = ("KURZZEITKONTEXT", "LANGZEITKONTEXT")
         max_related_memories = 2
         max_recent_events = 6
+        delegation_mode = "single_evidence_fetch"
+        max_delegate_calls = 1
+        force_answer_after_delegate_budget = True
+        allowed_delegate_agents = ("shell", "document", "system")
         rationale = "Statusfragen duerfen State- und Verlaufskontext sehen, aber keine irrelevanten Praeferenzpfade."
     elif answer_shape == "historical_topic_state" or policy_reason == "historical_topic_recall":
         request_kind = "historical_recall"
@@ -197,6 +263,8 @@ def build_meta_clarity_contract(
         allowed_working_memory_sections = ("KURZZEITKONTEXT", "LANGZEITKONTEXT")
         max_related_memories = 3
         max_recent_events = 6
+        delegation_mode = "direct_only"
+        max_delegate_calls = 0
         rationale = "Historische Rueckfragen brauchen gezielte Verlaufsspuren, nicht breite thematische Seitenpfade."
     elif answer_shape == "self_model_status" or policy_reason == "self_model_status_request":
         request_kind = "self_model_status"
@@ -212,6 +280,10 @@ def build_meta_clarity_contract(
         allowed_working_memory_sections = ("KURZZEITKONTEXT", "STABILER_KONTEXT")
         max_related_memories = 1
         max_recent_events = 4
+        delegation_mode = "single_evidence_fetch"
+        max_delegate_calls = 1
+        force_answer_after_delegate_budget = True
+        allowed_delegate_agents = ("system", "shell")
         rationale = "Selbststatus darf Stabilkontext nutzen, aber keine thematisch fremden Langzeitpfade."
     elif response_mode_clean == "clarify_before_execute":
         request_kind = "clarify_question"
@@ -232,6 +304,8 @@ def build_meta_clarity_contract(
         allowed_working_memory_sections = ("KURZZEITKONTEXT",)
         max_related_memories = 0
         max_recent_events = 4
+        delegation_mode = "direct_only"
+        max_delegate_calls = 0
         rationale = "Klaerfragen brauchen Klarheit ueber den aktuellen Turn, nicht semantisches Altgewicht."
     elif response_mode_clean == "resume_open_loop":
         request_kind = "resume_action"
@@ -248,6 +322,8 @@ def build_meta_clarity_contract(
         allowed_working_memory_sections = ("KURZZEITKONTEXT", "LANGZEITKONTEXT")
         max_related_memories = 2
         max_recent_events = 8
+        delegation_mode = "bounded_chain"
+        max_delegate_calls = 2
         rationale = "Resume-Faelle brauchen Plananschluss, aber keine beliebigen Alt-Praeferenzen."
     elif response_mode_clean == "acknowledge_and_store":
         request_kind = "acknowledgment"
@@ -263,6 +339,8 @@ def build_meta_clarity_contract(
         allowed_working_memory_sections = ("KURZZEITKONTEXT", "STABILER_KONTEXT")
         max_related_memories = 1
         max_recent_events = 4
+        delegation_mode = "direct_only"
+        max_delegate_calls = 0
         rationale = "Praeferenz-Updates sollen bestaetigt werden, nicht in breite Themennavigation kippen."
 
     if str((goal_spec or {}).get("output_mode") or "").strip().lower() in {"report", "artifact", "table"}:
@@ -285,6 +363,10 @@ def build_meta_clarity_contract(
         allowed_working_memory_sections=allowed_working_memory_sections,
         max_related_memories=max_related_memories,
         max_recent_events=max_recent_events,
+        delegation_mode=delegation_mode,
+        max_delegate_calls=max_delegate_calls,
+        allowed_delegate_agents=allowed_delegate_agents,
+        force_answer_after_delegate_budget=force_answer_after_delegate_budget,
         rationale=rationale,
     )
 

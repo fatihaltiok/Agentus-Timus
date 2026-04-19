@@ -37,6 +37,10 @@ def test_build_meta_clarity_contract_for_direct_recommendation_limits_context() 
     assert contract.allowed_working_memory_sections == ("KURZZEITKONTEXT",)
     assert contract.max_related_memories == 0
     assert contract.max_recent_events == 4
+    assert contract.delegation_mode == "single_evidence_fetch"
+    assert contract.max_delegate_calls == 1
+    assert contract.allowed_delegate_agents == ("shell", "document")
+    assert contract.force_answer_after_delegate_budget is True
 
 
 def test_apply_meta_clarity_to_bundle_filters_forbidden_slots() -> None:
@@ -108,3 +112,24 @@ def test_filter_working_memory_context_keeps_only_allowed_sections() -> None:
     assert "KURZZEITKONTEXT" in filtered
     assert "LANGZEITKONTEXT" not in filtered
     assert "STABILER_KONTEXT" not in filtered
+
+
+def test_build_meta_clarity_contract_for_historical_recall_disallows_delegation() -> None:
+    contract = build_meta_clarity_contract(
+        effective_query="woran haben wir gestern bei Kanada gearbeitet",
+        response_mode="summarize_state",
+        policy_decision={
+            "answer_shape": "historical_topic_state",
+            "policy_reason": "historical_topic_recall",
+        },
+        task_type="single_lane",
+        goal_spec={},
+        task_decomposition={"goal": "Gesternes Kanada-Thema rekapitulieren"},
+        meta_execution_plan={},
+    )
+
+    assert contract.request_kind == "historical_recall"
+    assert contract.delegation_mode == "direct_only"
+    assert contract.max_delegate_calls == 0
+    assert contract.allowed_delegate_agents == ()
+    assert contract.force_answer_after_delegate_budget is False

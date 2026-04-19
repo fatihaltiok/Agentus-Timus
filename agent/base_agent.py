@@ -88,6 +88,45 @@ _RESTART_VERB_PATTERN = re.compile(
 _RESTART_QUALIFIER_PATTERN = re.compile(
     r"\b(neu|wieder|erneut|hoch|zurueck|zurück)\b"
 )
+_META_DOC_STATUS_PATTERNS = (
+    "docs/",
+    "changelog",
+    "phase_",
+    "phase ",
+    "plan.md",
+    "naechstes ansteht",
+    "nächstes ansteht",
+    "next step",
+    "wo stehen wir",
+    "status",
+)
+_META_LOCATION_ROUTE_PATTERNS = (
+    "route",
+    "weg nach",
+    "anfahrt",
+    "anfahrt",
+    "maps",
+    "google maps",
+    "travel_mode",
+    "destination_query",
+    "mit dem auto",
+    "driving",
+    "offenbach",
+    "münster",
+    "muenster",
+)
+_META_FILE_READ_METHODS = {
+    "read_file",
+    "read_text_file",
+    "get_text",
+    "fetch_url",
+}
+_META_LOCATION_METHODS = {
+    "get_google_maps_route",
+    "search_google_maps_places",
+    "get_current_location",
+    "get_live_location_context",
+}
 
 
 AGENT_CAPABILITY_MAP = {
@@ -1382,6 +1421,177 @@ class BaseAgent(DynamicToolMixin):
 
         return "\n".join(parts).strip()
 
+    @staticmethod
+    def _detect_meta_objective_domain(text: str) -> str:
+        lowered = str(text or "").strip().lower()
+        if not lowered:
+            return ""
+        if any(pattern in lowered for pattern in _META_DOC_STATUS_PATTERNS):
+            return "docs_status"
+        if any(pattern in lowered for pattern in _META_LOCATION_ROUTE_PATTERNS):
+            return "location_route"
+        return ""
+
+    @classmethod
+    def _detect_meta_action_domain(cls, method: str, params: dict) -> str:
+        method_clean = str(method or "").strip().lower()
+        params_map = params if isinstance(params, dict) else {}
+        candidate_parts = [method_clean]
+        for key in ("task", "query", "goal", "destination_query", "location_query"):
+            value = params_map.get(key)
+            if value:
+                candidate_parts.append(str(value))
+        candidate_text = " ".join(candidate_parts).strip()
+        candidate_lower = candidate_text.lower()
+
+        if method_clean in _META_LOCATION_METHODS:
+            return "location_route"
+        if method_clean in _META_FILE_READ_METHODS:
+            return "docs_status"
+        if method_clean == "delegate_to_agent":
+            delegated = cls._detect_meta_objective_domain(candidate_lower)
+            if delegated:
+                return delegated
+
+        if any(pattern in candidate_lower for pattern in _META_LOCATION_ROUTE_PATTERNS):
+            return "location_route"
+        if any(pattern in candidate_lower for pattern in _META_DOC_STATUS_PATTERNS):
+            return "docs_status"
+        return ""
+
+    def _current_meta_clarity_contract(self) -> Dict[str, Any]:
+        if str(self.agent_type or "").strip().lower() != "meta":
+            return {}
+        task_text = str(getattr(self, "_current_task_text", "") or "").strip()
+        if not task_text:
+            return {}
+        return self._extract_meta_clarity_contract(task_text)
+
+    def _current_meta_delegate_count(self) -> int:
+        return sum(
+            1
+            for item in (self._task_action_history or [])
+            if str((item or {}).get("method") or "").strip().lower() == "delegate_to_agent"
+        )
+
+    def _build_meta_clarity_closeout_prompt(self, task: str, method: str, obs: Any) -> str | None:
+        contract = self._current_meta_clarity_contract()
+        if not contract or not bool(contract.get("direct_answer_required")):
+            return None
+        if not bool(contract.get("force_answer_after_delegate_budget")):
+            return None
+
+        max_delegate_raw = contract.get("max_delegate_calls", -1)
+        max_delegate_calls = -1 if max_delegate_raw in (None, "") else int(max_delegate_raw)
+        blocked_reason = ""
+        if isinstance(obs, dict):
+            blocked_reason = str(obs.get("blocked_reason") or "").strip().lower()
+        if method != "delegate_to_agent" and blocked_reason not in {
+            "meta_clarity_delegate_budget_exhausted",
+            "meta_clarity_delegate_agent_not_allowed",
+        }:
+            return None
+        if max_delegate_calls < 0:
+            return None
+        if (
+            self._current_meta_delegate_count() < max_delegate_calls
+            and blocked_reason not in {
+                "meta_clarity_delegate_budget_exhausted",
+                "meta_clarity_delegate_agent_not_allowed",
+            }
+        ):
+            return None
+
+        primary_objective = str(
+            contract.get("primary_objective")
+            or self._extract_primary_task_text(task)
+            or ""
+        ).strip()
+        completion_condition = str(contract.get("completion_condition") or "").strip()
+        answer_obligation = str(contract.get("answer_obligation") or "").strip()
+        return (
+            "Meta-Clarity Abschlusszwang:\n"
+            f"- primary_objective: {primary_objective}\n"
+            f"- answer_obligation: {answer_obligation}\n"
+            f"- completion_condition: {completion_condition}\n"
+            "Die notwendige Evidenz liegt jetzt vor oder weiteres Delegieren ist nicht erlaubt.\n"
+            "Kein weiterer Toolcall. Kein delegate_to_agent. Antworte jetzt direkt im Format:\n"
+            "Final Answer: ..."
+        )
+
+    def _check_meta_clarity_tool_intent(self, method: str, params: dict) -> Optional[Tuple[str, str]]:
+        if str(self.agent_type or "").strip().lower() != "meta":
+            return None
+
+        task_text = str(getattr(self, "_current_task_text", "") or "").strip()
+        if not task_text:
+            return None
+
+        clarity_contract = self._current_meta_clarity_contract()
+        if not clarity_contract:
+            return None
+
+        primary_objective = str(
+            clarity_contract.get("primary_objective")
+            or self._extract_primary_task_text(task_text)
+            or ""
+        ).strip()
+        request_kind = str(clarity_contract.get("request_kind") or "").strip().lower()
+        objective_domain = self._detect_meta_objective_domain(primary_objective)
+        action_domain = self._detect_meta_action_domain(method, params)
+
+        if str(method or "").strip().lower() == "delegate_to_agent":
+            allowed_agents = tuple(
+                str(item or "").strip().lower()
+                for item in (clarity_contract.get("allowed_delegate_agents") or ())
+                if str(item or "").strip()
+            )
+            delegated_agent = str((params or {}).get("agent_type") or "").strip().lower()
+            if allowed_agents and delegated_agent and delegated_agent not in allowed_agents:
+                return (
+                    "Meta-Clarity blockiert diese Delegation: "
+                    f"fuer request_kind={request_kind or 'unknown'} sind nur {', '.join(allowed_agents)} erlaubt, "
+                    f"nicht aber {delegated_agent}.",
+                    "meta_clarity_delegate_agent_not_allowed",
+                )
+
+            max_delegate_raw = clarity_contract.get("max_delegate_calls", -1)
+            max_delegate_calls = -1 if max_delegate_raw in (None, "") else int(max_delegate_raw)
+            if max_delegate_calls >= 0 and self._current_meta_delegate_count() >= max_delegate_calls:
+                return (
+                    "Meta-Clarity blockiert weitere Delegation: "
+                    f"das Delegationsbudget fuer request_kind={request_kind or 'unknown'} "
+                    f"ist mit {max_delegate_calls} Delegation(en) ausgeschoepft. "
+                    "Nutze die vorhandene Evidenz und schliesse direkt ab.",
+                    "meta_clarity_delegate_budget_exhausted",
+                )
+
+        if not objective_domain or not action_domain:
+            return None
+
+        if objective_domain == action_domain:
+            return None
+
+        if request_kind in {
+            "direct_recommendation",
+            "state_summary",
+            "historical_recall",
+            "self_model_status",
+        }:
+            return (
+                "Meta-Clarity blockiert diese Aktion: "
+                f"primary_objective verlangt {objective_domain}, "
+                f"die geplante Aktion wirkt aber wie {action_domain}. "
+                "Bleibe bei der aktuellen Frage und beantworte oder reframe sie direkt.",
+                "meta_clarity_objective_mismatch",
+            )
+
+        return (
+            "Meta-Clarity blockiert diese Aktion wegen Objective-Mismatch: "
+            f"primary_objective={objective_domain}, action={action_domain}.",
+            "meta_clarity_objective_mismatch",
+        )
+
     def _has_explicit_restart_intent(self) -> bool:
         task_text = self._task_text_for_restart_guard()
         if not task_text:
@@ -1521,6 +1731,24 @@ class BaseAgent(DynamicToolMixin):
                 context={"method": method, "params": str(params)[:300]},
             )
             return _finalize({"error": policy_reason, "blocked_by_policy": True}, success_override=False)
+
+        clarity_guard = self._check_meta_clarity_tool_intent(method, params)
+        if clarity_guard:
+            clarity_guard_reason, clarity_guard_code = clarity_guard
+            log.warning("Meta-Clarity blockiert %s: %s", method, clarity_guard_reason)
+            self._emit_live_status(
+                phase="tool_blocked",
+                detail="Meta-Clarity blockiert",
+                tool_name=method,
+            )
+            return _finalize(
+                {
+                    "error": clarity_guard_reason,
+                    "blocked_by_policy": True,
+                    "blocked_reason": clarity_guard_code,
+                },
+                success_override=False,
+            )
 
         await self._ensure_remote_tool_names()
 
@@ -3298,6 +3526,19 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 messages.append(self._build_vision_message(obs_text, screenshot_b64))
             else:
                 messages.append({"role": "user", "content": obs_text})
+
+            closeout_prompt = self._build_meta_clarity_closeout_prompt(task, method, obs)
+            if closeout_prompt:
+                messages.append({"role": "user", "content": closeout_prompt})
+                self._emit_step_trace(
+                    action="meta_clarity_closeout_enforced",
+                    output_data={
+                        "step": step,
+                        "method": method,
+                        "closeout_preview": self._preview_value(closeout_prompt, 500),
+                    },
+                    status="warning",
+                )
 
         if roi_set:
             self._clear_roi()

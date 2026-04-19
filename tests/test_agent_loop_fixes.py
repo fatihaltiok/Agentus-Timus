@@ -332,6 +332,173 @@ async def test_run_uses_compact_working_memory_query_for_meta_handoff(monkeypatc
     assert "meta_execution_plan_json" not in captured["query"]
 
 
+@pytest.mark.asyncio
+async def test_meta_clarity_blocks_wrong_route_action_for_direct_recommendation(monkeypatch):
+    replies = iter(
+        [
+            (
+                'Action: {"method":"delegate_to_agent","params":{"agent_type":"executor",'
+                '"task":"Berechne die Route von Offenbach am Main nach Münster mit dem Auto."}}'
+            ),
+            "Final Answer: Als Naechstes kommt das Zwischenprojekt zur allgemeinen Mehrschritt-Planung.",
+        ]
+    )
+
+    async def _fake_detect(self, task: str) -> bool:
+        return False
+
+    async def _fake_working_memory(self, task: str) -> str:
+        return ""
+
+    def _fake_inject(self, task: str, working_memory_context: str) -> str:
+        return task
+
+    async def _fake_llm(self, messages):
+        return next(replies)
+
+    async def _fake_reflection(self, task: str, result: str, success: bool = True) -> None:
+        return None
+
+    async def _unexpected_remote_registry(self) -> None:
+        raise AssertionError("Meta-Clarity guard should block before remote tool resolution")
+
+    monkeypatch.setattr(BaseAgent, "_detect_dynamic_ui_and_set_roi", _fake_detect)
+    monkeypatch.setattr(BaseAgent, "_build_working_memory_context", _fake_working_memory)
+    monkeypatch.setattr(BaseAgent, "_inject_working_memory_into_task", _fake_inject)
+    monkeypatch.setattr(BaseAgent, "_call_llm", _fake_llm)
+    monkeypatch.setattr(BaseAgent, "_run_reflection", _fake_reflection)
+    monkeypatch.setattr(BaseAgent, "_ensure_remote_tool_names", _unexpected_remote_registry)
+
+    agent = BaseAgent(
+        system_prompt_template="Du bist ein Test-Agent.",
+        tools_description_string="",
+        max_iterations=3,
+        agent_type="meta",
+        skip_model_validation=True,
+    )
+    task = (
+        "# META ORCHESTRATION HANDOFF\n"
+        "task_type: single_lane\n"
+        "intent_family: plan_only\n"
+        "planning_needed: yes\n"
+        "meta_clarity_contract_json: "
+        '{"primary_objective":"lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht",'
+        '"request_kind":"direct_recommendation","answer_obligation":"answer_now_with_single_recommendation",'
+        '"completion_condition":"next_recommended_block_or_step_named","direct_answer_required":true}\n'
+        "\n"
+        "# ORIGINAL USER TASK\n"
+        "lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht\n"
+    )
+
+    try:
+        result = await agent.run(task)
+    finally:
+        await agent.http_client.aclose()
+
+    assert "Zwischenprojekt zur allgemeinen Mehrschritt-Planung" in result
+
+
+@pytest.mark.asyncio
+async def test_meta_clarity_limits_direct_recommendation_to_single_evidence_fetch(monkeypatch):
+    import agent.base_agent as base_agent_module
+
+    replies = iter(
+        [
+            (
+                'Action: {"method":"delegate_to_agent","params":{"agent_type":"shell",'
+                '"task":"Lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und extrahiere den naechsten Block."}}'
+            ),
+            (
+                'Action: {"method":"delegate_to_agent","params":{"agent_type":"document",'
+                '"task":"Lies docs/ZWISCHENPROJEKT_ALLGEMEINE_MEHRSCHRITT_PLANUNG_2026-04-12.md."}}'
+            ),
+            "Final Answer: Als Naechstes kommt das Zwischenprojekt zur allgemeinen Mehrschritt-Planung.",
+        ]
+    )
+    llm_last_messages = []
+    http_calls = []
+
+    async def _fake_detect(self, task: str) -> bool:
+        return False
+
+    async def _fake_working_memory(self, task: str) -> str:
+        return ""
+
+    def _fake_inject(self, task: str, working_memory_context: str) -> str:
+        return task
+
+    async def _fake_llm(self, messages):
+        last = messages[-1]["content"] if isinstance(messages[-1], dict) else ""
+        llm_last_messages.append(last)
+        return next(replies)
+
+    async def _fake_reflection(self, task: str, result: str, success: bool = True) -> None:
+        return None
+
+    class _FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    async def _fake_post(url, *, json=None, timeout=None):
+        http_calls.append(json)
+        return _FakeResponse(
+            {
+                "result": {
+                    "status": "success",
+                    "agent_type": "shell",
+                    "output": "Phase F ist im Kern abgeschlossen. Als Naechstes kommt das Zwischenprojekt.",
+                }
+            }
+        )
+
+    monkeypatch.setattr(BaseAgent, "_detect_dynamic_ui_and_set_roi", _fake_detect)
+    monkeypatch.setattr(BaseAgent, "_build_working_memory_context", _fake_working_memory)
+    monkeypatch.setattr(BaseAgent, "_inject_working_memory_into_task", _fake_inject)
+    monkeypatch.setattr(BaseAgent, "_call_llm", _fake_llm)
+    monkeypatch.setattr(BaseAgent, "_run_reflection", _fake_reflection)
+    monkeypatch.setattr(BaseAgent, "_ensure_remote_tool_names", AsyncMock())
+    monkeypatch.setattr(base_agent_module.registry_v2, "validate_tool_call", lambda *args, **kwargs: None)
+    monkeypatch.setattr(base_agent_module.registry_v2, "normalize_tool_result", lambda method, result: result)
+
+    agent = BaseAgent(
+        system_prompt_template="Du bist ein Test-Agent.",
+        tools_description_string="",
+        max_iterations=4,
+        agent_type="meta",
+        skip_model_validation=True,
+    )
+    agent.http_client.post = AsyncMock(side_effect=_fake_post)
+    task = (
+        "# META ORCHESTRATION HANDOFF\n"
+        "task_type: single_lane\n"
+        "intent_family: plan_only\n"
+        "planning_needed: yes\n"
+        "meta_clarity_contract_json: "
+        '{"primary_objective":"lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht",'
+        '"request_kind":"direct_recommendation","answer_obligation":"answer_now_with_single_recommendation",'
+        '"completion_condition":"next_recommended_block_or_step_named","direct_answer_required":true,'
+        '"delegation_mode":"single_evidence_fetch","max_delegate_calls":1,'
+        '"allowed_delegate_agents":["shell","document"],"force_answer_after_delegate_budget":true}\n'
+        "\n"
+        "# ORIGINAL USER TASK\n"
+        "lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht\n"
+    )
+
+    try:
+        result = await agent.run(task)
+    finally:
+        await agent.http_client.aclose()
+
+    assert "Zwischenprojekt zur allgemeinen Mehrschritt-Planung" in result
+    assert len(http_calls) == 1
+    assert http_calls[0]["method"] == "delegate_to_agent"
+    assert "Meta-Clarity Abschlusszwang" in llm_last_messages[1]
+    assert "Kein weiterer Toolcall. Kein delegate_to_agent." in llm_last_messages[1]
+
+
 # ── 4. Prompt-Korrektheit ─────────────────────────────────────────────────
 
 def test_reasoning_prompt_mentions_qwq():
