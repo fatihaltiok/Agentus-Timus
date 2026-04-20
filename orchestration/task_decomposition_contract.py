@@ -198,6 +198,9 @@ def _normalize_metadata(value: Mapping[str, Any] | None) -> dict[str, Any]:
         "task_type": _clean_text(payload.get("task_type"), limit=64),
         "site_kind": _clean_text(payload.get("site_kind"), limit=64),
         "response_mode": _clean_text(payload.get("response_mode"), limit=64),
+        "frame_kind": _clean_text(payload.get("frame_kind"), limit=64),
+        "frame_task_domain": _clean_text(payload.get("frame_task_domain"), limit=64),
+        "frame_execution_mode": _clean_text(payload.get("frame_execution_mode"), limit=64),
         "action_count": _normalize_int(payload.get("action_count"), default=0),
         "capability_count": _normalize_int(payload.get("capability_count"), default=0),
         "route_to_meta": _normalize_yes_no(payload.get("route_to_meta")),
@@ -527,6 +530,9 @@ def build_task_decomposition(
     task_type = _clean_text(policy.get("task_type"), limit=64)
     site_kind = _clean_text(policy.get("site_kind"), limit=64)
     response_mode = _clean_text(policy.get("response_mode"), limit=64)
+    frame_kind = _clean_text(policy.get("frame_kind"), limit=64).lower()
+    frame_task_domain = _clean_text(policy.get("frame_task_domain"), limit=64).lower()
+    frame_execution_mode = _clean_text(policy.get("frame_execution_mode"), limit=64).lower()
     action_count = _normalize_int(policy.get("action_count"), default=0)
     capability_count = _normalize_int(policy.get("capability_count"), default=0)
     recommended_chain = list(policy.get("recommended_agent_chain") or [])
@@ -551,7 +557,13 @@ def build_task_decomposition(
     )
 
     intent_family = "single_step"
-    if has_build_setup:
+    if frame_execution_mode == "answer_directly":
+        intent_family = "single_step"
+    elif frame_task_domain == "setup_build":
+        intent_family = "build_setup"
+    elif frame_task_domain == "migration_work":
+        intent_family = "research"
+    elif has_build_setup:
         intent_family = "build_setup"
     elif has_plan and not has_deliver and not has_research:
         intent_family = "plan_only"
@@ -568,7 +580,11 @@ def build_task_decomposition(
         intent_family in {"build_setup", "plan_only", "execute_multistep"}
         and not explicit_shell_execution
     )
-    if intent_family == "plan_only":
+    if frame_execution_mode == "answer_directly":
+        planning_needed = False
+    if frame_execution_mode == "answer_directly":
+        planning_reason = "frame_answer_directly"
+    elif intent_family == "plan_only":
         planning_reason = "user_explicitly_requested_a_plan"
     elif intent_family == "build_setup":
         planning_reason = "setup_or_build_request_requires_controlled_subtasks"
@@ -577,7 +593,20 @@ def build_task_decomposition(
     else:
         planning_reason = ""
 
-    if intent_family == "plan_only":
+    if frame_execution_mode == "answer_directly":
+        goal_satisfaction_mode = "answer_or_artifact_ready"
+        subtasks = [
+            {
+                "id": "respond",
+                "title": "Anfrage direkt bearbeiten",
+                "kind": "response",
+                "status": "pending",
+                "depends_on": [],
+                "optional": False,
+                "completion_signals": ["answer_delivered"],
+            }
+        ]
+    elif intent_family == "plan_only":
         goal_satisfaction_mode = "plan_ready"
         subtasks = _build_plan_only_subtasks()
     elif intent_family == "build_setup":
@@ -625,6 +654,9 @@ def build_task_decomposition(
             "task_type": task_type,
             "site_kind": site_kind,
             "response_mode": response_mode,
+            "frame_kind": frame_kind,
+            "frame_task_domain": frame_task_domain,
+            "frame_execution_mode": frame_execution_mode,
             "action_count": action_count,
             "capability_count": capability_count,
             "route_to_meta": route_to_meta,

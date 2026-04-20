@@ -11,6 +11,7 @@ def _build_policy_input(
     baseline_response_mode: str,
     task_type: str,
     meta_context_bundle: dict,
+    meta_request_frame: dict | None = None,
     recommended_agent_chain: tuple[str, ...] = ("meta",),
 ) :
     return build_meta_policy_input(
@@ -23,6 +24,7 @@ def _build_policy_input(
         next_step="",
         recommended_agent_chain=recommended_agent_chain,
         meta_context_bundle=meta_context_bundle,
+        meta_request_frame=meta_request_frame or {},
         preference_memory_selection={},
         topic_state_transition={},
     )
@@ -60,6 +62,11 @@ def test_meta_response_policy_uses_direct_recommendation_for_next_step_questions
             dominant_turn_type="new_task",
             baseline_response_mode="execute",
             task_type="single_lane",
+            meta_request_frame={
+                "frame_kind": "direct_answer",
+                "task_domain": "docs_status",
+                "execution_mode": "answer_directly",
+            },
             meta_context_bundle={
                 "context_slots": [
                     {
@@ -81,6 +88,34 @@ def test_meta_response_policy_uses_direct_recommendation_for_next_step_questions
     assert decision.recipe_enabled is False
     assert decision.answer_shape == "direct_recommendation"
     assert "next_step_summary_language" in decision.policy_signals
+
+
+def test_meta_response_policy_prioritizes_frame_direct_answer_for_docs_status():
+    decision = resolve_meta_response_policy(
+        _build_policy_input(
+            effective_query="lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht",
+            dominant_turn_type="new_task",
+            baseline_response_mode="execute",
+            task_type="single_lane",
+            meta_request_frame={
+                "frame_kind": "direct_answer",
+                "task_domain": "docs_status",
+                "execution_mode": "answer_directly",
+            },
+            meta_context_bundle={
+                "context_slots": [
+                    {"slot": "current_query", "content": "lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht"},
+                ],
+                "suppressed_context": [],
+            },
+            recommended_agent_chain=("meta", "executor"),
+        )
+    )
+
+    assert decision.response_mode == "summarize_state"
+    assert decision.override_applied is True
+    assert decision.policy_reason == "frame_direct_answer"
+    assert decision.agent_chain_override == ("meta",)
 
 
 def test_meta_response_policy_clarifies_broad_action_hint_when_context_is_unreliable():

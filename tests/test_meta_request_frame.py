@@ -82,6 +82,11 @@ def test_classify_meta_task_exposes_meta_request_frame_for_docs_status():
     assert frame["task_domain"] == "docs_status"
     assert frame["execution_mode"] == "answer_directly"
     assert frame["delegation_budget"] == 0
+    assert result["task_decomposition"]["planning_needed"] is False
+    assert result["task_decomposition"]["intent_family"] == "single_step"
+    assert result["meta_execution_plan"]["plan_mode"] == "direct_response"
+    assert result["meta_execution_plan"]["intent_family"] == "single_step"
+    assert result["meta_execution_plan"]["steps"][0]["assigned_agent"] == "meta"
 
 
 def test_classify_meta_task_exposes_meta_request_frame_for_canada_followup():
@@ -107,3 +112,5 @@ def test_classify_meta_task_exposes_meta_request_frame_for_canada_followup():
     assert frame["task_domain"] == "migration_work"
     assert frame["execution_mode"] == "plan_and_delegate"
     assert "skill_creation" in frame["forbidden_memory_domains"]
+    assert result["task_decomposition"]["intent_family"] == "research"
+    assert result["task_decomposition"]["metadata"]["frame_task_domain"] == "migration_work"

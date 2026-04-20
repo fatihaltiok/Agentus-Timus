@@ -25,7 +25,10 @@ from orchestration.diagnosis_records import (
 )
 from orchestration.meta_plan_compiler import build_meta_execution_plan
 from orchestration.preference_instruction_memory import select_stored_preference_memory_with_summary
-from orchestration.meta_request_frame import build_meta_request_frame
+from orchestration.meta_request_frame import (
+    apply_meta_request_frame_routing,
+    build_meta_request_frame,
+)
 from orchestration.meta_response_policy import build_meta_policy_input, resolve_meta_response_policy
 from orchestration.specialist_context import build_specialist_context_payload
 from orchestration.task_decomposition_contract import build_task_decomposition
@@ -3207,6 +3210,38 @@ def classify_meta_task(
         if agent not in deduped_chain:
             deduped_chain.append(agent)
 
+    pre_policy_frame = build_meta_request_frame(
+        effective_query=effective_query,
+        dominant_turn_type=turn_interpretation.dominant_turn_type,
+        response_mode=turn_interpretation.response_mode,
+        answer_shape="",
+        task_type=task_type,
+        active_topic=active_topic,
+        open_goal=str(open_goal or ""),
+        next_step=str(next_step or ""),
+        recommended_agent_chain=tuple(deduped_chain),
+        active_plan=active_plan,
+    )
+    frame_routing = apply_meta_request_frame_routing(
+        pre_policy_frame.to_dict(),
+        task_type=task_type,
+        recommended_chain=deduped_chain,
+        reason=reason,
+        required_capabilities=required_capabilities,
+    )
+    task_type = str(frame_routing.get("task_type") or task_type).strip() or task_type
+    reason = str(frame_routing.get("reason") or reason).strip() or reason
+    required_capabilities = [
+        str(item or "").strip()
+        for item in (frame_routing.get("required_capabilities") or required_capabilities)
+        if str(item or "").strip()
+    ]
+    deduped_chain = [
+        str(item or "").strip()
+        for item in (frame_routing.get("recommended_agent_chain") or deduped_chain)
+        if str(item or "").strip()
+    ]
+
     policy_input = build_meta_policy_input(
         effective_query=effective_query,
         dominant_turn_type=turn_interpretation.dominant_turn_type,
@@ -3219,6 +3254,7 @@ def classify_meta_task(
         meta_context_bundle=meta_context_bundle.to_dict(),
         preference_memory_selection=preference_memory_selection,
         topic_state_transition=topic_transition.to_dict(),
+        meta_request_frame=pre_policy_frame.to_dict(),
     )
     policy_decision = resolve_meta_response_policy(policy_input)
     final_task_type = task_type
@@ -3227,7 +3263,13 @@ def classify_meta_task(
     final_response_mode = turn_interpretation.response_mode
     if policy_decision.override_applied:
         final_response_mode = policy_decision.response_mode
-        final_reason = f"meta_policy:{policy_decision.policy_reason}"
+        policy_signals = tuple(str(item or "") for item in (policy_decision.policy_signals or ()))
+        policy_reason = policy_decision.policy_reason
+        if "next_step_summary_language" in policy_signals:
+            policy_reason = "next_step_summary_request"
+        elif "state_summary_language" in policy_signals:
+            policy_reason = "state_summary_request"
+        final_reason = f"meta_policy:{policy_reason}"
         if policy_decision.task_type_override:
             final_task_type = policy_decision.task_type_override
         if policy_decision.agent_chain_override:
@@ -3275,6 +3317,10 @@ def classify_meta_task(
         "response_mode": final_response_mode,
         "required_capabilities": sorted(set(required_capabilities)),
         "recommended_agent_chain": final_chain,
+        "frame_kind": meta_request_frame.frame_kind,
+        "frame_task_domain": meta_request_frame.task_domain,
+        "frame_execution_mode": meta_request_frame.execution_mode,
+        "frame_completion_contract": meta_request_frame.completion_contract,
         "recommended_recipe_id": None if not recipe else recipe["recipe_id"],
         "recipe_stages": [] if not recipe else recipe["recipe_stages"],
         "recipe_recoveries": [] if not recipe else recipe.get("recipe_recoveries", []),
@@ -3288,6 +3334,23 @@ def classify_meta_task(
         task_decomposition["planning_reason"] = "resume_active_plan"
         if str(active_plan.get("goal") or "").strip():
             task_decomposition["goal"] = str(active_plan.get("goal") or "").strip()
+    if meta_request_frame.execution_mode == "answer_directly":
+        task_decomposition["intent_family"] = "single_step"
+        task_decomposition["planning_needed"] = False
+        task_decomposition["planning_reason"] = "frame_answer_directly"
+        task_decomposition["goal_satisfaction_mode"] = "answer_or_artifact_ready"
+        task_decomposition["subtasks"] = [
+            {
+                "id": "respond",
+                "title": "Direkt auf die Anfrage antworten",
+                "kind": "response",
+                "status": "pending",
+                "depends_on": [],
+                "optional": False,
+                "completion_signals": ["answer_delivered"],
+            }
+        ]
+        task_decomposition["completion_signals"] = ["answer_delivered"]
     meta_execution_plan = build_meta_execution_plan(
         source_query=effective_query,
         handoff_payload=plan_handoff_payload,
@@ -3324,6 +3387,29 @@ def classify_meta_task(
                 },
                 *list(meta_execution_plan.get("steps") or []),
             ]
+    if meta_request_frame.execution_mode == "answer_directly":
+        meta_execution_plan["plan_mode"] = "direct_response"
+        meta_execution_plan["intent_family"] = "single_step"
+        meta_execution_plan["planning_needed"] = False
+        meta_execution_plan["summary"] = "direct_response ueber 1 Schritt fuer single_step"
+        meta_execution_plan["steps"] = [
+            {
+                "id": "plan_respond",
+                "title": "Direkt auf die Anfrage antworten",
+                "step_kind": "response",
+                "assigned_agent": "meta",
+                "status": "pending",
+                "depends_on": [],
+                "optional": False,
+                "completion_signals": ["answer_delivered"],
+                "recipe_stage_id": "",
+                "expected_output": "",
+                "source_subtask_id": "respond",
+                "delegation_mode": "meta_only",
+            }
+        ]
+        meta_execution_plan["next_step_id"] = "plan_respond"
+        meta_execution_plan["status"] = "active"
     clarity_contract = build_meta_clarity_contract(
         effective_query=effective_query,
         response_mode=final_response_mode,

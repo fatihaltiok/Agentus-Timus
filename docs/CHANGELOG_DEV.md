@@ -7411,3 +7411,36 @@ Verifikation:
 - `python -m py_compile orchestration/meta_request_frame.py orchestration/meta_orchestration.py tests/test_meta_request_frame.py`
 - `pytest -q tests/test_meta_request_frame.py tests/test_meta_orchestration.py` -> `71 passed`
 - `pytest -q tests/test_meta_request_frame.py tests/test_meta_orchestration.py tests/test_meta_response_policy.py tests/test_agent_loop_fixes.py` -> `118 passed`
+
+## 2026-04-20 - MFR2 Frame-First Routing: Frame wird primaere Quelle fuer Policy und Handoff
+
+- [orchestration/meta_request_frame.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_request_frame.py)
+- [orchestration/meta_response_policy.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_response_policy.py)
+- [orchestration/meta_orchestration.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_orchestration.py)
+- [orchestration/task_decomposition_contract.py](/home/fatih-ubuntu/dev/timus/orchestration/task_decomposition_contract.py)
+- [pyproject.toml](/home/fatih-ubuntu/dev/timus/pyproject.toml)
+- [tests/test_meta_request_frame.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_request_frame.py)
+- [tests/test_meta_response_policy.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_response_policy.py)
+- [tests/test_meta_orchestration.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_orchestration.py)
+- [tests/test_agent_loop_fixes.py](/home/fatih-ubuntu/dev/timus/tests/test_agent_loop_fixes.py)
+- [docs/META_FRAME_RESOLVER_PLAN_2026-04-20.md](/home/fatih-ubuntu/dev/timus/docs/META_FRAME_RESOLVER_PLAN_2026-04-20.md)
+
+Inhalt:
+
+- `classify_meta_task(...)` baut jetzt den `meta_request_frame` vor der Policy und nutzt ihn direkt fuer:
+  - `task_type`
+  - `recommended_agent_chain`
+  - `required_capabilities`
+  - `reason`
+- die Policy liest den Frame explizit und behandelt direkte Docs-/Statusframes nicht mehr nur heuristisch
+- Handoff, `task_decomposition` und `meta_execution_plan` uebernehmen den Frame jetzt als primaere Quelle
+- `answer_directly` erzwingt einen `single_step`-Pfad mit `direct_response`
+- `migration_work` zieht nur noch dann hart in einen Research-Pfad, wenn der Query selbst stark genug darauf deutet
+- `docs_status` ist enger gefasst; generische Status-/Systemfragen kippen dadurch nicht mehr in den falschen Frame
+- ein syntaktischer Blocker in [pyproject.toml](/home/fatih-ubuntu/dev/timus/pyproject.toml) wurde entfernt, damit Pytest wieder lauffaehig ist
+
+Verifikation:
+
+- `python -m py_compile orchestration/meta_request_frame.py orchestration/meta_response_policy.py orchestration/meta_orchestration.py orchestration/task_decomposition_contract.py tests/test_meta_request_frame.py tests/test_meta_response_policy.py tests/test_meta_orchestration.py`
+- `pytest -q tests/test_meta_request_frame.py tests/test_meta_response_policy.py tests/test_meta_orchestration.py` -> `79 passed`
+- `pytest -q tests/test_meta_request_frame.py tests/test_meta_response_policy.py tests/test_meta_orchestration.py tests/test_agent_loop_fixes.py` -> `119 passed`

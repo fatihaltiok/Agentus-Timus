@@ -883,8 +883,8 @@ def test_classify_meta_task_routes_topic_referential_followup_to_meta_without_ca
     )
 
     assert result["dominant_turn_type"] == "followup"
-    assert result["recommended_agent_chain"] == ["meta"]
-    assert result["reason"] == "stateful_followup"
+    assert result["recommended_agent_chain"] == ["meta", "research"]
+    assert result["reason"] == "frame:migration_work"
     assert "kanada" in (result["active_topic"] or "").lower()
 
 

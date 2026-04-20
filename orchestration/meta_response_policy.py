@@ -247,6 +247,7 @@ class MetaPolicyInput:
     next_step: str
     recommended_agent_chain: Tuple[str, ...]
     meta_context_bundle: dict[str, Any]
+    meta_request_frame: dict[str, Any]
     preference_memory_selection: dict[str, Any]
     topic_state_transition: dict[str, Any]
     context_misread_risk: dict[str, Any]
@@ -291,11 +292,59 @@ class MetaPolicyDecision:
 def resolve_meta_response_policy(policy_input: MetaPolicyInput) -> MetaPolicyDecision:
     baseline = _normalize_text(policy_input.baseline_response_mode, limit=64).lower() or "execute"
     dominant_turn_type = _normalize_text(policy_input.dominant_turn_type, limit=64).lower()
+    frame = dict(policy_input.meta_request_frame or {})
+    frame_kind = _normalize_text(frame.get("frame_kind"), limit=64).lower()
+    frame_task_domain = _normalize_text(frame.get("task_domain"), limit=64).lower()
+    frame_execution_mode = _normalize_text(frame.get("execution_mode"), limit=64).lower()
     risk = dict(policy_input.context_misread_risk or {})
     risk_reasons = tuple(str(item or "") for item in (risk.get("reasons") or []))
     suspicious = bool(risk.get("suspicious"))
     signals: list[str] = []
     historical_recall = parse_historical_topic_recall_hint(policy_input.effective_query)
+    query_has_next_step_summary = _looks_like_next_step_summary(policy_input.effective_query)
+    query_has_state_summary = _looks_like_state_summary(policy_input.effective_query)
+
+    if frame_execution_mode == "answer_directly" and frame_task_domain == "docs_status":
+        signals.extend(["frame_direct_answer", "frame_task_domain:docs_status"])
+        if query_has_next_step_summary:
+            signals.append("next_step_summary_language")
+        return MetaPolicyDecision(
+            response_mode="summarize_state",
+            policy_reason="frame_direct_answer",
+            policy_confidence=0.95,
+            answer_shape="direct_recommendation",
+            should_delegate=False,
+            should_store_preference=False,
+            should_resume_open_loop=False,
+            should_summarize_state=True,
+            self_model_bound_applied=False,
+            policy_signals=tuple(signals),
+            override_applied=True,
+            agent_chain_override=("meta",),
+            task_type_override="single_lane",
+            recipe_enabled=False,
+        )
+
+    if frame_kind == "status_summary" and frame_execution_mode == "answer_directly":
+        signals.extend(["frame_status_summary", f"frame_task_domain:{frame_task_domain or 'generic'}"])
+        if query_has_state_summary:
+            signals.append("state_summary_language")
+        return MetaPolicyDecision(
+            response_mode="summarize_state",
+            policy_reason="frame_status_summary",
+            policy_confidence=0.9,
+            answer_shape="state_summary",
+            should_delegate=False,
+            should_store_preference=False,
+            should_resume_open_loop=False,
+            should_summarize_state=True,
+            self_model_bound_applied=False,
+            policy_signals=tuple(signals),
+            override_applied=True,
+            agent_chain_override=("meta",),
+            task_type_override="single_lane",
+            recipe_enabled=False,
+        )
 
     if _looks_like_self_model_status(policy_input.effective_query):
         signals.append("self_model_status_question")
@@ -335,7 +384,7 @@ def resolve_meta_response_policy(policy_input: MetaPolicyInput) -> MetaPolicyDec
             recipe_enabled=False,
         )
 
-    if _looks_like_next_step_summary(policy_input.effective_query):
+    if query_has_next_step_summary:
         signals.append("next_step_summary_language")
         return MetaPolicyDecision(
             response_mode="summarize_state",
@@ -354,7 +403,7 @@ def resolve_meta_response_policy(policy_input: MetaPolicyInput) -> MetaPolicyDec
             recipe_enabled=False,
         )
 
-    if _looks_like_state_summary(policy_input.effective_query):
+    if query_has_state_summary:
         signals.append("state_summary_language")
         return MetaPolicyDecision(
             response_mode="summarize_state",
@@ -458,6 +507,7 @@ def build_meta_policy_input(
     next_step: str,
     recommended_agent_chain: tuple[str, ...],
     meta_context_bundle: Mapping[str, Any] | None,
+    meta_request_frame: Mapping[str, Any] | None,
     preference_memory_selection: Mapping[str, Any] | None,
     topic_state_transition: Mapping[str, Any] | None,
 ) -> MetaPolicyInput:
@@ -477,6 +527,7 @@ def build_meta_policy_input(
         next_step=_normalize_text(next_step, limit=180),
         recommended_agent_chain=tuple(str(item or "").strip() for item in recommended_agent_chain if str(item or "").strip()),
         meta_context_bundle=bundle,
+        meta_request_frame=dict(meta_request_frame or {}),
         preference_memory_selection=dict(preference_memory_selection or {}),
         topic_state_transition=dict(topic_state_transition or {}),
         context_misread_risk=risk,

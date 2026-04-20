@@ -260,5 +260,8 @@ Erfolg:
 
 Direkt starten mit:
 
-- `MFR1 Frame Contract`
-- plus erste Eval-Faelle als feste Regression
+- `MFR3 Context Admission by Frame`
+- plus Live-Checks fuer:
+  - Kanada / Arbeit / `Fuß fassen`
+  - Docs-Status / naechster Schritt
+  - Twilio + Inworld Setup

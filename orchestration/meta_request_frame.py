@@ -12,11 +12,13 @@ _DOC_STATUS_HINTS = (
     "phase_",
     "phase ",
     "plan.md",
-    "naechstes ansteht",
-    "nächstes ansteht",
-    "next step",
+)
+_STATE_SUMMARY_HINTS = (
     "wo stehen wir",
-    "status",
+    "wie ist dein zustand",
+    "hast du probleme",
+    "was ist dein zustand",
+    "aktueller stand",
 )
 _LOCATION_ROUTE_HINTS = (
     "route",
@@ -109,12 +111,14 @@ class MetaRequestFrame:
 
 def _infer_frame_kind(
     *,
+    effective_query: str,
     dominant_turn_type: str,
     response_mode: str,
     answer_shape: str,
     has_active_plan: bool,
 ) -> tuple[str, list[str]]:
     evidence: list[str] = []
+    query_text = _clean_text(effective_query, limit=320).lower()
     turn_type = _clean_text(dominant_turn_type, limit=64).lower()
     mode = _clean_text(response_mode, limit=64).lower()
     shape = _clean_text(answer_shape, limit=64).lower()
@@ -122,6 +126,12 @@ def _infer_frame_kind(
     if shape in {"direct_recommendation", "state_summary", "historical_topic_state", "self_model_status"}:
         evidence.append(f"answer_shape:{shape}")
         return "direct_answer" if shape == "direct_recommendation" else "status_summary", evidence
+    if _contains_any(query_text, _DOC_STATUS_HINTS):
+        evidence.append("query:docs_status_like")
+        return "direct_answer", evidence
+    if _contains_any(query_text, _STATE_SUMMARY_HINTS):
+        evidence.append("query:state_summary_like")
+        return "status_summary", evidence
     if mode == "clarify_before_execute":
         evidence.append("response_mode:clarify_before_execute")
         return "clarify_needed", evidence
@@ -248,6 +258,81 @@ def _infer_execution_mode(frame_kind: str) -> str:
     return "plan_and_delegate"
 
 
+def apply_meta_request_frame_routing(
+    frame: Mapping[str, Any] | None,
+    *,
+    task_type: str,
+    recommended_chain: Iterable[str] | None,
+    reason: str,
+    required_capabilities: Iterable[str] | None = None,
+) -> dict[str, Any]:
+    payload = dict(frame or {})
+    frame_kind = _clean_text(payload.get("frame_kind"), limit=64).lower()
+    task_domain = _clean_text(payload.get("task_domain"), limit=64).lower()
+    execution_mode = _clean_text(payload.get("execution_mode"), limit=64).lower()
+    confidence = float(payload.get("confidence") or 0.0)
+
+    chain = [
+        _clean_text(item, limit=48).lower()
+        for item in (recommended_chain or ())
+        if _clean_text(item, limit=48)
+    ]
+    capabilities = [
+        _clean_text(item, limit=64).lower()
+        for item in (required_capabilities or ())
+        if _clean_text(item, limit=64)
+    ]
+    normalized_task_type = _clean_text(task_type, limit=64).lower() or "single_lane"
+    final_reason = reason
+
+    if frame_kind in {"direct_answer", "status_summary"}:
+        return {
+            "task_type": "single_lane",
+            "recommended_agent_chain": ["meta"],
+            "required_capabilities": [],
+            "reason": f"frame:{task_domain or frame_kind}",
+        }
+
+    if task_domain == "migration_work" and confidence >= 0.85:
+        if not chain or chain == ["executor"]:
+            chain = ["meta", "research"]
+        elif chain[0] != "meta":
+            chain = ["meta", *[item for item in chain if item != "meta"]]
+        if "research" not in chain:
+            chain.append("research")
+        for capability in ("content_extraction", "source_research"):
+            if capability not in capabilities:
+                capabilities.append(capability)
+        if normalized_task_type == "single_lane":
+            normalized_task_type = "knowledge_research"
+        final_reason = "frame:migration_work"
+    elif task_domain == "setup_build":
+        if not chain or chain == ["executor"]:
+            chain = ["meta", "executor"]
+        elif chain[0] != "meta":
+            chain = ["meta", *[item for item in chain if item != "meta"]]
+        normalized_task_type = "single_lane" if normalized_task_type == "single_lane" else normalized_task_type
+        final_reason = "frame:setup_build"
+    elif task_domain == "skill_creation":
+        chain = ["meta"]
+        normalized_task_type = "single_lane"
+        final_reason = "frame:skill_creation"
+    elif task_domain == "docs_status":
+        chain = ["meta"]
+        normalized_task_type = "single_lane"
+        final_reason = "frame:docs_status"
+    elif execution_mode == "resume_existing_plan" and not chain:
+        chain = ["meta"]
+        final_reason = "frame:resume_existing_plan"
+
+    return {
+        "task_type": normalized_task_type,
+        "recommended_agent_chain": chain or ["meta"],
+        "required_capabilities": capabilities,
+        "reason": final_reason,
+    }
+
+
 def build_meta_request_frame(
     *,
     effective_query: str,
@@ -263,6 +348,7 @@ def build_meta_request_frame(
 ) -> MetaRequestFrame:
     has_active_plan = bool(dict(active_plan or {}))
     frame_kind, kind_evidence = _infer_frame_kind(
+        effective_query=effective_query,
         dominant_turn_type=dominant_turn_type,
         response_mode=response_mode,
         answer_shape=answer_shape,
