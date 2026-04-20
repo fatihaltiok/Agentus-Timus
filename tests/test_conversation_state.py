@@ -47,6 +47,23 @@ def test_apply_pending_followup_prompt_clears_seeded_open_loop_when_removed():
     assert cleared.updated_at == "2026-04-06T16:42:00Z"
 
 
+def test_normalize_conversation_state_ignores_generic_pending_followup_prompt():
+    state = normalize_conversation_state(
+        {
+            "open_loop": "Was brauchst du?",
+            "next_expected_step": "Was brauchst du?",
+            "state_source": ["pending_followup_prompt", "session_summary"],
+        },
+        session_id="canvas_demo",
+        last_updated="2026-04-20T12:00:00Z",
+        pending_followup_prompt="Was brauchst du?",
+    )
+
+    assert state.open_loop == ""
+    assert state.next_expected_step == ""
+    assert "pending_followup_prompt" not in state.state_source
+
+
 def test_conversation_state_serialization_normalizes_lists_and_confidence():
     payload = conversation_state_to_dict(
         {

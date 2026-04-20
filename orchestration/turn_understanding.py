@@ -101,6 +101,24 @@ _SHORT_CONTEXTUAL_FOLLOWUP_PREFIXES = (
     "diesmal mit",
     "so nur",
 )
+_TOPIC_REFERENTIAL_FOLLOWUP_HINTS = (
+    "da ",
+    "dabei",
+    "dafuer",
+    "dafür",
+    "dafuer",
+    "daran",
+    "darauf",
+    "darueber",
+    "darüber",
+    "dazu",
+    "dort",
+    "fuss fassen",
+    "fuß fassen",
+    "wie kann ich dort",
+    "wie koennte ich dort",
+    "wie könnte ich dort",
+)
 
 
 def _normalize_text(value: Any, *, limit: int = 400) -> str:
@@ -296,6 +314,11 @@ def detect_turn_signals(turn_input: TurnUnderstandingInput) -> tuple[str, ...]:
         and any(lowered_query.startswith(prefix) for prefix in _SHORT_CONTEXTUAL_FOLLOWUP_PREFIXES)
     ):
         signals.append("short_contextual_followup_language")
+    if (
+        (turn_input.active_topic or turn_input.open_goal or turn_input.next_step)
+        and any(marker in lowered_query for marker in _TOPIC_REFERENTIAL_FOLLOWUP_HINTS)
+    ):
+        signals.append("topic_referential_followup")
 
     if "behavior_instruction" not in signals and "directive_language" in signals and "future_preference_language" in signals:
         signals.append("behavior_instruction")
@@ -333,6 +356,8 @@ def resolve_dominant_turn_type(turn_input: TurnUnderstandingInput, signals: Iter
     if "clarification_language" in signal_set:
         return "clarification"
     if "historical_recall_with_context" in signal_set:
+        return "followup"
+    if "topic_referential_followup" in signal_set:
         return "followup"
     if "short_contextual_followup_language" in signal_set:
         return "followup"

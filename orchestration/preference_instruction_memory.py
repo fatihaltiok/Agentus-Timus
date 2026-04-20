@@ -90,6 +90,36 @@ _SCOPE_CONSTRAINT_HINTS = (
     "weltweit",
 )
 _SCOPE_PRIORITY = {"session": 3, "topic": 2, "global": 1}
+_PREFERENCE_OVERLAP_STOPWORDS = {
+    "aber",
+    "api",
+    "auch",
+    "dann",
+    "dass",
+    "dort",
+    "duerfen",
+    "fuer",
+    "für",
+    "hat",
+    "hier",
+    "ich",
+    "informationen",
+    "info",
+    "kann",
+    "kannst",
+    "koennte",
+    "koennte",
+    "mit",
+    "mir",
+    "nur",
+    "soll",
+    "sollst",
+    "ueber",
+    "über",
+    "und",
+    "wie",
+    "zugang",
+}
 
 
 def _normalize_text(value: Any, *, limit: int = 240) -> str:
@@ -102,6 +132,10 @@ def _tokenize(text: str) -> set[str]:
         for token in re.findall(r"[a-zA-Z0-9äöüÄÖÜß_-]+", str(text or "").lower())
         if len(token.strip("_-")) >= 3
     }
+
+
+def _tokenize_preference_overlap(text: str) -> set[str]:
+    return {token for token in _tokenize(text) if token not in _PREFERENCE_OVERLAP_STOPWORDS}
 
 
 def _overlap(left: str, right: str) -> int:
@@ -213,6 +247,18 @@ def _infer_preference_family(text: str, topic_anchor: str = "") -> str:
     if topic_anchor:
         return f"topic:{_normalize_text(topic_anchor, limit=40).lower()}"
     return f"instruction:{stable_text_digest(lowered, hex_chars=6)}"
+
+
+_CROSS_DOMAIN_PREFERENCE_FAMILIES = {
+    "response_style",
+    "output_format",
+    "language",
+}
+
+
+def _allow_cross_domain_preference_family(family: str) -> bool:
+    normalized = _normalize_text(family, limit=64).lower()
+    return normalized in _CROSS_DOMAIN_PREFERENCE_FAMILIES
 
 
 def _infer_scope(
@@ -444,7 +490,11 @@ def select_stored_preference_memory_with_summary(
     active_goal = _normalize_text((conversation_state or {}).get("active_goal"), limit=120)
     open_loop = _normalize_text((conversation_state or {}).get("open_loop"), limit=120)
     focus_text = " | ".join(item for item in (effective_query, active_topic, active_goal, open_loop) if item)
-    focus_terms = _tokenize(focus_text)
+    focus_terms = _tokenize_preference_overlap(focus_text)
+    preference_turn = _normalize_text(turn_type, limit=64).lower() in {
+        "behavior_instruction",
+        "preference_update",
+    }
 
     try:
         items = memory_manager.persistent.get_memory_items("preference_memory")
@@ -472,15 +522,31 @@ def select_stored_preference_memory_with_summary(
         )
         age_days = _preference_age_days(value.get("updated_at"))
         overlap = max(
-            len(focus_terms.intersection(_tokenize(instruction))),
-            len(focus_terms.intersection(_tokenize(topic_anchor))),
+            len(focus_terms.intersection(_tokenize_preference_overlap(instruction))),
+            len(focus_terms.intersection(_tokenize_preference_overlap(topic_anchor))),
         )
         rendered = _render_preference_item(value)
+        cross_domain_allowed = _allow_cross_domain_preference_family(family)
+
+        if not preference_turn and focus_terms and overlap <= 0 and not cross_domain_allowed:
+            ignored_low_stability.append(
+                {
+                    **_build_candidate_detail(
+                        rendered=rendered,
+                        scope=scope,
+                        family=family,
+                        stability=stability,
+                        evidence_count=evidence_count,
+                    ),
+                    "reason": "preference_domain_mismatch",
+                }
+            )
+            continue
 
         if scope == "session":
             if not session_id or item_session != session_id:
                 continue
-            if age_days > 2.0:
+            if age_days > 30.0:
                 ignored_low_stability.append(
                     {
                         **_build_candidate_detail(

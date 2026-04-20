@@ -316,6 +316,7 @@ def build_meta_clarity_contract(
             "conversation_state",
             "open_loop",
             "recent_user_turn",
+            "topic_memory",
             "historical_topic_memory",
         )
         forbidden_context_slots = ("assistant_fallback_context",)

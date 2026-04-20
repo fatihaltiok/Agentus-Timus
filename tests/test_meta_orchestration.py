@@ -861,7 +861,31 @@ def test_classify_meta_task_applies_context_anchor_for_deferred_decision_followu
     assert result["context_anchor_applied"] is True
     assert result["reason"] == "semantic_clarification_turn"
     assert "telefonfunktion" in (result["active_topic"] or "").lower()
-    assert "was willst du" in (result["open_goal"] or "").lower()
+    assert "was willst du" not in (result["open_goal"] or "").lower()
+    assert "telefonfunktion" in (result["open_goal"] or "").lower()
+
+
+def test_classify_meta_task_routes_topic_referential_followup_to_meta_without_capsule_wrapper():
+    result = classify_meta_task(
+        "Informationen ueber Kanada wie kann ich dort arbeiten",
+        action_count=0,
+        conversation_state={
+            "session_id": "tg_demo",
+            "active_topic": "Kanada",
+            "active_goal": "Möglichkeiten in Kanada Fuß zu fassen",
+            "open_loop": "",
+            "next_expected_step": "",
+            "turn_type_hint": "followup",
+            "topic_confidence": 0.81,
+        },
+        recent_user_turns=["suche mir Möglichkeiten in Kanada Fuß zu fassen"],
+        recent_assistant_turns=["Kontext geladen. 07:31 Uhr, 0 offene Tasks, Routinen laufen.\n\nWas brauchst du?"],
+    )
+
+    assert result["dominant_turn_type"] == "followup"
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["reason"] == "stateful_followup"
+    assert "kanada" in (result["active_topic"] or "").lower()
 
 
 def test_classify_meta_task_builds_meta_context_bundle_with_state_priority_and_suppression():

@@ -13,7 +13,11 @@ from orchestration.meta_clarity_contract import (
     apply_meta_clarity_to_bundle,
     build_meta_clarity_contract,
 )
-from orchestration.conversation_state import derive_topic_state_transition
+from orchestration.conversation_state import (
+    derive_topic_state_transition,
+    is_generic_followup_prompt,
+    normalize_pending_followup_prompt,
+)
 from orchestration.diagnosis_records import (
     build_diagnosis_records,
     compile_developer_task_brief,
@@ -969,9 +973,11 @@ _META_CONTEXT_STOPWORDS = {
     "der",
     "des",
     "die",
+    "du",
     "dir",
     "doch",
     "dort",
+    "dich",
     "drei",
     "eine",
     "einer",
@@ -987,6 +993,8 @@ _META_CONTEXT_STOPWORDS = {
     "https",
     "ich",
     "immer",
+    "mir",
+    "mich",
     "jetzt",
     "kann",
     "kannst",
@@ -1002,7 +1010,10 @@ _META_CONTEXT_STOPWORDS = {
     "noch",
     "oder",
     "ohne",
+    "ueber",
+    "über",
     "sagt",
+    "gesagt",
     "schon",
     "sein",
     "sind",
@@ -1023,6 +1034,7 @@ _META_CONTEXT_STOPWORDS = {
     "wir",
     "wird",
     "wirst",
+    "hast",
     "wollen",
     "wollen",
     "you",
@@ -2141,7 +2153,24 @@ def _select_relevant_preference_memory(
     filtered_selected = [
         item
         for item in selected
-        if explicit_preference_turn or _meta_context_reference_overlap(item, reference_texts) > 0
+        if (
+            explicit_preference_turn
+            or _meta_context_reference_overlap(item, reference_texts) > 0
+            or any(
+                token in item.lower()
+                for token in (
+                    "response_style",
+                    "output_format",
+                    "language",
+                    "kurz",
+                    "praezise",
+                    "präzise",
+                    "deutsch",
+                    "json",
+                    "struktur",
+                )
+            )
+        )
     ]
     normalized_selected = _normalize_meta_context_fragments(filtered_selected, limit=2)
     selection_summary["selected"] = list(normalized_selected)
@@ -2194,6 +2223,8 @@ def _select_relevant_recent_assistant_turns(
     for item in reversed(candidates):
         cleaned = _clean_meta_state_fragment(item, max_chars=220)
         if not cleaned or cleaned in selected:
+            continue
+        if is_generic_followup_prompt(cleaned):
             continue
         selected.append(cleaned)
         if len(selected) >= 3:
@@ -2312,6 +2343,10 @@ def _select_open_loop_payload(
         conversation_state.get("next_expected_step") or dialog_state.get("next_step"),
         max_chars=220,
     )
+    if is_generic_followup_prompt(open_loop):
+        open_loop = ""
+    if is_generic_followup_prompt(next_step):
+        next_step = ""
     if turn_type in {"followup", "handover_resume", "approval_response", "auth_response", "clarification"}:
         return next_step or open_loop
     if response_mode in {"resume_open_loop", "acknowledge_and_store"}:
@@ -2741,7 +2776,9 @@ def extract_meta_context_anchor(query: str) -> str:
             if recent_parts:
                 parts.append(recent_parts[-1])
 
-    pending_followup_prompt = _extract_meta_followup_field(raw, "pending_followup_prompt")
+    pending_followup_prompt = normalize_pending_followup_prompt(
+        _extract_meta_followup_field(raw, "pending_followup_prompt")
+    )
     if pending_followup_prompt:
         parts.append(pending_followup_prompt)
     elif not parts:
@@ -2762,7 +2799,9 @@ def extract_meta_dialog_state(query: str) -> Dict[str, Any]:
     effective_query = extract_effective_meta_query(raw)
     context_anchor = extract_meta_context_anchor(raw)
     last_user = _extract_meta_followup_field(raw, "last_user")
-    pending_followup_prompt = _extract_meta_followup_field(raw, "pending_followup_prompt")
+    pending_followup_prompt = normalize_pending_followup_prompt(
+        _extract_meta_followup_field(raw, "pending_followup_prompt")
+    )
     topic_recall = _extract_meta_followup_field(raw, "topic_recall")
     session_summary = _extract_meta_followup_field(raw, "session_summary")
     recent_users_raw = _extract_meta_followup_field(raw, "recent_user_queries")
@@ -3155,6 +3194,9 @@ def classify_meta_task(
         elif compressed_followup_parsed or active_topic_reused:
             recommended_chain = ["meta"]
             reason = "compressed_advisory_followup" if compressed_followup_parsed else "active_topic_followup"
+        elif turn_interpretation.dominant_turn_type == "followup":
+            recommended_chain = ["meta"]
+            reason = "stateful_followup"
         else:
             recommended_chain = ["meta"] if ("und dann" in normalized or "danach" in normalized) else ["executor"]
 

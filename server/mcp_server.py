@@ -129,6 +129,7 @@ from orchestration.conversation_state import (
     apply_pending_followup_prompt,
     conversation_state_to_dict,
     decay_conversation_state,
+    normalize_pending_followup_prompt,
     touch_conversation_state,
 )
 from orchestration.meta_context_eval import detect_context_misread_risk
@@ -1170,7 +1171,7 @@ def _store_proposal_in_capsule(session_id: str, proposal: dict | None) -> None:
 def _store_pending_followup_prompt_in_capsule(session_id: str, prompt: str) -> None:
     """Speichert eine offene Rueckfrage explizit fuer den naechsten Turn."""
     capsule = _load_session_capsule(session_id)
-    cleaned = str(prompt or "").strip()
+    cleaned = normalize_pending_followup_prompt(prompt)
     if cleaned:
         capsule["pending_followup_prompt"] = cleaned[:280]
     else:
@@ -1914,13 +1915,13 @@ def _extract_pending_followup_prompt(text: str) -> str:
             question_like.append(cleaned)
 
     if question_like:
-        return question_like[-1][:280]
+        return normalize_pending_followup_prompt(question_like[-1][:280])
 
     sentences = [part.strip(" -\t\r\n") for part in re.split(r"(?<=[.!?])\s+", source) if part.strip()]
     for sentence in reversed(sentences):
         lowered = sentence.lower()
         if "?" in sentence or re.search(r"\b(soll ich|willst du|magst du|möchtest du|moechtest du)\b", lowered):
-            return sentence[:280]
+            return normalize_pending_followup_prompt(sentence[:280])
     return ""
 
 

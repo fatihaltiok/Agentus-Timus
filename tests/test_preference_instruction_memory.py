@@ -203,6 +203,57 @@ def test_select_stored_preference_memory_ignores_weak_global_until_repeated():
     assert selection.ignored_low_stability[0]["reason"] == "global_requires_repeat_or_explicit"
 
 
+def test_select_stored_preference_memory_filters_cross_domain_goal_leak_on_followup():
+    manager = _FakeMemoryManager(
+        [
+            SimpleNamespace(
+                key="global::twilio_goal",
+                value={
+                    "scope": "global",
+                    "instruction": "dass du mir ueber twillo und api Zugang mit mir telefonieren sollst",
+                    "topic_anchor": "",
+                    "session_id": "canvas_pref",
+                    "stability": 0.96,
+                    "explicit_global": True,
+                    "preference_family": "instruction:twilio01",
+                    "evidence_count": 3,
+                    "updated_at": "2026-04-20T08:59:21Z",
+                },
+            ),
+            SimpleNamespace(
+                key="global::style",
+                value={
+                    "scope": "global",
+                    "instruction": "antworte kurz und praezise",
+                    "topic_anchor": "",
+                    "session_id": "canvas_pref",
+                    "stability": 0.9,
+                    "explicit_global": True,
+                    "preference_family": "response_style",
+                    "evidence_count": 2,
+                    "updated_at": "2026-04-20T08:59:21Z",
+                },
+            ),
+        ]
+    )
+
+    selection = select_stored_preference_memory_with_summary(
+        effective_query="Informationen ueber Kanada wie kann ich dort arbeiten",
+        conversation_state={
+            "session_id": "canvas_pref",
+            "active_topic": "Kanada",
+            "active_goal": "in Kanada Fuss fassen",
+        },
+        turn_type="followup",
+        memory_manager=manager,
+        limit=2,
+    )
+
+    assert any("antworte kurz und praezise" in item for item in selection.selected)
+    assert all("twillo" not in item.lower() for item in selection.selected)
+    assert any(item["reason"] == "preference_domain_mismatch" for item in selection.ignored_low_stability)
+
+
 def test_select_stored_preference_memory_resolves_conflict_by_narrower_scope():
     manager = _FakeMemoryManager(
         [

@@ -86,10 +86,36 @@ _TOPIC_STOPWORDS = {
     "wir",
     "zu",
 }
+_GENERIC_FOLLOWUP_PROMPT_PATTERNS = (
+    r"^\s*was\s+brauchst\s+du\??\s*$",
+    r"^\s*was\s+willst\s+du\??\s*$",
+    r"^\s*wie\s+kann\s+ich\s+(?:dir|ihnen)\s+helfen\??\s*$",
+    r"^\s*womit\s+kann\s+ich\s+(?:dir|ihnen)\s+helfen\??\s*$",
+    r"^\s*was\s+kann\s+ich\s+(?:fuer|für)\s+(?:dich|sie)\s+tun\??\s*$",
+    r"^\s*was\s+soll\s+ich\s+f(?:u|ü)r\s+dich\s+tun\??\s*$",
+    r"^\s*was\s+genau\s+brauchst\s+du\??\s*$",
+)
 
 
 def _normalize_text(value: Any, *, limit: int = _MAX_TEXT_LEN) -> str:
     return str(value or "").strip()[:limit]
+
+
+def is_generic_followup_prompt(value: Any) -> bool:
+    cleaned = _normalize_text(value)
+    if not cleaned:
+        return False
+    lowered = cleaned.lower()
+    return any(re.search(pattern, lowered) for pattern in _GENERIC_FOLLOWUP_PROMPT_PATTERNS)
+
+
+def normalize_pending_followup_prompt(value: Any) -> str:
+    cleaned = _normalize_text(value)
+    if not cleaned:
+        return ""
+    if is_generic_followup_prompt(cleaned):
+        return ""
+    return cleaned
 
 
 def _normalize_text_list(
@@ -398,7 +424,7 @@ def normalize_conversation_state(
 ) -> ConversationState:
     raw = payload if isinstance(payload, Mapping) else {}
     normalized_session_id = _normalize_text(session_id, limit=120) or "default"
-    prompt = _normalize_text(pending_followup_prompt)
+    prompt = normalize_pending_followup_prompt(pending_followup_prompt)
     state_source = _normalize_state_source(raw.get("state_source"))
     active_plan = normalize_conversation_plan_state(
         raw.get("active_plan"),
@@ -407,6 +433,15 @@ def normalize_conversation_state(
 
     open_loop = _normalize_text(raw.get("open_loop"))
     next_expected_step = _normalize_text(raw.get("next_expected_step"))
+    if (
+        "pending_followup_prompt" in state_source
+        and open_loop
+        and open_loop == next_expected_step
+        and is_generic_followup_prompt(open_loop)
+    ):
+        open_loop = ""
+        next_expected_step = ""
+        state_source = tuple(item for item in state_source if item != "pending_followup_prompt")
 
     if active_plan:
         if not next_expected_step:
@@ -554,7 +589,7 @@ def apply_pending_followup_prompt(
         session_id=session_id,
         last_updated=updated_at,
     )
-    cleaned = _normalize_text(prompt)
+    cleaned = normalize_pending_followup_prompt(prompt)
     sources = tuple(item for item in current.state_source if item != "pending_followup_prompt")
     open_loop = current.open_loop
     next_expected_step = current.next_expected_step

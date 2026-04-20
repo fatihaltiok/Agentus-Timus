@@ -7318,3 +7318,35 @@ Status:
   - [meta.py](/home/fatih-ubuntu/dev/timus/agent/agents/meta.py) schreibt den `meta_execution_plan` jetzt waehrend Rezept- und Recovery-Laeufen fort und behandelt `goal_satisfied` als terminalen Pfad.
   - [conversation_state.py](/home/fatih-ubuntu/dev/timus/orchestration/conversation_state.py), [main_dispatcher.py](/home/fatih-ubuntu/dev/timus/main_dispatcher.py) und [mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py) reichen den aktualisierten Runtime-Plan bis in den Session-State durch.
   - Neue Z5-Tests fuer Runtime-Plan, Conversation-State und Meta-Rezeptpfad; gezielte Verifikation grün.
+
+## 2026-04-20 - Meta Follow-up Clarity Fixblock fuer Kernkontext und thematische Folgefragen
+
+- [docs/META_FOLLOWUP_CLARITY_FIXBLOCK_2026-04-20.md](/home/fatih-ubuntu/dev/timus/docs/META_FOLLOWUP_CLARITY_FIXBLOCK_2026-04-20.md)
+- [orchestration/conversation_state.py](/home/fatih-ubuntu/dev/timus/orchestration/conversation_state.py)
+- [server/mcp_server.py](/home/fatih-ubuntu/dev/timus/server/mcp_server.py)
+- [orchestration/turn_understanding.py](/home/fatih-ubuntu/dev/timus/orchestration/turn_understanding.py)
+- [orchestration/meta_orchestration.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_orchestration.py)
+- [orchestration/meta_response_policy.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_response_policy.py)
+- [orchestration/preference_instruction_memory.py](/home/fatih-ubuntu/dev/timus/orchestration/preference_instruction_memory.py)
+- [orchestration/meta_clarity_contract.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_clarity_contract.py)
+- [tests/test_conversation_state.py](/home/fatih-ubuntu/dev/timus/tests/test_conversation_state.py)
+- [tests/test_meta_orchestration.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_orchestration.py)
+- [tests/test_preference_instruction_memory.py](/home/fatih-ubuntu/dev/timus/tests/test_preference_instruction_memory.py)
+- [tests/test_meta_response_policy.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_response_policy.py)
+- [tests/test_dispatcher_self_status_routing.py](/home/fatih-ubuntu/dev/timus/tests/test_dispatcher_self_status_routing.py)
+- [tests/test_agent_loop_fixes.py](/home/fatih-ubuntu/dev/timus/tests/test_agent_loop_fixes.py)
+
+Inhalt:
+
+- generische Rueckfragen wie `Was brauchst du?` oder `Wie kann ich helfen?` werden nicht mehr als `pending_followup_prompt` konserviert und ueberschreiben damit weder `open_loop` noch `next_expected_step`
+- referentielle Folgefragen mit klarem Themenanker werden in [turn_understanding.py](/home/fatih-ubuntu/dev/timus/orchestration/turn_understanding.py) robuster als `followup` erkannt
+- der Meta-Kontext priorisiert stateful Folgefragen wieder ueber `active_topic`, `active_goal` und relevante User-Turns statt ueber query-fremde Assistentenreste
+- query-fremde `preference_memory` wie Twilio-/Telefonie-Ziele werden bei fachlich anderen Themen durch Domain-Gating unterdrueckt; globale Stilpraeferenzen bleiben erhalten
+- `resume_open_loop` behaelt bei vorhandenem Themenanker seinen stateful Charakter und wird nicht unnötig als `open_loop_not_reliable` entwertet
+- der Klarheitsvertrag laesst fuer stateful Folgefragen wieder passende `topic_memory` zu, statt sie im Resume-Pfad wegzufiltern
+
+Verifikation:
+
+- `python -m py_compile orchestration/meta_clarity_contract.py orchestration/meta_response_policy.py orchestration/preference_instruction_memory.py orchestration/meta_orchestration.py`
+- `pytest -q tests/test_preference_instruction_memory.py tests/test_meta_orchestration.py` -> `72 passed`
+- `pytest -q tests/test_conversation_state.py tests/test_meta_orchestration.py tests/test_preference_instruction_memory.py tests/test_meta_response_policy.py tests/test_dispatcher_self_status_routing.py tests/test_agent_loop_fixes.py` -> `158 passed`

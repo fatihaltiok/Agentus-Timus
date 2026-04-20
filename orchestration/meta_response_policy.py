@@ -229,6 +229,13 @@ def _looks_action_oriented(query: str) -> bool:
     return any(any(token in lowered for token in group) for group in _ACTION_HINT_GROUPS)
 
 
+def _has_stateful_followup_anchor(policy_input: "MetaPolicyInput") -> bool:
+    return any(
+        _normalize_text(value, limit=180)
+        for value in (policy_input.active_topic, policy_input.open_goal, policy_input.next_step)
+    )
+
+
 @dataclass(frozen=True)
 class MetaPolicyInput:
     effective_query: str
@@ -369,23 +376,26 @@ def resolve_meta_response_policy(policy_input: MetaPolicyInput) -> MetaPolicyDec
     if baseline == "resume_open_loop" and any(
         reason in risk_reasons for reason in ("resume_mode_without_open_loop", "thin_context_for_risky_turn")
     ):
-        signals.extend(["open_loop_resume_requested", *risk_reasons])
-        return MetaPolicyDecision(
-            response_mode="clarify_before_execute",
-            policy_reason="open_loop_not_reliable",
-            policy_confidence=0.84,
-            answer_shape="question_first",
-            should_delegate=False,
-            should_store_preference=False,
-            should_resume_open_loop=False,
-            should_summarize_state=False,
-            self_model_bound_applied=False,
-            policy_signals=tuple(signals),
-            override_applied=True,
-            agent_chain_override=("meta",),
-            task_type_override="single_lane",
-            recipe_enabled=False,
-        )
+        if dominant_turn_type == "followup" and _has_stateful_followup_anchor(policy_input):
+            signals.extend(["stateful_followup_anchor_present", *risk_reasons])
+        else:
+            signals.extend(["open_loop_resume_requested", *risk_reasons])
+            return MetaPolicyDecision(
+                response_mode="clarify_before_execute",
+                policy_reason="open_loop_not_reliable",
+                policy_confidence=0.84,
+                answer_shape="question_first",
+                should_delegate=False,
+                should_store_preference=False,
+                should_resume_open_loop=False,
+                should_summarize_state=False,
+                self_model_bound_applied=False,
+                policy_signals=tuple(signals),
+                override_applied=True,
+                agent_chain_override=("meta",),
+                task_type_override="single_lane",
+                recipe_enabled=False,
+            )
 
     if (
         baseline == "execute"
