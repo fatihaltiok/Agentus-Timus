@@ -7350,3 +7350,64 @@ Verifikation:
 - `python -m py_compile orchestration/meta_clarity_contract.py orchestration/meta_response_policy.py orchestration/preference_instruction_memory.py orchestration/meta_orchestration.py`
 - `pytest -q tests/test_preference_instruction_memory.py tests/test_meta_orchestration.py` -> `72 passed`
 - `pytest -q tests/test_conversation_state.py tests/test_meta_orchestration.py tests/test_preference_instruction_memory.py tests/test_meta_response_policy.py tests/test_dispatcher_self_status_routing.py tests/test_agent_loop_fixes.py` -> `158 passed`
+
+## 2026-04-20 - Meta Frame Resolver als naechster Kernumbau geplant
+
+- [docs/META_FRAME_RESOLVER_PLAN_2026-04-20.md](/home/fatih-ubuntu/dev/timus/docs/META_FRAME_RESOLVER_PLAN_2026-04-20.md)
+- [docs/ZWISCHENPROJEKT_ALLGEMEINE_MEHRSCHRITT_PLANUNG_2026-04-12.md](/home/fatih-ubuntu/dev/timus/docs/ZWISCHENPROJEKT_ALLGEMEINE_MEHRSCHRITT_PLANUNG_2026-04-12.md)
+
+Inhalt:
+
+- der aktuelle Live-Befund zeigt, dass weitere Einzelpatches an `meta_context`,
+  `preference_memory` oder `response_policy` allein nicht reichen
+- der naechste Umbau wird deshalb als zentraler `Meta Frame Resolver` geplant:
+  - `frame_kind`
+  - `task_domain`
+  - `execution_mode`
+  - `allowed/forbidden memory domains`
+  - `delegation_budget`
+  - `completion_contract`
+- dieser Resolver soll vor `meta_context_bundle`, `meta_response_policy`,
+  `meta_clarity_contract` und `meta_plan_compiler` sitzen
+- Pflicht-Evalfaelle sind dabei bereits fest benannt, u. a.:
+  - Kanada / Arbeit / `Fuß fassen`
+  - Docs-Status
+  - Twilio + Inworld Setup
+
+Status:
+
+- Plan steht
+- naechster direkter Umsetzungsschritt ist `MFR1 Frame Contract`
+
+## 2026-04-20 - MFR1 erster Runtime-Slice: kanonischer Meta Request Frame
+
+- [orchestration/meta_request_frame.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_request_frame.py)
+- [orchestration/meta_orchestration.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_orchestration.py)
+- [tests/test_meta_request_frame.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_request_frame.py)
+- [docs/META_FRAME_RESOLVER_PLAN_2026-04-20.md](/home/fatih-ubuntu/dev/timus/docs/META_FRAME_RESOLVER_PLAN_2026-04-20.md)
+
+Inhalt:
+
+- neuer kanonischer `meta_request_frame_v1` vor dem spaeteren Policy-/Context-Umbau
+- der Frame liefert jetzt explizit:
+  - `frame_kind`
+  - `task_domain`
+  - `execution_mode`
+  - `primary_objective`
+  - `topic_anchor`
+  - `goal_anchor`
+  - `allowed/forbidden memory domains`
+  - `delegation_budget`
+  - `allowed_delegate_agents`
+  - `completion_contract`
+- `classify_meta_task(...)` gibt den neuen Frame jetzt mit aus
+- erste Vertragsfaelle sind gezielt abgedeckt:
+  - Docs-Status / naechster Schritt
+  - Kanada / Arbeit / `Fuß fassen`
+  - Twilio + Inworld Setup
+
+Verifikation:
+
+- `python -m py_compile orchestration/meta_request_frame.py orchestration/meta_orchestration.py tests/test_meta_request_frame.py`
+- `pytest -q tests/test_meta_request_frame.py tests/test_meta_orchestration.py` -> `71 passed`
+- `pytest -q tests/test_meta_request_frame.py tests/test_meta_orchestration.py tests/test_meta_response_policy.py tests/test_agent_loop_fixes.py` -> `118 passed`

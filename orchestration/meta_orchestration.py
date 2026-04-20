@@ -25,6 +25,7 @@ from orchestration.diagnosis_records import (
 )
 from orchestration.meta_plan_compiler import build_meta_execution_plan
 from orchestration.preference_instruction_memory import select_stored_preference_memory_with_summary
+from orchestration.meta_request_frame import build_meta_request_frame
 from orchestration.meta_response_policy import build_meta_policy_input, resolve_meta_response_policy
 from orchestration.specialist_context import build_specialist_context_payload
 from orchestration.task_decomposition_contract import build_task_decomposition
@@ -3234,6 +3235,19 @@ def classify_meta_task(
     if not final_chain:
         final_chain = ["meta"]
 
+    meta_request_frame = build_meta_request_frame(
+        effective_query=effective_query,
+        dominant_turn_type=turn_interpretation.dominant_turn_type,
+        response_mode=final_response_mode,
+        answer_shape=policy_decision.answer_shape,
+        task_type=final_task_type,
+        active_topic=active_topic,
+        open_goal=str(open_goal or ""),
+        next_step=str(next_step or ""),
+        recommended_agent_chain=final_chain,
+        active_plan=active_plan,
+    )
+
     prefer_youtube_research_only = (
         final_task_type == "youtube_content_extraction"
         and has_direct_youtube_url
@@ -3365,6 +3379,7 @@ def classify_meta_task(
         "task_decomposition": task_decomposition,
         "meta_execution_plan": meta_execution_plan,
         "meta_policy_decision": policy_decision.to_dict(),
+        "meta_request_frame": meta_request_frame.to_dict(),
         "topic_shift_detected": topic_transition.topic_shift_detected,
         "topic_state_transition": topic_transition.to_dict(),
         "meta_context_bundle": filtered_meta_context_bundle,
