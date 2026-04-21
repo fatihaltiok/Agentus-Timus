@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import logging
 from typing import Any, Optional
@@ -24,6 +25,23 @@ _FORMAT_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("PDF",  re.compile(r"\b(pdf|bericht|report|zusammenfassung|summary|protokoll|projektdoku)\b", re.I)),
 ]
 _DEFAULT_FORMAT = "PDF"
+_EXPLICIT_TEXT_REF_PATTERN = re.compile(
+    r"(?:^|[\s`'\"(])((?:[\w.-]+/)*[\w.-]+\.(?:md|txt|log|json|yaml|yml|toml|ini|cfg|py))(?:$|[\s`'\"),.;:])",
+    re.IGNORECASE,
+)
+_EVIDENCE_READ_MARKERS = (
+    "lies ",
+    "lese ",
+    "schau nach",
+    "pruef",
+    "prüf",
+    "status",
+    "naechstes",
+    "nächstes",
+    "was steht",
+    "welche vorbereitungen",
+    "welche vorbereitungen gibt es",
+)
 
 
 def _detect_format(task: str) -> str:
@@ -35,6 +53,57 @@ def _detect_format(task: str) -> str:
 
 def _decode_handoff_value(value: Any) -> str:
     return str(value or "").replace("\\n", "\n").replace("\\t", "\t").replace("\\\\", "\\")
+
+
+def _shorten_text(value: Any, *, limit: int = 1800) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    clipped = text[:limit].rsplit(" ", 1)[0].strip()
+    return f"{clipped or text[:limit]}..."
+
+
+def _parse_string_list(value: Any) -> list[str]:
+    if isinstance(value, (list, tuple)):
+        return [str(item or "").strip() for item in value if str(item or "").strip()]
+    raw = str(value or "").strip()
+    if not raw:
+        return []
+    try:
+        loaded = json.loads(raw)
+    except Exception:
+        loaded = None
+    if isinstance(loaded, list):
+        return [str(item or "").strip() for item in loaded if str(item or "").strip()]
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _extract_explicit_text_refs(task: str, handoff: Optional[DelegationHandoff]) -> list[str]:
+    refs: list[str] = []
+    seen: set[str] = set()
+    if handoff:
+        for key in (
+            "document_refs_json",
+            "document_refs",
+            "explicit_document_refs_json",
+            "explicit_document_refs",
+        ):
+            for ref in _parse_string_list(handoff.handoff_data.get(key)):
+                lowered = ref.lower()
+                if lowered in seen:
+                    continue
+                seen.add(lowered)
+                refs.append(ref)
+    for match in _EXPLICIT_TEXT_REF_PATTERN.findall(str(task or "")):
+        cleaned = str(match or "").strip().strip("`")
+        if not cleaned:
+            continue
+        lowered = cleaned.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        refs.append(cleaned)
+    return refs
 
 
 def _extract_table_from_source_material(source_material: str) -> tuple[list[str], list[list[str]]]:
@@ -79,6 +148,9 @@ class DocumentAgent(BaseAgent):
         handoff = parse_delegation_handoff(task)
         effective_task = handoff.goal if handoff and handoff.goal else str(task or "").strip()
         handoff_context = self._build_delegation_document_context(handoff)
+        file_evidence = await self._maybe_read_explicit_file_evidence(handoff, effective_task)
+        if file_evidence:
+            return file_evidence
         fmt = _detect_format(effective_task)
         log.info(f"DocumentAgent | Format erkannt: {fmt}")
         direct_export = await self._maybe_run_structured_lookup_export(handoff, fmt)
@@ -115,11 +187,60 @@ class DocumentAgent(BaseAgent):
             ("captured_context", "Bereits erfasster Kontext"),
             ("previous_stage_result", "Vorheriges Stage-Ergebnis"),
             ("previous_blackboard_key", "Blackboard-Key"),
+            ("document_refs_json", "Dokument-Referenzen"),
+            ("evidence_mode", "Evidenzmodus"),
         ):
             value = handoff.handoff_data.get(key)
             if value:
                 lines.append(f"{label}: {_decode_handoff_value(value)}")
         return "\n".join(lines)
+
+    async def _maybe_read_explicit_file_evidence(
+        self,
+        handoff: Optional[DelegationHandoff],
+        effective_task: str,
+    ) -> str:
+        normalized = str(effective_task or "").strip().lower()
+        evidence_mode = (
+            str((handoff.handoff_data or {}).get("evidence_mode") or "").strip().lower()
+            if handoff
+            else ""
+        )
+        should_read = evidence_mode == "read_and_summarize" or any(
+            marker in normalized for marker in _EVIDENCE_READ_MARKERS
+        )
+        refs = _extract_explicit_text_refs(effective_task, handoff)
+        if not should_read or not refs:
+            return ""
+
+        sections: list[str] = ["# DOKUMENT-EVIDENZ", "Explizit gelesene Dateien:"]
+        success_count = 0
+        for ref in refs[:4]:
+            result = await self._call_tool("read_file", {"path": ref})
+            payload = result if isinstance(result, dict) else {}
+            if str(payload.get("status") or "").strip().lower() != "success":
+                message = str(payload.get("message") or payload.get("error") or "").strip()
+                sections.append(f"- {ref}: LESEN_FEHLGESCHLAGEN{': ' + message if message else ''}")
+                continue
+            success_count += 1
+            content = _shorten_text(payload.get("content") or "", limit=2500)
+            path = str(payload.get("path") or ref).strip()
+            sections.extend(
+                [
+                    f"- {ref}: gelesen",
+                    "",
+                    f"## DATEI: {path}",
+                    content or "(leer)",
+                    "",
+                ]
+            )
+
+        if success_count == 0:
+            return ""
+        sections.append(
+            "Nutze nur diese gelesene Evidenz. Erfinde keine weiteren Dateien oder Projektkontexte."
+        )
+        return "\n".join(part for part in sections if part is not None).strip()
 
     async def _maybe_run_structured_lookup_export(
         self,

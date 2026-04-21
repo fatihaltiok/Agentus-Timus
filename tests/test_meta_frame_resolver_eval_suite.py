@@ -116,8 +116,8 @@ def _assert_chain_prefix(result: dict, expected_prefix: list[str]) -> None:
             "research_advisory",
             "plan_and_delegate",
             "frame:research_advisory",
-            "knowledge_research",
-            ["meta", "research"],
+            "single_lane",
+            ["meta", "executor"],
             "execute_task",
             "telephony_setup",
         ),
@@ -188,7 +188,7 @@ def test_mfr6_research_advisory_prefers_focused_research_support() -> None:
         action_count=0,
     )
 
-    assert result["recommended_agent_chain"][:2] == ["meta", "research"]
+    assert result["recommended_agent_chain"][:2] == ["meta", "executor"]
     assert result["meta_request_frame"]["task_domain"] == "research_advisory"
     assert result["meta_clarity_contract"]["delegation_mode"] == "focused_research"
-    assert result["meta_clarity_contract"]["allowed_delegate_agents"] == ["research"]
+    assert result["meta_clarity_contract"]["allowed_delegate_agents"] == ["executor"]

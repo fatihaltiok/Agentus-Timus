@@ -172,6 +172,31 @@ def test_build_meta_clarity_contract_for_setup_build_binds_controlled_delegate_b
     assert "assistant_fallback_context" in contract.forbidden_context_slots
 
 
+def test_build_meta_clarity_contract_for_setup_build_preparation_check_forces_single_evidence_step() -> None:
+    contract = build_meta_clarity_contract(
+        effective_query=(
+            "richte fuer mich eine anruffunktion ein und schau mal nach ob es schon "
+            "vorbereitungen gibt"
+        ),
+        response_mode="execute",
+        policy_decision={
+            "answer_shape": "action_first",
+            "policy_reason": "baseline_turn_mode",
+        },
+        task_type="single_lane",
+        goal_spec={},
+        task_decomposition={"goal": "Vorhandene Vorbereitungen fuer Twilio/Inworld pruefen"},
+        meta_execution_plan={},
+    )
+
+    assert contract.request_kind == "execute_task"
+    assert contract.answer_obligation == "inspect_preparation_then_report"
+    assert contract.completion_condition == "existing_preparations_or_real_gap_named"
+    assert contract.max_delegate_calls == 1
+    assert contract.allowed_delegate_agents == ("executor", "document")
+    assert contract.force_answer_after_delegate_budget is True
+
+
 def test_build_meta_clarity_contract_for_migration_work_prefers_focused_research() -> None:
     contract = build_meta_clarity_contract(
         effective_query="suche mir Moeglichkeiten in Kanada Fuss zu fassen",
@@ -238,7 +263,15 @@ def test_build_meta_clarity_contract_for_research_advisory_prefers_focused_resea
     assert contract.request_kind == "execute_task"
     assert contract.answer_obligation == "build_topic_understanding_then_support_followups"
     assert contract.completion_condition == "research_briefing_or_next_research_path_named"
+    assert contract.allowed_context_slots == (
+        "current_query",
+        "conversation_state",
+        "open_loop",
+        "recent_user_turn",
+        "historical_topic_memory",
+    )
     assert contract.delegation_mode == "focused_research"
     assert contract.max_delegate_calls == 1
-    assert contract.allowed_delegate_agents == ("research",)
+    assert contract.allowed_delegate_agents == ("executor",)
+    assert "topic_memory" in contract.forbidden_context_slots
     assert "semantic_recall" in contract.forbidden_context_slots

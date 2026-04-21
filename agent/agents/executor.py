@@ -418,6 +418,8 @@ class ExecutorAgent(BaseAgent):
             ("search_mode", "Suchmodus"),
             ("max_results", "Max Ergebnisse"),
             ("avoid_deep_research", "Deep-Research vermeiden"),
+            ("workspace_root", "Workspace-Root"),
+            ("project_root", "Projekt-Root"),
             ("previous_stage_result", "Vorheriges Stage-Ergebnis"),
             ("previous_blackboard_key", "Blackboard-Key"),
         ):
@@ -2212,6 +2214,242 @@ class ExecutorAgent(BaseAgent):
             results=combined_results,
         )
 
+    @staticmethod
+    def _infer_setup_build_focus_terms(user_task: str) -> list[str]:
+        lowered = str(user_task or "").strip().lower()
+        if not lowered:
+            return []
+        preferred_terms: list[str] = []
+        term_groups = (
+            ("twilio", ("twilio",)),
+            ("inworld", ("inworld",)),
+            ("voice", ("voice", "stimme", "tts")),
+            ("call", ("call", "anruf", "phone", "telefon", "telephony")),
+        )
+        for canonical, variants in term_groups:
+            if any(item in lowered for item in variants):
+                preferred_terms.append(canonical)
+        if preferred_terms:
+            return preferred_terms
+
+        stopwords = {
+            "richte",
+            "ein",
+            "fuer",
+            "mich",
+            "eine",
+            "funktion",
+            "kannst",
+            "sollst",
+            "schau",
+            "nach",
+            "ob",
+            "schon",
+            "gibt",
+            "vorbereitungen",
+            "mir",
+            "dann",
+            "dich",
+            "ueber",
+            "hilfreich",
+            "seite",
+        }
+        tokens = [
+            token
+            for token in re.findall(r"[a-zA-Z][\w.-]{4,}", lowered)
+            if token not in stopwords
+        ]
+        seen: set[str] = set()
+        result: list[str] = []
+        for token in tokens:
+            if token in seen:
+                continue
+            seen.add(token)
+            result.append(token)
+            if len(result) >= 4:
+                break
+        return result
+
+    @staticmethod
+    def _is_setup_build_noise_path(path: str) -> bool:
+        lowered = str(path or "").strip().lower()
+        if not lowered:
+            return True
+        noisy_fragments = (
+            "/docs/autonomy/",
+            "/data/",
+            "/.git/",
+            "/logs/",
+            "/results/",
+            ".env.example",
+            "phase_f_plan",
+            "changelog_dev",
+            "zwischenprojekt_allgemeine_mehrschritt_planung",
+        )
+        return any(fragment in lowered for fragment in noisy_fragments)
+
+    @staticmethod
+    def _is_setup_build_sensitive_path(path: str) -> bool:
+        filename = str(path or "").strip().rsplit("/", 1)[-1].lower()
+        return filename.startswith(".env")
+
+    @classmethod
+    def _sanitize_setup_build_match_line(cls, file_path: str, line: str) -> str:
+        text = str(line or "").strip()
+        if not text:
+            return ""
+        if not cls._is_setup_build_sensitive_path(file_path):
+            return text
+
+        env_match = re.match(r"^([A-Z0-9_]+)\s*=\s*(.+)$", text)
+        if env_match:
+            key = str(env_match.group(1) or "").strip()
+            if key:
+                return f"{key}=<configured>"
+        return "<sensitive env entry present>"
+
+    async def _run_setup_build_probe(
+        self,
+        handoff: DelegationHandoff,
+        task_text: str = "",
+    ) -> str:
+        self._notify_delegation_progress("setup_build_probe_start")
+        handoff_data = handoff.handoff_data if handoff else {}
+        source_task = (
+            handoff_data.get("original_user_task")
+            or handoff_data.get("query")
+            or handoff.goal
+            or task_text
+            or ""
+        )
+        user_task = self._recover_user_query(source_task)
+        project_root = str(
+            handoff_data.get("project_root")
+            or handoff_data.get("workspace_root")
+            or "."
+        ).strip() or "."
+        focus_terms = self._infer_setup_build_focus_terms(user_task)
+        search_terms = list(focus_terms)
+        if "twilio" in focus_terms:
+            search_terms.append("TWILIO_")
+        if "inworld" in focus_terms:
+            search_terms.append("INWORLD_")
+        if "voice" in focus_terms or "call" in focus_terms:
+            search_terms.append("voice_")
+
+        hits_by_file: dict[str, list[str]] = {}
+        for term in search_terms[:6]:
+            self._notify_delegation_progress("setup_build_repo_search", term=term)
+            result = await self._call_tool(
+                "search_in_files",
+                {
+                    "path": project_root,
+                    "text": term,
+                    "file_pattern": "*",
+                    "limit": 20,
+                },
+            )
+            payload = self._tool_payload(result)
+            if str(payload.get("status") or "").strip().lower() != "success":
+                continue
+            for entry in payload.get("results") or []:
+                if not isinstance(entry, dict):
+                    continue
+                file_path = str(entry.get("file") or "").strip()
+                if not file_path or self._is_setup_build_noise_path(file_path):
+                    continue
+                matches = entry.get("matches") or []
+                match_lines = [
+                    self._sanitize_setup_build_match_line(
+                        file_path,
+                        str(item.get("content") or "").strip(),
+                    )
+                    for item in matches
+                    if isinstance(item, dict) and str(item.get("content") or "").strip()
+                ]
+                bucket = hits_by_file.setdefault(file_path, [])
+                for line in match_lines[:3]:
+                    if line not in bucket:
+                        bucket.append(line)
+
+        if not hits_by_file:
+            return (
+                "Ich habe im Projekt keine klaren Vorbereitungen fuer diesen Setup-Auftrag gefunden. "
+                "Es gibt aktuell keine belastbaren Repo-Hinweise auf die angefragte Integration."
+            )
+
+        relevant_files = sorted(
+            hits_by_file.keys(),
+            key=lambda item: (
+                0 if any(seg in item.lower() for seg in ("/agent/", "/tools/", "/skills/", "/server/")) else 1,
+                item,
+            ),
+        )[:6]
+
+        read_snippets: dict[str, str] = {}
+        for file_path in relevant_files[:4]:
+            if self._is_setup_build_sensitive_path(file_path):
+                continue
+            self._notify_delegation_progress("setup_build_read_file", path=file_path)
+            read_result = await self._call_tool("read_file", {"path": file_path})
+            read_payload = self._tool_payload(read_result)
+            if str(read_payload.get("status") or "").strip().lower() != "success":
+                continue
+            content = str(read_payload.get("content") or "")
+            if content:
+                read_snippets[file_path] = content[:1800]
+
+        combined_text = "\n".join(read_snippets.values())
+        lowered_text = combined_text.lower()
+        twilio_present = "twilio" in lowered_text or any("twilio" in path.lower() for path in relevant_files)
+        inworld_present = "inworld" in lowered_text or any("inworld" in path.lower() for path in relevant_files)
+        voice_present = "voice_" in lowered_text or any("voice" in path.lower() for path in relevant_files)
+        twilio_env_present = "twilio_" in lowered_text or any("TWILIO_" in line for lines in hits_by_file.values() for line in lines)
+        inworld_env_present = "inworld_" in lowered_text or any("INWORLD_" in line for lines in hits_by_file.values() for line in lines)
+        twilio_call_logic_present = any(
+            marker in lowered_text
+            for marker in ("client.calls", "calls.create", "twiml", "voice_response")
+        ) or any("test_call.py" in path.lower() for path in relevant_files)
+
+        lines = ["**Repo-Probe fuer vorhandene Vorbereitungen**", ""]
+        lines.append("**Relevante Fundstellen:**")
+        for file_path in relevant_files:
+            lines.append(f"- {file_path}")
+            for match_line in hits_by_file.get(file_path, [])[:2]:
+                lines.append(f"  - {match_line}")
+        lines.extend(
+            [
+                "",
+                "**Verdichteter Stand:**",
+                f"- Twilio-Bezug im Repo: {'ja' if twilio_present else 'nein'}",
+                f"- Inworld-Bezug im Repo: {'ja' if inworld_present else 'nein'}",
+                f"- Voice-/TTS-Bezug im Repo: {'ja' if voice_present else 'nein'}",
+                f"- TWILIO_-Keys referenziert: {'ja' if twilio_env_present else 'nein'}",
+                f"- INWORLD_-Keys referenziert: {'ja' if inworld_env_present else 'nein'}",
+                f"- Outbound-Call-Logik fuer Twilio sichtbar: {'ja' if twilio_call_logic_present else 'nein'}",
+                "",
+                "**Einordnung:**",
+            ]
+        )
+        if twilio_present or inworld_present or voice_present:
+            lines.append(
+                "- Es gibt bereits erkennbare Vorbereitungen im Repo. "
+                "Die Basis ist also nicht null."
+            )
+        else:
+            lines.append("- Im Repo ist derzeit kaum belastbare Vorarbeit fuer diese Integration sichtbar.")
+        if not twilio_call_logic_present:
+            lines.append(
+                "- Eine klare Twilio-Outbound-Call-Implementierung ist in den geprueften Dateien noch nicht sichtbar."
+            )
+        if twilio_present and inworld_present:
+            lines.append(
+                "- Die naechste sinnvolle Arbeit ist, die vorhandenen Twilio- und Inworld-Bausteine "
+                "in einen konkreten Call-Flow zusammenzufuehren."
+            )
+
+        return "\n".join(lines).strip()
+
     async def _run_simple_live_lookup(
         self,
         handoff: DelegationHandoff | None,
@@ -2432,19 +2670,20 @@ class ExecutorAgent(BaseAgent):
     async def run(self, task: str) -> str:
         self._notify_delegation_progress("executor_run_started")
         handoff = parse_delegation_handoff(task)
+        handoff_data = handoff.handoff_data if handoff else {}
         specialist_context_payload = (
-            extract_specialist_context_from_handoff_data(handoff.handoff_data) if handoff else {}
+            extract_specialist_context_from_handoff_data(handoff_data) if handoff else {}
         )
         alignment = assess_specialist_context_alignment(
             current_task=(
-                handoff.handoff_data.get("original_user_task")
-                or handoff.handoff_data.get("query")
+                handoff_data.get("original_user_task")
+                or handoff_data.get("query")
                 or (handoff.goal if handoff else task)
             ),
             payload=specialist_context_payload,
         )
         response_mode = str(specialist_context_payload.get("response_mode") or "").strip().lower()
-        handoff_task_type = str((handoff.handoff_data or {}).get("task_type") or "").strip().lower() if handoff else ""
+        handoff_task_type = str(handoff_data.get("task_type") or "").strip().lower() if handoff else ""
         if handoff and response_mode == "summarize_state" and handoff_task_type in {
             "simple_live_lookup",
             "simple_live_lookup_document",
@@ -2502,6 +2741,8 @@ class ExecutorAgent(BaseAgent):
             return await self._run_location_route(handoff, task)
         if handoff and handoff.handoff_data.get("task_type") == "youtube_light_research":
             return await self._run_youtube_light_research(handoff)
+        if handoff and handoff.handoff_data.get("task_type") == "setup_build_probe":
+            return await self._run_setup_build_probe(handoff, task)
         if handoff and handoff.handoff_data.get("task_type") in {"simple_live_lookup", "simple_live_lookup_document"}:
             return await self._run_simple_live_lookup(handoff, task)
         if not handoff and self._is_simple_live_lookup_query(plain_task):

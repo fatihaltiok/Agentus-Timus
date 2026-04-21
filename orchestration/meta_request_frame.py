@@ -402,16 +402,15 @@ def apply_meta_request_frame_routing(
         final_reason = "frame:migration_work"
     elif task_domain == "research_advisory":
         if not chain or chain == ["executor"]:
-            chain = ["meta", "research"]
+            chain = ["meta", "executor"]
         elif chain[0] != "meta":
             chain = ["meta", *[item for item in chain if item != "meta"]]
-        if "research" not in chain:
-            chain.append("research")
+        if "executor" not in chain:
+            chain.append("executor")
         for capability in ("content_extraction", "source_research"):
             if capability not in capabilities:
                 capabilities.append(capability)
-        if normalized_task_type == "single_lane":
-            normalized_task_type = "knowledge_research"
+        normalized_task_type = "single_lane"
         final_reason = "frame:research_advisory"
     elif task_domain == "planning_advisory":
         chain = ["meta"]

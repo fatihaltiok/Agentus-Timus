@@ -3458,7 +3458,20 @@ class MetaAgent(BaseAgent):
                     "Die eigentliche Aufgabe steht unter # ORIGINAL USER TASK.",
                     "Diese Anfrage ist bereits konkret genug fuer Build/Setup-Planung.",
                     "Pruefe zuerst vorhandene Vorbereitungen, existierende Artefakte und echte Blocker.",
+                    "Nutze dafuer hoechstens einen fokussierten Evidenzpfad auf einmal.",
+                    "Keine parallelen Shell-Mini-Scans und keine generische Setup-Hilfe.",
                     "Keine generische Rueckfrage zum Grundauftrag, solange die Nutzeraufgabe explizit ist.",
+                ]
+            )
+
+        if task_domain == "research_advisory":
+            return "\n".join(
+                [
+                    "# RESEARCH-ADVISORY AUFTRAGSKLARHEIT",
+                    "Bearbeite die konkrete Benutzeranfrage, nicht den internen Handoff.",
+                    "Liefere zuerst ein kompaktes Themen-Briefing mit belastbaren Quellen und klaren Anschlussfragen.",
+                    "Nutze hoechstens einen fokussierten Evidenzpfad auf einmal.",
+                    "Kein Deep-Research-Report und keine breite Agentenkette, solange der Nutzer nicht explizit mehr Tiefe verlangt.",
                 ]
             )
 

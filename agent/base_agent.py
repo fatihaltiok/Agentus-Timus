@@ -127,6 +127,23 @@ _META_MIGRATION_WORK_PATTERNS = (
     "fuß fassen",
     "leben aufbauen",
 )
+_META_RESEARCH_ADVISORY_PATTERNS = (
+    "mach dich schlau ueber",
+    "mach dich schlau über",
+    "informier dich ueber",
+    "informier dich über",
+    "lies dich in",
+    "arbeite dich in",
+    "recherchiere ueber",
+    "recherchiere über",
+    "recherchiere zu",
+    "hilf mir dann",
+    "und hilf mir dann",
+    "steh mir hilfreich zur seite",
+    "steh mir hilfreich zur Seite",
+    "hilfreich zur seite",
+    "hilfreich zur Seite",
+)
 _META_LOCATION_ROUTE_PATTERNS = (
     "route",
     "weg nach",
@@ -1118,6 +1135,78 @@ class BaseAgent(DynamicToolMixin):
         ]
         return "\n".join(payload_lines)
 
+    @staticmethod
+    def _build_setup_build_executor_handoff(task: str) -> str:
+        safe_task = str(task or "").strip()
+        workspace_root = os.getcwd()
+        payload_lines = [
+            "# DELEGATION HANDOFF",
+            "target_agent: executor",
+            f"goal: {safe_task}",
+            "expected_output: Bestehende Vorbereitungen, echte Luecken und naechster Build-Schritt",
+            "success_signal: Setup-Stand im Repo belastbar geklaert",
+            "constraints: pruefe_repo_artefakte_und_env_zuerst, keine_generische_setup_hilfe, kein_parallelscan",
+            "handoff_data:",
+            "- task_type: setup_build_probe",
+            f"- original_user_task: {safe_task[:500]}",
+            f"- query: {safe_task[:500]}",
+            f"- workspace_root: {workspace_root}",
+            f"- project_root: {workspace_root}",
+            "- preferred_tools: read_file, run_command",
+            "- avoid_deep_research: yes",
+            "",
+            "# TASK",
+            safe_task,
+        ]
+        return "\n".join(payload_lines)
+
+    @staticmethod
+    def _build_research_advisory_executor_handoff(task: str) -> str:
+        safe_task = str(task or "").strip()
+        payload_lines = [
+            "# DELEGATION HANDOFF",
+            "target_agent: executor",
+            f"goal: {safe_task}",
+            "expected_output: Kompaktes Themen-Briefing mit belastbaren Quellen und naechsten sinnvollen Fragen",
+            "success_signal: Bounded topic briefing abgeschlossen",
+            "constraints: nutze_leichte_live_suche_ohne_deep_research, bleibe_quellengebunden_und_kompakt, keine_exhaustive_langrecherche",
+            "handoff_data:",
+            "- task_type: simple_live_lookup",
+            f"- original_user_task: {safe_task[:500]}",
+            f"- query: {safe_task[:500]}",
+            "- preferred_search_tool: search_web",
+            "- fallback_tools: search_news, fetch_url",
+            "- avoid_deep_research: yes",
+            "- max_results: 5",
+            "",
+            "# TASK",
+            safe_task,
+        ]
+        return "\n".join(payload_lines)
+
+    @staticmethod
+    def _build_generic_executor_handoff(task: str, *, task_type: str = "delegated_executor_task") -> str:
+        safe_task = str(task or "").strip()
+        workspace_root = os.getcwd()
+        payload_lines = [
+            "# DELEGATION HANDOFF",
+            "target_agent: executor",
+            f"goal: {safe_task}",
+            "expected_output: Strukturierte Diagnose oder direktes Ausfuehrungsergebnis",
+            "success_signal: Delegierter Executor-Schritt abgeschlossen",
+            "constraints: bleibe_beim_konkreten_auftrag, nutze_projektwurzel_aus_dem_handoff",
+            "handoff_data:",
+            f"- task_type: {task_type}",
+            f"- original_user_task: {safe_task[:500]}",
+            f"- query: {safe_task[:500]}",
+            f"- workspace_root: {workspace_root}",
+            f"- project_root: {workspace_root}",
+            "",
+            "# TASK",
+            safe_task,
+        ]
+        return "\n".join(payload_lines)
+
     def _normalize_delegate_to_agent_params(self, params: dict) -> dict:
         if not isinstance(params, dict):
             return params
@@ -1128,6 +1217,21 @@ class BaseAgent(DynamicToolMixin):
         if target_agent != "executor" or not raw_task:
             return refined
         if parse_delegation_handoff(raw_task):
+            return refined
+
+        current_clarity = self._current_meta_clarity_contract() if self.agent_type == "meta" else {}
+        objective_domain = self._detect_meta_objective_domain(
+            str(current_clarity.get("primary_objective") or raw_task)
+        )
+
+        if self.agent_type == "meta" and objective_domain == "setup_build":
+            refined["task"] = self._build_setup_build_executor_handoff(raw_task)
+            log.info("Executor-Delegation fuer setup_build mit strukturiertem Probe-Handoff angereichert")
+            return refined
+
+        if self.agent_type == "meta" and objective_domain == "research_advisory":
+            refined["task"] = self._build_research_advisory_executor_handoff(raw_task)
+            log.info("Executor-Delegation fuer research_advisory als bounded topic briefing angereichert")
             return refined
 
         try:
@@ -1165,6 +1269,15 @@ class BaseAgent(DynamicToolMixin):
             log.info(
                 "Executor-Delegation mit strukturiertem Handoff angereichert | task_type=%s",
                 task_type,
+            )
+        elif self.agent_type == "meta":
+            refined["task"] = self._build_generic_executor_handoff(
+                raw_task,
+                task_type=task_type or "delegated_executor_task",
+            )
+            log.info(
+                "Executor-Delegation mit generischem Handoff angereichert | task_type=%s",
+                task_type or "delegated_executor_task",
             )
 
         return refined
@@ -1513,6 +1626,8 @@ class BaseAgent(DynamicToolMixin):
             return "docs_status"
         if any(pattern in lowered for pattern in _META_SETUP_BUILD_PATTERNS):
             return "setup_build"
+        if any(pattern in lowered for pattern in _META_RESEARCH_ADVISORY_PATTERNS):
+            return "research_advisory"
         if any(pattern in lowered for pattern in _META_MIGRATION_WORK_PATTERNS):
             return "migration_work"
         if any(pattern in lowered for pattern in _META_LOCATION_ROUTE_PATTERNS):
@@ -1528,14 +1643,16 @@ class BaseAgent(DynamicToolMixin):
             return "generic_meta_help"
         if any(pattern in lowered for pattern in _META_SKILL_RESPONSE_PATTERNS):
             return "skill_creation"
+        if any(pattern in lowered for pattern in _META_DOC_STATUS_PATTERNS):
+            return "docs_status"
         if any(pattern in lowered for pattern in _META_SETUP_BUILD_PATTERNS):
             return "setup_build"
+        if any(pattern in lowered for pattern in _META_RESEARCH_ADVISORY_PATTERNS):
+            return "research_advisory"
         if any(pattern in lowered for pattern in _META_MIGRATION_WORK_PATTERNS):
             return "migration_work"
         if any(pattern in lowered for pattern in _META_LOCATION_ROUTE_PATTERNS):
             return "location_route"
-        if any(pattern in lowered for pattern in _META_DOC_STATUS_PATTERNS):
-            return "docs_status"
         return ""
 
     @classmethod
@@ -1565,6 +1682,8 @@ class BaseAgent(DynamicToolMixin):
             return "docs_status"
         if any(pattern in candidate_lower for pattern in _META_SETUP_BUILD_PATTERNS):
             return "setup_build"
+        if any(pattern in candidate_lower for pattern in _META_RESEARCH_ADVISORY_PATTERNS):
+            return "research_advisory"
         if any(pattern in candidate_lower for pattern in _META_MIGRATION_WORK_PATTERNS):
             return "migration_work"
         return ""
@@ -1647,12 +1766,15 @@ class BaseAgent(DynamicToolMixin):
         )
 
     def _build_meta_clarity_delegate_redirect_prompt(self, task: str, method: str, obs: Any) -> str | None:
-        if str(method or "").strip().lower() != "delegate_to_agent":
+        if str(method or "").strip().lower() not in {"delegate_to_agent", "delegate_multiple_agents"}:
             return None
         if not isinstance(obs, dict):
             return None
         blocked_reason = str(obs.get("blocked_reason") or "").strip().lower()
-        if blocked_reason != "meta_clarity_delegate_agent_not_allowed":
+        if blocked_reason not in {
+            "meta_clarity_delegate_agent_not_allowed",
+            "meta_clarity_parallel_delegation_not_allowed",
+        }:
             return None
 
         contract = self._current_meta_clarity_contract()
@@ -1682,7 +1804,7 @@ class BaseAgent(DynamicToolMixin):
             f"- primary_objective: {primary_objective}\n"
             f"- erlaubte_delegate_agents: {', '.join(allowed_agents)}\n"
             "Waehle jetzt entweder einen dieser erlaubten Evidenzpfade oder beantworte direkt.\n"
-            "Kein anderer delegate_to_agent."
+            "Kein anderer delegate_to_agent. Kein delegate_multiple_agents."
         )
 
     def _build_meta_frame_answer_redirect_prompt(self, task: str, result: str) -> str | None:
@@ -1777,7 +1899,31 @@ class BaseAgent(DynamicToolMixin):
         objective_domain = self._detect_meta_objective_domain(primary_objective)
         action_domain = self._detect_meta_action_domain(method, params)
 
-        if str(method or "").strip().lower() == "delegate_to_agent":
+        method_clean = str(method or "").strip().lower()
+
+        if method_clean == "delegate_multiple_agents":
+            delegation_mode = str(clarity_contract.get("delegation_mode") or "").strip().lower()
+            max_delegate_raw = clarity_contract.get("max_delegate_calls", -1)
+            max_delegate_calls = -1 if max_delegate_raw in (None, "") else int(max_delegate_raw)
+            if request_kind in {
+                "direct_recommendation",
+                "state_summary",
+                "historical_recall",
+                "self_model_status",
+            } or max_delegate_calls in {0, 1} or delegation_mode in {
+                "controlled_orchestration",
+                "focused_research",
+            }:
+                return (
+                    "Meta-Clarity blockiert parallele Delegation: "
+                    f"fuer request_kind={request_kind or 'unknown'} und delegation_mode="
+                    f"{delegation_mode or 'unknown'} ist hoechstens ein einzelner passender "
+                    "Evidenzpfad erlaubt. Nutze entweder einen erlaubten Einzelagenten "
+                    "oder schliesse direkt ab.",
+                    "meta_clarity_parallel_delegation_not_allowed",
+                )
+
+        if method_clean == "delegate_to_agent":
             allowed_agents = tuple(
                 str(item or "").strip().lower()
                 for item in (clarity_contract.get("allowed_delegate_agents") or ())

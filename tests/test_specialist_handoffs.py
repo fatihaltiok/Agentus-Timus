@@ -299,6 +299,150 @@ async def test_document_run_exports_lookup_table_without_llm(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_document_run_reads_explicit_file_evidence_without_llm(monkeypatch):
+    tool_calls = []
+
+    async def _unexpected_super_run(self, task: str) -> str:
+        raise AssertionError("BaseAgent.run darf fuer explizite Datei-Evidenz nicht aufgerufen werden")
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        tool_calls.append((method, dict(params)))
+        assert method == "read_file"
+        path = str(params.get("path") or "")
+        return {
+            "status": "success",
+            "path": f"/home/fatih-ubuntu/dev/timus/{path}",
+            "content": f"Inhalt aus {path}\nNaechster Hauptblock: Zwischenprojekt Mehrschrittplanung",
+        }
+
+    monkeypatch.setattr(BaseAgent, "run", _unexpected_super_run)
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = DocumentAgent(tools_description_string="")
+    result = await agent.run(
+        "Lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht."
+    )
+
+    assert [call[1]["path"] for call in tool_calls] == [
+        "docs/PHASE_F_PLAN.md",
+        "docs/CHANGELOG_DEV.md",
+    ]
+    assert "# DOKUMENT-EVIDENZ" in result
+    assert "DATEI: /home/fatih-ubuntu/dev/timus/docs/PHASE_F_PLAN.md" in result
+    assert "Naechster Hauptblock: Zwischenprojekt Mehrschrittplanung" in result
+
+
+@pytest.mark.asyncio
+async def test_executor_run_setup_build_probe_uses_repo_search_instead_of_llm(monkeypatch):
+    tool_calls = []
+
+    async def _unexpected_super_run(self, task: str) -> str:
+        raise AssertionError("BaseAgent.run darf fuer setup_build_probe nicht aufgerufen werden")
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        tool_calls.append((method, dict(params)))
+        if method == "search_in_files":
+            text = str(params.get("text") or "")
+            if text == "twilio":
+                return {
+                    "status": "success",
+                    "results": [
+                        {
+                            "file": "/home/fatih-ubuntu/dev/timus/skills/twilio-voice/scripts/test_call.py",
+                            "matches": [{"content": "from twilio.rest import Client"}],
+                        }
+                    ],
+                }
+            if text == "inworld":
+                return {
+                    "status": "success",
+                    "results": [
+                        {
+                            "file": "/home/fatih-ubuntu/dev/timus/tools/voice_tool/tool.py",
+                            "matches": [{"content": "INWORLD_API_KEY = os.getenv('INWORLD_API_KEY')"}],
+                        }
+                    ],
+                }
+            if text in {"voice_", "voice", "call"}:
+                return {
+                    "status": "success",
+                    "results": [
+                        {
+                            "file": "/home/fatih-ubuntu/dev/timus/tools/voice_tool/tool.py",
+                            "matches": [{"content": "def voice_speak(text: str):"}],
+                        }
+                    ],
+                }
+            if text in {"TWILIO_", "INWORLD_"}:
+                if text == "TWILIO_":
+                    return {
+                        "status": "success",
+                        "results": [
+                            {
+                                "file": "/home/fatih-ubuntu/dev/timus/.env",
+                                "matches": [{"content": "TWILIO_ACCOUNT_SID=ACsupersecretvalue"}],
+                            }
+                        ],
+                    }
+                return {
+                    "status": "success",
+                    "results": [
+                        {
+                            "file": "/home/fatih-ubuntu/dev/timus/.env.backup",
+                            "matches": [{"content": "INWORLD_API_KEY=verysecretapikey"}],
+                        }
+                    ],
+                }
+            raise AssertionError(f"unerwarteter Suchterm: {text}")
+        if method == "read_file":
+            path = str(params.get("path") or "")
+            if path.endswith("test_call.py"):
+                return {
+                    "status": "success",
+                    "path": path,
+                    "content": "from twilio.rest import Client\nclient.calls.create(to='x', from_='y')",
+                }
+            if path.endswith("tool.py"):
+                return {
+                    "status": "success",
+                    "path": path,
+                    "content": "INWORLD_API_KEY = os.getenv('INWORLD_API_KEY')\ndef voice_speak(text: str):\n    pass",
+                }
+            raise AssertionError(f"unerwarteter Dateipfad: {path}")
+        raise AssertionError(f"unerwartetes Tool: {method}")
+
+    monkeypatch.setattr(BaseAgent, "run", _unexpected_super_run)
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = ExecutorAgent(tools_description_string="")
+    result = await agent.run(
+        "# DELEGATION HANDOFF\n"
+        "target_agent: executor\n"
+        "goal: Pruefe vorhandene Vorbereitungen fuer eine Twilio-Anruffunktion mit Inworld-Stimme.\n"
+        "expected_output: Repo-Probe\n"
+        "success_signal: Setup-Stand geklaert\n"
+        "handoff_data:\n"
+        "- task_type: setup_build_probe\n"
+        "- original_user_task: Richte fuer mich eine Anruffunktion ein. Du sollst mich ueber Twilio anrufen koennen mit der Stimme von Inworld.ai Lennart.\n"
+        "- query: Richte fuer mich eine Anruffunktion ein. Du sollst mich ueber Twilio anrufen koennen mit der Stimme von Inworld.ai Lennart.\n"
+        "- project_root: /home/fatih-ubuntu/dev/timus\n"
+    )
+
+    assert any(method == "search_in_files" for method, _ in tool_calls)
+    assert not any(
+        method == "read_file" and str(params.get("path") or "").endswith((".env", ".env.backup"))
+        for method, params in tool_calls
+    )
+    assert "Twilio-Bezug im Repo: ja" in result
+    assert "Inworld-Bezug im Repo: ja" in result
+    assert "Outbound-Call-Logik fuer Twilio sichtbar: ja" in result
+    assert "TWILIO_ACCOUNT_SID=<configured>" in result
+    assert "INWORLD_API_KEY=<configured>" in result
+    assert "ACsupersecretvalue" not in result
+    assert "verysecretapikey" not in result
+
+
+@pytest.mark.asyncio
 async def test_system_run_uses_structured_handoff(monkeypatch):
     captured = {}
 

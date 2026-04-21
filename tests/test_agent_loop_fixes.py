@@ -9,6 +9,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from agent.base_agent import BaseAgent
 from agent.agents.meta import MetaAgent
+from agent.shared.delegation_handoff import parse_delegation_handoff
 
 
 # ── 1. max_tokens ─────────────────────────────────────────────────────────
@@ -114,6 +115,15 @@ def test_parse_action_rejects_list_shaped_action_payload():
     assert err == "Action-JSON muss ein Objekt sein, keine Liste."
 
 
+def test_detect_meta_answer_domain_prefers_docs_status_over_restarbeit_wording():
+    answer = (
+        "Phase F ist im Kern abgeschlossen. Offene Restarbeit ist nur Nachschaerfung. "
+        "Als naechstes steht das Zwischenprojekt zur allgemeinen Mehrschritt-Planung an."
+    )
+
+    assert BaseAgent._detect_meta_answer_domain(answer) == "docs_status"
+
+
 def test_base_agent_normalize_action_payload_rejects_non_dict():
     action, err = BaseAgent._normalize_action_payload(
         [{"method": "read_file", "params": {"path": "x"}}],
@@ -176,6 +186,70 @@ def test_refine_tool_call_wraps_executor_simple_live_lookup_in_handoff():
     assert params["task"].startswith("# DELEGATION HANDOFF")
     assert "- task_type: simple_live_lookup" in params["task"]
     assert "preferred_search_tool: search_web" in params["task"]
+
+
+def test_refine_tool_call_wraps_meta_executor_setup_task_in_generic_handoff():
+    agent = BaseAgent(
+        system_prompt_template="Du bist ein Test-Agent.",
+        tools_description_string="",
+        max_iterations=2,
+        agent_type="meta",
+        skip_model_validation=True,
+    )
+    try:
+        method, params = agent._refine_tool_call(
+            "delegate_to_agent",
+            {
+                "agent_type": "executor",
+                "task": (
+                    "Pruefe im Repo, ob es schon Vorbereitungen fuer Twilio und Inworld "
+                    "fuer eine Anruffunktion gibt."
+                ),
+            },
+        )
+    finally:
+        asyncio.run(agent.http_client.aclose())
+
+    assert method == "delegate_to_agent"
+    assert params["agent_type"] == "executor"
+    handoff = parse_delegation_handoff(params["task"])
+    assert handoff is not None
+    assert handoff.target_agent == "executor"
+    assert handoff.handoff_data["task_type"] == "setup_build_probe"
+    assert handoff.handoff_data["project_root"].endswith("/home/fatih-ubuntu/dev/timus")
+
+
+def test_refine_tool_call_wraps_meta_executor_research_advisory_in_bounded_handoff():
+    agent = BaseAgent(
+        system_prompt_template="Du bist ein Test-Agent.",
+        tools_description_string="",
+        max_iterations=2,
+        agent_type="meta",
+        skip_model_validation=True,
+    )
+    agent._current_task_text = (
+        "# META ORCHESTRATION HANDOFF\n"
+        'meta_clarity_contract_json: {"primary_objective":"Mach dich schlau ueber Kreislaufwirtschaft im Bau und steh mir dann hilfreich zur Seite","request_kind":"execute_task"}\n'
+    )
+    try:
+        method, params = agent._refine_tool_call(
+            "delegate_to_agent",
+            {
+                "agent_type": "executor",
+                "task": "Mach dich schlau ueber Kreislaufwirtschaft im Bau und steh mir dann hilfreich zur Seite",
+            },
+        )
+    finally:
+        asyncio.run(agent.http_client.aclose())
+
+    assert method == "delegate_to_agent"
+    assert params["agent_type"] == "executor"
+    handoff = parse_delegation_handoff(params["task"])
+    assert handoff is not None
+    assert handoff.target_agent == "executor"
+    assert handoff.handoff_data["task_type"] == "simple_live_lookup"
+    assert handoff.handoff_data["query"].startswith("Mach dich schlau ueber Kreislaufwirtschaft")
+    assert "avoid_deep_research: yes" in params["task"]
 
 
 def test_embedded_final_answer_action_salvage_requires_safe_runtime_context():
@@ -1066,6 +1140,107 @@ async def test_meta_frame_guard_rejects_setup_build_generic_help(monkeypatch):
     assert "Meta-Frame-Korrektur" in last_user_messages[1]
     assert "task_domain: setup_build" in last_user_messages[1]
     assert "erkannter_antwort_drift: generic_meta_help" in last_user_messages[1]
+
+
+@pytest.mark.asyncio
+async def test_meta_clarity_blocks_parallel_delegation_for_docs_direct_answer(monkeypatch):
+    replies = iter(
+        [
+            (
+                'Action: {"method":"delegate_multiple_agents","params":{"tasks":['
+                '{"task_id":"phase","agent":"shell","task":"Lies docs/PHASE_F_PLAN.md"},'
+                '{"task_id":"changelog","agent":"shell","task":"Lies docs/CHANGELOG_DEV.md"}'
+                ']}}'
+            ),
+            "Final Answer: Als Naechstes kommt das Zwischenprojekt zur allgemeinen Mehrschritt-Planung.",
+        ]
+    )
+    last_user_messages = []
+
+    async def _fake_detect(self, task: str) -> bool:
+        return False
+
+    async def _fake_working_memory(self, task: str) -> str:
+        return ""
+
+    def _fake_inject(self, task: str, working_memory_context: str) -> str:
+        return task
+
+    async def _fake_llm(self, messages):
+        last_user_messages.append(messages[-1]["content"])
+        return next(replies)
+
+    async def _fake_reflection(self, task: str, result: str, success: bool = True) -> None:
+        return None
+
+    monkeypatch.setattr(BaseAgent, "_detect_dynamic_ui_and_set_roi", _fake_detect)
+    monkeypatch.setattr(BaseAgent, "_build_working_memory_context", _fake_working_memory)
+    monkeypatch.setattr(BaseAgent, "_inject_working_memory_into_task", _fake_inject)
+    monkeypatch.setattr(BaseAgent, "_call_llm", _fake_llm)
+    monkeypatch.setattr(BaseAgent, "_run_reflection", _fake_reflection)
+
+    agent = BaseAgent(
+        system_prompt_template="Du bist ein Test-Agent.",
+        tools_description_string="",
+        max_iterations=3,
+        agent_type="meta",
+        skip_model_validation=True,
+    )
+    task = (
+        "# META ORCHESTRATION HANDOFF\n"
+        "meta_request_frame_json: "
+        '{"frame_kind":"direct_answer","task_domain":"docs_status","execution_mode":"answer_directly",'
+        '"primary_objective":"lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht"}\n'
+        "meta_clarity_contract_json: "
+        '{"primary_objective":"lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht",'
+        '"request_kind":"direct_recommendation","answer_obligation":"answer_now_with_single_recommendation",'
+        '"completion_condition":"next_recommended_block_or_step_named","direct_answer_required":true,'
+        '"delegation_mode":"single_evidence_fetch","max_delegate_calls":1,'
+        '"allowed_delegate_agents":["document"],"force_answer_after_delegate_budget":true}\n'
+        "\n"
+        "# ORIGINAL USER TASK\n"
+        "lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht\n"
+    )
+
+    try:
+        result = await agent.run(task)
+    finally:
+        await agent.http_client.aclose()
+
+    assert "Zwischenprojekt" in result
+    assert len(last_user_messages) == 2
+    assert "Meta-Clarity Korrektur" in last_user_messages[1]
+    assert "erlaubte_delegate_agents: document" in last_user_messages[1]
+    assert "Kein anderer delegate_to_agent. Kein delegate_multiple_agents." in last_user_messages[1]
+
+
+def test_meta_clarity_blocks_parallel_delegation_for_setup_build():
+    agent = BaseAgent(
+        system_prompt_template="Du bist ein Test-Agent.",
+        tools_description_string="",
+        max_iterations=2,
+        agent_type="meta",
+        skip_model_validation=True,
+    )
+    agent._current_task_text = (
+        "# META ORCHESTRATION HANDOFF\n"
+        'meta_clarity_contract_json: {"primary_objective":"Richte fuer mich eine Anruffunktion ein","request_kind":"execute_task","delegation_mode":"controlled_orchestration","max_delegate_calls":2,"allowed_delegate_agents":["executor","research","document"]}\n'
+    )
+    try:
+        message, reason = agent._check_meta_clarity_tool_intent(
+            "delegate_multiple_agents",
+            {
+                "tasks": [
+                    {"task_id": "twilio", "agent": "shell", "task": "grep -R twilio ."},
+                    {"task_id": "inworld", "agent": "shell", "task": "grep -R inworld ."},
+                ]
+            },
+        )
+    finally:
+        asyncio.run(agent.http_client.aclose())
+
+    assert "parallele Delegation" in message
+    assert reason == "meta_clarity_parallel_delegation_not_allowed"
 
 
 # ── 4. Prompt-Korrektheit ─────────────────────────────────────────────────

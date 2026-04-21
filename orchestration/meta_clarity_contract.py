@@ -213,6 +213,22 @@ def _detect_objective_domain(text: Any) -> str:
     return ""
 
 
+def _is_setup_build_preparation_check(text: Any) -> bool:
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return False
+    markers = (
+        "schau mal nach ob es schon vorbereitungen gibt",
+        "schau nach ob es schon vorbereitungen gibt",
+        "ob es schon vorbereitungen gibt",
+        "gibt es schon vorbereitungen",
+        "pruefe ob es schon vorbereitungen gibt",
+        "prüfe ob es schon vorbereitungen gibt",
+        "was gibt es schon",
+    )
+    return any(marker in lowered for marker in markers)
+
+
 def build_meta_clarity_contract(
     *,
     effective_query: str,
@@ -446,6 +462,16 @@ def build_meta_clarity_contract(
             "Setup-/Integrationsaufgaben brauchen klare Zielbindung und kleine kontrollierte "
             "Evidenzpfade statt generischer Meta-Rueckfragen."
         )
+        if _is_setup_build_preparation_check(effective_query):
+            answer_obligation = "inspect_preparation_then_report"
+            completion_condition = "existing_preparations_or_real_gap_named"
+            max_delegate_calls = 1
+            allowed_delegate_agents = ("executor", "document")
+            force_answer_after_delegate_budget = True
+            rationale = (
+                "Reine Vorbereitungspruefungen sollen genau einmal belastbare Repo-Evidenz holen "
+                "und danach direkt mit vorhandenem Stand plus echter Luecke abschliessen."
+            )
     elif objective_domain == "migration_work":
         request_kind = "execute_task"
         answer_obligation = "return_actionable_migration_or_work_path"
@@ -508,23 +534,23 @@ def build_meta_clarity_contract(
             "conversation_state",
             "open_loop",
             "recent_user_turn",
-            "topic_memory",
             "historical_topic_memory",
         )
         forbidden_context_slots = (
             "assistant_fallback_context",
+            "topic_memory",
             "preference_memory",
             "semantic_recall",
         )
         allowed_working_memory_sections = ("KURZZEITKONTEXT", "LANGZEITKONTEXT")
-        max_related_memories = 2
+        max_related_memories = 1
         max_recent_events = 6
         delegation_mode = "focused_research"
         max_delegate_calls = 1
-        allowed_delegate_agents = ("research",)
+        allowed_delegate_agents = ("executor",)
         rationale = (
-            "Themenrecherche mit anschliessender Beratung braucht fokussierte Recherche "
-            "plus Topic-Continuity, aber keinen Drift in fremde Setup-/Skill-Domaenen."
+            "Themenrecherche mit anschliessender Beratung braucht ein gebundenes "
+            "Themen-Briefing mit schnellen Quellen statt sofortigem Deep-Research-Drift."
         )
 
     if str((goal_spec or {}).get("output_mode") or "").strip().lower() in {"report", "artifact", "table"}:
