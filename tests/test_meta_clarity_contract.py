@@ -196,3 +196,49 @@ def test_build_meta_clarity_contract_for_migration_work_prefers_focused_research
     assert contract.allowed_delegate_agents == ("research",)
     assert "preference_memory" in contract.forbidden_context_slots
     assert "semantic_recall" in contract.forbidden_context_slots
+
+
+def test_build_meta_clarity_contract_for_planning_advisory_prefers_direct_planning() -> None:
+    contract = build_meta_clarity_contract(
+        effective_query="Plane meinen Tag fuer morgen",
+        response_mode="execute",
+        policy_decision={
+            "answer_shape": "action_first",
+            "policy_reason": "baseline_turn_mode",
+        },
+        task_type="single_lane",
+        goal_spec={},
+        task_decomposition={"goal": "Einen Tagesplan fuer morgen erstellen"},
+        meta_execution_plan={},
+    )
+
+    assert contract.request_kind == "execute_task"
+    assert contract.answer_obligation == "collect_constraints_then_plan"
+    assert contract.completion_condition == "planning_structure_or_missing_constraints_named"
+    assert contract.delegation_mode == "direct_only"
+    assert contract.max_delegate_calls == 0
+    assert contract.allowed_delegate_agents == ()
+    assert "semantic_recall" in contract.forbidden_context_slots
+
+
+def test_build_meta_clarity_contract_for_research_advisory_prefers_focused_research() -> None:
+    contract = build_meta_clarity_contract(
+        effective_query="Mach dich schlau ueber Kreislaufwirtschaft im Bau und steh mir dann hilfreich zur Seite",
+        response_mode="execute",
+        policy_decision={
+            "answer_shape": "action_first",
+            "policy_reason": "baseline_turn_mode",
+        },
+        task_type="knowledge_research",
+        goal_spec={},
+        task_decomposition={"goal": "Thema verstehen und anschlussfaehig beraten koennen"},
+        meta_execution_plan={},
+    )
+
+    assert contract.request_kind == "execute_task"
+    assert contract.answer_obligation == "build_topic_understanding_then_support_followups"
+    assert contract.completion_condition == "research_briefing_or_next_research_path_named"
+    assert contract.delegation_mode == "focused_research"
+    assert contract.max_delegate_calls == 1
+    assert contract.allowed_delegate_agents == ("research",)
+    assert "semantic_recall" in contract.forbidden_context_slots

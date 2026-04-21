@@ -35,8 +35,11 @@ _NEXT_STEP_SUMMARY_PATTERNS = (
 )
 
 _SELF_MODEL_STATUS_PATTERNS = (
+    r"\bwie\s+ist\s+dein\s+zustand\b",
+    r"\bwas\s+ist\s+dein\s+zustand\b",
     r"\bbist\s+du\s+anpassungsf(?:aehig|[aä]hig)\b",
     r"\bbist\s+du\s+ein\s+funktionierendes?\s+ki(?:-| )?system\b",
+    r"\bhast\s+du\s+probleme\s+mich\s+zu\s+verstehen\b",
     r"\bwas\s+hast\s+du\s+f(?:u|ü)r\s+probleme\b",
     r"\bwelche\s+probleme\s+hast\s+du\b",
     r"\bwas\s+ist\s+los\b",
@@ -318,6 +321,25 @@ def resolve_meta_response_policy(policy_input: MetaPolicyInput) -> MetaPolicyDec
             should_resume_open_loop=False,
             should_summarize_state=True,
             self_model_bound_applied=False,
+            policy_signals=tuple(signals),
+            override_applied=True,
+            agent_chain_override=("meta",),
+            task_type_override="single_lane",
+            recipe_enabled=False,
+        )
+
+    if frame_task_domain == "self_status" and frame_execution_mode == "answer_directly":
+        signals.extend(["frame_self_status", "self_model_status_question"])
+        return MetaPolicyDecision(
+            response_mode="summarize_state",
+            policy_reason="self_model_status_request",
+            policy_confidence=0.93,
+            answer_shape="self_model_status",
+            should_delegate=False,
+            should_store_preference=False,
+            should_resume_open_loop=False,
+            should_summarize_state=True,
+            self_model_bound_applied=True,
             policy_signals=tuple(signals),
             override_applied=True,
             agent_chain_override=("meta",),

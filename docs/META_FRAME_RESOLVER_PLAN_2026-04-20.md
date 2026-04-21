@@ -238,6 +238,33 @@ Erfolg:
 - der Resolver wird nicht mehr nur an Symptomen, sondern an festen
   Invarianten gemessen
 
+Status 2026-04-21:
+
+- erster MFR6-Eval-Block lokal umgesetzt
+- neue integrierte Suite:
+  - [tests/test_meta_frame_resolver_eval_suite.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_frame_resolver_eval_suite.py)
+- deckt jetzt nicht nur die bisherigen Pflichtfaelle ab, sondern auch
+  allgemeine Beratungs-/Planungsfaelle:
+  - `docs_status`
+  - `migration_work`
+  - `setup_build`
+  - `planning_advisory`
+  - `research_advisory`
+  - `self_status`
+- neue allgemeine Frame-Domaenen aktiviert:
+  - `planning_advisory`
+  - `research_advisory`
+  - `self_status`
+- die MFR6-Suite prueft pro Fall fest:
+  - `frame_kind`
+  - `task_domain`
+  - `execution_mode`
+  - `reason`
+  - `recommended_agent_chain`
+  - `meta_clarity_contract.request_kind`
+- aktueller lokaler Verifikationsstand:
+  - fokussierter Meta-Subset `96 passed`
+
 ## Reihenfolge
 
 1. MFR1 Frame Contract

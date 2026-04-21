@@ -2,6 +2,53 @@
 
 ---
 
+## Fortschritt 2026-04-21 - MFR6 Eval Suite und allgemeine Meta-Frames
+
+Der Meta-Frame-Resolver wird jetzt nicht mehr nur gegen die bisherigen
+Fehlfaelle `Docs`, `Kanada` und `Twilio` geprueft, sondern gegen eine feste
+Eval-Matrix fuer allgemeine Beratungs- und Planungsanfragen. Damit wird der
+Umbau erstmals gegen echte Generalisierungsfaelle gemessen statt nur gegen die
+letzte Fehlkonversation.
+
+Geaendert:
+
+- [orchestration/meta_request_frame.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_request_frame.py)
+  - neue Frame-Domaenen:
+    - `planning_advisory`
+    - `research_advisory`
+    - `self_status`
+  - neue Frame-Routing-Regeln:
+    - `planning_advisory` bleibt lokal bei `meta`
+    - `research_advisory` erzwingt `meta -> research`
+- [orchestration/meta_response_policy.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_response_policy.py)
+  - `self_status` wird jetzt explizit als `self_model_status_request`
+    behandelt statt nur als generischer Status-Summary-Fall
+- [orchestration/meta_clarity_contract.py](/home/fatih-ubuntu/dev/timus/orchestration/meta_clarity_contract.py)
+  - neue Klarheitsvertraege fuer:
+    - `planning_advisory`
+    - `research_advisory`
+  - damit sind Delegationsbudget und Kontextgrenzen fuer diese neuen
+    Generalisierungsfaelle explizit
+- [tests/test_meta_frame_resolver_eval_suite.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_frame_resolver_eval_suite.py)
+  - neue integrierte MFR6-Eval-Matrix fuer:
+    - `docs_status`
+    - `migration_work`
+    - `setup_build`
+    - `planning_advisory`
+    - `research_advisory`
+    - `self_status`
+- [tests/test_meta_clarity_contract.py](/home/fatih-ubuntu/dev/timus/tests/test_meta_clarity_contract.py)
+  - neue Vertragschecks fuer:
+    - `planning_advisory`
+    - `research_advisory`
+- [docs/META_FRAME_RESOLVER_PLAN_2026-04-20.md](/home/fatih-ubuntu/dev/timus/docs/META_FRAME_RESOLVER_PLAN_2026-04-20.md)
+  - MFR6-Status als erster lokaler Eval-Block dokumentiert
+
+Verifikation:
+
+- `python -m py_compile orchestration/meta_request_frame.py orchestration/meta_response_policy.py orchestration/meta_clarity_contract.py tests/test_meta_frame_resolver_eval_suite.py tests/test_meta_clarity_contract.py` gruen
+- `pytest -q tests/test_meta_frame_resolver_eval_suite.py tests/test_meta_clarity_contract.py tests/test_meta_request_frame.py tests/test_meta_orchestration.py tests/test_meta_response_policy.py` -> `96 passed`
+
 ## Fortschritt 2026-04-18 - Z4 erster Runtime-Slice fuer Specialist Step Packaging
 
 Z4 ist nicht mehr nur als naechster Mehrschritt-Block dokumentiert, sondern im ersten echten Runtime-Slice umgesetzt. Spezialisten bekommen jetzt nicht mehr nur rohen Handoff-Kontext plus loses `plan_step_json`, sondern ein explizites `specialist_step_package_json` mit fokussiertem Arbeitsschritt und einem klaren Ruecksignalvertrag.

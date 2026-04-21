@@ -25,6 +25,15 @@ _DOC_STATUS_PATTERNS = (
     "wo stehen wir",
     "status",
 )
+_SELF_STATUS_PATTERNS = (
+    "wie ist dein zustand",
+    "was ist dein zustand",
+    "hast du probleme",
+    "hast du probleme mich zu verstehen",
+    "welche probleme hast du",
+    "was ist los",
+    "wo hakt es",
+)
 _LOCATION_ROUTE_PATTERNS = (
     "route",
     "weg nach",
@@ -63,6 +72,35 @@ _MIGRATION_WORK_PATTERNS = (
     "fuss fassen",
     "fuß fassen",
     "leben aufbauen",
+)
+_PLANNING_ADVISORY_PATTERNS = (
+    "plane meinen tag",
+    "plan meinen tag",
+    "plane mir den tag",
+    "meinen tag planen",
+    "tagesplan",
+    "strukturier meinen tag",
+    "plane meine woche",
+    "plan meine woche",
+    "meine woche strukturieren",
+    "hilf mir meinen tag zu planen",
+)
+_RESEARCH_ADVISORY_PATTERNS = (
+    "mach dich schlau ueber",
+    "mach dich schlau über",
+    "informier dich ueber",
+    "informier dich über",
+    "lies dich in",
+    "arbeite dich in",
+    "recherchiere ueber",
+    "recherchiere über",
+    "recherchiere zu",
+    "hilf mir dann",
+    "und hilf mir dann",
+    "steh mir hilfreich zur seite",
+    "steh mir hilfreich zur Seite",
+    "hilfreich zur seite",
+    "hilfreich zur Seite",
 )
 
 
@@ -160,12 +198,18 @@ def _detect_objective_domain(text: Any) -> str:
         return ""
     if any(pattern in lowered for pattern in _DOC_STATUS_PATTERNS):
         return "docs_status"
+    if any(pattern in lowered for pattern in _SELF_STATUS_PATTERNS):
+        return "self_status"
     if any(pattern in lowered for pattern in _LOCATION_ROUTE_PATTERNS):
         return "location_route"
     if any(pattern in lowered for pattern in _SETUP_BUILD_PATTERNS):
         return "setup_build"
     if any(pattern in lowered for pattern in _MIGRATION_WORK_PATTERNS):
         return "migration_work"
+    if any(pattern in lowered for pattern in _PLANNING_ADVISORY_PATTERNS):
+        return "planning_advisory"
+    if any(pattern in lowered for pattern in _RESEARCH_ADVISORY_PATTERNS):
+        return "research_advisory"
     return ""
 
 
@@ -428,6 +472,59 @@ def build_meta_clarity_contract(
         rationale = (
             "Migrations-/Arbeitsfragen brauchen thematische Kontinuitaet und fokussierte "
             "Recherche statt offener Meta-Hilfe oder fachfremdem Kontext."
+        )
+    elif objective_domain == "planning_advisory":
+        request_kind = "execute_task"
+        answer_obligation = "collect_constraints_then_plan"
+        completion_condition = "planning_structure_or_missing_constraints_named"
+        allowed_context_slots = (
+            "current_query",
+            "conversation_state",
+            "open_loop",
+            "recent_user_turn",
+            "topic_memory",
+            "historical_topic_memory",
+        )
+        forbidden_context_slots = (
+            "assistant_fallback_context",
+            "preference_memory",
+            "semantic_recall",
+        )
+        allowed_working_memory_sections = ("KURZZEITKONTEXT", "LANGZEITKONTEXT")
+        max_related_memories = 1
+        max_recent_events = 6
+        delegation_mode = "direct_only"
+        max_delegate_calls = 0
+        rationale = (
+            "Planungsanfragen brauchen zuerst das konkrete Ziel und Randbedingungen, "
+            "aber keine freie Agentenkette oder fachfremdes Altgedaechtnis."
+        )
+    elif objective_domain == "research_advisory":
+        request_kind = "execute_task"
+        answer_obligation = "build_topic_understanding_then_support_followups"
+        completion_condition = "research_briefing_or_next_research_path_named"
+        allowed_context_slots = (
+            "current_query",
+            "conversation_state",
+            "open_loop",
+            "recent_user_turn",
+            "topic_memory",
+            "historical_topic_memory",
+        )
+        forbidden_context_slots = (
+            "assistant_fallback_context",
+            "preference_memory",
+            "semantic_recall",
+        )
+        allowed_working_memory_sections = ("KURZZEITKONTEXT", "LANGZEITKONTEXT")
+        max_related_memories = 2
+        max_recent_events = 6
+        delegation_mode = "focused_research"
+        max_delegate_calls = 1
+        allowed_delegate_agents = ("research",)
+        rationale = (
+            "Themenrecherche mit anschliessender Beratung braucht fokussierte Recherche "
+            "plus Topic-Continuity, aber keinen Drift in fremde Setup-/Skill-Domaenen."
         )
 
     if str((goal_spec or {}).get("output_mode") or "").strip().lower() in {"report", "artifact", "table"}:

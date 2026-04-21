@@ -20,6 +20,15 @@ _STATE_SUMMARY_HINTS = (
     "was ist dein zustand",
     "aktueller stand",
 )
+_SELF_STATUS_HINTS = (
+    "wie ist dein zustand",
+    "was ist dein zustand",
+    "hast du probleme",
+    "hast du probleme mich zu verstehen",
+    "welche probleme hast du",
+    "was ist los",
+    "wo hakt es",
+)
 _LOCATION_ROUTE_HINTS = (
     "route",
     "weg nach",
@@ -68,8 +77,38 @@ _MIGRATION_WORK_HINTS = (
     "fuß fassen",
     "leben aufbauen",
 )
+_PLANNING_ADVISORY_HINTS = (
+    "plane meinen tag",
+    "plan meinen tag",
+    "plane mir den tag",
+    "meinen tag planen",
+    "tagesplan",
+    "strukturier meinen tag",
+    "plane meine woche",
+    "plan meine woche",
+    "meine woche strukturieren",
+    "hilf mir meinen tag zu planen",
+)
+_RESEARCH_ADVISORY_HINTS = (
+    "mach dich schlau ueber",
+    "mach dich schlau über",
+    "informier dich ueber",
+    "informier dich über",
+    "lies dich in",
+    "arbeite dich in",
+    "recherchiere ueber",
+    "recherchiere über",
+    "recherchiere zu",
+    "hilf mir dann",
+    "und hilf mir dann",
+    "steh mir hilfreich zur seite",
+    "steh mir hilfreich zur Seite",
+    "hilfreich zur seite",
+    "hilfreich zur Seite",
+)
 
 _DOMAIN_HINTS: dict[str, tuple[str, ...]] = {
+    "self_status": _SELF_STATUS_HINTS,
     "skill_creation": _SKILL_CREATION_HINTS,
     "location_route": _LOCATION_ROUTE_HINTS
     + (
@@ -88,6 +127,8 @@ _DOMAIN_HINTS: dict[str, tuple[str, ...]] = {
         "stimme",
         "lennart",
     ),
+    "planning_advisory": _PLANNING_ADVISORY_HINTS,
+    "research_advisory": _RESEARCH_ADVISORY_HINTS,
     "migration_work": _MIGRATION_WORK_HINTS,
     "docs_status": _DOC_STATUS_HINTS,
 }
@@ -186,6 +227,9 @@ def _infer_task_domain(
     if _contains_any(query_text, _DOC_STATUS_HINTS):
         evidence.append("query:docs_status")
         return "docs_status", evidence, 0.96
+    if _contains_any(query_text, _SELF_STATUS_HINTS):
+        evidence.append("query:self_status")
+        return "self_status", evidence, 0.93
     if _contains_any(query_text, _LOCATION_ROUTE_HINTS):
         evidence.append("query:location_route")
         return "location_route", evidence, 0.95
@@ -198,6 +242,12 @@ def _infer_task_domain(
     if _contains_any(combined, _MIGRATION_WORK_HINTS):
         evidence.append("query_or_anchor:migration_work")
         return "migration_work", evidence, 0.9 if _contains_any(query_text, _MIGRATION_WORK_HINTS) else 0.82
+    if _contains_any(query_text, _PLANNING_ADVISORY_HINTS):
+        evidence.append("query:planning_advisory")
+        return "planning_advisory", evidence, 0.88
+    if _contains_any(query_text, _RESEARCH_ADVISORY_HINTS):
+        evidence.append("query:research_advisory")
+        return "research_advisory", evidence, 0.9
 
     normalized_task_type = _clean_text(task_type, limit=64).lower()
     task_type_mapping = {
@@ -242,12 +292,33 @@ def _frame_memory_rules(
             ("current_query", "conversation_state", "open_loop", "recent_user_turn", "topic_memory", "historical_topic_memory"),
             "return_actionable_migration_or_work_path",
         )
+    if task_domain == "planning_advisory":
+        return (
+            ("planning_advisory", "historical_topic", "topic_continuity"),
+            ("skill_creation", "location_route", "telephony_setup"),
+            ("current_query", "conversation_state", "open_loop", "recent_user_turn", "topic_memory", "historical_topic_memory"),
+            "collect_constraints_or_return_planning_structure",
+        )
+    if task_domain == "research_advisory":
+        return (
+            ("research_advisory", "general_research", "historical_topic"),
+            ("skill_creation", "location_route", "telephony_setup"),
+            ("current_query", "conversation_state", "open_loop", "recent_user_turn", "topic_memory", "historical_topic_memory"),
+            "build_topic_understanding_and_support_followups",
+        )
     if task_domain == "setup_build":
         return (
             ("setup_build", "integration", "developer_workflow"),
             ("location_route",),
             ("current_query", "conversation_state", "open_loop", "recent_user_turn", "topic_memory"),
             "return_build_path_or_start_execution",
+        )
+    if task_domain == "self_status":
+        return (
+            ("self_status", "project_state", "historical_topic"),
+            ("skill_creation", "location_route", "telephony_setup"),
+            ("current_query", "conversation_state", "recent_user_turn", "historical_topic_memory"),
+            "summarize_self_state_without_off_domain_drift",
         )
     if task_domain == "skill_creation":
         return (
@@ -329,6 +400,23 @@ def apply_meta_request_frame_routing(
         if normalized_task_type == "single_lane":
             normalized_task_type = "knowledge_research"
         final_reason = "frame:migration_work"
+    elif task_domain == "research_advisory":
+        if not chain or chain == ["executor"]:
+            chain = ["meta", "research"]
+        elif chain[0] != "meta":
+            chain = ["meta", *[item for item in chain if item != "meta"]]
+        if "research" not in chain:
+            chain.append("research")
+        for capability in ("content_extraction", "source_research"):
+            if capability not in capabilities:
+                capabilities.append(capability)
+        if normalized_task_type == "single_lane":
+            normalized_task_type = "knowledge_research"
+        final_reason = "frame:research_advisory"
+    elif task_domain == "planning_advisory":
+        chain = ["meta"]
+        normalized_task_type = "single_lane"
+        final_reason = "frame:planning_advisory"
     elif task_domain == "setup_build":
         if not chain or chain == ["executor"]:
             chain = ["meta", "executor"]
