@@ -484,7 +484,7 @@ async def test_meta_clarity_limits_direct_recommendation_to_single_evidence_fetc
         '"request_kind":"direct_recommendation","answer_obligation":"answer_now_with_single_recommendation",'
         '"completion_condition":"next_recommended_block_or_step_named","direct_answer_required":true,'
         '"delegation_mode":"single_evidence_fetch","max_delegate_calls":1,'
-        '"allowed_delegate_agents":["shell","document"],"force_answer_after_delegate_budget":true}\n'
+        '"allowed_delegate_agents":["document"],"force_answer_after_delegate_budget":true}\n'
         "\n"
         "# ORIGINAL USER TASK\n"
         "lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht\n"
@@ -498,8 +498,9 @@ async def test_meta_clarity_limits_direct_recommendation_to_single_evidence_fetc
     assert "Zwischenprojekt zur allgemeinen Mehrschritt-Planung" in result
     assert len(http_calls) == 1
     assert http_calls[0]["method"] == "delegate_to_agent"
-    assert "Meta-Clarity Abschlusszwang" in llm_last_messages[1]
-    assert "Kein weiterer Toolcall. Kein delegate_to_agent." in llm_last_messages[1]
+    assert "Meta-Clarity Korrektur" in llm_last_messages[1]
+    assert "erlaubte_delegate_agents: document" in llm_last_messages[1]
+    assert "Kein anderer delegate_to_agent." in llm_last_messages[1]
 
 
 @pytest.mark.asyncio
@@ -598,9 +599,9 @@ async def test_meta_clarity_redirects_wrong_direct_answer_delegate_to_allowed_ev
 
     assert "Zwischenprojekt zur allgemeinen Mehrschritt-Planung" in result
     assert len(http_calls) == 1
-    assert http_calls[0]["params"]["agent_type"] == "shell"
+    assert http_calls[0]["params"]["agent_type"] == "document"
     assert "Meta-Clarity Korrektur" in llm_last_messages[1]
-    assert "erlaubte_delegate_agents: shell, document" in llm_last_messages[1]
+    assert "erlaubte_delegate_agents: document" in llm_last_messages[1]
 
 
 @pytest.mark.asyncio

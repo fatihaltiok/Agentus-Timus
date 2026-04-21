@@ -218,7 +218,7 @@ def build_meta_clarity_contract(
         max_delegate_calls = 1
         force_answer_after_delegate_budget = True
         if objective_domain == "docs_status":
-            allowed_delegate_agents = ("shell", "document")
+            allowed_delegate_agents = ("document",)
         else:
             allowed_delegate_agents = ("shell", "document", "research", "system")
         rationale = "Direkte Empfehlung braucht aktuelle Frage und kurze Verlaufsanker, aber kein breites Altgedaechtnis."

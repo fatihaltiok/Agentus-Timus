@@ -39,7 +39,7 @@ def test_build_meta_clarity_contract_for_direct_recommendation_limits_context() 
     assert contract.max_recent_events == 4
     assert contract.delegation_mode == "single_evidence_fetch"
     assert contract.max_delegate_calls == 1
-    assert contract.allowed_delegate_agents == ("shell", "document")
+    assert contract.allowed_delegate_agents == ("document",)
     assert contract.force_answer_after_delegate_budget is True
 
 
