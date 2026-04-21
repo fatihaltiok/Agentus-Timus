@@ -918,6 +918,49 @@ async def test_meta_direct_answer_mode_skips_skill_catalog_injection(monkeypatch
     assert "skill-creator" not in captured["enhanced_task"]
 
 
+@pytest.mark.asyncio
+async def test_meta_docs_status_direct_answer_uses_frame_bound_evidence_context(monkeypatch):
+    captured = {}
+
+    async def _fake_build_meta_context(self):
+        return (
+            "# TIMUS SYSTEM-KONTEXT (automatisch geladen)\n"
+            "Aktive Routinen: PDF Chunking Fertig - Neuronal Dynamics (now+check)\n"
+            "Agent-Blackboard: Projektstatus ist vorhanden\n"
+            "Aktuelle Zeit: 2026-04-21 20:00:00"
+        )
+
+    async def _fake_base_run(self, task: str):
+        captured["enhanced_task"] = task
+        return "Final Answer: Als Naechstes kommt das Zwischenprojekt zur allgemeinen Mehrschritt-Planung."
+
+    monkeypatch.setattr(MetaAgent, "_build_meta_context", _fake_build_meta_context)
+
+    with patch.object(BaseAgent, "run", new=_fake_base_run):
+        agent = MetaAgent(tools_description_string="", skip_model_validation=True)
+        task = (
+            "# META ORCHESTRATION HANDOFF\n"
+            "meta_request_frame_json: "
+            '{"frame_kind":"direct_answer","task_domain":"docs_status","execution_mode":"answer_directly",'
+            '"primary_objective":"lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht"}\n'
+            "meta_clarity_contract_json: "
+            '{"primary_objective":"lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht",'
+            '"request_kind":"direct_recommendation","answer_obligation":"answer_now_with_single_recommendation",'
+            '"completion_condition":"next_recommended_block_or_step_named","direct_answer_required":true}\n'
+            "\n"
+            "# ORIGINAL USER TASK\n"
+            "lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht\n"
+        )
+        result = await agent.run(task)
+
+    assert "Zwischenprojekt" in result
+    assert "# DOCS-STATUS EVIDENZVERTRAG" in captured["enhanced_task"]
+    assert "docs/PHASE_F_PLAN.md" in captured["enhanced_task"]
+    assert "docs/CHANGELOG_DEV.md" in captured["enhanced_task"]
+    assert "PDF Chunking Fertig - Neuronal Dynamics" not in captured["enhanced_task"]
+    assert "Agent-Blackboard: Projektstatus ist vorhanden" not in captured["enhanced_task"]
+
+
 # ── 4. Prompt-Korrektheit ─────────────────────────────────────────────────
 
 def test_reasoning_prompt_mentions_qwq():

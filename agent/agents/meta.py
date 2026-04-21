@@ -73,6 +73,10 @@ class MetaAgent(BaseAgent):
         "bestehenden skill",
         "improvement-workflow",
     )
+    _DOC_REF_PATTERN = re.compile(
+        r"\b(?:docs/[A-Za-z0-9_./-]+\.(?:md|txt|pdf)|[A-Za-z0-9_./-]+\.(?:md|txt|pdf))\b",
+        re.IGNORECASE,
+    )
     _OBSERVED_DIRECT_TOOL_METHODS = {
         "search_web",
         "search_news",
@@ -3386,6 +3390,72 @@ class MetaAgent(BaseAgent):
         return "\n".join(context_parts)
 
     @classmethod
+    def _extract_explicit_document_refs(
+        cls,
+        task: str,
+        active_handoff: Optional[Dict[str, Any]],
+    ) -> List[str]:
+        payload = dict(active_handoff or {})
+        frame = payload.get("meta_request_frame") if isinstance(payload.get("meta_request_frame"), dict) else {}
+        clarity = payload.get("meta_clarity_contract") if isinstance(payload.get("meta_clarity_contract"), dict) else {}
+        objective = str(
+            frame.get("primary_objective")
+            or clarity.get("primary_objective")
+            or cls._extract_primary_task_text(task)
+            or task
+            or ""
+        )
+        refs: List[str] = []
+        seen: set[str] = set()
+        for match in cls._DOC_REF_PATTERN.findall(objective):
+            cleaned = str(match or "").strip().strip("`")
+            if not cleaned:
+                continue
+            lowered = cleaned.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            refs.append(cleaned)
+        return refs
+
+    @classmethod
+    def _build_frame_bound_meta_context(
+        cls,
+        meta_context: str,
+        task: str,
+        active_handoff: Optional[Dict[str, Any]],
+    ) -> str:
+        payload = dict(active_handoff or {})
+        frame = payload.get("meta_request_frame") if isinstance(payload.get("meta_request_frame"), dict) else {}
+        clarity = payload.get("meta_clarity_contract") if isinstance(payload.get("meta_clarity_contract"), dict) else {}
+        task_domain = str(frame.get("task_domain") or "").strip().lower()
+        execution_mode = str(frame.get("execution_mode") or "").strip().lower()
+        direct_answer_required = bool(clarity.get("direct_answer_required"))
+
+        if task_domain != "docs_status":
+            return meta_context
+        if not (direct_answer_required or execution_mode == "answer_directly"):
+            return meta_context
+
+        refs = cls._extract_explicit_document_refs(task, active_handoff)
+        lines = [
+            "# DOCS-STATUS EVIDENZVERTRAG",
+            "Bearbeite diese Anfrage nur mit expliziter Dokument- oder Plan-Evidenz.",
+        ]
+        if refs:
+            lines.append("Erlaubte Referenzen:")
+            for ref in refs:
+                lines.append(f"- {ref}")
+        lines.extend(
+            [
+                "Ignoriere aktive Routinen, Blackboard, Skills und andere Projektartefakte,",
+                "wenn sie nicht direkt aus den genannten Dokumenten stammen.",
+                "Wenn die benoetigte Evidenz nicht direkt vorliegt, hole hoechstens einen passenden Shell- oder Document-Beleg.",
+            ]
+        )
+        return "\n".join(lines)
+
+    @classmethod
     def _should_include_skill_context(
         cls,
         task: str,
@@ -3442,6 +3512,7 @@ class MetaAgent(BaseAgent):
 
             # 1. Timus Autonomie-Kontext laden
             meta_context = await self._build_meta_context()
+            meta_context = self._build_frame_bound_meta_context(meta_context, task, active_handoff)
 
             # 2. Skills auswählen
             include_skill_context = self._should_include_skill_context(task, active_handoff)
