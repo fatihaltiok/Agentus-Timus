@@ -69,6 +69,29 @@ _MIGRATION_WORK_HINTS = (
     "leben aufbauen",
 )
 
+_DOMAIN_HINTS: dict[str, tuple[str, ...]] = {
+    "skill_creation": _SKILL_CREATION_HINTS,
+    "location_route": _LOCATION_ROUTE_HINTS
+    + (
+        "offenbach",
+        "münster",
+        "muenster",
+        "standort",
+        "navigation",
+    ),
+    "telephony_setup": (
+        "twilio",
+        "inworld",
+        "anruffunktion",
+        "telefon",
+        "voice",
+        "stimme",
+        "lennart",
+    ),
+    "migration_work": _MIGRATION_WORK_HINTS,
+    "docs_status": _DOC_STATUS_HINTS,
+}
+
 
 def _clean_text(value: Any, *, limit: int = 240) -> str:
     text = " ".join(str(value or "").strip().split())
@@ -393,3 +416,118 @@ def build_meta_request_frame(
         confidence=round(confidence, 2),
         evidence=evidence,
     )
+
+
+def _matches_domain_hint(text: str, domain: str) -> bool:
+    hints = _DOMAIN_HINTS.get(_clean_text(domain, limit=64).lower(), ())
+    if not hints:
+        return False
+    return _contains_any(text, hints)
+
+
+def apply_meta_request_frame_context_admission(
+    frame: Mapping[str, Any] | None,
+    *,
+    bundle: Mapping[str, Any] | None,
+    preference_memory_selection: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = dict(bundle or {})
+    context_slots = list(payload.get("context_slots") or [])
+    suppressed = list(payload.get("suppressed_context") or [])
+    frame_payload = dict(frame or {})
+    allowed_slots = {
+        _clean_text(item, limit=64)
+        for item in (frame_payload.get("allowed_context_slots") or [])
+        if _clean_text(item, limit=64)
+    }
+    forbidden_domains = {
+        _clean_text(item, limit=64).lower()
+        for item in (frame_payload.get("forbidden_memory_domains") or [])
+        if _clean_text(item, limit=64)
+    }
+    task_domain = _clean_text(frame_payload.get("task_domain"), limit=64).lower()
+    execution_mode = _clean_text(frame_payload.get("execution_mode"), limit=64).lower()
+    strict_admission = task_domain in {"docs_status", "migration_work", "setup_build", "skill_creation"} or (
+        execution_mode == "answer_directly" and bool(forbidden_domains)
+    )
+
+    filtered_slots: list[dict[str, Any]] = []
+    for item in context_slots:
+        if not isinstance(item, Mapping):
+            continue
+        slot = _clean_text(item.get("slot"), limit=64)
+        content = _clean_text(item.get("content"), limit=220)
+        if not slot:
+            continue
+        lowered_content = content.lower()
+        blocked_domain = (
+            next(
+                (domain for domain in forbidden_domains if _matches_domain_hint(lowered_content, domain)),
+                "",
+            )
+            if strict_admission
+            else ""
+        )
+        if strict_admission and blocked_domain:
+            suppressed.append(
+                {
+                    "source": slot,
+                    "reason": f"frame_domain_filtered:{blocked_domain}",
+                    "content_preview": content[:140],
+                }
+            )
+            continue
+        filtered_slots.append(dict(item))
+
+    selection = dict(preference_memory_selection or {})
+    selected_preferences = list(selection.get("selected") or [])
+    selected_details = list(selection.get("selected_details") or [])
+    filtered_preferences: list[str] = []
+    filtered_details: list[dict[str, Any]] = []
+    filtered_irrelevant = list(selection.get("filtered_irrelevant") or [])
+
+    preference_allowed = (not strict_admission) or (not allowed_slots or "preference_memory" in allowed_slots)
+    if preference_allowed:
+        for index, item in enumerate(selected_preferences):
+            rendered = _clean_text(item, limit=220)
+            lowered_rendered = rendered.lower()
+            blocked_domain = (
+                next(
+                    (domain for domain in forbidden_domains if _matches_domain_hint(lowered_rendered, domain)),
+                    "",
+                )
+                if strict_admission
+                else ""
+            )
+            if strict_admission and blocked_domain:
+                filtered_irrelevant.append(
+                    {
+                        "rendered": rendered,
+                        "reason": f"frame_domain_filtered:{blocked_domain}",
+                    }
+                )
+                continue
+            filtered_preferences.append(item)
+            if index < len(selected_details) and isinstance(selected_details[index], Mapping):
+                filtered_details.append(dict(selected_details[index]))
+    else:
+        for item in selected_preferences:
+            rendered = _clean_text(item, limit=220)
+            filtered_irrelevant.append(
+                {
+                    "rendered": rendered,
+                    "reason": "frame_preference_memory_disallowed",
+                }
+            )
+
+    selection["selected"] = filtered_preferences
+    selection["selected_details"] = filtered_details
+    if filtered_irrelevant:
+        selection["filtered_irrelevant"] = filtered_irrelevant[:8]
+
+    payload["context_slots"] = filtered_slots
+    payload["suppressed_context"] = suppressed[:10]
+    return {
+        "meta_context_bundle": payload,
+        "preference_memory_selection": selection,
+    }

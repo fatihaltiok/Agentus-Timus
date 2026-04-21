@@ -238,6 +238,20 @@ def test_evaluate_query_orchestration_ignores_systemish_followup_context_for_chu
     assert decision["recommended_recipe_id"] != "system_diagnosis"
 
 
+def test_evaluate_query_orchestration_propagates_frame_decomposition_and_plan_for_docs_status():
+    decision = evaluate_query_orchestration(
+        "lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht"
+    )
+
+    assert decision["meta_request_frame"]["task_domain"] == "docs_status"
+    assert decision["meta_request_frame"]["execution_mode"] == "answer_directly"
+    assert decision["task_decomposition"]["planning_needed"] is False
+    assert decision["task_decomposition"]["intent_family"] == "single_step"
+    assert decision["task_decomposition"]["metadata"]["frame_task_domain"] == "docs_status"
+    assert decision["meta_execution_plan"]["plan_mode"] == "direct_response"
+    assert decision["meta_execution_plan"]["intent_family"] == "single_step"
+
+
 def test_evaluate_parallel_tasks_blocks_explicit_dependencies():
     decision = evaluate_parallel_tasks(
         [

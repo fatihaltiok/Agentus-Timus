@@ -8,6 +8,7 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from agent.base_agent import BaseAgent
+from agent.agents.meta import MetaAgent
 
 
 # ── 1. max_tokens ─────────────────────────────────────────────────────────
@@ -668,6 +669,253 @@ async def test_meta_direct_answer_mode_skips_blackboard_enrichment(monkeypatch):
     assert "Zwischenprojekt" in result
     assert "# Bekannte Informationen (Agent-Blackboard):" not in captured["initial_user_content"]
     assert "skill-creator" not in captured["initial_user_content"]
+
+
+@pytest.mark.asyncio
+async def test_meta_frame_guard_rejects_off_frame_explicit_final_answer(monkeypatch):
+    replies = iter(
+        [
+            (
+                "Final Answer: Der **skill-creator** ist ein Meta-Skill zum Erstellen "
+                "und Bearbeiten von Skills fuer Timus."
+            ),
+            "Final Answer: Als Naechstes kommt das Zwischenprojekt zur allgemeinen Mehrschritt-Planung.",
+        ]
+    )
+    last_user_messages = []
+
+    async def _fake_detect(self, task: str) -> bool:
+        return False
+
+    async def _fake_working_memory(self, task: str) -> str:
+        return ""
+
+    def _fake_inject(self, task: str, working_memory_context: str) -> str:
+        return task
+
+    async def _fake_llm(self, messages):
+        last_user_messages.append(messages[-1]["content"])
+        return next(replies)
+
+    async def _fake_reflection(self, task: str, result: str, success: bool = True) -> None:
+        return None
+
+    monkeypatch.setattr(BaseAgent, "_detect_dynamic_ui_and_set_roi", _fake_detect)
+    monkeypatch.setattr(BaseAgent, "_build_working_memory_context", _fake_working_memory)
+    monkeypatch.setattr(BaseAgent, "_inject_working_memory_into_task", _fake_inject)
+    monkeypatch.setattr(BaseAgent, "_call_llm", _fake_llm)
+    monkeypatch.setattr(BaseAgent, "_run_reflection", _fake_reflection)
+
+    agent = BaseAgent(
+        system_prompt_template="Du bist ein Test-Agent.",
+        tools_description_string="",
+        max_iterations=3,
+        agent_type="meta",
+        skip_model_validation=True,
+    )
+    task = (
+        "# META ORCHESTRATION HANDOFF\n"
+        "meta_request_frame_json: "
+        '{"frame_kind":"direct_answer","task_domain":"docs_status","execution_mode":"answer_directly",'
+        '"primary_objective":"lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht"}\n'
+        "meta_clarity_contract_json: "
+        '{"primary_objective":"lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht",'
+        '"request_kind":"direct_recommendation","answer_obligation":"answer_now_with_single_recommendation",'
+        '"completion_condition":"next_recommended_block_or_step_named","direct_answer_required":true}\n'
+        "\n"
+        "# ORIGINAL USER TASK\n"
+        "lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht\n"
+    )
+
+    try:
+        result = await agent.run(task)
+    finally:
+        await agent.http_client.aclose()
+
+    assert "Zwischenprojekt" in result
+    assert len(last_user_messages) == 2
+    assert "Meta-Frame-Korrektur" in last_user_messages[1]
+    assert "erkannter_antwort_drift: skill_creation" in last_user_messages[1]
+
+
+@pytest.mark.asyncio
+async def test_meta_frame_guard_rejects_off_frame_parse_salvage_answer(monkeypatch):
+    replies = iter(
+        [
+            (
+                "Der **skill-creator** ist ein Meta-Skill zum Erstellen und Bearbeiten "
+                "von Skills fuer Timus.\n\nWas er macht:\n- Neue Skills erstellen"
+            ),
+            "Final Answer: Als Naechstes kommt das Zwischenprojekt zur allgemeinen Mehrschritt-Planung.",
+        ]
+    )
+    last_user_messages = []
+
+    async def _fake_detect(self, task: str) -> bool:
+        return False
+
+    async def _fake_working_memory(self, task: str) -> str:
+        return ""
+
+    def _fake_inject(self, task: str, working_memory_context: str) -> str:
+        return task
+
+    async def _fake_llm(self, messages):
+        last_user_messages.append(messages[-1]["content"])
+        return next(replies)
+
+    async def _fake_reflection(self, task: str, result: str, success: bool = True) -> None:
+        return None
+
+    monkeypatch.setattr(BaseAgent, "_detect_dynamic_ui_and_set_roi", _fake_detect)
+    monkeypatch.setattr(BaseAgent, "_build_working_memory_context", _fake_working_memory)
+    monkeypatch.setattr(BaseAgent, "_inject_working_memory_into_task", _fake_inject)
+    monkeypatch.setattr(BaseAgent, "_call_llm", _fake_llm)
+    monkeypatch.setattr(BaseAgent, "_run_reflection", _fake_reflection)
+
+    agent = BaseAgent(
+        system_prompt_template="Du bist ein Test-Agent.",
+        tools_description_string="",
+        max_iterations=3,
+        agent_type="meta",
+        skip_model_validation=True,
+    )
+    task = (
+        "# META ORCHESTRATION HANDOFF\n"
+        "meta_request_frame_json: "
+        '{"frame_kind":"direct_answer","task_domain":"docs_status","execution_mode":"answer_directly",'
+        '"primary_objective":"lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht"}\n'
+        "meta_clarity_contract_json: "
+        '{"primary_objective":"lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht",'
+        '"request_kind":"direct_recommendation","answer_obligation":"answer_now_with_single_recommendation",'
+        '"completion_condition":"next_recommended_block_or_step_named","direct_answer_required":true}\n'
+        "\n"
+        "# ORIGINAL USER TASK\n"
+        "lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht\n"
+    )
+
+    try:
+        result = await agent.run(task)
+    finally:
+        await agent.http_client.aclose()
+
+    assert "Zwischenprojekt" in result
+    assert len(last_user_messages) == 2
+    assert "Meta-Frame-Korrektur" in last_user_messages[1]
+    assert "erkannter_antwort_drift: skill_creation" in last_user_messages[1]
+
+
+@pytest.mark.asyncio
+async def test_meta_frame_guard_rejects_generic_help_fallback(monkeypatch):
+    replies = iter(
+        [
+            (
+                "Final Answer: Ich sehe, dass der System-Kontext geladen wurde. "
+                "Du hast mir aber noch keine konkrete Frage oder Aufgabe gestellt. "
+                "Was kann ich fuer dich tun?"
+            ),
+            "Final Answer: Als Naechstes kommt das Zwischenprojekt zur allgemeinen Mehrschritt-Planung.",
+        ]
+    )
+    last_user_messages = []
+
+    async def _fake_detect(self, task: str) -> bool:
+        return False
+
+    async def _fake_working_memory(self, task: str) -> str:
+        return ""
+
+    def _fake_inject(self, task: str, working_memory_context: str) -> str:
+        return task
+
+    async def _fake_llm(self, messages):
+        last_user_messages.append(messages[-1]["content"])
+        return next(replies)
+
+    async def _fake_reflection(self, task: str, result: str, success: bool = True) -> None:
+        return None
+
+    monkeypatch.setattr(BaseAgent, "_detect_dynamic_ui_and_set_roi", _fake_detect)
+    monkeypatch.setattr(BaseAgent, "_build_working_memory_context", _fake_working_memory)
+    monkeypatch.setattr(BaseAgent, "_inject_working_memory_into_task", _fake_inject)
+    monkeypatch.setattr(BaseAgent, "_call_llm", _fake_llm)
+    monkeypatch.setattr(BaseAgent, "_run_reflection", _fake_reflection)
+
+    agent = BaseAgent(
+        system_prompt_template="Du bist ein Test-Agent.",
+        tools_description_string="",
+        max_iterations=3,
+        agent_type="meta",
+        skip_model_validation=True,
+    )
+    task = (
+        "# META ORCHESTRATION HANDOFF\n"
+        "meta_request_frame_json: "
+        '{"frame_kind":"direct_answer","task_domain":"docs_status","execution_mode":"answer_directly",'
+        '"primary_objective":"lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht"}\n'
+        "meta_clarity_contract_json: "
+        '{"primary_objective":"lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht",'
+        '"request_kind":"direct_recommendation","answer_obligation":"answer_now_with_single_recommendation",'
+        '"completion_condition":"next_recommended_block_or_step_named","direct_answer_required":true}\n'
+        "\n"
+        "# ORIGINAL USER TASK\n"
+        "lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht\n"
+    )
+
+    try:
+        result = await agent.run(task)
+    finally:
+        await agent.http_client.aclose()
+
+    assert "Zwischenprojekt" in result
+    assert len(last_user_messages) == 2
+    assert "Meta-Frame-Korrektur" in last_user_messages[1]
+    assert "erkannter_antwort_drift: generic_meta_help" in last_user_messages[1]
+
+
+@pytest.mark.asyncio
+async def test_meta_direct_answer_mode_skips_skill_catalog_injection(monkeypatch):
+    captured = {}
+
+    async def _fake_build_meta_context(self):
+        return "# TIMUS SYSTEM-KONTEXT\nAktuelle Zeit: 2026-04-21 20:00:00"
+
+    def _fake_select_skills(self, task: str, top_k: int = 3):
+        class _FakeSkill:
+            name = "skill-creator"
+
+            def get_full_context(self, include_references=False):
+                return "# Skill: skill-creator\nDescription: Create or update Skills for Timus."
+
+        return [_FakeSkill()]
+
+    async def _fake_base_run(self, task: str):
+        captured["enhanced_task"] = task
+        return "Final Answer: Als Naechstes kommt das Zwischenprojekt zur allgemeinen Mehrschritt-Planung."
+
+    monkeypatch.setattr(MetaAgent, "_build_meta_context", _fake_build_meta_context)
+    monkeypatch.setattr(MetaAgent, "_select_skills_for_task", _fake_select_skills)
+
+    with patch.object(BaseAgent, "run", new=_fake_base_run):
+        agent = MetaAgent(tools_description_string="", skip_model_validation=True)
+        task = (
+            "# META ORCHESTRATION HANDOFF\n"
+            "meta_request_frame_json: "
+            '{"frame_kind":"direct_answer","task_domain":"docs_status","execution_mode":"answer_directly",'
+            '"primary_objective":"lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht"}\n'
+            "meta_clarity_contract_json: "
+            '{"primary_objective":"lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht",'
+            '"request_kind":"direct_recommendation","answer_obligation":"answer_now_with_single_recommendation",'
+            '"completion_condition":"next_recommended_block_or_step_named","direct_answer_required":true}\n'
+            "\n"
+            "# ORIGINAL USER TASK\n"
+            "lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht\n"
+        )
+        result = await agent.run(task)
+
+    assert "Zwischenprojekt" in result
+    assert "# AVAILABLE SKILLS" not in captured["enhanced_task"]
+    assert "skill-creator" not in captured["enhanced_task"]
 
 
 # ── 4. Prompt-Korrektheit ─────────────────────────────────────────────────

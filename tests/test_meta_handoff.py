@@ -524,3 +524,21 @@ def test_build_meta_handoff_payload_adopts_safe_adaptive_plan(monkeypatch):
     assert payload["meta_execution_plan"]["plan_mode"] == "multi_step_execution"
     assert payload["meta_execution_plan"]["steps"][-1]["assigned_agent"] == "document"
     assert payload["alternative_recipes"][0]["recipe_id"] == "simple_live_lookup"
+
+
+def test_build_meta_handoff_payload_preserves_frame_driven_docs_direct_answer():
+    import main_dispatcher
+
+    payload = main_dispatcher._build_meta_handoff_payload(
+        "lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht"
+    )
+
+    assert payload["meta_request_frame"]["task_domain"] == "docs_status"
+    assert payload["meta_request_frame"]["execution_mode"] == "answer_directly"
+    assert payload["task_decomposition"]["planning_needed"] is False
+    assert payload["task_decomposition"]["intent_family"] == "single_step"
+    assert payload["task_decomposition"]["metadata"]["frame_task_domain"] == "docs_status"
+    assert payload["meta_execution_plan"]["plan_mode"] == "direct_response"
+    assert payload["meta_execution_plan"]["intent_family"] == "single_step"
+    rendered = main_dispatcher._render_meta_handoff_block(payload)
+    assert "meta_request_frame_json:" in rendered

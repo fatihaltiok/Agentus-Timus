@@ -1228,6 +1228,46 @@ def test_classify_meta_task_suppresses_topic_mismatched_assistant_context():
     assert any(item["reason"] == "topic_mismatch_with_current_query" for item in suppressed)
 
 
+def test_classify_meta_task_filters_preference_memory_for_docs_status_frame(monkeypatch):
+    fake_memory_manager = SimpleNamespace(
+        persistent=SimpleNamespace(
+            get_memory_items=lambda category: [
+                SimpleNamespace(
+                    value={
+                        "scope": "global",
+                        "instruction": "Nutze fuer Twilio und Inworld immer denselben Setup-Pfad.",
+                        "topic_anchor": "Twilio Inworld Setup",
+                        "session_id": "sess_pref",
+                        "stability": 0.95,
+                        "evidence_count": 3,
+                        "explicit_global": True,
+                        "preference_family": "topic:twilio",
+                        "updated_at": "2026-04-20T10:00:00+00:00",
+                    }
+                )
+            ]
+        ),
+        get_behavior_hooks=lambda: [],
+        get_self_model_prompt=lambda: "Der Nutzer lebt in Offenbach und interessiert sich fuer Setup-Themen.",
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "memory.memory_system",
+        SimpleNamespace(memory_manager=fake_memory_manager),
+    )
+
+    result = classify_meta_task(
+        "lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht",
+        action_count=0,
+    )
+
+    assert result["meta_request_frame"]["task_domain"] == "docs_status"
+    assert result["preference_memory_selection"]["selected"] == []
+    context_slots = result["meta_context_bundle"]["context_slots"]
+    assert all(slot["slot"] != "preference_memory" for slot in context_slots)
+    assert result["specialist_context_seed"]["user_preferences"] == []
+
+
 def test_classify_meta_task_marks_topic_shift_for_new_unrelated_task():
     result = classify_meta_task(
         "lass uns jetzt ueber browser automation reden",

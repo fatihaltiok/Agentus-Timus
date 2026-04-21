@@ -26,6 +26,7 @@ from orchestration.diagnosis_records import (
 from orchestration.meta_plan_compiler import build_meta_execution_plan
 from orchestration.preference_instruction_memory import select_stored_preference_memory_with_summary
 from orchestration.meta_request_frame import (
+    apply_meta_request_frame_context_admission,
     apply_meta_request_frame_routing,
     build_meta_request_frame,
 )
@@ -3222,6 +3223,40 @@ def classify_meta_task(
         recommended_agent_chain=tuple(deduped_chain),
         active_plan=active_plan,
     )
+    admitted_context = apply_meta_request_frame_context_admission(
+        pre_policy_frame.to_dict(),
+        bundle=meta_context_bundle.to_dict(),
+        preference_memory_selection=preference_memory_selection,
+    )
+    admitted_bundle = dict(admitted_context.get("meta_context_bundle") or {})
+    meta_context_bundle = MetaContextBundle(
+        schema_version=int(admitted_bundle.get("schema_version") or _META_CONTEXT_SCHEMA_VERSION),
+        current_query=str(admitted_bundle.get("current_query") or ""),
+        bundle_reason=str(admitted_bundle.get("bundle_reason") or "meta_context_rehydration"),
+        active_topic=str(admitted_bundle.get("active_topic") or ""),
+        active_goal=str(admitted_bundle.get("active_goal") or ""),
+        open_loop=str(admitted_bundle.get("open_loop") or ""),
+        next_expected_step=str(admitted_bundle.get("next_expected_step") or ""),
+        turn_type=str(admitted_bundle.get("turn_type") or ""),
+        response_mode=str(admitted_bundle.get("response_mode") or ""),
+        context_slots=tuple(
+            MetaContextSlot(
+                slot=str(item.get("slot") or ""),
+                priority=int(item.get("priority") or 0),
+                content=str(item.get("content") or ""),
+                source=str(item.get("source") or ""),
+            )
+            for item in (admitted_bundle.get("context_slots") or [])
+            if isinstance(item, Mapping)
+        ),
+        suppressed_context=tuple(
+            dict(item)
+            for item in (admitted_bundle.get("suppressed_context") or [])
+            if isinstance(item, Mapping)
+        ),
+        confidence=float(admitted_bundle.get("confidence") or 0.0),
+    )
+    preference_memory_selection = dict(admitted_context.get("preference_memory_selection") or {})
     frame_routing = apply_meta_request_frame_routing(
         pre_policy_frame.to_dict(),
         task_type=task_type,

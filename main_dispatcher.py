@@ -2650,10 +2650,12 @@ def _build_meta_handoff_payload(query: str) -> dict:
     """Erzeugt ein kompaktes, strukturiertes Handoff fuer Meta."""
     clean_query = _strip_meta_canvas_wrappers(query)
     policy = evaluate_query_orchestration(clean_query)
-    task_decomposition = build_task_decomposition(
-        source_query=clean_query,
-        orchestration_policy=policy,
-    )
+    task_decomposition = dict(policy.get("task_decomposition") or {})
+    if not task_decomposition:
+        task_decomposition = build_task_decomposition(
+            source_query=clean_query,
+            orchestration_policy=policy,
+        )
     payload = {
         "task_type": policy.get("task_type", "single_lane"),
         "site_kind": policy.get("site_kind"),
@@ -2673,6 +2675,7 @@ def _build_meta_handoff_payload(query: str) -> dict:
         "capability_graph": dict(policy.get("capability_graph") or {}),
         "adaptive_plan": dict(policy.get("adaptive_plan") or {}),
         "meta_clarity_contract": dict(policy.get("meta_clarity_contract") or {}),
+        "meta_request_frame": dict(policy.get("meta_request_frame") or {}),
         "meta_context_bundle": dict(policy.get("meta_context_bundle") or {}),
         "specialist_context_seed": parse_specialist_context_payload(
             policy.get("specialist_context_seed") or {}
@@ -2717,7 +2720,7 @@ def _build_meta_handoff_payload(query: str) -> dict:
     payload["task_decomposition"] = task_decomposition
     payload["intent_family"] = task_decomposition.get("intent_family", "single_step")
     payload["planning_needed"] = bool(task_decomposition.get("planning_needed"))
-    payload["meta_execution_plan"] = build_meta_execution_plan(
+    payload["meta_execution_plan"] = dict(policy.get("meta_execution_plan") or {}) or build_meta_execution_plan(
         source_query=clean_query,
         handoff_payload=payload,
         task_decomposition=task_decomposition,
@@ -3070,6 +3073,11 @@ def _render_meta_handoff_block(payload: dict) -> str:
         lines.append(
             "meta_execution_plan_json: "
             + json.dumps(payload["meta_execution_plan"], ensure_ascii=False, sort_keys=True)
+        )
+    if payload.get("meta_request_frame"):
+        lines.append(
+            "meta_request_frame_json: "
+            + json.dumps(payload["meta_request_frame"], ensure_ascii=False, sort_keys=True)
         )
     if payload.get("task_decomposition"):
         lines.append(

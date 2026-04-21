@@ -63,6 +63,16 @@ from agent.shared.json_utils import extract_json_robust  # noqa: F401 - re-expor
 
 
 class MetaAgent(BaseAgent):
+    _SKILL_CONTEXT_HINTS = (
+        "skill-creator",
+        "skill creator",
+        "run_skill(",
+        "skill erstellen",
+        "neuen skill",
+        "neuer skill",
+        "bestehenden skill",
+        "improvement-workflow",
+    )
     _OBSERVED_DIRECT_TOOL_METHODS = {
         "search_web",
         "search_news",
@@ -1219,6 +1229,11 @@ class MetaAgent(BaseAgent):
                     payload["meta_self_state"] = {"raw": normalized_value}
             elif normalized_key == "meta_execution_plan_json":
                 payload["meta_execution_plan"] = parse_meta_execution_plan(normalized_value)
+            elif normalized_key == "meta_request_frame_json":
+                try:
+                    payload["meta_request_frame"] = json.loads(normalized_value)
+                except json.JSONDecodeError:
+                    payload["meta_request_frame"] = {"raw": normalized_value}
             elif normalized_key == "task_decomposition_json":
                 payload["task_decomposition"] = parse_task_decomposition(normalized_value)
             elif normalized_key == "meta_context_bundle_json":
@@ -3370,6 +3385,37 @@ class MetaAgent(BaseAgent):
 
         return "\n".join(context_parts)
 
+    @classmethod
+    def _should_include_skill_context(
+        cls,
+        task: str,
+        active_handoff: Optional[Dict[str, Any]],
+    ) -> bool:
+        payload = dict(active_handoff or {})
+        frame = payload.get("meta_request_frame") if isinstance(payload.get("meta_request_frame"), dict) else {}
+        clarity = payload.get("meta_clarity_contract") if isinstance(payload.get("meta_clarity_contract"), dict) else {}
+        primary_objective = str(
+            frame.get("primary_objective")
+            or clarity.get("primary_objective")
+            or cls._extract_primary_task_text(task)
+            or ""
+        ).strip().lower()
+        if any(hint in primary_objective for hint in cls._SKILL_CONTEXT_HINTS):
+            return True
+
+        task_domain = str(frame.get("task_domain") or "").strip().lower()
+        frame_kind = str(frame.get("frame_kind") or "").strip().lower()
+        execution_mode = str(frame.get("execution_mode") or "").strip().lower()
+        if task_domain == "skill_creation":
+            return True
+        if bool(clarity.get("direct_answer_required")):
+            return False
+        if frame_kind in {"direct_answer", "status_summary"}:
+            return False
+        if execution_mode == "answer_directly":
+            return False
+        return False
+
     # ------------------------------------------------------------------
     # Erweiterter run()-Einstieg: Timus-Kontext + Skills injizieren
     # ------------------------------------------------------------------
@@ -3398,8 +3444,13 @@ class MetaAgent(BaseAgent):
             meta_context = await self._build_meta_context()
 
             # 2. Skills auswählen
-            self.active_skills = self._select_skills_for_task(task, top_k=3)
-            skill_context = self._build_skill_context(self.active_skills, include_references=False)
+            include_skill_context = self._should_include_skill_context(task, active_handoff)
+            self.active_skills = self._select_skills_for_task(task, top_k=3) if include_skill_context else []
+            skill_context = (
+                self._build_skill_context(self.active_skills, include_references=False)
+                if include_skill_context
+                else ""
+            )
 
             # 3. Task anreichern
             parts: list[str] = []

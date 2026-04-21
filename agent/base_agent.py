@@ -115,6 +115,33 @@ _META_LOCATION_ROUTE_PATTERNS = (
     "münster",
     "muenster",
 )
+_META_SKILL_RESPONSE_PATTERNS = (
+    "skill-creator",
+    "skill creator",
+    "run_skill(",
+    "meta-skill",
+    "meta skill",
+    "verfuegbare skills",
+    "verfügbare skills",
+    "skill-struktur",
+    "skill struktur",
+    "skill-architektur",
+    "skill architektur",
+    "improvement-workflow",
+)
+_META_GENERIC_HELP_PATTERNS = (
+    "ich sehe zwar den system-kontext",
+    "ich sehe, dass du mich aufgerufen hast",
+    "ich sehe, dass der system-kontext geladen wurde",
+    "deine eigentliche nachricht oder frage fehlt",
+    "du hast mir aber noch keine konkrete frage oder aufgabe gestellt",
+    "was moechtest du?",
+    "was möchtest du?",
+    "was kann ich fuer dich tun",
+    "was kann ich für dich tun",
+    "sag mir, was du brauchst",
+    "schnelluebersicht was ich tun kann",
+)
 _META_FILE_READ_METHODS = {
     "read_file",
     "read_text_file",
@@ -1333,6 +1360,29 @@ class BaseAgent(DynamicToolMixin):
                 return {}
         return {}
 
+    @staticmethod
+    def _extract_meta_request_frame(task_text: str) -> Dict[str, Any]:
+        marker = "# META ORCHESTRATION HANDOFF"
+        text = str(task_text or "").strip()
+        if marker not in text:
+            return {}
+
+        _, after_header = text.split(marker, 1)
+        handoff_block = after_header.split("# ORIGINAL USER TASK", 1)[0]
+        for raw_line in handoff_block.splitlines():
+            stripped = str(raw_line or "").strip()
+            if not stripped or ":" not in stripped:
+                continue
+            key, value = stripped.split(":", 1)
+            if key.strip() != "meta_request_frame_json":
+                continue
+            try:
+                loaded = json.loads(value.strip())
+                return loaded if isinstance(loaded, dict) else {}
+            except Exception:
+                return {}
+        return {}
+
     @classmethod
     def _extract_meta_working_memory_query(cls, task_text: str) -> str:
         marker = "# META ORCHESTRATION HANDOFF"
@@ -1426,10 +1476,27 @@ class BaseAgent(DynamicToolMixin):
         lowered = str(text or "").strip().lower()
         if not lowered:
             return ""
+        if any(pattern in lowered for pattern in _META_SKILL_RESPONSE_PATTERNS):
+            return "skill_creation"
         if any(pattern in lowered for pattern in _META_DOC_STATUS_PATTERNS):
             return "docs_status"
         if any(pattern in lowered for pattern in _META_LOCATION_ROUTE_PATTERNS):
             return "location_route"
+        return ""
+
+    @staticmethod
+    def _detect_meta_answer_domain(text: str) -> str:
+        lowered = str(text or "").strip().lower()
+        if not lowered:
+            return ""
+        if any(pattern in lowered for pattern in _META_SKILL_RESPONSE_PATTERNS):
+            return "skill_creation"
+        if any(pattern in lowered for pattern in _META_LOCATION_ROUTE_PATTERNS):
+            return "location_route"
+        if any(pattern in lowered for pattern in _META_DOC_STATUS_PATTERNS):
+            return "docs_status"
+        if any(pattern in lowered for pattern in _META_GENERIC_HELP_PATTERNS):
+            return "generic_meta_help"
         return ""
 
     @classmethod
@@ -1466,6 +1533,14 @@ class BaseAgent(DynamicToolMixin):
         if not task_text:
             return {}
         return self._extract_meta_clarity_contract(task_text)
+
+    def _current_meta_request_frame(self) -> Dict[str, Any]:
+        if str(self.agent_type or "").strip().lower() != "meta":
+            return {}
+        task_text = str(getattr(self, "_current_task_text", "") or "").strip()
+        if not task_text:
+            return {}
+        return self._extract_meta_request_frame(task_text)
 
     def _current_meta_delegate_count(self) -> int:
         count = 0
@@ -1565,6 +1640,68 @@ class BaseAgent(DynamicToolMixin):
             f"- erlaubte_delegate_agents: {', '.join(allowed_agents)}\n"
             "Waehle jetzt entweder einen dieser erlaubten Evidenzpfade oder beantworte direkt.\n"
             "Kein anderer delegate_to_agent."
+        )
+
+    def _build_meta_frame_answer_redirect_prompt(self, task: str, result: str) -> str | None:
+        if str(self.agent_type or "").strip().lower() != "meta":
+            return None
+
+        clarity_contract = self._current_meta_clarity_contract()
+        frame = self._current_meta_request_frame()
+        if not clarity_contract and not frame:
+            return None
+
+        primary_objective = str(
+            (frame or {}).get("primary_objective")
+            or clarity_contract.get("primary_objective")
+            or self._extract_primary_task_text(task)
+            or ""
+        ).strip()
+        if not primary_objective:
+            return None
+
+        objective_domain = str((frame or {}).get("task_domain") or "").strip().lower()
+        if not objective_domain:
+            objective_domain = self._detect_meta_objective_domain(primary_objective)
+        answer_domain = self._detect_meta_answer_domain(result)
+        request_kind = str(clarity_contract.get("request_kind") or "").strip().lower()
+        frame_kind = str((frame or {}).get("frame_kind") or "").strip().lower()
+        execution_mode = str((frame or {}).get("execution_mode") or "").strip().lower()
+        direct_answer_required = bool(clarity_contract.get("direct_answer_required"))
+
+        objective_lower = primary_objective.lower()
+        if answer_domain == "skill_creation" and (
+            objective_domain == "skill_creation"
+            or any(pattern in objective_lower for pattern in _META_SKILL_RESPONSE_PATTERNS)
+        ):
+            return None
+        if answer_domain == "location_route" and objective_domain == "location_route":
+            return None
+        if answer_domain == "docs_status" and objective_domain == "docs_status":
+            return None
+
+        mismatch = False
+        if answer_domain in {"skill_creation", "location_route"}:
+            mismatch = answer_domain != objective_domain
+        elif answer_domain == "generic_meta_help":
+            mismatch = direct_answer_required or frame_kind in {"direct_answer", "status_summary"} or execution_mode == "answer_directly"
+
+        if not mismatch:
+            return None
+
+        request_hint = request_kind or frame_kind or execution_mode or "unknown"
+        completion_condition = str(clarity_contract.get("completion_condition") or "").strip()
+        return (
+            "Meta-Frame-Korrektur:\n"
+            f"- primary_objective: {primary_objective}\n"
+            f"- task_domain: {objective_domain or 'unknown'}\n"
+            f"- request_kind: {request_hint}\n"
+            f"- erkannter_antwort_drift: {answer_domain}\n"
+            f"- completion_condition: {completion_condition}\n"
+            "Die letzte Antwort ist off-frame und verworfen.\n"
+            "Kein Skill-/Workflow-Inventar. Kein Routing-/Standortblock. Keine generische Hilfe.\n"
+            "Antworte jetzt nur auf die eigentliche Nutzerfrage im Format:\n"
+            "Final Answer: ..."
         )
 
     def _check_meta_clarity_tool_intent(self, method: str, params: dict) -> Optional[Tuple[str, str]]:
@@ -3403,6 +3540,25 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                     )
                 else:
                     final_result = self._extract_final_answer_body(reply)
+                    correction_prompt = self._build_meta_frame_answer_redirect_prompt(task, final_result)
+                    if correction_prompt:
+                        messages.append({"role": "assistant", "content": reply})
+                        messages.append({"role": "user", "content": correction_prompt})
+                        self._emit_live_status(
+                            phase="answer_guard",
+                            detail="meta_frame_answer_rejected",
+                            step=step,
+                            total_steps=self.max_iterations,
+                        )
+                        self._emit_step_trace(
+                            action="meta_frame_answer_rejected",
+                            output_data={
+                                "step": step,
+                                "reply_preview": self._preview_value(final_result, 800),
+                            },
+                            status="warning",
+                        )
+                        continue
                     final_result = await self._finalize_user_output(task, final_result)
                     self._emit_live_status(
                         phase="final",
@@ -3434,6 +3590,25 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 # Implicit Final Answer: LLM schrieb Abschluss-Text ohne Action-JSON
                 if self._looks_like_implicit_final_answer(reply):
                     final_result = reply
+                    correction_prompt = self._build_meta_frame_answer_redirect_prompt(task, final_result)
+                    if correction_prompt:
+                        messages.append({"role": "assistant", "content": reply})
+                        messages.append({"role": "user", "content": correction_prompt})
+                        self._emit_live_status(
+                            phase="answer_guard",
+                            detail="meta_frame_answer_rejected",
+                            step=step,
+                            total_steps=self.max_iterations,
+                        )
+                        self._emit_step_trace(
+                            action="meta_frame_answer_rejected",
+                            output_data={
+                                "step": step,
+                                "reply_preview": self._preview_value(final_result, 800),
+                            },
+                            status="warning",
+                        )
+                        continue
                     final_result = await self._finalize_user_output(task, final_result)
                     self._emit_live_status(
                         phase="final",
@@ -3456,6 +3631,25 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                     return final_result
 
                 if (err or "").strip().lower() == "kein json gefunden" and self._looks_like_salvageable_parse_error_answer(reply):
+                    correction_prompt = self._build_meta_frame_answer_redirect_prompt(task, reply.strip())
+                    if correction_prompt:
+                        messages.append({"role": "assistant", "content": reply})
+                        messages.append({"role": "user", "content": correction_prompt})
+                        self._emit_live_status(
+                            phase="answer_guard",
+                            detail="meta_frame_answer_rejected",
+                            step=step,
+                            total_steps=self.max_iterations,
+                        )
+                        self._emit_step_trace(
+                            action="meta_frame_answer_rejected",
+                            output_data={
+                                "step": step,
+                                "reply_preview": self._preview_value(reply, 800),
+                            },
+                            status="warning",
+                        )
+                        continue
                     final_result = await self._finalize_user_output(task, reply.strip())
                     self._emit_live_status(
                         phase="final",
