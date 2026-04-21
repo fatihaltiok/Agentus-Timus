@@ -100,6 +100,33 @@ _META_DOC_STATUS_PATTERNS = (
     "wo stehen wir",
     "status",
 )
+_META_SETUP_BUILD_PATTERNS = (
+    "twilio",
+    "inworld",
+    "anruffunktion",
+    "einrichten",
+    "setup",
+    "konfigurier",
+    "integration",
+    "verbinde",
+    "api key",
+    "lennart",
+)
+_META_MIGRATION_WORK_PATTERNS = (
+    "kanada",
+    "canada",
+    "auswand",
+    "einwander",
+    "visa",
+    "visum",
+    "arbeiten",
+    "arbeit",
+    "job",
+    "beruf",
+    "fuss fassen",
+    "fuß fassen",
+    "leben aufbauen",
+)
 _META_LOCATION_ROUTE_PATTERNS = (
     "route",
     "weg nach",
@@ -130,13 +157,17 @@ _META_SKILL_RESPONSE_PATTERNS = (
     "improvement-workflow",
 )
 _META_GENERIC_HELP_PATTERNS = (
+    "ich sehe hier einen meta orchestration handoff",
     "ich sehe zwar den system-kontext",
     "ich sehe, dass du mich aufgerufen hast",
     "ich sehe, dass der system-kontext geladen wurde",
+    "mir fehlt die konkrete benutzeranfrage",
     "deine eigentliche nachricht oder frage fehlt",
     "du hast mir aber noch keine konkrete frage oder aufgabe gestellt",
     "was moechtest du?",
     "was möchtest du?",
+    "was moechtest du bauen oder einrichten",
+    "was möchtest du bauen oder einrichten",
     "was kann ich fuer dich tun",
     "was kann ich für dich tun",
     "sag mir, was du brauchst",
@@ -1480,6 +1511,10 @@ class BaseAgent(DynamicToolMixin):
             return "skill_creation"
         if any(pattern in lowered for pattern in _META_DOC_STATUS_PATTERNS):
             return "docs_status"
+        if any(pattern in lowered for pattern in _META_SETUP_BUILD_PATTERNS):
+            return "setup_build"
+        if any(pattern in lowered for pattern in _META_MIGRATION_WORK_PATTERNS):
+            return "migration_work"
         if any(pattern in lowered for pattern in _META_LOCATION_ROUTE_PATTERNS):
             return "location_route"
         return ""
@@ -1489,14 +1524,18 @@ class BaseAgent(DynamicToolMixin):
         lowered = str(text or "").strip().lower()
         if not lowered:
             return ""
+        if any(pattern in lowered for pattern in _META_GENERIC_HELP_PATTERNS):
+            return "generic_meta_help"
         if any(pattern in lowered for pattern in _META_SKILL_RESPONSE_PATTERNS):
             return "skill_creation"
+        if any(pattern in lowered for pattern in _META_SETUP_BUILD_PATTERNS):
+            return "setup_build"
+        if any(pattern in lowered for pattern in _META_MIGRATION_WORK_PATTERNS):
+            return "migration_work"
         if any(pattern in lowered for pattern in _META_LOCATION_ROUTE_PATTERNS):
             return "location_route"
         if any(pattern in lowered for pattern in _META_DOC_STATUS_PATTERNS):
             return "docs_status"
-        if any(pattern in lowered for pattern in _META_GENERIC_HELP_PATTERNS):
-            return "generic_meta_help"
         return ""
 
     @classmethod
@@ -1524,6 +1563,10 @@ class BaseAgent(DynamicToolMixin):
             return "location_route"
         if any(pattern in candidate_lower for pattern in _META_DOC_STATUS_PATTERNS):
             return "docs_status"
+        if any(pattern in candidate_lower for pattern in _META_SETUP_BUILD_PATTERNS):
+            return "setup_build"
+        if any(pattern in candidate_lower for pattern in _META_MIGRATION_WORK_PATTERNS):
+            return "migration_work"
         return ""
 
     def _current_meta_clarity_contract(self) -> Dict[str, Any]:
@@ -1675,16 +1718,25 @@ class BaseAgent(DynamicToolMixin):
             or any(pattern in objective_lower for pattern in _META_SKILL_RESPONSE_PATTERNS)
         ):
             return None
+        if answer_domain == "setup_build" and objective_domain == "setup_build":
+            return None
+        if answer_domain == "migration_work" and objective_domain == "migration_work":
+            return None
         if answer_domain == "location_route" and objective_domain == "location_route":
             return None
         if answer_domain == "docs_status" and objective_domain == "docs_status":
             return None
 
         mismatch = False
-        if answer_domain in {"skill_creation", "location_route"}:
+        if answer_domain in {"skill_creation", "location_route", "setup_build", "migration_work"}:
             mismatch = answer_domain != objective_domain
         elif answer_domain == "generic_meta_help":
-            mismatch = direct_answer_required or frame_kind in {"direct_answer", "status_summary"} or execution_mode == "answer_directly"
+            mismatch = (
+                direct_answer_required
+                or frame_kind in {"direct_answer", "status_summary"}
+                or execution_mode == "answer_directly"
+                or objective_domain in {"setup_build", "migration_work"}
+            )
 
         if not mismatch:
             return None

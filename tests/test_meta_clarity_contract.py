@@ -133,3 +133,66 @@ def test_build_meta_clarity_contract_for_historical_recall_disallows_delegation(
     assert contract.max_delegate_calls == 0
     assert contract.allowed_delegate_agents == ()
     assert contract.force_answer_after_delegate_budget is False
+
+
+def test_build_meta_clarity_contract_for_setup_build_binds_controlled_delegate_budget() -> None:
+    contract = build_meta_clarity_contract(
+        effective_query=(
+            "richte fuer mich eine anruffunktion ein du sollst mich ueber twilio anrufen "
+            "koennen mit der stimme von inworld.ai lennart"
+        ),
+        response_mode="execute",
+        policy_decision={
+            "answer_shape": "action_first",
+            "policy_reason": "baseline_turn_mode",
+        },
+        task_type="single_lane",
+        goal_spec={},
+        task_decomposition={"goal": "Twilio und Inworld fuer Anruffunktion integrieren"},
+        meta_execution_plan={},
+    )
+
+    assert contract.request_kind == "execute_task"
+    assert contract.answer_obligation == "inspect_preparation_then_plan_or_execute"
+    assert contract.allowed_context_slots == (
+        "current_query",
+        "conversation_state",
+        "open_loop",
+        "recent_user_turn",
+        "historical_topic_memory",
+    )
+    assert "topic_memory" in contract.forbidden_context_slots
+    assert "preference_memory" in contract.forbidden_context_slots
+    assert contract.allowed_working_memory_sections == ("KURZZEITKONTEXT",)
+    assert contract.max_related_memories == 0
+    assert contract.max_recent_events == 6
+    assert contract.delegation_mode == "controlled_orchestration"
+    assert contract.max_delegate_calls == 2
+    assert contract.allowed_delegate_agents == ("executor", "research", "document")
+    assert "assistant_fallback_context" in contract.forbidden_context_slots
+
+
+def test_build_meta_clarity_contract_for_migration_work_prefers_focused_research() -> None:
+    contract = build_meta_clarity_contract(
+        effective_query="suche mir Moeglichkeiten in Kanada Fuss zu fassen",
+        response_mode="execute",
+        policy_decision={
+            "answer_shape": "action_first",
+            "policy_reason": "baseline_turn_mode",
+        },
+        task_type="knowledge_research",
+        goal_spec={},
+        task_decomposition={"goal": "Pruefen, wie man in Kanada arbeiten und Fuss fassen kann"},
+        meta_execution_plan={},
+    )
+
+    assert contract.request_kind == "execute_task"
+    assert contract.answer_obligation == "return_actionable_migration_or_work_path"
+    assert contract.allowed_working_memory_sections == ("KURZZEITKONTEXT", "LANGZEITKONTEXT")
+    assert contract.max_related_memories == 2
+    assert contract.max_recent_events == 6
+    assert contract.delegation_mode == "focused_research"
+    assert contract.max_delegate_calls == 1
+    assert contract.allowed_delegate_agents == ("research",)
+    assert "preference_memory" in contract.forbidden_context_slots
+    assert "semantic_recall" in contract.forbidden_context_slots

@@ -962,6 +962,112 @@ async def test_meta_docs_status_direct_answer_uses_frame_bound_evidence_context(
     assert "Agent-Blackboard: Projektstatus ist vorhanden" not in captured["enhanced_task"]
 
 
+@pytest.mark.asyncio
+async def test_meta_setup_build_runtime_context_binds_to_original_user_task(monkeypatch):
+    captured = {}
+
+    async def _fake_build_meta_context(self):
+        return "# TIMUS SYSTEM-KONTEXT\nAktive Routinen: irrelevant"
+
+    async def _fake_base_run(self, task: str):
+        captured["enhanced_task"] = task
+        return "Final Answer: Ich pruefe zuerst die vorhandenen Twilio- und Inworld-Vorbereitungen."
+
+    monkeypatch.setattr(MetaAgent, "_build_meta_context", _fake_build_meta_context)
+
+    with patch.object(BaseAgent, "run", new=_fake_base_run):
+        agent = MetaAgent(tools_description_string="", skip_model_validation=True)
+        task = (
+            "# META ORCHESTRATION HANDOFF\n"
+            "meta_request_frame_json: "
+            '{"frame_kind":"new_task","task_domain":"setup_build","execution_mode":"plan_and_delegate",'
+            '"primary_objective":"richte fuer mich eine anruffunktion ueber twilio und inworld ein"}\n'
+            "meta_clarity_contract_json: "
+            '{"primary_objective":"richte fuer mich eine anruffunktion ueber twilio und inworld ein",'
+            '"request_kind":"execute_task","answer_obligation":"inspect_preparation_then_plan_or_execute",'
+            '"completion_condition":"concrete_setup_path_or_real_blocker_named","direct_answer_required":false}\n'
+            "\n"
+            "# ORIGINAL USER TASK\n"
+            "richte fuer mich eine anruffunktion ueber twilio und inworld ein\n"
+        )
+        result = await agent.run(task)
+
+    assert "Twilio" in result
+    assert "# PRIMAERES NUTZERZIEL" in captured["enhanced_task"]
+    assert "Benutzeranfrage: richte fuer mich eine anruffunktion ueber twilio und inworld ein" in captured["enhanced_task"]
+    assert "# SETUP-BUILD AUFTRAGSKLARHEIT" in captured["enhanced_task"]
+    assert "Bearbeite die konkrete Benutzeranfrage, nicht den internen Handoff." in captured["enhanced_task"]
+    assert "Was moechtest du bauen oder einrichten?" not in captured["enhanced_task"]
+
+
+@pytest.mark.asyncio
+async def test_meta_frame_guard_rejects_setup_build_generic_help(monkeypatch):
+    replies = iter(
+        [
+            (
+                "Final Answer: Ich sehe hier einen META ORCHESTRATION HANDOFF mit einer Build/Setup-Aufgabe, "
+                "aber mir fehlt die konkrete Benutzeranfrage. Was moechtest du bauen oder einrichten?"
+            ),
+            "Final Answer: Es gibt bereits Twilio- und Inworld-Vorbereitungen im Repo; als Naechstes solltest du die konkrete Voice-Bridge implementieren.",
+        ]
+    )
+    last_user_messages = []
+
+    async def _fake_detect(self, task: str) -> bool:
+        return False
+
+    async def _fake_working_memory(self, task: str) -> str:
+        return ""
+
+    def _fake_inject(self, task: str, working_memory_context: str) -> str:
+        return task
+
+    async def _fake_llm(self, messages):
+        last_user_messages.append(messages[-1]["content"])
+        return next(replies)
+
+    async def _fake_reflection(self, task: str, result: str, success: bool = True) -> None:
+        return None
+
+    monkeypatch.setattr(BaseAgent, "_detect_dynamic_ui_and_set_roi", _fake_detect)
+    monkeypatch.setattr(BaseAgent, "_build_working_memory_context", _fake_working_memory)
+    monkeypatch.setattr(BaseAgent, "_inject_working_memory_into_task", _fake_inject)
+    monkeypatch.setattr(BaseAgent, "_call_llm", _fake_llm)
+    monkeypatch.setattr(BaseAgent, "_run_reflection", _fake_reflection)
+
+    agent = BaseAgent(
+        system_prompt_template="Du bist ein Test-Agent.",
+        tools_description_string="",
+        max_iterations=3,
+        agent_type="meta",
+        skip_model_validation=True,
+    )
+    task = (
+        "# META ORCHESTRATION HANDOFF\n"
+        "meta_request_frame_json: "
+        '{"frame_kind":"new_task","task_domain":"setup_build","execution_mode":"plan_and_delegate",'
+        '"primary_objective":"richte fuer mich eine anruffunktion ueber twilio und inworld ein"}\n'
+        "meta_clarity_contract_json: "
+        '{"primary_objective":"richte fuer mich eine anruffunktion ueber twilio und inworld ein",'
+        '"request_kind":"execute_task","answer_obligation":"inspect_preparation_then_plan_or_execute",'
+        '"completion_condition":"concrete_setup_path_or_real_blocker_named","direct_answer_required":false}\n'
+        "\n"
+        "# ORIGINAL USER TASK\n"
+        "richte fuer mich eine anruffunktion ueber twilio und inworld ein\n"
+    )
+
+    try:
+        result = await agent.run(task)
+    finally:
+        await agent.http_client.aclose()
+
+    assert "Twilio" in result
+    assert len(last_user_messages) == 2
+    assert "Meta-Frame-Korrektur" in last_user_messages[1]
+    assert "task_domain: setup_build" in last_user_messages[1]
+    assert "erkannter_antwort_drift: generic_meta_help" in last_user_messages[1]
+
+
 # ── 4. Prompt-Korrektheit ─────────────────────────────────────────────────
 
 def test_reasoning_prompt_mentions_qwq():

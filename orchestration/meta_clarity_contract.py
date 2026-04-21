@@ -36,6 +36,34 @@ _LOCATION_ROUTE_PATTERNS = (
     "mit dem auto",
     "driving",
 )
+_SETUP_BUILD_PATTERNS = (
+    "twilio",
+    "inworld",
+    "anruffunktion",
+    "einrichten",
+    "setup",
+    "install",
+    "konfigurier",
+    "integration",
+    "verbinde",
+    "api key",
+    "lennart",
+)
+_MIGRATION_WORK_PATTERNS = (
+    "kanada",
+    "canada",
+    "auswand",
+    "einwander",
+    "visa",
+    "visum",
+    "arbeiten",
+    "arbeit",
+    "job",
+    "beruf",
+    "fuss fassen",
+    "fuß fassen",
+    "leben aufbauen",
+)
 
 
 @dataclass(frozen=True)
@@ -134,6 +162,10 @@ def _detect_objective_domain(text: Any) -> str:
         return "docs_status"
     if any(pattern in lowered for pattern in _LOCATION_ROUTE_PATTERNS):
         return "location_route"
+    if any(pattern in lowered for pattern in _SETUP_BUILD_PATTERNS):
+        return "setup_build"
+    if any(pattern in lowered for pattern in _MIGRATION_WORK_PATTERNS):
+        return "migration_work"
     return ""
 
 
@@ -343,6 +375,60 @@ def build_meta_clarity_contract(
         delegation_mode = "direct_only"
         max_delegate_calls = 0
         rationale = "Praeferenz-Updates sollen bestaetigt werden, nicht in breite Themennavigation kippen."
+    elif objective_domain == "setup_build":
+        request_kind = "execute_task"
+        answer_obligation = "inspect_preparation_then_plan_or_execute"
+        completion_condition = "concrete_setup_path_or_real_blocker_named"
+        allowed_context_slots = (
+            "current_query",
+            "conversation_state",
+            "open_loop",
+            "recent_user_turn",
+            "historical_topic_memory",
+        )
+        forbidden_context_slots = (
+            "assistant_fallback_context",
+            "topic_memory",
+            "preference_memory",
+            "semantic_recall",
+        )
+        allowed_working_memory_sections = ("KURZZEITKONTEXT",)
+        max_related_memories = 0
+        max_recent_events = 6
+        delegation_mode = "controlled_orchestration"
+        max_delegate_calls = 2
+        allowed_delegate_agents = ("executor", "research", "document")
+        rationale = (
+            "Setup-/Integrationsaufgaben brauchen klare Zielbindung und kleine kontrollierte "
+            "Evidenzpfade statt generischer Meta-Rueckfragen."
+        )
+    elif objective_domain == "migration_work":
+        request_kind = "execute_task"
+        answer_obligation = "return_actionable_migration_or_work_path"
+        completion_condition = "country_work_or_migration_path_named"
+        allowed_context_slots = (
+            "current_query",
+            "conversation_state",
+            "open_loop",
+            "recent_user_turn",
+            "topic_memory",
+            "historical_topic_memory",
+        )
+        forbidden_context_slots = (
+            "assistant_fallback_context",
+            "preference_memory",
+            "semantic_recall",
+        )
+        allowed_working_memory_sections = ("KURZZEITKONTEXT", "LANGZEITKONTEXT")
+        max_related_memories = 2
+        max_recent_events = 6
+        delegation_mode = "focused_research"
+        max_delegate_calls = 1
+        allowed_delegate_agents = ("research",)
+        rationale = (
+            "Migrations-/Arbeitsfragen brauchen thematische Kontinuitaet und fokussierte "
+            "Recherche statt offener Meta-Hilfe oder fachfremdem Kontext."
+        )
 
     if str((goal_spec or {}).get("output_mode") or "").strip().lower() in {"report", "artifact", "table"}:
         completion_condition = "requested_output_prepared"
