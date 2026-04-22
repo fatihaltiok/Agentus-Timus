@@ -1214,15 +1214,23 @@ class BaseAgent(DynamicToolMixin):
         refined = dict(params)
         target_agent = str(refined.get("agent_type") or "").strip().lower()
         raw_task = str(refined.get("task") or "").strip()
-        if target_agent != "executor" or not raw_task:
-            return refined
-        if parse_delegation_handoff(raw_task):
+        if not raw_task:
             return refined
 
         current_clarity = self._current_meta_clarity_contract() if self.agent_type == "meta" else {}
         objective_domain = self._detect_meta_objective_domain(
             str(current_clarity.get("primary_objective") or raw_task)
         )
+
+        if self.agent_type == "meta" and objective_domain == "docs_status" and target_agent == "shell":
+            refined["agent_type"] = "document"
+            log.info("Shell-Delegation fuer docs_status auf document umgebogen")
+            return refined
+
+        if target_agent != "executor":
+            return refined
+        if parse_delegation_handoff(raw_task):
+            return refined
 
         if self.agent_type == "meta" and objective_domain == "setup_build":
             refined["task"] = self._build_setup_build_executor_handoff(raw_task)
@@ -1799,6 +1807,9 @@ class BaseAgent(DynamicToolMixin):
             or self._extract_primary_task_text(task)
             or ""
         ).strip()
+        objective_domain = self._detect_meta_objective_domain(primary_objective)
+        if objective_domain == "docs_status" and "document" in allowed_agents:
+            allowed_agents = ["document", *[agent for agent in allowed_agents if agent != "document"]]
         return (
             "Meta-Clarity Korrektur:\n"
             f"- primary_objective: {primary_objective}\n"

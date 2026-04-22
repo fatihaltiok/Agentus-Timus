@@ -13,6 +13,7 @@ from orchestration.meta_clarity_contract import (
     apply_meta_clarity_to_bundle,
     build_meta_clarity_contract,
 )
+from orchestration.meta_interaction_mode import build_meta_interaction_mode
 from orchestration.conversation_state import (
     derive_topic_state_transition,
     is_generic_followup_prompt,
@@ -3324,6 +3325,11 @@ def classify_meta_task(
         recommended_agent_chain=final_chain,
         active_plan=active_plan,
     )
+    meta_interaction_mode = build_meta_interaction_mode(
+        effective_query=effective_query,
+        meta_request_frame=meta_request_frame.to_dict(),
+        policy_decision=policy_decision.to_dict(),
+    )
 
     prefer_youtube_research_only = (
         final_task_type == "youtube_content_extraction"
@@ -3449,6 +3455,7 @@ def classify_meta_task(
         effective_query=effective_query,
         response_mode=final_response_mode,
         policy_decision=policy_decision.to_dict(),
+        interaction_mode=meta_interaction_mode.to_dict(),
         task_type=final_task_type,
         goal_spec={},
         task_decomposition=task_decomposition,
@@ -3501,6 +3508,7 @@ def classify_meta_task(
         "meta_execution_plan": meta_execution_plan,
         "meta_policy_decision": policy_decision.to_dict(),
         "meta_request_frame": meta_request_frame.to_dict(),
+        "meta_interaction_mode": meta_interaction_mode.to_dict(),
         "topic_shift_detected": topic_transition.topic_shift_detected,
         "topic_state_transition": topic_transition.to_dict(),
         "meta_context_bundle": filtered_meta_context_bundle,
@@ -3522,6 +3530,7 @@ def classify_meta_task(
         effective_query=effective_query,
         response_mode=final_response_mode,
         policy_decision=policy_decision.to_dict(),
+        interaction_mode=meta_interaction_mode.to_dict(),
         task_type=final_task_type,
         goal_spec=goal_spec,
         task_decomposition=task_decomposition,

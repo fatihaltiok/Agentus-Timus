@@ -572,9 +572,9 @@ async def test_meta_clarity_limits_direct_recommendation_to_single_evidence_fetc
     assert "Zwischenprojekt zur allgemeinen Mehrschritt-Planung" in result
     assert len(http_calls) == 1
     assert http_calls[0]["method"] == "delegate_to_agent"
-    assert "Meta-Clarity Korrektur" in llm_last_messages[1]
-    assert "erlaubte_delegate_agents: document" in llm_last_messages[1]
-    assert "Kein anderer delegate_to_agent." in llm_last_messages[1]
+    assert "Meta-Clarity Abschlusszwang" in llm_last_messages[1]
+    assert "Kein weiterer Toolcall. Kein delegate_to_agent." in llm_last_messages[1]
+    assert "Antworte jetzt direkt im Format:" in llm_last_messages[1]
 
 
 @pytest.mark.asyncio

@@ -115,6 +115,7 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert "meta_execution_plan_json:" in result
     assert "task_decomposition_json:" in result
     assert "meta_clarity_contract_json:" in result
+    assert "meta_interaction_mode_json:" in result
     assert "specialist_context_seed_json:" in result
     assert "meta_policy_decision_json:" in result
     assert "alternative_recipes_json:" in result
@@ -542,3 +543,4 @@ def test_build_meta_handoff_payload_preserves_frame_driven_docs_direct_answer():
     assert payload["meta_execution_plan"]["intent_family"] == "single_step"
     rendered = main_dispatcher._render_meta_handoff_block(payload)
     assert "meta_request_frame_json:" in rendered
+    assert "meta_interaction_mode_json:" in rendered

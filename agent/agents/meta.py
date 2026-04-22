@@ -33,6 +33,7 @@ from orchestration.meta_orchestration import (
     resolve_orchestration_recipe,
 )
 from orchestration.meta_clarity_contract import parse_meta_clarity_contract
+from orchestration.meta_interaction_mode import parse_meta_interaction_mode
 from orchestration.meta_plan_compiler import (
     build_meta_execution_plan,
     parse_meta_execution_plan,
@@ -1238,6 +1239,11 @@ class MetaAgent(BaseAgent):
                     payload["meta_request_frame"] = json.loads(normalized_value)
                 except json.JSONDecodeError:
                     payload["meta_request_frame"] = {"raw": normalized_value}
+            elif normalized_key == "meta_interaction_mode_json":
+                try:
+                    payload["meta_interaction_mode"] = json.loads(normalized_value)
+                except json.JSONDecodeError:
+                    payload["meta_interaction_mode"] = {"raw": normalized_value}
             elif normalized_key == "task_decomposition_json":
                 payload["task_decomposition"] = parse_task_decomposition(normalized_value)
             elif normalized_key == "meta_context_bundle_json":
@@ -3522,6 +3528,52 @@ class MetaAgent(BaseAgent):
         return "\n".join(lines)
 
     @classmethod
+    def _build_interaction_mode_block(
+        cls,
+        task: str,
+        active_handoff: Optional[Dict[str, Any]],
+    ) -> str:
+        payload = dict(active_handoff or {})
+        mode = parse_meta_interaction_mode(
+            payload.get("meta_interaction_mode")
+            if isinstance(payload.get("meta_interaction_mode"), dict)
+            else {}
+        )
+        mode_name = str(mode.get("mode") or "").strip().lower()
+        if not mode_name:
+            return ""
+
+        lines = [
+            "# INTERAKTIONSMODUS",
+            f"Modus: {mode_name}",
+            f"Grund: {mode.get('mode_reason') or 'unknown'}",
+        ]
+        if mode_name == "think_partner":
+            lines.extend(
+                [
+                    "Arbeite als Denkpartner.",
+                    "Keine ungefragte Recherche, keine Ausfuehrung, keine Agentenkette.",
+                    "Hilf beim Denken, Einordnen, Strukturieren und Abwaegen.",
+                ]
+            )
+        elif mode_name == "inspect":
+            lines.extend(
+                [
+                    "Arbeite im Pruefmodus.",
+                    "Nutze hoechstens einen kleinen Evidenzpfad und berichte dann direkt.",
+                    "Keine ungefragte Umsetzung und keine freie Agentenkette.",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    "Arbeite im Assistenzmodus.",
+                    "Liefere einen konkreten Plan, eine pruefbare Empfehlung oder kontrollierte Ausfuehrung.",
+                ]
+            )
+        return "\n".join(lines)
+
+    @classmethod
     def _should_include_skill_context(
         cls,
         task: str,
@@ -3580,6 +3632,7 @@ class MetaAgent(BaseAgent):
             meta_context = await self._build_meta_context()
             meta_context = self._build_frame_bound_meta_context(meta_context, task, active_handoff)
             primary_objective_preamble = self._build_primary_objective_preamble(task, active_handoff)
+            interaction_mode_block = self._build_interaction_mode_block(task, active_handoff)
 
             # 2. Skills auswählen
             include_skill_context = self._should_include_skill_context(task, active_handoff)
@@ -3594,6 +3647,8 @@ class MetaAgent(BaseAgent):
             parts: list[str] = []
             if primary_objective_preamble:
                 parts.append(primary_objective_preamble)
+            if interaction_mode_block:
+                parts.append(interaction_mode_block)
             if meta_context:
                 parts.append(meta_context)
             if skill_context:

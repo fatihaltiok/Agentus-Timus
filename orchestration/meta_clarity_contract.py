@@ -234,6 +234,7 @@ def build_meta_clarity_contract(
     effective_query: str,
     response_mode: str,
     policy_decision: Mapping[str, Any] | None = None,
+    interaction_mode: Mapping[str, Any] | None = None,
     task_type: str = "",
     goal_spec: Mapping[str, Any] | None = None,
     task_decomposition: Mapping[str, Any] | None = None,
@@ -247,6 +248,12 @@ def build_meta_clarity_contract(
     answer_shape = str(policy.get("request_kind") or "").strip().lower()
     response_mode_clean = _clean_text(response_mode, limit=64).lower()
     policy_reason = _clean_text((policy_decision or {}).get("policy_reason"), limit=80).lower()
+    mode_payload = dict(interaction_mode or {})
+    interaction_mode_name = _clean_text(mode_payload.get("mode"), limit=32).lower()
+    interaction_mode_reason = _clean_text(mode_payload.get("mode_reason"), limit=80).lower()
+    interaction_mode_explicit = bool(mode_payload.get("explicit_override")) or interaction_mode_reason.startswith(
+        "explicit_"
+    )
     decomposition = dict(task_decomposition or {})
     plan = dict(meta_execution_plan or {})
     goal = _clean_text(
@@ -286,7 +293,64 @@ def build_meta_clarity_contract(
     rationale = "Default-Orchestrierung mit vollem Kontextbudget."
     objective_domain = _detect_objective_domain(goal) or _detect_objective_domain(effective_query)
 
-    if answer_shape == "direct_recommendation" or policy_reason == "next_step_summary_request":
+    if interaction_mode_explicit and interaction_mode_name == "think_partner":
+        request_kind = "thinking_partner"
+        answer_obligation = "reason_with_user_without_research_or_execution"
+        completion_condition = "insight_or_options_given"
+        allowed_context_slots = (
+            "current_query",
+            "conversation_state",
+            "open_loop",
+            "recent_user_turn",
+            "topic_memory",
+            "historical_topic_memory",
+        )
+        forbidden_context_slots = (
+            "assistant_fallback_context",
+            "preference_memory",
+            "semantic_recall",
+        )
+        allowed_working_memory_sections = ("KURZZEITKONTEXT", "LANGZEITKONTEXT")
+        max_related_memories = 1
+        max_recent_events = 6
+        delegation_mode = "direct_only"
+        max_delegate_calls = 0
+        rationale = (
+            "Denkpartner-Modus soll mit dem Nutzer denken, Optionen sortieren und keine "
+            "ungefragte Recherche oder Ausfuehrung starten."
+        )
+    elif interaction_mode_explicit and interaction_mode_name == "inspect":
+        request_kind = "inspect_only"
+        answer_obligation = "inspect_then_report_without_execution"
+        completion_condition = "findings_or_real_gap_named"
+        allowed_context_slots = (
+            "current_query",
+            "conversation_state",
+            "open_loop",
+            "recent_user_turn",
+            "historical_topic_memory",
+        )
+        forbidden_context_slots = (
+            "assistant_fallback_context",
+            "topic_memory",
+            "preference_memory",
+            "semantic_recall",
+        )
+        allowed_working_memory_sections = ("KURZZEITKONTEXT",)
+        max_related_memories = 0
+        max_recent_events = 6
+        delegation_mode = "single_evidence_fetch"
+        max_delegate_calls = 1
+        force_answer_after_delegate_budget = True
+        allowed_delegate_agents = ("executor", "document", "research", "system", "shell")
+        rationale = (
+            "Pruefmodus soll hoechstens einen kleinen Evidenzpfad nutzen und dann ohne "
+            "ungefragte Umsetzung direkt berichten."
+        )
+
+    if not interaction_mode_explicit and (
+        answer_shape == "direct_recommendation" or policy_reason == "next_step_summary_request"
+    ):
         request_kind = "direct_recommendation"
         answer_obligation = "answer_now_with_single_recommendation"
         completion_condition = "next_recommended_block_or_step_named"
@@ -314,7 +378,9 @@ def build_meta_clarity_contract(
         else:
             allowed_delegate_agents = ("shell", "document", "research", "system")
         rationale = "Direkte Empfehlung braucht aktuelle Frage und kurze Verlaufsanker, aber kein breites Altgedaechtnis."
-    elif answer_shape == "state_summary" or policy_reason == "state_summary_request":
+    elif not interaction_mode_explicit and (
+        answer_shape == "state_summary" or policy_reason == "state_summary_request"
+    ):
         request_kind = "state_summary"
         answer_obligation = "summarize_current_state_directly"
         completion_condition = "current_state_summarized"
@@ -337,7 +403,9 @@ def build_meta_clarity_contract(
         force_answer_after_delegate_budget = True
         allowed_delegate_agents = ("shell", "document", "system")
         rationale = "Statusfragen duerfen State- und Verlaufskontext sehen, aber keine irrelevanten Praeferenzpfade."
-    elif answer_shape == "historical_topic_state" or policy_reason == "historical_topic_recall":
+    elif not interaction_mode_explicit and (
+        answer_shape == "historical_topic_state" or policy_reason == "historical_topic_recall"
+    ):
         request_kind = "historical_recall"
         answer_obligation = "answer_now_from_relevant_history"
         completion_condition = "historical_topic_recalled"
@@ -358,7 +426,9 @@ def build_meta_clarity_contract(
         delegation_mode = "direct_only"
         max_delegate_calls = 0
         rationale = "Historische Rueckfragen brauchen gezielte Verlaufsspuren, nicht breite thematische Seitenpfade."
-    elif answer_shape == "self_model_status" or policy_reason == "self_model_status_request":
+    elif not interaction_mode_explicit and (
+        answer_shape == "self_model_status" or policy_reason == "self_model_status_request"
+    ):
         request_kind = "self_model_status"
         answer_obligation = "answer_now_from_self_model_and_runtime"
         completion_condition = "self_capability_state_explained"
@@ -377,7 +447,7 @@ def build_meta_clarity_contract(
         force_answer_after_delegate_budget = True
         allowed_delegate_agents = ("system", "shell")
         rationale = "Selbststatus darf Stabilkontext nutzen, aber keine thematisch fremden Langzeitpfade."
-    elif response_mode_clean == "clarify_before_execute":
+    elif not interaction_mode_explicit and response_mode_clean == "clarify_before_execute":
         request_kind = "clarify_question"
         answer_obligation = "ask_one_clarifying_question_only_if_needed"
         completion_condition = "material_ambiguity_resolved"
@@ -399,7 +469,7 @@ def build_meta_clarity_contract(
         delegation_mode = "direct_only"
         max_delegate_calls = 0
         rationale = "Klaerfragen brauchen Klarheit ueber den aktuellen Turn, nicht semantisches Altgewicht."
-    elif response_mode_clean == "resume_open_loop":
+    elif not interaction_mode_explicit and response_mode_clean == "resume_open_loop":
         request_kind = "resume_action"
         answer_obligation = "continue_current_plan_or_statefully_reframe"
         completion_condition = "next_plan_step_resolved"
@@ -418,7 +488,7 @@ def build_meta_clarity_contract(
         delegation_mode = "bounded_chain"
         max_delegate_calls = 2
         rationale = "Resume-Faelle brauchen Plananschluss, aber keine beliebigen Alt-Praeferenzen."
-    elif response_mode_clean == "acknowledge_and_store":
+    elif not interaction_mode_explicit and response_mode_clean == "acknowledge_and_store":
         request_kind = "acknowledgment"
         answer_obligation = "confirm_and_store_without_menu"
         completion_condition = "preference_or_instruction_acknowledged"
@@ -558,7 +628,7 @@ def build_meta_clarity_contract(
     if next_step_title and request_kind == "resume_action":
         completion_condition = f"next_plan_step_resolved:{next_step_title}"
 
-    direct_answer_required = request_kind in _DIRECT_ANSWER_REQUEST_KINDS
+    direct_answer_required = request_kind in (_DIRECT_ANSWER_REQUEST_KINDS | {"thinking_partner"})
     primary_objective = goal if goal else _clean_text(effective_query, limit=320)
 
     return MetaClarityContract(

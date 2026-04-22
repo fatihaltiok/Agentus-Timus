@@ -197,6 +197,55 @@ def test_build_meta_clarity_contract_for_setup_build_preparation_check_forces_si
     assert contract.force_answer_after_delegate_budget is True
 
 
+def test_build_meta_clarity_contract_for_think_partner_blocks_research_and_execution() -> None:
+    contract = build_meta_clarity_contract(
+        effective_query="Ohne Recherche: Was ist deine Meinung dazu?",
+        response_mode="execute",
+        policy_decision={
+            "answer_shape": "direct_recommendation",
+            "policy_reason": "baseline_turn_mode",
+        },
+        interaction_mode={
+            "mode": "think_partner",
+            "mode_reason": "explicit_think_partner_language",
+        },
+        task_type="single_lane",
+        goal_spec={},
+        task_decomposition={"goal": "Mit dem Nutzer denken"},
+        meta_execution_plan={},
+    )
+
+    assert contract.request_kind == "thinking_partner"
+    assert contract.answer_obligation == "reason_with_user_without_research_or_execution"
+    assert contract.max_delegate_calls == 0
+    assert contract.delegation_mode == "direct_only"
+    assert contract.direct_answer_required is True
+
+
+def test_build_meta_clarity_contract_for_inspect_mode_limits_to_single_evidence_step() -> None:
+    contract = build_meta_clarity_contract(
+        effective_query="Schau mal nach, ob es schon Vorbereitungen gibt.",
+        response_mode="execute",
+        policy_decision={
+            "answer_shape": "action_first",
+            "policy_reason": "baseline_turn_mode",
+        },
+        interaction_mode={
+            "mode": "inspect",
+            "mode_reason": "explicit_inspection_language",
+        },
+        task_type="single_lane",
+        goal_spec={},
+        task_decomposition={"goal": "Vorhandene Vorbereitungen pruefen"},
+        meta_execution_plan={},
+    )
+
+    assert contract.request_kind == "inspect_only"
+    assert contract.answer_obligation == "inspect_then_report_without_execution"
+    assert contract.max_delegate_calls == 1
+    assert contract.force_answer_after_delegate_budget is True
+
+
 def test_build_meta_clarity_contract_for_migration_work_prefers_focused_research() -> None:
     contract = build_meta_clarity_contract(
         effective_query="suche mir Moeglichkeiten in Kanada Fuss zu fassen",
