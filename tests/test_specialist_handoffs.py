@@ -370,7 +370,27 @@ async def test_executor_run_setup_build_probe_uses_repo_search_instead_of_llm(mo
                         {
                             "file": "/home/fatih-ubuntu/dev/timus/tools/voice_tool/tool.py",
                             "matches": [{"content": "def voice_speak(text: str):"}],
-                        }
+                        },
+                        {
+                            "file": "/home/fatih-ubuntu/dev/timus/ROADMAP.md",
+                            "matches": [{"content": "Voice Loop mit Inworld.AI TTS"}],
+                        },
+                        {
+                            "file": "/home/fatih-ubuntu/dev/timus/conftest.py",
+                            "matches": [{"content": "\"test_inworld_tts.py\","}],
+                        },
+                        {
+                            "file": "/home/fatih-ubuntu/dev/timus/docs/VOICE.md",
+                            "matches": [{"content": "Inworld.AI TTS Integration"}],
+                        },
+                        {
+                            "file": "/home/fatih-ubuntu/dev/timus/.hypothesis/constants/abc123",
+                            "matches": [{"content": "INWORLD_API_KEY=notrelevant"}],
+                        },
+                        {
+                            "file": "/home/fatih-ubuntu/dev/timus/.gitignore",
+                            "matches": [{"content": "test_inworld_output.mp3"}],
+                        },
                     ],
                 }
             if text in {"TWILIO_", "INWORLD_"}:
@@ -388,9 +408,13 @@ async def test_executor_run_setup_build_probe_uses_repo_search_instead_of_llm(mo
                     "status": "success",
                     "results": [
                         {
+                            "file": "/home/fatih-ubuntu/dev/timus/.env",
+                            "matches": [{"content": "INWORLD_API_KEY=activeverysecretapikey"}],
+                        },
+                        {
                             "file": "/home/fatih-ubuntu/dev/timus/.env.backup",
                             "matches": [{"content": "INWORLD_API_KEY=verysecretapikey"}],
-                        }
+                        },
                     ],
                 }
             raise AssertionError(f"unerwarteter Suchterm: {text}")
@@ -439,7 +463,14 @@ async def test_executor_run_setup_build_probe_uses_repo_search_instead_of_llm(mo
     assert "TWILIO_ACCOUNT_SID=<configured>" in result
     assert "INWORLD_API_KEY=<configured>" in result
     assert "ACsupersecretvalue" not in result
+    assert "activeverysecretapikey" not in result
     assert "verysecretapikey" not in result
+    assert ".env.backup" not in result
+    assert ".hypothesis" not in result
+    assert ".gitignore" not in result
+    assert "ROADMAP.md" not in result
+    assert "conftest.py" not in result
+    assert "/docs/VOICE.md" not in result
 
 
 @pytest.mark.asyncio

@@ -2275,10 +2275,23 @@ class ExecutorAgent(BaseAgent):
         lowered = str(path or "").strip().lower()
         if not lowered:
             return True
+        filename = lowered.rsplit("/", 1)[-1]
+        if filename in {".gitignore", ".qdrant-initialized"}:
+            return True
+        if filename.endswith((".bak", ".backup", ".orig", ".rej", ".tmp")):
+            return True
+        if filename.startswith(".env.") and any(
+            suffix in filename for suffix in (".example", ".sample", ".template", ".backup", ".bak", ".orig")
+        ):
+            return True
         noisy_fragments = (
             "/docs/autonomy/",
             "/data/",
             "/.git/",
+            "/.hypothesis/",
+            "/__pycache__/",
+            "/.venv/",
+            "/venv/",
             "/logs/",
             "/results/",
             ".env.example",
@@ -2287,6 +2300,22 @@ class ExecutorAgent(BaseAgent):
             "zwischenprojekt_allgemeine_mehrschritt_planung",
         )
         return any(fragment in lowered for fragment in noisy_fragments)
+
+    @classmethod
+    def _setup_build_path_priority(cls, path: str) -> int:
+        lowered = str(path or "").strip().lower()
+        if not lowered:
+            return 99
+        filename = lowered.rsplit("/", 1)[-1]
+        if cls._is_setup_build_noise_path(lowered):
+            return 99
+        if filename == ".env":
+            return 0
+        if any(segment in lowered for segment in ("/tools/", "/skills/", "/server/", "/agent/", "/scripts/", "/config/")):
+            return 1
+        if any(segment in lowered for segment in ("/docs/", "/tests/")) or filename in {"conftest.py", "roadmap.md", "readme.md"}:
+            return 5
+        return 3
 
     @staticmethod
     def _is_setup_build_sensitive_path(path: str) -> bool:
@@ -2378,13 +2407,24 @@ class ExecutorAgent(BaseAgent):
                 "Es gibt aktuell keine belastbaren Repo-Hinweise auf die angefragte Integration."
             )
 
-        relevant_files = sorted(
+        prioritized_files = sorted(
             hits_by_file.keys(),
             key=lambda item: (
-                0 if any(seg in item.lower() for seg in ("/agent/", "/tools/", "/skills/", "/server/")) else 1,
+                self._setup_build_path_priority(item),
                 item,
             ),
-        )[:6]
+        )
+        strongest_priority = min((self._setup_build_path_priority(item) for item in prioritized_files), default=99)
+        max_allowed_priority = strongest_priority
+        if strongest_priority <= 1:
+            max_allowed_priority = 1
+        relevant_files = [
+            item
+            for item in prioritized_files
+            if self._setup_build_path_priority(item) <= max_allowed_priority
+        ][:6]
+        if not relevant_files:
+            relevant_files = prioritized_files[:6]
 
         read_snippets: dict[str, str] = {}
         for file_path in relevant_files[:4]:
@@ -2401,8 +2441,16 @@ class ExecutorAgent(BaseAgent):
 
         combined_text = "\n".join(read_snippets.values())
         lowered_text = combined_text.lower()
-        twilio_present = "twilio" in lowered_text or any("twilio" in path.lower() for path in relevant_files)
-        inworld_present = "inworld" in lowered_text or any("inworld" in path.lower() for path in relevant_files)
+        twilio_present = (
+            "twilio" in lowered_text
+            or any("twilio" in path.lower() for path in relevant_files)
+            or any("TWILIO_" in line for lines in hits_by_file.values() for line in lines)
+        )
+        inworld_present = (
+            "inworld" in lowered_text
+            or any("inworld" in path.lower() for path in relevant_files)
+            or any("INWORLD_" in line for lines in hits_by_file.values() for line in lines)
+        )
         voice_present = "voice_" in lowered_text or any("voice" in path.lower() for path in relevant_files)
         twilio_env_present = "twilio_" in lowered_text or any("TWILIO_" in line for lines in hits_by_file.values() for line in lines)
         inworld_env_present = "inworld_" in lowered_text or any("INWORLD_" in line for lines in hits_by_file.values() for line in lines)
