@@ -1177,6 +1177,22 @@ def test_classify_meta_task_explicit_think_partner_stays_meta_only():
     assert result["meta_clarity_contract"]["request_kind"] == "thinking_partner"
 
 
+def test_classify_meta_task_explicit_inspect_setup_build_uses_probe_fast_path():
+    result = classify_meta_task(
+        "Schau mal nach, ob es schon Vorbereitungen fuer Twilio und Inworld gibt, aber nichts umsetzen.",
+        action_count=0,
+    )
+
+    assert result["task_type"] == "setup_build_probe"
+    assert result["recommended_agent_chain"] == ["meta", "executor"]
+    assert result["recommended_recipe_id"] == "setup_build_probe"
+    assert [stage["stage_id"] for stage in result["recipe_stages"]] == ["setup_build_probe"]
+    assert result["reason"] == "interaction_mode:inspect_setup_build_probe"
+    assert result["meta_request_frame"]["task_domain"] == "setup_build"
+    assert result["meta_interaction_mode"]["mode"] == "inspect"
+    assert result["meta_clarity_contract"]["request_kind"] == "inspect_only"
+
+
 def test_classify_meta_task_keeps_canada_context_for_context_dependent_footing_query(monkeypatch):
     fake_memory_manager = SimpleNamespace(
         find_related_memories=lambda query, n_results=6: [

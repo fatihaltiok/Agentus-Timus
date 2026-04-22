@@ -208,6 +208,58 @@ async def test_meta_recipe_execution_returns_direct_result_for_simple_live_looku
 
 
 @pytest.mark.asyncio
+async def test_meta_recipe_execution_returns_direct_result_for_setup_build_probe(monkeypatch):
+    from agent.agents.meta import MetaAgent
+    from agent.base_agent import BaseAgent
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        assert method == "delegate_to_agent"
+        assert params["agent_type"] == "executor"
+        assert "task_type: setup_build_probe" in params["task"]
+        return {
+            "status": "success",
+            "agent": "executor",
+            "result": (
+                "**Repo-Probe fuer vorhandene Vorbereitungen**\n\n"
+                "**Verdichteter Stand:**\n"
+                "- Twilio-Bezug im Repo: ja\n"
+                "- Inworld-Bezug im Repo: ja\n"
+                "- Outbound-Call-Logik fuer Twilio sichtbar: nein"
+            ),
+            "blackboard_key": "delegation:executor:setup-probe",
+            "metadata": {},
+            "artifacts": [],
+        }
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = MetaAgent.__new__(MetaAgent)
+    agent.conversation_session_id = "sess-meta-setup-build-probe"
+
+    task = _build_meta_task(
+        recipe_id="setup_build_probe",
+        chain="meta -> executor",
+        stages=[
+            (
+                "setup_build_probe",
+                "executor",
+                "Pruefe vorhandene Setup-Vorbereitungen im Repo",
+                "repo_findings",
+                False,
+            ),
+        ],
+        original_task="Schau mal nach, ob es schon Vorbereitungen fuer Twilio und Inworld gibt, aber nichts umsetzen.",
+        task_type="setup_build_probe",
+        site_kind="",
+    )
+
+    result = await MetaAgent.run(agent, task)
+
+    assert "Twilio-Bezug im Repo: ja" in result
+    assert "Meta-Rezept 'setup_build_probe' ausgefuehrt." not in result
+
+
+@pytest.mark.asyncio
 async def test_meta_recipe_execution_returns_direct_result_for_lookup_document_recipe(monkeypatch):
     from agent.agents.meta import MetaAgent
     from agent.base_agent import BaseAgent

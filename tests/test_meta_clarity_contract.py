@@ -246,6 +246,33 @@ def test_build_meta_clarity_contract_for_inspect_mode_limits_to_single_evidence_
     assert contract.force_answer_after_delegate_budget is True
 
 
+def test_build_meta_clarity_contract_for_explicit_inspect_setup_build_uses_executor_probe_only() -> None:
+    contract = build_meta_clarity_contract(
+        effective_query="Schau mal nach, ob es schon Vorbereitungen fuer Twilio und Inworld gibt, aber nichts umsetzen.",
+        response_mode="execute",
+        policy_decision={
+            "answer_shape": "action_first",
+            "policy_reason": "baseline_turn_mode",
+        },
+        interaction_mode={
+            "mode": "inspect",
+            "mode_reason": "explicit_inspection_language",
+            "explicit_override": True,
+        },
+        task_type="single_lane",
+        goal_spec={},
+        task_decomposition={"goal": "Vorbereitungen fuer Twilio und Inworld pruefen"},
+        meta_execution_plan={},
+    )
+
+    assert contract.request_kind == "inspect_only"
+    assert contract.answer_obligation == "inspect_preparation_then_report"
+    assert contract.completion_condition == "existing_preparations_or_real_gap_named"
+    assert contract.max_delegate_calls == 1
+    assert contract.allowed_delegate_agents == ("executor",)
+    assert contract.force_answer_after_delegate_budget is True
+
+
 def test_build_meta_clarity_contract_for_migration_work_prefers_focused_research() -> None:
     contract = build_meta_clarity_contract(
         effective_query="suche mir Moeglichkeiten in Kanada Fuss zu fassen",

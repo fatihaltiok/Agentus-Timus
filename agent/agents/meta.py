@@ -98,6 +98,7 @@ class MetaAgent(BaseAgent):
         "location_local_search",
         "simple_live_lookup",
         "simple_live_lookup_document",
+        "setup_build_probe",
     }
     _META_HANDOFF_HEADER = "# META ORCHESTRATION HANDOFF"
     _ORIGINAL_TASK_HEADER = "# ORIGINAL USER TASK"

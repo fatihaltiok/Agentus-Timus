@@ -347,6 +347,14 @@ def build_meta_clarity_contract(
             "Pruefmodus soll hoechstens einen kleinen Evidenzpfad nutzen und dann ohne "
             "ungefragte Umsetzung direkt berichten."
         )
+        if objective_domain == "setup_build":
+            answer_obligation = "inspect_preparation_then_report"
+            completion_condition = "existing_preparations_or_real_gap_named"
+            allowed_delegate_agents = ("executor",)
+            rationale = (
+                "Expliziter Pruefmodus fuer Setup-Aufgaben soll direkt in einen einzigen "
+                "Repo-Probe-Schritt gehen und danach ohne freie Meta-Orchestrierung berichten."
+            )
 
     if not interaction_mode_explicit and (
         answer_shape == "direct_recommendation" or policy_reason == "next_step_summary_request"
@@ -505,7 +513,7 @@ def build_meta_clarity_contract(
         delegation_mode = "direct_only"
         max_delegate_calls = 0
         rationale = "Praeferenz-Updates sollen bestaetigt werden, nicht in breite Themennavigation kippen."
-    elif objective_domain == "setup_build":
+    elif not interaction_mode_explicit and objective_domain == "setup_build":
         request_kind = "execute_task"
         answer_obligation = "inspect_preparation_then_plan_or_execute"
         completion_condition = "concrete_setup_path_or_real_blocker_named"
@@ -542,7 +550,7 @@ def build_meta_clarity_contract(
                 "Reine Vorbereitungspruefungen sollen genau einmal belastbare Repo-Evidenz holen "
                 "und danach direkt mit vorhandenem Stand plus echter Luecke abschliessen."
             )
-    elif objective_domain == "migration_work":
+    elif not interaction_mode_explicit and objective_domain == "migration_work":
         request_kind = "execute_task"
         answer_obligation = "return_actionable_migration_or_work_path"
         completion_condition = "country_work_or_migration_path_named"
@@ -569,7 +577,7 @@ def build_meta_clarity_contract(
             "Migrations-/Arbeitsfragen brauchen thematische Kontinuitaet und fokussierte "
             "Recherche statt offener Meta-Hilfe oder fachfremdem Kontext."
         )
-    elif objective_domain == "planning_advisory":
+    elif not interaction_mode_explicit and objective_domain == "planning_advisory":
         request_kind = "execute_task"
         answer_obligation = "collect_constraints_then_plan"
         completion_condition = "planning_structure_or_missing_constraints_named"
@@ -595,7 +603,7 @@ def build_meta_clarity_contract(
             "Planungsanfragen brauchen zuerst das konkrete Ziel und Randbedingungen, "
             "aber keine freie Agentenkette oder fachfremdes Altgedaechtnis."
         )
-    elif objective_domain == "research_advisory":
+    elif not interaction_mode_explicit and objective_domain == "research_advisory":
         request_kind = "execute_task"
         answer_obligation = "build_topic_understanding_then_support_followups"
         completion_condition = "research_briefing_or_next_research_path_named"
