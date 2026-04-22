@@ -679,6 +679,91 @@ async def test_meta_clarity_redirects_wrong_direct_answer_delegate_to_allowed_ev
 
 
 @pytest.mark.asyncio
+async def test_meta_interaction_mode_think_partner_blocks_research_and_forces_direct_answer(monkeypatch):
+    import agent.base_agent as base_agent_module
+
+    replies = iter(
+        [
+            (
+                'Action: {"method":"delegate_to_agent","params":{"agent_type":"research",'
+                '"task":"Recherchiere pros und cons von Denk-, Pruef- und Assistenzmodus."}}'
+            ),
+            "Final Answer: Intern ist die Trennung sinnvoll, solange sie fuer den Nutzer unsichtbar bleibt und nur als Laufzeitvertrag dient.",
+        ]
+    )
+    llm_last_messages = []
+    http_calls = []
+
+    async def _fake_detect(self, task: str) -> bool:
+        return False
+
+    async def _fake_working_memory(self, task: str) -> str:
+        return ""
+
+    def _fake_inject(self, task: str, working_memory_context: str) -> str:
+        return task
+
+    async def _fake_llm(self, messages):
+        last = messages[-1]["content"] if isinstance(messages[-1], dict) else ""
+        llm_last_messages.append(last)
+        return next(replies)
+
+    async def _fake_reflection(self, task: str, result: str, success: bool = True) -> None:
+        return None
+
+    async def _fake_post(url, *, json=None, timeout=None):
+        http_calls.append(json)
+        raise AssertionError("think_partner darf keinen Remote-Toolcall ausloesen")
+
+    monkeypatch.setattr(BaseAgent, "_detect_dynamic_ui_and_set_roi", _fake_detect)
+    monkeypatch.setattr(BaseAgent, "_build_working_memory_context", _fake_working_memory)
+    monkeypatch.setattr(BaseAgent, "_inject_working_memory_into_task", _fake_inject)
+    monkeypatch.setattr(BaseAgent, "_call_llm", _fake_llm)
+    monkeypatch.setattr(BaseAgent, "_run_reflection", _fake_reflection)
+    monkeypatch.setattr(BaseAgent, "_ensure_remote_tool_names", AsyncMock())
+    monkeypatch.setattr(base_agent_module.registry_v2, "validate_tool_call", lambda *args, **kwargs: None)
+    monkeypatch.setattr(base_agent_module.registry_v2, "normalize_tool_result", lambda method, result: result)
+
+    agent = BaseAgent(
+        system_prompt_template="Du bist ein Test-Agent.",
+        tools_description_string="",
+        max_iterations=3,
+        agent_type="meta",
+        skip_model_validation=True,
+    )
+    agent.http_client.post = AsyncMock(side_effect=_fake_post)
+    task = (
+        "# META ORCHESTRATION HANDOFF\n"
+        "task_type: single_lane\n"
+        "intent_family: single_step\n"
+        "planning_needed: no\n"
+        "meta_interaction_mode_json: "
+        '{"mode":"think_partner","mode_reason":"explicit_think_partner_language","explicit_override":true,'
+        '"answer_style":"reason_with_user","execution_policy":"no_research_no_execution",'
+        '"completion_expectation":"insight_or_options_given"}\n'
+        "meta_clarity_contract_json: "
+        '{"primary_objective":"Ohne Recherche: Was ist deine Meinung dazu, ob Timus intern Denk-, Pruef- und Assistenzmodus haben sollte?",'
+        '"request_kind":"thinking_partner","answer_obligation":"reason_with_user_without_research_or_execution",'
+        '"completion_condition":"insight_or_options_given","direct_answer_required":true,'
+        '"delegation_mode":"direct_only","max_delegate_calls":0,'
+        '"allowed_delegate_agents":[],"force_answer_after_delegate_budget":false}\n'
+        "\n"
+        "# ORIGINAL USER TASK\n"
+        "Ohne Recherche: Was ist deine Meinung dazu, ob Timus intern Denk-, Pruef- und Assistenzmodus haben sollte?\n"
+    )
+
+    try:
+        result = await agent.run(task)
+    finally:
+        await agent.http_client.aclose()
+
+    assert "Trennung sinnvoll" in result
+    assert http_calls == []
+    assert "Meta-Interaktionsmodus Abschlusszwang" in llm_last_messages[1]
+    assert "keine Recherche, keine Toolnutzung und keine Delegation" in llm_last_messages[1]
+
+
+@pytest.mark.asyncio
 async def test_meta_direct_answer_mode_skips_blackboard_enrichment(monkeypatch):
     import memory.agent_blackboard as blackboard_module
 

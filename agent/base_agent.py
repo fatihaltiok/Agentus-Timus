@@ -49,6 +49,7 @@ from orchestration.meta_clarity_contract import (
     filter_working_memory_context,
     parse_meta_clarity_contract,
 )
+from orchestration.meta_interaction_mode import parse_meta_interaction_mode
 from orchestration.llm_budget_guard import (
     BudgetModelOverride,
     LLMBudgetDecision,
@@ -1535,6 +1536,28 @@ class BaseAgent(DynamicToolMixin):
                 return {}
         return {}
 
+    @staticmethod
+    def _extract_meta_interaction_mode(task_text: str) -> Dict[str, Any]:
+        marker = "# META ORCHESTRATION HANDOFF"
+        text = str(task_text or "").strip()
+        if marker not in text:
+            return {}
+
+        _, after_header = text.split(marker, 1)
+        handoff_block = after_header.split("# ORIGINAL USER TASK", 1)[0]
+        for raw_line in handoff_block.splitlines():
+            stripped = str(raw_line or "").strip()
+            if not stripped or ":" not in stripped:
+                continue
+            key, value = stripped.split(":", 1)
+            if key.strip() != "meta_interaction_mode_json":
+                continue
+            try:
+                return parse_meta_interaction_mode(json.loads(value.strip()))
+            except Exception:
+                return {}
+        return {}
+
     @classmethod
     def _extract_meta_working_memory_query(cls, task_text: str) -> str:
         marker = "# META ORCHESTRATION HANDOFF"
@@ -1712,6 +1735,14 @@ class BaseAgent(DynamicToolMixin):
             return {}
         return self._extract_meta_request_frame(task_text)
 
+    def _current_meta_interaction_mode(self) -> Dict[str, Any]:
+        if str(self.agent_type or "").strip().lower() != "meta":
+            return {}
+        task_text = str(getattr(self, "_current_task_text", "") or "").strip()
+        if not task_text:
+            return {}
+        return self._extract_meta_interaction_mode(task_text)
+
     def _current_meta_delegate_count(self) -> int:
         count = 0
         for item in (self._task_action_history or []):
@@ -1724,6 +1755,7 @@ class BaseAgent(DynamicToolMixin):
             if blocked_reason in {
                 "meta_clarity_delegate_agent_not_allowed",
                 "meta_clarity_objective_mismatch",
+                "meta_interaction_mode_no_action",
             }:
                 continue
             count += 1
@@ -1733,14 +1765,29 @@ class BaseAgent(DynamicToolMixin):
         contract = self._current_meta_clarity_contract()
         if not contract or not bool(contract.get("direct_answer_required")):
             return None
-        if not bool(contract.get("force_answer_after_delegate_budget")):
-            return None
 
         max_delegate_raw = contract.get("max_delegate_calls", -1)
         max_delegate_calls = -1 if max_delegate_raw in (None, "") else int(max_delegate_raw)
         blocked_reason = ""
         if isinstance(obs, dict):
             blocked_reason = str(obs.get("blocked_reason") or "").strip().lower()
+        request_kind = str(contract.get("request_kind") or "").strip().lower()
+        if request_kind == "thinking_partner" and blocked_reason == "meta_interaction_mode_no_action":
+            primary_objective = str(
+                contract.get("primary_objective")
+                or self._extract_primary_task_text(task)
+                or ""
+            ).strip()
+            return (
+                "Meta-Interaktionsmodus Abschlusszwang:\n"
+                f"- primary_objective: {primary_objective}\n"
+                "- mode: think_partner\n"
+                "Dieser Turn erlaubt keine Recherche, keine Toolnutzung und keine Delegation.\n"
+                "Antworte jetzt direkt denkend, einordnend und ohne weitere Aktion im Format:\n"
+                "Final Answer: ..."
+            )
+        if not bool(contract.get("force_answer_after_delegate_budget")):
+            return None
         if method != "delegate_to_agent" and blocked_reason not in {
             "meta_clarity_delegate_budget_exhausted",
             "meta_clarity_delegate_agent_not_allowed",
@@ -1907,10 +1954,20 @@ class BaseAgent(DynamicToolMixin):
             or ""
         ).strip()
         request_kind = str(clarity_contract.get("request_kind") or "").strip().lower()
+        interaction_mode = self._current_meta_interaction_mode()
+        interaction_mode_name = str(interaction_mode.get("mode") or "").strip().lower()
         objective_domain = self._detect_meta_objective_domain(primary_objective)
         action_domain = self._detect_meta_action_domain(method, params)
 
         method_clean = str(method or "").strip().lower()
+
+        if request_kind == "thinking_partner" or interaction_mode_name == "think_partner":
+            return (
+                "Meta-Interaktionsmodus blockiert diese Aktion: "
+                "think_partner erlaubt keine Recherche, keine Toolnutzung und keine Delegation. "
+                "Antworte direkt oder stelle hoechstens eine echte Klaerfrage.",
+                "meta_interaction_mode_no_action",
+            )
 
         if method_clean == "delegate_multiple_agents":
             delegation_mode = str(clarity_contract.get("delegation_mode") or "").strip().lower()

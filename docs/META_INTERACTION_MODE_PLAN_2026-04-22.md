@@ -76,6 +76,141 @@ Pflichtfaelle:
 - `Richte das ein`
 - `Plane meinen Tag`
 
+## Aktueller Stand
+
+Stand nach erstem Runtime-Slice:
+
+- `assist` ist live bereits tragbar
+  - `Plane meinen Tag` liefert einen brauchbaren Plan
+- `think_partner` ist noch nicht live gehärtet
+  - der Modus kann noch auf `research` kippen
+- `inspect` ist noch nicht live stabil
+  - der Run haengt noch im ersten `meta`-Schritt
+
+Das bedeutet:
+- die technische Verdrahtung ist da
+- die Test-Suite ist grün
+- aber der Plan ist live noch nicht geschlossen
+
+## Nachhaltiger Closeout-Plan
+
+Die offenen Baustellen werden nicht ueber neue Textheuristiken geloest, sondern ueber Runtime-Invarianten an den wenigen Choke Points:
+
+1. vor Tool-/Delegationsschritten
+2. vor dem ersten Evidenzpfad
+3. vor finaler Antwortauslieferung
+
+### MIM5 Think-Partner Enforcement
+
+Ziel:
+- `think_partner` muss intern wirklich `no_research_no_execution` bedeuten
+
+Pflichtinvarianten:
+- keine Delegation
+- keine Recherche
+- keine Toolkette
+- keine Skill-/Research-Vorschlagsantwort
+- nur direkte Antwort oder genau eine echte Rueckfrage bei materieller Unklarheit
+
+Implementierung:
+- harter Runtime-Guard vor jedem Tool-/Delegate-Call
+- Meta-Prompt fuer `think_partner` ohne Research-/Skill-Aktionsraum
+- off-policy Toolversuche werden nicht nur markiert, sondern in direkte Antwort umgelenkt
+- Final-Answer-Guard prueft, dass die Antwort wirklich denkend/einordnend bleibt
+
+Erfolgskriterium:
+- `Ohne Recherche: Was ist deine Meinung dazu ...`
+  - bleibt in `meta`
+  - startet keinen Spezialisten
+  - liefert eine direkte, reflektierende Antwort
+
+### MIM6 Inspect Fast Path
+
+Ziel:
+- `inspect` soll nicht mehr durch offenen Meta-Reasoning-Lauf gehen
+- stattdessen ein deterministischer kleiner Evidenzpfad
+
+Pflichtinvarianten:
+- maximal ein begrenzter Evidenzschritt
+- keine freie Agentenkette
+- keine Ausfuehrung
+- danach sofort Abschlussbericht
+
+Implementierung:
+- `inspect` bekommt einen Fast Path:
+  - Modus erkannt
+  - passender Evidenzagent direkt bestimmt
+  - genau ein Evidence Fetch
+  - harter Abschlussbericht
+- fuer `setup_build_preparation_check`:
+  - strukturierten Probe-/Dokumentpfad statt offenem Meta-Denken
+- Abschlussformat fuer `inspect`:
+  - `Vorhanden`
+  - `Fehlt`
+  - `Unklar`
+  - `Naechster sinnvoller Schritt`
+
+Erfolgskriterium:
+- `Schau mal nach, ob es schon Vorbereitungen gibt, aber nichts umsetzen`
+  - haengt nicht
+  - plant nicht breit
+  - liefert bounded Findings
+
+### MIM7 Live Gates und Unseen Eval
+
+Ziel:
+- nicht nur bekannte Regressionen gruen halten
+- sondern generelle Interaktionsstabilitaet absichern
+
+Pflicht-Live-Gates:
+- `think_partner`
+  - `Ohne Recherche: Was ist deine Meinung dazu ...`
+- `inspect`
+  - `Schau mal nach, ob es schon Vorbereitungen gibt, aber nichts umsetzen`
+- `assist`
+  - `Richte das jetzt ein`
+- `planning_advisory`
+  - `Plane meinen Tag`
+- `research_advisory`
+  - `Mach dich schlau ueber X und steh mir dann hilfreich zur Seite`
+
+Pflicht-Eval-Felder je Fall:
+- korrekter `task_domain`
+- korrekter `interaction_mode`
+- korrekter erster Runtime-Schritt
+- erlaubte vs. verbotene Delegation
+- Abschlussform passend zum Modus
+
+Neue Aufgaben fuer Unseen-Generalisation:
+- `Hilf mir das zu durchdenken, aber recherchiere nicht`
+- `Pruef kurz, ob wir dafuer schon etwas im Repo haben`
+- `Mach dich schlau ueber Kreislaufwirtschaft im Bauwesen und hilf mir danach`
+- `Wie ist dein Zustand, hast du gerade Probleme mich zu verstehen`
+
+## Umsetzungsreihenfolge
+
+1. `MIM5 Think-Partner Enforcement`
+- zuerst, weil dieser Fall aktuell den eigenen Vertrag am haertesten bricht
+
+2. `MIM6 Inspect Fast Path`
+- danach, weil `inspect` noch im offenen Meta-Loop haengt
+
+3. `MIM7 Live Gates und Unseen Eval`
+- erst wenn die beiden Runtime-Pfade belastbar sind
+
+## Architekturgrenze
+
+Nicht tun:
+- noch mehr lose Query-Heuristiken
+- weitere ad-hoc Prompt-Texte fuer Einzelfaelle
+- Modusentscheidungen spaeter wieder von Memory oder Salvage ueberschreiben lassen
+
+Tun:
+- Modus als harte Runtime-Disziplin behandeln
+- Frame bleibt fachlich autoritativ
+- Interaktionsmodus bleibt verhaltensseitig autoritativ
+- beides wird an Runtime und Final Answer durchgesetzt
+
 ## Erfolgskriterium
 
 Natuerliche Sprache bleibt die Hauptschnittstelle.

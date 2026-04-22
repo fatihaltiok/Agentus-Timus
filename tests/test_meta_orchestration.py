@@ -1162,6 +1162,21 @@ def test_classify_meta_task_applies_clarity_filter_for_direct_recommendation_bun
     )
 
 
+def test_classify_meta_task_explicit_think_partner_stays_meta_only():
+    result = classify_meta_task(
+        "Ohne Recherche: Was ist deine Meinung dazu, ob Timus intern Denk-, Pruef- und Assistenzmodus haben sollte?",
+        action_count=0,
+    )
+
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["task_type"] == "single_lane"
+    assert result["reason"] == "interaction_mode:think_partner"
+    assert result["meta_request_frame"]["execution_mode"] == "answer_directly"
+    assert result["meta_interaction_mode"]["mode"] == "think_partner"
+    assert result["meta_interaction_mode"]["explicit_override"] is True
+    assert result["meta_clarity_contract"]["request_kind"] == "thinking_partner"
+
+
 def test_classify_meta_task_keeps_canada_context_for_context_dependent_footing_query(monkeypatch):
     fake_memory_manager = SimpleNamespace(
         find_related_memories=lambda query, n_results=6: [

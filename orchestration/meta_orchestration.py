@@ -3330,6 +3330,32 @@ def classify_meta_task(
         meta_request_frame=meta_request_frame.to_dict(),
         policy_decision=policy_decision.to_dict(),
     )
+    if meta_interaction_mode.mode == "think_partner" and meta_interaction_mode.explicit_override:
+        final_task_type = "single_lane"
+        final_chain = ["meta"]
+        final_reason = "interaction_mode:think_partner"
+        final_response_mode = "summarize_state"
+        meta_request_frame = build_meta_request_frame(
+            effective_query=effective_query,
+            dominant_turn_type=turn_interpretation.dominant_turn_type,
+            response_mode=final_response_mode,
+            answer_shape="direct_recommendation",
+            task_type=final_task_type,
+            active_topic=active_topic,
+            open_goal=str(open_goal or ""),
+            next_step=str(next_step or ""),
+            recommended_agent_chain=final_chain,
+            active_plan=active_plan,
+        )
+        meta_interaction_mode = build_meta_interaction_mode(
+            effective_query=effective_query,
+            meta_request_frame=meta_request_frame.to_dict(),
+            policy_decision={
+                **policy_decision.to_dict(),
+                "answer_shape": "direct_recommendation",
+                "policy_reason": "explicit_think_partner_override",
+            },
+        )
 
     prefer_youtube_research_only = (
         final_task_type == "youtube_content_extraction"

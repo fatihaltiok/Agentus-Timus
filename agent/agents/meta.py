@@ -3553,6 +3553,7 @@ class MetaAgent(BaseAgent):
                 [
                     "Arbeite als Denkpartner.",
                     "Keine ungefragte Recherche, keine Ausfuehrung, keine Agentenkette.",
+                    "Jeder Tool- oder Delegationsversuch in diesem Turn ist verboten und wird verworfen.",
                     "Hilf beim Denken, Einordnen, Strukturieren und Abwaegen.",
                 ]
             )
@@ -3580,6 +3581,13 @@ class MetaAgent(BaseAgent):
         active_handoff: Optional[Dict[str, Any]],
     ) -> bool:
         payload = dict(active_handoff or {})
+        mode = parse_meta_interaction_mode(
+            payload.get("meta_interaction_mode")
+            if isinstance(payload.get("meta_interaction_mode"), dict)
+            else {}
+        )
+        if str(mode.get("mode") or "").strip().lower() == "think_partner":
+            return False
         frame = payload.get("meta_request_frame") if isinstance(payload.get("meta_request_frame"), dict) else {}
         clarity = payload.get("meta_clarity_contract") if isinstance(payload.get("meta_clarity_contract"), dict) else {}
         primary_objective = str(
