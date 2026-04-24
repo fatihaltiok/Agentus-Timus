@@ -49,6 +49,7 @@ from orchestration.meta_clarity_contract import (
     filter_working_memory_context,
     parse_meta_clarity_contract,
 )
+from orchestration.meta_context_authority import parse_meta_context_authority
 from orchestration.meta_interaction_mode import parse_meta_interaction_mode
 from orchestration.llm_budget_guard import (
     BudgetModelOverride,
@@ -1137,18 +1138,30 @@ class BaseAgent(DynamicToolMixin):
         return "\n".join(payload_lines)
 
     @staticmethod
-    def _build_setup_build_executor_handoff(task: str) -> str:
+    def _build_setup_build_executor_handoff(task: str, *, task_type: str = "setup_build_probe") -> str:
         safe_task = str(task or "").strip()
         workspace_root = os.getcwd()
+        normalized_task_type = str(task_type or "setup_build_probe").strip().lower()
+        if normalized_task_type == "setup_build_execution":
+            expected_output = "Bestehende Vorbereitungen, echte Luecken und erster konkreter Umsetzungsschritt"
+            success_signal = "Konkreter Setup-Ausfuehrungspfad im Repo belastbar geklaert"
+            constraints = (
+                "pruefe_repo_artefakte_und_env_zuerst, leite_daraus_den_ersten_konkreten_"
+                "umsetzungsschritt_oder_echten_blocker_ab, keine_generische_setup_hilfe, kein_parallelscan"
+            )
+        else:
+            expected_output = "Bestehende Vorbereitungen, echte Luecken und naechster Build-Schritt"
+            success_signal = "Setup-Stand im Repo belastbar geklaert"
+            constraints = "pruefe_repo_artefakte_und_env_zuerst, keine_generische_setup_hilfe, kein_parallelscan"
         payload_lines = [
             "# DELEGATION HANDOFF",
             "target_agent: executor",
             f"goal: {safe_task}",
-            "expected_output: Bestehende Vorbereitungen, echte Luecken und naechster Build-Schritt",
-            "success_signal: Setup-Stand im Repo belastbar geklaert",
-            "constraints: pruefe_repo_artefakte_und_env_zuerst, keine_generische_setup_hilfe, kein_parallelscan",
+            f"expected_output: {expected_output}",
+            f"success_signal: {success_signal}",
+            f"constraints: {constraints}",
             "handoff_data:",
-            "- task_type: setup_build_probe",
+            f"- task_type: {normalized_task_type}",
             f"- original_user_task: {safe_task[:500]}",
             f"- query: {safe_task[:500]}",
             f"- workspace_root: {workspace_root}",
@@ -1234,8 +1247,19 @@ class BaseAgent(DynamicToolMixin):
             return refined
 
         if self.agent_type == "meta" and objective_domain == "setup_build":
-            refined["task"] = self._build_setup_build_executor_handoff(raw_task)
-            log.info("Executor-Delegation fuer setup_build mit strukturiertem Probe-Handoff angereichert")
+            clarity_request_kind = str(current_clarity.get("request_kind") or "").strip().lower()
+            clarity_obligation = str(current_clarity.get("answer_obligation") or "").strip().lower()
+            setup_task_type = "setup_build_probe"
+            if clarity_request_kind == "execute_task" and clarity_obligation != "inspect_preparation_then_report":
+                setup_task_type = "setup_build_execution"
+            refined["task"] = self._build_setup_build_executor_handoff(
+                raw_task,
+                task_type=setup_task_type,
+            )
+            log.info(
+                "Executor-Delegation fuer setup_build mit strukturiertem %s-Handoff angereichert",
+                setup_task_type,
+            )
             return refined
 
         if self.agent_type == "meta" and objective_domain == "research_advisory":
@@ -1558,6 +1582,28 @@ class BaseAgent(DynamicToolMixin):
                 return {}
         return {}
 
+    @staticmethod
+    def _extract_meta_context_authority(task_text: str) -> Dict[str, Any]:
+        marker = "# META ORCHESTRATION HANDOFF"
+        text = str(task_text or "").strip()
+        if marker not in text:
+            return {}
+
+        _, after_header = text.split(marker, 1)
+        handoff_block = after_header.split("# ORIGINAL USER TASK", 1)[0]
+        for raw_line in handoff_block.splitlines():
+            stripped = str(raw_line or "").strip()
+            if not stripped or ":" not in stripped:
+                continue
+            key, value = stripped.split(":", 1)
+            if key.strip() != "meta_context_authority_json":
+                continue
+            try:
+                return parse_meta_context_authority(json.loads(value.strip()))
+            except Exception:
+                return {}
+        return {}
+
     @classmethod
     def _extract_meta_working_memory_query(cls, task_text: str) -> str:
         marker = "# META ORCHESTRATION HANDOFF"
@@ -1742,6 +1788,14 @@ class BaseAgent(DynamicToolMixin):
         if not task_text:
             return {}
         return self._extract_meta_interaction_mode(task_text)
+
+    def _current_meta_context_authority(self) -> Dict[str, Any]:
+        if str(self.agent_type or "").strip().lower() != "meta":
+            return {}
+        task_text = str(getattr(self, "_current_task_text", "") or "").strip()
+        if not task_text:
+            return {}
+        return self._extract_meta_context_authority(task_text)
 
     def _current_meta_delegate_count(self) -> int:
         count = 0
@@ -3389,7 +3443,12 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         )
 
         clarity_contract = cls._extract_meta_clarity_contract(task)
-        allowed_sections = tuple(clarity_contract.get("allowed_working_memory_sections") or ())
+        authority_contract = cls._extract_meta_context_authority(task)
+        allowed_sections = tuple(
+            authority_contract.get("working_memory_allowed_sections")
+            or clarity_contract.get("allowed_working_memory_sections")
+            or ()
+        )
 
         if not followup_context:
             settings: Dict[str, int | bool | tuple[str, ...]] = {
@@ -3399,8 +3458,14 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 "followup_context": False,
                 "allowed_sections": allowed_sections,
             }
-            clarity_related_raw = clarity_contract.get("max_related_memories", -1)
-            clarity_recent_raw = clarity_contract.get("max_recent_events", -1)
+            clarity_related_raw = authority_contract.get(
+                "working_memory_max_related",
+                clarity_contract.get("max_related_memories", -1),
+            )
+            clarity_recent_raw = authority_contract.get(
+                "working_memory_max_recent",
+                clarity_contract.get("max_recent_events", -1),
+            )
             clarity_related = -1 if clarity_related_raw in (None, "") else int(clarity_related_raw)
             clarity_recent = -1 if clarity_recent_raw in (None, "") else int(clarity_recent_raw)
             if clarity_related >= 0:
@@ -3428,8 +3493,14 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             "followup_context": True,
             "allowed_sections": allowed_sections,
         }
-        clarity_related_raw = clarity_contract.get("max_related_memories", -1)
-        clarity_recent_raw = clarity_contract.get("max_recent_events", -1)
+        clarity_related_raw = authority_contract.get(
+            "working_memory_max_related",
+            clarity_contract.get("max_related_memories", -1),
+        )
+        clarity_recent_raw = authority_contract.get(
+            "working_memory_max_recent",
+            clarity_contract.get("max_recent_events", -1),
+        )
         clarity_related = -1 if clarity_related_raw in (None, "") else int(clarity_related_raw)
         clarity_recent = -1 if clarity_recent_raw in (None, "") else int(clarity_recent_raw)
         if clarity_related >= 0:
@@ -3453,6 +3524,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         max_related = int(settings["max_related"])
         max_recent_events = int(settings["max_recent_events"])
         clarity_contract = self._extract_meta_clarity_contract(task)
+        authority_contract = self._extract_meta_context_authority(task)
         memory_query = self._extract_working_memory_query(task) or task
 
         try:
@@ -3493,6 +3565,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 "memory_stats": wm_stats,
                 "memory_snapshot": memory_snapshot,
                 "meta_clarity_contract": clarity_contract,
+                "meta_context_authority": authority_contract,
                 "memory_query_preview": self._preview_value(memory_query, 400),
             }
             if filtered_context:

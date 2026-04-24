@@ -230,6 +230,7 @@ def evaluate_query_orchestration(query: str) -> Dict[str, Any]:
         "capability_graph": dict(meta_task.get("capability_graph") or {}),
         "adaptive_plan": dict(meta_task.get("adaptive_plan") or {}),
         "meta_clarity_contract": dict(meta_task.get("meta_clarity_contract") or {}),
+        "meta_context_authority": dict(meta_task.get("meta_context_authority") or {}),
         "meta_request_frame": dict(meta_task.get("meta_request_frame") or {}),
         "meta_interaction_mode": dict(meta_task.get("meta_interaction_mode") or {}),
         "meta_context_bundle": dict(meta_task.get("meta_context_bundle") or {}),

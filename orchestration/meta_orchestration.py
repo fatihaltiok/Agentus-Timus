@@ -13,6 +13,7 @@ from orchestration.meta_clarity_contract import (
     apply_meta_clarity_to_bundle,
     build_meta_clarity_contract,
 )
+from orchestration.meta_context_authority import build_meta_context_authority
 from orchestration.meta_interaction_mode import MetaInteractionMode, build_meta_interaction_mode
 from orchestration.conversation_state import (
     derive_topic_state_transition,
@@ -209,6 +210,20 @@ _ORCHESTRATION_RECIPES: Dict[str, Tuple[OrchestrationRecipeStage, ...]] = {
                 "Setup-/Integrationsaufgabe, fuehre nichts aus und liefere nur den belastbaren Ist-Stand."
             ),
             expected_output="repo_findings, existing_preparations, real_gaps",
+            handoff_fields=("goal", "expected_output", "success_signal", "query"),
+        ),
+    ),
+    "setup_build_execution": (
+        OrchestrationRecipeStage(
+            stage_id="setup_build_execution",
+            agent="executor",
+            goal=(
+                "Pruefe vorhandene Repo- und Konfigurationsvorbereitungen fuer die angefragte "
+                "Setup-/Integrationsaufgabe und leite daraus den konkreten ersten "
+                "Umsetzungsschritt oder echten Blocker ab. Keine freie Meta-Hilfe, "
+                "keine parallelen Scans."
+            ),
+            expected_output="repo_findings, existing_preparations, real_gaps, first_execution_step",
             handoff_fields=("goal", "expected_output", "success_signal", "query"),
         ),
     ),
@@ -494,6 +509,7 @@ _ORCHESTRATION_RECIPE_RECOVERIES: Dict[str, Tuple[OrchestrationRecipeRecovery, .
 
 _ORCHESTRATION_RECIPE_AGENT_CHAINS: Dict[str, Tuple[str, ...]] = {
     "setup_build_probe": ("meta", "executor"),
+    "setup_build_execution": ("meta", "executor"),
     "simple_live_lookup": ("meta", "executor"),
     "simple_live_lookup_document": ("meta", "executor", "document"),
     "knowledge_research": ("meta", "research"),
@@ -1139,6 +1155,8 @@ def build_meta_feedback_targets(classification: Dict[str, Any]) -> List[Dict[str
 def _resolve_primary_recipe_id(task_type: str, site_kind: str | None = None) -> str | None:
     if task_type == "setup_build_probe":
         return "setup_build_probe"
+    if task_type == "setup_build_execution":
+        return "setup_build_execution"
     if task_type == "simple_live_lookup":
         return "simple_live_lookup"
     if task_type == "simple_live_lookup_document":
@@ -3408,6 +3426,34 @@ def classify_meta_task(
             execution_policy="bounded_evidence_only",
             completion_expectation="existing_preparations_or_gap_named",
         )
+    elif (
+        meta_interaction_mode.mode == "assist"
+        and str(meta_request_frame.task_domain or "").strip().lower() == "setup_build"
+    ):
+        final_task_type = "setup_build_execution"
+        final_chain = ["meta", "executor"]
+        final_reason = "interaction_mode:assist_setup_build_execution"
+        final_response_mode = "execute"
+        meta_request_frame = build_meta_request_frame(
+            effective_query=effective_query,
+            dominant_turn_type=turn_interpretation.dominant_turn_type,
+            response_mode=final_response_mode,
+            answer_shape=policy_decision.answer_shape,
+            task_type=final_task_type,
+            active_topic=active_topic,
+            open_goal=str(open_goal or ""),
+            next_step=str(next_step or ""),
+            recommended_agent_chain=final_chain,
+            active_plan=active_plan,
+        )
+        meta_interaction_mode = build_meta_interaction_mode(
+            effective_query=effective_query,
+            meta_request_frame=meta_request_frame.to_dict(),
+            policy_decision={
+                **policy_decision.to_dict(),
+                "policy_reason": "assist_fast_path_setup_build_execution",
+            },
+        )
 
     prefer_youtube_research_only = (
         final_task_type == "youtube_content_extraction"
@@ -3633,10 +3679,17 @@ def classify_meta_task(
         classification,
         learned_chain_stats=learned_chain_stats,
     )
+    meta_context_authority = build_meta_context_authority(
+        meta_request_frame=meta_request_frame.to_dict(),
+        meta_interaction_mode=meta_interaction_mode.to_dict(),
+        meta_clarity_contract=clarity_contract.to_dict(),
+        meta_context_bundle=filtered_meta_context_bundle,
+    )
     return {
         **classification,
         "goal_spec": goal_spec,
         "meta_clarity_contract": clarity_contract.to_dict(),
+        "meta_context_authority": meta_context_authority.to_dict(),
         "capability_graph": capability_graph,
         "learned_chain_stats": learned_chain_stats,
         "adaptive_plan": adaptive_plan,

@@ -33,6 +33,7 @@ from orchestration.meta_orchestration import (
     resolve_orchestration_recipe,
 )
 from orchestration.meta_clarity_contract import parse_meta_clarity_contract
+from orchestration.meta_context_authority import parse_meta_context_authority
 from orchestration.meta_interaction_mode import parse_meta_interaction_mode
 from orchestration.meta_plan_compiler import (
     build_meta_execution_plan,
@@ -1257,6 +1258,11 @@ class MetaAgent(BaseAgent):
                     payload["meta_clarity_contract"] = parse_meta_clarity_contract(json.loads(normalized_value))
                 except json.JSONDecodeError:
                     payload["meta_clarity_contract"] = {"raw": normalized_value}
+            elif normalized_key == "meta_context_authority_json":
+                try:
+                    payload["meta_context_authority"] = parse_meta_context_authority(json.loads(normalized_value))
+                except json.JSONDecodeError:
+                    payload["meta_context_authority"] = {"raw": normalized_value}
             elif normalized_key == "specialist_context_seed_json":
                 payload["specialist_context_seed"] = parse_specialist_context_payload(normalized_value)
             elif normalized_key in {"meta_policy_decision_json", "meta_policy_json"}:
@@ -3438,6 +3444,7 @@ class MetaAgent(BaseAgent):
         task_domain = str(frame.get("task_domain") or "").strip().lower()
         execution_mode = str(frame.get("execution_mode") or "").strip().lower()
         direct_answer_required = bool(clarity.get("direct_answer_required"))
+        answer_obligation = str(clarity.get("answer_obligation") or "").strip().lower()
         if task_domain == "docs_status" and (direct_answer_required or execution_mode == "answer_directly"):
             refs = cls._extract_explicit_document_refs(task, active_handoff)
             lines = [
@@ -3458,18 +3465,32 @@ class MetaAgent(BaseAgent):
             return "\n".join(lines)
 
         if task_domain == "setup_build":
-            return "\n".join(
-                [
-                    "# SETUP-BUILD AUFTRAGSKLARHEIT",
-                    "Bearbeite die konkrete Benutzeranfrage, nicht den internen Handoff.",
-                    "Die eigentliche Aufgabe steht unter # ORIGINAL USER TASK.",
-                    "Diese Anfrage ist bereits konkret genug fuer Build/Setup-Planung.",
-                    "Pruefe zuerst vorhandene Vorbereitungen, existierende Artefakte und echte Blocker.",
-                    "Nutze dafuer hoechstens einen fokussierten Evidenzpfad auf einmal.",
-                    "Keine parallelen Shell-Mini-Scans und keine generische Setup-Hilfe.",
-                    "Keine generische Rueckfrage zum Grundauftrag, solange die Nutzeraufgabe explizit ist.",
-                ]
-            )
+            lines = [
+                "# SETUP-BUILD AUFTRAGSKLARHEIT",
+                "Bearbeite die konkrete Benutzeranfrage, nicht den internen Handoff.",
+                "Die eigentliche Aufgabe steht unter # ORIGINAL USER TASK.",
+                "Diese Anfrage ist bereits konkret genug fuer Build/Setup-Planung.",
+                "Pruefe zuerst vorhandene Vorbereitungen, existierende Artefakte und echte Blocker.",
+                "Nutze dafuer hoechstens einen fokussierten Evidenzpfad auf einmal.",
+                "Keine parallelen Shell-Mini-Scans und keine generische Setup-Hilfe.",
+                "Keine generische Rueckfrage zum Grundauftrag, solange die Nutzeraufgabe explizit ist.",
+            ]
+            if answer_obligation == "inspect_preparation_then_report":
+                lines.extend(
+                    [
+                        "Dies ist ein reiner Vorbereitungs-Check.",
+                        "Berichte nur vorhandenen Stand, echte Luecken und den naechsten sinnvollen Schritt.",
+                    ]
+                )
+            elif answer_obligation == "probe_then_return_concrete_setup_execution_path":
+                lines.extend(
+                    [
+                        "Dies ist ein echter Setup-Execution-Auftrag.",
+                        "Leite aus dem ersten Repo-Probe-Schritt den konkreten ersten Umsetzungsschritt oder echten Blocker ab.",
+                        "Nicht in offene Beratungsprosa oder Menue-Fragen kippen.",
+                    ]
+                )
+            return "\n".join(lines)
 
         if task_domain == "research_advisory":
             return "\n".join(
@@ -3576,6 +3597,47 @@ class MetaAgent(BaseAgent):
         return "\n".join(lines)
 
     @classmethod
+    def _build_context_authority_block(
+        cls,
+        active_handoff: Optional[Dict[str, Any]],
+    ) -> str:
+        payload = dict(active_handoff or {})
+        authority = parse_meta_context_authority(
+            payload.get("meta_context_authority")
+            if isinstance(payload.get("meta_context_authority"), dict)
+            else {}
+        )
+        if not authority:
+            return ""
+
+        lines = [
+            "# KONTEXT-AUTORITAET",
+            "Autoritative Reihenfolge: request_frame -> interaction_mode -> zugelassener Kontext -> working_memory.",
+        ]
+        if authority.get("task_domain"):
+            lines.append(f"Task-Domaene: {authority['task_domain']}")
+        if authority.get("interaction_mode"):
+            lines.append(f"Interaktionsmodus: {authority['interaction_mode']}")
+        allowed_classes = list(authority.get("allowed_context_classes") or [])
+        if allowed_classes:
+            lines.append("Erlaubte Kontextklassen: " + ", ".join(allowed_classes))
+        forbidden_classes = list(authority.get("forbidden_context_classes") or [])
+        if forbidden_classes:
+            lines.append("Verbotene Kontextklassen: " + ", ".join(forbidden_classes))
+        allowed_sections = list(authority.get("working_memory_allowed_sections") or [])
+        if allowed_sections:
+            lines.append("Working-Memory-Sektionen: " + ", ".join(allowed_sections))
+        max_related = authority.get("working_memory_max_related", -1)
+        max_recent = authority.get("working_memory_max_recent", -1)
+        if max_related not in (None, "", -1) or max_recent not in (None, "", -1):
+            lines.append(
+                "Working-Memory-Budget: "
+                f"related={max_related if max_related not in (None, '') else -1}, "
+                f"recent={max_recent if max_recent not in (None, '') else -1}"
+            )
+        return "\n".join(lines)
+
+    @classmethod
     def _should_include_skill_context(
         cls,
         task: str,
@@ -3642,6 +3704,7 @@ class MetaAgent(BaseAgent):
             meta_context = self._build_frame_bound_meta_context(meta_context, task, active_handoff)
             primary_objective_preamble = self._build_primary_objective_preamble(task, active_handoff)
             interaction_mode_block = self._build_interaction_mode_block(task, active_handoff)
+            context_authority_block = self._build_context_authority_block(active_handoff)
 
             # 2. Skills auswählen
             include_skill_context = self._should_include_skill_context(task, active_handoff)
@@ -3658,6 +3721,8 @@ class MetaAgent(BaseAgent):
                 parts.append(primary_objective_preamble)
             if interaction_mode_block:
                 parts.append(interaction_mode_block)
+            if context_authority_block:
+                parts.append(context_authority_block)
             if meta_context:
                 parts.append(meta_context)
             if skill_context:

@@ -115,6 +115,7 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert "meta_execution_plan_json:" in result
     assert "task_decomposition_json:" in result
     assert "meta_clarity_contract_json:" in result
+    assert "meta_context_authority_json:" in result
     assert "meta_interaction_mode_json:" in result
     assert "specialist_context_seed_json:" in result
     assert "meta_policy_decision_json:" in result
@@ -166,6 +167,8 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert any(item["name"] == "get_youtube_subtitles" for item in meta["tool_affordances"])
     assert meta["meta_self_state"]["strategy_posture"] in {"neutral", "preferred", "conservative"}
     assert meta["meta_clarity_contract"]["request_kind"] == "execute_task"
+    assert meta["meta_context_authority"]["task_domain"] == "youtube_content"
+    assert meta["meta_context_authority"]["interaction_mode"] == "assist"
     assert meta["meta_clarity_contract"]["direct_answer_required"] is False
     assert isinstance(meta["meta_self_state"]["current_capabilities"], list)
     assert isinstance(meta["meta_self_state"]["confidence_bounds"], list)
@@ -189,6 +192,8 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert parsed["task_profile"]["intent"] == "content_extraction"
     assert parsed["selected_strategy"]["strategy_id"] == "layered_youtube_extraction"
     assert parsed["meta_clarity_contract"]["request_kind"] == "execute_task"
+    assert parsed["meta_context_authority"]["task_domain"] == "youtube_content"
+    assert parsed["meta_context_authority"]["interaction_mode"] == "assist"
     assert parsed["task_packet"]["packet_type"] == "meta_orchestration"
     assert parsed["request_preflight"]["state"] in {"ok", "warn"}
     assert parsed["intent_family"] == "execute_multistep"
@@ -543,4 +548,5 @@ def test_build_meta_handoff_payload_preserves_frame_driven_docs_direct_answer():
     assert payload["meta_execution_plan"]["intent_family"] == "single_step"
     rendered = main_dispatcher._render_meta_handoff_block(payload)
     assert "meta_request_frame_json:" in rendered
+    assert "meta_context_authority_json:" in rendered
     assert "meta_interaction_mode_json:" in rendered

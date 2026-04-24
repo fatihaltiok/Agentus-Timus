@@ -2675,6 +2675,7 @@ def _build_meta_handoff_payload(query: str) -> dict:
         "capability_graph": dict(policy.get("capability_graph") or {}),
         "adaptive_plan": dict(policy.get("adaptive_plan") or {}),
         "meta_clarity_contract": dict(policy.get("meta_clarity_contract") or {}),
+        "meta_context_authority": dict(policy.get("meta_context_authority") or {}),
         "meta_request_frame": dict(policy.get("meta_request_frame") or {}),
         "meta_interaction_mode": dict(policy.get("meta_interaction_mode") or {}),
         "meta_context_bundle": dict(policy.get("meta_context_bundle") or {}),
@@ -3099,6 +3100,11 @@ def _render_meta_handoff_block(payload: dict) -> str:
         lines.append(
             "meta_clarity_contract_json: "
             + json.dumps(payload["meta_clarity_contract"], ensure_ascii=False, sort_keys=True)
+        )
+    if payload.get("meta_context_authority"):
+        lines.append(
+            "meta_context_authority_json: "
+            + json.dumps(payload["meta_context_authority"], ensure_ascii=False, sort_keys=True)
         )
     if payload.get("specialist_context_seed"):
         lines.append(

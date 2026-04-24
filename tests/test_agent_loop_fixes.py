@@ -219,6 +219,42 @@ def test_refine_tool_call_wraps_meta_executor_setup_task_in_generic_handoff():
     assert handoff.handoff_data["project_root"].endswith("/home/fatih-ubuntu/dev/timus")
 
 
+def test_refine_tool_call_wraps_meta_executor_setup_execution_in_structured_handoff():
+    agent = BaseAgent(
+        system_prompt_template="Du bist ein Test-Agent.",
+        tools_description_string="",
+        max_iterations=2,
+        agent_type="meta",
+        skip_model_validation=True,
+    )
+    agent._current_task_text = (
+        "# META ORCHESTRATION HANDOFF\n"
+        'meta_clarity_contract_json: {"primary_objective":"Richte fuer mich eine Anruffunktion ueber Twilio und Inworld ein",'
+        '"request_kind":"execute_task","answer_obligation":"probe_then_return_concrete_setup_execution_path",'
+        '"completion_condition":"first_build_step_or_real_blocker_named"}\n'
+    )
+    try:
+        method, params = agent._refine_tool_call(
+            "delegate_to_agent",
+            {
+                "agent_type": "executor",
+                "task": (
+                    "Richte fuer mich eine Anruffunktion ueber Twilio und Inworld ein."
+                ),
+            },
+        )
+    finally:
+        asyncio.run(agent.http_client.aclose())
+
+    assert method == "delegate_to_agent"
+    assert params["agent_type"] == "executor"
+    handoff = parse_delegation_handoff(params["task"])
+    assert handoff is not None
+    assert handoff.target_agent == "executor"
+    assert handoff.handoff_data["task_type"] == "setup_build_execution"
+    assert "erster konkreter Umsetzungsschritt" in params["task"]
+
+
 def test_refine_tool_call_wraps_meta_executor_research_advisory_in_bounded_handoff():
     agent = BaseAgent(
         system_prompt_template="Du bist ein Test-Agent.",
@@ -1143,8 +1179,8 @@ async def test_meta_setup_build_runtime_context_binds_to_original_user_task(monk
             '"primary_objective":"richte fuer mich eine anruffunktion ueber twilio und inworld ein"}\n'
             "meta_clarity_contract_json: "
             '{"primary_objective":"richte fuer mich eine anruffunktion ueber twilio und inworld ein",'
-            '"request_kind":"execute_task","answer_obligation":"inspect_preparation_then_plan_or_execute",'
-            '"completion_condition":"concrete_setup_path_or_real_blocker_named","direct_answer_required":false}\n'
+            '"request_kind":"execute_task","answer_obligation":"probe_then_return_concrete_setup_execution_path",'
+            '"completion_condition":"first_build_step_or_real_blocker_named","direct_answer_required":false}\n'
             "\n"
             "# ORIGINAL USER TASK\n"
             "richte fuer mich eine anruffunktion ueber twilio und inworld ein\n"
@@ -1208,8 +1244,8 @@ async def test_meta_frame_guard_rejects_setup_build_generic_help(monkeypatch):
         '"primary_objective":"richte fuer mich eine anruffunktion ueber twilio und inworld ein"}\n'
         "meta_clarity_contract_json: "
         '{"primary_objective":"richte fuer mich eine anruffunktion ueber twilio und inworld ein",'
-        '"request_kind":"execute_task","answer_obligation":"inspect_preparation_then_plan_or_execute",'
-        '"completion_condition":"concrete_setup_path_or_real_blocker_named","direct_answer_required":false}\n'
+        '"request_kind":"execute_task","answer_obligation":"probe_then_return_concrete_setup_execution_path",'
+        '"completion_condition":"first_build_step_or_real_blocker_named","direct_answer_required":false}\n'
         "\n"
         "# ORIGINAL USER TASK\n"
         "richte fuer mich eine anruffunktion ueber twilio und inworld ein\n"
@@ -1309,7 +1345,7 @@ def test_meta_clarity_blocks_parallel_delegation_for_setup_build():
     )
     agent._current_task_text = (
         "# META ORCHESTRATION HANDOFF\n"
-        'meta_clarity_contract_json: {"primary_objective":"Richte fuer mich eine Anruffunktion ein","request_kind":"execute_task","delegation_mode":"controlled_orchestration","max_delegate_calls":2,"allowed_delegate_agents":["executor","research","document"]}\n'
+        'meta_clarity_contract_json: {"primary_objective":"Richte fuer mich eine Anruffunktion ein","request_kind":"execute_task","delegation_mode":"single_structured_probe_then_direct_close","max_delegate_calls":1,"allowed_delegate_agents":["executor"],"force_answer_after_delegate_budget":true}\n'
     )
     try:
         message, reason = agent._check_meta_clarity_tool_intent(
@@ -1472,4 +1508,27 @@ def test_working_memory_settings_respect_meta_clarity_contract_limits(monkeypatc
     assert settings["max_chars"] == 10000
     assert settings["max_related"] == 0
     assert settings["max_recent_events"] == 4
+    assert settings["allowed_sections"] == ("KURZZEITKONTEXT",)
+
+
+def test_working_memory_settings_respect_meta_context_authority_limits(monkeypatch):
+    monkeypatch.delenv("WORKING_MEMORY_CHAR_BUDGET", raising=False)
+    monkeypatch.delenv("WORKING_MEMORY_MAX_RELATED", raising=False)
+    monkeypatch.delenv("WORKING_MEMORY_MAX_RECENT_EVENTS", raising=False)
+    monkeypatch.setenv("WM_MAX_CHARS", "10000")
+    monkeypatch.setenv("WM_MAX_RELATED", "8")
+    monkeypatch.setenv("WM_MAX_EVENTS", "15")
+
+    settings = BaseAgent._resolve_working_memory_settings(
+        "# META ORCHESTRATION HANDOFF\n"
+        "meta_context_authority_json: "
+        '{"working_memory_allowed_sections":["KURZZEITKONTEXT"],"working_memory_max_related":1,"working_memory_max_recent":3}\n'
+        "\n# ORIGINAL USER TASK\n"
+        "wo kann ich am Wochenende hin in Deutschland\n"
+    )
+
+    assert settings["followup_context"] is False
+    assert settings["max_chars"] == 10000
+    assert settings["max_related"] == 1
+    assert settings["max_recent_events"] == 3
     assert settings["allowed_sections"] == ("KURZZEITKONTEXT",)
