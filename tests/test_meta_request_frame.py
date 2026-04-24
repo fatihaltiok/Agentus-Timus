@@ -63,6 +63,45 @@ def test_build_meta_request_frame_recognizes_setup_build_for_twilio_and_inworld(
     assert frame.execution_mode == "plan_and_delegate"
 
 
+def test_build_meta_request_frame_recognizes_travel_advisory_for_weekend_trip_question():
+    frame = build_meta_request_frame(
+        effective_query="wo kann ich am Wochenende hin in Deutschland",
+        dominant_turn_type="new_task",
+        response_mode="execute",
+        answer_shape="action_first",
+        task_type="single_lane",
+        active_topic="",
+        open_goal="",
+        next_step="",
+        recommended_agent_chain=("meta",),
+        active_plan={},
+    )
+
+    assert frame.frame_kind == "new_task"
+    assert frame.task_domain == "travel_advisory"
+    assert "telephony_setup" in frame.forbidden_memory_domains
+    assert "conversation_state" in frame.allowed_context_slots
+
+
+def test_build_meta_request_frame_reuses_carried_travel_domain_for_short_followup():
+    frame = build_meta_request_frame(
+        effective_query="ich mag Staedte und Kultur",
+        dominant_turn_type="followup",
+        response_mode="resume_open_loop",
+        answer_shape="resume_action",
+        task_type="single_lane",
+        active_topic="",
+        open_goal="",
+        next_step="",
+        active_domain="travel_advisory",
+        recommended_agent_chain=("meta",),
+        active_plan={},
+    )
+
+    assert frame.task_domain == "travel_advisory"
+    assert "carried_domain:travel_advisory" in frame.evidence
+
+
 def test_classify_meta_task_exposes_meta_request_frame_for_docs_status():
     result = classify_meta_task(
         "lies docs/PHASE_F_PLAN.md und docs/CHANGELOG_DEV.md und sag was als naechstes ansteht",

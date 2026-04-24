@@ -85,6 +85,24 @@ _PLANNING_ADVISORY_PATTERNS = (
     "meine woche strukturieren",
     "hilf mir meinen tag zu planen",
 )
+_TRAVEL_ADVISORY_PATTERNS = (
+    "wo kann ich am wochenende hin",
+    "wohin am wochenende",
+    "ausflugsziel",
+    "ausflugsziele",
+    "reiseidee",
+    "reiseideen",
+    "staedtetrip",
+)
+_LIFE_ADVISORY_PATTERNS = (
+    "mein leben",
+    "mein alltag",
+    "alltag ordnen",
+    "privatleben",
+    "beziehung",
+    "stress im alltag",
+    "lebensentscheidung",
+)
 _RESEARCH_ADVISORY_PATTERNS = (
     "mach dich schlau ueber",
     "mach dich schlau über",
@@ -208,6 +226,10 @@ def _detect_objective_domain(text: Any) -> str:
         return "migration_work"
     if any(pattern in lowered for pattern in _PLANNING_ADVISORY_PATTERNS):
         return "planning_advisory"
+    if any(pattern in lowered for pattern in _TRAVEL_ADVISORY_PATTERNS):
+        return "travel_advisory"
+    if any(pattern in lowered for pattern in _LIFE_ADVISORY_PATTERNS):
+        return "life_advisory"
     if any(pattern in lowered for pattern in _RESEARCH_ADVISORY_PATTERNS):
         return "research_advisory"
     return ""
@@ -515,8 +537,8 @@ def build_meta_clarity_contract(
         rationale = "Praeferenz-Updates sollen bestaetigt werden, nicht in breite Themennavigation kippen."
     elif not interaction_mode_explicit and objective_domain == "setup_build":
         request_kind = "execute_task"
-        answer_obligation = "inspect_preparation_then_plan_or_execute"
-        completion_condition = "concrete_setup_path_or_real_blocker_named"
+        answer_obligation = "probe_then_return_concrete_setup_execution_path"
+        completion_condition = "first_build_step_or_real_blocker_named"
         allowed_context_slots = (
             "current_query",
             "conversation_state",
@@ -533,12 +555,14 @@ def build_meta_clarity_contract(
         allowed_working_memory_sections = ("KURZZEITKONTEXT",)
         max_related_memories = 0
         max_recent_events = 6
-        delegation_mode = "controlled_orchestration"
-        max_delegate_calls = 2
-        allowed_delegate_agents = ("executor", "research", "document")
+        delegation_mode = "single_structured_probe_then_direct_close"
+        max_delegate_calls = 1
+        allowed_delegate_agents = ("executor",)
+        force_answer_after_delegate_budget = True
         rationale = (
-            "Setup-/Integrationsaufgaben brauchen klare Zielbindung und kleine kontrollierte "
-            "Evidenzpfade statt generischer Meta-Rueckfragen."
+            "Setup-/Integrationsaufgaben sollen zuerst ueber einen einzelnen strukturierten "
+            "Repo-Probe-Schritt den konkreten ersten Umsetzungspfad oder echten Blocker "
+            "ableiten, statt in freie Meta-Orchestrierung oder generische Rueckfragen zu kippen."
         )
         if _is_setup_build_preparation_check(effective_query):
             answer_obligation = "inspect_preparation_then_report"
@@ -602,6 +626,56 @@ def build_meta_clarity_contract(
         rationale = (
             "Planungsanfragen brauchen zuerst das konkrete Ziel und Randbedingungen, "
             "aber keine freie Agentenkette oder fachfremdes Altgedaechtnis."
+        )
+    elif not interaction_mode_explicit and objective_domain == "travel_advisory":
+        request_kind = "thinking_partner"
+        answer_obligation = "recommend_destinations_or_collect_one_missing_preference"
+        completion_condition = "travel_options_or_missing_preference_named"
+        allowed_context_slots = (
+            "current_query",
+            "conversation_state",
+            "open_loop",
+            "recent_user_turn",
+            "historical_topic_memory",
+        )
+        forbidden_context_slots = (
+            "assistant_fallback_context",
+            "preference_memory",
+            "semantic_recall",
+        )
+        allowed_working_memory_sections = ("KURZZEITKONTEXT", "LANGZEITKONTEXT")
+        max_related_memories = 1
+        max_recent_events = 6
+        delegation_mode = "direct_only"
+        max_delegate_calls = 0
+        rationale = (
+            "Offene Reiseberatung soll erst thematisch sauber bleiben und direkte Optionen "
+            "geben, statt sofort in Recherche-, Nearby- oder Setup-Pfade zu kippen."
+        )
+    elif not interaction_mode_explicit and objective_domain in {"life_advisory", "topic_advisory"}:
+        request_kind = "thinking_partner"
+        answer_obligation = "reason_with_user_inside_current_topic"
+        completion_condition = "advisory_answer_or_options_given"
+        allowed_context_slots = (
+            "current_query",
+            "conversation_state",
+            "open_loop",
+            "recent_user_turn",
+            "historical_topic_memory",
+        )
+        forbidden_context_slots = (
+            "assistant_fallback_context",
+            "preference_memory",
+            "semantic_recall",
+        )
+        allowed_working_memory_sections = ("KURZZEITKONTEXT", "LANGZEITKONTEXT")
+        max_related_memories = 1
+        max_recent_events = 6
+        delegation_mode = "direct_only"
+        max_delegate_calls = 0
+        rationale = (
+            "Allgemeine Beratungsfragen sollen im aktuellen Themenraum beantwortet werden, "
+            "ohne ungefragte Recherche oder fachfremde Alt-Kontext-Leaks."
         )
     elif not interaction_mode_explicit and objective_domain == "research_advisory":
         request_kind = "execute_task"

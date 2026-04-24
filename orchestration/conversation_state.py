@@ -39,6 +39,21 @@ _ALLOWED_PLAN_STATUSES = {
     "blocked",
     "completed",
 }
+_ALLOWED_ACTIVE_DOMAINS = {
+    "",
+    "docs_status",
+    "self_status",
+    "location_route",
+    "skill_creation",
+    "setup_build",
+    "migration_work",
+    "planning_advisory",
+    "research_advisory",
+    "travel_advisory",
+    "topic_advisory",
+    "life_advisory",
+    "general_task",
+}
 _TOPIC_STOPWORDS = {
     "aber",
     "als",
@@ -156,6 +171,11 @@ def _normalize_turn_type_hint(value: Any) -> str:
     return hint if hint in _ALLOWED_TURN_TYPE_HINTS else ""
 
 
+def _normalize_active_domain(value: Any) -> str:
+    domain = _normalize_text(value, limit=64).lower()
+    return domain if domain in _ALLOWED_ACTIVE_DOMAINS else ""
+
+
 def _append_source(sources: tuple[str, ...], value: str) -> tuple[str, ...]:
     item = _normalize_text(value, limit=64)
     if not item:
@@ -244,6 +264,7 @@ class ConversationState:
     session_id: str
     active_topic: str
     active_goal: str
+    active_domain: str
     open_loop: str
     next_expected_step: str
     turn_type_hint: str
@@ -262,6 +283,7 @@ class ConversationState:
             "session_id": self.session_id,
             "active_topic": self.active_topic,
             "active_goal": self.active_goal,
+            "active_domain": self.active_domain,
             "open_loop": self.open_loop,
             "next_expected_step": self.next_expected_step,
             "turn_type_hint": self.turn_type_hint,
@@ -462,6 +484,7 @@ def normalize_conversation_state(
         session_id=normalized_session_id,
         active_topic=_normalize_text(raw.get("active_topic")),
         active_goal=_normalize_text(raw.get("active_goal")),
+        active_domain=_normalize_active_domain(raw.get("active_domain")),
         open_loop=open_loop,
         next_expected_step=next_expected_step,
         turn_type_hint=_normalize_turn_type_hint(raw.get("turn_type_hint")),
@@ -494,6 +517,7 @@ def touch_conversation_state(
         session_id=current.session_id,
         active_topic=current.active_topic,
         active_goal=current.active_goal,
+        active_domain=current.active_domain,
         open_loop=current.open_loop,
         next_expected_step=current.next_expected_step,
         turn_type_hint=current.turn_type_hint,
@@ -562,6 +586,7 @@ def decay_conversation_state(
         session_id=current.session_id,
         active_topic=current.active_topic,
         active_goal=current.active_goal,
+        active_domain=current.active_domain,
         open_loop=open_loop,
         next_expected_step=next_expected_step,
         turn_type_hint=current.turn_type_hint,
@@ -607,6 +632,7 @@ def apply_pending_followup_prompt(
         session_id=current.session_id,
         active_topic=current.active_topic,
         active_goal=current.active_goal,
+        active_domain=current.active_domain,
         open_loop=open_loop,
         next_expected_step=next_expected_step,
         turn_type_hint=current.turn_type_hint,
@@ -646,6 +672,7 @@ def apply_runtime_plan_state(
             session_id=current.session_id,
             active_topic=current.active_topic,
             active_goal=current.active_goal,
+            active_domain=current.active_domain,
             open_loop=current.open_loop,
             next_expected_step=current.next_expected_step,
             turn_type_hint=current.turn_type_hint,
@@ -665,6 +692,7 @@ def apply_runtime_plan_state(
             session_id=current.session_id,
             active_topic=current.active_topic,
             active_goal=incoming_plan.goal or current.active_goal,
+            active_domain=current.active_domain,
             open_loop="",
             next_expected_step="",
             turn_type_hint=current.turn_type_hint,
@@ -684,6 +712,7 @@ def apply_runtime_plan_state(
         session_id=current.session_id,
         active_topic=current.active_topic,
         active_goal=incoming_plan.goal or current.active_goal,
+        active_domain=current.active_domain,
         open_loop=next_step,
         next_expected_step=next_step,
         turn_type_hint=current.turn_type_hint,
@@ -826,6 +855,7 @@ def apply_turn_interpretation(
     effective_query: str,
     active_topic: str = "",
     active_goal: str = "",
+    active_domain: str = "",
     dialog_constraints: Iterable[str] | None = None,
     next_step: str = "",
     active_plan: Mapping[str, Any] | None = None,
@@ -841,6 +871,7 @@ def apply_turn_interpretation(
     cleaned_query = _normalize_text(effective_query)
     cleaned_topic = _normalize_text(active_topic)
     cleaned_goal = _normalize_text(active_goal)
+    cleaned_domain = _normalize_active_domain(active_domain)
     cleaned_next_step = _normalize_text(next_step)
     merged_constraints = _normalize_text_list(
         [*current.constraints, *(dialog_constraints or ())],
@@ -875,6 +906,8 @@ def apply_turn_interpretation(
     open_loop = current.open_loop
     active_topic_value = current.active_topic
     active_goal_value = current.active_goal
+    active_domain_value = current.active_domain
+    domain_shift_detected = bool(cleaned_domain and active_domain_value and cleaned_domain != active_domain_value)
 
     if effects.get("shift_active_topic"):
         if cleaned_topic:
@@ -895,6 +928,8 @@ def apply_turn_interpretation(
             active_topic_value = cleaned_topic
         if not active_goal_value and cleaned_goal:
             active_goal_value = cleaned_goal
+    if cleaned_domain:
+        active_domain_value = cleaned_domain
 
     if effects.get("update_preferences") and cleaned_query:
         preferences = list(_normalize_text_list([*preferences, cleaned_query], limit_items=_MAX_LIST_ITEMS))
@@ -910,16 +945,19 @@ def apply_turn_interpretation(
     elif response_mode == "resume_open_loop" and not next_expected_step and current.open_loop:
         next_expected_step = current.open_loop
 
-    if transition.topic_shift_detected:
+    if transition.topic_shift_detected or domain_shift_detected:
         active_topic_value = transition.next_topic or cleaned_query or active_topic_value
         active_goal_value = transition.next_goal or cleaned_query or active_goal_value
         open_loop = ""
         next_expected_step = ""
         active_plan_state = None
         open_questions = []
-        sources = _append_source(sources, "topic_shift")
+        if transition.topic_shift_detected:
+            sources = _append_source(sources, "topic_shift")
+        if domain_shift_detected:
+            sources = _append_source(sources, "domain_shift")
 
-    if incoming_plan and not transition.topic_shift_detected:
+    if incoming_plan and not transition.topic_shift_detected and not domain_shift_detected:
         active_plan_state = incoming_plan
         sources = _append_source(sources, "active_plan")
         if not active_goal_value:
@@ -960,6 +998,7 @@ def apply_turn_interpretation(
         session_id=current.session_id,
         active_topic=active_topic_value,
         active_goal=active_goal_value,
+        active_domain=active_domain_value,
         open_loop=open_loop,
         next_expected_step=next_expected_step,
         turn_type_hint=_normalize_turn_type_hint(dominant_turn_type),

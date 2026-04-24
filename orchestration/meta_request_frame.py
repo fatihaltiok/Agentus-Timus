@@ -89,6 +89,29 @@ _PLANNING_ADVISORY_HINTS = (
     "meine woche strukturieren",
     "hilf mir meinen tag zu planen",
 )
+_TRAVEL_ADVISORY_HINTS = (
+    "wo kann ich am wochenende hin",
+    "wo kann ich am weekend hin",
+    "wohin am wochenende",
+    "ausflugsziel",
+    "ausflugsziele",
+    "staedtetrip",
+    "städte-trip",
+    "wohin in deutschland",
+    "trip nach",
+    "reiseidee",
+    "reiseideen",
+)
+_LIFE_ADVISORY_HINTS = (
+    "wie soll ich mit meinem leben",
+    "alltag ordnen",
+    "mein alltag",
+    "mein leben",
+    "privatleben",
+    "beziehung",
+    "stress im alltag",
+    "lebensentscheidung",
+)
 _RESEARCH_ADVISORY_HINTS = (
     "mach dich schlau ueber",
     "mach dich schlau über",
@@ -129,8 +152,16 @@ _DOMAIN_HINTS: dict[str, tuple[str, ...]] = {
     ),
     "planning_advisory": _PLANNING_ADVISORY_HINTS,
     "research_advisory": _RESEARCH_ADVISORY_HINTS,
+    "travel_advisory": _TRAVEL_ADVISORY_HINTS,
+    "life_advisory": _LIFE_ADVISORY_HINTS,
     "migration_work": _MIGRATION_WORK_HINTS,
     "docs_status": _DOC_STATUS_HINTS,
+}
+
+_CARRIABLE_ADVISORY_DOMAINS = {
+    "travel_advisory",
+    "life_advisory",
+    "topic_advisory",
 }
 
 
@@ -248,6 +279,12 @@ def _infer_task_domain(
     if _contains_any(query_text, _RESEARCH_ADVISORY_HINTS):
         evidence.append("query:research_advisory")
         return "research_advisory", evidence, 0.9
+    if _contains_any(query_text, _TRAVEL_ADVISORY_HINTS):
+        evidence.append("query:travel_advisory")
+        return "travel_advisory", evidence, 0.86
+    if _contains_any(query_text, _LIFE_ADVISORY_HINTS):
+        evidence.append("query:life_advisory")
+        return "life_advisory", evidence, 0.82
 
     normalized_task_type = _clean_text(task_type, limit=64).lower()
     task_type_mapping = {
@@ -268,9 +305,50 @@ def _infer_task_domain(
         return mapped, evidence, 0.72
     if normalized_task_type == "single_lane":
         evidence.append("task_type:single_lane")
-        return "general_advisory", evidence, 0.58
+        return "topic_advisory", evidence, 0.58
     evidence.append("fallback:general_task")
     return "general_task", evidence, 0.5
+
+
+def infer_meta_task_domain_hint(
+    *,
+    effective_query: str,
+    active_topic: str,
+    open_goal: str,
+    task_type: str,
+    carried_domain: str = "",
+) -> tuple[str, tuple[str, ...], float]:
+    task_domain, evidence, confidence = _infer_task_domain(
+        effective_query=effective_query,
+        active_topic=active_topic,
+        open_goal=open_goal,
+        task_type=task_type,
+    )
+    normalized_carried = _clean_text(carried_domain, limit=64).lower()
+    if (
+        normalized_carried in _CARRIABLE_ADVISORY_DOMAINS
+        and task_domain in {"general_task", "topic_advisory"}
+    ):
+        query_text = _clean_text(effective_query, limit=320).lower()
+        has_stronger_domain = any(
+            _contains_any(query_text, patterns)
+            for patterns in (
+                _DOC_STATUS_HINTS,
+                _SELF_STATUS_HINTS,
+                _LOCATION_ROUTE_HINTS,
+                _SETUP_BUILD_HINTS,
+                _SKILL_CREATION_HINTS,
+                _MIGRATION_WORK_HINTS,
+                _PLANNING_ADVISORY_HINTS,
+                _RESEARCH_ADVISORY_HINTS,
+                _TRAVEL_ADVISORY_HINTS,
+                _LIFE_ADVISORY_HINTS,
+            )
+        )
+        if not has_stronger_domain or task_domain == normalized_carried:
+            evidence.append(f"carried_domain:{normalized_carried}")
+            return normalized_carried, tuple(evidence), max(confidence, 0.66)
+    return task_domain, tuple(evidence), confidence
 
 
 def _frame_memory_rules(
@@ -298,6 +376,27 @@ def _frame_memory_rules(
             ("skill_creation", "location_route", "telephony_setup"),
             ("current_query", "conversation_state", "open_loop", "recent_user_turn", "topic_memory", "historical_topic_memory"),
             "collect_constraints_or_return_planning_structure",
+        )
+    if task_domain == "travel_advisory":
+        return (
+            ("travel_advisory", "destination_research", "historical_topic"),
+            ("skill_creation", "location_route", "telephony_setup"),
+            ("current_query", "conversation_state", "open_loop", "recent_user_turn", "topic_memory", "historical_topic_memory"),
+            "recommend_destinations_or_collect_missing_preferences",
+        )
+    if task_domain == "life_advisory":
+        return (
+            ("life_advisory", "topic_continuity", "historical_topic"),
+            ("skill_creation", "location_route", "telephony_setup"),
+            ("current_query", "conversation_state", "open_loop", "recent_user_turn", "topic_memory", "historical_topic_memory"),
+            "reason_through_options_without_off_domain_drift",
+        )
+    if task_domain == "topic_advisory":
+        return (
+            ("topic_advisory", "topic_continuity", "historical_topic"),
+            ("skill_creation", "location_route", "telephony_setup"),
+            ("current_query", "conversation_state", "open_loop", "recent_user_turn", "topic_memory", "historical_topic_memory"),
+            "answer_or_clarify_within_current_topic",
         )
     if task_domain == "research_advisory":
         return (
@@ -416,6 +515,10 @@ def apply_meta_request_frame_routing(
         chain = ["meta"]
         normalized_task_type = "single_lane"
         final_reason = "frame:planning_advisory"
+    elif task_domain in {"travel_advisory", "life_advisory", "topic_advisory"}:
+        if normalized_task_type == "single_lane":
+            chain = ["meta"]
+            final_reason = f"frame:{task_domain}" if reason == "single_lane" else reason
     elif task_domain == "setup_build":
         if not chain or chain == ["executor"]:
             chain = ["meta", "executor"]
@@ -453,6 +556,7 @@ def build_meta_request_frame(
     active_topic: str,
     open_goal: str,
     next_step: str,
+    active_domain: str = "",
     recommended_agent_chain: Iterable[str] | None = None,
     active_plan: Mapping[str, Any] | None = None,
 ) -> MetaRequestFrame:
@@ -464,11 +568,12 @@ def build_meta_request_frame(
         answer_shape=answer_shape,
         has_active_plan=has_active_plan,
     )
-    task_domain, domain_evidence, confidence = _infer_task_domain(
+    task_domain, domain_evidence, confidence = infer_meta_task_domain_hint(
         effective_query=effective_query,
         active_topic=active_topic,
         open_goal=open_goal,
         task_type=task_type,
+        carried_domain=active_domain,
     )
     execution_mode = _infer_execution_mode(frame_kind)
     allowed_memory_domains, forbidden_memory_domains, allowed_context_slots, completion_contract = _frame_memory_rules(
@@ -484,7 +589,7 @@ def build_meta_request_frame(
     primary_objective = _clean_text(open_goal or effective_query, limit=320)
     goal_anchor = _clean_text(open_goal or next_step or effective_query, limit=220)
     topic_anchor = _clean_text(active_topic, limit=180)
-    evidence = tuple(kind_evidence + domain_evidence)
+    evidence = tuple([*kind_evidence, *domain_evidence])
 
     return MetaRequestFrame(
         schema_version=1,
@@ -534,7 +639,15 @@ def apply_meta_request_frame_context_admission(
     }
     task_domain = _clean_text(frame_payload.get("task_domain"), limit=64).lower()
     execution_mode = _clean_text(frame_payload.get("execution_mode"), limit=64).lower()
-    strict_admission = task_domain in {"docs_status", "migration_work", "setup_build", "skill_creation"} or (
+    strict_admission = task_domain in {
+        "docs_status",
+        "migration_work",
+        "setup_build",
+        "skill_creation",
+        "travel_advisory",
+        "life_advisory",
+        "topic_advisory",
+    } or (
         execution_mode == "answer_directly" and bool(forbidden_domains)
     )
 

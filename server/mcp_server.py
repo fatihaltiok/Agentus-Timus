@@ -1375,6 +1375,7 @@ def _persist_meta_turn_understanding(
         effective_query=str(classification.get("effective_query") or ""),
         active_topic=str(classification.get("active_topic") or ""),
         active_goal=str(classification.get("open_goal") or ""),
+        active_domain=str(((classification.get("meta_request_frame") or {}) if isinstance(classification.get("meta_request_frame"), dict) else {}).get("task_domain") or ""),
         dialog_constraints=classification.get("dialog_constraints") or [],
         next_step=str(classification.get("next_step") or ""),
         active_plan=classification.get("meta_execution_plan") if isinstance(classification.get("meta_execution_plan"), dict) else None,
@@ -2458,6 +2459,7 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
     if isinstance(conversation_state, dict):
         active_topic = str(conversation_state.get("active_topic") or "").strip()
         active_goal = str(conversation_state.get("active_goal") or "").strip()
+        active_domain = str(conversation_state.get("active_domain") or "").strip()
         open_loop = str(conversation_state.get("open_loop") or "").strip()
         next_expected_step = str(conversation_state.get("next_expected_step") or "").strip()
         turn_type_hint = str(conversation_state.get("turn_type_hint") or "").strip()
@@ -2476,6 +2478,8 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
             parts.append(f"conversation_state_active_topic: {active_topic[:240]}")
         if active_goal:
             parts.append(f"conversation_state_active_goal: {active_goal[:240]}")
+        if active_domain:
+            parts.append(f"conversation_state_active_domain: {active_domain[:64]}")
         if open_loop:
             parts.append(f"conversation_state_open_loop: {open_loop[:240]}")
         if next_expected_step:

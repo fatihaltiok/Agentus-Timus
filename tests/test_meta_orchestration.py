@@ -1509,3 +1509,60 @@ def test_meta_prefers_strategy_selected_fallback_recipe_for_youtube_extraction()
 
     assert selected["recipe_id"] == "youtube_research_only"
     assert selected["switch_reason"] == "selected_strategy_primary"
+
+
+def test_classify_meta_task_filters_cross_domain_setup_state_for_travel_query():
+    result = classify_meta_task(
+        "wo kann ich am Wochenende hin in Deutschland",
+        action_count=0,
+        conversation_state={
+            "session_id": "tg_travel",
+            "active_topic": "Twilio Setup",
+            "active_goal": "Anruffunktion fuer Voice-Agent vorbereiten",
+            "active_domain": "setup_build",
+            "open_loop": "Twilio Credentials pruefen",
+            "next_expected_step": "Twilio Credentials pruefen",
+            "turn_type_hint": "followup",
+            "topic_confidence": 0.84,
+        },
+        recent_user_turns=["richte fuer mich eine Anruffunktion ueber Twilio und Inworld ein"],
+        recent_assistant_turns=["Ich pruefe die vorhandenen Vorbereitungen fuer Twilio und Inworld."],
+    )
+
+    frame = result["meta_request_frame"]
+    bundle = result["meta_context_bundle"]
+
+    assert frame["task_domain"] == "travel_advisory"
+    assert result["active_domain"] == "travel_advisory"
+    assert bundle["active_topic"] == ""
+    assert bundle["open_loop"] == ""
+    assert any(
+        "session_domain_filtered:setup_build->travel_advisory" == str(item.get("reason") or "")
+        for item in (bundle.get("suppressed_context") or [])
+        if isinstance(item, dict)
+    )
+
+
+def test_classify_meta_task_reuses_travel_session_domain_for_short_followup():
+    result = classify_meta_task(
+        "ich mag Staedte und Kultur",
+        action_count=0,
+        conversation_state={
+            "session_id": "tg_travel",
+            "active_topic": "Ausflugsziele in Deutschland",
+            "active_goal": "Wochenendtrip mit Staedten und Kultur finden",
+            "active_domain": "travel_advisory",
+            "open_loop": "Passende Ziele eingrenzen",
+            "next_expected_step": "Vorlieben nennen",
+            "turn_type_hint": "followup",
+            "topic_confidence": 0.79,
+        },
+        recent_user_turns=["wo kann ich am Wochenende hin in Deutschland"],
+        recent_assistant_turns=["Ich kann dir ein paar Reiseideen in Deutschland vorschlagen."],
+    )
+
+    frame = result["meta_request_frame"]
+
+    assert frame["task_domain"] == "travel_advisory"
+    assert result["active_domain"] == "travel_advisory"
+    assert "recommend_destinations" in frame["completion_contract"]

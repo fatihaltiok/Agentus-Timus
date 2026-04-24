@@ -184,6 +184,17 @@ def build_meta_interaction_mode(
             completion_expectation="findings_or_next_research_path_named",
         )
 
+    if task_domain in {"travel_advisory", "topic_advisory", "life_advisory"}:
+        return MetaInteractionMode(
+            schema_version=1,
+            mode="think_partner",
+            mode_reason=f"task_domain:{task_domain}",
+            explicit_override=False,
+            answer_style="reason_with_user",
+            execution_policy="no_research_no_execution",
+            completion_expectation="advisory_answer_or_options_given",
+        )
+
     if task_domain == "setup_build":
         mode_reason = "task_domain:setup_build"
         if "vorbereitungen" in query or "was gibt es schon" in query:

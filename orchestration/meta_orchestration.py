@@ -32,6 +32,7 @@ from orchestration.meta_request_frame import (
     apply_meta_request_frame_context_admission,
     apply_meta_request_frame_routing,
     build_meta_request_frame,
+    infer_meta_task_domain_hint,
 )
 from orchestration.meta_response_policy import build_meta_policy_input, resolve_meta_response_policy
 from orchestration.specialist_context import build_specialist_context_payload
@@ -116,6 +117,7 @@ class MetaContextBundle:
     bundle_reason: str
     active_topic: str
     active_goal: str
+    active_domain: str
     open_loop: str
     next_expected_step: str
     turn_type: str
@@ -131,6 +133,7 @@ class MetaContextBundle:
             "bundle_reason": self.bundle_reason,
             "active_topic": self.active_topic,
             "active_goal": self.active_goal,
+            "active_domain": self.active_domain,
             "open_loop": self.open_loop,
             "next_expected_step": self.next_expected_step,
             "turn_type": self.turn_type,
@@ -898,6 +901,7 @@ _FOLLOWUP_CONTEXT_FIELD_NAMES = (
     "pending_followup_prompt",
     "conversation_state_active_topic",
     "conversation_state_active_goal",
+    "conversation_state_active_domain",
     "conversation_state_open_loop",
     "conversation_state_next_expected_step",
     "conversation_state_turn_type_hint",
@@ -1756,6 +1760,7 @@ def _extract_meta_followup_list(raw: str, field_name: str, *, limit: int = 3) ->
 def _extract_meta_followup_conversation_state(raw: str) -> Dict[str, Any]:
     active_topic = _extract_meta_followup_field(raw, "conversation_state_active_topic")
     active_goal = _extract_meta_followup_field(raw, "conversation_state_active_goal")
+    active_domain = _extract_meta_followup_field(raw, "conversation_state_active_domain")
     open_loop = _extract_meta_followup_field(raw, "conversation_state_open_loop")
     next_expected_step = _extract_meta_followup_field(raw, "conversation_state_next_expected_step")
     turn_type_hint = _extract_meta_followup_field(raw, "conversation_state_turn_type_hint")
@@ -1796,6 +1801,7 @@ def _extract_meta_followup_conversation_state(raw: str) -> Dict[str, Any]:
     payload = {
         "active_topic": _clean_meta_state_fragment(active_topic, max_chars=220),
         "active_goal": _clean_meta_state_fragment(active_goal, max_chars=220),
+        "active_domain": _clean_meta_state_fragment(active_domain, max_chars=64).lower(),
         "open_loop": _clean_meta_state_fragment(open_loop, max_chars=220),
         "next_expected_step": _clean_meta_state_fragment(next_expected_step, max_chars=220),
         "turn_type_hint": _clean_meta_state_fragment(turn_type_hint, max_chars=64).lower(),
@@ -1811,6 +1817,28 @@ def _meta_context_slot_text(label: str, parts: Iterable[str]) -> str:
     if not cleaned:
         return ""
     return f"{label}: " + " | ".join(cleaned[:4])
+
+
+def _session_domain_family(domain: str) -> str:
+    normalized = str(domain or "").strip().lower()
+    if normalized in {"travel_advisory", "topic_advisory", "life_advisory"}:
+        return "advisory"
+    return normalized
+
+
+def _session_domains_compatible(current_domain: str, session_domain: str) -> bool:
+    current = str(current_domain or "").strip().lower()
+    session = str(session_domain or "").strip().lower()
+    if not current or not session:
+        return True
+    if current == session:
+        return True
+    current_family = _session_domain_family(current)
+    session_family = _session_domain_family(session)
+    if current_family == "advisory" and session_family == "advisory":
+        if current == "topic_advisory" or session == "topic_advisory":
+            return True
+    return False
 
 
 def _append_meta_context_slot(
@@ -2496,6 +2524,7 @@ def build_meta_context_bundle(
     *,
     raw_query: str,
     effective_query: str,
+    provisional_task_domain: str = "",
     dialog_state: Mapping[str, Any] | None = None,
     conversation_state: Mapping[str, Any] | None = None,
     turn_understanding: Mapping[str, Any] | None = None,
@@ -2520,6 +2549,9 @@ def build_meta_context_bundle(
         or followup_state.get("active_goal")
         or dialog.get("open_goal")
         or "",
+        "active_domain": explicit_state.get("active_domain")
+        or followup_state.get("active_domain")
+        or "",
         "open_loop": explicit_state.get("open_loop")
         or followup_state.get("open_loop")
         or "",
@@ -2541,6 +2573,21 @@ def build_meta_context_bundle(
         or {},
         "topic_confidence": explicit_state.get("topic_confidence") or 0.0,
     }
+    active_session_domain = str(merged_state.get("active_domain") or "").strip().lower()
+    requested_domain = str(provisional_task_domain or "").strip().lower()
+    session_domain_filtered = bool(
+        requested_domain
+        and active_session_domain
+        and not _session_domains_compatible(requested_domain, active_session_domain)
+    )
+    if session_domain_filtered:
+        merged_state["active_topic"] = ""
+        merged_state["active_goal"] = ""
+        merged_state["open_loop"] = ""
+        merged_state["next_expected_step"] = ""
+        merged_state["active_plan"] = {}
+        merged_state["topic_confidence"] = 0.0
+        merged_state["active_domain"] = requested_domain
     turn = dict(turn_understanding or {})
     turn_type = str(turn.get("dominant_turn_type") or "").strip().lower() or str(
         merged_state.get("turn_type_hint") or ""
@@ -2555,7 +2602,7 @@ def build_meta_context_bundle(
         raw,
         recent_assistant_turns=recent_assistant_turns,
     )
-    semantic_recall = _normalize_meta_context_fragments(semantic_recall_hits, limit=2)
+    semantic_recall = [] if session_domain_filtered else _normalize_meta_context_fragments(semantic_recall_hits, limit=2)
     topic_memory = _select_relevant_topic_memory(
         raw_query=raw,
         effective_query=effective_query,
@@ -2565,6 +2612,8 @@ def build_meta_context_bundle(
         turn_type=turn_type,
         provided_hits=topic_memory_hits,
     )
+    if session_domain_filtered:
+        topic_memory = []
     preference_memory, preference_selection = _select_relevant_preference_memory(
         effective_query=effective_query,
         dialog_state=dialog,
@@ -2578,6 +2627,14 @@ def build_meta_context_bundle(
         session_id=str((conversation_state or {}).get("session_id") or "default"),
         query=effective_query,
     )
+    if session_domain_filtered:
+        historical_topic_memory = []
+        historical_topic_selection = {
+            **dict(historical_topic_selection or {}),
+            "selected": [],
+            "selected_details": [],
+            "domain_filtered": True,
+        }
     if not historical_topic_memory:
         historical_topic_memory, historical_topic_selection = _select_recent_historical_topic_fallback(
             effective_query=effective_query,
@@ -2585,6 +2642,14 @@ def build_meta_context_bundle(
             recent_assistant_turns=recent_assistant,
             conversation_state=merged_state,
         )
+        if session_domain_filtered:
+            historical_topic_memory = []
+            historical_topic_selection = {
+                **dict(historical_topic_selection or {}),
+                "selected": [],
+                "selected_details": [],
+                "domain_filtered": True,
+            }
     selected_open_loop = _select_open_loop_payload(
         conversation_state=merged_state,
         dialog_state=dialog,
@@ -2605,6 +2670,7 @@ def build_meta_context_bundle(
         [
             merged_state.get("active_topic"),
             merged_state.get("active_goal"),
+            merged_state.get("active_domain"),
             merged_state.get("turn_type_hint"),
             *list(merged_state.get("preferences") or ())[:2],
             *list(merged_state.get("recent_corrections") or ())[:2],
@@ -2695,6 +2761,18 @@ def build_meta_context_bundle(
         topic_memory=topic_memory,
         preference_memory=preference_memory,
     )
+    if session_domain_filtered:
+        suppressed_context.append(
+            {
+                "source": "conversation_state",
+                "reason": f"session_domain_filtered:{active_session_domain}->{requested_domain}",
+                "content_preview": (
+                    str(explicit_state.get("active_topic") or "")
+                    or str(followup_state.get("active_topic") or "")
+                    or active_session_domain
+                )[:140],
+            }
+        )
     suppressed_pairs = []
     for item in suppressed_context:
         suppressed_source = str(item.get("source") or "").strip()
@@ -2731,6 +2809,7 @@ def build_meta_context_bundle(
         bundle_reason="meta_context_rehydration",
         active_topic=_clean_meta_state_fragment(merged_state.get("active_topic"), max_chars=220),
         active_goal=_clean_meta_state_fragment(merged_state.get("active_goal"), max_chars=220),
+        active_domain=_clean_meta_state_fragment(merged_state.get("active_domain"), max_chars=64).lower(),
         open_loop=_clean_meta_state_fragment(selected_open_loop, max_chars=220),
         next_expected_step=_clean_meta_state_fragment(merged_state.get("next_expected_step"), max_chars=220),
         turn_type=turn_type,
@@ -2754,6 +2833,8 @@ def render_meta_context_bundle(bundle: MetaContextBundle | Mapping[str, Any] | N
         lines.append(f"active_topic: {payload['active_topic']}")
     if payload.get("active_goal"):
         lines.append(f"active_goal: {payload['active_goal']}")
+    if payload.get("active_domain"):
+        lines.append(f"active_domain: {payload['active_domain']}")
     if payload.get("open_loop"):
         lines.append(f"open_loop: {payload['open_loop']}")
     if payload.get("next_expected_step"):
@@ -2825,6 +2906,7 @@ def _normalize_authoritative_meta_context_bundle(
     if not slot_names:
         payload["active_topic"] = ""
         payload["active_goal"] = ""
+        payload["active_domain"] = ""
         payload["open_loop"] = ""
         payload["next_expected_step"] = ""
         return payload
@@ -2832,6 +2914,7 @@ def _normalize_authoritative_meta_context_bundle(
     if not slot_names.intersection({"conversation_state", "topic_memory", "historical_topic_memory"}):
         payload["active_topic"] = ""
         payload["active_goal"] = ""
+        payload["active_domain"] = ""
     if not slot_names.intersection({"open_loop", "conversation_state"}):
         payload["open_loop"] = ""
     if not slot_names.intersection({"open_loop", "conversation_state"}):
@@ -3237,9 +3320,19 @@ def classify_meta_task(
         context_anchor_applied=context_anchor_applied,
     )
     turn_interpretation = interpret_turn(turn_input)
+    carried_domain = str((conversation_state or {}).get("active_domain") or "").strip().lower()
+    provisional_task_type = "single_lane"
+    provisional_task_domain, _, _ = infer_meta_task_domain_hint(
+        effective_query=effective_query,
+        active_topic=active_topic,
+        open_goal=open_goal,
+        task_type=provisional_task_type,
+        carried_domain=carried_domain,
+    )
     meta_context_bundle, preference_memory_selection, historical_topic_selection = build_meta_context_bundle(
         raw_query=query,
         effective_query=effective_query,
+        provisional_task_domain=provisional_task_domain,
         dialog_state=dialog_state,
         conversation_state=conversation_state,
         turn_understanding=turn_interpretation.to_dict(),
@@ -3412,6 +3505,7 @@ def classify_meta_task(
         active_topic=active_topic,
         open_goal=str(open_goal or ""),
         next_step=str(next_step or ""),
+        active_domain=str(meta_context_bundle.active_domain or carried_domain or provisional_task_domain or ""),
         recommended_agent_chain=tuple(deduped_chain),
         active_plan=active_plan,
     )
@@ -3427,6 +3521,7 @@ def classify_meta_task(
         bundle_reason=str(admitted_bundle.get("bundle_reason") or "meta_context_rehydration"),
         active_topic=str(admitted_bundle.get("active_topic") or ""),
         active_goal=str(admitted_bundle.get("active_goal") or ""),
+        active_domain=str(admitted_bundle.get("active_domain") or ""),
         open_loop=str(admitted_bundle.get("open_loop") or ""),
         next_expected_step=str(admitted_bundle.get("next_expected_step") or ""),
         turn_type=str(admitted_bundle.get("turn_type") or ""),
@@ -3513,6 +3608,7 @@ def classify_meta_task(
         active_topic=active_topic,
         open_goal=str(open_goal or ""),
         next_step=str(next_step or ""),
+        active_domain=str(meta_context_bundle.active_domain or carried_domain or provisional_task_domain or ""),
         recommended_agent_chain=final_chain,
         active_plan=active_plan,
     )
@@ -3535,6 +3631,7 @@ def classify_meta_task(
             active_topic=active_topic,
             open_goal=str(open_goal or ""),
             next_step=str(next_step or ""),
+            active_domain=str(meta_context_bundle.active_domain or carried_domain or provisional_task_domain or ""),
             recommended_agent_chain=final_chain,
             active_plan=active_plan,
         )
@@ -3564,6 +3661,7 @@ def classify_meta_task(
             active_topic=active_topic,
             open_goal=str(open_goal or ""),
             next_step=str(next_step or ""),
+            active_domain=str(meta_context_bundle.active_domain or carried_domain or provisional_task_domain or ""),
             recommended_agent_chain=final_chain,
             active_plan=active_plan,
         )
@@ -3601,6 +3699,7 @@ def classify_meta_task(
             active_topic=active_topic,
             open_goal=str(open_goal or ""),
             next_step=str(next_step or ""),
+            active_domain=str(meta_context_bundle.active_domain or carried_domain or provisional_task_domain or ""),
             recommended_agent_chain=final_chain,
             active_plan=active_plan,
         )
@@ -3776,6 +3875,7 @@ def classify_meta_task(
         "context_anchor_applied": context_anchor_applied,
         "active_topic": active_topic or None,
         "open_goal": open_goal or None,
+        "active_domain": meta_context_bundle.active_domain or provisional_task_domain or None,
         "dialog_constraints": dialog_constraints,
         "next_step": next_step,
         "active_topic_reused": active_topic_reused,

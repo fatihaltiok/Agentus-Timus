@@ -162,6 +162,34 @@ def test_apply_turn_interpretation_updates_preferences_and_turn_hint():
     assert updated.topic_confidence == 0.86
 
 
+def test_apply_turn_interpretation_tracks_active_domain_and_clears_open_loop_on_domain_shift():
+    updated = apply_turn_interpretation(
+        {
+            "active_topic": "Twilio Setup",
+            "active_goal": "Anruffunktion vorbereiten",
+            "active_domain": "setup_build",
+            "open_loop": "Twilio Credentials pruefen",
+            "next_expected_step": "Twilio Credentials pruefen",
+        },
+        session_id="canvas_demo",
+        dominant_turn_type="new_task",
+        response_mode="execute",
+        state_effects={"shift_active_topic": True},
+        effective_query="wo kann ich am Wochenende hin in Deutschland",
+        active_topic="Ausflugsziele in Deutschland",
+        active_goal="Staedte und Kultur fuer das Wochenende finden",
+        active_domain="travel_advisory",
+        next_step="",
+        confidence=0.74,
+        updated_at="2026-04-24T20:00:00Z",
+    )
+
+    assert updated.active_domain == "travel_advisory"
+    assert updated.open_loop == ""
+    assert updated.next_expected_step == ""
+    assert "domain_shift" in updated.state_source
+
+
 def test_apply_turn_interpretation_persists_active_plan_and_resumes_next_step():
     updated = apply_turn_interpretation(
         {
