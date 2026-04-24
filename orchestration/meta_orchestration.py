@@ -12,6 +12,7 @@ from orchestration.capability_graph import build_capability_graph
 from orchestration.meta_clarity_contract import (
     apply_meta_clarity_to_bundle,
     build_meta_clarity_contract,
+    parse_meta_clarity_contract,
 )
 from orchestration.meta_context_authority import build_meta_context_authority
 from orchestration.meta_interaction_mode import MetaInteractionMode, build_meta_interaction_mode
@@ -2769,6 +2770,163 @@ def render_meta_context_bundle(bundle: MetaContextBundle | Mapping[str, Any] | N
     return "\n".join(lines)
 
 
+def _apply_meta_clarity_to_preference_selection(
+    selection: Mapping[str, Any] | None,
+    clarity_contract: Mapping[str, Any] | None,
+) -> Dict[str, Any]:
+    payload = dict(selection or {})
+    contract = parse_meta_clarity_contract(clarity_contract or {})
+    if not payload or not contract:
+        return payload
+
+    allowed_slots = {
+        str(item or "").strip()
+        for item in (contract.get("allowed_context_slots") or [])
+        if str(item or "").strip()
+    }
+    forbidden_slots = {
+        str(item or "").strip()
+        for item in (contract.get("forbidden_context_slots") or [])
+        if str(item or "").strip()
+    }
+    preference_allowed = "preference_memory" not in forbidden_slots and (
+        not allowed_slots or "preference_memory" in allowed_slots
+    )
+    if preference_allowed:
+        return payload
+
+    filtered_irrelevant = list(payload.get("filtered_irrelevant") or [])
+    for item in payload.get("selected") or []:
+        rendered = _clean_meta_state_fragment(item, max_chars=220)
+        if not rendered:
+            continue
+        filtered_irrelevant.append(
+            {
+                "rendered": rendered,
+                "reason": "clarity_contract_filtered_preference_memory",
+            }
+        )
+    payload["selected"] = []
+    payload["selected_details"] = []
+    if filtered_irrelevant:
+        payload["filtered_irrelevant"] = filtered_irrelevant[:8]
+    return payload
+
+
+def _normalize_authoritative_meta_context_bundle(
+    bundle: Mapping[str, Any] | None,
+) -> Dict[str, Any]:
+    payload = dict(bundle or {})
+    slot_names = {
+        str(item.get("slot") or "").strip()
+        for item in (payload.get("context_slots") or [])
+        if isinstance(item, Mapping) and str(item.get("slot") or "").strip()
+    }
+    if not slot_names:
+        payload["active_topic"] = ""
+        payload["active_goal"] = ""
+        payload["open_loop"] = ""
+        payload["next_expected_step"] = ""
+        return payload
+
+    if not slot_names.intersection({"conversation_state", "topic_memory", "historical_topic_memory"}):
+        payload["active_topic"] = ""
+        payload["active_goal"] = ""
+    if not slot_names.intersection({"open_loop", "conversation_state"}):
+        payload["open_loop"] = ""
+    if not slot_names.intersection({"open_loop", "conversation_state"}):
+        payload["next_expected_step"] = ""
+    return payload
+
+
+def _build_authoritative_meta_context_view(
+    *,
+    meta_request_frame: Mapping[str, Any] | None,
+    clarity_contract: Mapping[str, Any] | None,
+    meta_context_bundle: Mapping[str, Any] | None,
+    preference_memory_selection: Mapping[str, Any] | None,
+) -> Dict[str, Any]:
+    admitted = apply_meta_request_frame_context_admission(
+        meta_request_frame,
+        bundle=meta_context_bundle,
+        preference_memory_selection=preference_memory_selection,
+    )
+    filtered_bundle = apply_meta_clarity_to_bundle(
+        admitted.get("meta_context_bundle") or {},
+        clarity_contract,
+    )
+    normalized_bundle = _normalize_authoritative_meta_context_bundle(filtered_bundle)
+    filtered_preferences = _apply_meta_clarity_to_preference_selection(
+        admitted.get("preference_memory_selection") or {},
+        clarity_contract,
+    )
+    return {
+        "meta_context_bundle": normalized_bundle,
+        "preference_memory_selection": filtered_preferences,
+    }
+
+
+def _build_authoritative_specialist_context_seed(
+    *,
+    meta_context_bundle: Mapping[str, Any] | None,
+    preference_memory_selection: Mapping[str, Any] | None,
+    conversation_state: Mapping[str, Any] | None,
+    clarity_contract: Mapping[str, Any] | None,
+    turn_type: str,
+    response_mode: str,
+) -> Dict[str, Any]:
+    bundle = dict(meta_context_bundle or {})
+    slot_names = {
+        str(item.get("slot") or "").strip()
+        for item in (bundle.get("context_slots") or [])
+        if isinstance(item, Mapping) and str(item.get("slot") or "").strip()
+    }
+    conversation_state_map = dict(conversation_state or {})
+    contract = parse_meta_clarity_contract(clarity_contract or {})
+    allowed_slots = {
+        str(item or "").strip()
+        for item in (contract.get("allowed_context_slots") or [])
+        if str(item or "").strip()
+    }
+    forbidden_slots = {
+        str(item or "").strip()
+        for item in (contract.get("forbidden_context_slots") or [])
+        if str(item or "").strip()
+    }
+
+    def _slot_allowed(name: str) -> bool:
+        if name in forbidden_slots:
+            return False
+        return not allowed_slots or name in allowed_slots
+
+    topical_context_allowed = bool(
+        {
+            slot
+            for slot in ("conversation_state", "topic_memory", "historical_topic_memory")
+            if _slot_allowed(slot)
+        }
+    )
+    open_loop_allowed = _slot_allowed("open_loop") or _slot_allowed("conversation_state")
+    next_step_allowed = open_loop_allowed or _slot_allowed("conversation_state")
+    preference_allowed = _slot_allowed("preference_memory")
+    conversation_state_allowed = _slot_allowed("conversation_state")
+
+    return build_specialist_context_payload(
+        current_topic=(bundle.get("active_topic") if topical_context_allowed else "") or "",
+        active_goal=(bundle.get("active_goal") if topical_context_allowed else "") or "",
+        open_loop=(bundle.get("open_loop") if open_loop_allowed else "") or "",
+        next_expected_step=(bundle.get("next_expected_step") if next_step_allowed else "") or "",
+        turn_type=turn_type,
+        response_mode=response_mode,
+        user_preferences=list((preference_memory_selection or {}).get("selected") or [])
+        if preference_allowed
+        else [],
+        recent_corrections=list(conversation_state_map.get("recent_corrections") or [])
+        if conversation_state_allowed
+        else [],
+    )
+
+
 def extract_effective_meta_query(query: str) -> str:
     """Bewertet bei Follow-up-Kapseln nur die eigentliche Nutzerfrage.
 
@@ -3585,22 +3743,21 @@ def classify_meta_task(
         task_decomposition=task_decomposition,
         meta_execution_plan=meta_execution_plan,
     )
-    filtered_meta_context_bundle = apply_meta_clarity_to_bundle(
-        meta_context_bundle.to_dict(),
-        clarity_contract.to_dict(),
+    authoritative_context = _build_authoritative_meta_context_view(
+        meta_request_frame=meta_request_frame.to_dict(),
+        clarity_contract=clarity_contract.to_dict(),
+        meta_context_bundle=meta_context_bundle.to_dict(),
+        preference_memory_selection=preference_memory_selection,
     )
-    conversation_state_map = dict(conversation_state or {})
-    specialist_context_seed = build_specialist_context_payload(
-        current_topic=filtered_meta_context_bundle.get("active_topic") or active_topic,
-        active_goal=filtered_meta_context_bundle.get("active_goal") or open_goal,
-        open_loop=filtered_meta_context_bundle.get("open_loop")
-        or filtered_meta_context_bundle.get("next_expected_step"),
-        next_expected_step=filtered_meta_context_bundle.get("next_expected_step") or next_step,
+    filtered_meta_context_bundle = dict(authoritative_context.get("meta_context_bundle") or {})
+    preference_memory_selection = dict(authoritative_context.get("preference_memory_selection") or {})
+    specialist_context_seed = _build_authoritative_specialist_context_seed(
+        meta_context_bundle=filtered_meta_context_bundle,
+        preference_memory_selection=preference_memory_selection,
+        conversation_state=conversation_state,
+        clarity_contract=clarity_contract.to_dict(),
         turn_type=turn_interpretation.dominant_turn_type,
         response_mode=final_response_mode,
-        user_preferences=list(conversation_state_map.get("preferences") or [])
-        + list((preference_memory_selection or {}).get("selected") or []),
-        recent_corrections=list(conversation_state_map.get("recent_corrections") or []),
     )
     classification = {
         "task_type": final_task_type,

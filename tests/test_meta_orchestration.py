@@ -1177,6 +1177,42 @@ def test_classify_meta_task_explicit_think_partner_stays_meta_only():
     assert result["meta_clarity_contract"]["request_kind"] == "thinking_partner"
 
 
+def test_classify_meta_task_think_partner_uses_authoritative_context_only():
+    result = classify_meta_task(
+        "Ohne Recherche: Was ist deine Meinung dazu, ob Timus intern Denk-, Pruef- und Assistenzmodus haben sollte?",
+        action_count=0,
+        conversation_state={
+            "active_topic": "Twilio Setup",
+            "active_goal": "Anruffunktion fuer Voice-Agent vorbereiten",
+            "open_loop": "Integrationsreihenfolge abwaegen",
+            "preferences": ["Twilio zuerst"],
+            "recent_corrections": ["Nicht ungefragt ausfuehren"],
+        },
+        preference_memory_hits=[
+            {
+                "role": "assistant",
+                "agent": "meta",
+                "text": "Twilio zuerst behandeln und dann Inworld pruefen.",
+            }
+        ],
+        semantic_recall_hits=[
+            {
+                "role": "assistant",
+                "agent": "meta",
+                "text": "Du wolltest gestern eine Twilio-Integration aufsetzen.",
+            }
+        ],
+    )
+
+    slot_types = [slot["slot"] for slot in result["meta_context_bundle"]["context_slots"]]
+
+    assert result["meta_interaction_mode"]["mode"] == "think_partner"
+    assert "preference_memory" not in slot_types
+    assert "semantic_recall" not in slot_types
+    assert result["specialist_context_seed"]["user_preferences"] == []
+    assert result["specialist_context_seed"]["recent_corrections"] == ["Nicht ungefragt ausfuehren"]
+
+
 def test_classify_meta_task_explicit_inspect_setup_build_uses_probe_fast_path():
     result = classify_meta_task(
         "Schau mal nach, ob es schon Vorbereitungen fuer Twilio und Inworld gibt, aber nichts umsetzen.",
@@ -1191,6 +1227,22 @@ def test_classify_meta_task_explicit_inspect_setup_build_uses_probe_fast_path():
     assert result["meta_request_frame"]["task_domain"] == "setup_build"
     assert result["meta_interaction_mode"]["mode"] == "inspect"
     assert result["meta_clarity_contract"]["request_kind"] == "inspect_only"
+
+
+def test_classify_meta_task_setup_build_assist_uses_execution_fast_path():
+    result = classify_meta_task(
+        "Richte fuer mich eine Anruffunktion ueber Twilio und Inworld ein.",
+        action_count=0,
+    )
+
+    assert result["task_type"] == "setup_build_execution"
+    assert result["recommended_agent_chain"] == ["meta", "executor"]
+    assert result["recommended_recipe_id"] == "setup_build_execution"
+    assert [stage["stage_id"] for stage in result["recipe_stages"]] == ["setup_build_execution"]
+    assert result["reason"] == "interaction_mode:assist_setup_build_execution"
+    assert result["meta_request_frame"]["task_domain"] == "setup_build"
+    assert result["meta_interaction_mode"]["mode"] == "assist"
+    assert result["meta_clarity_contract"]["answer_obligation"] == "probe_then_return_concrete_setup_execution_path"
 
 
 def test_classify_meta_task_keeps_canada_context_for_context_dependent_footing_query(monkeypatch):
