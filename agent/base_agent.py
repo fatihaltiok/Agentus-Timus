@@ -3449,6 +3449,13 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             or clarity_contract.get("allowed_working_memory_sections")
             or ()
         )
+        allowed_context_classes = tuple(
+            str(item or "").strip().lower()
+            for item in (authority_contract.get("allowed_context_classes") or [])
+            if str(item or "").strip()
+        )
+        query_mode = str(authority_contract.get("working_memory_query_mode") or "").strip().lower() or "default"
+        strict_gating = bool(authority_contract.get("strict_working_memory_gating"))
 
         if not followup_context:
             settings: Dict[str, int | bool | tuple[str, ...]] = {
@@ -3457,6 +3464,9 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 "max_recent_events": max(0, base_recent_events),
                 "followup_context": False,
                 "allowed_sections": allowed_sections,
+                "allowed_context_classes": allowed_context_classes,
+                "query_mode": query_mode,
+                "strict_gating": strict_gating,
             }
             clarity_related_raw = authority_contract.get(
                 "working_memory_max_related",
@@ -3492,6 +3502,9 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             "max_recent_events": max(0, boosted_recent),
             "followup_context": True,
             "allowed_sections": allowed_sections,
+            "allowed_context_classes": allowed_context_classes,
+            "query_mode": query_mode,
+            "strict_gating": strict_gating,
         }
         clarity_related_raw = authority_contract.get(
             "working_memory_max_related",
@@ -3509,6 +3522,32 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             settings["max_recent_events"] = clarity_recent
         return settings
 
+    @classmethod
+    def _resolve_working_memory_query(cls, task_text: str) -> str:
+        authority_contract = cls._extract_meta_context_authority(task_text)
+        query_mode = str(authority_contract.get("working_memory_query_mode") or "").strip().lower()
+        default_query = cls._extract_working_memory_query(task_text)
+        if not query_mode or query_mode == "authority_bound":
+            return default_query
+
+        primary_objective = str(authority_contract.get("primary_objective") or "").strip()
+        if query_mode == "objective_only":
+            return primary_objective or default_query
+
+        if query_mode == "evidence_bound":
+            parts: list[str] = []
+            task_domain = str(authority_contract.get("task_domain") or "").strip()
+            request_kind = str(authority_contract.get("request_kind") or "").strip()
+            if task_domain:
+                parts.append(f"Domaene: {task_domain}")
+            if request_kind:
+                parts.append(f"Auftrag: {request_kind}")
+            if primary_objective:
+                parts.append(primary_objective)
+            return "\n".join(part for part in parts if part).strip() or default_query
+
+        return default_query
+
     async def _build_working_memory_context(self, task: str) -> str:
         enabled = os.getenv("WORKING_MEMORY_INJECTION_ENABLED", "true").lower()
         if enabled not in {"1", "true", "yes", "on"}:
@@ -3525,7 +3564,10 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         max_recent_events = int(settings["max_recent_events"])
         clarity_contract = self._extract_meta_clarity_contract(task)
         authority_contract = self._extract_meta_context_authority(task)
-        memory_query = self._extract_working_memory_query(task) or task
+        memory_query = self._resolve_working_memory_query(task) or task
+        allowed_sections = tuple(settings.get("allowed_sections") or ())
+        allowed_context_classes = tuple(settings.get("allowed_context_classes") or ())
+        query_mode = str(settings.get("query_mode") or "").strip().lower() or "default"
 
         try:
             from memory.memory_system import memory_manager
@@ -3537,6 +3579,9 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 max_related,
                 max_recent_events,
                 self.conversation_session_id,
+                allowed_sections=allowed_sections,
+                allowed_context_classes=allowed_context_classes,
+                query_mode=query_mode,
             )
             wm_stats: Dict[str, Any] = {}
             if hasattr(memory_manager, "get_last_working_memory_stats"):
@@ -3560,7 +3605,10 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                     "max_related": max_related,
                     "max_recent_events": max_recent_events,
                     "followup_context": bool(settings["followup_context"]),
-                    "allowed_sections": list(settings.get("allowed_sections") or ()),
+                    "allowed_sections": list(allowed_sections),
+                    "allowed_context_classes": list(allowed_context_classes),
+                    "query_mode": query_mode,
+                    "strict_gating": bool(settings.get("strict_gating")),
                 },
                 "memory_stats": wm_stats,
                 "memory_snapshot": memory_snapshot,
@@ -3735,11 +3783,13 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
 
         # Clear action history for new task
         self._task_action_history = []
-        working_memory_query = self._extract_working_memory_query(task)
+        working_memory_query = self._resolve_working_memory_query(task)
         working_memory_context = await self._build_working_memory_context(task)
         task_with_context = self._inject_working_memory_into_task(
             task, working_memory_context
         )
+        working_memory_meta = dict(self._working_memory_last_meta or {})
+        working_memory_settings = dict(working_memory_meta.get("settings") or {})
         self._emit_step_trace(
             action="working_memory_injected",
             output_data={
@@ -3747,6 +3797,9 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 "query_preview": self._preview_value(working_memory_query, 500),
                 "context_chars": len(working_memory_context or ""),
                 "context_preview": self._preview_value(working_memory_context, 700),
+                "allowed_context_classes": list(working_memory_settings.get("allowed_context_classes") or []),
+                "allowed_sections": list(working_memory_settings.get("allowed_sections") or []),
+                "query_mode": working_memory_settings.get("query_mode") or "",
             },
             metadata={"vision_enabled": self._vision_enabled},
         )

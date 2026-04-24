@@ -1522,7 +1522,7 @@ def test_working_memory_settings_respect_meta_context_authority_limits(monkeypat
     settings = BaseAgent._resolve_working_memory_settings(
         "# META ORCHESTRATION HANDOFF\n"
         "meta_context_authority_json: "
-        '{"working_memory_allowed_sections":["KURZZEITKONTEXT"],"working_memory_max_related":1,"working_memory_max_recent":3}\n'
+        '{"working_memory_allowed_sections":["KURZZEITKONTEXT"],"working_memory_max_related":1,"working_memory_max_recent":3,"allowed_context_classes":["conversation_state"],"working_memory_query_mode":"objective_only"}\n'
         "\n# ORIGINAL USER TASK\n"
         "wo kann ich am Wochenende hin in Deutschland\n"
     )
@@ -1532,3 +1532,21 @@ def test_working_memory_settings_respect_meta_context_authority_limits(monkeypat
     assert settings["max_related"] == 1
     assert settings["max_recent_events"] == 3
     assert settings["allowed_sections"] == ("KURZZEITKONTEXT",)
+    assert settings["allowed_context_classes"] == ("conversation_state",)
+    assert settings["query_mode"] == "objective_only"
+
+
+def test_resolve_working_memory_query_respects_objective_only_mode():
+    query = BaseAgent._resolve_working_memory_query(
+        "# META ORCHESTRATION HANDOFF\n"
+        "meta_context_authority_json: "
+        '{"primary_objective":"Ohne Recherche: Was ist deine Meinung dazu?","working_memory_query_mode":"objective_only"}\n'
+        "meta_execution_plan_json: "
+        '{"next_step_id":"plan_respond","steps":[{"id":"plan_respond","title":"Direkt antworten","expected_output":"klare Einschaetzung"}]}\n'
+        "meta_clarity_contract_json: "
+        '{"primary_objective":"Ohne Recherche: Was ist deine Meinung dazu?","completion_condition":"insight_or_options_given"}\n'
+        "\n# ORIGINAL USER TASK\n"
+        "Ohne Recherche: Was ist deine Meinung dazu, ob Timus intern Modi haben sollte?\n"
+    )
+
+    assert query == "Ohne Recherche: Was ist deine Meinung dazu?"

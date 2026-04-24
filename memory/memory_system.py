@@ -30,7 +30,7 @@ import re
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple, TYPE_CHECKING
+from typing import Optional, List, Dict, Any, Tuple, Iterable, Mapping, TYPE_CHECKING
 from dataclasses import dataclass, field, asdict
 from openai import OpenAI
 from utils.chroma_runtime import build_chroma_settings, configure_chroma_runtime
@@ -2143,6 +2143,92 @@ class MemoryManager:
             return ""
         return header + "\n".join(kept)
 
+    def _normalize_working_memory_allowed_sections(
+        self,
+        values: Iterable[Any] | None,
+    ) -> Tuple[str, ...]:
+        normalized: List[str] = []
+        seen: set[str] = set()
+        for item in values or ():
+            cleaned = self._normalize_text_for_prompt(item).upper()
+            if not cleaned or cleaned in seen:
+                continue
+            seen.add(cleaned)
+            normalized.append(cleaned)
+        return tuple(normalized)
+
+    def _normalize_working_memory_context_classes(
+        self,
+        values: Iterable[Any] | None,
+    ) -> Tuple[str, ...]:
+        normalized: List[str] = []
+        seen: set[str] = set()
+        for item in values or ():
+            cleaned = self._normalize_text_for_prompt(item).lower()
+            if not cleaned or cleaned in seen:
+                continue
+            seen.add(cleaned)
+            normalized.append(cleaned)
+        return tuple(normalized)
+
+    def _related_memory_context_class(self, memory: Mapping[str, Any]) -> str:
+        category = self._normalize_text_for_prompt(memory.get("category", "")).lower()
+        source = self._normalize_text_for_prompt(memory.get("source", "")).lower()
+        content = self._normalize_text_for_prompt(memory.get("content", "")).lower()
+        combined = " ".join(part for part in (category, source, content) if part)
+
+        if any(
+            token in combined
+            for token in (
+                "user_profile",
+                "relationships",
+                "decisions",
+                "patterns",
+                "self_model",
+                "preference",
+                "behavior hook",
+            )
+        ):
+            return "preference_profile"
+        if any(
+            token in combined
+            for token in (
+                "document",
+                "document_memory",
+                "document_knowledge",
+                "document_excerpt",
+                "file_excerpt",
+                "source_excerpt",
+                "source_quote",
+                "pdf",
+                "docx",
+                "extracted",
+            )
+        ):
+            return "document_knowledge"
+        if any(
+            token in combined
+            for token in (
+                "topic_memory",
+                "goal_memory",
+                "open_loop",
+                "historical_topic",
+                "topic_state",
+                "session_state",
+            )
+        ):
+            return "topic_state"
+        return "semantic_recall"
+
+    def _working_memory_related_allowed(
+        self,
+        memory: Mapping[str, Any],
+        allowed_context_classes: Tuple[str, ...],
+    ) -> bool:
+        if not allowed_context_classes:
+            return True
+        return self._related_memory_context_class(memory) in set(allowed_context_classes)
+
     def build_working_memory_context(
         self,
         current_query: str,
@@ -2150,6 +2236,9 @@ class MemoryManager:
         max_related: int = WORKING_MEMORY_MAX_RELATED,
         max_recent_events: int = WORKING_MEMORY_MAX_RECENT_EVENTS,
         preferred_session_id: Optional[str] = None,
+        allowed_sections: Iterable[Any] | None = None,
+        allowed_context_classes: Iterable[Any] | None = None,
+        query_mode: str = "",
     ) -> str:
         """
         Baut einen budgetierten Working-Memory-Block für Prompt-Injektion.
@@ -2172,6 +2261,11 @@ class MemoryManager:
         max_chars = max(600, int(max_chars))
         max_related = max(0, int(max_related))
         max_recent_events = max(0, int(max_recent_events))
+        allowed_sections_tuple = self._normalize_working_memory_allowed_sections(allowed_sections)
+        allowed_context_classes_tuple = self._normalize_working_memory_context_classes(allowed_context_classes)
+        allowed_sections_set = set(allowed_sections_tuple)
+        allowed_context_classes_set = set(allowed_context_classes_tuple)
+        query_mode_value = self._normalize_text_for_prompt(query_mode).lower()
         query_terms = self._extract_query_terms(query)
         focus_terms = self._collect_session_focus_terms(limit=10)
         prefer_unresolved = self._is_temporal_recall_query(query) or ("offen" in query.lower())
@@ -2198,12 +2292,17 @@ class MemoryManager:
             "semantic_backend_requested": self.semantic_backend_requested,
             "semantic_backend_active": self.semantic_backend_active,
             "semantic_backend_reason": self.semantic_backend_reason,
+            "allowed_sections": list(allowed_sections_tuple),
+            "allowed_context_classes": list(allowed_context_classes_tuple),
+            "query_mode": query_mode_value,
         }
 
         # --- 1) Kurzzeitkontext aus persistenten Interaktions-Events ---
         event_lines: List[str] = []
         selected_events: List[Dict[str, Any]] = []
-        if recent_target > 0:
+        if recent_target > 0 and (
+            not allowed_sections_set or "KURZZEITKONTEXT" in allowed_sections_set
+        ):
             recent_events = self.persistent.get_recent_interaction_events(
                 limit=max(12, recent_target * 6)
             )
@@ -2247,14 +2346,22 @@ class MemoryManager:
                 event_lines.append(
                     f"- ({ts}) User: {user_text} | Timus: {assistant_text}"
                 )
+        elif allowed_sections_set and "KURZZEITKONTEXT" not in allowed_sections_set:
+            stats["short_term_skipped"] = "section_disallowed"
         stats["selected_recent_events"] = len(event_lines)
 
         # --- 2) Langzeitkontext: relevante Erinnerungen ---
         related_lines: List[str] = []
-        if related_target > 0 and len(query) >= 3:
+        filtered_related_count = 0
+        if related_target > 0 and len(query) >= 3 and (
+            not allowed_sections_set or "LANGZEITKONTEXT" in allowed_sections_set
+        ):
             related = self.find_related_memories(query, n_results=max(related_target * 4, 6))
             scored_related: List[Tuple[float, Dict[str, Any]]] = []
             for memory in related:
+                if not self._working_memory_related_allowed(memory, allowed_context_classes_tuple):
+                    filtered_related_count += 1
+                    continue
                 score = self._score_related_memory(memory, query_terms)
                 scored_related.append((score, memory))
 
@@ -2264,31 +2371,42 @@ class MemoryManager:
                 source = self._normalize_text_for_prompt(memory.get("source", ""))
                 content = self._truncate_for_budget(memory.get("content", ""), 180)
                 related_lines.append(f"- [{category}/{source}] {content}")
+        elif allowed_sections_set and "LANGZEITKONTEXT" not in allowed_sections_set:
+            stats["long_term_skipped"] = "section_disallowed"
         stats["selected_related_memories"] = len(related_lines)
+        stats["filtered_related_memories"] = filtered_related_count
 
         # --- 3) Stabiler Kontext ---
         stable_lines: List[str] = []
-        dynamic_state_lines = [
-            self._normalize_text_for_prompt(line)
-            for line in self.session.get_dynamic_state_lines()
-        ]
-        dynamic_state_lines = [line for line in dynamic_state_lines if line]
-        if dynamic_state_lines:
-            stable_lines.append("AKTIVER_DIALOGZUSTAND:")
-            for line in dynamic_state_lines[:4]:
-                stable_lines.append(f"- {line}")
+        include_stable_section = not allowed_sections_set or "STABILER_KONTEXT" in allowed_sections_set
+        conversation_state_allowed = not allowed_context_classes_set or bool(
+            allowed_context_classes_set.intersection({"conversation_state", "topic_state"})
+        )
+        preference_profile_allowed = not allowed_context_classes_set or "preference_profile" in allowed_context_classes_set
+        dynamic_state_lines: List[str] = []
+        if include_stable_section and conversation_state_allowed:
+            dynamic_state_lines = [
+                self._normalize_text_for_prompt(line)
+                for line in self.session.get_dynamic_state_lines()
+            ]
+            dynamic_state_lines = [line for line in dynamic_state_lines if line]
+            if dynamic_state_lines:
+                stable_lines.append("AKTIVER_DIALOGZUSTAND:")
+                for line in dynamic_state_lines[:4]:
+                    stable_lines.append(f"- {line}")
         stats["dynamic_state_lines"] = len(dynamic_state_lines)
 
-        self_model_budget = 220 if dynamic_state_lines else 350
-        self_model = self._truncate_for_budget(self.get_self_model_prompt(), self_model_budget)
-        if self_model:
-            stable_lines.append(f"Self-Model: {self_model}")
+        if include_stable_section and preference_profile_allowed:
+            self_model_budget = 220 if dynamic_state_lines else 350
+            self_model = self._truncate_for_budget(self.get_self_model_prompt(), self_model_budget)
+            if self_model:
+                stable_lines.append(f"Self-Model: {self_model}")
 
-        hooks = [self._normalize_text_for_prompt(h) for h in self.get_behavior_hooks()[:4]]
-        if hooks:
-            stable_lines.append("Hooks: " + " | ".join(hooks))
+            hooks = [self._normalize_text_for_prompt(h) for h in self.get_behavior_hooks()[:4]]
+            if hooks:
+                stable_lines.append("Hooks: " + " | ".join(hooks))
 
-        if query_terms and selected_events:
+        if include_stable_section and conversation_state_allowed and query_terms and selected_events:
             repeated = []
             for token in query_terms:
                 count = 0
@@ -2300,6 +2418,8 @@ class MemoryManager:
                     repeated.append(token)
             if repeated:
                 stable_lines.append("Aktive Themen: " + ", ".join(repeated[:5]))
+        if allowed_sections_set and "STABILER_KONTEXT" not in allowed_sections_set:
+            stats["stable_skipped"] = "section_disallowed"
         stats["stable_lines"] = len(stable_lines)
 
         # Budgetiert zusammensetzen
@@ -2964,6 +3084,9 @@ def get_working_memory_context(
     max_related: int = WORKING_MEMORY_MAX_RELATED,
     max_recent_events: int = WORKING_MEMORY_MAX_RECENT_EVENTS,
     preferred_session_id: Optional[str] = None,
+    allowed_sections: Iterable[Any] | None = None,
+    allowed_context_classes: Iterable[Any] | None = None,
+    query_mode: str = "",
 ) -> str:
     """Shortcut für budgetierten Working-Memory-Kontext."""
     return memory_manager.build_working_memory_context(
@@ -2972,6 +3095,9 @@ def get_working_memory_context(
         max_related=max_related,
         max_recent_events=max_recent_events,
         preferred_session_id=preferred_session_id,
+        allowed_sections=allowed_sections,
+        allowed_context_classes=allowed_context_classes,
+        query_mode=query_mode,
     )
 
 
