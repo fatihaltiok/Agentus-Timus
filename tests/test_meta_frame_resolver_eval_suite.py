@@ -85,10 +85,10 @@ def _assert_chain_prefix(result: dict, expected_prefix: list[str]) -> None:
             "new_task",
             "setup_build",
             "plan_and_delegate",
-            "frame:setup_build",
-            "single_lane",
+            "interaction_mode:inspect_setup_build_probe",
+            "setup_build_probe",
             ["meta", "executor"],
-            "execute_task",
+            "inspect_only",
             "location_route",
         ),
         (

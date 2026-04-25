@@ -113,6 +113,7 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert "request_preflight_json:" in result
     assert "meta_self_state_json:" in result
     assert "meta_execution_plan_json:" in result
+    assert "general_decision_kernel_json:" in result
     assert "task_decomposition_json:" in result
     assert "meta_clarity_contract_json:" in result
     assert "meta_context_authority_json:" in result
@@ -171,6 +172,8 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert meta["meta_context_authority"]["interaction_mode"] == "assist"
     assert isinstance(meta["meta_context_authority"]["observed_context_classes"], list)
     assert "primary_evidence_class" in meta["meta_context_authority"]
+    assert meta["general_decision_kernel"]["turn_kind"] == "execute"
+    assert meta["general_decision_kernel"]["topic_family"] == "technical"
     assert meta["meta_clarity_contract"]["direct_answer_required"] is False
     assert isinstance(meta["meta_self_state"]["current_capabilities"], list)
     assert isinstance(meta["meta_self_state"]["confidence_bounds"], list)
@@ -199,6 +202,8 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert parsed["meta_context_authority"]["interaction_mode"] == "assist"
     assert isinstance(parsed["specialist_context_seed"]["evidence_classes"], list)
     assert "primary_evidence_class" in parsed["specialist_context_seed"]
+    assert parsed["general_decision_kernel"]["turn_kind"] == "execute"
+    assert parsed["general_decision_kernel"]["topic_family"] == "technical"
     assert parsed["task_packet"]["packet_type"] == "meta_orchestration"
     assert parsed["request_preflight"]["state"] in {"ok", "warn"}
     assert parsed["intent_family"] == "execute_multistep"
@@ -605,3 +610,4 @@ def test_build_meta_handoff_payload_preserves_frame_driven_docs_direct_answer():
     assert "meta_request_frame_json:" in rendered
     assert "meta_context_authority_json:" in rendered
     assert "meta_interaction_mode_json:" in rendered
+    assert "general_decision_kernel_json:" in rendered

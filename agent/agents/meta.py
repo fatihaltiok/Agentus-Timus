@@ -34,6 +34,7 @@ from orchestration.meta_orchestration import (
 )
 from orchestration.meta_clarity_contract import parse_meta_clarity_contract
 from orchestration.meta_context_authority import parse_meta_context_authority
+from orchestration.general_decision_kernel import parse_general_decision_kernel
 from orchestration.meta_interaction_mode import parse_meta_interaction_mode
 from orchestration.meta_plan_compiler import (
     build_meta_execution_plan,
@@ -1246,6 +1247,11 @@ class MetaAgent(BaseAgent):
                     payload["meta_interaction_mode"] = json.loads(normalized_value)
                 except json.JSONDecodeError:
                     payload["meta_interaction_mode"] = {"raw": normalized_value}
+            elif normalized_key == "general_decision_kernel_json":
+                try:
+                    payload["general_decision_kernel"] = parse_general_decision_kernel(json.loads(normalized_value))
+                except json.JSONDecodeError:
+                    payload["general_decision_kernel"] = {"raw": normalized_value}
             elif normalized_key == "task_decomposition_json":
                 payload["task_decomposition"] = parse_task_decomposition(normalized_value)
             elif normalized_key == "meta_context_bundle_json":

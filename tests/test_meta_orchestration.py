@@ -1348,6 +1348,8 @@ def test_classify_meta_task_filters_preference_memory_for_docs_status_frame(monk
     )
 
     assert result["meta_request_frame"]["task_domain"] == "docs_status"
+    assert result["general_decision_kernel"]["turn_kind"] == "inspect"
+    assert result["general_decision_kernel"]["topic_family"] == "document"
     assert result["preference_memory_selection"]["selected"] == []
     context_slots = result["meta_context_bundle"]["context_slots"]
     assert all(slot["slot"] != "preference_memory" for slot in context_slots)
@@ -1546,8 +1548,11 @@ def test_classify_meta_task_filters_cross_domain_setup_state_for_travel_query():
 
     frame = result["meta_request_frame"]
     bundle = result["meta_context_bundle"]
+    kernel = result["general_decision_kernel"]
 
     assert frame["task_domain"] == "travel_advisory"
+    assert kernel["turn_kind"] == "think"
+    assert kernel["topic_family"] == "travel"
     assert result["active_domain"] == "travel_advisory"
     assert bundle["active_topic"] == ""
     assert bundle["open_loop"] == ""

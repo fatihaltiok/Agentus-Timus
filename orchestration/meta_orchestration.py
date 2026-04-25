@@ -14,6 +14,7 @@ from orchestration.meta_clarity_contract import (
     build_meta_clarity_contract,
     parse_meta_clarity_contract,
 )
+from orchestration.general_decision_kernel import build_general_decision_kernel
 from orchestration.meta_context_authority import build_meta_context_authority
 from orchestration.meta_context_authority import classify_meta_context_slot, summarize_meta_context_classes
 from orchestration.meta_interaction_mode import MetaInteractionMode, build_meta_interaction_mode
@@ -3967,6 +3968,11 @@ def classify_meta_task(
         turn_type=turn_interpretation.dominant_turn_type,
         response_mode=final_response_mode,
     )
+    general_decision_kernel = build_general_decision_kernel(
+        effective_query=effective_query,
+        meta_request_frame=meta_request_frame.to_dict(),
+        meta_interaction_mode=meta_interaction_mode.to_dict(),
+    )
     resolved_active_domain = (
         str(meta_request_frame.task_domain or meta_context_bundle.active_domain or provisional_task_domain or "").strip()
         or None
@@ -4006,6 +4012,7 @@ def classify_meta_task(
         "meta_policy_decision": policy_decision.to_dict(),
         "meta_request_frame": meta_request_frame.to_dict(),
         "meta_interaction_mode": meta_interaction_mode.to_dict(),
+        "general_decision_kernel": general_decision_kernel.to_dict(),
         "topic_shift_detected": topic_transition.topic_shift_detected,
         "topic_state_transition": topic_transition.to_dict(),
         "meta_context_bundle": filtered_meta_context_bundle,

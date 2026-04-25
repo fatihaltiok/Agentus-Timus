@@ -2,6 +2,103 @@
 
 ---
 
+## Fortschritt 2026-04-25 - General Decision Kernel und Leitfaden fuer kleine LLM-Chatbots
+
+Der naechste Generalisierungsschritt nach `MCA` ist formalisiert. Ziel ist,
+Timus von bekannten Fallfamilien und Drift-Reparaturen weiter in Richtung einer
+allgemeineren Entscheidungsarchitektur zu verschieben. Parallel dazu ist eine
+wiederverwendbare Architektur-Notiz fuer kuenftige Projekte entstanden, die
+erklaert, wie ein kleiner lokaler oder freier Chatbot durch Systemdesign
+deutlich naeher an ChatGPT-Qualitaet herankommen kann.
+
+Neu:
+
+- [docs/GENERAL_DECISION_KERNEL_PLAN_2026-04-25.md](/home/fatih-ubuntu/dev/timus/docs/GENERAL_DECISION_KERNEL_PLAN_2026-04-25.md)
+  - Problemstellung:
+    - zu viele noch fallgetriebene Spezialpfade
+    - zu wenig allgemeine Turn-Semantik
+  - Zielbild:
+    - ein autoritativer Decision Kernel vor Kontext, Tools und Delegation
+  - neue Generalisierungs-Slices:
+    - `GDK1` Universal Turn Taxonomy
+    - `GDK2` Decision Kernel Contract
+    - `GDK3` Runtime Alignment
+    - `GDK4` Low-Confidence Controller
+    - `GDK5` Unseen Eval Matrix
+    - `GDK6` Telemetrie fuer Entscheidungsgruende
+- [docs/KLEINES_LLM_CHATBOT_ARCHITEKTURLEITFADEN_2026-04-25.md](/home/fatih-ubuntu/dev/timus/docs/KLEINES_LLM_CHATBOT_ARCHITEKTURLEITFADEN_2026-04-25.md)
+  - wiederverwendbare Grundlage fuer kuenftige Projekte
+  - erklaert, warum kleine Modelle nicht durch rohe Modellgroesse, sondern
+    durch Architektur stark werden:
+    - Decision Kernel
+    - Wissensklassentrennung
+    - bounded Retrieval
+    - Arbeitsmodi
+    - Low-Confidence-Verhalten
+    - Eval statt Anecdote
+  - klare Abgrenzung:
+    - nicht magische Modellparitaet
+    - sondern nutzerseitig starke Produktpfade durch sauberes Systemdesign
+
+## Fortschritt 2026-04-24 - Meta Context Authority Plan
+
+Der naechste Meta-Block ist als eigener Architekturpfad formalisiert. Kern der
+Hypothese: Meta muss zuerst bewusst entscheiden, welche Anfrage vorliegt. Erst
+danach darf Kontext geladen werden. Damit wird die Autoritaetskette zwischen
+`request_frame`, `interaction_mode`, `meta_context_bundle` und
+`working_memory` explizit gemacht, statt weiter mehrere konkurrierende
+Kontextpfade gleichzeitig wirken zu lassen.
+
+Neu:
+
+- [docs/META_CONTEXT_AUTHORITY_PLAN_2026-04-24.md](/home/fatih-ubuntu/dev/timus/docs/META_CONTEXT_AUTHORITY_PLAN_2026-04-24.md)
+  - Problemdefinition fuer konkurrierende Meta-Kontextpfade
+  - klare Benennung der heutigen Kontextlader:
+    - `mcp_server`
+    - `meta_orchestration`
+    - `main_dispatcher`
+    - `meta`
+    - `base_agent`
+    - `memory_system`
+  - Architekturentscheidung:
+    - erst `meta_request_frame`
+    - dann `meta_interaction_mode`
+    - dann `context_admission`
+    - erst danach bounded `working_memory`
+  - Umsetzungs-Slices:
+    - `MCA1` Context Authority Contract
+    - `MCA2` Orchestration Becomes Authoritative
+    - `MCA3` Working Memory Gating
+    - `MCA4` Session Domain Separation
+    - `MCA5` Evidence Class Plumbing
+    - `MCA6` Live Gates
+  - explizite Einordnung:
+    - dieser Block kommt vor dem breiteren Maßnahmenkatalog
+    - genauer: als Voraussetzung fuer dessen P0-Produktisierung
+
+## Fortschritt 2026-04-23 - PDF Knowledge Base Plan
+
+Der PDF-Quellenpfad ist als eigener Architekturblock formalisiert. Ziel ist
+nicht mehr nur punktuelle PDF-Extraktion, sondern eine persistente,
+zitierbare PDF-Wissensbasis mit eigenem Storage-, Retrieval- und
+Citation-Vertrag.
+
+Neu:
+
+- [docs/PDF_KNOWLEDGE_BASE_PLAN_2026-04-23.md](/home/fatih-ubuntu/dev/timus/docs/PDF_KNOWLEDGE_BASE_PLAN_2026-04-23.md)
+  - Quellregistry fuer Uploads, lokale Dateien und URLs
+  - seitenweise Extraktion statt nur Volltext
+  - eigene PDF-Qdrant-Collections statt Chat-Memory-Missbrauch
+  - Chunking mit `source_id`, Seitenbereich und Chunk-Metadaten
+  - Retrieval- und Citation-Guard fuer spaetere PDF-Antworten
+  - Umsetzungs-Slices:
+    - `PKB1` Source Registry
+    - `PKB2` seitenweise Extraktion
+    - `PKB3` Chunking und Storage
+    - `PKB4` Retrieval Tool
+    - `PKB5` Citation Guard
+    - `PKB6` Live-Gates
+
 ## Fortschritt 2026-04-21 - MFR6 Eval Suite und allgemeine Meta-Frames
 
 Der Meta-Frame-Resolver wird jetzt nicht mehr nur gegen die bisherigen

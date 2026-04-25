@@ -2678,6 +2678,7 @@ def _build_meta_handoff_payload(query: str, *, policy_override: dict | None = No
         "meta_context_authority": dict(policy.get("meta_context_authority") or {}),
         "meta_request_frame": dict(policy.get("meta_request_frame") or {}),
         "meta_interaction_mode": dict(policy.get("meta_interaction_mode") or {}),
+        "general_decision_kernel": dict(policy.get("general_decision_kernel") or {}),
         "meta_context_bundle": dict(policy.get("meta_context_bundle") or {}),
         "specialist_context_seed": parse_specialist_context_payload(
             policy.get("specialist_context_seed") or {}
@@ -3085,6 +3086,11 @@ def _render_meta_handoff_block(payload: dict) -> str:
         lines.append(
             "meta_interaction_mode_json: "
             + json.dumps(payload["meta_interaction_mode"], ensure_ascii=False, sort_keys=True)
+        )
+    if payload.get("general_decision_kernel"):
+        lines.append(
+            "general_decision_kernel_json: "
+            + json.dumps(payload["general_decision_kernel"], ensure_ascii=False, sort_keys=True)
         )
     if payload.get("task_decomposition"):
         lines.append(
