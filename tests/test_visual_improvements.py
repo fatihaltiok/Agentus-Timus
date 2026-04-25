@@ -17,6 +17,7 @@ import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from PIL import Image
 
 from agent import providers as providers_mod
 from agent.agents.visual import VisualAgent
@@ -644,3 +645,90 @@ async def test_visual_nemotron_type_action_prefers_clipboard_for_url():
     assert done is False
     assert error is None
     assert controller.mcp.type_text.await_args.kwargs["method"] == "clipboard"
+
+
+@pytest.mark.asyncio
+async def test_visual_nemotron_gpt4_analyze_uses_max_completion_tokens_for_new_openai_models(
+    monkeypatch, tmp_path
+):
+    import agent.visual_nemotron_agent_v4 as visual_v4
+
+    captured = {}
+
+    class _FakeResponse:
+        def json(self):
+            return {"choices": [{"message": {"content": "OK"}}]}
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            captured["url"] = url
+            captured["headers"] = headers or {}
+            captured["json"] = json or {}
+            return _FakeResponse()
+
+    monkeypatch.setattr(visual_v4, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(visual_v4, "OPENAI_VISION_FALLBACK_MODEL", "gpt-5.4")
+    monkeypatch.setattr(visual_v4, "_ensure_visual_v4_debug_dir", lambda: tmp_path)
+    monkeypatch.setattr(visual_v4.httpx, "AsyncClient", _FakeAsyncClient)
+
+    client = visual_v4.VisionClient("http://127.0.0.1:5000")
+    result = await client._gpt4_analyze(Image.new("RGB", (8, 8), "white"), "Sag OK.")
+
+    assert result == "OK"
+    assert captured["url"] == "https://api.openai.com/v1/chat/completions"
+    assert "max_completion_tokens" in captured["json"]
+    assert captured["json"]["max_completion_tokens"] == 500
+    assert "max_tokens" not in captured["json"]
+
+
+@pytest.mark.asyncio
+async def test_visual_nemotron_find_element_uses_max_completion_tokens_for_new_openai_models(
+    monkeypatch,
+):
+    import agent.visual_nemotron_agent_v4 as visual_v4
+
+    captured = {}
+
+    class _FakeResponse:
+        def json(self):
+            return {"choices": [{"message": {"content": '{"x": 100, "y": 50, "found": true}'}}]}
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            captured["url"] = url
+            captured["headers"] = headers or {}
+            captured["json"] = json or {}
+            return _FakeResponse()
+
+    monkeypatch.setattr(visual_v4, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(visual_v4, "OPENAI_VISION_FALLBACK_MODEL", "gpt-5.4")
+    monkeypatch.setattr(visual_v4.httpx, "AsyncClient", _FakeAsyncClient)
+
+    controller = visual_v4.DesktopController.__new__(visual_v4.DesktopController)
+    screenshot = Image.new("RGB", (1536, 864), "white")
+
+    coords = await controller.find_element_by_description("Suchfeld", screenshot)
+
+    assert coords == (200, 100)
+    assert captured["url"] == "https://api.openai.com/v1/chat/completions"
+    assert "max_completion_tokens" in captured["json"]
+    assert captured["json"]["max_completion_tokens"] == 150
+    assert "max_tokens" not in captured["json"]

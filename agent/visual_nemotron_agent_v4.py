@@ -50,6 +50,7 @@ from agent.shared.screenshot import (
 from agent.shared.action_parser import parse_action as _shared_parse_action
 from agent.providers import ModelProvider, validate_configured_model_or_raise
 from utils.headless_service_guard import desktop_open_block_reason
+from utils.openai_compat import is_new_openai_model
 
 logging.basicConfig(
     level=logging.INFO,
@@ -278,6 +279,11 @@ ODER wenn nicht gefunden:
 KEIN Code, KEINE Erklärung - nur JSON!"""
         
         try:
+            token_key = (
+                "max_completion_tokens"
+                if is_new_openai_model(OPENAI_VISION_FALLBACK_MODEL)
+                else "max_tokens"
+            )
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.post(
                     "https://api.openai.com/v1/chat/completions",
@@ -291,8 +297,8 @@ KEIN Code, KEINE Erklärung - nur JSON!"""
                                 {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
                             ]
                         }],
-                        "max_tokens": 150,
-                        "temperature": 0.1  # Präzise Koordinaten
+                        token_key: 150,
+                        "temperature": 0.1,  # Präzise Koordinaten
                     }
                 )
                 data = resp.json()
@@ -1161,6 +1167,11 @@ Antworte strukturiert und präzise. NUR beschreiben, KEIN Code."""
         b64 = base64.b64encode(buf.getvalue()).decode()
         
         try:
+            token_key = (
+                "max_completion_tokens"
+                if is_new_openai_model(OPENAI_VISION_FALLBACK_MODEL)
+                else "max_tokens"
+            )
             async with httpx.AsyncClient(timeout=self.gpt4_timeout) as client:
                 resp = await client.post(
                     "https://api.openai.com/v1/chat/completions",
@@ -1186,7 +1197,7 @@ NUR beschreiben - kein Code!"""},
                                 {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
                             ]
                         }],
-                        "max_tokens": 500  # Kürzer = präziser
+                        token_key: 500,  # Kürzer = präziser
                     }
                 )
                 data = resp.json()
