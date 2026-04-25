@@ -279,9 +279,12 @@ def _infer_task_domain(
     if _contains_any(query_text, _RESEARCH_ADVISORY_HINTS):
         evidence.append("query:research_advisory")
         return "research_advisory", evidence, 0.9
-    if _contains_any(query_text, _TRAVEL_ADVISORY_HINTS):
-        evidence.append("query:travel_advisory")
-        return "travel_advisory", evidence, 0.86
+    if _contains_any(combined, _TRAVEL_ADVISORY_HINTS):
+        if _contains_any(query_text, _TRAVEL_ADVISORY_HINTS):
+            evidence.append("query:travel_advisory")
+            return "travel_advisory", evidence, 0.86
+        evidence.append("query_or_anchor:travel_advisory")
+        return "travel_advisory", evidence, 0.78
     if _contains_any(query_text, _LIFE_ADVISORY_HINTS):
         evidence.append("query:life_advisory")
         return "life_advisory", evidence, 0.82

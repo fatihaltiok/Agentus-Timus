@@ -1841,6 +1841,50 @@ def _session_domains_compatible(current_domain: str, session_domain: str) -> boo
     return False
 
 
+def _align_meta_frame_to_reason_domain(
+    *,
+    meta_request_frame,
+    final_reason: str,
+    effective_query: str,
+    dominant_turn_type: str,
+    final_response_mode: str,
+    answer_shape: str,
+    final_task_type: str,
+    active_topic: str,
+    open_goal: str,
+    next_step: str,
+    active_domain: str,
+    final_chain: Iterable[str],
+    active_plan: Mapping[str, Any] | None,
+):
+    reason_text = str(final_reason or "").strip().lower()
+    if not reason_text.startswith("frame:"):
+        return meta_request_frame
+
+    reason_domain = reason_text.split("frame:", 1)[1].strip()
+    if not reason_domain or reason_domain == str(meta_request_frame.task_domain or "").strip().lower():
+        return meta_request_frame
+    if reason_domain not in {"travel_advisory", "life_advisory", "topic_advisory"}:
+        return meta_request_frame
+    if str(meta_request_frame.task_domain or "").strip().lower() not in {"topic_advisory", "general_task"}:
+        return meta_request_frame
+
+    repaired = build_meta_request_frame(
+        effective_query=effective_query,
+        dominant_turn_type=dominant_turn_type,
+        response_mode=final_response_mode,
+        answer_shape=answer_shape,
+        task_type=final_task_type,
+        active_topic=active_topic,
+        open_goal=open_goal,
+        next_step=next_step,
+        active_domain=reason_domain or active_domain,
+        recommended_agent_chain=final_chain,
+        active_plan=active_plan,
+    )
+    return repaired
+
+
 def _append_meta_context_slot(
     slots: List[MetaContextSlot],
     *,
@@ -3712,6 +3756,22 @@ def classify_meta_task(
             },
         )
 
+    meta_request_frame = _align_meta_frame_to_reason_domain(
+        meta_request_frame=meta_request_frame,
+        final_reason=final_reason,
+        effective_query=effective_query,
+        dominant_turn_type=turn_interpretation.dominant_turn_type,
+        final_response_mode=final_response_mode,
+        answer_shape=policy_decision.answer_shape,
+        final_task_type=final_task_type,
+        active_topic=active_topic,
+        open_goal=str(open_goal or ""),
+        next_step=str(next_step or ""),
+        active_domain=str(meta_context_bundle.active_domain or carried_domain or provisional_task_domain or ""),
+        final_chain=final_chain,
+        active_plan=active_plan,
+    )
+
     prefer_youtube_research_only = (
         final_task_type == "youtube_content_extraction"
         and has_direct_youtube_url
@@ -3858,6 +3918,13 @@ def classify_meta_task(
         turn_type=turn_interpretation.dominant_turn_type,
         response_mode=final_response_mode,
     )
+    resolved_active_domain = (
+        str(meta_request_frame.task_domain or meta_context_bundle.active_domain or provisional_task_domain or "").strip()
+        or None
+    )
+    if resolved_active_domain:
+        filtered_meta_context_bundle["active_domain"] = resolved_active_domain
+
     classification = {
         "task_type": final_task_type,
         "site_kind": site_kind,
@@ -3875,7 +3942,7 @@ def classify_meta_task(
         "context_anchor_applied": context_anchor_applied,
         "active_topic": active_topic or None,
         "open_goal": open_goal or None,
-        "active_domain": meta_context_bundle.active_domain or provisional_task_domain or None,
+        "active_domain": resolved_active_domain,
         "dialog_constraints": dialog_constraints,
         "next_step": next_step,
         "active_topic_reused": active_topic_reused,

@@ -4,6 +4,7 @@ import sys
 from types import SimpleNamespace
 
 from orchestration.meta_orchestration import (
+    _align_meta_frame_to_reason_domain,
     build_meta_feedback_targets,
     classify_meta_task,
     extract_meta_dialog_state,
@@ -12,6 +13,7 @@ from orchestration.meta_orchestration import (
     get_agent_capability_map,
     looks_like_meta_clarification_turn,
 )
+from orchestration.meta_request_frame import build_meta_request_frame
 from agent.agents.meta import MetaAgent
 
 
@@ -1566,3 +1568,72 @@ def test_classify_meta_task_reuses_travel_session_domain_for_short_followup():
     assert frame["task_domain"] == "travel_advisory"
     assert result["active_domain"] == "travel_advisory"
     assert "recommend_destinations" in frame["completion_contract"]
+
+
+def test_classify_meta_task_reuses_travel_goal_anchor_for_short_preference_followup():
+    result = classify_meta_task(
+        "ich mag Staedte und Kultur",
+        action_count=0,
+        conversation_state={
+            "session_id": "tg_travel_anchor",
+            "active_topic": "",
+            "active_goal": "wo kann ich am Wochenende hin in Deutschland",
+            "open_loop": "**Mit wem?** (Allein, zu zweit, mit Kindern, mit Hund)",
+            "next_expected_step": "**Mit wem?** (Allein, zu zweit, mit Kindern, mit Hund)",
+            "turn_type_hint": "new_task",
+            "topic_confidence": 0.72,
+        },
+        recent_user_turns=["wo kann ich am Wochenende hin in Deutschland"],
+        recent_assistant_turns=[
+            "Die Frage ist zu offen, um sie sinnvoll zu beantworten. Sag mir zwei-drei Punkte."
+        ],
+    )
+
+    frame = result["meta_request_frame"]
+
+    assert frame["task_domain"] == "travel_advisory"
+    assert result["active_domain"] == "travel_advisory"
+    assert any(
+        str(item or "") == "query_or_anchor:travel_advisory"
+        for item in (frame.get("evidence") or [])
+    )
+
+
+def test_align_meta_frame_to_reason_domain_repairs_travel_advisory_carryover():
+    frame = build_meta_request_frame(
+        effective_query="ich mag Staedte und Kultur",
+        dominant_turn_type="new_task",
+        response_mode="execute",
+        answer_shape="action_first",
+        task_type="single_lane",
+        active_topic="",
+        open_goal="",
+        next_step="",
+        active_domain="",
+        recommended_agent_chain=("meta",),
+        active_plan={},
+    )
+
+    assert frame.task_domain == "topic_advisory"
+
+    repaired = _align_meta_frame_to_reason_domain(
+        meta_request_frame=frame,
+        final_reason="frame:travel_advisory",
+        effective_query="ich mag Staedte und Kultur",
+        dominant_turn_type="new_task",
+        final_response_mode="execute",
+        answer_shape="action_first",
+        final_task_type="single_lane",
+        active_topic="",
+        open_goal="wo kann ich am Wochenende hin in Deutschland",
+        next_step="**Budget?** Guenstig, mittel, egal?",
+        active_domain="travel_advisory",
+        final_chain=("meta",),
+        active_plan={},
+    )
+
+    assert repaired.task_domain == "travel_advisory"
+    assert any(
+        str(item or "") in {"carried_domain:travel_advisory", "query_or_anchor:travel_advisory"}
+        for item in repaired.evidence
+    )

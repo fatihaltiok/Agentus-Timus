@@ -175,7 +175,8 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert isinstance(meta["meta_self_state"]["autonomy_limits"], list)
     assert len(meta["recipe_stages"]) == 3
     assert len(meta["recipe_recoveries"]) == 1
-    parsed = MetaAgent._parse_meta_orchestration_handoff(result)
+    handoff = result[len("dummy:") :] if result.startswith("dummy:") else result
+    parsed = MetaAgent._parse_meta_orchestration_handoff(handoff)
     assert parsed is not None
     assert parsed["meta_self_state"]["identity"] == "Timus"
     assert parsed["specialist_context_seed"]["response_mode"] == "execute"
@@ -293,6 +294,56 @@ async def test_run_agent_meta_handoff_marks_compacted_original_task_when_preflig
     assert "..." in result
     assert calls[0]["metadata"]["meta_original_user_query_compacted"] is True
     assert calls[0]["metadata"]["meta_handoff_preflight"]["state"] == "warn"
+
+
+@pytest.mark.asyncio
+async def test_run_agent_meta_handoff_respects_authoritative_travel_followup_policy(monkeypatch):
+    import main_dispatcher
+    from orchestration.meta_orchestration import classify_meta_task
+    from orchestration.meta_self_state import build_meta_self_state as _build_meta_self_state
+
+    _patch_dispatcher_dependencies(monkeypatch)
+    monkeypatch.setitem(main_dispatcher.AGENT_CLASS_MAP, "meta", _DummyMetaAgent)
+    monkeypatch.setattr(
+        main_dispatcher,
+        "build_meta_self_state",
+        lambda payload, learning: _build_meta_self_state(
+            payload,
+            learning,
+            _stable_runtime_constraints(),
+        ),
+    )
+
+    authoritative_policy = classify_meta_task(
+        "ich mag Städte und Kultur",
+        action_count=0,
+        conversation_state={
+            "session_id": "sess_travel_followup",
+            "active_goal": "wo kann ich am Wochenende hin in Deutschland",
+            "active_topic": "",
+            "active_domain": "travel_advisory",
+            "open_loop": "**Mit wem?** Alleine, zu zweit, Familie, Freunde?",
+            "next_expected_step": "**Mit wem?** Alleine, zu zweit, Familie, Freunde?",
+            "turn_type_hint": "new_task",
+        },
+        recent_user_turns=["wo kann ich am Wochenende hin in Deutschland"],
+        recent_assistant_turns=[
+            "Gute Frage — aber noch zu offen für eine echte Empfehlung. Lass uns das kurz eingrenzen."
+        ],
+    )
+
+    result = await main_dispatcher.run_agent(
+        agent_name="meta",
+        query="ich mag Städte und Kultur",
+        tools_description="tools",
+        session_id="sess_travel_followup",
+        meta_handoff_policy=authoritative_policy,
+    )
+
+    assert "reason: frame:travel_advisory" in result
+    assert '"task_domain": "travel_advisory"' in result
+    assert '"active_domain": "travel_advisory"' in result
+    assert '"mode": "think_partner"' in result
 
 
 @pytest.mark.asyncio

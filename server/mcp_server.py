@@ -4662,12 +4662,23 @@ async def canvas_chat(request: Request):
                         f"Nutzeranfrage:\n{query_for_agent}"
                     )
 
-                result = await run_agent(
-                    agent_name=agent,
-                    query=query_for_agent,
-                    tools_description=tools_desc,
-                    session_id=session_id,
-                )
+                try:
+                    result = await run_agent(
+                        agent_name=agent,
+                        query=query_for_agent,
+                        tools_description=tools_desc,
+                        session_id=session_id,
+                        meta_handoff_policy=meta_classification if agent == "meta" else None,
+                    )
+                except TypeError as run_agent_error:
+                    if "meta_handoff_policy" not in str(run_agent_error):
+                        raise
+                    result = await run_agent(
+                        agent_name=agent,
+                        query=query_for_agent,
+                        tools_description=tools_desc,
+                        session_id=session_id,
+                    )
                 if agent == "meta":
                     try:
                         from main_dispatcher import pop_last_agent_runtime_metadata

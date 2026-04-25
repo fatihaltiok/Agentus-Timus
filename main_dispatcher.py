@@ -2646,10 +2646,10 @@ def _apply_dispatcher_feedback_bias(user_query: str, decision: str) -> str:
     return candidate
 
 
-def _build_meta_handoff_payload(query: str) -> dict:
+def _build_meta_handoff_payload(query: str, *, policy_override: dict | None = None) -> dict:
     """Erzeugt ein kompaktes, strukturiertes Handoff fuer Meta."""
     clean_query = _strip_meta_canvas_wrappers(query)
-    policy = evaluate_query_orchestration(clean_query)
+    policy = dict(policy_override or {}) or evaluate_query_orchestration(clean_query)
     task_decomposition = dict(policy.get("task_decomposition") or {})
     if not task_decomposition:
         task_decomposition = build_task_decomposition(
@@ -3323,7 +3323,12 @@ async def get_agent_decision(
 
 
 async def run_agent(
-    agent_name: str, query: str, tools_description: str, session_id: str = None
+    agent_name: str,
+    query: str,
+    tools_description: str,
+    session_id: str = None,
+    *,
+    meta_handoff_policy: dict | None = None,
 ):
     """Instanziiert den Agenten und führt ihn aus."""
     from utils.audit_logger import AuditLogger
@@ -3474,7 +3479,10 @@ async def run_agent(
             agent_query = query
         else:
             clean_meta_query = _strip_meta_canvas_wrappers(query)
-            meta_handoff = _build_meta_handoff_payload(clean_meta_query)
+            meta_handoff = _build_meta_handoff_payload(
+                clean_meta_query,
+                policy_override=meta_handoff_policy,
+            )
             safe_original_task = shorten_for_preflight(
                 clean_meta_query,
                 task_type=meta_handoff.get("task_type"),
