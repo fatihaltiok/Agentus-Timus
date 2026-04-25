@@ -2,11 +2,38 @@
 
 import os
 import logging
+from pathlib import Path
 from typing import List
 
 from chromadb.api.types import Documents, EmbeddingFunction, Embeddings
+from dotenv import dotenv_values
 
 log = logging.getLogger("TimusAgent-v4.4")
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_DOTENV_PATH = _PROJECT_ROOT / ".env"
+
+
+def _resolve_provider_api_key(env_key: str, *, dotenv_path: Path | None = None) -> str:
+    """Nutze Projekt-.env vor geerbten Prozess-Variablen.
+
+    Das verhindert, dass alte Shell-/Service-Umgebungen einen inzwischen
+    ersetzten API-Key fuer Embeddings weiter injizieren.
+    """
+
+    env_name = str(env_key or "").strip()
+    if not env_name:
+        return ""
+
+    resolved_path = dotenv_path or _DOTENV_PATH
+    try:
+        file_values = dotenv_values(resolved_path) if resolved_path.exists() else {}
+    except Exception:
+        file_values = {}
+
+    file_value = str(file_values.get(env_name) or "").strip()
+    if file_value:
+        return file_value
+    return str(os.getenv(env_name) or "").strip()
 
 
 class MultiProviderEmbeddingFunction(EmbeddingFunction[Documents]):
@@ -48,7 +75,7 @@ class MultiProviderEmbeddingFunction(EmbeddingFunction[Documents]):
             )
 
         self._model = model or os.getenv("EMBEDDING_MODEL", config["default_model"])
-        api_key = os.getenv(config["env_key"])
+        api_key = _resolve_provider_api_key(config["env_key"])
         if not api_key:
             raise ValueError(
                 f"API Key fehlt: {config['env_key']} muss gesetzt sein "
