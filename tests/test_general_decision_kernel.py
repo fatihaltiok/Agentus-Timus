@@ -73,6 +73,28 @@ def test_build_general_decision_kernel_for_research_advisory() -> None:
     assert kernel["execution_permission"] == "bounded"
 
 
+def test_build_general_decision_kernel_for_short_resume_update() -> None:
+    kernel = build_general_decision_kernel(
+        effective_query="Wetter sonnig Zeit ganzen Tag lokale Ecken",
+        dominant_turn_type="new_task",
+        response_mode="execute",
+        active_topic="Frankfurt am Main",
+        open_goal="Hey Timus ich bin in Frankfurt sitze am Main was könnte ich heute machen",
+        next_step="Wetter? Zeit? Was fuer Ecken?",
+        active_domain="topic_advisory",
+        meta_request_frame=None,
+        meta_interaction_mode=None,
+    ).to_dict()
+
+    assert kernel["turn_kind"] == "resume"
+    assert kernel["topic_family"] == "advisory"
+    assert kernel["interaction_mode"] == "think_partner"
+    assert kernel["evidence_requirement"] == "state_bound"
+    assert kernel["execution_permission"] == "forbidden"
+    assert kernel["confidence"] >= 0.78
+    assert "query:short_resume_update" in kernel["evidence"]
+
+
 def test_parse_general_decision_kernel_roundtrip() -> None:
     parsed = parse_general_decision_kernel(
         {

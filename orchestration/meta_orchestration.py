@@ -1649,6 +1649,13 @@ def _apply_turn_understanding_override(
         and list(classification.get("recommended_agent_chain") or []) == ["meta"]
         and not bool(classification.get("needs_structured_handoff"))
     ):
+        if dominant_turn_type == "correction" and str(classification.get("reason") or "").strip().lower() != (
+            f"turn_understanding:{dominant_turn_type}"
+        ):
+            return {
+                **classification,
+                "reason": f"turn_understanding:{dominant_turn_type}",
+            }
         return classification
 
     return {
@@ -3587,10 +3594,55 @@ def classify_meta_task(
         if agent not in deduped_chain:
             deduped_chain.append(agent)
 
-    pre_policy_frame = build_meta_request_frame(
+    kernel_seed = build_general_decision_kernel(
         effective_query=effective_query,
         dominant_turn_type=turn_interpretation.dominant_turn_type,
         response_mode=turn_interpretation.response_mode,
+        active_topic=active_topic,
+        open_goal=str(open_goal or ""),
+        next_step=str(next_step or ""),
+        active_domain=str(meta_context_bundle.active_domain or carried_domain or provisional_task_domain or ""),
+        has_active_plan=bool(active_plan),
+        meta_request_frame=None,
+        meta_interaction_mode=None,
+    )
+    gdk_generic_task_types = {
+        "single_lane",
+        "general_task",
+        "knowledge_research",
+        "simple_live_lookup",
+        "simple_live_lookup_document",
+        "location_local_search",
+    }
+    kernel_turn_type = turn_interpretation.dominant_turn_type
+    kernel_response_mode = turn_interpretation.response_mode
+    if kernel_seed.turn_kind == "resume" and kernel_turn_type != "followup":
+        kernel_turn_type = "followup"
+    if (
+        kernel_seed.turn_kind == "resume"
+        and kernel_response_mode
+        not in {"resume_open_loop", "correct_previous_path", "acknowledge_and_store"}
+    ):
+        kernel_response_mode = "resume_open_loop"
+    if kernel_seed.execution_permission == "forbidden":
+        deduped_chain = ["meta"]
+        if task_type in gdk_generic_task_types or kernel_seed.turn_kind in {"think", "inform", "resume", "clarify"}:
+            task_type = "single_lane"
+        if not str(reason or "").strip() or str(reason or "").strip() in {
+            "single_lane",
+            "current_chain_satisfies_goal",
+        }:
+            reason = f"gdk:{kernel_seed.turn_kind}"
+    elif kernel_seed.clarify_if_below_threshold and task_type in gdk_generic_task_types:
+        deduped_chain = ["meta"]
+        task_type = "single_lane"
+        kernel_response_mode = "clarify_before_execute"
+        reason = "gdk:clarify_low_confidence"
+
+    pre_policy_frame = build_meta_request_frame(
+        effective_query=effective_query,
+        dominant_turn_type=kernel_turn_type,
+        response_mode=kernel_response_mode,
         answer_shape="",
         task_type=task_type,
         active_topic=active_topic,
@@ -3660,8 +3712,8 @@ def classify_meta_task(
 
     policy_input = build_meta_policy_input(
         effective_query=effective_query,
-        dominant_turn_type=turn_interpretation.dominant_turn_type,
-        baseline_response_mode=turn_interpretation.response_mode,
+        dominant_turn_type=kernel_turn_type,
+        baseline_response_mode=kernel_response_mode,
         task_type=task_type,
         active_topic=active_topic,
         open_goal=str(open_goal or ""),
@@ -3676,7 +3728,7 @@ def classify_meta_task(
     final_task_type = task_type
     final_reason = reason
     final_chain = list(deduped_chain)
-    final_response_mode = turn_interpretation.response_mode
+    final_response_mode = kernel_response_mode
     if policy_decision.override_applied:
         final_response_mode = policy_decision.response_mode
         policy_signals = tuple(str(item or "") for item in (policy_decision.policy_signals or ()))
@@ -3695,7 +3747,7 @@ def classify_meta_task(
 
     meta_request_frame = build_meta_request_frame(
         effective_query=effective_query,
-        dominant_turn_type=turn_interpretation.dominant_turn_type,
+        dominant_turn_type=kernel_turn_type,
         response_mode=final_response_mode,
         answer_shape=policy_decision.answer_shape,
         task_type=final_task_type,
@@ -3718,7 +3770,7 @@ def classify_meta_task(
         final_response_mode = "summarize_state"
         meta_request_frame = build_meta_request_frame(
             effective_query=effective_query,
-            dominant_turn_type=turn_interpretation.dominant_turn_type,
+            dominant_turn_type=kernel_turn_type,
             response_mode=final_response_mode,
             answer_shape="direct_recommendation",
             task_type=final_task_type,
@@ -3748,7 +3800,7 @@ def classify_meta_task(
         final_response_mode = "execute"
         meta_request_frame = build_meta_request_frame(
             effective_query=effective_query,
-            dominant_turn_type=turn_interpretation.dominant_turn_type,
+            dominant_turn_type=kernel_turn_type,
             response_mode=final_response_mode,
             answer_shape=policy_decision.answer_shape,
             task_type=final_task_type,
@@ -3786,7 +3838,7 @@ def classify_meta_task(
         final_response_mode = "execute"
         meta_request_frame = build_meta_request_frame(
             effective_query=effective_query,
-            dominant_turn_type=turn_interpretation.dominant_turn_type,
+            dominant_turn_type=kernel_turn_type,
             response_mode=final_response_mode,
             answer_shape=policy_decision.answer_shape,
             task_type=final_task_type,
@@ -3806,11 +3858,45 @@ def classify_meta_task(
             },
         )
 
+    if kernel_seed.confidence >= 0.7 and kernel_seed.interaction_mode != meta_interaction_mode.mode:
+        if kernel_seed.interaction_mode == "think_partner":
+            meta_interaction_mode = MetaInteractionMode(
+                schema_version=1,
+                mode="think_partner",
+                mode_reason=f"general_decision_kernel:{kernel_seed.turn_kind}",
+                explicit_override=False,
+                answer_style="reason_with_user",
+                execution_policy="no_research_no_execution",
+                completion_expectation="insight_or_options_given",
+            )
+            if final_chain != ["meta"]:
+                final_chain = ["meta"]
+        elif kernel_seed.interaction_mode == "inspect":
+            meta_interaction_mode = MetaInteractionMode(
+                schema_version=1,
+                mode="inspect",
+                mode_reason=f"general_decision_kernel:{kernel_seed.turn_kind}",
+                explicit_override=False,
+                answer_style="report_findings",
+                execution_policy="bounded_evidence_only",
+                completion_expectation="findings_or_gaps_reported",
+            )
+        elif kernel_seed.interaction_mode == "assist":
+            meta_interaction_mode = MetaInteractionMode(
+                schema_version=1,
+                mode="assist",
+                mode_reason=f"general_decision_kernel:{kernel_seed.turn_kind}",
+                explicit_override=False,
+                answer_style="action_or_plan",
+                execution_policy="plan_delegate_or_execute",
+                completion_expectation="concrete_next_action_or_result",
+            )
+
     meta_request_frame = _align_meta_frame_to_reason_domain(
         meta_request_frame=meta_request_frame,
         final_reason=final_reason,
         effective_query=effective_query,
-        dominant_turn_type=turn_interpretation.dominant_turn_type,
+        dominant_turn_type=kernel_turn_type,
         final_response_mode=final_response_mode,
         answer_shape=policy_decision.answer_shape,
         final_task_type=final_task_type,
@@ -3821,6 +3907,12 @@ def classify_meta_task(
         final_chain=final_chain,
         active_plan=active_plan,
     )
+    if str(final_reason or "").startswith("gdk:") and str(meta_request_frame.task_domain or "").strip().lower() not in {
+        "",
+        "topic_advisory",
+        "general_task",
+    }:
+        final_reason = f"frame:{str(meta_request_frame.task_domain or '').strip().lower()}"
 
     prefer_youtube_research_only = (
         final_task_type == "youtube_content_extraction"
@@ -3970,6 +4062,13 @@ def classify_meta_task(
     )
     general_decision_kernel = build_general_decision_kernel(
         effective_query=effective_query,
+        dominant_turn_type=kernel_turn_type,
+        response_mode=final_response_mode,
+        active_topic=active_topic,
+        open_goal=str(open_goal or ""),
+        next_step=str(next_step or ""),
+        active_domain=str(meta_request_frame.task_domain or meta_context_bundle.active_domain or carried_domain or provisional_task_domain or ""),
+        has_active_plan=bool(active_plan),
         meta_request_frame=meta_request_frame.to_dict(),
         meta_interaction_mode=meta_interaction_mode.to_dict(),
     )

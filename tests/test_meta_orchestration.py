@@ -1551,8 +1551,9 @@ def test_classify_meta_task_filters_cross_domain_setup_state_for_travel_query():
     kernel = result["general_decision_kernel"]
 
     assert frame["task_domain"] == "travel_advisory"
-    assert kernel["turn_kind"] == "think"
     assert kernel["topic_family"] == "travel"
+    assert kernel["interaction_mode"] == "think_partner"
+    assert kernel["execution_permission"] == "forbidden"
     assert result["active_domain"] == "travel_advisory"
     assert bundle["active_topic"] == ""
     assert bundle["open_loop"] == ""
@@ -1615,6 +1616,68 @@ def test_classify_meta_task_reuses_travel_goal_anchor_for_short_preference_follo
         str(item or "") == "query_or_anchor:travel_advisory"
         for item in (frame.get("evidence") or [])
     )
+
+
+def test_classify_meta_task_treats_short_constraint_followup_as_resume_not_live_lookup():
+    result = classify_meta_task(
+        "Wetter sonnig Zeit ganzen Tag sitze irgendwo und beobachte Leute mit einer Freundin Bock auf lokale Ecken",
+        action_count=0,
+        conversation_state={
+            "session_id": "tg_frankfurt_resume",
+            "active_topic": "Frankfurt am Main",
+            "active_goal": "Hey Timus ich bin in Frankfurt sitze am Main was könnte ich heute machen",
+            "active_domain": "topic_advisory",
+            "open_loop": "Wetter? Zeit? Mit wem? Welche Ecken?",
+            "next_expected_step": "Wetter? Zeit? Mit wem? Welche Ecken?",
+            "turn_type_hint": "new_task",
+            "topic_confidence": 0.77,
+        },
+        recent_user_turns=["Hey Timus ich bin in Frankfurt sitze am Main was könnte ich heute machen"],
+        recent_assistant_turns=[
+            "Okay, Frankfurt am Main. Bevor ich dir konkrete Optionen aufschlage, brauch ich Wetter, Zeit und was fuer Ecken du suchst."
+        ],
+    )
+
+    frame = result["meta_request_frame"]
+    kernel = result["general_decision_kernel"]
+
+    assert kernel["turn_kind"] == "resume"
+    assert kernel["interaction_mode"] == "think_partner"
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["task_type"] == "single_lane"
+    assert frame["task_domain"] in {"topic_advisory", "travel_advisory"}
+    assert frame["execution_mode"] == "plan_and_delegate"
+
+
+def test_classify_meta_task_treats_correction_turn_as_resume_on_open_goal():
+    result = classify_meta_task(
+        "was hast du eben nicht verstanden",
+        action_count=0,
+        conversation_state={
+            "session_id": "tg_frankfurt_correction",
+            "active_topic": "Frankfurt am Main",
+            "active_goal": "Hey Timus ich bin in Frankfurt sitze am Main was könnte ich heute machen",
+            "active_domain": "topic_advisory",
+            "open_loop": "Wetter? Zeit? Mit wem? Welche Ecken?",
+            "next_expected_step": "Wetter? Zeit? Mit wem? Welche Ecken?",
+            "turn_type_hint": "new_task",
+            "topic_confidence": 0.74,
+        },
+        recent_user_turns=[
+            "Hey Timus ich bin in Frankfurt sitze am Main was könnte ich heute machen",
+            "Wetter sonnig Zeit ganzen Tag sitze irgendwo und beobachte Leute mit einer Freundin Bock auf lokale Ecken",
+        ],
+        recent_assistant_turns=[
+            "Ich habe zum Wetter gerade keine brauchbaren Live-Treffer gefunden.",
+        ],
+    )
+
+    kernel = result["general_decision_kernel"]
+
+    assert kernel["turn_kind"] == "resume"
+    assert kernel["interaction_mode"] == "think_partner"
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["task_type"] == "single_lane"
 
 
 def test_align_meta_frame_to_reason_domain_repairs_travel_advisory_carryover():
