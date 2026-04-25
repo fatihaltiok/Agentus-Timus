@@ -756,9 +756,12 @@ def apply_meta_clarity_to_bundle(
         if not slot:
             continue
         if slot in forbidden or (allowed and slot not in allowed):
+            from orchestration.meta_context_authority import classify_meta_context_slot
+
             suppressed.append(
                 {
                     "source": slot,
+                    "evidence_class": classify_meta_context_slot(slot),
                     "reason": "clarity_contract_filtered_context",
                     "content_preview": content[:140],
                 }

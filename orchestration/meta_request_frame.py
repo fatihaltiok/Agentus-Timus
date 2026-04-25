@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Iterable, Mapping, Tuple
 
+from orchestration.meta_context_authority import classify_meta_context_slot
+
 
 _DOC_STATUS_HINTS = (
     "docs/",
@@ -675,6 +677,7 @@ def apply_meta_request_frame_context_admission(
             suppressed.append(
                 {
                     "source": slot,
+                    "evidence_class": classify_meta_context_slot(slot),
                     "reason": f"frame_domain_filtered:{blocked_domain}",
                     "content_preview": content[:140],
                 }

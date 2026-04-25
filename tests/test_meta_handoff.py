@@ -169,6 +169,8 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert meta["meta_clarity_contract"]["request_kind"] == "execute_task"
     assert meta["meta_context_authority"]["task_domain"] == "youtube_content"
     assert meta["meta_context_authority"]["interaction_mode"] == "assist"
+    assert isinstance(meta["meta_context_authority"]["observed_context_classes"], list)
+    assert "primary_evidence_class" in meta["meta_context_authority"]
     assert meta["meta_clarity_contract"]["direct_answer_required"] is False
     assert isinstance(meta["meta_self_state"]["current_capabilities"], list)
     assert isinstance(meta["meta_self_state"]["confidence_bounds"], list)
@@ -195,6 +197,8 @@ async def test_run_agent_injects_structured_meta_handoff(monkeypatch):
     assert parsed["meta_clarity_contract"]["request_kind"] == "execute_task"
     assert parsed["meta_context_authority"]["task_domain"] == "youtube_content"
     assert parsed["meta_context_authority"]["interaction_mode"] == "assist"
+    assert isinstance(parsed["specialist_context_seed"]["evidence_classes"], list)
+    assert "primary_evidence_class" in parsed["specialist_context_seed"]
     assert parsed["task_packet"]["packet_type"] == "meta_orchestration"
     assert parsed["request_preflight"]["state"] in {"ok", "warn"}
     assert parsed["intent_family"] == "execute_multistep"

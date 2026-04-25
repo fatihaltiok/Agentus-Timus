@@ -117,6 +117,8 @@ def build_specialist_context_payload(
     response_mode: Any = "",
     user_preferences: Iterable[Any] | None = None,
     recent_corrections: Iterable[Any] | None = None,
+    evidence_classes: Iterable[Any] | None = None,
+    primary_evidence_class: Any = "",
 ) -> Dict[str, Any]:
     payload = {
         "schema_version": SPECIALIST_CONTEXT_SCHEMA_VERSION,
@@ -128,6 +130,8 @@ def build_specialist_context_payload(
         "response_mode": _clean_text(response_mode, limit=64).lower(),
         "user_preferences": _normalize_items(user_preferences, limit=3, max_chars=140),
         "recent_corrections": _normalize_items(recent_corrections, limit=3, max_chars=140),
+        "evidence_classes": _normalize_items(evidence_classes, limit=4, max_chars=64),
+        "primary_evidence_class": _clean_text(primary_evidence_class, limit=64).lower(),
         "signal_contract": list(SPECIALIST_RETURN_SIGNALS),
     }
     return payload
@@ -159,6 +163,8 @@ def parse_specialist_context_payload(raw: Any) -> Dict[str, Any]:
         response_mode=loaded.get("response_mode"),
         user_preferences=loaded.get("user_preferences") or (),
         recent_corrections=loaded.get("recent_corrections") or (),
+        evidence_classes=loaded.get("evidence_classes") or (),
+        primary_evidence_class=loaded.get("primary_evidence_class"),
     )
 
 
@@ -202,6 +208,13 @@ def render_specialist_context_block(
             "Jungste Korrekturen: "
             + " | ".join(str(item) for item in parsed.get("recent_corrections") or [])
         )
+    if parsed.get("evidence_classes"):
+        lines.append(
+            "Evidenzklassen: "
+            + " | ".join(str(item) for item in parsed.get("evidence_classes") or [])
+        )
+    if parsed.get("primary_evidence_class"):
+        lines.append(f"Primaere Evidenzklasse: {parsed['primary_evidence_class']}")
     if parsed.get("signal_contract"):
         lines.append(
             "Rueckgabesignale: "

@@ -71,6 +71,33 @@ def _context_classes_from_slots(values: Iterable[Any] | None) -> Tuple[str, ...]
     return tuple(result)
 
 
+def classify_meta_context_slot(slot: Any) -> str:
+    cleaned = _clean_text(slot, limit=64).lower()
+    if not cleaned:
+        return "unknown"
+    return _CONTEXT_CLASS_BY_SLOT.get(cleaned, "unknown")
+
+
+def summarize_meta_context_classes(
+    bundle: Mapping[str, Any] | None,
+) -> Tuple[Tuple[str, ...], Dict[str, int]]:
+    payload = dict(bundle or {})
+    ordered: list[str] = []
+    counts: Dict[str, int] = {}
+    for item in (payload.get("context_slots") or []):
+        if not isinstance(item, Mapping):
+            continue
+        evidence_class = _clean_text(item.get("evidence_class"), limit=64).lower()
+        if not evidence_class:
+            evidence_class = classify_meta_context_slot(item.get("slot"))
+        if not evidence_class or evidence_class == "unknown":
+            continue
+        counts[evidence_class] = counts.get(evidence_class, 0) + 1
+        if evidence_class not in ordered:
+            ordered.append(evidence_class)
+    return tuple(ordered), counts
+
+
 @dataclass(frozen=True)
 class MetaContextAuthority:
     schema_version: int
@@ -85,6 +112,9 @@ class MetaContextAuthority:
     direct_answer_required: bool
     allowed_context_classes: Tuple[str, ...]
     forbidden_context_classes: Tuple[str, ...]
+    observed_context_classes: Tuple[str, ...]
+    context_class_counts: Dict[str, int]
+    primary_evidence_class: str
     allowed_context_slots: Tuple[str, ...]
     working_memory_query_mode: str
     working_memory_allowed_sections: Tuple[str, ...]
@@ -131,6 +161,17 @@ def parse_meta_context_authority(value: Any) -> Dict[str, Any]:
             for item in (value.get("forbidden_context_classes") or [])
             if _clean_text(item, limit=64)
         ],
+        "observed_context_classes": [
+            _clean_text(item, limit=64).lower()
+            for item in (value.get("observed_context_classes") or [])
+            if _clean_text(item, limit=64)
+        ],
+        "context_class_counts": {
+            _clean_text(key, limit=64).lower(): max(0, int(count))
+            for key, count in dict(value.get("context_class_counts") or {}).items()
+            if _clean_text(key, limit=64)
+        },
+        "primary_evidence_class": _clean_text(value.get("primary_evidence_class"), limit=64).lower(),
         "allowed_context_slots": [
             _clean_text(item, limit=64)
             for item in (value.get("allowed_context_slots") or [])
@@ -179,6 +220,7 @@ def build_meta_context_authority(
     forbidden_context_slots = _normalize_text_tuple(clarity.get("forbidden_context_slots") or ())
     allowed_context_classes = _context_classes_from_slots(allowed_context_slots)
     forbidden_context_classes = _context_classes_from_slots(forbidden_context_slots)
+    observed_context_classes, context_class_counts = summarize_meta_context_classes(bundle)
 
     allowed_sections = _normalize_text_tuple(clarity.get("allowed_working_memory_sections") or ())
     working_related_raw = clarity.get("max_related_memories", -1)
@@ -208,6 +250,8 @@ def build_meta_context_authority(
     elif task_domain in {"docs_status", "setup_build"}:
         working_query_mode = "evidence_bound"
 
+    primary_evidence_class = observed_context_classes[0] if observed_context_classes else ""
+
     return MetaContextAuthority(
         schema_version=1,
         authority_chain=(
@@ -230,6 +274,9 @@ def build_meta_context_authority(
         direct_answer_required=bool(clarity.get("direct_answer_required")),
         allowed_context_classes=allowed_context_classes,
         forbidden_context_classes=forbidden_context_classes,
+        observed_context_classes=observed_context_classes,
+        context_class_counts=context_class_counts,
+        primary_evidence_class=primary_evidence_class,
         allowed_context_slots=allowed_context_slots,
         working_memory_query_mode=working_query_mode,
         working_memory_allowed_sections=allowed_sections,

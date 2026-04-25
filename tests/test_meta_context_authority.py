@@ -39,6 +39,24 @@ def test_build_meta_context_authority_for_docs_direct_answer() -> None:
             "max_related_memories": 0,
             "max_recent_events": 4,
         },
+        meta_context_bundle={
+            "context_slots": [
+                {
+                    "slot": "conversation_state",
+                    "priority": 1,
+                    "content": "active_topic: Phase F",
+                    "source": "conversation_state",
+                    "evidence_class": "conversation_state",
+                },
+                {
+                    "slot": "historical_topic_memory",
+                    "priority": 2,
+                    "content": "Frueherer Planstand zu Phase F",
+                    "source": "topic_history",
+                    "evidence_class": "topic_state",
+                },
+            ]
+        },
     )
 
     payload = authority.to_dict()
@@ -53,6 +71,9 @@ def test_build_meta_context_authority_for_docs_direct_answer() -> None:
         "semantic_recall",
         "assistant_fallback",
     ]
+    assert payload["observed_context_classes"] == ["conversation_state", "topic_state"]
+    assert payload["context_class_counts"] == {"conversation_state": 1, "topic_state": 1}
+    assert payload["primary_evidence_class"] == "conversation_state"
     assert payload["working_memory_query_mode"] == "evidence_bound"
     assert payload["working_memory_allowed_sections"] == ["KURZZEITKONTEXT"]
     assert payload["working_memory_max_related"] == 0
@@ -75,6 +96,9 @@ def test_parse_meta_context_authority_normalizes_payload() -> None:
             "direct_answer_required": False,
             "allowed_context_classes": ["conversation_state", "preference_profile"],
             "forbidden_context_classes": ["semantic_recall"],
+            "observed_context_classes": ["conversation_state", "document_knowledge"],
+            "context_class_counts": {"conversation_state": 1, "document_knowledge": 2},
+            "primary_evidence_class": "document_knowledge",
             "allowed_context_slots": ["current_query", "conversation_state"],
             "working_memory_query_mode": "authority_bound",
             "working_memory_allowed_sections": ["KURZZEITKONTEXT"],
@@ -88,5 +112,8 @@ def test_parse_meta_context_authority_normalizes_payload() -> None:
     assert parsed["interaction_mode"] == "assist"
     assert parsed["task_domain"] == "planning_advisory"
     assert parsed["allowed_context_classes"] == ["conversation_state", "preference_profile"]
+    assert parsed["observed_context_classes"] == ["conversation_state", "document_knowledge"]
+    assert parsed["context_class_counts"] == {"conversation_state": 1, "document_knowledge": 2}
+    assert parsed["primary_evidence_class"] == "document_knowledge"
     assert parsed["working_memory_max_related"] == 2
     assert parsed["working_memory_max_recent"] == 6

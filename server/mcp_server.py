@@ -1488,12 +1488,16 @@ def _record_meta_turn_understanding_observations(
     baseline_response_mode = str(turn_understanding.get("response_mode") or "")
     context_slots = meta_context_bundle.get("context_slots") or []
     slot_types: list[str] = []
+    evidence_classes: list[str] = []
     for item in context_slots:
         if not isinstance(item, dict):
             continue
         slot = str(item.get("slot") or "").strip()
         if slot and slot not in slot_types:
             slot_types.append(slot)
+        evidence_class = str(item.get("evidence_class") or "").strip().lower()
+        if evidence_class and evidence_class not in evidence_classes:
+            evidence_classes.append(evidence_class)
 
     _record_chat_observation(
         "meta_turn_type_selected",
@@ -1587,6 +1591,9 @@ def _record_meta_turn_understanding_observations(
             "bundle_reason": str(meta_context_bundle.get("bundle_reason") or ""),
             "slot_types": slot_types,
             "slot_count": len(slot_types),
+            "evidence_classes": evidence_classes,
+            "primary_evidence_class": str(meta_context_bundle.get("primary_evidence_class") or ""),
+            "context_class_counts": dict(meta_context_bundle.get("context_class_counts") or {}),
             "suppressed_count": int(classification.get("meta_context_suppressed_count") or 0),
             "confidence": float(meta_context_bundle.get("confidence") or 0.0),
             "active_topic": str(meta_context_bundle.get("active_topic") or "")[:180],
@@ -1605,6 +1612,7 @@ def _record_meta_turn_understanding_observations(
                 "slot": str(item.get("slot") or ""),
                 "priority": int(item.get("priority") or 0),
                 "slot_source": str(item.get("source") or ""),
+                "evidence_class": str(item.get("evidence_class") or ""),
                 "content_preview": str(item.get("content") or "")[:180],
             },
         )
@@ -1618,6 +1626,7 @@ def _record_meta_turn_understanding_observations(
                 "session_id": session_id,
                 "source": "canvas_chat",
                 "slot_source": str(item.get("source") or ""),
+                "evidence_class": str(item.get("evidence_class") or ""),
                 "reason": str(item.get("reason") or ""),
                 "content_preview": str(item.get("content_preview") or "")[:180],
             },

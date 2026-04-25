@@ -3624,6 +3624,11 @@ class MetaAgent(BaseAgent):
         forbidden_classes = list(authority.get("forbidden_context_classes") or [])
         if forbidden_classes:
             lines.append("Verbotene Kontextklassen: " + ", ".join(forbidden_classes))
+        observed_classes = list(authority.get("observed_context_classes") or [])
+        if observed_classes:
+            lines.append("Aktive Evidenzklassen: " + ", ".join(observed_classes))
+        if authority.get("primary_evidence_class"):
+            lines.append(f"Primaere Evidenzklasse: {authority['primary_evidence_class']}")
         allowed_sections = list(authority.get("working_memory_allowed_sections") or [])
         if allowed_sections:
             lines.append("Working-Memory-Sektionen: " + ", ".join(allowed_sections))

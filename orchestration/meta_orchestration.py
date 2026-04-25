@@ -15,6 +15,7 @@ from orchestration.meta_clarity_contract import (
     parse_meta_clarity_contract,
 )
 from orchestration.meta_context_authority import build_meta_context_authority
+from orchestration.meta_context_authority import classify_meta_context_slot, summarize_meta_context_classes
 from orchestration.meta_interaction_mode import MetaInteractionMode, build_meta_interaction_mode
 from orchestration.conversation_state import (
     derive_topic_state_transition,
@@ -100,6 +101,7 @@ class MetaContextSlot:
     priority: int
     content: str
     source: str = ""
+    evidence_class: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -107,6 +109,7 @@ class MetaContextSlot:
             "priority": self.priority,
             "content": self.content,
             "source": self.source,
+            "evidence_class": self.evidence_class or classify_meta_context_slot(self.slot),
         }
 
 
@@ -127,6 +130,9 @@ class MetaContextBundle:
     confidence: float
 
     def to_dict(self) -> Dict[str, Any]:
+        evidence_classes, class_counts = summarize_meta_context_classes(
+            {"context_slots": [slot.to_dict() for slot in self.context_slots]}
+        )
         return {
             "schema_version": self.schema_version,
             "current_query": self.current_query,
@@ -140,6 +146,9 @@ class MetaContextBundle:
             "response_mode": self.response_mode,
             "context_slots": [slot.to_dict() for slot in self.context_slots],
             "suppressed_context": [dict(item) for item in self.suppressed_context],
+            "evidence_classes": list(evidence_classes),
+            "context_class_counts": dict(class_counts),
+            "primary_evidence_class": evidence_classes[0] if evidence_classes else "",
             "confidence": self.confidence,
         }
 
@@ -1902,6 +1911,7 @@ def _append_meta_context_slot(
             priority=priority,
             content=cleaned,
             source=_clean_meta_state_fragment(source, max_chars=64),
+            evidence_class=classify_meta_context_slot(slot),
         )
     )
 
@@ -2487,6 +2497,7 @@ def _suppress_low_priority_context(
         suppressed.append(
             {
                 "source": "assistant_reply",
+                "evidence_class": "conversation_state",
                 "reason": "lower_priority_than_recent_user_turn",
                 "content_preview": assistant_turns[0][:140],
             }
@@ -2498,6 +2509,7 @@ def _suppress_low_priority_context(
                 suppressed.append(
                     {
                         "source": "assistant_reply",
+                        "evidence_class": "conversation_state",
                         "reason": "location_context_without_current_evidence",
                         "content_preview": item[:140],
                     }
@@ -2512,6 +2524,7 @@ def _suppress_low_priority_context(
             suppressed.append(
                 {
                     "source": "assistant_reply",
+                    "evidence_class": "conversation_state",
                     "reason": "topic_mismatch_with_current_query",
                     "content_preview": item[:140],
                 }
@@ -2544,6 +2557,7 @@ def _suppress_low_priority_context(
             suppressed.append(
                 {
                     "source": "preference_memory",
+                    "evidence_class": "preference_profile",
                     "reason": "preference_not_relevant_for_current_topic",
                     "content_preview": item[:140],
                 }
@@ -2809,6 +2823,7 @@ def build_meta_context_bundle(
         suppressed_context.append(
             {
                 "source": "conversation_state",
+                "evidence_class": "conversation_state",
                 "reason": f"session_domain_filtered:{active_session_domain}->{requested_domain}",
                 "content_preview": (
                     str(explicit_state.get("active_topic") or "")
@@ -2883,14 +2898,21 @@ def render_meta_context_bundle(bundle: MetaContextBundle | Mapping[str, Any] | N
         lines.append(f"open_loop: {payload['open_loop']}")
     if payload.get("next_expected_step"):
         lines.append(f"next_expected_step: {payload['next_expected_step']}")
+    evidence_classes = list(payload.get("evidence_classes") or [])
+    if evidence_classes:
+        lines.append("evidence_classes: " + ", ".join(str(item) for item in evidence_classes))
     if slots:
         lines.append("context_slots:")
         for item in slots[:6]:
             if not isinstance(item, Mapping):
                 continue
+            evidence_suffix = ""
+            evidence_class = str(item.get("evidence_class") or "").strip()
+            if evidence_class:
+                evidence_suffix = f" [{evidence_class}]"
             lines.append(
                 f"- {str(item.get('priority') or '')}:{str(item.get('slot') or '').strip()} => "
-                f"{str(item.get('content') or '').strip()}"
+                f"{str(item.get('content') or '').strip()}{evidence_suffix}"
             )
     return "\n".join(lines)
 
@@ -2942,11 +2964,32 @@ def _normalize_authoritative_meta_context_bundle(
     bundle: Mapping[str, Any] | None,
 ) -> Dict[str, Any]:
     payload = dict(bundle or {})
+    normalized_slots = []
+    for item in (payload.get("context_slots") or []):
+        if not isinstance(item, Mapping):
+            continue
+        slot_payload = dict(item)
+        slot_payload["evidence_class"] = str(
+            slot_payload.get("evidence_class") or classify_meta_context_slot(slot_payload.get("slot"))
+        ).strip().lower()
+        normalized_slots.append(slot_payload)
+    payload["context_slots"] = normalized_slots
+    for item in (payload.get("suppressed_context") or []):
+        if not isinstance(item, Mapping):
+            continue
+        if str(item.get("evidence_class") or "").strip():
+            continue
+        item["evidence_class"] = classify_meta_context_slot(item.get("source"))
+
     slot_names = {
         str(item.get("slot") or "").strip()
         for item in (payload.get("context_slots") or [])
         if isinstance(item, Mapping) and str(item.get("slot") or "").strip()
     }
+    evidence_classes, class_counts = summarize_meta_context_classes(payload)
+    payload["evidence_classes"] = list(evidence_classes)
+    payload["context_class_counts"] = dict(class_counts)
+    payload["primary_evidence_class"] = evidence_classes[0] if evidence_classes else ""
     if not slot_names:
         payload["active_topic"] = ""
         payload["active_goal"] = ""
@@ -3010,6 +3053,7 @@ def _build_authoritative_specialist_context_seed(
     }
     conversation_state_map = dict(conversation_state or {})
     contract = parse_meta_clarity_contract(clarity_contract or {})
+    evidence_classes, _ = summarize_meta_context_classes(bundle)
     allowed_slots = {
         str(item or "").strip()
         for item in (contract.get("allowed_context_slots") or [])
@@ -3051,6 +3095,8 @@ def _build_authoritative_specialist_context_seed(
         recent_corrections=list(conversation_state_map.get("recent_corrections") or [])
         if conversation_state_allowed
         else [],
+        evidence_classes=evidence_classes,
+        primary_evidence_class=(evidence_classes[0] if evidence_classes else ""),
     )
 
 
@@ -3576,6 +3622,9 @@ def classify_meta_task(
                 priority=int(item.get("priority") or 0),
                 content=str(item.get("content") or ""),
                 source=str(item.get("source") or ""),
+                evidence_class=str(
+                    item.get("evidence_class") or classify_meta_context_slot(item.get("slot"))
+                ),
             )
             for item in (admitted_bundle.get("context_slots") or [])
             if isinstance(item, Mapping)

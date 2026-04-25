@@ -1311,6 +1311,7 @@ def test_classify_meta_task_suppresses_topic_mismatched_assistant_context():
     suppressed = result["meta_context_bundle"]["suppressed_context"]
 
     assert any(item["reason"] == "topic_mismatch_with_current_query" for item in suppressed)
+    assert all(item.get("evidence_class") == "conversation_state" for item in suppressed)
 
 
 def test_classify_meta_task_filters_preference_memory_for_docs_status_frame(monkeypatch):
@@ -1350,6 +1351,18 @@ def test_classify_meta_task_filters_preference_memory_for_docs_status_frame(monk
     assert result["preference_memory_selection"]["selected"] == []
     context_slots = result["meta_context_bundle"]["context_slots"]
     assert all(slot["slot"] != "preference_memory" for slot in context_slots)
+    assert all(slot.get("evidence_class") for slot in context_slots)
+    assert "conversation_state" in result["meta_context_bundle"]["evidence_classes"]
+    assert result["meta_context_bundle"]["primary_evidence_class"] == "conversation_state"
+    assert (
+        result["meta_context_authority"]["observed_context_classes"]
+        == result["meta_context_bundle"]["evidence_classes"]
+    )
+    assert (
+        result["specialist_context_seed"]["evidence_classes"]
+        == result["meta_context_bundle"]["evidence_classes"]
+    )
+    assert result["specialist_context_seed"]["primary_evidence_class"] == "conversation_state"
     assert result["specialist_context_seed"]["user_preferences"] == []
 
 
