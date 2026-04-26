@@ -15,6 +15,7 @@ from orchestration.meta_clarity_contract import (
     parse_meta_clarity_contract,
 )
 from orchestration.general_decision_kernel import build_general_decision_kernel
+from orchestration.general_decision_kernel import resolve_low_confidence_controller
 from orchestration.meta_context_authority import build_meta_context_authority
 from orchestration.meta_context_authority import classify_meta_context_slot, summarize_meta_context_classes
 from orchestration.meta_interaction_mode import MetaInteractionMode, build_meta_interaction_mode
@@ -3650,7 +3651,24 @@ def classify_meta_task(
         and kernel_seed.topic_family in {"travel", "advisory", "personal_productivity"}
     ):
         kernel_response_mode = "summarize_state"
-    if kernel_seed.execution_permission == "forbidden":
+    low_confidence_controller = resolve_low_confidence_controller(
+        kernel_seed.to_dict(),
+        has_state_anchor=bool(active_topic or open_goal or next_step or active_plan),
+    )
+    if low_confidence_controller.get("active"):
+        deduped_chain = [
+            str(item or "").strip()
+            for item in (low_confidence_controller.get("recommended_agent_chain") or ["meta"])
+            if str(item or "").strip()
+        ] or ["meta"]
+        task_type = str(low_confidence_controller.get("task_type") or "single_lane").strip() or "single_lane"
+        kernel_response_mode = (
+            str(low_confidence_controller.get("response_mode") or "clarify_before_execute").strip()
+            or "clarify_before_execute"
+        )
+        reason = f"gdk4:{low_confidence_controller.get('reason') or 'low_confidence_fail_small'}"
+        required_capabilities = []
+    elif kernel_seed.execution_permission == "forbidden":
         deduped_chain = ["meta"]
         if task_type in gdk_generic_task_types or kernel_seed.turn_kind in {"think", "inform", "resume", "constraint_update", "clarify"}:
             task_type = "single_lane"
@@ -4214,6 +4232,7 @@ def classify_meta_task(
         "meta_request_frame": meta_request_frame.to_dict(),
         "meta_interaction_mode": meta_interaction_mode.to_dict(),
         "general_decision_kernel": general_decision_kernel.to_dict(),
+        "low_confidence_controller": low_confidence_controller,
         "topic_shift_detected": topic_transition.topic_shift_detected,
         "topic_state_transition": topic_transition.to_dict(),
         "meta_context_bundle": filtered_meta_context_bundle,

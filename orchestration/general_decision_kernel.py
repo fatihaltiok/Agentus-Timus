@@ -217,6 +217,7 @@ _ADVISORY_DOMAINS = {"topic_advisory"}
 _THINK_PARTNER_DOMAINS = {"travel_advisory", "topic_advisory", "life_advisory", "self_status"}
 _INSPECT_DOMAINS = {"docs_status", "research_advisory"}
 _STATEFUL_ADVISORY_DOMAINS = {"travel_advisory", "topic_advisory", "life_advisory"}
+_LOW_CONFIDENCE_THRESHOLD = 0.7
 
 
 def _token_count(text: str) -> int:
@@ -234,10 +235,7 @@ def _looks_like_short_resume_update(
     lowered = _clean_text(query, limit=320).lower()
     if not lowered:
         return False
-    if not any(
-        str(item or "").strip()
-        for item in (active_topic, open_goal, next_step, active_domain)
-    ):
+    if not any(str(item or "").strip() for item in (active_topic, open_goal, next_step)):
         return False
     if _contains_any(lowered, _NEW_TOPIC_HINTS):
         return False
@@ -461,6 +459,63 @@ def parse_general_decision_kernel(value: Mapping[str, Any] | None) -> Dict[str, 
             for item in (payload.get("evidence") or [])
             if _clean_text(item, limit=120)
         ],
+    }
+
+
+def resolve_low_confidence_controller(
+    kernel: Mapping[str, Any] | None,
+    *,
+    has_state_anchor: bool = False,
+) -> Dict[str, Any]:
+    """Fail small when the kernel is unsure instead of widening orchestration."""
+    parsed = parse_general_decision_kernel(kernel or {})
+    confidence = float(parsed.get("confidence") or 0.0)
+    turn_kind = str(parsed.get("turn_kind") or "").strip().lower()
+    execution_permission = str(parsed.get("execution_permission") or "").strip().lower()
+    clarify = bool(parsed.get("clarify_if_below_threshold"))
+
+    baseline = {
+        "schema_version": 1,
+        "active": False,
+        "controller_action": "none",
+        "reason": "confidence_sufficient",
+        "response_mode": "",
+        "task_type": "",
+        "recommended_agent_chain": [],
+        "max_delegate_calls": -1,
+        "execution_permission_override": "",
+    }
+    if confidence >= _LOW_CONFIDENCE_THRESHOLD and not clarify:
+        return baseline
+    if has_state_anchor and turn_kind == "resume":
+        return {
+            **baseline,
+            "reason": "state_anchor_present",
+        }
+
+    if turn_kind in {"think", "inform"} or execution_permission == "forbidden":
+        return {
+            **baseline,
+            "active": True,
+            "controller_action": "small_direct_answer",
+            "reason": "low_confidence_no_execution",
+            "response_mode": "summarize_state",
+            "task_type": "single_lane",
+            "recommended_agent_chain": ["meta"],
+            "max_delegate_calls": 0,
+            "execution_permission_override": "forbidden",
+        }
+
+    return {
+        **baseline,
+        "active": True,
+        "controller_action": "clarify_once",
+        "reason": "low_confidence_fail_small",
+        "response_mode": "clarify_before_execute",
+        "task_type": "single_lane",
+        "recommended_agent_chain": ["meta"],
+        "max_delegate_calls": 0,
+        "execution_permission_override": "forbidden",
     }
 
 
@@ -698,6 +753,8 @@ def build_general_decision_kernel(
         confidence = max(confidence, 0.78)
     elif any(item.startswith("query:research") for item in turn_evidence):
         confidence = max(confidence, 0.8)
+    elif any(item.startswith("query:live_lookup") for item in turn_evidence):
+        confidence = max(confidence, 0.78)
     elif any(item.startswith("query:inspect") for item in turn_evidence):
         confidence = max(confidence, 0.78)
     elif any(item.startswith("mode_or_query:think") for item in turn_evidence):

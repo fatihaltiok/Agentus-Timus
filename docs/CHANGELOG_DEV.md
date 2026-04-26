@@ -35,6 +35,17 @@ Geaendert:
   - Live-Lookup wie `aktuelle News zu OpenAI` bleibt `inspect` und wird nicht
     durch Low-Confidence-Klaerung verschluckt
   - neue Tests fuer den GDK-Authority-Pfad in Builder und Orchestrierung
+- `GDK4`:
+  - Low-Confidence-Controller eingefuehrt
+  - unsichere Ausfuehrung faellt jetzt klein:
+    - `meta`
+    - `single_lane`
+    - maximal eine Klaerfrage
+    - keine Tool- oder Agentenkette
+  - reine Domain-Annahme ohne konkreten Topic-/Goal-/Next-Step-Anker zaehlt
+    nicht mehr als Resume-Beleg
+  - Live-Lookup bekommt eigene Query-Confidence, damit echte aktuelle Suchen
+    nicht vom Low-Confidence-Controller abgewuergt werden
 
 ## Fortschritt 2026-04-25 - General Decision Kernel und Leitfaden fuer kleine LLM-Chatbots
 

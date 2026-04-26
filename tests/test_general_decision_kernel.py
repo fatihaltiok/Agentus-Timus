@@ -3,6 +3,7 @@ from __future__ import annotations
 from orchestration.general_decision_kernel import (
     build_general_decision_kernel,
     parse_general_decision_kernel,
+    resolve_low_confidence_controller,
 )
 
 
@@ -92,6 +93,37 @@ def test_build_general_decision_kernel_for_current_news_lookup() -> None:
     assert kernel["evidence_requirement"] == "bounded"
     assert kernel["execution_permission"] == "bounded"
     assert "query:live_lookup" in kernel["evidence"]
+
+
+def test_low_confidence_controller_fails_small_for_unclear_execution() -> None:
+    kernel = build_general_decision_kernel(
+        effective_query="dings machen",
+    ).to_dict()
+
+    controller = resolve_low_confidence_controller(kernel)
+
+    assert kernel["turn_kind"] == "execute"
+    assert kernel["clarify_if_below_threshold"] is True
+    assert controller["active"] is True
+    assert controller["controller_action"] == "clarify_once"
+    assert controller["response_mode"] == "clarify_before_execute"
+    assert controller["task_type"] == "single_lane"
+    assert controller["recommended_agent_chain"] == ["meta"]
+    assert controller["max_delegate_calls"] == 0
+    assert controller["execution_permission_override"] == "forbidden"
+
+
+def test_low_confidence_controller_is_inactive_for_confident_live_lookup() -> None:
+    kernel = build_general_decision_kernel(
+        effective_query="Zeig mir aktuelle News zu OpenAI.",
+    ).to_dict()
+
+    controller = resolve_low_confidence_controller(kernel)
+
+    assert kernel["turn_kind"] == "inspect"
+    assert kernel["confidence"] >= 0.7
+    assert controller["active"] is False
+    assert controller["controller_action"] == "none"
 
 
 def test_build_general_decision_kernel_for_short_resume_update() -> None:

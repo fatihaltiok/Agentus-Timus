@@ -356,6 +356,24 @@ def test_classify_meta_task_clarifies_low_confidence_action_followup_before_exec
     assert result["meta_policy_decision"]["should_delegate"] is False
 
 
+def test_classify_meta_task_uses_gdk4_low_confidence_controller_for_unclear_execution():
+    result = classify_meta_task(
+        "dings machen",
+        action_count=0,
+    )
+
+    controller = result["low_confidence_controller"]
+
+    assert controller["active"] is True
+    assert controller["controller_action"] == "clarify_once"
+    assert result["task_type"] == "single_lane"
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["recommended_recipe_id"] is None
+    assert result["response_mode"] == "clarify_before_execute"
+    assert result["general_decision_kernel"]["execution_permission"] == "forbidden"
+    assert result["meta_context_authority"]["decision_execution_permission"] == "forbidden"
+
+
 def test_classify_meta_task_routes_future_behavior_alignment_turn_to_meta_review():
     result = classify_meta_task(
         "dann mach das in zukunft so dass du auf echtzeit agenturmeldungen zugreifst bei news und aktuellem geschehen",
