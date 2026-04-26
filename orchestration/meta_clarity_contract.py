@@ -830,10 +830,17 @@ def filter_working_memory_context(
 
     header = parts[0]
     kept = [header]
-    allowed = set(allowed_sections)
+    # Bug-Fix: der Memory-Builder schreibt Section-Header mit Doppelpunkt
+    # ("KURZZEITKONTEXT:\n..."), aber allowed_sections enthaelt nur den
+    # Namen ohne Doppelpunkt. Wir normalisieren beide Seiten beim Vergleich.
+    allowed = {str(s or "").strip().rstrip(":").upper() for s in allowed_sections}
     for block in parts[1:]:
-        first_line = block.splitlines()[0].strip() if block.splitlines() else ""
-        if first_line in allowed:
+        if not block.strip():
+            continue
+        block_lines = block.splitlines()
+        first_line = block_lines[0].strip() if block_lines else ""
+        normalized = first_line.rstrip(":").strip().upper()
+        if normalized in allowed:
             kept.append(block)
 
     if len(kept) <= 1:

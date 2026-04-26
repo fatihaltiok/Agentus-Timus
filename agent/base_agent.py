@@ -3974,6 +3974,16 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         )
         working_memory_meta = dict(self._working_memory_last_meta or {})
         working_memory_settings = dict(working_memory_meta.get("settings") or {})
+        working_memory_stats = dict(working_memory_meta.get("memory_stats") or {})
+        # Diagnose-Felder: zeigen warum context_chars=0 sein kann
+        wm_diagnostics = {
+            "preferred_session_id": str(self.conversation_session_id or ""),
+            "stats_status": working_memory_stats.get("status"),
+            "stats_recent_target": working_memory_stats.get("recent_target"),
+            "stats_selected_recent_events": working_memory_stats.get("selected_recent_events"),
+            "stats_short_term_skipped": working_memory_stats.get("short_term_skipped"),
+            "stats_final_chars": working_memory_stats.get("final_chars"),
+        }
         self._emit_step_trace(
             action="working_memory_injected",
             output_data={
@@ -3984,6 +3994,10 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 "allowed_context_classes": list(working_memory_settings.get("allowed_context_classes") or []),
                 "allowed_sections": list(working_memory_settings.get("allowed_sections") or []),
                 "query_mode": working_memory_settings.get("query_mode") or "",
+                "max_recent_events": working_memory_settings.get("max_recent_events"),
+                "max_related": working_memory_settings.get("max_related"),
+                "max_chars": working_memory_settings.get("max_chars"),
+                "diagnostics": wm_diagnostics,
             },
             metadata={"vision_enabled": self._vision_enabled},
         )
