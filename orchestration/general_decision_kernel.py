@@ -44,6 +44,17 @@ _RESEARCH_HINTS = (
     "arbeite dich in",
 )
 
+_LIVE_LOOKUP_HINTS = (
+    "aktuelle news",
+    "aktuelle nachrichten",
+    "live-news",
+    "news zu",
+    "neues aus",
+    "was gibt es neues",
+    "aktuelle preise",
+    "aktuelle entwicklungen",
+)
+
 _EXECUTE_HINTS = (
     "starte den browser",
     "gehe auf",
@@ -249,6 +260,26 @@ def _looks_like_standalone_question(query: str) -> bool:
     if "?" in lowered:
         return True
     return _contains_any(lowered, _STANDALONE_QUESTION_HINTS)
+
+
+def _looks_like_live_lookup_request(query: str) -> bool:
+    lowered = _clean_text(query, limit=320).lower()
+    if not lowered:
+        return False
+    if _contains_any(lowered, _LIVE_LOOKUP_HINTS):
+        return True
+    return "aktuell" in lowered and _contains_any(
+        lowered,
+        (
+            "news",
+            "nachrichten",
+            "preise",
+            "kurs",
+            "kurse",
+            "entwicklungen",
+            "stand",
+        ),
+    )
 
 
 def _is_stateful_advisory_domain(*domains: str) -> bool:
@@ -477,6 +508,9 @@ def _infer_turn_kind(
     turn_type = _clean_text(dominant_turn_type, limit=64).lower()
     response = _clean_text(response_mode, limit=64).lower()
 
+    if _looks_like_live_lookup_request(lowered):
+        evidence.append("query:live_lookup")
+        return "inspect", evidence
     if frame == "clarify_needed" or _contains_any(lowered, _CLARIFY_HINTS):
         evidence.append("frame_or_query:clarify")
         return "clarify", evidence

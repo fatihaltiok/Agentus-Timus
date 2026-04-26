@@ -73,6 +73,27 @@ def test_build_general_decision_kernel_for_research_advisory() -> None:
     assert kernel["execution_permission"] == "bounded"
 
 
+def test_build_general_decision_kernel_for_current_news_lookup() -> None:
+    kernel = build_general_decision_kernel(
+        effective_query="Zeig mir aktuelle News zu OpenAI.",
+        dominant_turn_type="followup",
+        response_mode="clarify_before_execute",
+        meta_request_frame={
+            "frame_kind": "clarify_needed",
+            "task_domain": "topic_advisory",
+            "execution_mode": "clarify_once",
+            "confidence": 0.7,
+        },
+        meta_interaction_mode=None,
+    ).to_dict()
+
+    assert kernel["turn_kind"] == "inspect"
+    assert kernel["interaction_mode"] == "inspect"
+    assert kernel["evidence_requirement"] == "bounded"
+    assert kernel["execution_permission"] == "bounded"
+    assert "query:live_lookup" in kernel["evidence"]
+
+
 def test_build_general_decision_kernel_for_short_resume_update() -> None:
     kernel = build_general_decision_kernel(
         effective_query="Wetter sonnig Zeit ganzen Tag lokale Ecken",
