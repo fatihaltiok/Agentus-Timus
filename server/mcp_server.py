@@ -1925,7 +1925,18 @@ def _extract_pending_followup_prompt(text: str) -> str:
             question_like.append(cleaned)
 
     if question_like:
-        return normalize_pending_followup_prompt(question_like[-1][:280])
+        candidate = question_like[-1][:280]
+        normalized = normalize_pending_followup_prompt(candidate)
+        # Wenn die Frage allein generic ist (z.B. "Was willst du?"), aber der
+        # Assistant-Text zusaetzliche Optionen/Auswahl-Items enthaelt, ist der
+        # Prompt im Kontext nicht mehr generic. Wir kombinieren Frage + Optionen.
+        if not normalized:
+            option_pattern = re.compile(r"^\s*(?:[A-Z]\)|\d+[.)]|[-*•])\s+\S")
+            options = [line for line in lines if option_pattern.match(line)]
+            if options and len(options) >= 2:
+                composite = candidate + "\n" + "\n".join(options[:6])
+                return composite[:600]
+        return normalized
 
     sentences = [part.strip(" -\t\r\n") for part in re.split(r"(?<=[.!?])\s+", source) if part.strip()]
     for sentence in reversed(sentences):
@@ -2178,6 +2189,36 @@ def _resolve_followup_agent(query: str, capsule: dict[str, str]) -> str:
     )
     pending_workflow_reply = capsule.get("pending_workflow_reply") if isinstance(capsule.get("pending_workflow_reply"), dict) else {}
     has_pending_workflow_resume = bool(str(pending_workflow_reply.get("reply_kind") or "").strip())
+    # CCF2 (Konsistenz mit _augment_query_with_followup_capsule):
+    # Wenn die Session einen offenen Open-Loop hat und die Query kurz und
+    # nicht offensichtlich ein neues Topic ist, behandle sie als Followup.
+    conv_state = capsule.get("conversation_state") or {}
+    if not isinstance(conv_state, dict):
+        conv_state = {}
+    pending_followup_prompt = str(capsule.get("pending_followup_prompt") or "").strip()
+    open_loop_anchor = str(conv_state.get("open_loop") or "").strip()
+    next_step_anchor = str(conv_state.get("next_expected_step") or "").strip()
+    active_topic_anchor = str(conv_state.get("active_topic") or "").strip()
+    has_open_loop_anchor = bool(open_loop_anchor or pending_followup_prompt or next_step_anchor)
+    looks_like_new_url = "http://" in normalized or "https://" in normalized
+    looks_like_explicit_new_topic = any(
+        marker in normalized
+        for marker in (
+            "neues thema",
+            "anderes thema",
+            "wechseln wir das thema",
+            "vergiss das",
+            "andere frage",
+        )
+    )
+    is_short_query = 0 < len(normalized) <= 120
+    has_open_loop_followup = bool(
+        has_open_loop_anchor
+        and is_short_query
+        and not looks_like_new_url
+        and not looks_like_explicit_new_topic
+        and (active_topic_anchor or open_loop_anchor or pending_followup_prompt)
+    )
     if not (
         is_followup
         or is_contextual_recall
@@ -2185,6 +2226,7 @@ def _resolve_followup_agent(query: str, capsule: dict[str, str]) -> str:
         or is_capability_followup
         or is_result_extraction_followup
         or has_pending_workflow_resume
+        or has_open_loop_followup
     ):
         return ""
     matched_reply_points = capsule.get("matched_reply_points") or []
