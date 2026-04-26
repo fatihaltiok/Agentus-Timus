@@ -2,6 +2,40 @@
 
 ---
 
+## Fortschritt 2026-04-26 - GDK1 bis GDK3 Runtime-Haertung
+
+Der General Decision Kernel ist aus dem Plan in den Runtime-Pfad gewandert.
+Die erste Einordnung einer Nutzeranfrage ist jetzt nicht mehr nur Begleitdaten,
+sondern steuert Frame, Modus, Antwortbereitschaft und Kontextgrenzen.
+
+Geaendert:
+
+- `GDK1`/`GDK2`:
+  - allgemeine Turn-Arten wie `think`, `inspect`, `research`, `resume`,
+    `constraint_update` und `inform`
+  - explizite Felder fuer `evidence_requirement`,
+    `execution_permission`, `confidence` und `answer_ready`
+  - Follow-up-Fall aus Telegram gehaertet:
+    - vorhandene Ausflugs-Constraints bleiben im State
+    - `mach jetzt Vorschlaege` / `du weisst doch wofuer` fuehrt nicht mehr
+      zu leerem Kontext
+    - bei ausreichenden Constraints wird direkt empfohlen statt erneut zu
+      fragen
+- `GDK3`:
+  - `meta_context_authority` nutzt den `general_decision_kernel` jetzt als
+    erste Authority-Quelle
+  - `think_partner`/`inform` mit `execution_permission=forbidden` sperrt
+    Semantic-Recall, Document-Knowledge, Preference-Profile und
+    Assistant-Fallback fuer diesen Turn
+  - `inspect`/`research` werden auf gebundene Evidenz- und
+    Working-Memory-Budgets begrenzt
+  - der Meta-Prompt bekommt die GDK-Entscheidung explizit als
+    Kontext-Autoritaetsblock
+- Regressionsschutz:
+  - Live-Lookup wie `aktuelle News zu OpenAI` bleibt `inspect` und wird nicht
+    durch Low-Confidence-Klaerung verschluckt
+  - neue Tests fuer den GDK-Authority-Pfad in Builder und Orchestrierung
+
 ## Fortschritt 2026-04-25 - General Decision Kernel und Leitfaden fuer kleine LLM-Chatbots
 
 Der naechste Generalisierungsschritt nach `MCA` ist formalisiert. Ziel ist,

@@ -5,9 +5,18 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Iterable, Mapping, Tuple
 
+from orchestration.general_decision_kernel import parse_general_decision_kernel
 from orchestration.meta_clarity_contract import parse_meta_clarity_contract
 from orchestration.meta_interaction_mode import parse_meta_interaction_mode
 
+
+_STATE_CONTEXT_CLASSES = ("conversation_state", "topic_state")
+_EXTERNAL_CONTEXT_CLASSES = (
+    "semantic_recall",
+    "document_knowledge",
+    "preference_profile",
+    "assistant_fallback",
+)
 
 _CONTEXT_CLASS_BY_SLOT = {
     "current_query": "conversation_state",
@@ -71,6 +80,78 @@ def _context_classes_from_slots(values: Iterable[Any] | None) -> Tuple[str, ...]
     return tuple(result)
 
 
+def _merge_text_tuples(*groups: Iterable[Any] | None, limit: int = 64) -> Tuple[str, ...]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for item in group or ():
+            cleaned = _clean_text(item, limit=limit)
+            if not cleaned:
+                continue
+            lowered = cleaned.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            result.append(cleaned)
+    return tuple(result)
+
+
+def _filter_context_classes(
+    values: Iterable[Any] | None,
+    *,
+    allow: Iterable[str] | None = None,
+    forbid: Iterable[str] | None = None,
+) -> Tuple[str, ...]:
+    allowed = {str(item or "").strip().lower() for item in (allow or ()) if str(item or "").strip()}
+    forbidden = {str(item or "").strip().lower() for item in (forbid or ()) if str(item or "").strip()}
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in values or ():
+        cleaned = _clean_text(item, limit=64).lower()
+        if not cleaned:
+            continue
+        if allowed and cleaned not in allowed:
+            continue
+        if cleaned in forbidden or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        result.append(cleaned)
+    return tuple(result)
+
+
+def _filter_context_slots_by_class(
+    slots: Iterable[Any] | None,
+    *,
+    allow: Iterable[str] | None = None,
+    forbid: Iterable[str] | None = None,
+) -> Tuple[str, ...]:
+    allowed = {str(item or "").strip().lower() for item in (allow or ()) if str(item or "").strip()}
+    forbidden = {str(item or "").strip().lower() for item in (forbid or ()) if str(item or "").strip()}
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in slots or ():
+        slot = _clean_text(item, limit=64)
+        if not slot:
+            continue
+        context_class = classify_meta_context_slot(slot)
+        if allowed and context_class not in allowed:
+            continue
+        if context_class in forbidden:
+            continue
+        lowered = slot.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        result.append(slot)
+    return tuple(result)
+
+
+def _cap_budget(current: int, cap: int) -> int:
+    if current < 0:
+        return cap
+    return min(current, cap)
+
+
 def classify_meta_context_slot(slot: Any) -> str:
     cleaned = _clean_text(slot, limit=64).lower()
     if not cleaned:
@@ -108,6 +189,12 @@ class MetaContextAuthority:
     execution_mode: str
     interaction_mode: str
     interaction_reason: str
+    decision_turn_kind: str
+    decision_topic_family: str
+    decision_evidence_requirement: str
+    decision_execution_permission: str
+    decision_confidence: float
+    decision_answer_ready: bool
     request_kind: str
     direct_answer_required: bool
     allowed_context_classes: Tuple[str, ...]
@@ -149,6 +236,16 @@ def parse_meta_context_authority(value: Any) -> Dict[str, Any]:
         "execution_mode": _clean_text(value.get("execution_mode"), limit=64).lower(),
         "interaction_mode": _clean_text(value.get("interaction_mode"), limit=32).lower(),
         "interaction_reason": _clean_text(value.get("interaction_reason"), limit=120),
+        "decision_turn_kind": _clean_text(value.get("decision_turn_kind"), limit=64).lower(),
+        "decision_topic_family": _clean_text(value.get("decision_topic_family"), limit=64).lower(),
+        "decision_evidence_requirement": _clean_text(
+            value.get("decision_evidence_requirement"), limit=32
+        ).lower(),
+        "decision_execution_permission": _clean_text(
+            value.get("decision_execution_permission"), limit=32
+        ).lower(),
+        "decision_confidence": round(float(value.get("decision_confidence") or 0.0), 2),
+        "decision_answer_ready": bool(value.get("decision_answer_ready")),
         "request_kind": _clean_text(value.get("request_kind"), limit=64).lower(),
         "direct_answer_required": bool(value.get("direct_answer_required")),
         "allowed_context_classes": [
@@ -203,11 +300,13 @@ def build_meta_context_authority(
     meta_interaction_mode: Mapping[str, Any] | None,
     meta_clarity_contract: Mapping[str, Any] | None,
     meta_context_bundle: Mapping[str, Any] | None = None,
+    general_decision_kernel: Mapping[str, Any] | None = None,
 ) -> MetaContextAuthority:
     frame = dict(meta_request_frame or {})
     mode = parse_meta_interaction_mode(meta_interaction_mode or {})
     clarity = parse_meta_clarity_contract(meta_clarity_contract or {})
     bundle = dict(meta_context_bundle or {})
+    kernel = parse_general_decision_kernel(general_decision_kernel or {})
 
     allowed_context_slots = _normalize_text_tuple(clarity.get("allowed_context_slots") or ())
     if not allowed_context_slots:
@@ -237,24 +336,70 @@ def build_meta_context_authority(
     request_kind = _clean_text(clarity.get("request_kind"), limit=64).lower()
     task_domain = _clean_text(frame.get("task_domain"), limit=64).lower()
     interaction_mode_name = _clean_text(mode.get("mode"), limit=32).lower()
-    rationale_parts = [
-        f"frame:{_clean_text(frame.get('frame_kind'), limit=64).lower() or 'unknown'}",
-        f"domain:{task_domain or 'unknown'}",
-        f"mode:{interaction_mode_name or 'unknown'}",
-        f"request_kind:{request_kind or 'unknown'}",
-    ]
-
     working_query_mode = "authority_bound"
     if interaction_mode_name == "think_partner":
         working_query_mode = "objective_only"
     elif task_domain in {"docs_status", "setup_build"}:
         working_query_mode = "evidence_bound"
 
+    decision_turn_kind = _clean_text(kernel.get("turn_kind"), limit=64).lower()
+    decision_topic_family = _clean_text(kernel.get("topic_family"), limit=64).lower()
+    decision_evidence_requirement = _clean_text(kernel.get("evidence_requirement"), limit=32).lower()
+    decision_execution_permission = _clean_text(kernel.get("execution_permission"), limit=32).lower()
+    decision_confidence = round(float(kernel.get("confidence") or 0.0), 2)
+    decision_answer_ready = bool(kernel.get("answer_ready"))
+    kernel_authoritative = decision_confidence >= 0.7 and bool(
+        decision_turn_kind or decision_evidence_requirement or decision_execution_permission
+    )
+    if kernel_authoritative:
+        if decision_execution_permission == "forbidden" and decision_evidence_requirement in {
+            "none",
+            "state_bound",
+        }:
+            allowed_context_classes = _filter_context_classes(
+                allowed_context_classes or _STATE_CONTEXT_CLASSES,
+                allow=_STATE_CONTEXT_CLASSES,
+            )
+            allowed_context_slots = _filter_context_slots_by_class(
+                allowed_context_slots,
+                allow=_STATE_CONTEXT_CLASSES,
+            )
+            forbidden_context_classes = _merge_text_tuples(
+                forbidden_context_classes,
+                _EXTERNAL_CONTEXT_CLASSES,
+            )
+            working_query_mode = "objective_only"
+            working_memory_max_related = _cap_budget(working_memory_max_related, 0)
+            working_memory_max_recent = _cap_budget(working_memory_max_recent, 8)
+            strict_working_memory_gating = True
+        elif decision_evidence_requirement in {"bounded", "research"} or decision_execution_permission == "bounded":
+            working_query_mode = "evidence_bound"
+            if decision_evidence_requirement == "research":
+                working_memory_max_related = _cap_budget(working_memory_max_related, 2)
+                working_memory_max_recent = _cap_budget(working_memory_max_recent, 8)
+            else:
+                working_memory_max_related = _cap_budget(working_memory_max_related, 1)
+                working_memory_max_recent = _cap_budget(working_memory_max_recent, 6)
+            forbidden_context_classes = _merge_text_tuples(
+                forbidden_context_classes,
+                ("assistant_fallback",),
+            )
+            strict_working_memory_gating = True
+
+    rationale_parts = [
+        f"gdk:{decision_turn_kind or 'unknown'}/{decision_execution_permission or 'unknown'}",
+        f"frame:{_clean_text(frame.get('frame_kind'), limit=64).lower() or 'unknown'}",
+        f"domain:{task_domain or 'unknown'}",
+        f"mode:{interaction_mode_name or 'unknown'}",
+        f"request_kind:{request_kind or 'unknown'}",
+    ]
+
     primary_evidence_class = observed_context_classes[0] if observed_context_classes else ""
 
     return MetaContextAuthority(
         schema_version=1,
         authority_chain=(
+            "general_decision_kernel",
             "meta_request_frame",
             "meta_interaction_mode",
             "meta_clarity_contract",
@@ -270,6 +415,12 @@ def build_meta_context_authority(
         execution_mode=_clean_text(frame.get("execution_mode"), limit=64).lower(),
         interaction_mode=interaction_mode_name,
         interaction_reason=_clean_text(mode.get("mode_reason"), limit=120),
+        decision_turn_kind=decision_turn_kind,
+        decision_topic_family=decision_topic_family,
+        decision_evidence_requirement=decision_evidence_requirement,
+        decision_execution_permission=decision_execution_permission,
+        decision_confidence=decision_confidence,
+        decision_answer_ready=decision_answer_ready,
         request_kind=request_kind,
         direct_answer_required=bool(clarity.get("direct_answer_required")),
         allowed_context_classes=allowed_context_classes,

@@ -1742,6 +1742,7 @@ def test_classify_meta_task_switches_advisory_followup_to_direct_answer_when_con
     kernel = result["general_decision_kernel"]
     frame = result["meta_request_frame"]
     policy = result["meta_policy_decision"]
+    authority = result["meta_context_authority"]
 
     assert result["dominant_turn_type"] == "followup"
     assert result["recommended_agent_chain"] == ["meta"]
@@ -1755,6 +1756,12 @@ def test_classify_meta_task_switches_advisory_followup_to_direct_answer_when_con
     assert policy["answer_shape"] == "direct_recommendation"
     assert policy["should_delegate"] is False
     assert result["reason"] == "meta_policy:general_decision_answer_ready"
+    assert authority["authority_chain"][0] == "general_decision_kernel"
+    assert authority["decision_turn_kind"] == "inform"
+    assert authority["decision_execution_permission"] == "forbidden"
+    assert authority["working_memory_query_mode"] == "objective_only"
+    assert authority["working_memory_max_related"] == 0
+    assert "semantic_recall" in authority["forbidden_context_classes"]
 
 
 def test_align_meta_frame_to_reason_domain_repairs_travel_advisory_carryover():

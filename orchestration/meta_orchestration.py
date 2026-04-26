@@ -4265,6 +4265,7 @@ def classify_meta_task(
         meta_interaction_mode=meta_interaction_mode.to_dict(),
         meta_clarity_contract=clarity_contract.to_dict(),
         meta_context_bundle=filtered_meta_context_bundle,
+        general_decision_kernel=general_decision_kernel.to_dict(),
     )
     return {
         **classification,

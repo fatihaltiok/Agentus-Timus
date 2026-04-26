@@ -3658,6 +3658,18 @@ class MetaAgent(BaseAgent):
             lines.append(f"Task-Domaene: {authority['task_domain']}")
         if authority.get("interaction_mode"):
             lines.append(f"Interaktionsmodus: {authority['interaction_mode']}")
+        if authority.get("decision_turn_kind"):
+            lines.append(
+                "GDK-Entscheidung: "
+                f"turn={authority['decision_turn_kind']}, "
+                f"evidence={authority.get('decision_evidence_requirement') or 'unknown'}, "
+                f"execution={authority.get('decision_execution_permission') or 'unknown'}, "
+                f"confidence={authority.get('decision_confidence', 0.0)}"
+            )
+        if authority.get("decision_execution_permission") == "forbidden":
+            lines.append(
+                "GDK verbietet in diesem Turn Toolnutzung, Recherche und Delegation; antworte direkt im erlaubten Kontext."
+            )
         allowed_classes = list(authority.get("allowed_context_classes") or [])
         if allowed_classes:
             lines.append("Erlaubte Kontextklassen: " + ", ".join(allowed_classes))
