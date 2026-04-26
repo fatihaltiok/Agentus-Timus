@@ -2274,6 +2274,40 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
     pending_workflow = capsule.get("pending_workflow") if isinstance(capsule.get("pending_workflow"), dict) else {}
     pending_workflow_reply = capsule.get("pending_workflow_reply") if isinstance(capsule.get("pending_workflow_reply"), dict) else {}
     has_pending_workflow_resume = bool(str(pending_workflow_reply.get("reply_kind") or "").strip())
+
+    # CCF2: Wenn die Session einen offenen Open-Loop hat (Timus hat zuletzt
+    # eine Rueckfrage gestellt) oder ein pending_followup_prompt vorliegt,
+    # und die aktuelle Nutzer-Query nicht offensichtlich ein neuer Auftrag
+    # ist, dann behandle sie als Folge im laufenden Beratungsfaden.
+    conversation_state_for_anchor = capsule.get("conversation_state") or {}
+    if not isinstance(conversation_state_for_anchor, dict):
+        conversation_state_for_anchor = {}
+    open_loop_anchor = str(conversation_state_for_anchor.get("open_loop") or "").strip()
+    next_step_anchor = str(conversation_state_for_anchor.get("next_expected_step") or "").strip()
+    active_topic_anchor = str(conversation_state_for_anchor.get("active_topic") or "").strip()
+    has_open_loop_anchor = bool(open_loop_anchor or pending_followup_prompt or next_step_anchor)
+    # Kurze Antworten (<=120 Zeichen) im laufenden Faden: als Followup behandeln,
+    # ausser sie tragen klar ein neues Topic (z.B. URL, neue starke Domain-Marker).
+    query_lower = str(query or "").strip().lower()
+    looks_like_new_url = "http://" in query_lower or "https://" in query_lower
+    looks_like_explicit_new_topic = any(
+        marker in query_lower
+        for marker in (
+            "neues thema",
+            "anderes thema",
+            "wechseln wir das thema",
+            "vergiss das",
+            "andere frage",
+        )
+    )
+    is_short_query = 0 < len(query_lower) <= 120
+    has_open_loop_followup = bool(
+        has_open_loop_anchor
+        and is_short_query
+        and not looks_like_new_url
+        and not looks_like_explicit_new_topic
+        and (active_topic_anchor or open_loop_anchor or pending_followup_prompt)
+    )
     latest_auth_session = capsule.get("latest_auth_session") if isinstance(capsule.get("latest_auth_session"), dict) else {}
 
     # P4: Kurze Zustimmung + gespeichertes Angebot → direkt auflösen
@@ -2309,6 +2343,7 @@ def _augment_query_with_followup_capsule(query: str, capsule: dict) -> str:
         or is_capability_followup
         or is_result_extraction_followup
         or has_pending_workflow_resume
+        or has_open_loop_followup
     ):
         return query
 
