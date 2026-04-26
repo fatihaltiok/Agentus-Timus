@@ -4185,6 +4185,14 @@ def classify_meta_task(
         meta_request_frame=meta_request_frame.to_dict(),
         meta_interaction_mode=meta_interaction_mode.to_dict(),
     )
+    low_confidence_controller = resolve_low_confidence_controller(
+        general_decision_kernel.to_dict(),
+        has_state_anchor=bool(active_topic or open_goal or next_step or active_plan),
+    )
+    if not low_confidence_controller.get("active") and str(final_reason or "").startswith("gdk4:"):
+        final_reason = f"frame:{str(meta_request_frame.task_domain or final_task_type or 'single_lane').strip().lower()}"
+    elif low_confidence_controller.get("active"):
+        final_reason = f"gdk4:{low_confidence_controller.get('reason') or 'low_confidence_fail_small'}"
     resolved_dominant_turn_type = turn_interpretation.dominant_turn_type
     if (
         resolved_dominant_turn_type

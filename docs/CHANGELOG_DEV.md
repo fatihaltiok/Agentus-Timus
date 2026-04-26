@@ -46,6 +46,31 @@ Geaendert:
     nicht mehr als Resume-Beleg
   - Live-Lookup bekommt eigene Query-Confidence, damit echte aktuelle Suchen
     nicht vom Low-Confidence-Controller abgewuergt werden
+- `GDK5`:
+  - Unseen-Eval-Matrix als eigenes Runtime-Gate eingefuehrt
+  - Pflichtfaelle aus dem GDK-Plan werden jetzt gegen Kernel und
+    Meta-Orchestration geprueft:
+    - Tagesplanung
+    - freie Meinung / Denkpartner
+    - persoenliche Entscheidungsberatung
+    - tiefe Recherche mit Folgeunterstuetzung
+    - bounded Inspect
+    - Doku-Status
+    - offener Reise-/Ausflugswunsch
+    - Research-Follow-up: `Und was bedeutet das fuer mich?`
+    - Skill-Erstellung
+    - neue Funktion bauen
+    - unklare Ausfuehrung
+    - aktuelle Suche / Live-Lookup
+  - Hypothesis-Validierungen fuer Think-, Research- und Inspect-Sprache
+  - CrossHair/deal-Contracts fuer die GDK5-Score- und Summary-Logik
+  - dabei geschlossene Generalisierungsluecken:
+    - Denkpartner-Sprache bekommt Kernel-Confidence
+    - Entscheidungsfragen mit `Job A/B` driften nicht mehr in
+      `migration_work`
+    - `research_advisory` darf als Follow-up-Domain weitergetragen werden
+    - finale Low-Confidence-Telemetrie wird nach dem finalen Kernel neu
+      synchronisiert
 
 ## Fortschritt 2026-04-25 - General Decision Kernel und Leitfaden fuer kleine LLM-Chatbots
 

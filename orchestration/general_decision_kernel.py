@@ -12,11 +12,18 @@ _THINK_HINTS = (
     "deine meinung",
     "deine einschätzung",
     "deine einschaetzung",
+    "was bedeutet das für mich",
+    "was bedeutet das fuer mich",
     "wie wuerdest du",
     "wie würdest du",
     "hilf mir beim denken",
+    "hilf mir bei einer entscheidung",
     "denk mit mir",
     "durchdenken",
+    "entscheidung zwischen",
+    "entscheiden zwischen",
+    "abwaegen",
+    "abwägen",
     "brainstorm",
     "wie war nochmal",
 )
@@ -730,8 +737,9 @@ def build_general_decision_kernel(
         interaction_mode=interaction_mode,
         answer_ready=answer_ready,
     )
-    if not interaction_mode:
-        interaction_mode = _interaction_mode_for_kernel(turn_kind, task_domain)
+    kernel_interaction_mode = _interaction_mode_for_kernel(turn_kind, task_domain)
+    if not interaction_mode or turn_kind in {"think", "inform", "constraint_update", "clarify"}:
+        interaction_mode = kernel_interaction_mode
     topic_family = _topic_family_for_domain(task_domain)
     evidence_requirement = _infer_evidence_requirement(turn_kind, task_domain)
     execution_permission = _infer_execution_permission(turn_kind, interaction_mode, task_domain)
@@ -756,6 +764,8 @@ def build_general_decision_kernel(
     elif any(item.startswith("query:live_lookup") for item in turn_evidence):
         confidence = max(confidence, 0.78)
     elif any(item.startswith("query:inspect") for item in turn_evidence):
+        confidence = max(confidence, 0.78)
+    elif any(item.startswith("query:think") for item in turn_evidence):
         confidence = max(confidence, 0.78)
     elif any(item.startswith("mode_or_query:think") for item in turn_evidence):
         confidence = max(confidence, 0.74)

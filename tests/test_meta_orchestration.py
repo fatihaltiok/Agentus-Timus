@@ -364,12 +364,13 @@ def test_classify_meta_task_uses_gdk4_low_confidence_controller_for_unclear_exec
 
     controller = result["low_confidence_controller"]
 
-    assert controller["active"] is True
-    assert controller["controller_action"] == "clarify_once"
+    assert controller["active"] is False
+    assert controller["controller_action"] == "none"
     assert result["task_type"] == "single_lane"
     assert result["recommended_agent_chain"] == ["meta"]
     assert result["recommended_recipe_id"] is None
     assert result["response_mode"] == "clarify_before_execute"
+    assert result["meta_request_frame"]["frame_kind"] == "clarify_needed"
     assert result["general_decision_kernel"]["execution_permission"] == "forbidden"
     assert result["meta_context_authority"]["decision_execution_permission"] == "forbidden"
 

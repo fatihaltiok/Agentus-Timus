@@ -14,6 +14,8 @@ _DOC_STATUS_HINTS = (
     "phase_",
     "phase ",
     "plan.md",
+    "lies die doku",
+    "lese die doku",
 )
 _STATE_SUMMARY_HINTS = (
     "wo stehen wir",
@@ -44,6 +46,8 @@ _SKILL_CREATION_HINTS = (
     "skill-creator",
     "skill creator",
     "skill erstellen",
+    "erstelle einen skill",
+    "erstelle ein skill",
     "neuen skill",
     "neuer skill",
     "bestehenden skill",
@@ -58,6 +62,9 @@ _SETUP_BUILD_HINTS = (
     "integrier",
     "integration",
     "verbinde",
+    "baue eine neue funktion",
+    "neue funktion",
+    "implementiere",
     "anruffunktion",
     "api key",
     "twilio",
@@ -105,6 +112,11 @@ _TRAVEL_ADVISORY_HINTS = (
     "reiseideen",
 )
 _LIFE_ADVISORY_HINTS = (
+    "hilf mir bei einer entscheidung",
+    "entscheidung zwischen",
+    "entscheiden zwischen",
+    "abwägen",
+    "abwaegen",
     "wie soll ich mit meinem leben",
     "alltag ordnen",
     "mein alltag",
@@ -164,6 +176,7 @@ _CARRIABLE_ADVISORY_DOMAINS = {
     "travel_advisory",
     "life_advisory",
     "topic_advisory",
+    "research_advisory",
 }
 
 
@@ -272,6 +285,9 @@ def _infer_task_domain(
     if _contains_any(query_text, _SKILL_CREATION_HINTS):
         evidence.append("query:skill_creation")
         return "skill_creation", evidence, 0.93
+    if _contains_any(query_text, _LIFE_ADVISORY_HINTS):
+        evidence.append("query:life_advisory")
+        return "life_advisory", evidence, 0.82
     if _contains_any(combined, _MIGRATION_WORK_HINTS):
         evidence.append("query_or_anchor:migration_work")
         return "migration_work", evidence, 0.9 if _contains_any(query_text, _MIGRATION_WORK_HINTS) else 0.82
@@ -287,10 +303,6 @@ def _infer_task_domain(
             return "travel_advisory", evidence, 0.86
         evidence.append("query_or_anchor:travel_advisory")
         return "travel_advisory", evidence, 0.78
-    if _contains_any(query_text, _LIFE_ADVISORY_HINTS):
-        evidence.append("query:life_advisory")
-        return "life_advisory", evidence, 0.82
-
     normalized_task_type = _clean_text(task_type, limit=64).lower()
     task_type_mapping = {
         "knowledge_research": "general_research",
