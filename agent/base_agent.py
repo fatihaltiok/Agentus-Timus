@@ -215,6 +215,25 @@ _META_GENERIC_HELP_PATTERNS = (
     "sag mir, was du brauchst",
     "schnelluebersicht was ich tun kann",
 )
+# CCF3 + CCF5: Antworten, die behaupten, der Kontext sei leer/abgeschnitten,
+# obwohl ein Deictic-Anker vorhanden ist. Diese werden vom Guard verworfen
+# wenn deictic_reference.confidence hoch genug ist.
+_META_CLAIMS_NO_CONTEXT_PATTERNS = (
+    "kann die vorherige anfrage im aktuellen kontext nicht sehen",
+    "der conversation-state ist hier abgeschnitten",
+    "ich sehe keine konkrete frage",
+    "ich habe keinen ankerpunkt",
+    "kein laufender open-loop",
+    "kein gespeichertes ziel",
+    "der kontext ist leer",
+    "ich kann es nicht sehen - der",
+    "welches problem?",
+    "welches problem genau?",
+    "ich brauche mindestens",
+    "ohne diese basics kann ich nichts beheben",
+    "ich tu auch nicht so",
+    "ich weiss es nicht - und ich tu auch nicht so",
+)
 _META_FILE_READ_METHODS = {
     "read_file",
     "read_text_file",
@@ -1584,6 +1603,29 @@ class BaseAgent(DynamicToolMixin):
         return {}
 
     @staticmethod
+    def _extract_meta_deictic_reference(task_text: str) -> Dict[str, Any]:
+        """CCF3: Liest deictic_reference_json aus dem Meta-Handoff."""
+        marker = "# META ORCHESTRATION HANDOFF"
+        text = str(task_text or "").strip()
+        if marker not in text:
+            return {}
+        _, after_header = text.split(marker, 1)
+        handoff_block = after_header.split("# ORIGINAL USER TASK", 1)[0]
+        for raw_line in handoff_block.splitlines():
+            stripped = str(raw_line or "").strip()
+            if not stripped or ":" not in stripped:
+                continue
+            key, value = stripped.split(":", 1)
+            if key.strip() != "deictic_reference_json":
+                continue
+            try:
+                loaded = json.loads(value.strip())
+                return loaded if isinstance(loaded, dict) else {}
+            except Exception:
+                return {}
+        return {}
+
+    @staticmethod
     def _extract_meta_interaction_mode(task_text: str) -> Dict[str, Any]:
         marker = "# META ORCHESTRATION HANDOFF"
         text = str(task_text or "").strip()
@@ -1981,6 +2023,28 @@ class BaseAgent(DynamicToolMixin):
     def _build_meta_frame_answer_redirect_prompt(self, task: str, result: str) -> str | None:
         if str(self.agent_type or "").strip().lower() != "meta":
             return None
+
+        # CCF3: Wenn Deictic-Resolver einen frischen Anker mit hoher
+        # Confidence gefunden hat, darf Meta nicht behaupten der Kontext
+        # sei leer. Solche Antworten werden als Frame-Drift verworfen.
+        deictic = self._extract_meta_deictic_reference(task)
+        if deictic and bool(deictic.get("has_reference")) and float(deictic.get("confidence") or 0.0) >= 0.7:
+            answer_lower = str(result or "").strip().lower()
+            if any(pattern in answer_lower for pattern in _META_CLAIMS_NO_CONTEXT_PATTERNS):
+                resolved = str(deictic.get("resolved_reference") or "").strip()
+                source = str(deictic.get("source_anchor") or "").strip()
+                kind = str(deictic.get("reference_kind") or "").strip()
+                return (
+                    "Meta-Frame-Korrektur (CCF3 Deictic Drift):\n"
+                    f"- reference_kind: {kind}\n"
+                    f"- source_anchor: {source}\n"
+                    f"- resolved_reference: {resolved[:240]}\n"
+                    "Die letzte Antwort behauptet, der Kontext sei leer oder abgeschnitten,\n"
+                    "obwohl ein deiktischer Anker bereits aufgeloest wurde.\n"
+                    "Du DARFST nicht erneut nach 'Welches Problem?' / 'Welches Thema?' fragen.\n"
+                    "Greife stattdessen auf den aufgeloesten Anker zurueck und antworte direkt im Format:\n"
+                    "Final Answer: ..."
+                )
 
         clarity_contract = self._current_meta_clarity_contract()
         frame = self._current_meta_request_frame()

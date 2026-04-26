@@ -3330,6 +3330,32 @@ def classify_meta_task(
     dialog_constraints = [str(item or "").strip() for item in dialog_state.get("constraints") or [] if str(item or "").strip()]
     compressed_followup_parsed = bool(dialog_state.get("compressed_followup_parsed"))
     active_topic_reused = bool(dialog_state.get("active_topic_reused"))
+
+    # CCF3: Deictic Reference Resolver - bindet "dieses Problem", "eben",
+    # "worueber hatte ich" an einen frischen Anker, bevor Frame/GDK
+    # die Entscheidung trifft.
+    from orchestration.deictic_reference_resolver import resolve_deictic_reference
+    raw_query_text = str(query or "")
+    last_user_raw = _extract_meta_followup_field(raw_query_text, "last_user")
+    last_assistant_raw = _extract_meta_followup_field(raw_query_text, "last_assistant")
+    pending_followup_prompt_raw = _extract_meta_followup_field(
+        raw_query_text, "pending_followup_prompt"
+    )
+    open_loop_raw = _extract_meta_followup_field(
+        raw_query_text, "conversation_state_open_loop"
+    )
+    next_step_raw = _extract_meta_followup_field(
+        raw_query_text, "conversation_state_next_expected_step"
+    )
+    deictic_resolution = resolve_deictic_reference(
+        query=effective_query,
+        open_loop=open_loop_raw,
+        pending_followup_prompt=pending_followup_prompt_raw,
+        last_assistant=last_assistant_raw,
+        last_user=last_user_raw,
+        active_topic=active_topic,
+        next_step=next_step_raw,
+    ).to_dict()
     context_anchor_applied = _should_apply_meta_context_anchor(effective_query, context_anchor)
     normalized_source = effective_query
     if context_anchor_applied:
@@ -4242,6 +4268,7 @@ def classify_meta_task(
         "effective_query": effective_query,
         "context_anchor": context_anchor or None,
         "context_anchor_applied": context_anchor_applied,
+        "deictic_reference": deictic_resolution,
         "active_topic": active_topic or None,
         "open_goal": open_goal or None,
         "active_domain": resolved_active_domain,

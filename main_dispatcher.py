@@ -3092,6 +3092,12 @@ def _render_meta_handoff_block(payload: dict) -> str:
             "general_decision_kernel_json: "
             + json.dumps(payload["general_decision_kernel"], ensure_ascii=False, sort_keys=True)
         )
+    # CCF3: Deictic-Reference-Resolution durch den Handoff tragen
+    if payload.get("deictic_reference"):
+        lines.append(
+            "deictic_reference_json: "
+            + json.dumps(payload["deictic_reference"], ensure_ascii=False, sort_keys=True)
+        )
     if payload.get("task_decomposition"):
         lines.append(
             "task_decomposition_json: "
