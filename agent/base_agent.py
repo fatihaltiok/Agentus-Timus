@@ -2028,9 +2028,12 @@ class BaseAgent(DynamicToolMixin):
         # Confidence gefunden hat, darf Meta nicht behaupten der Kontext
         # sei leer. Solche Antworten werden als Frame-Drift verworfen.
         deictic = self._extract_meta_deictic_reference(task)
+        answer_lower = str(result or "").strip().lower()
+        claims_no_context = any(
+            pattern in answer_lower for pattern in _META_CLAIMS_NO_CONTEXT_PATTERNS
+        )
         if deictic and bool(deictic.get("has_reference")) and float(deictic.get("confidence") or 0.0) >= 0.7:
-            answer_lower = str(result or "").strip().lower()
-            if any(pattern in answer_lower for pattern in _META_CLAIMS_NO_CONTEXT_PATTERNS):
+            if claims_no_context:
                 resolved = str(deictic.get("resolved_reference") or "").strip()
                 source = str(deictic.get("source_anchor") or "").strip()
                 kind = str(deictic.get("reference_kind") or "").strip()
@@ -2043,6 +2046,26 @@ class BaseAgent(DynamicToolMixin):
                     "obwohl ein deiktischer Anker bereits aufgeloest wurde.\n"
                     "Du DARFST nicht erneut nach 'Welches Problem?' / 'Welches Thema?' fragen.\n"
                     "Greife stattdessen auf den aufgeloesten Anker zurueck und antworte direkt im Format:\n"
+                    "Final Answer: ..."
+                )
+
+        # CCF5: Auch ohne Deictic-Trigger - wenn der Authority-Vertrag
+        # active_topic/conversation_state traegt und die Antwort
+        # 'Kontext leer' behauptet, ist das ein klarer Frame-Bruch.
+        if claims_no_context:
+            authority = self._current_meta_context_authority()
+            allowed_classes = list(authority.get("allowed_context_classes") or [])
+            primary_objective = str(authority.get("primary_objective") or "").strip()
+            if "conversation_state" in allowed_classes and primary_objective:
+                rationale = str(authority.get("rationale") or "")
+                return (
+                    "Meta-Frame-Korrektur (CCF5 Answer Formation):\n"
+                    f"- primary_objective: {primary_objective[:240]}\n"
+                    f"- rationale: {rationale[:200]}\n"
+                    "Die letzte Antwort behauptet 'Kontext leer', obwohl der "
+                    "Authority-Vertrag conversation_state freigegeben hat und "
+                    "ein primary_objective vorliegt. Greife darauf zurueck.\n"
+                    "Antworte direkt im Format:\n"
                     "Final Answer: ..."
                 )
 

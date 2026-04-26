@@ -4339,6 +4339,10 @@ def classify_meta_task(
         or active_topic_reused
         or resolved_dominant_turn_type == "followup"
     )
+    # CCF4: Personal Assessment Gate - erkennt explizite Personalisierungsanfrage
+    from orchestration.personal_assessment_gate import detect_personal_assessment
+    _personal_gate = detect_personal_assessment(effective_query).to_dict()
+    _is_personal_assessment = bool(_personal_gate.get("is_personal_assessment"))
     meta_context_authority = build_meta_context_authority(
         meta_request_frame=meta_request_frame.to_dict(),
         meta_interaction_mode=meta_interaction_mode.to_dict(),
@@ -4346,12 +4350,14 @@ def classify_meta_task(
         meta_context_bundle=filtered_meta_context_bundle,
         general_decision_kernel=general_decision_kernel.to_dict(),
         is_session_followup=_is_session_followup,
+        is_personal_assessment=_is_personal_assessment,
     )
     return {
         **classification,
         "goal_spec": goal_spec,
         "meta_clarity_contract": clarity_contract.to_dict(),
         "meta_context_authority": meta_context_authority.to_dict(),
+        "personal_assessment_gate": _personal_gate,
         "capability_graph": capability_graph,
         "learned_chain_stats": learned_chain_stats,
         "adaptive_plan": adaptive_plan,

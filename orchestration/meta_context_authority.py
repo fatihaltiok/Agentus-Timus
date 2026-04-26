@@ -302,6 +302,7 @@ def build_meta_context_authority(
     meta_context_bundle: Mapping[str, Any] | None = None,
     general_decision_kernel: Mapping[str, Any] | None = None,
     is_session_followup: bool = False,
+    is_personal_assessment: bool = False,
 ) -> MetaContextAuthority:
     frame = dict(meta_request_frame or {})
     mode = parse_meta_interaction_mode(meta_interaction_mode or {})
@@ -399,6 +400,16 @@ def build_meta_context_authority(
                 ("assistant_fallback",),
             )
             strict_working_memory_gating = True
+
+    # CCF4: Bei expliziter Personalisierungsanfrage wird preference_profile
+    # bounded zugelassen. Andere Drift-Quellen (semantic_recall, document_knowledge)
+    # bleiben gesperrt, ausser sie sind bereits explizit zugelassen.
+    if is_personal_assessment:
+        if "preference_profile" not in allowed_context_classes:
+            allowed_context_classes = (*allowed_context_classes, "preference_profile")
+        forbidden_context_classes = tuple(
+            c for c in forbidden_context_classes if c != "preference_profile"
+        )
 
     # CCF1: Bei Follow-ups innerhalb derselben Session muss conversation_state
     # immer als erlaubte Klasse bleiben und KURZZEITKONTEXT muss im Working-Memory
