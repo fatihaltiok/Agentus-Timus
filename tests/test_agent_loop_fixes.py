@@ -1158,6 +1158,47 @@ async def test_meta_docs_status_direct_answer_uses_frame_bound_evidence_context(
 
 
 @pytest.mark.asyncio
+async def test_meta_advisory_direct_recommendation_injects_answer_threshold_context(monkeypatch):
+    captured = {}
+
+    async def _fake_build_meta_context(self):
+        return "# TIMUS SYSTEM-KONTEXT\nAktive Routinen: irrelevant"
+
+    async def _fake_base_run(self, task: str):
+        captured["enhanced_task"] = task
+        return "Final Answer: Fahrt nach Mainz ins Gutenberg-Museum und spaeter ans Rheinufer."
+
+    monkeypatch.setattr(MetaAgent, "_build_meta_context", _fake_build_meta_context)
+
+    with patch.object(BaseAgent, "run", new=_fake_base_run):
+        agent = MetaAgent(tools_description_string="", skip_model_validation=True)
+        task = (
+            "# META ORCHESTRATION HANDOFF\n"
+            "meta_request_frame_json: "
+            '{"frame_kind":"followup","task_domain":"travel_advisory","execution_mode":"answer_directly",'
+            '"primary_objective":"ich hab Lust einen Ausflug zu machen"}\n'
+            "meta_clarity_contract_json: "
+            '{"primary_objective":"ich hab Lust einen Ausflug zu machen",'
+            '"request_kind":"direct_recommendation","answer_obligation":"answer_now_with_single_recommendation",'
+            '"completion_condition":"concrete_trip_recommendations_named","direct_answer_required":true}\n'
+            "meta_context_bundle_json: "
+            '{"active_goal":"Ausflug am Wochenende mit Kultur","open_loop":"konkrete Vorschlaege fuer Frankfurt-Umfeld",'
+            '"next_expected_step":"konkrete Vorschlaege fuer naechstes Wochenende","current_query":"was kannst du mir fuer das naechste Wochenende empfehlen"}\n'
+            "\n"
+            "# ORIGINAL USER TASK\n"
+            "was kannst du mir fuer das naechste Wochenende empfehlen\n"
+        )
+        result = await agent.run(task)
+
+    assert "Mainz" in result
+    assert "# ADVISORY-ANTWORTSCHWELLE" in captured["enhanced_task"]
+    assert "Der Nutzer will jetzt eine konkrete Empfehlung" in captured["enhanced_task"]
+    assert "Aktive Anker:" in captured["enhanced_task"]
+    assert "Ausflug am Wochenende mit Kultur" in captured["enhanced_task"]
+    assert "konkrete Vorschlaege fuer Frankfurt-Umfeld" in captured["enhanced_task"]
+
+
+@pytest.mark.asyncio
 async def test_meta_setup_build_runtime_context_binds_to_original_user_task(monkeypatch):
     captured = {}
 
@@ -1333,6 +1374,176 @@ async def test_meta_clarity_blocks_parallel_delegation_for_docs_direct_answer(mo
     assert "Meta-Clarity Korrektur" in last_user_messages[1]
     assert "erlaubte_delegate_agents: document" in last_user_messages[1]
     assert "Kein anderer delegate_to_agent. Kein delegate_multiple_agents." in last_user_messages[1]
+
+
+def test_meta_frame_answer_redirect_rejects_question_shaped_direct_recommendation():
+    agent = BaseAgent(
+        system_prompt_template="Du bist ein Test-Agent.",
+        tools_description_string="",
+        max_iterations=2,
+        agent_type="meta",
+        skip_model_validation=True,
+    )
+    task = (
+        "# META ORCHESTRATION HANDOFF\n"
+        "meta_request_frame_json: "
+        '{"frame_kind":"followup","task_domain":"travel_advisory","execution_mode":"answer_directly",'
+        '"primary_objective":"ich hab Lust einen Ausflug zu machen"}\n'
+        "meta_clarity_contract_json: "
+        '{"primary_objective":"ich hab Lust einen Ausflug zu machen",'
+        '"request_kind":"direct_recommendation","answer_obligation":"answer_now_with_single_recommendation",'
+        '"completion_condition":"concrete_trip_recommendations_named","direct_answer_required":true}\n'
+        "\n"
+        "# ORIGINAL USER TASK\n"
+        "was kannst du mir fuer das naechste Wochenende empfehlen\n"
+    )
+    agent._current_task_text = task
+
+    try:
+        redirect = agent._build_meta_frame_answer_redirect_prompt(
+            task,
+            "Bevor ich dir was vorschlage, sag mir kurz ob ihr eher Museen oder Architektur wollt?",
+        )
+    finally:
+        asyncio.run(agent.http_client.aclose())
+
+    assert redirect is not None
+    assert "reask_instead_of_recommendation" in redirect
+    assert "Keine weitere Rueckfrage" in redirect
+
+
+def test_meta_frame_answer_redirect_allows_structured_recommendation_with_optional_next_step():
+    agent = BaseAgent(
+        system_prompt_template="Du bist ein Test-Agent.",
+        tools_description_string="",
+        max_iterations=2,
+        agent_type="meta",
+        skip_model_validation=True,
+    )
+    task = (
+        "# META ORCHESTRATION HANDOFF\n"
+        "meta_request_frame_json: "
+        '{"frame_kind":"followup","task_domain":"travel_advisory","execution_mode":"answer_directly",'
+        '"primary_objective":"ich hab Lust einen Ausflug zu machen"}\n'
+        "meta_clarity_contract_json: "
+        '{"primary_objective":"ich hab Lust einen Ausflug zu machen",'
+        '"request_kind":"direct_recommendation","answer_obligation":"answer_now_with_single_recommendation",'
+        '"completion_condition":"concrete_trip_recommendations_named","direct_answer_required":true}\n'
+        "\n"
+        "# ORIGINAL USER TASK\n"
+        "was kannst du mir fuer das naechste Wochenende empfehlen\n"
+    )
+    agent._current_task_text = task
+
+    try:
+        redirect = agent._build_meta_frame_answer_redirect_prompt(
+            task,
+            (
+                "**Kultur-Ausflug am Wochenende:**\n\n"
+                "1. Altstadt + kleines Museum\n"
+                "2. Schlosspark + Galerie\n"
+                "3. Kirche + Café\n\n"
+                "Wenn du willst, konkretisiere ich den besten davon."
+            ),
+        )
+    finally:
+        asyncio.run(agent.http_client.aclose())
+
+    assert redirect is None
+
+
+def test_meta_frame_answer_redirect_allows_markdown_numbered_recommendation():
+    agent = BaseAgent(
+        system_prompt_template="Du bist ein Test-Agent.",
+        tools_description_string="",
+        max_iterations=2,
+        agent_type="meta",
+        skip_model_validation=True,
+    )
+    task = (
+        "# META ORCHESTRATION HANDOFF\n"
+        "meta_request_frame_json: "
+        '{"frame_kind":"followup","task_domain":"travel_advisory","execution_mode":"answer_directly",'
+        '"primary_objective":"ich hab Lust einen Ausflug zu machen"}\n'
+        "meta_clarity_contract_json: "
+        '{"primary_objective":"ich hab Lust einen Ausflug zu machen",'
+        '"request_kind":"direct_recommendation","answer_obligation":"answer_now_with_single_recommendation",'
+        '"completion_condition":"concrete_trip_recommendations_named","direct_answer_required":true}\n'
+        "\n"
+        "# ORIGINAL USER TASK\n"
+        "was kannst du mir fuer das naechste Wochenende empfehlen\n"
+    )
+    agent._current_task_text = task
+
+    try:
+        redirect = agent._build_meta_frame_answer_redirect_prompt(
+            task,
+            (
+                "Drei konkrete Kulturausfluege fuer dein Wochenende:\n\n"
+                "**1. Museum + Altstadt-Kombination**\n"
+                "Ruhiger Einstieg, dann Spaziergang durch die Altstadt.\n\n"
+                "**2. Schloss oder historisches Anwesen**\n"
+                "Architektur, Geschichte und Park in einem Block.\n\n"
+                "**3. Kleinere Galerie oder Atelier-Ausstellung**\n"
+                "Persoenlicher, oft weniger ueberlaufen.\n\n"
+                "Wenn du willst, konkretisiere ich den passendsten davon."
+            ),
+        )
+    finally:
+        asyncio.run(agent.http_client.aclose())
+
+    assert redirect is None
+
+
+def test_meta_frame_answer_redirect_rejects_numbered_question_reask():
+    agent = BaseAgent(
+        system_prompt_template="Du bist ein Test-Agent.",
+        tools_description_string="",
+        max_iterations=2,
+        agent_type="meta",
+        skip_model_validation=True,
+    )
+    task = (
+        "# META ORCHESTRATION HANDOFF\n"
+        "meta_request_frame_json: "
+        '{"frame_kind":"followup","task_domain":"travel_advisory","execution_mode":"answer_directly",'
+        '"primary_objective":"ich hab Lust einen Ausflug zu machen"}\n'
+        "meta_clarity_contract_json: "
+        '{"primary_objective":"ich hab Lust einen Ausflug zu machen",'
+        '"request_kind":"direct_recommendation","answer_obligation":"answer_now_with_single_recommendation",'
+        '"completion_condition":"concrete_trip_recommendations_named","direct_answer_required":true}\n'
+        "\n"
+        "# ORIGINAL USER TASK\n"
+        "was kannst du mir fuer das naechste Wochenende empfehlen\n"
+    )
+    agent._current_task_text = task
+
+    try:
+        redirect = agent._build_meta_frame_answer_redirect_prompt(
+            task,
+            (
+                "Gut, lass uns das zusammen durchdenken.\n\n"
+                "Bevor ich dir konkrete Empfehlungen gebe, brauche ich noch ein paar Eckdaten:\n\n"
+                "1. Welche Stadt oder Region meinst du?\n"
+                "2. Was bedeutet Kultur fuer dich genau?\n"
+                "3. Ruhe oder Trubel?\n"
+                "4. Ganzes Wochenende oder nur ein Tag?\n"
+            ),
+        )
+    finally:
+        asyncio.run(agent.http_client.aclose())
+
+    assert redirect is not None
+    assert "reask_instead_of_recommendation" in redirect
+
+
+def test_detect_meta_answer_domain_does_not_treat_city_mentions_as_location_route():
+    answer = (
+        "Frankfurt direkt vor der Tuer waere die einfache Variante. "
+        "Offenbach, Mainz oder Wiesbaden waeren auch moeglich, wenn du rausfahren willst."
+    )
+
+    assert BaseAgent._detect_meta_answer_domain(answer) != "location_route"
 
 
 def test_meta_clarity_blocks_parallel_delegation_for_setup_build():

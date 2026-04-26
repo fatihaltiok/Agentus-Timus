@@ -116,6 +116,80 @@ _STANDALONE_QUESTION_HINTS = (
     "wieso ",
 )
 
+_ADVISORY_RECOMMENDATION_HINTS = (
+    "mach jetzt vorschläge",
+    "mach jetzt vorschlaege",
+    "mach vorschläge",
+    "mach vorschlaege",
+    "schlag was vor",
+    "schlage was vor",
+    "was kannst du mir",
+    "was empfiehlst du",
+    "empfiehl mir",
+    "du weißt doch wofür",
+    "du weisst doch wofuer",
+)
+
+_CONSTRAINT_TIME_HINTS = (
+    "heute",
+    "morgen",
+    "wochenende",
+    "nächstes wochenende",
+    "naechstes wochenende",
+    "ganzen tag",
+    "nachmittag",
+    "abend",
+    "vormittag",
+)
+
+_CONSTRAINT_LOCATION_HINTS = (
+    "bin in ",
+    "in frankfurt",
+    "in deutschland",
+    "lokal",
+    "lokale ecken",
+    "stadt",
+    "region",
+)
+
+_CONSTRAINT_STYLE_HINTS = (
+    "in ruhe",
+    "entspannt",
+    "ruhig",
+    "raus",
+    "atmosphäre",
+    "atmosphaere",
+    "beobachte leute",
+)
+
+_CONSTRAINT_ACTIVITY_HINTS = (
+    "kultur",
+    "natur",
+    "museen",
+    "museum",
+    "ausstellungen",
+    "ausstellung",
+    "architektur",
+    "essen",
+    "trinken",
+    "nachtleben",
+    "shopping",
+    "cafés",
+    "cafes",
+)
+
+_CONSTRAINT_COMPANY_HINTS = (
+    "mit freunden",
+    "mit einer freundin",
+    "mit meinem freund",
+    "zu zweit",
+    "alleine",
+    "solo",
+    "familie",
+    "kids",
+    "mit kindern",
+)
+
 _TECHNICAL_DOMAINS = {
     "setup_build",
     "skill_creation",
@@ -131,6 +205,7 @@ _KNOWLEDGE_DOMAINS = {"migration_work", "research_advisory"}
 _ADVISORY_DOMAINS = {"topic_advisory"}
 _THINK_PARTNER_DOMAINS = {"travel_advisory", "topic_advisory", "life_advisory", "self_status"}
 _INSPECT_DOMAINS = {"docs_status", "research_advisory"}
+_STATEFUL_ADVISORY_DOMAINS = {"travel_advisory", "topic_advisory", "life_advisory"}
 
 
 def _token_count(text: str) -> int:
@@ -176,9 +251,116 @@ def _looks_like_standalone_question(query: str) -> bool:
     return _contains_any(lowered, _STANDALONE_QUESTION_HINTS)
 
 
+def _is_stateful_advisory_domain(*domains: str) -> bool:
+    return any(_clean_text(domain, limit=64).lower() in _STATEFUL_ADVISORY_DOMAINS for domain in domains)
+
+
+def _collect_constraint_signals(*texts: str) -> tuple[str, ...]:
+    signals: list[str] = []
+    for raw in texts:
+        lowered = _clean_text(raw, limit=320).lower()
+        if not lowered:
+            continue
+        if _contains_any(lowered, _CONSTRAINT_TIME_HINTS) and "time_window" not in signals:
+            signals.append("time_window")
+        if _contains_any(lowered, _CONSTRAINT_LOCATION_HINTS) and "location_scope" not in signals:
+            signals.append("location_scope")
+        if _contains_any(lowered, _CONSTRAINT_STYLE_HINTS) and "style_preference" not in signals:
+            signals.append("style_preference")
+        if _contains_any(lowered, _CONSTRAINT_ACTIVITY_HINTS) and "activity_preference" not in signals:
+            signals.append("activity_preference")
+        if _contains_any(lowered, _CONSTRAINT_COMPANY_HINTS) and "company_context" not in signals:
+            signals.append("company_context")
+    return tuple(signals)
+
+
+def _looks_like_advisory_answer_request(query: str) -> bool:
+    lowered = _clean_text(query, limit=320).lower()
+    return _contains_any(lowered, _ADVISORY_RECOMMENDATION_HINTS)
+
+
+def _looks_like_constraint_update(
+    *,
+    query: str,
+    active_topic: str,
+    open_goal: str,
+    next_step: str,
+    active_domain: str,
+) -> bool:
+    lowered = _clean_text(query, limit=320).lower()
+    if not lowered:
+        return False
+    if not _is_stateful_advisory_domain(active_domain):
+        return False
+    if not any(str(item or "").strip() for item in (active_topic, open_goal, next_step)):
+        return False
+    if _looks_like_advisory_answer_request(lowered):
+        return False
+    if _contains_any(lowered, _THINK_HINTS + _INSPECT_HINTS + _RESEARCH_HINTS + _EXECUTE_HINTS + _CLARIFY_HINTS):
+        return False
+    if _contains_any(lowered, _CORRECTION_HINTS):
+        return False
+    if "?" in lowered:
+        return False
+    if _token_count(lowered) > 18:
+        return False
+    return bool(_collect_constraint_signals(lowered))
+
+
+def _advisory_answer_ready(
+    *,
+    query: str,
+    active_topic: str,
+    open_goal: str,
+    next_step: str,
+    active_domain: str,
+    recent_user_turns: Iterable[str] | None = None,
+) -> bool:
+    lowered = _clean_text(query, limit=320).lower()
+    if not lowered or not _is_stateful_advisory_domain(active_domain):
+        return False
+    if not any(str(item or "").strip() for item in (active_topic, open_goal, next_step)):
+        return False
+    if not _looks_like_advisory_answer_request(lowered):
+        return False
+    signals = _collect_constraint_signals(
+        lowered,
+        active_topic,
+        open_goal,
+        *list(recent_user_turns or ())[-4:],
+    )
+    return len(signals) >= 3
+
+
+def _build_advisory_constraint_summary(
+    *,
+    query: str,
+    active_domain: str,
+    recent_user_turns: Iterable[str] | None = None,
+    open_goal: str = "",
+) -> str:
+    if not _is_stateful_advisory_domain(active_domain):
+        return ""
+    selected: list[str] = []
+    for raw in [*(recent_user_turns or ()), query]:
+        cleaned = _clean_text(raw, limit=120)
+        lowered = cleaned.lower()
+        if not cleaned or "?" in cleaned:
+            continue
+        if _looks_like_advisory_answer_request(lowered):
+            continue
+        if _collect_constraint_signals(cleaned) or not selected:
+            if cleaned not in selected:
+                selected.append(cleaned)
+    cleaned_goal = _clean_text(open_goal, limit=120)
+    if cleaned_goal and "?" not in cleaned_goal and cleaned_goal not in selected:
+        selected.append(cleaned_goal)
+    return " | ".join(selected[:3])
+
+
 def _interaction_mode_for_kernel(turn_kind: str, candidate_domain: str) -> str:
     domain = _clean_text(candidate_domain, limit=64).lower()
-    if turn_kind in {"think", "inform", "clarify"}:
+    if turn_kind in {"think", "inform", "constraint_update", "clarify"}:
         return "think_partner"
     if turn_kind == "inspect":
         return "inspect"
@@ -218,6 +400,8 @@ class GeneralDecisionKernel:
     execution_permission: str
     confidence: float
     clarify_if_below_threshold: bool
+    answer_ready: bool
+    constraint_summary: str
     rationale: str
     evidence: Tuple[str, ...]
 
@@ -238,6 +422,8 @@ def parse_general_decision_kernel(value: Mapping[str, Any] | None) -> Dict[str, 
         "execution_permission": _clean_text(payload.get("execution_permission"), limit=32).lower(),
         "confidence": round(float(payload.get("confidence") or 0.0), 2),
         "clarify_if_below_threshold": bool(payload.get("clarify_if_below_threshold")),
+        "answer_ready": bool(payload.get("answer_ready")),
+        "constraint_summary": _clean_text(payload.get("constraint_summary"), limit=240),
         "rationale": _clean_text(payload.get("rationale"), limit=220),
         "evidence": [
             _clean_text(item, limit=120)
@@ -280,6 +466,7 @@ def _infer_turn_kind(
     task_domain: str,
     execution_mode: str,
     interaction_mode: str,
+    answer_ready: bool,
 ) -> tuple[str, list[str]]:
     lowered = _clean_text(query, limit=320).lower()
     evidence: list[str] = []
@@ -308,6 +495,20 @@ def _infer_turn_kind(
     if _contains_any(lowered, _EXECUTE_HINTS):
         evidence.append("query:execute")
         return "execute", evidence
+    if answer_ready:
+        evidence.append("state:answer_ready")
+        if _looks_like_advisory_answer_request(lowered):
+            evidence.append("query:advisory_answer_request")
+        return "inform", evidence
+    if _looks_like_constraint_update(
+        query=lowered,
+        active_topic=active_topic,
+        open_goal=open_goal,
+        next_step=next_step,
+        active_domain=active_domain or task_domain,
+    ):
+        evidence.append("query:constraint_update")
+        return "constraint_update", evidence
     if (turn_type == "followup" or response == "resume_open_loop") and not _looks_like_standalone_question(lowered):
         evidence.append("turn_or_response:resume")
         return "resume", evidence
@@ -353,6 +554,8 @@ def _infer_evidence_requirement(turn_kind: str, task_domain: str) -> str:
         return "none"
     if turn_kind == "inform":
         return "bounded" if task_domain == "docs_status" else "none"
+    if turn_kind == "constraint_update":
+        return "state_bound"
     if turn_kind == "inspect":
         return "bounded"
     if turn_kind == "research":
@@ -366,7 +569,7 @@ def _infer_evidence_requirement(turn_kind: str, task_domain: str) -> str:
 
 def _infer_execution_permission(turn_kind: str, interaction_mode: str, task_domain: str) -> str:
     mode = _clean_text(interaction_mode, limit=32).lower()
-    if turn_kind in {"think", "inform", "clarify"}:
+    if turn_kind in {"think", "inform", "constraint_update", "clarify"}:
         return "forbidden"
     if turn_kind == "resume":
         if mode == "think_partner":
@@ -395,6 +598,8 @@ def build_general_decision_kernel(
     next_step: str = "",
     active_domain: str = "",
     has_active_plan: bool = False,
+    recent_user_turns: Iterable[str] | None = None,
+    recent_assistant_turns: Iterable[str] | None = None,
     meta_request_frame: Mapping[str, Any] | None = None,
     meta_interaction_mode: Mapping[str, Any] | None = None,
 ) -> GeneralDecisionKernel:
@@ -406,6 +611,20 @@ def build_general_decision_kernel(
     execution_mode = _clean_text(frame.get("execution_mode"), limit=64).lower()
     frame_confidence = float(frame.get("confidence") or 0.0)
     explicit_override = bool(mode.get("explicit_override"))
+    answer_ready = _advisory_answer_ready(
+        query=effective_query,
+        active_topic=active_topic,
+        open_goal=open_goal,
+        next_step=next_step,
+        active_domain=task_domain or active_domain,
+        recent_user_turns=recent_user_turns,
+    )
+    constraint_summary = _build_advisory_constraint_summary(
+        query=effective_query,
+        active_domain=task_domain or active_domain,
+        recent_user_turns=recent_user_turns,
+        open_goal=open_goal,
+    )
 
     turn_kind, turn_evidence = _infer_turn_kind(
         query=effective_query,
@@ -420,6 +639,7 @@ def build_general_decision_kernel(
         task_domain=task_domain,
         execution_mode=execution_mode,
         interaction_mode=interaction_mode,
+        answer_ready=answer_ready,
     )
     if not interaction_mode:
         interaction_mode = _interaction_mode_for_kernel(turn_kind, task_domain)
@@ -432,6 +652,10 @@ def build_general_decision_kernel(
         confidence = max(confidence, 0.9)
     elif any(item.startswith("frame_or_query:clarify") for item in turn_evidence):
         confidence = max(confidence, 0.82)
+    elif any(item == "state:answer_ready" for item in turn_evidence):
+        confidence = max(confidence, 0.86)
+    elif turn_kind == "constraint_update":
+        confidence = max(confidence, 0.8)
     elif turn_kind == "resume" and any(
         str(item or "").strip() for item in (active_topic, open_goal, next_step, active_domain)
     ):
@@ -450,7 +674,7 @@ def build_general_decision_kernel(
         confidence = max(confidence, 0.68)
     confidence = round(max(0.0, min(confidence, 1.0)), 2)
 
-    clarify_if_below_threshold = confidence < 0.6 and turn_kind not in {"clarify", "resume"}
+    clarify_if_below_threshold = confidence < 0.6 and turn_kind not in {"clarify", "resume", "constraint_update"}
     rationale = " | ".join(
         part
         for part in (
@@ -482,6 +706,8 @@ def build_general_decision_kernel(
         execution_permission=execution_permission,
         confidence=confidence,
         clarify_if_below_threshold=clarify_if_below_threshold,
+        answer_ready=answer_ready,
+        constraint_summary=constraint_summary,
         rationale=rationale,
         evidence=evidence,
     )

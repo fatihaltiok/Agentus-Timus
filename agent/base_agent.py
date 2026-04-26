@@ -157,9 +157,6 @@ _META_LOCATION_ROUTE_PATTERNS = (
     "destination_query",
     "mit dem auto",
     "driving",
-    "offenbach",
-    "münster",
-    "muenster",
 )
 _META_SKILL_RESPONSE_PATTERNS = (
     "skill-creator",
@@ -1732,6 +1729,42 @@ class BaseAgent(DynamicToolMixin):
             return "location_route"
         return ""
 
+    @staticmethod
+    def _looks_like_direct_recommendation_reask(text: str) -> bool:
+        lowered = str(text or "").strip().lower()
+        if not lowered:
+            return False
+        strong_reask_patterns = (
+            "sag mir kurz",
+            "sag mir,",
+            "sag mir ",
+            "bevor ich dir",
+            "brauch ich noch",
+            "ich brauche noch",
+            "was genau",
+            "wo bist du",
+            "mit wem",
+            "welche tageszeit",
+            "welche art",
+            "meinst du",
+            "damit ich dir",
+            "worum geht",
+            "welche stadt",
+            "welche region",
+            "ruhe oder trubel",
+            "ganzes wochenende",
+            "nur ein tag",
+        )
+        if any(pattern in lowered for pattern in strong_reask_patterns):
+            return True
+        numbered_markers = len(re.findall(r"(?:^|\n)\s*(?:\*\*)?\d+\.", lowered))
+        bullet_markers = len(re.findall(r"(?:^|\n)\s*[-*]\s+", lowered))
+        if numbered_markers >= 2 or (numbered_markers >= 1 and bullet_markers >= 2):
+            return False
+        if "?" in lowered:
+            return True
+        return False
+
     @classmethod
     def _detect_meta_action_domain(cls, method: str, params: dict) -> str:
         method_clean = str(method or "").strip().lower()
@@ -1945,6 +1978,7 @@ class BaseAgent(DynamicToolMixin):
         frame_kind = str((frame or {}).get("frame_kind") or "").strip().lower()
         execution_mode = str((frame or {}).get("execution_mode") or "").strip().lower()
         direct_answer_required = bool(clarity_contract.get("direct_answer_required"))
+        answer_obligation = str(clarity_contract.get("answer_obligation") or "").strip().lower()
 
         objective_lower = primary_objective.lower()
         if answer_domain == "skill_creation" and (
@@ -1960,6 +1994,36 @@ class BaseAgent(DynamicToolMixin):
             return None
         if answer_domain == "docs_status" and objective_domain == "docs_status":
             return None
+
+        if (
+            objective_domain in {
+                "travel_advisory",
+                "topic_advisory",
+                "life_advisory",
+                "planning_advisory",
+                "general_advisory",
+            }
+            and (
+                request_kind == "direct_recommendation"
+                or answer_obligation == "answer_now_with_single_recommendation"
+            )
+            and self._looks_like_direct_recommendation_reask(result)
+        ):
+            completion_condition = str(clarity_contract.get("completion_condition") or "").strip()
+            request_hint = request_kind or frame_kind or execution_mode or "unknown"
+            return (
+                "Meta-Frame-Korrektur:\n"
+                f"- primary_objective: {primary_objective}\n"
+                f"- task_domain: {objective_domain or 'unknown'}\n"
+                f"- request_kind: {request_hint}\n"
+                "- erkannter_antwort_drift: reask_instead_of_recommendation\n"
+                f"- completion_condition: {completion_condition}\n"
+                "Die letzte Antwort fragt erneut nach Kontext, obwohl jetzt eine direkte Empfehlung faellig ist.\n"
+                "Keine weitere Rueckfrage. Kein Kontext-Reset. Kein Hinweis, dass noch Infos fehlen.\n"
+                "Nutze die vorhandenen Constraints aus aktuellem Turn, Verlauf und Open Loop.\n"
+                "Antworte jetzt direkt mit 2 bis 4 konkreten Vorschlaegen und kurzer Begruendung je Vorschlag im Format:\n"
+                "Final Answer: ..."
+            )
 
         mismatch = False
         if answer_domain in {"skill_creation", "location_route", "setup_build", "migration_work"}:

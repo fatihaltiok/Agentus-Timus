@@ -36,7 +36,7 @@ from orchestration.meta_request_frame import (
     build_meta_request_frame,
     infer_meta_task_domain_hint,
 )
-from orchestration.meta_response_policy import build_meta_policy_input, resolve_meta_response_policy
+from orchestration.meta_response_policy import MetaPolicyDecision, build_meta_policy_input, resolve_meta_response_policy
 from orchestration.specialist_context import build_specialist_context_payload
 from orchestration.task_decomposition_contract import build_task_decomposition
 from orchestration.topic_state_history import parse_historical_topic_recall_hint, select_historical_topic_memory
@@ -3603,9 +3603,21 @@ def classify_meta_task(
         next_step=str(next_step or ""),
         active_domain=str(meta_context_bundle.active_domain or carried_domain or provisional_task_domain or ""),
         has_active_plan=bool(active_plan),
+        recent_user_turns=recent_user_turns,
+        recent_assistant_turns=recent_assistant_turns,
         meta_request_frame=None,
         meta_interaction_mode=None,
     )
+    advisory_constraint_summary = str(kernel_seed.constraint_summary or "").strip()
+    if (
+        advisory_constraint_summary
+        and kernel_seed.turn_kind in {"constraint_update", "inform"}
+        and kernel_seed.topic_family in {"travel", "advisory", "personal_productivity"}
+    ):
+        open_goal = advisory_constraint_summary
+        next_step = advisory_constraint_summary
+        if not str(active_topic or "").strip():
+            active_topic = advisory_constraint_summary
     gdk_generic_task_types = {
         "single_lane",
         "general_task",
@@ -3616,17 +3628,31 @@ def classify_meta_task(
     }
     kernel_turn_type = turn_interpretation.dominant_turn_type
     kernel_response_mode = turn_interpretation.response_mode
-    if kernel_seed.turn_kind == "resume" and kernel_turn_type != "followup":
+    if kernel_seed.turn_kind in {"resume", "constraint_update"} and kernel_turn_type not in {"followup", "correction"}:
         kernel_turn_type = "followup"
     if (
-        kernel_seed.turn_kind == "resume"
+        kernel_seed.answer_ready
+        and kernel_seed.interaction_mode == "think_partner"
+        and kernel_turn_type not in {"followup", "correction"}
+        and any(str(item or "").strip() for item in (active_topic, open_goal, next_step))
+    ):
+        kernel_turn_type = "followup"
+    if (
+        kernel_seed.turn_kind in {"resume", "constraint_update"}
         and kernel_response_mode
         not in {"resume_open_loop", "correct_previous_path", "acknowledge_and_store"}
     ):
         kernel_response_mode = "resume_open_loop"
+    if (
+        kernel_seed.turn_kind == "inform"
+        and kernel_seed.answer_ready
+        and kernel_seed.interaction_mode == "think_partner"
+        and kernel_seed.topic_family in {"travel", "advisory", "personal_productivity"}
+    ):
+        kernel_response_mode = "summarize_state"
     if kernel_seed.execution_permission == "forbidden":
         deduped_chain = ["meta"]
-        if task_type in gdk_generic_task_types or kernel_seed.turn_kind in {"think", "inform", "resume", "clarify"}:
+        if task_type in gdk_generic_task_types or kernel_seed.turn_kind in {"think", "inform", "resume", "constraint_update", "clarify"}:
             task_type = "single_lane"
         if not str(reason or "").strip() or str(reason or "").strip() in {
             "single_lane",
@@ -3689,6 +3715,52 @@ def classify_meta_task(
         ),
         confidence=float(admitted_bundle.get("confidence") or 0.0),
     )
+    if (
+        advisory_constraint_summary
+        and kernel_seed.turn_kind in {"constraint_update", "inform"}
+        and kernel_seed.topic_family in {"travel", "advisory", "personal_productivity"}
+    ):
+        rewritten_slots: List[MetaContextSlot] = []
+        open_loop_rewritten = False
+        for slot in meta_context_bundle.context_slots:
+            if slot.slot == "open_loop":
+                rewritten_slots.append(
+                    MetaContextSlot(
+                        slot="open_loop",
+                        priority=slot.priority,
+                        content=advisory_constraint_summary,
+                        source="constraint_summary",
+                        evidence_class="conversation_state",
+                    )
+                )
+                open_loop_rewritten = True
+            else:
+                rewritten_slots.append(slot)
+        if not open_loop_rewritten:
+            rewritten_slots.append(
+                MetaContextSlot(
+                    slot="open_loop",
+                    priority=max(1, len(rewritten_slots) + 1),
+                    content=advisory_constraint_summary,
+                    source="constraint_summary",
+                    evidence_class="conversation_state",
+                )
+            )
+        meta_context_bundle = MetaContextBundle(
+            schema_version=meta_context_bundle.schema_version,
+            current_query=meta_context_bundle.current_query,
+            bundle_reason=meta_context_bundle.bundle_reason,
+            active_topic=meta_context_bundle.active_topic or advisory_constraint_summary,
+            active_goal=advisory_constraint_summary,
+            active_domain=meta_context_bundle.active_domain,
+            open_loop=advisory_constraint_summary,
+            next_expected_step=advisory_constraint_summary,
+            turn_type=meta_context_bundle.turn_type,
+            response_mode=meta_context_bundle.response_mode,
+            context_slots=tuple(rewritten_slots),
+            suppressed_context=meta_context_bundle.suppressed_context,
+            confidence=meta_context_bundle.confidence,
+        )
     preference_memory_selection = dict(admitted_context.get("preference_memory_selection") or {})
     frame_routing = apply_meta_request_frame_routing(
         pre_policy_frame.to_dict(),
@@ -3725,6 +3797,27 @@ def classify_meta_task(
         meta_request_frame=pre_policy_frame.to_dict(),
     )
     policy_decision = resolve_meta_response_policy(policy_input)
+    if (
+        kernel_seed.answer_ready
+        and kernel_seed.interaction_mode == "think_partner"
+        and kernel_seed.topic_family in {"travel", "advisory", "personal_productivity"}
+    ):
+        policy_decision = MetaPolicyDecision(
+            response_mode="summarize_state",
+            policy_reason="general_decision_answer_ready",
+            policy_confidence=max(kernel_seed.confidence, 0.84),
+            answer_shape="direct_recommendation",
+            should_delegate=False,
+            should_store_preference=False,
+            should_resume_open_loop=False,
+            should_summarize_state=True,
+            self_model_bound_applied=False,
+            policy_signals=("general_decision_kernel_answer_ready",),
+            override_applied=True,
+            agent_chain_override=("meta",),
+            task_type_override="single_lane",
+            recipe_enabled=False,
+        )
     final_task_type = task_type
     final_reason = reason
     final_chain = list(deduped_chain)
@@ -4069,9 +4162,18 @@ def classify_meta_task(
         next_step=str(next_step or ""),
         active_domain=str(meta_request_frame.task_domain or meta_context_bundle.active_domain or carried_domain or provisional_task_domain or ""),
         has_active_plan=bool(active_plan),
+        recent_user_turns=recent_user_turns,
+        recent_assistant_turns=recent_assistant_turns,
         meta_request_frame=meta_request_frame.to_dict(),
         meta_interaction_mode=meta_interaction_mode.to_dict(),
     )
+    resolved_dominant_turn_type = turn_interpretation.dominant_turn_type
+    if (
+        resolved_dominant_turn_type
+        not in {"correction", "behavior_instruction", "approval_response", "auth_response", "handover_resume"}
+        and kernel_turn_type == "followup"
+    ):
+        resolved_dominant_turn_type = "followup"
     resolved_active_domain = (
         str(meta_request_frame.task_domain or meta_context_bundle.active_domain or provisional_task_domain or "").strip()
         or None
@@ -4101,7 +4203,7 @@ def classify_meta_task(
         "next_step": next_step,
         "active_topic_reused": active_topic_reused,
         "compressed_followup_parsed": compressed_followup_parsed,
-        "dominant_turn_type": turn_interpretation.dominant_turn_type,
+        "dominant_turn_type": resolved_dominant_turn_type,
         "turn_signals": list(turn_interpretation.turn_signals),
         "response_mode": final_response_mode,
         "state_effects": turn_interpretation.state_effects.to_dict(),

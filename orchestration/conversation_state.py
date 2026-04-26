@@ -944,6 +944,15 @@ def apply_turn_interpretation(
         next_expected_step = cleaned_next_step or cleaned_query
     elif response_mode == "resume_open_loop" and not next_expected_step and current.open_loop:
         next_expected_step = current.open_loop
+    if (
+        response_mode == "resume_open_loop"
+        and dominant_turn_type == "followup"
+        and cleaned_domain in {"travel_advisory", "topic_advisory", "life_advisory"}
+        and cleaned_next_step
+        and not _looks_like_question(cleaned_next_step)
+    ):
+        open_loop = cleaned_next_step
+        next_expected_step = cleaned_next_step
 
     if transition.topic_shift_detected or domain_shift_detected:
         active_topic_value = transition.next_topic or cleaned_query or active_topic_value
@@ -956,6 +965,16 @@ def apply_turn_interpretation(
             sources = _append_source(sources, "topic_shift")
         if domain_shift_detected:
             sources = _append_source(sources, "domain_shift")
+
+    if (
+        response_mode == "resume_open_loop"
+        and dominant_turn_type == "followup"
+        and cleaned_domain in {"travel_advisory", "topic_advisory", "life_advisory"}
+        and cleaned_next_step
+        and not _looks_like_question(cleaned_next_step)
+    ):
+        open_loop = cleaned_next_step
+        next_expected_step = cleaned_next_step
 
     if incoming_plan and not transition.topic_shift_detected and not domain_shift_detected:
         active_plan_state = incoming_plan

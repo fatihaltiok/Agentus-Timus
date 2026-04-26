@@ -356,6 +356,86 @@ async def test_run_agent_meta_handoff_respects_authoritative_travel_followup_pol
 
 
 @pytest.mark.asyncio
+async def test_run_agent_meta_handoff_uses_current_user_query_from_followup_capsule(monkeypatch):
+    import main_dispatcher
+    from orchestration.meta_orchestration import classify_meta_task
+    from orchestration.meta_self_state import build_meta_self_state as _build_meta_self_state
+
+    _patch_dispatcher_dependencies(monkeypatch)
+    monkeypatch.setitem(main_dispatcher.AGENT_CLASS_MAP, "meta", _DummyMetaAgent)
+    monkeypatch.setattr(
+        main_dispatcher,
+        "build_meta_self_state",
+        lambda payload, learning: _build_meta_self_state(
+            payload,
+            learning,
+            _stable_runtime_constraints(),
+        ),
+    )
+
+    calls = []
+    monkeypatch.setattr(
+        main_dispatcher,
+        "_log_interaction_deterministic",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    captured = {}
+    original_builder = main_dispatcher._build_meta_handoff_payload
+
+    def _capture_handoff_query(query: str, *, policy_override=None):
+        captured["query"] = query
+        return original_builder(query, policy_override=policy_override)
+
+    monkeypatch.setattr(main_dispatcher, "_build_meta_handoff_payload", _capture_handoff_query)
+
+    authoritative_policy = classify_meta_task(
+        "was kannst du mir fuer das naechste Wochenende empfehlen",
+        action_count=0,
+        conversation_state={
+            "session_id": "sess_travel_capsule",
+            "active_goal": "ich hab Lust einen Ausflug zu machen",
+            "active_topic": "",
+            "active_domain": "travel_advisory",
+            "open_loop": "Welche Region oder Stadt soll im Fokus stehen?",
+            "next_expected_step": "Welche Region oder Stadt soll im Fokus stehen?",
+            "turn_type_hint": "followup",
+        },
+        recent_user_turns=[
+            "ich hab Lust einen Ausflug zu machen",
+            "am Wochenende in Ruhe Stadt",
+            "einen Ausflug mit Kultur",
+        ],
+        recent_assistant_turns=[
+            "Schoen. Was fuer ein Ausflug?",
+            "Kulturausflug - schoen. Aber wo und wann?",
+        ],
+    )
+
+    followup_capsule = (
+        "# FOLLOW-UP CONTEXT\n"
+        "session_id: sess_travel_capsule\n"
+        "active_goal: ich hab Lust einen Ausflug zu machen\n\n"
+        "# CURRENT USER QUERY\n"
+        "was kannst du mir fuer das naechste Wochenende empfehlen"
+    )
+
+    result = await main_dispatcher.run_agent(
+        agent_name="meta",
+        query=followup_capsule,
+        tools_description="tools",
+        session_id="sess_travel_capsule",
+        meta_handoff_policy=authoritative_policy,
+    )
+
+    assert captured["query"] == "was kannst du mir fuer das naechste Wochenende empfehlen"
+    assert "# ORIGINAL USER TASK\nwas kannst du mir fuer das naechste Wochenende empfehlen" in result
+    assert "# FOLLOW-UP CONTEXT" not in result
+    assert calls[0]["metadata"]["meta_original_user_query"] == "was kannst du mir fuer das naechste Wochenende empfehlen"
+    assert calls[0]["metadata"]["meta_followup_capsule_query"].startswith("# FOLLOW-UP CONTEXT")
+
+
+@pytest.mark.asyncio
 async def test_real_meta_agent_can_execute_structured_route_recipe_without_llm_init(monkeypatch):
     import main_dispatcher
     from agent.agents.meta import MetaAgent

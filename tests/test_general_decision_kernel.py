@@ -82,17 +82,47 @@ def test_build_general_decision_kernel_for_short_resume_update() -> None:
         open_goal="Hey Timus ich bin in Frankfurt sitze am Main was könnte ich heute machen",
         next_step="Wetter? Zeit? Was fuer Ecken?",
         active_domain="topic_advisory",
+        recent_user_turns=["Hey Timus ich bin in Frankfurt sitze am Main was könnte ich heute machen"],
         meta_request_frame=None,
         meta_interaction_mode=None,
     ).to_dict()
 
-    assert kernel["turn_kind"] == "resume"
+    assert kernel["turn_kind"] == "constraint_update"
     assert kernel["topic_family"] == "advisory"
     assert kernel["interaction_mode"] == "think_partner"
     assert kernel["evidence_requirement"] == "state_bound"
     assert kernel["execution_permission"] == "forbidden"
     assert kernel["confidence"] >= 0.78
-    assert "query:short_resume_update" in kernel["evidence"]
+    assert kernel["answer_ready"] is False
+    assert "Wetter sonnig Zeit ganzen Tag lokale Ecken" in kernel["constraint_summary"]
+    assert "query:constraint_update" in kernel["evidence"]
+
+
+def test_build_general_decision_kernel_marks_advisory_followup_ready_for_answer() -> None:
+    kernel = build_general_decision_kernel(
+        effective_query="was kannst du mir für das nächste Wochenende empfehlen",
+        dominant_turn_type="followup",
+        response_mode="resume_open_loop",
+        active_topic="einen Ausflug mit Kultur",
+        open_goal="ich hab Lust einen Ausflug zu machen",
+        next_step="Was ist dir bei Kultur wichtiger – Museen oder Architektur?",
+        active_domain="travel_advisory",
+        recent_user_turns=[
+            "ich hab Lust einen Ausflug zu machen",
+            "am Wochenende in Ruhe Stadt",
+            "einen Ausflug mit Kultur",
+        ],
+        meta_request_frame=None,
+        meta_interaction_mode=None,
+    ).to_dict()
+
+    assert kernel["turn_kind"] == "inform"
+    assert kernel["interaction_mode"] == "think_partner"
+    assert kernel["execution_permission"] == "forbidden"
+    assert kernel["answer_ready"] is True
+    assert "am Wochenende in Ruhe Stadt" in kernel["constraint_summary"]
+    assert "einen Ausflug mit Kultur" in kernel["constraint_summary"]
+    assert "state:answer_ready" in kernel["evidence"]
 
 
 def test_parse_general_decision_kernel_roundtrip() -> None:
@@ -106,6 +136,8 @@ def test_parse_general_decision_kernel_roundtrip() -> None:
             "execution_permission": "bounded",
             "confidence": 0.78,
             "clarify_if_below_threshold": False,
+            "answer_ready": False,
+            "constraint_summary": "am Wochenende in Ruhe Stadt | einen Ausflug mit Kultur",
             "rationale": "turn_kind:inspect | topic_family:document",
             "evidence": ["frame:direct_answer", "mode:inspect", "domain:docs_status"],
         }
@@ -117,3 +149,5 @@ def test_parse_general_decision_kernel_roundtrip() -> None:
     assert parsed["evidence_requirement"] == "bounded"
     assert parsed["execution_permission"] == "bounded"
     assert parsed["confidence"] == 0.78
+    assert parsed["answer_ready"] is False
+    assert parsed["constraint_summary"] == "am Wochenende in Ruhe Stadt | einen Ausflug mit Kultur"

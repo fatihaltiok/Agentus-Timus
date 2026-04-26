@@ -3485,17 +3485,18 @@ async def run_agent(
             agent_query = query
         else:
             clean_meta_query = _strip_meta_canvas_wrappers(query)
+            focus_meta_query = _extract_dispatcher_focus_query(clean_meta_query) or clean_meta_query
             meta_handoff = _build_meta_handoff_payload(
-                clean_meta_query,
+                focus_meta_query,
                 policy_override=meta_handoff_policy,
             )
             safe_original_task = shorten_for_preflight(
-                clean_meta_query,
+                focus_meta_query,
                 task_type=meta_handoff.get("task_type"),
                 recipe_id=meta_handoff.get("recommended_recipe_id"),
                 allowed_tools=(meta_handoff.get("task_packet") or {}).get("allowed_tools") or (),
             )
-            if safe_original_task != clean_meta_query:
+            if safe_original_task != focus_meta_query:
                 meta_handoff["task_decomposition"] = _compact_meta_task_decomposition(
                     meta_handoff.get("task_decomposition"),
                     safe_original_task,
@@ -3518,9 +3519,11 @@ async def run_agent(
                 recipe_id=meta_handoff.get("recommended_recipe_id"),
             )
             runtime_metadata["meta_orchestration"] = meta_handoff
-            runtime_metadata["meta_original_user_query"] = clean_meta_query
+            runtime_metadata["meta_original_user_query"] = focus_meta_query
+            if focus_meta_query != clean_meta_query:
+                runtime_metadata["meta_followup_capsule_query"] = clean_meta_query
             runtime_metadata["meta_handoff_preflight"] = dict(meta_handoff.get("request_preflight") or {})
-            runtime_metadata["meta_original_user_query_compacted"] = safe_original_task != clean_meta_query
+            runtime_metadata["meta_original_user_query_compacted"] = safe_original_task != focus_meta_query
             runtime_metadata["meta_query_wrapped"] = clean_meta_query != query
             agent_query = (
                 _render_meta_handoff_block(meta_handoff)

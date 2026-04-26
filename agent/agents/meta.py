@@ -3470,6 +3470,40 @@ class MetaAgent(BaseAgent):
             )
             return "\n".join(lines)
 
+        if answer_obligation == "answer_now_with_single_recommendation" and task_domain in {
+            "travel_advisory",
+            "topic_advisory",
+            "life_advisory",
+            "planning_advisory",
+            "general_advisory",
+        }:
+            bundle = payload.get("meta_context_bundle") if isinstance(payload.get("meta_context_bundle"), dict) else {}
+            anchors: list[str] = []
+            for value in (
+                bundle.get("active_goal"),
+                bundle.get("open_loop"),
+                bundle.get("next_expected_step"),
+                bundle.get("current_query"),
+                frame.get("goal_anchor"),
+                frame.get("topic_anchor"),
+            ):
+                cleaned = " ".join(str(value or "").strip().split())
+                if cleaned and cleaned not in anchors:
+                    anchors.append(cleaned)
+            lines = [
+                "# ADVISORY-ANTWORTSCHWELLE",
+                "Der Nutzer will jetzt eine konkrete Empfehlung, keine weitere Rueckfrage.",
+                "Nutze die bereits gesammelten Constraints aus aktuellem Turn, Verlauf und Open Loop.",
+                "Wenn Zeit, Ort, Modus oder Interessensrichtung schon erkennbar sind, verdichte sie stillschweigend.",
+                "Keine Rueckfrage wie 'wo/wann/mit wem/was genau', solange schon genug Hinweise fuer brauchbare Vorschlaege da sind.",
+                "Liefere jetzt 2 bis 4 konkrete Vorschlaege und begruende jeden kurz passend zu den erkannten Constraints.",
+            ]
+            if anchors:
+                lines.append("Aktive Anker:")
+                for anchor in anchors[:4]:
+                    lines.append(f"- {anchor}")
+            return "\n".join(lines)
+
         if task_domain == "setup_build":
             lines = [
                 "# SETUP-BUILD AUFTRAGSKLARHEIT",

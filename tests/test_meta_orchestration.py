@@ -1641,12 +1641,47 @@ def test_classify_meta_task_treats_short_constraint_followup_as_resume_not_live_
     frame = result["meta_request_frame"]
     kernel = result["general_decision_kernel"]
 
-    assert kernel["turn_kind"] == "resume"
+    assert kernel["turn_kind"] == "constraint_update"
     assert kernel["interaction_mode"] == "think_partner"
     assert result["recommended_agent_chain"] == ["meta"]
     assert result["task_type"] == "single_lane"
+    assert result["dominant_turn_type"] == "followup"
+    assert result["response_mode"] == "resume_open_loop"
     assert frame["task_domain"] in {"topic_advisory", "travel_advisory"}
     assert frame["execution_mode"] == "plan_and_delegate"
+
+
+def test_classify_meta_task_retargets_advisory_bundle_to_constraint_summary():
+    result = classify_meta_task(
+        "am Wochenende in Ruhe Stadt",
+        action_count=0,
+        conversation_state={
+            "session_id": "tg_travel_constraint_summary",
+            "active_topic": "",
+            "active_goal": "ich hab Lust einen Ausflug zu machen",
+            "active_domain": "travel_advisory",
+            "open_loop": "Sag mir nur: was ist die Richtung, die dich gerade reizt?",
+            "next_expected_step": "Sag mir nur: was ist die Richtung, die dich gerade reizt?",
+            "turn_type_hint": "followup",
+            "topic_confidence": 0.81,
+        },
+        recent_user_turns=[
+            "ich hab Lust einen Ausflug zu machen",
+        ],
+        recent_assistant_turns=[
+            "Sag mir nur: was ist die Richtung, die dich gerade reizt?",
+        ],
+    )
+
+    kernel = result["general_decision_kernel"]
+    bundle = result["meta_context_bundle"]
+
+    assert kernel["turn_kind"] == "constraint_update"
+    assert "am Wochenende in Ruhe Stadt" in kernel["constraint_summary"]
+    assert "am Wochenende in Ruhe Stadt" in bundle["active_goal"]
+    assert "am Wochenende in Ruhe Stadt" in bundle["open_loop"]
+    assert "am Wochenende in Ruhe Stadt" in bundle["next_expected_step"]
+    assert "Sag mir nur" not in bundle["open_loop"]
 
 
 def test_classify_meta_task_treats_correction_turn_as_resume_on_open_goal():
@@ -1678,6 +1713,48 @@ def test_classify_meta_task_treats_correction_turn_as_resume_on_open_goal():
     assert kernel["interaction_mode"] == "think_partner"
     assert result["recommended_agent_chain"] == ["meta"]
     assert result["task_type"] == "single_lane"
+
+
+def test_classify_meta_task_switches_advisory_followup_to_direct_answer_when_constraints_are_sufficient():
+    result = classify_meta_task(
+        "was kannst du mir für das nächste Wochenende empfehlen",
+        action_count=0,
+        conversation_state={
+            "session_id": "tg_travel_threshold",
+            "active_topic": "einen Ausflug mit Kultur",
+            "active_goal": "ich hab Lust einen Ausflug zu machen",
+            "active_domain": "travel_advisory",
+            "open_loop": "Was ist dir bei Kultur wichtiger – Museen/Ausstellungen oder Architektur/Atmosphäre?",
+            "next_expected_step": "Was ist dir bei Kultur wichtiger – Museen/Ausstellungen oder Architektur/Atmosphäre?",
+            "turn_type_hint": "followup",
+            "topic_confidence": 0.83,
+        },
+        recent_user_turns=[
+            "ich hab Lust einen Ausflug zu machen",
+            "am Wochenende in Ruhe Stadt",
+            "einen Ausflug mit Kultur",
+        ],
+        recent_assistant_turns=[
+            "Was ist dir bei Kultur wichtiger – Museen/Ausstellungen oder Architektur/Atmosphäre?",
+        ],
+    )
+
+    kernel = result["general_decision_kernel"]
+    frame = result["meta_request_frame"]
+    policy = result["meta_policy_decision"]
+
+    assert result["dominant_turn_type"] == "followup"
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["task_type"] == "single_lane"
+    assert result["response_mode"] == "summarize_state"
+    assert kernel["turn_kind"] == "inform"
+    assert kernel["answer_ready"] is True
+    assert frame["frame_kind"] == "direct_answer"
+    assert frame["execution_mode"] == "answer_directly"
+    assert frame["task_domain"] == "travel_advisory"
+    assert policy["answer_shape"] == "direct_recommendation"
+    assert policy["should_delegate"] is False
+    assert result["reason"] == "meta_policy:general_decision_answer_ready"
 
 
 def test_align_meta_frame_to_reason_domain_repairs_travel_advisory_carryover():

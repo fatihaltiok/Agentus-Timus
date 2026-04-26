@@ -225,6 +225,34 @@ def test_apply_turn_interpretation_persists_active_plan_and_resumes_next_step():
     assert "active_plan" in updated.state_source
 
 
+def test_apply_turn_interpretation_retargets_advisory_open_loop_to_constraint_summary():
+    updated = apply_turn_interpretation(
+        {
+            "active_topic": "Ausflugsideen",
+            "active_goal": "ich hab Lust einen Ausflug zu machen",
+            "active_domain": "travel_advisory",
+            "open_loop": "Sag mir nur: was ist die Richtung, die dich gerade reizt?",
+            "next_expected_step": "Sag mir nur: was ist die Richtung, die dich gerade reizt?",
+        },
+        session_id="canvas_advisory",
+        dominant_turn_type="followup",
+        response_mode="resume_open_loop",
+        state_effects={"shift_active_topic": True},
+        effective_query="am Wochenende in Ruhe Stadt",
+        active_topic="am Wochenende in Ruhe Stadt | einen Ausflug mit Kultur",
+        active_goal="am Wochenende in Ruhe Stadt | einen Ausflug mit Kultur",
+        active_domain="travel_advisory",
+        next_step="am Wochenende in Ruhe Stadt | einen Ausflug mit Kultur",
+        confidence=0.84,
+        updated_at="2026-04-26T11:10:00Z",
+    )
+
+    assert "am Wochenende in Ruhe Stadt" in updated.active_goal
+    assert "am Wochenende in Ruhe Stadt" in updated.next_expected_step
+    assert "am Wochenende in Ruhe Stadt" in updated.open_loop
+    assert "Sag mir nur" not in updated.open_loop
+
+
 def test_apply_runtime_plan_state_advances_open_loop_to_new_next_step():
     updated = apply_runtime_plan_state(
         {
