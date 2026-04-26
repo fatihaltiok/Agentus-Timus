@@ -1546,6 +1546,62 @@ def test_detect_meta_answer_domain_does_not_treat_city_mentions_as_location_rout
     assert BaseAgent._detect_meta_answer_domain(answer) != "location_route"
 
 
+def test_detect_meta_answer_domain_does_not_treat_job_decision_as_migration_work():
+    answer = (
+        "Fuer Job A und Job B wuerde ich Gehalt, Arbeitsort, Vertragsart, "
+        "Team, Entwicklung und Work-Life-Balance vergleichen."
+    )
+
+    assert BaseAgent._detect_meta_answer_domain(answer) != "migration_work"
+
+
+def test_detect_meta_answer_domain_does_not_treat_social_integration_as_setup_build():
+    answer = (
+        "Lebensqualitaet: Gesundheitssystem, Sicherheit, Infrastruktur, "
+        "Sprache, Integration und Entfernung zu Familie oder Freunden."
+    )
+
+    assert BaseAgent._detect_meta_answer_domain(answer) != "setup_build"
+
+
+def test_meta_frame_answer_redirect_allows_life_advisory_job_decision_questions():
+    agent = BaseAgent(
+        system_prompt_template="Du bist ein Test-Agent.",
+        tools_description_string="",
+        max_iterations=2,
+        agent_type="meta",
+        skip_model_validation=True,
+    )
+    task = (
+        "# META ORCHESTRATION HANDOFF\n"
+        "meta_request_frame_json: "
+        '{"frame_kind":"new_task","task_domain":"life_advisory","execution_mode":"plan_and_delegate",'
+        '"primary_objective":"Hilf mir bei einer Entscheidung zwischen Job A und Job B"}\n'
+        "meta_clarity_contract_json: "
+        '{"primary_objective":"Hilf mir bei einer Entscheidung zwischen Job A und Job B",'
+        '"request_kind":"thinking_partner","answer_obligation":"reason_with_user_inside_current_topic",'
+        '"completion_condition":"advisory_answer_or_options_given","direct_answer_required":true}\n'
+        "\n"
+        "# ORIGINAL USER TASK\n"
+        "Hilf mir bei einer Entscheidung zwischen Job A und Job B\n"
+    )
+    agent._current_task_text = task
+
+    try:
+        redirect = agent._build_meta_frame_answer_redirect_prompt(
+            task,
+            (
+                "Klar, lass uns das strukturieren. Vergleiche Job A und Job B nach "
+                "Gehalt, Arbeitsort, Vertrag, Team, Entwicklung und deinem wichtigsten Kriterium. "
+                "Welche zwei Eckdaten kennst du schon?"
+            ),
+        )
+    finally:
+        asyncio.run(agent.http_client.aclose())
+
+    assert redirect is None
+
+
 def test_meta_clarity_blocks_parallel_delegation_for_setup_build():
     agent = BaseAgent(
         system_prompt_template="Du bist ein Test-Agent.",

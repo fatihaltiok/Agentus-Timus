@@ -2337,12 +2337,11 @@ class ExecutorAgent(BaseAgent):
                 return f"{key}=<configured>"
         return "<sensitive env entry present>"
 
-    async def _run_setup_build_probe(
+    async def _collect_setup_build_probe_findings(
         self,
         handoff: DelegationHandoff,
         task_text: str = "",
-    ) -> str:
-        self._notify_delegation_progress("setup_build_probe_start")
+    ) -> dict[str, Any]:
         handoff_data = handoff.handoff_data if handoff else {}
         source_task = (
             handoff_data.get("original_user_task")
@@ -2398,14 +2397,8 @@ class ExecutorAgent(BaseAgent):
                 ]
                 bucket = hits_by_file.setdefault(file_path, [])
                 for line in match_lines[:3]:
-                    if line not in bucket:
+                    if line and line not in bucket:
                         bucket.append(line)
-
-        if not hits_by_file:
-            return (
-                "Ich habe im Projekt keine klaren Vorbereitungen fuer diesen Setup-Auftrag gefunden. "
-                "Es gibt aktuell keine belastbaren Repo-Hinweise auf die angefragte Integration."
-            )
 
         prioritized_files = sorted(
             hits_by_file.keys(),
@@ -2451,13 +2444,111 @@ class ExecutorAgent(BaseAgent):
             or any("inworld" in path.lower() for path in relevant_files)
             or any("INWORLD_" in line for lines in hits_by_file.values() for line in lines)
         )
-        voice_present = "voice_" in lowered_text or any("voice" in path.lower() for path in relevant_files)
-        twilio_env_present = "twilio_" in lowered_text or any("TWILIO_" in line for lines in hits_by_file.values() for line in lines)
-        inworld_env_present = "inworld_" in lowered_text or any("INWORLD_" in line for lines in hits_by_file.values() for line in lines)
+        voice_present = (
+            "voice_" in lowered_text
+            or "tts" in lowered_text
+            or any("voice" in path.lower() for path in relevant_files)
+        )
+        twilio_env_present = (
+            "twilio_" in lowered_text
+            or any("TWILIO_" in line for lines in hits_by_file.values() for line in lines)
+        )
+        inworld_env_present = (
+            "inworld_" in lowered_text
+            or any("INWORLD_" in line for lines in hits_by_file.values() for line in lines)
+        )
         twilio_call_logic_present = any(
             marker in lowered_text
             for marker in ("client.calls", "calls.create", "twiml", "voice_response")
         ) or any("test_call.py" in path.lower() for path in relevant_files)
+
+        return {
+            "user_task": user_task,
+            "project_root": project_root,
+            "hits_by_file": hits_by_file,
+            "relevant_files": relevant_files,
+            "read_snippets": read_snippets,
+            "twilio_present": twilio_present,
+            "inworld_present": inworld_present,
+            "voice_present": voice_present,
+            "twilio_env_present": twilio_env_present,
+            "inworld_env_present": inworld_env_present,
+            "twilio_call_logic_present": twilio_call_logic_present,
+        }
+
+    @staticmethod
+    def _derive_setup_build_first_execution_step(findings: dict[str, Any]) -> tuple[str, str]:
+        twilio_present = bool(findings.get("twilio_present"))
+        inworld_present = bool(findings.get("inworld_present"))
+        voice_present = bool(findings.get("voice_present"))
+        twilio_env_present = bool(findings.get("twilio_env_present"))
+        inworld_env_present = bool(findings.get("inworld_env_present"))
+        twilio_call_logic_present = bool(findings.get("twilio_call_logic_present"))
+
+        if not twilio_present and not inworld_present and not voice_present:
+            return (
+                "Lege zuerst den minimalen Integrationspfad fest und verankere die benoetigten "
+                "Twilio- und Inworld-Bausteine im Repo.",
+                "Im Repo ist derzeit kaum belastbare Vorarbeit fuer diese Integration sichtbar.",
+            )
+        if not twilio_env_present:
+            return (
+                "Ergaenze oder validiere zuerst die benoetigten `TWILIO_*`-Konfigurationen, "
+                "bevor du einen Outbound-Call-Flow aufbaust.",
+                "Die benoetigten `TWILIO_*`-Eintraege sind im geprueften Stand noch nicht belastbar sichtbar.",
+            )
+        if not inworld_env_present:
+            return (
+                "Ergaenze oder validiere zuerst den `INWORLD_API_KEY`, bevor du die Sprachausgabe "
+                "in den Call-Flow verdrahtest.",
+                "Die benoetigte Inworld-Konfiguration ist im geprueften Stand noch nicht belastbar sichtbar.",
+            )
+        if twilio_present and inworld_present and not twilio_call_logic_present:
+            return (
+                "Baue als ersten Umsetzungsschritt einen ausgehenden Twilio-Call-Flow, der die "
+                "vorhandenen Twilio-Credentials mit dem bestehenden Inworld-TTS-Pfad zusammenfuehrt.",
+                "",
+            )
+        if twilio_call_logic_present and inworld_present:
+            return (
+                "Pruefe als ersten Umsetzungsschritt, wie die bestehende Twilio-Call-Logik den "
+                "Inworld-TTS-Pfad wirklich nutzt, und schliesse danach die letzte Voice-Bridge.",
+                "",
+            )
+        if twilio_present and not inworld_present:
+            return (
+                "Ergaenze als ersten Umsetzungsschritt die Inworld-TTS-Anbindung im bestehenden "
+                "Twilio-Kontext.",
+                "",
+            )
+        if inworld_present and not twilio_present:
+            return (
+                "Ergaenze als ersten Umsetzungsschritt einen belastbaren Twilio-Voice-Outbound-Pfad "
+                "zu den vorhandenen Inworld-Bausteinen.",
+                "",
+            )
+        return (
+            "Fuehre als ersten Umsetzungsschritt die vorhandenen Setup-Bausteine in einen "
+            "klaren End-to-End-Pfad mit echten Runtime-Blockern zusammen.",
+            "",
+        )
+
+    @staticmethod
+    def _render_setup_build_probe_report(findings: dict[str, Any]) -> str:
+        hits_by_file = findings.get("hits_by_file") or {}
+        relevant_files = findings.get("relevant_files") or []
+        if not hits_by_file:
+            return (
+                "Ich habe im Projekt keine klaren Vorbereitungen fuer diesen Setup-Auftrag gefunden. "
+                "Es gibt aktuell keine belastbaren Repo-Hinweise auf die angefragte Integration."
+            )
+
+        twilio_present = bool(findings.get("twilio_present"))
+        inworld_present = bool(findings.get("inworld_present"))
+        voice_present = bool(findings.get("voice_present"))
+        twilio_env_present = bool(findings.get("twilio_env_present"))
+        inworld_env_present = bool(findings.get("inworld_env_present"))
+        twilio_call_logic_present = bool(findings.get("twilio_call_logic_present"))
 
         lines = ["**Repo-Probe fuer vorhandene Vorbereitungen**", ""]
         lines.append("**Relevante Fundstellen:**")
@@ -2497,6 +2588,42 @@ class ExecutorAgent(BaseAgent):
             )
 
         return "\n".join(lines).strip()
+
+    @classmethod
+    def _render_setup_build_execution_report(cls, findings: dict[str, Any]) -> str:
+        probe_report = cls._render_setup_build_probe_report(findings)
+        first_step, blocker = cls._derive_setup_build_first_execution_step(findings)
+        lines = [probe_report, "", "**Konkreter erster Umsetzungsschritt:**", f"- {first_step}"]
+        if blocker:
+            lines.extend(["", "**Blocker:**", f"- {blocker}"])
+        lines.extend(
+            [
+                "",
+                "**Ausfuehrungspfad:**",
+                "- Noch keine freie Mehrfach-Delegation.",
+                "- Keine generische Setup-Hilfe.",
+                "- Zuerst den genannten ersten Umsetzungsschritt oder Blocker sauber schliessen.",
+            ]
+        )
+        return "\n".join(lines).strip()
+
+    async def _run_setup_build_probe(
+        self,
+        handoff: DelegationHandoff,
+        task_text: str = "",
+    ) -> str:
+        self._notify_delegation_progress("setup_build_probe_start")
+        findings = await self._collect_setup_build_probe_findings(handoff, task_text)
+        return self._render_setup_build_probe_report(findings)
+
+    async def _run_setup_build_execution(
+        self,
+        handoff: DelegationHandoff,
+        task_text: str = "",
+    ) -> str:
+        self._notify_delegation_progress("setup_build_execution_start")
+        findings = await self._collect_setup_build_probe_findings(handoff, task_text)
+        return self._render_setup_build_execution_report(findings)
 
     async def _run_simple_live_lookup(
         self,
@@ -2791,6 +2918,8 @@ class ExecutorAgent(BaseAgent):
             return await self._run_youtube_light_research(handoff)
         if handoff and handoff.handoff_data.get("task_type") == "setup_build_probe":
             return await self._run_setup_build_probe(handoff, task)
+        if handoff and handoff.handoff_data.get("task_type") == "setup_build_execution":
+            return await self._run_setup_build_execution(handoff, task)
         if handoff and handoff.handoff_data.get("task_type") in {"simple_live_lookup", "simple_live_lookup_document"}:
             return await self._run_simple_live_lookup(handoff, task)
         if not handoff and self._is_simple_live_lookup_query(plain_task):

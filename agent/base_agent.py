@@ -114,6 +114,18 @@ _META_SETUP_BUILD_PATTERNS = (
     "api key",
     "lennart",
 )
+_META_SETUP_BUILD_ANSWER_PATTERNS = (
+    "twilio",
+    "inworld",
+    "anruffunktion",
+    "setup",
+    "api key",
+    "konfigurier",
+    "einrichten",
+    "verbinde",
+    "installiere",
+    "installation",
+)
 _META_MIGRATION_WORK_PATTERNS = (
     "kanada",
     "canada",
@@ -125,6 +137,20 @@ _META_MIGRATION_WORK_PATTERNS = (
     "arbeit",
     "job",
     "beruf",
+    "fuss fassen",
+    "fuß fassen",
+    "leben aufbauen",
+)
+_META_MIGRATION_WORK_ANSWER_PATTERNS = (
+    "kanada",
+    "canada",
+    "auswand",
+    "einwander",
+    "visa",
+    "visum",
+    "aufenthaltstitel",
+    "migrationspfad",
+    "niederlass",
     "fuss fassen",
     "fuß fassen",
     "leben aufbauen",
@@ -1719,11 +1745,11 @@ class BaseAgent(DynamicToolMixin):
             return "skill_creation"
         if any(pattern in lowered for pattern in _META_DOC_STATUS_PATTERNS):
             return "docs_status"
-        if any(pattern in lowered for pattern in _META_SETUP_BUILD_PATTERNS):
+        if any(pattern in lowered for pattern in _META_SETUP_BUILD_ANSWER_PATTERNS):
             return "setup_build"
         if any(pattern in lowered for pattern in _META_RESEARCH_ADVISORY_PATTERNS):
             return "research_advisory"
-        if any(pattern in lowered for pattern in _META_MIGRATION_WORK_PATTERNS):
+        if any(pattern in lowered for pattern in _META_MIGRATION_WORK_ANSWER_PATTERNS):
             return "migration_work"
         if any(pattern in lowered for pattern in _META_LOCATION_ROUTE_PATTERNS):
             return "location_route"
@@ -2028,6 +2054,13 @@ class BaseAgent(DynamicToolMixin):
         mismatch = False
         if answer_domain in {"skill_creation", "location_route", "setup_build", "migration_work"}:
             mismatch = answer_domain != objective_domain
+            if (
+                mismatch
+                and answer_domain == "migration_work"
+                and objective_domain == "life_advisory"
+                and any(pattern in objective_lower for pattern in ("job", "arbeit", "beruf", "entscheidung"))
+            ):
+                mismatch = False
         elif answer_domain == "generic_meta_help":
             mismatch = (
                 direct_answer_required

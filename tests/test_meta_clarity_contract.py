@@ -153,7 +153,6 @@ def test_build_meta_clarity_contract_for_setup_build_binds_controlled_delegate_b
     )
 
     assert contract.request_kind == "execute_task"
-    assert contract.answer_obligation == "inspect_preparation_then_plan_or_execute"
     assert contract.allowed_context_slots == (
         "current_query",
         "conversation_state",
@@ -166,9 +165,12 @@ def test_build_meta_clarity_contract_for_setup_build_binds_controlled_delegate_b
     assert contract.allowed_working_memory_sections == ("KURZZEITKONTEXT",)
     assert contract.max_related_memories == 0
     assert contract.max_recent_events == 6
-    assert contract.delegation_mode == "controlled_orchestration"
-    assert contract.max_delegate_calls == 2
-    assert contract.allowed_delegate_agents == ("executor", "research", "document")
+    assert contract.delegation_mode == "single_structured_probe_then_direct_close"
+    assert contract.max_delegate_calls == 1
+    assert contract.allowed_delegate_agents == ("executor",)
+    assert contract.force_answer_after_delegate_budget is True
+    assert contract.answer_obligation == "probe_then_return_concrete_setup_execution_path"
+    assert contract.completion_condition == "first_build_step_or_real_blocker_named"
     assert "assistant_fallback_context" in contract.forbidden_context_slots
 
 
@@ -220,6 +222,35 @@ def test_build_meta_clarity_contract_for_think_partner_blocks_research_and_execu
     assert contract.max_delegate_calls == 0
     assert contract.delegation_mode == "direct_only"
     assert contract.direct_answer_required is True
+
+
+def test_build_meta_clarity_contract_prefers_frame_domain_for_job_decision_support() -> None:
+    contract = build_meta_clarity_contract(
+        effective_query="Hilf mir bei einer Entscheidung zwischen Job A und Job B",
+        response_mode="execute",
+        policy_decision={
+            "answer_shape": "action_first",
+            "policy_reason": "baseline_turn_mode",
+        },
+        interaction_mode={
+            "mode": "think_partner",
+            "mode_reason": "general_decision_kernel:think",
+        },
+        task_type="single_lane",
+        goal_spec={},
+        task_decomposition={
+            "goal": "Hilf mir bei einer Entscheidung zwischen Job A und Job B",
+            "metadata": {"frame_task_domain": "life_advisory"},
+        },
+        meta_execution_plan={},
+    )
+
+    assert contract.request_kind == "thinking_partner"
+    assert contract.answer_obligation == "reason_with_user_inside_current_topic"
+    assert contract.completion_condition == "advisory_answer_or_options_given"
+    assert contract.max_delegate_calls == 0
+    assert contract.delegation_mode == "direct_only"
+    assert contract.allowed_delegate_agents == ()
 
 
 def test_build_meta_clarity_contract_for_inspect_mode_limits_to_single_evidence_step() -> None:

@@ -95,6 +95,11 @@ _TRAVEL_ADVISORY_PATTERNS = (
     "staedtetrip",
 )
 _LIFE_ADVISORY_PATTERNS = (
+    "hilf mir bei einer entscheidung",
+    "entscheidung zwischen",
+    "entscheiden zwischen",
+    "abwägen",
+    "abwaegen",
     "mein leben",
     "mein alltag",
     "alltag ordnen",
@@ -120,6 +125,18 @@ _RESEARCH_ADVISORY_PATTERNS = (
     "hilfreich zur seite",
     "hilfreich zur Seite",
 )
+_FRAME_FIRST_DOMAINS = {
+    "docs_status",
+    "self_status",
+    "location_route",
+    "setup_build",
+    "migration_work",
+    "planning_advisory",
+    "travel_advisory",
+    "life_advisory",
+    "research_advisory",
+    "topic_advisory",
+}
 
 
 @dataclass(frozen=True)
@@ -222,16 +239,28 @@ def _detect_objective_domain(text: Any) -> str:
         return "location_route"
     if any(pattern in lowered for pattern in _SETUP_BUILD_PATTERNS):
         return "setup_build"
-    if any(pattern in lowered for pattern in _MIGRATION_WORK_PATTERNS):
-        return "migration_work"
     if any(pattern in lowered for pattern in _PLANNING_ADVISORY_PATTERNS):
         return "planning_advisory"
     if any(pattern in lowered for pattern in _TRAVEL_ADVISORY_PATTERNS):
         return "travel_advisory"
     if any(pattern in lowered for pattern in _LIFE_ADVISORY_PATTERNS):
         return "life_advisory"
+    if any(pattern in lowered for pattern in _MIGRATION_WORK_PATTERNS):
+        return "migration_work"
     if any(pattern in lowered for pattern in _RESEARCH_ADVISORY_PATTERNS):
         return "research_advisory"
+    return ""
+
+
+def _frame_task_domain_from_decomposition(value: Mapping[str, Any] | None) -> str:
+    if not isinstance(value, Mapping):
+        return ""
+    metadata = value.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return ""
+    candidate = _clean_text(metadata.get("frame_task_domain"), limit=64).lower()
+    if candidate in _FRAME_FIRST_DOMAINS:
+        return candidate
     return ""
 
 
@@ -313,7 +342,12 @@ def build_meta_clarity_contract(
     allowed_delegate_agents: Tuple[str, ...] = ()
     force_answer_after_delegate_budget = False
     rationale = "Default-Orchestrierung mit vollem Kontextbudget."
-    objective_domain = _detect_objective_domain(goal) or _detect_objective_domain(effective_query)
+    frame_task_domain = _frame_task_domain_from_decomposition(decomposition)
+    objective_domain = (
+        frame_task_domain
+        or _detect_objective_domain(goal)
+        or _detect_objective_domain(effective_query)
+    )
 
     if interaction_mode_explicit and interaction_mode_name == "think_partner":
         request_kind = "thinking_partner"

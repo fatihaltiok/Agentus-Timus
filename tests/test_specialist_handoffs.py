@@ -468,6 +468,108 @@ async def test_executor_run_setup_build_probe_uses_repo_search_instead_of_llm(mo
     assert ".env.backup" not in result
     assert ".hypothesis" not in result
     assert ".gitignore" not in result
+
+
+@pytest.mark.asyncio
+async def test_executor_run_setup_build_execution_returns_concrete_first_step(monkeypatch):
+    async def _unexpected_super_run(self, task: str) -> str:
+        raise AssertionError("BaseAgent.run darf fuer setup_build_execution nicht aufgerufen werden")
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        if method == "search_in_files":
+            text = str(params.get("text") or "")
+            if text == "twilio":
+                return {
+                    "status": "success",
+                    "results": [
+                        {
+                            "file": "/home/fatih-ubuntu/dev/timus/skills/twilio-voice/scripts/test_call.py",
+                            "matches": [{"content": "from twilio.rest import Client"}],
+                        }
+                    ],
+                }
+            if text == "inworld":
+                return {
+                    "status": "success",
+                    "results": [
+                        {
+                            "file": "/home/fatih-ubuntu/dev/timus/tools/voice_tool/tool.py",
+                            "matches": [{"content": "INWORLD_API_KEY = os.getenv('INWORLD_API_KEY')"}],
+                        }
+                    ],
+                }
+            if text in {"voice_", "voice", "call"}:
+                return {
+                    "status": "success",
+                    "results": [
+                        {
+                            "file": "/home/fatih-ubuntu/dev/timus/tools/voice_tool/tool.py",
+                            "matches": [{"content": "def voice_speak(text: str):"}],
+                        }
+                    ],
+                }
+            if text == "TWILIO_":
+                return {
+                    "status": "success",
+                    "results": [
+                        {
+                            "file": "/home/fatih-ubuntu/dev/timus/.env",
+                            "matches": [{"content": "TWILIO_ACCOUNT_SID=ACsupersecretvalue"}],
+                        }
+                    ],
+                }
+            if text == "INWORLD_":
+                return {
+                    "status": "success",
+                    "results": [
+                        {
+                            "file": "/home/fatih-ubuntu/dev/timus/.env",
+                            "matches": [{"content": "INWORLD_API_KEY=activeverysecretapikey"}],
+                        }
+                    ],
+                }
+            raise AssertionError(f"unerwarteter Suchterm: {text}")
+        if method == "read_file":
+            path = str(params.get("path") or "")
+            if path.endswith("test_call.py"):
+                return {
+                    "status": "success",
+                    "path": path,
+                    "content": "from twilio.rest import Client\n# test script only",
+                }
+            if path.endswith("tool.py"):
+                return {
+                    "status": "success",
+                    "path": path,
+                    "content": "INWORLD_API_KEY = os.getenv('INWORLD_API_KEY')\ndef voice_speak(text: str):\n    pass",
+                }
+            raise AssertionError(f"unerwarteter Dateipfad: {path}")
+        raise AssertionError(f"unerwartetes Tool: {method}")
+
+    monkeypatch.setattr(BaseAgent, "run", _unexpected_super_run)
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = ExecutorAgent(tools_description_string="")
+    result = await agent.run(
+        "# DELEGATION HANDOFF\n"
+        "target_agent: executor\n"
+        "goal: Richte fuer mich eine Anruffunktion ueber Twilio und Inworld ein.\n"
+        "expected_output: Repo-Probe und erster Umsetzungsschritt\n"
+        "success_signal: Setup-Ausfuehrungspfad geklaert\n"
+        "handoff_data:\n"
+        "- task_type: setup_build_execution\n"
+        "- original_user_task: Richte fuer mich eine Anruffunktion ueber Twilio und Inworld ein.\n"
+        "- query: Richte fuer mich eine Anruffunktion ueber Twilio und Inworld ein.\n"
+        "- project_root: /home/fatih-ubuntu/dev/timus\n"
+    )
+
+    assert "Twilio-Bezug im Repo: ja" in result
+    assert "Inworld-Bezug im Repo: ja" in result
+    assert "Outbound-Call-Logik fuer Twilio sichtbar: ja" in result
+    assert "**Konkreter erster Umsetzungsschritt:**" in result
+    assert "bestehende Twilio-Call-Logik" in result
+    assert "ACsupersecretvalue" not in result
+    assert "activeverysecretapikey" not in result
     assert "ROADMAP.md" not in result
     assert "conftest.py" not in result
     assert "/docs/VOICE.md" not in result
