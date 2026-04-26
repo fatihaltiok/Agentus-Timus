@@ -782,6 +782,11 @@ def apply_meta_clarity_to_bundle(
     filtered_slots = []
     suppressed = list(payload.get("suppressed_context") or [])
 
+    # RCF3: Slots mit expliziter externer Quelle (z.B. semantic_recall aus
+    # semantic_recall_hits) duerfen nur durch explizites forbidden geblockt werden,
+    # nicht durch eine restriktive allowed-Liste. Sonst verschwindet uebergebener
+    # Kontext trotz vorhandener Treffer.
+    _EXPLICIT_SOURCE_SLOTS = {"semantic_recall"}
     for item in slots:
         if not isinstance(item, Mapping):
             continue
@@ -789,7 +794,8 @@ def apply_meta_clarity_to_bundle(
         content = _clean_text(item.get("content"), limit=180)
         if not slot:
             continue
-        if slot in forbidden or (allowed and slot not in allowed):
+        is_explicit_source = slot in _EXPLICIT_SOURCE_SLOTS
+        if (slot in forbidden and not is_explicit_source) or (allowed and slot not in allowed and not is_explicit_source):
             from orchestration.meta_context_authority import classify_meta_context_slot
 
             suppressed.append(

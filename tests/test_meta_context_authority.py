@@ -139,13 +139,17 @@ def test_build_meta_context_authority_uses_gdk_as_primary_context_contract() -> 
     assert payload["decision_turn_kind"] == "think"
     assert payload["decision_evidence_requirement"] == "none"
     assert payload["decision_execution_permission"] == "forbidden"
-    assert payload["allowed_context_classes"] == ["conversation_state", "topic_state"]
+    # RCF3: semantic_recall bleibt erlaubt, wenn der Bundle es explizit enthaelt
+    assert "conversation_state" in payload["allowed_context_classes"]
+    assert "topic_state" in payload["allowed_context_classes"]
+    assert "semantic_recall" in payload["allowed_context_classes"]
     assert payload["allowed_context_slots"] == [
         "current_query",
         "conversation_state",
         "historical_topic_memory",
+        "semantic_recall",
     ]
-    assert "semantic_recall" in payload["forbidden_context_classes"]
+    assert "semantic_recall" not in payload["forbidden_context_classes"]
     assert "document_knowledge" in payload["forbidden_context_classes"]
     assert "preference_profile" in payload["forbidden_context_classes"]
     assert payload["working_memory_query_mode"] == "objective_only"

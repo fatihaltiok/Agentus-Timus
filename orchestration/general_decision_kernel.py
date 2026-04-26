@@ -507,7 +507,8 @@ def resolve_low_confidence_controller(
             "controller_action": "small_direct_answer",
             "reason": "low_confidence_no_execution",
             "response_mode": "summarize_state",
-            "task_type": "single_lane",
+            # task_type bleibt leer: die Spezialroute darf erhalten bleiben
+            "task_type": "",
             "recommended_agent_chain": ["meta"],
             "max_delegate_calls": 0,
             "execution_permission_override": "forbidden",
@@ -519,10 +520,11 @@ def resolve_low_confidence_controller(
         "controller_action": "clarify_once",
         "reason": "low_confidence_fail_small",
         "response_mode": "clarify_before_execute",
-        "task_type": "single_lane",
+        # task_type bleibt leer: Route bleibt erhalten, nur Execution wird begrenzt
+        "task_type": "",
         "recommended_agent_chain": ["meta"],
-        "max_delegate_calls": 0,
-        "execution_permission_override": "forbidden",
+        "max_delegate_calls": 1,
+        "execution_permission_override": "bounded",
     }
 
 

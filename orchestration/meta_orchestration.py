@@ -3655,29 +3655,49 @@ def classify_meta_task(
         kernel_seed.to_dict(),
         has_state_anchor=bool(active_topic or open_goal or next_step or active_plan),
     )
+    # RCF2: Spezialrouten (youtube, location, knowledge_research) duerfen nicht
+    # durch den Low-Confidence-Controller oder execution_permission=forbidden
+    # auf single_lane gedrueckt werden. Controller begrenzt Execution, loescht
+    # aber nicht die Route.
+    _PROTECTED_TASK_TYPES = {
+        "youtube_content_extraction",
+        "youtube_light_research",
+        "location_local_search",
+        "knowledge_research",
+        "web_content_extraction",
+        "multi_stage_web_task",
+        "ui_navigation",
+    }
+    _is_protected_route = task_type in _PROTECTED_TASK_TYPES
     if low_confidence_controller.get("active"):
-        deduped_chain = [
-            str(item or "").strip()
-            for item in (low_confidence_controller.get("recommended_agent_chain") or ["meta"])
-            if str(item or "").strip()
-        ] or ["meta"]
-        task_type = str(low_confidence_controller.get("task_type") or "single_lane").strip() or "single_lane"
+        if not _is_protected_route:
+            deduped_chain = [
+                str(item or "").strip()
+                for item in (low_confidence_controller.get("recommended_agent_chain") or ["meta"])
+                if str(item or "").strip()
+            ] or ["meta"]
+            controller_task_type = str(low_confidence_controller.get("task_type") or "").strip()
+            task_type = controller_task_type or "single_lane"
+            required_capabilities = []
         kernel_response_mode = (
             str(low_confidence_controller.get("response_mode") or "clarify_before_execute").strip()
             or "clarify_before_execute"
         )
         reason = f"gdk4:{low_confidence_controller.get('reason') or 'low_confidence_fail_small'}"
-        required_capabilities = []
     elif kernel_seed.execution_permission == "forbidden":
-        deduped_chain = ["meta"]
-        if task_type in gdk_generic_task_types or kernel_seed.turn_kind in {"think", "inform", "resume", "constraint_update", "clarify"}:
-            task_type = "single_lane"
+        if not _is_protected_route:
+            deduped_chain = ["meta"]
+            if (
+                task_type in gdk_generic_task_types
+                or kernel_seed.turn_kind in {"think", "inform", "resume", "constraint_update", "clarify"}
+            ):
+                task_type = "single_lane"
         if not str(reason or "").strip() or str(reason or "").strip() in {
             "single_lane",
             "current_chain_satisfies_goal",
         }:
             reason = f"gdk:{kernel_seed.turn_kind}"
-    elif kernel_seed.clarify_if_below_threshold and task_type in gdk_generic_task_types:
+    elif kernel_seed.clarify_if_below_threshold and task_type in gdk_generic_task_types and not _is_protected_route:
         deduped_chain = ["meta"]
         task_type = "single_lane"
         kernel_response_mode = "clarify_before_execute"
@@ -4287,12 +4307,18 @@ def classify_meta_task(
         classification,
         learned_chain_stats=learned_chain_stats,
     )
+    _is_session_followup = bool(
+        compressed_followup_parsed
+        or active_topic_reused
+        or resolved_dominant_turn_type == "followup"
+    )
     meta_context_authority = build_meta_context_authority(
         meta_request_frame=meta_request_frame.to_dict(),
         meta_interaction_mode=meta_interaction_mode.to_dict(),
         meta_clarity_contract=clarity_contract.to_dict(),
         meta_context_bundle=filtered_meta_context_bundle,
         general_decision_kernel=general_decision_kernel.to_dict(),
+        is_session_followup=_is_session_followup,
     )
     return {
         **classification,

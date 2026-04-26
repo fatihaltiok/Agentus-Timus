@@ -107,10 +107,11 @@ def test_low_confidence_controller_fails_small_for_unclear_execution() -> None:
     assert controller["active"] is True
     assert controller["controller_action"] == "clarify_once"
     assert controller["response_mode"] == "clarify_before_execute"
-    assert controller["task_type"] == "single_lane"
+    # Route bleibt erhalten, nur Execution wird begrenzt
+    assert controller["task_type"] == ""
     assert controller["recommended_agent_chain"] == ["meta"]
-    assert controller["max_delegate_calls"] == 0
-    assert controller["execution_permission_override"] == "forbidden"
+    assert controller["max_delegate_calls"] == 1
+    assert controller["execution_permission_override"] == "bounded"
 
 
 def test_low_confidence_controller_is_inactive_for_confident_live_lookup() -> None:

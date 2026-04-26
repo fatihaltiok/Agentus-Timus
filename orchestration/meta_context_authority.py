@@ -301,6 +301,7 @@ def build_meta_context_authority(
     meta_clarity_contract: Mapping[str, Any] | None,
     meta_context_bundle: Mapping[str, Any] | None = None,
     general_decision_kernel: Mapping[str, Any] | None = None,
+    is_session_followup: bool = False,
 ) -> MetaContextAuthority:
     frame = dict(meta_request_frame or {})
     mode = parse_meta_interaction_mode(meta_interaction_mode or {})
@@ -351,22 +352,35 @@ def build_meta_context_authority(
     kernel_authoritative = decision_confidence >= 0.7 and bool(
         decision_turn_kind or decision_evidence_requirement or decision_execution_permission
     )
+    # RCF3: Wenn der Bundle bereits semantic_recall-Slots enthaelt (z.B. weil
+    # semantic_recall_hits uebergeben wurden), darf die Authority den Slot nicht
+    # pauschal verbieten. Nur wirklich irrelevante externe Klassen werden blockiert.
+    _has_semantic_recall_in_bundle = any(
+        isinstance(item, Mapping) and str(item.get("slot") or "").strip().lower() == "semantic_recall"
+        for item in (bundle.get("context_slots") or [])
+    )
     if kernel_authoritative:
         if decision_execution_permission == "forbidden" and decision_evidence_requirement in {
             "none",
             "state_bound",
         }:
+            _allow_set = set(_STATE_CONTEXT_CLASSES)
+            if _has_semantic_recall_in_bundle:
+                _allow_set.add("semantic_recall")
             allowed_context_classes = _filter_context_classes(
-                allowed_context_classes or _STATE_CONTEXT_CLASSES,
-                allow=_STATE_CONTEXT_CLASSES,
+                allowed_context_classes or tuple(_allow_set),
+                allow=tuple(sorted(_allow_set)),
             )
             allowed_context_slots = _filter_context_slots_by_class(
                 allowed_context_slots,
-                allow=_STATE_CONTEXT_CLASSES,
+                allow=tuple(sorted(_allow_set)),
+            )
+            _forbidden_external = tuple(
+                c for c in _EXTERNAL_CONTEXT_CLASSES if c not in _allow_set
             )
             forbidden_context_classes = _merge_text_tuples(
                 forbidden_context_classes,
-                _EXTERNAL_CONTEXT_CLASSES,
+                _forbidden_external,
             )
             working_query_mode = "objective_only"
             working_memory_max_related = _cap_budget(working_memory_max_related, 0)
@@ -386,6 +400,24 @@ def build_meta_context_authority(
             )
             strict_working_memory_gating = True
 
+    # CCF1: Bei Follow-ups innerhalb derselben Session muss conversation_state
+    # immer als erlaubte Klasse bleiben und KURZZEITKONTEXT muss im Working-Memory
+    # erreichbar sein. Sonst verliert Meta den Gesprächsfaden.
+    if is_session_followup:
+        _state_set = set(_STATE_CONTEXT_CLASSES)
+        if not any(c in _state_set for c in allowed_context_classes):
+            allowed_context_classes = _merge_text_tuples(
+                _STATE_CONTEXT_CLASSES,
+                allowed_context_classes,
+            )
+        forbidden_context_classes = tuple(
+            c for c in forbidden_context_classes if c not in _state_set
+        )
+        if allowed_sections and "KURZZEITKONTEXT" not in allowed_sections:
+            allowed_sections = (*allowed_sections, "KURZZEITKONTEXT")
+        if working_memory_max_recent == 0:
+            working_memory_max_recent = 6
+
     rationale_parts = [
         f"gdk:{decision_turn_kind or 'unknown'}/{decision_execution_permission or 'unknown'}",
         f"frame:{_clean_text(frame.get('frame_kind'), limit=64).lower() or 'unknown'}",
@@ -393,6 +425,8 @@ def build_meta_context_authority(
         f"mode:{interaction_mode_name or 'unknown'}",
         f"request_kind:{request_kind or 'unknown'}",
     ]
+    if is_session_followup:
+        rationale_parts.append("session:followup")
 
     primary_evidence_class = observed_context_classes[0] if observed_context_classes else ""
 
