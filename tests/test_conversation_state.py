@@ -162,6 +162,37 @@ def test_apply_turn_interpretation_updates_preferences_and_turn_hint():
     assert updated.topic_confidence == 0.86
 
 
+def test_apply_turn_interpretation_removes_last_preference():
+    updated = apply_turn_interpretation(
+        {
+            "active_topic": "Antwortstil",
+            "active_goal": "passende Dialogpraeferenzen nutzen",
+            "preferences": [
+                "antworte kurz",
+                "nutze bei PDF zuerst lokale Tools",
+            ],
+        },
+        session_id="canvas_demo",
+        dominant_turn_type="behavior_instruction",
+        response_mode="acknowledge_and_store",
+        state_effects={
+            "remove_last_preference": True,
+            "set_next_expected_step": True,
+            "keep_active_topic": True,
+        },
+        effective_query="vergiss die letzte praferenz die ich dir gegeben habe",
+        active_topic="Antwortstil",
+        active_goal="passende Dialogpraeferenzen nutzen",
+        next_step="letzte Praeferenz entfernt",
+        confidence=0.86,
+        updated_at="2026-04-27T15:10:00Z",
+    )
+
+    assert updated.preferences == ("antworte kurz",)
+    assert updated.turn_type_hint == "behavior_instruction"
+    assert updated.next_expected_step == "letzte Praeferenz entfernt"
+
+
 def test_apply_turn_interpretation_tracks_active_domain_and_clears_open_loop_on_domain_shift():
     updated = apply_turn_interpretation(
         {

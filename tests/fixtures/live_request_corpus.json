@@ -437,8 +437,7 @@
         "response_mode": "acknowledge_and_store",
         "chain": ["meta"],
         "dominant_turn_type": "behavior_instruction"
-      },
-      "xfail": "Preference-memory wording coverage is not complete yet."
+      }
     },
     {
       "id": "behavior_less_formal",
@@ -449,8 +448,7 @@
         "response_mode": "acknowledge_and_store",
         "chain": ["meta"],
         "dominant_turn_type": "behavior_instruction"
-      },
-      "xfail": "Preference-memory wording coverage is not complete yet."
+      }
     },
     {
       "id": "behavior_pdf_local_tools",
@@ -461,8 +459,7 @@
         "response_mode": "acknowledge_and_store",
         "chain": ["meta"],
         "dominant_turn_type": "behavior_instruction"
-      },
-      "xfail": "Tool-behavior preference wording coverage is not complete yet."
+      }
     },
     {
       "id": "behavior_forget_last_preference",
@@ -473,8 +470,7 @@
         "response_mode": "acknowledge_and_store",
         "chain": ["meta"],
         "dominant_turn_type": "behavior_instruction"
-      },
-      "xfail": "Preference deletion needs a dedicated state-effect path."
+      }
     },
     {
       "id": "multi_step_youtube_report",

@@ -931,6 +931,8 @@ def apply_turn_interpretation(
     if cleaned_domain:
         active_domain_value = cleaned_domain
 
+    if effects.get("remove_last_preference") and preferences:
+        preferences = preferences[:-1]
     if effects.get("update_preferences") and cleaned_query:
         preferences = list(_normalize_text_list([*preferences, cleaned_query], limit_items=_MAX_LIST_ITEMS))
     if effects.get("update_recent_corrections") and cleaned_query:

@@ -66,6 +66,8 @@ _BEHAVIOR_FUTURE_HINTS = (
 
 _BEHAVIOR_DIRECTIVE_HINTS = (
     "mach das",
+    "speichere dir",
+    "antworte mir",
     "nutze",
     "verwende",
     "bevorzuge",
@@ -79,11 +81,39 @@ _BEHAVIOR_DIRECTIVE_HINTS = (
 
 _PREFERENCE_HINTS = (
     "bitte zuerst",
+    "kurze antworten",
+    "kurz antworten",
+    "weniger formal",
+    "lokale tools",
     "lieber",
     "eher",
     "bevorzuge",
     "priorisiere",
     "in solchen faellen",
+)
+
+_BEHAVIOR_STORAGE_PATTERNS = (
+    r"\bspeichere\s+dir\b",
+    r"\bmerk(?:e)?\s+dir\b",
+    r"\bbehalte\s+(?:das\s+)?im\s+kopf\b",
+)
+
+_STYLE_PREFERENCE_PATTERNS = (
+    r"\b(?:kurze?|knappe?)\s+antwort",
+    r"\bkurz\s+antwort",
+    r"\bweniger\s+formal\b",
+    r"\b(?:locker|direkter|formeller)\s+antwort",
+    r"\bantworte\s+mir\b.*\b(?:kurz|knapp|formal|locker|direkt)\b",
+)
+
+_CONDITIONAL_TOOL_PREFERENCE_PATTERNS = (
+    r"\bwenn\s+ich\b.*\bsage\b.*\b(?:nutze|verwende|nimm|bevorzuge|priorisiere)\b",
+    r"\bwenn\s+ich\b.*\b(?:pdf|datei|dokument)\b.*\b(?:nutze|verwende|nimm)\b.*\b(?:lokale?\s+tools?|tools?)\b",
+)
+
+_PREFERENCE_DELETE_PATTERNS = (
+    r"\bvergiss\b.*\b(?:letzte\s+)?(?:praeferenz|präferenz|praferenz|preference|vorgabe|regel)\b",
+    r"\b(?:l[öo]sch(?:e)?|loesch(?:e)?)\b.*\b(?:letzte\s+)?(?:praeferenz|präferenz|praferenz|preference|vorgabe|regel)\b",
 )
 
 _HANDOVER_RESUME_PATTERNS = (
@@ -177,6 +207,7 @@ class TurnUnderstandingInput:
 @dataclass(frozen=True)
 class TurnStateEffects:
     update_preferences: bool = False
+    remove_last_preference: bool = False
     update_recent_corrections: bool = False
     set_open_loop: bool = False
     clear_open_loop: bool = False
@@ -294,6 +325,14 @@ def detect_turn_signals(turn_input: TurnUnderstandingInput) -> tuple[str, ...]:
         signals.append("directive_language")
     if _contains_any(query, _PREFERENCE_HINTS):
         signals.append("preference_language")
+    if _matches_any(query, _PREFERENCE_DELETE_PATTERNS):
+        signals.extend(["behavior_instruction", "preference_delete"])
+    if _matches_any(query, _BEHAVIOR_STORAGE_PATTERNS):
+        signals.append("behavior_storage_language")
+    if _matches_any(query, _STYLE_PREFERENCE_PATTERNS):
+        signals.append("style_preference_language")
+    if _matches_any(query, _CONDITIONAL_TOOL_PREFERENCE_PATTERNS):
+        signals.append("conditional_tool_preference_language")
 
     if _matches_any(query, _CORRECTION_PATTERNS):
         signals.append("correction_language")
@@ -322,8 +361,21 @@ def detect_turn_signals(turn_input: TurnUnderstandingInput) -> tuple[str, ...]:
 
     if "behavior_instruction" not in signals and "directive_language" in signals and "future_preference_language" in signals:
         signals.append("behavior_instruction")
+    if "behavior_instruction" not in signals and (
+        "behavior_storage_language" in signals
+        or ("future_preference_language" in signals and "style_preference_language" in signals)
+        or "conditional_tool_preference_language" in signals
+    ):
+        signals.append("behavior_instruction")
     if "preference_update" not in signals and (
-        "preference_language" in signals or "future_preference_language" in signals
+        "preference_delete" not in signals
+        and (
+            "preference_language" in signals
+            or "future_preference_language" in signals
+            or "style_preference_language" in signals
+            or "conditional_tool_preference_language" in signals
+            or "behavior_storage_language" in signals
+        )
     ):
         signals.append("preference_update")
 
@@ -390,7 +442,17 @@ def resolve_response_mode(dominant_turn_type: str, turn_input: TurnUnderstanding
     return "execute"
 
 
-def derive_state_effects(dominant_turn_type: str, response_mode: str) -> TurnStateEffects:
+def derive_state_effects(
+    dominant_turn_type: str,
+    response_mode: str,
+    signals: Iterable[str] = (),
+) -> TurnStateEffects:
+    if "preference_delete" in set(signals):
+        return TurnStateEffects(
+            remove_last_preference=True,
+            set_next_expected_step=True,
+            keep_active_topic=True,
+        )
     if dominant_turn_type in {"behavior_instruction", "preference_update"}:
         return TurnStateEffects(
             update_preferences=True,
@@ -423,7 +485,7 @@ def interpret_turn(turn_input: TurnUnderstandingInput) -> TurnInterpretation:
     signals = detect_turn_signals(turn_input)
     dominant_turn_type = resolve_dominant_turn_type(turn_input, signals)
     response_mode = resolve_response_mode(dominant_turn_type, turn_input, signals)
-    state_effects = derive_state_effects(dominant_turn_type, response_mode)
+    state_effects = derive_state_effects(dominant_turn_type, response_mode, signals)
 
     route_bias = "route_normally"
     has_live_dialog_context = bool(

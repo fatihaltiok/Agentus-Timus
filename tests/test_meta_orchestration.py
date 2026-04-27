@@ -534,6 +534,37 @@ def test_classify_meta_task_routes_followup_capsule_behavior_alignment_to_meta_r
     assert result["turn_understanding"]["route_bias"] == "meta_only"
 
 
+def test_classify_meta_task_routes_behavior_preference_variants_to_meta_store():
+    for query in (
+        "speichere dir dass ich kurze antworten bevorzuge",
+        "antworte mir ab jetzt weniger formal",
+        "wenn ich pdf sage nutze erst lokale tools bevor du mir nur erklaerst wie es geht",
+    ):
+        result = classify_meta_task(query, action_count=0)
+
+        assert result["task_type"] == "single_lane"
+        assert result["recommended_entry_agent"] == "meta"
+        assert result["recommended_agent_chain"] == ["meta"]
+        assert result["dominant_turn_type"] == "behavior_instruction"
+        assert result["response_mode"] == "acknowledge_and_store"
+        assert result["state_effects"]["update_preferences"] is True
+
+
+def test_classify_meta_task_routes_preference_delete_to_meta_store_without_appending():
+    result = classify_meta_task(
+        "vergiss die letzte praferenz die ich dir gegeben habe",
+        action_count=0,
+    )
+
+    assert result["task_type"] == "single_lane"
+    assert result["recommended_entry_agent"] == "meta"
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["dominant_turn_type"] == "behavior_instruction"
+    assert result["response_mode"] == "acknowledge_and_store"
+    assert result["state_effects"]["update_preferences"] is False
+    assert result["state_effects"]["remove_last_preference"] is True
+
+
 def test_classify_meta_task_routes_correction_turn_to_meta_only():
     result = classify_meta_task(
         "# FOLLOW-UP CONTEXT\n"

@@ -25,6 +25,45 @@ def test_interpret_turn_marks_behavior_instruction_as_acknowledge_and_store():
     assert interpretation.state_effects.set_next_expected_step is True
 
 
+def test_interpret_turn_marks_style_preferences_as_behavior_instruction():
+    for query in (
+        "speichere dir dass ich kurze antworten bevorzuge",
+        "antworte mir ab jetzt weniger formal",
+        "wenn ich pdf sage nutze erst lokale tools bevor du mir nur erklaerst wie es geht",
+    ):
+        turn_input = build_turn_understanding_input(
+            raw_query=query,
+            effective_query=query,
+            dialog_state={},
+            semantic_review_hints=[],
+        )
+
+        interpretation = interpret_turn(turn_input)
+
+        assert interpretation.dominant_turn_type == "behavior_instruction"
+        assert interpretation.response_mode == "acknowledge_and_store"
+        assert interpretation.route_bias == "meta_only"
+        assert interpretation.state_effects.update_preferences is True
+
+
+def test_interpret_turn_marks_preference_delete_without_appending_preference():
+    query = "vergiss die letzte praferenz die ich dir gegeben habe"
+    turn_input = build_turn_understanding_input(
+        raw_query=query,
+        effective_query=query,
+        dialog_state={},
+        semantic_review_hints=[],
+    )
+
+    interpretation = interpret_turn(turn_input)
+
+    assert interpretation.dominant_turn_type == "behavior_instruction"
+    assert interpretation.response_mode == "acknowledge_and_store"
+    assert interpretation.route_bias == "meta_only"
+    assert interpretation.state_effects.update_preferences is False
+    assert interpretation.state_effects.remove_last_preference is True
+
+
 def test_interpret_turn_marks_correction_and_complaint_before_followup():
     turn_input = build_turn_understanding_input(
         raw_query="# FOLLOW-UP CONTEXT\n# CURRENT USER QUERY\nso meinte ich das nicht, du hast die Antwort voellig aus dem Kontext gezogen",

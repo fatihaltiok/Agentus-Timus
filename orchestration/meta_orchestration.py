@@ -946,6 +946,8 @@ _SEMANTIC_BEHAVIOR_ALIGNMENT_FUTURE_HINTS = (
 _SEMANTIC_BEHAVIOR_ALIGNMENT_DIRECTIVE_HINTS = (
     "mach das",
     "mach es",
+    "speichere dir",
+    "antworte mir",
     "greif",
     "nutze",
     "verwende",
@@ -959,6 +961,9 @@ _SEMANTIC_BEHAVIOR_ALIGNMENT_DIRECTIVE_HINTS = (
     "merk dir",
     "merke dir",
     "behalte im kopf",
+    "vergiss",
+    "loesch",
+    "lösch",
 )
 
 _SEMANTIC_DIALOGUE_CLARIFICATION_PATTERNS = (
@@ -1643,6 +1648,16 @@ def _looks_like_meta_behavior_alignment_turn(text: str) -> bool:
     has_future_hint = any(token in normalized for token in _SEMANTIC_BEHAVIOR_ALIGNMENT_FUTURE_HINTS)
     has_directive_hint = any(token in normalized for token in _SEMANTIC_BEHAVIOR_ALIGNMENT_DIRECTIVE_HINTS)
     if has_future_hint and has_directive_hint:
+        return True
+    if re.search(
+        r"\b(?:vergiss|l[öo]sch(?:e)?|loesch(?:e)?)\b.*\b(?:letzte\s+)?(?:praeferenz|präferenz|praferenz|preference|vorgabe|regel)\b",
+        normalized,
+    ):
+        return True
+    if re.search(
+        r"\bwenn\s+ich\b.*\bsage\b.*\b(?:nutze|verwende|nimm|bevorzuge|priorisiere)\b",
+        normalized,
+    ):
         return True
     return bool(
         re.search(
