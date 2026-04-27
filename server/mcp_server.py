@@ -1487,6 +1487,11 @@ def _record_meta_turn_understanding_observations(
     meta_policy_decision = dict(classification.get("meta_policy_decision") or {})
     baseline_response_mode = str(turn_understanding.get("response_mode") or "")
     context_slots = meta_context_bundle.get("context_slots") or []
+    suppressed_context = [
+        item
+        for item in (meta_context_bundle.get("suppressed_context") or [])
+        if isinstance(item, dict)
+    ]
     slot_types: list[str] = []
     evidence_classes: list[str] = []
     for item in context_slots:
@@ -1616,9 +1621,7 @@ def _record_meta_turn_understanding_observations(
                 "content_preview": str(item.get("content") or "")[:180],
             },
         )
-    for item in meta_context_bundle.get("suppressed_context") or []:
-        if not isinstance(item, dict):
-            continue
+    for item in suppressed_context:
         _record_chat_observation(
             "context_slot_suppressed",
             {
@@ -1643,7 +1646,13 @@ def _record_meta_turn_understanding_observations(
                 "next_expected_step": str(meta_context_bundle.get("next_expected_step") or "")[:180],
             },
         )
-    if "topic_memory" in slot_types:
+    suppressed_topic_memory_count = sum(
+        1
+        for item in suppressed_context
+        if str(item.get("source") or "").strip() == "topic_memory"
+        and str(item.get("reason") or "").strip() == "clarity_contract_filtered_context"
+    )
+    if "topic_memory" in slot_types or suppressed_topic_memory_count:
         _record_chat_observation(
             "topic_memory_attached",
             {
@@ -1652,6 +1661,8 @@ def _record_meta_turn_understanding_observations(
                 "source": "canvas_chat",
                 "dominant_turn_type": dominant_turn_type,
                 "slot_count": slot_types.count("topic_memory"),
+                "filtered_count": suppressed_topic_memory_count,
+                "admitted": "topic_memory" in slot_types,
             },
         )
     if "historical_topic_memory" in slot_types:

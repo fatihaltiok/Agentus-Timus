@@ -557,16 +557,16 @@ def build_meta_clarity_contract(
         request_kind = "acknowledgment"
         answer_obligation = "confirm_and_store_without_menu"
         completion_condition = "preference_or_instruction_acknowledged"
-        # topic_memory ist erlaubt, weil eine Behavior-Instruction sich auf ein
-        # konkretes Thema beziehen kann (z.B. "bei news bitte Agenturquellen").
+        # Acknowledge/store turns must not pull free topical recall into the
+        # response path. The topic anchor is already in the current query or
+        # conversation state; only preference evidence is needed for storage.
         allowed_context_slots = (
             "current_query",
             "conversation_state",
             "recent_user_turn",
-            "topic_memory",
             "preference_memory",
         )
-        forbidden_context_slots = ("assistant_fallback_context",)
+        forbidden_context_slots = ("assistant_fallback_context", "topic_memory")
         allowed_working_memory_sections = ("KURZZEITKONTEXT", "STABILER_KONTEXT")
         max_related_memories = 2
         max_recent_events = 4
