@@ -800,6 +800,49 @@ _DOCUMENT_HINTS = (
     "speichere",
 )
 
+_LOCAL_FILE_TRANSFORM_HINTS = (
+    "wandle",
+    "umwandeln",
+    "wandle um",
+    "konvertiere",
+    "konvertieren",
+    "convert",
+    "exportiere",
+    "exportieren",
+    "mach daraus",
+    "mach daraud",
+)
+
+_LOCAL_FILE_SOURCE_EXTENSIONS = (
+    "csv",
+    "doc",
+    "docx",
+    "html",
+    "md",
+    "odp",
+    "ods",
+    "odt",
+    "pdf",
+    "ppt",
+    "pptx",
+    "rtf",
+    "txt",
+    "xls",
+    "xlsx",
+)
+
+_LOCAL_FILE_TARGET_FORMATS = (
+    "csv",
+    "doc",
+    "docx",
+    "excel",
+    "html",
+    "odt",
+    "pdf",
+    "txt",
+    "xlsx",
+)
+
 _DELIVERY_HINTS = (
     "email",
     "e-mail",
@@ -1496,6 +1539,37 @@ def resolve_runtime_goal_gap_stage(
 
 def _has_any(text: str, hints: Iterable[str]) -> bool:
     return any(hint in text for hint in hints)
+
+
+def _looks_like_local_file_transform_request(text: str) -> bool:
+    normalized = " ".join(str(text or "").strip().lower().split())
+    if not normalized:
+        return False
+
+    source_ext = "|".join(re.escape(item) for item in _LOCAL_FILE_SOURCE_EXTENSIONS)
+    target_formats = "|".join(re.escape(item) for item in _LOCAL_FILE_TARGET_FORMATS)
+    has_source_file = bool(re.search(rf"\.(?:{source_ext})(?:\b|$)", normalized))
+    if not has_source_file:
+        return False
+
+    has_local_path = bool(re.search(rf"(?:^|\s)(?:~|/)[^\s\"']+\.(?:{source_ext})(?:\b|$)", normalized))
+    has_file_anchor = has_local_path or "datei" in normalized or "file" in normalized
+    if not has_file_anchor:
+        return False
+
+    has_target_format = bool(
+        re.search(rf"\b(?:{target_formats})\b", normalized)
+        or re.search(rf"\b(?:in|als|nach|zu)\s+(?:eine\s+|ein\s+)?(?:{target_formats})\b", normalized)
+    )
+    if not has_target_format:
+        return False
+
+    if _has_any(normalized, _LOCAL_FILE_TRANSFORM_HINTS):
+        return True
+    return bool(
+        re.search(rf"\b(?:erstelle|erzeuge)\s+(?:eine\s+|ein\s+)?(?:{target_formats})\s+(?:aus|von)\b", normalized)
+        or re.search(rf"\b(?:in|als|nach|zu)\s+(?:eine\s+|ein\s+)?(?:{target_formats})\b", normalized)
+    )
 
 
 def looks_like_meta_clarification_turn(text: str) -> bool:
@@ -3421,6 +3495,7 @@ def classify_meta_task(
         and site_kind not in {"youtube", "booking", "x", "linkedin", "outlook", "github_login"}
     )
     has_document = _has_any(current_normalized, _DOCUMENT_HINTS)
+    has_local_file_transform = False
     has_delivery = _has_any(current_normalized, _DELIVERY_HINTS)
     has_system = _has_any(current_normalized, _SYSTEM_HINTS)
     has_login = any(token in current_normalized for token in ("login", "log in", "sign in", "anmelden", "einloggen"))
@@ -3480,6 +3555,27 @@ def classify_meta_task(
             open_goal = plan_goal
         if plan_next_step:
             next_step = plan_next_step
+    local_file_transform_focus = " ".join(
+        str(item or "")
+        for item in (
+            effective_query,
+            active_topic,
+            open_goal,
+            next_step,
+            context_anchor,
+            (conversation_state or {}).get("active_topic"),
+            (conversation_state or {}).get("active_goal"),
+            (conversation_state or {}).get("open_loop"),
+            (conversation_state or {}).get("next_expected_step"),
+            dialog_state.get("active_topic"),
+            dialog_state.get("open_goal"),
+            dialog_state.get("next_step"),
+        )
+        if str(item or "").strip()
+    )
+    has_local_file_transform = _looks_like_local_file_transform_request(local_file_transform_focus)
+    if has_local_file_transform:
+        has_document = True
     topic_transition = derive_topic_state_transition(
         conversation_state,
         session_id=str((conversation_state or {}).get("session_id") or "default"),
@@ -3505,6 +3601,11 @@ def classify_meta_task(
         if "systemctl" in normalized or "journalctl" in normalized or "sudo" in normalized:
             required_capabilities.append("terminal_execution")
             recommended_chain.append("shell")
+    elif has_local_file_transform:
+        required_capabilities.extend(["document_creation", "file_transform"])
+        recommended_chain = ["meta", "document"]
+        task_type = "document_generation"
+        reason = "local_file_transform"
     elif has_route_request:
         required_capabilities.extend(["location_context", "route_planning"])
         recommended_chain = ["meta", "executor"]
@@ -3694,7 +3795,7 @@ def classify_meta_task(
         "multi_stage_web_task",
         "ui_navigation",
     }
-    _is_protected_route = task_type in _PROTECTED_TASK_TYPES
+    _is_protected_route = task_type in _PROTECTED_TASK_TYPES or has_local_file_transform
     if low_confidence_controller.get("active"):
         if not _is_protected_route:
             deduped_chain = [
@@ -3735,6 +3836,8 @@ def classify_meta_task(
         if kernel_response_mode != "acknowledge_and_store":
             kernel_response_mode = "clarify_before_execute"
             reason = "gdk:clarify_low_confidence"
+    if has_local_file_transform and kernel_response_mode != "acknowledge_and_store":
+        kernel_response_mode = "execute"
 
     pre_policy_frame = build_meta_request_frame(
         effective_query=effective_query,
@@ -4022,7 +4125,11 @@ def classify_meta_task(
             },
         )
 
-    if kernel_seed.confidence >= 0.7 and kernel_seed.interaction_mode != meta_interaction_mode.mode:
+    if (
+        kernel_seed.confidence >= 0.7
+        and kernel_seed.interaction_mode != meta_interaction_mode.mode
+        and not has_local_file_transform
+    ):
         if kernel_seed.interaction_mode == "think_partner":
             meta_interaction_mode = MetaInteractionMode(
                 schema_version=1,

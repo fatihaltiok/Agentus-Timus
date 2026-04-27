@@ -123,6 +123,63 @@ def test_classify_meta_task_routes_local_action_plus_place_queries_to_meta_execu
     assert result["recommended_agent_chain"] == ["meta", "executor"]
 
 
+def test_classify_meta_task_routes_local_file_pdf_conversion_to_document_execution():
+    queries = [
+        "wandle diese datei in eine pdf /home/fatih-ubuntu/Dokumente/Lebenslauf_Fatih_Altiok_Betriebsmechaniker.odt",
+        "mach daraus eine pdf datei /home/fatih-ubuntu/Dokumente/Lebenslauf_Fatih_Altiok_Betriebsmechaniker.odt nutze die tools",
+        "wechsel in den aktionsmodus und mach daraud eine pdf /home/fatih-ubuntu/Dokumente/Lebenslauf_Fatih_Altiok_Betriebsmechaniker.odt",
+    ]
+
+    for query in queries:
+        result = classify_meta_task(query, action_count=0)
+
+        assert result["task_type"] == "document_generation"
+        assert result["recommended_agent_chain"] == ["meta", "document"]
+        assert result["response_mode"] == "execute"
+        assert result["meta_request_frame"]["task_domain"] == "document_generation"
+        assert result["meta_interaction_mode"]["mode"] == "assist"
+        assert result["meta_clarity_contract"]["request_kind"] == "execute_task"
+        assert result["meta_clarity_contract"]["delegation_mode"] == "full_orchestration"
+
+
+def test_classify_meta_task_resumes_local_file_pdf_conversion_from_open_loop():
+    result = classify_meta_task(
+        "mach das",
+        action_count=0,
+        conversation_state={
+            "active_topic": (
+                "wandle diese datei in eine pdf "
+                "/home/fatih-ubuntu/Dokumente/Lebenslauf_Fatih_Altiok_Betriebsmechaniker.odt"
+            ),
+            "active_goal": "PDF erstellen",
+            "open_loop": "ODT als PDF konvertieren",
+            "next_expected_step": "LibreOffice-Konvertierung ausfuehren",
+            "turn_type_hint": "followup",
+        },
+        recent_user_turns=[
+            (
+                "wandle diese datei in eine pdf "
+                "/home/fatih-ubuntu/Dokumente/Lebenslauf_Fatih_Altiok_Betriebsmechaniker.odt"
+            )
+        ],
+    )
+
+    assert result["task_type"] == "document_generation"
+    assert result["recommended_agent_chain"] == ["meta", "document"]
+    assert result["response_mode"] == "execute"
+    assert result["meta_interaction_mode"]["mode"] == "assist"
+    assert result["meta_clarity_contract"]["request_kind"] == "execute_task"
+
+
+def test_classify_meta_task_does_not_execute_explanatory_pdf_question():
+    result = classify_meta_task("was ist eine pdf datei", action_count=0)
+
+    assert result["task_type"] == "single_lane"
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["response_mode"] == "clarify_before_execute"
+    assert result["meta_interaction_mode"]["mode"] == "think_partner"
+
+
 def test_classify_meta_task_marks_mixed_preference_and_wealth_prompt_for_semantic_review():
     result = classify_meta_task(
         "soll ich kaffee oder tee trinken was meinst du und was und wie koenntest du mich reich machen",
