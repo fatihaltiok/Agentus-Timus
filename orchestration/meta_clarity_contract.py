@@ -544,6 +544,7 @@ def build_meta_clarity_contract(
             "recent_user_turn",
             "topic_memory",
             "historical_topic_memory",
+            "preference_memory",
         )
         forbidden_context_slots = ("assistant_fallback_context",)
         allowed_working_memory_sections = ("KURZZEITKONTEXT", "LANGZEITKONTEXT")
@@ -551,24 +552,27 @@ def build_meta_clarity_contract(
         max_recent_events = 8
         delegation_mode = "bounded_chain"
         max_delegate_calls = 2
-        rationale = "Resume-Faelle brauchen Plananschluss, aber keine beliebigen Alt-Praeferenzen."
+        rationale = "Resume-Faelle brauchen Plananschluss; aktive Praeferenzen bleiben sichtbar wenn thematisch relevant."
     elif not interaction_mode_explicit and response_mode_clean == "acknowledge_and_store":
         request_kind = "acknowledgment"
         answer_obligation = "confirm_and_store_without_menu"
         completion_condition = "preference_or_instruction_acknowledged"
+        # topic_memory ist erlaubt, weil eine Behavior-Instruction sich auf ein
+        # konkretes Thema beziehen kann (z.B. "bei news bitte Agenturquellen").
         allowed_context_slots = (
             "current_query",
             "conversation_state",
             "recent_user_turn",
+            "topic_memory",
             "preference_memory",
         )
         forbidden_context_slots = ("assistant_fallback_context",)
         allowed_working_memory_sections = ("KURZZEITKONTEXT", "STABILER_KONTEXT")
-        max_related_memories = 1
+        max_related_memories = 2
         max_recent_events = 4
         delegation_mode = "direct_only"
         max_delegate_calls = 0
-        rationale = "Praeferenz-Updates sollen bestaetigt werden, nicht in breite Themennavigation kippen."
+        rationale = "Praeferenz-Updates sollen bestaetigt werden, mit thematischem Kontext aber ohne breite Themennavigation."
     elif not interaction_mode_explicit and objective_domain == "setup_build":
         request_kind = "execute_task"
         answer_obligation = "probe_then_return_concrete_setup_execution_path"

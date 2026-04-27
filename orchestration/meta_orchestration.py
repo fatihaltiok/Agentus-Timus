@@ -3705,10 +3705,14 @@ def classify_meta_task(
             controller_task_type = str(low_confidence_controller.get("task_type") or "").strip()
             task_type = controller_task_type or "single_lane"
             required_capabilities = []
-        kernel_response_mode = (
-            str(low_confidence_controller.get("response_mode") or "clarify_before_execute").strip()
-            or "clarify_before_execute"
-        )
+        # acknowledge_and_store fuer behavior_instruction / preference_update
+        # darf nicht ueberschrieben werden - sonst geht die Preference-Capture-
+        # Pipeline kaputt, auch wenn der Kernel low confidence hat.
+        if kernel_response_mode != "acknowledge_and_store":
+            kernel_response_mode = (
+                str(low_confidence_controller.get("response_mode") or "clarify_before_execute").strip()
+                or "clarify_before_execute"
+            )
         reason = f"gdk4:{low_confidence_controller.get('reason') or 'low_confidence_fail_small'}"
     elif kernel_seed.execution_permission == "forbidden":
         if not _is_protected_route:
@@ -3726,8 +3730,11 @@ def classify_meta_task(
     elif kernel_seed.clarify_if_below_threshold and task_type in gdk_generic_task_types and not _is_protected_route:
         deduped_chain = ["meta"]
         task_type = "single_lane"
-        kernel_response_mode = "clarify_before_execute"
-        reason = "gdk:clarify_low_confidence"
+        # acknowledge_and_store fuer behavior_instruction / preference_update darf
+        # nicht ueberschrieben werden - sonst geht die Preference-Capture-Pipeline kaputt.
+        if kernel_response_mode != "acknowledge_and_store":
+            kernel_response_mode = "clarify_before_execute"
+            reason = "gdk:clarify_low_confidence"
 
     pre_policy_frame = build_meta_request_frame(
         effective_query=effective_query,
