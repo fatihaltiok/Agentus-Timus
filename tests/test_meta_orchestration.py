@@ -302,6 +302,22 @@ def test_classify_meta_task_routes_common_quick_lookups_to_meta_executor():
         assert result["meta_interaction_mode"]["mode"] != "think_partner"
 
 
+def test_classify_meta_task_does_not_route_lookup_substring_false_positives_to_executor():
+    queries = [
+        "yoga kurs morgen",
+        "zeit in der schule war hart",
+        "das kostet uns die nerven",
+        "kurs der vhs anmelden",
+        "ich habe wenig zeit in der woche",
+    ]
+
+    for query in queries:
+        result = classify_meta_task(query, action_count=0)
+
+        assert result["task_type"] != "simple_live_lookup"
+        assert result["recommended_agent_chain"] != ["meta", "executor"]
+
+
 def test_classify_meta_task_uses_state_summary_policy_for_status_question():
     result = classify_meta_task(
         "wo stehen wir gerade",

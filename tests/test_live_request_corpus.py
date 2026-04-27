@@ -101,6 +101,9 @@ def _assert_expected(result: dict[str, Any], expected: dict[str, Any]) -> None:
     if "task_type" in expected:
         assert result.get("task_type") == expected["task_type"]
 
+    if "not_task_types" in expected:
+        assert result.get("task_type") not in set(expected["not_task_types"])
+
     if "response_mode" in expected:
         assert result.get("response_mode") == expected["response_mode"]
 

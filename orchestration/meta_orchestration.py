@@ -678,10 +678,8 @@ _SIMPLE_LIVE_LOOKUP_DIRECT_HINTS = (
     "programm im kino",
     "preise",
     "preis",
-    "kostet",
     "pricing",
     "kosten",
-    "kurs",
     "vergleich",
     "liste",
     "tabelle",
@@ -690,10 +688,7 @@ _SIMPLE_LIVE_LOOKUP_DIRECT_HINTS = (
     "wer ist",
     "wie heißt",
     "wie heisst",
-    "wie spät",
-    "wie spaet",
     "uhrzeit",
-    "zeit in",
     "ceo",
     "präsident",
     "praesident",
@@ -722,6 +717,16 @@ _SIMPLE_LIVE_LOOKUP_FRESHNESS_HINTS = (
     "current",
     "latest",
     "gerade",
+)
+
+_SIMPLE_LIVE_LOOKUP_DIRECT_PATTERNS = (
+    re.compile(r"\b(?:was|wieviel|wie\s+viel)\s+kostet\b"),
+    re.compile(r"\b(?:bitcoin|btc|ethereum|eth)\b.*\b(?:kurs|preis)\b"),
+    re.compile(r"\b(?:kurs|preis)\s+(?:von|fuer|für)\s+(?:bitcoin|btc|ethereum|eth)\b"),
+    re.compile(r"\b(?:aktienkurs|wechselkurs)\b"),
+    re.compile(r"\bwie\s+(?:spät|spaet)\s+(?:ist\s+es\s+)?(?:in|auf|am)\b"),
+    re.compile(r"\bwie\s+viel\s+uhr\s+(?:ist\s+es\s+)?(?:in|auf|am)\b"),
+    re.compile(r"\buhrzeit\s+(?:in|auf|am)\b"),
 )
 
 _HARD_RESEARCH_HINTS = (
@@ -1568,6 +1573,15 @@ def resolve_runtime_goal_gap_stage(
 
 def _has_any(text: str, hints: Iterable[str]) -> bool:
     return any(hint in text for hint in hints)
+
+
+def _looks_like_simple_live_lookup_direct_query(text: str) -> bool:
+    normalized = " ".join(str(text or "").strip().lower().split())
+    if not normalized:
+        return False
+    if _has_any(normalized, _SIMPLE_LIVE_LOOKUP_DIRECT_HINTS):
+        return True
+    return any(pattern.search(normalized) for pattern in _SIMPLE_LIVE_LOOKUP_DIRECT_PATTERNS)
 
 
 def _looks_like_local_file_transform_request(text: str) -> bool:
@@ -3506,7 +3520,7 @@ def classify_meta_task(
     ) and not has_route_request
     has_simple_live_lookup = (
         (
-            _has_any(current_normalized, _SIMPLE_LIVE_LOOKUP_DIRECT_HINTS)
+            _looks_like_simple_live_lookup_direct_query(current_normalized)
             or (
                 _has_any(current_normalized, _SIMPLE_LIVE_LOOKUP_FRESHNESS_HINTS)
                 and any(

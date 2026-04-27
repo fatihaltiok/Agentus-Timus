@@ -357,6 +357,66 @@
       }
     },
     {
+      "id": "negative_yoga_course_not_market_rate",
+      "category": "advisory",
+      "query": "yoga kurs morgen",
+      "expected": {
+        "chain_prefix": ["meta"]
+      },
+      "target_forbidden": {
+        "task_types": ["simple_live_lookup", "simple_live_lookup_document"],
+        "task_domains": ["general_research"]
+      }
+    },
+    {
+      "id": "negative_school_time_reflection_not_time_lookup",
+      "category": "advisory",
+      "query": "zeit in der schule war hart",
+      "expected": {
+        "chain_prefix": ["meta"]
+      },
+      "target_forbidden": {
+        "task_types": ["simple_live_lookup", "simple_live_lookup_document"],
+        "task_domains": ["general_research"]
+      }
+    },
+    {
+      "id": "negative_costs_complaint_not_price_lookup",
+      "category": "advisory",
+      "query": "das kostet uns die nerven",
+      "expected": {
+        "chain_prefix": ["meta"]
+      },
+      "target_forbidden": {
+        "task_types": ["simple_live_lookup", "simple_live_lookup_document"],
+        "task_domains": ["general_research"]
+      }
+    },
+    {
+      "id": "negative_vhs_course_not_finance_rate",
+      "category": "advisory",
+      "query": "kurs der vhs anmelden",
+      "expected": {
+        "not_task_types": ["simple_live_lookup", "simple_live_lookup_document"]
+      },
+      "target_forbidden": {
+        "task_types": ["simple_live_lookup", "simple_live_lookup_document"],
+        "task_domains": ["general_research"]
+      }
+    },
+    {
+      "id": "negative_week_time_reflection_not_time_lookup",
+      "category": "advisory",
+      "query": "ich habe wenig zeit in der woche",
+      "expected": {
+        "chain_prefix": ["meta"]
+      },
+      "target_forbidden": {
+        "task_types": ["simple_live_lookup", "simple_live_lookup_document"],
+        "task_domains": ["general_research"]
+      }
+    },
+    {
       "id": "behavior_news_sources_future",
       "category": "behavior_instruction",
       "query": "dann mach das in zukunft so dass du auf echtzeit agenturmeldungen zugreifst bei news und aktuellem geschehen",
