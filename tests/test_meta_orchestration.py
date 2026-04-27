@@ -171,6 +171,32 @@ def test_classify_meta_task_resumes_local_file_pdf_conversion_from_open_loop():
     assert result["meta_clarity_contract"]["request_kind"] == "execute_task"
 
 
+def test_classify_meta_task_routes_explicit_local_file_operations_to_shell_execution():
+    queries = [
+        "erstelle einen ordner /tmp/timus-test",
+        "verschiebe /tmp/a.txt nach /tmp/b.txt",
+        "kopiere /tmp/a.txt nach /tmp/a-backup.txt",
+        "benenne /tmp/alt.txt in /tmp/neu.txt um",
+        "entpacke /tmp/archiv.zip nach /tmp/archiv",
+    ]
+
+    for query in queries:
+        result = classify_meta_task(query, action_count=0)
+
+        assert result["task_type"] == "file_operation"
+        assert result["recommended_agent_chain"] == ["meta", "shell"]
+        assert result["response_mode"] == "execute"
+        assert result["meta_request_frame"]["task_domain"] == "file_operation"
+        assert result["meta_interaction_mode"]["mode"] == "assist"
+
+
+def test_classify_meta_task_does_not_execute_file_operation_without_local_path():
+    result = classify_meta_task("wie verschiebe ich eine datei unter linux", action_count=0)
+
+    assert result["task_type"] != "file_operation"
+    assert result["recommended_agent_chain"] != ["meta", "shell"]
+
+
 def test_classify_meta_task_does_not_execute_explanatory_pdf_question():
     result = classify_meta_task("was ist eine pdf datei", action_count=0)
 

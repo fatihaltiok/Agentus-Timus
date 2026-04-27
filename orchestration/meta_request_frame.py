@@ -310,6 +310,7 @@ def _infer_task_domain(
         "simple_live_lookup_document": "general_research",
         "communication_task": "communication",
         "document_generation": "document_generation",
+        "file_operation": "file_operation",
         "location_local_search": "location_local_search",
         "location_route": "location_route",
         "system_diagnosis": "system_diagnosis",

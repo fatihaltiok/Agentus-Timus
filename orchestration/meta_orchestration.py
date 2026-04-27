@@ -813,6 +813,29 @@ _LOCAL_FILE_TRANSFORM_HINTS = (
     "mach daraud",
 )
 
+_LOCAL_FILE_OPERATION_HINTS = (
+    "benenne",
+    "benenn",
+    "copy",
+    "cp ",
+    "entpacke",
+    "entpacken",
+    "extrahiere",
+    "extrahieren",
+    "erstelle einen ordner",
+    "erstelle ordner",
+    "kopiere",
+    "kopieren",
+    "mkdir",
+    "neuen ordner",
+    "ordner anlegen",
+    "ordner erstellen",
+    "rename",
+    "unzip",
+    "verschiebe",
+    "verschieben",
+)
+
 _LOCAL_FILE_SOURCE_EXTENSIONS = (
     "csv",
     "doc",
@@ -1570,6 +1593,18 @@ def _looks_like_local_file_transform_request(text: str) -> bool:
         re.search(rf"\b(?:erstelle|erzeuge)\s+(?:eine\s+|ein\s+)?(?:{target_formats})\s+(?:aus|von)\b", normalized)
         or re.search(rf"\b(?:in|als|nach|zu)\s+(?:eine\s+|ein\s+)?(?:{target_formats})\b", normalized)
     )
+
+
+def _looks_like_local_file_operation_request(text: str) -> bool:
+    normalized = " ".join(str(text or "").strip().lower().split())
+    if not normalized:
+        return False
+
+    has_local_path = bool(re.search(r"(?:^|\s)(?:~|/)[^\s\"']+", normalized))
+    if not has_local_path:
+        return False
+
+    return _has_any(normalized, _LOCAL_FILE_OPERATION_HINTS)
 
 
 def looks_like_meta_clarification_turn(text: str) -> bool:
@@ -3496,6 +3531,7 @@ def classify_meta_task(
     )
     has_document = _has_any(current_normalized, _DOCUMENT_HINTS)
     has_local_file_transform = False
+    has_local_file_operation = False
     has_delivery = _has_any(current_normalized, _DELIVERY_HINTS)
     has_system = _has_any(current_normalized, _SYSTEM_HINTS)
     has_login = any(token in current_normalized for token in ("login", "log in", "sign in", "anmelden", "einloggen"))
@@ -3576,6 +3612,7 @@ def classify_meta_task(
     has_local_file_transform = _looks_like_local_file_transform_request(local_file_transform_focus)
     if has_local_file_transform:
         has_document = True
+    has_local_file_operation = _looks_like_local_file_operation_request(local_file_transform_focus)
     topic_transition = derive_topic_state_transition(
         conversation_state,
         session_id=str((conversation_state or {}).get("session_id") or "default"),
@@ -3606,6 +3643,11 @@ def classify_meta_task(
         recommended_chain = ["meta", "document"]
         task_type = "document_generation"
         reason = "local_file_transform"
+    elif has_local_file_operation:
+        required_capabilities.extend(["terminal_execution", "file_operation"])
+        recommended_chain = ["meta", "shell"]
+        task_type = "file_operation"
+        reason = "local_file_operation"
     elif has_route_request:
         required_capabilities.extend(["location_context", "route_planning"])
         recommended_chain = ["meta", "executor"]
@@ -3671,7 +3713,7 @@ def classify_meta_task(
         task_type = "knowledge_research"
         reason = "research_only"
 
-    if has_document and "document" not in required_capabilities:
+    if has_document and task_type != "file_operation" and "document" not in required_capabilities:
         required_capabilities.append("document_creation")
         if task_type == "simple_live_lookup":
             if not recommended_chain:
@@ -3795,7 +3837,7 @@ def classify_meta_task(
         "multi_stage_web_task",
         "ui_navigation",
     }
-    _is_protected_route = task_type in _PROTECTED_TASK_TYPES or has_local_file_transform
+    _is_protected_route = task_type in _PROTECTED_TASK_TYPES or has_local_file_transform or has_local_file_operation
     if low_confidence_controller.get("active"):
         if not _is_protected_route:
             deduped_chain = [
@@ -3837,6 +3879,8 @@ def classify_meta_task(
             kernel_response_mode = "clarify_before_execute"
             reason = "gdk:clarify_low_confidence"
     if has_local_file_transform and kernel_response_mode != "acknowledge_and_store":
+        kernel_response_mode = "execute"
+    if has_local_file_operation and kernel_response_mode != "acknowledge_and_store":
         kernel_response_mode = "execute"
 
     pre_policy_frame = build_meta_request_frame(

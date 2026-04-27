@@ -56,8 +56,7 @@
         "response_mode": "execute",
         "chain_prefix": ["meta", "shell"],
         "interaction_mode": "assist"
-      },
-      "xfail": "GDK6 file-operation fast path is not implemented yet."
+      }
     },
     {
       "id": "trivial_file_move",
@@ -68,8 +67,7 @@
         "response_mode": "execute",
         "chain_prefix": ["meta", "shell"],
         "interaction_mode": "assist"
-      },
-      "xfail": "GDK6 file-operation fast path is not implemented yet."
+      }
     },
     {
       "id": "trivial_file_copy",
@@ -80,8 +78,7 @@
         "response_mode": "execute",
         "chain_prefix": ["meta", "shell"],
         "interaction_mode": "assist"
-      },
-      "xfail": "GDK6 file-operation fast path is not implemented yet."
+      }
     },
     {
       "id": "trivial_file_rename",
@@ -92,8 +89,7 @@
         "response_mode": "execute",
         "chain_prefix": ["meta", "shell"],
         "interaction_mode": "assist"
-      },
-      "xfail": "GDK6 file-operation fast path is not implemented yet."
+      }
     },
     {
       "id": "trivial_extract_zip",
@@ -104,8 +100,7 @@
         "response_mode": "execute",
         "chain_prefix": ["meta", "shell"],
         "interaction_mode": "assist"
-      },
-      "xfail": "GDK6 archive/file-operation fast path is not implemented yet."
+      }
     },
     {
       "id": "quick_lookup_science_news",
