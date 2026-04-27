@@ -678,8 +678,10 @@ _SIMPLE_LIVE_LOOKUP_DIRECT_HINTS = (
     "programm im kino",
     "preise",
     "preis",
+    "kostet",
     "pricing",
     "kosten",
+    "kurs",
     "vergleich",
     "liste",
     "tabelle",
@@ -688,6 +690,10 @@ _SIMPLE_LIVE_LOOKUP_DIRECT_HINTS = (
     "wer ist",
     "wie heißt",
     "wie heisst",
+    "wie spät",
+    "wie spaet",
+    "uhrzeit",
+    "zeit in",
     "ceo",
     "präsident",
     "praesident",
@@ -1688,7 +1694,7 @@ def _derive_semantic_review_payload(
     if _looks_like_meta_behavior_alignment_turn(text):
         hints.append("behavior_preference_alignment")
 
-    if looks_like_meta_clarification_turn(text):
+    if looks_like_meta_clarification_turn(text) and not has_simple_live_lookup and not has_local_search:
         hints.append("conversational_clarification_needed")
 
     return {
@@ -3837,7 +3843,22 @@ def classify_meta_task(
         "multi_stage_web_task",
         "ui_navigation",
     }
-    _is_protected_route = task_type in _PROTECTED_TASK_TYPES or has_local_file_transform or has_local_file_operation
+    _lookup_first_route = has_simple_live_lookup and kernel_turn_type not in {
+        "approval_response",
+        "auth_response",
+        "followup",
+        "handover_resume",
+        "correction",
+        "clarification",
+        "behavior_instruction",
+        "preference_update",
+    }
+    _is_protected_route = (
+        task_type in _PROTECTED_TASK_TYPES
+        or has_local_file_transform
+        or has_local_file_operation
+        or _lookup_first_route
+    )
     if low_confidence_controller.get("active"):
         if not _is_protected_route:
             deduped_chain = [
@@ -3881,6 +3902,22 @@ def classify_meta_task(
     if has_local_file_transform and kernel_response_mode != "acknowledge_and_store":
         kernel_response_mode = "execute"
     if has_local_file_operation and kernel_response_mode != "acknowledge_and_store":
+        kernel_response_mode = "execute"
+    if (
+        has_simple_live_lookup
+        and kernel_response_mode != "acknowledge_and_store"
+        and kernel_turn_type
+        not in {
+            "approval_response",
+            "auth_response",
+            "followup",
+            "handover_resume",
+            "correction",
+            "clarification",
+            "behavior_instruction",
+            "preference_update",
+        }
+    ):
         kernel_response_mode = "execute"
 
     pre_policy_frame = build_meta_request_frame(
@@ -4173,6 +4210,7 @@ def classify_meta_task(
         kernel_seed.confidence >= 0.7
         and kernel_seed.interaction_mode != meta_interaction_mode.mode
         and not has_local_file_transform
+        and final_task_type not in {"file_operation", "simple_live_lookup", "simple_live_lookup_document"}
     ):
         if kernel_seed.interaction_mode == "think_partner":
             meta_interaction_mode = MetaInteractionMode(

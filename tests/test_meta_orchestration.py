@@ -283,6 +283,25 @@ def test_classify_meta_task_routes_simple_live_science_lookup_to_meta_executor()
     assert result["meta_policy_decision"]["override_applied"] is False
 
 
+def test_classify_meta_task_routes_common_quick_lookups_to_meta_executor():
+    queries = [
+        "wie ist das wetter morgen in muenchen",
+        "was kostet chatgpt plus aktuell",
+        "welche filme laufen heute im kino in frankfurt",
+        "wie spaet ist es in tokio",
+        "wer ist aktuell bundeskanzler von deutschland",
+        "wie ist der aktuelle bitcoin kurs",
+    ]
+
+    for query in queries:
+        result = classify_meta_task(query, action_count=0)
+
+        assert result["task_type"] == "simple_live_lookup"
+        assert result["response_mode"] == "execute"
+        assert result["recommended_agent_chain"] == ["meta", "executor"]
+        assert result["meta_interaction_mode"]["mode"] != "think_partner"
+
+
 def test_classify_meta_task_uses_state_summary_policy_for_status_question():
     result = classify_meta_task(
         "wo stehen wir gerade",

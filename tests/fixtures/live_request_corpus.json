@@ -122,8 +122,7 @@
         "response_mode": "execute",
         "chain_prefix": ["meta", "executor"],
         "interaction_mode": "assist"
-      },
-      "xfail": "Weather-style quick lookups still fall back to advisory clarification."
+      }
     },
     {
       "id": "quick_lookup_chatgpt_plus_price",
@@ -134,8 +133,7 @@
         "response_mode": "execute",
         "chain_prefix": ["meta", "executor"],
         "interaction_mode": "assist"
-      },
-      "xfail": "Current price lookups still need GDK6 lookup-first routing."
+      }
     },
     {
       "id": "quick_lookup_cinema_frankfurt",
@@ -146,8 +144,7 @@
         "response_mode": "execute",
         "chain_prefix": ["meta", "executor"],
         "interaction_mode": "assist"
-      },
-      "xfail": "Local event lookups still need GDK6 lookup-first routing."
+      }
     },
     {
       "id": "quick_lookup_time_tokyo",
@@ -158,8 +155,7 @@
         "response_mode": "execute",
         "chain_prefix": ["meta", "executor"],
         "interaction_mode": "assist"
-      },
-      "xfail": "Time lookups still fall back to advisory clarification."
+      }
     },
     {
       "id": "quick_lookup_current_chancellor",
@@ -170,8 +166,7 @@
         "response_mode": "execute",
         "chain_prefix": ["meta", "executor"],
         "interaction_mode": "assist"
-      },
-      "xfail": "Current office-holder lookup still needs lookup-first routing."
+      }
     },
     {
       "id": "quick_lookup_openai_news",
@@ -194,8 +189,7 @@
         "response_mode": "execute",
         "chain_prefix": ["meta", "executor"],
         "interaction_mode": "assist"
-      },
-      "xfail": "Market-price lookup still needs lookup-first routing."
+      }
     },
     {
       "id": "followup_personal_assessment_startup",
