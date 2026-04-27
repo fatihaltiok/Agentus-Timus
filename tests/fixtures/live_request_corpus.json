@@ -1,0 +1,663 @@
+{
+  "version": 1,
+  "created_at": "2026-04-27",
+  "purpose": "Ausbaustufe 5 B1/B2: realistische Live-Anfragen als Klassifikations-Gates vor weiteren GDK-Fixes.",
+  "cases": [
+    {
+      "id": "trivial_pdf_direct",
+      "category": "trivial_execution",
+      "query": "wandle diese datei in eine pdf /home/fatih-ubuntu/Dokumente/Lebenslauf_Fatih_Altiok_Betriebsmechaniker.odt",
+      "expected": {
+        "task_type": "document_generation",
+        "response_mode": "execute",
+        "chain": ["meta", "document"],
+        "task_domain": "document_generation",
+        "interaction_mode": "assist"
+      }
+    },
+    {
+      "id": "trivial_pdf_contextual_mach_das",
+      "category": "trivial_execution",
+      "query": "mach das",
+      "conversation_state": {
+        "active_topic": "wandle diese datei in eine pdf /home/fatih-ubuntu/Dokumente/Lebenslauf_Fatih_Altiok_Betriebsmechaniker.odt",
+        "active_goal": "PDF erstellen",
+        "open_loop": "ODT als PDF konvertieren",
+        "next_expected_step": "LibreOffice-Konvertierung ausfuehren",
+        "turn_type_hint": "followup"
+      },
+      "recent_user_turns": [
+        "wandle diese datei in eine pdf /home/fatih-ubuntu/Dokumente/Lebenslauf_Fatih_Altiok_Betriebsmechaniker.odt"
+      ],
+      "expected": {
+        "task_type": "document_generation",
+        "response_mode": "execute",
+        "chain": ["meta", "document"],
+        "interaction_mode": "assist"
+      }
+    },
+    {
+      "id": "trivial_txt_lookup_document",
+      "category": "trivial_execution",
+      "query": "erstelle eine txt datei mit den besten llms und ihren preisen",
+      "expected": {
+        "task_type": "simple_live_lookup_document",
+        "response_mode": "execute",
+        "chain": ["meta", "executor", "document"],
+        "interaction_mode": "assist"
+      }
+    },
+    {
+      "id": "trivial_folder_create",
+      "category": "trivial_execution",
+      "query": "erstelle einen ordner /tmp/timus-test",
+      "expected": {
+        "task_type": "file_operation",
+        "response_mode": "execute",
+        "chain_prefix": ["meta", "shell"],
+        "interaction_mode": "assist"
+      },
+      "xfail": "GDK6 file-operation fast path is not implemented yet."
+    },
+    {
+      "id": "trivial_file_move",
+      "category": "trivial_execution",
+      "query": "verschiebe /tmp/a.txt nach /tmp/b.txt",
+      "expected": {
+        "task_type": "file_operation",
+        "response_mode": "execute",
+        "chain_prefix": ["meta", "shell"],
+        "interaction_mode": "assist"
+      },
+      "xfail": "GDK6 file-operation fast path is not implemented yet."
+    },
+    {
+      "id": "trivial_file_copy",
+      "category": "trivial_execution",
+      "query": "kopiere /tmp/a.txt nach /tmp/a-backup.txt",
+      "expected": {
+        "task_type": "file_operation",
+        "response_mode": "execute",
+        "chain_prefix": ["meta", "shell"],
+        "interaction_mode": "assist"
+      },
+      "xfail": "GDK6 file-operation fast path is not implemented yet."
+    },
+    {
+      "id": "trivial_file_rename",
+      "category": "trivial_execution",
+      "query": "benenne /tmp/alt.txt in /tmp/neu.txt um",
+      "expected": {
+        "task_type": "file_operation",
+        "response_mode": "execute",
+        "chain_prefix": ["meta", "shell"],
+        "interaction_mode": "assist"
+      },
+      "xfail": "GDK6 file-operation fast path is not implemented yet."
+    },
+    {
+      "id": "trivial_extract_zip",
+      "category": "trivial_execution",
+      "query": "entpacke /tmp/archiv.zip nach /tmp/archiv",
+      "expected": {
+        "task_type": "file_operation",
+        "response_mode": "execute",
+        "chain_prefix": ["meta", "shell"],
+        "interaction_mode": "assist"
+      },
+      "xfail": "GDK6 archive/file-operation fast path is not implemented yet."
+    },
+    {
+      "id": "quick_lookup_science_news",
+      "category": "quick_lookup",
+      "query": "Was gibt es Neues aus der Wissenschaft?",
+      "expected": {
+        "task_type": "simple_live_lookup",
+        "response_mode": "execute",
+        "chain": ["meta", "executor"],
+        "recipe_id": "simple_live_lookup"
+      }
+    },
+    {
+      "id": "quick_lookup_weather_munich",
+      "category": "quick_lookup",
+      "query": "wie ist das wetter morgen in muenchen",
+      "expected": {
+        "task_type": "simple_live_lookup",
+        "response_mode": "execute",
+        "chain_prefix": ["meta", "executor"],
+        "interaction_mode": "assist"
+      },
+      "xfail": "Weather-style quick lookups still fall back to advisory clarification."
+    },
+    {
+      "id": "quick_lookup_chatgpt_plus_price",
+      "category": "quick_lookup",
+      "query": "was kostet chatgpt plus aktuell",
+      "expected": {
+        "task_type": "simple_live_lookup",
+        "response_mode": "execute",
+        "chain_prefix": ["meta", "executor"],
+        "interaction_mode": "assist"
+      },
+      "xfail": "Current price lookups still need GDK6 lookup-first routing."
+    },
+    {
+      "id": "quick_lookup_cinema_frankfurt",
+      "category": "quick_lookup",
+      "query": "welche filme laufen heute im kino in frankfurt",
+      "expected": {
+        "task_type": "simple_live_lookup",
+        "response_mode": "execute",
+        "chain_prefix": ["meta", "executor"],
+        "interaction_mode": "assist"
+      },
+      "xfail": "Local event lookups still need GDK6 lookup-first routing."
+    },
+    {
+      "id": "quick_lookup_time_tokyo",
+      "category": "quick_lookup",
+      "query": "wie spaet ist es in tokio",
+      "expected": {
+        "task_type": "simple_live_lookup",
+        "response_mode": "execute",
+        "chain_prefix": ["meta", "executor"],
+        "interaction_mode": "assist"
+      },
+      "xfail": "Time lookups still fall back to advisory clarification."
+    },
+    {
+      "id": "quick_lookup_current_chancellor",
+      "category": "quick_lookup",
+      "query": "wer ist aktuell bundeskanzler von deutschland",
+      "expected": {
+        "task_type": "simple_live_lookup",
+        "response_mode": "execute",
+        "chain_prefix": ["meta", "executor"],
+        "interaction_mode": "assist"
+      },
+      "xfail": "Current office-holder lookup still needs lookup-first routing."
+    },
+    {
+      "id": "quick_lookup_openai_news",
+      "category": "quick_lookup",
+      "query": "suche aktuelle news zu openai",
+      "expected": {
+        "task_type": "simple_live_lookup",
+        "response_mode": "execute",
+        "chain_prefix": ["meta", "executor"],
+        "interaction_mode": "assist"
+      },
+      "xfail": "News lookup routing is not yet broad enough for this wording."
+    },
+    {
+      "id": "quick_lookup_bitcoin_price",
+      "category": "quick_lookup",
+      "query": "wie ist der aktuelle bitcoin kurs",
+      "expected": {
+        "task_type": "simple_live_lookup",
+        "response_mode": "execute",
+        "chain_prefix": ["meta", "executor"],
+        "interaction_mode": "assist"
+      },
+      "xfail": "Market-price lookup still needs lookup-first routing."
+    },
+    {
+      "id": "followup_personal_assessment_startup",
+      "category": "followup_context",
+      "query": "du kannst mich ungefaehr einschaetzen was passt zu mir",
+      "conversation_state": {
+        "active_topic": "Unternehmensgruendung mit KI",
+        "active_goal": "Startansatz mit vorhandenen Faehigkeiten finden",
+        "active_domain": "topic_advisory",
+        "open_loop": "Was sind deine Skills, Ressourcen und Interessen?",
+        "next_expected_step": "Skills nennen",
+        "turn_type_hint": "followup",
+        "topic_confidence": 0.7
+      },
+      "recent_user_turns": [
+        "ich will ein unternehmen gruenden mit ki und brauche einen startansatz"
+      ],
+      "recent_assistant_turns": [
+        "Was bringst du mit? Sag mir in 2-3 Saetzen, was du gut kannst."
+      ],
+      "expected": {
+        "chain_prefix": ["meta"],
+        "personal_assessment": true
+      }
+    },
+    {
+      "id": "followup_recall_previous_request",
+      "category": "followup_context",
+      "query": "worueber hatte ich dich eben gebeten",
+      "conversation_state": {
+        "active_topic": "Unternehmensgruendung mit KI",
+        "active_goal": "Startansatz mit vorhandenen Faehigkeiten finden",
+        "open_loop": "Was sind deine Skills, Ressourcen und Interessen?",
+        "next_expected_step": "Skills nennen",
+        "turn_type_hint": "followup"
+      },
+      "recent_user_turns": [
+        "ich will ein unternehmen gruenden mit ki und brauche einen startansatz"
+      ],
+      "recent_assistant_turns": [
+        "Was bringst du mit? Sag mir in 2-3 Saetzen, was du gut kannst."
+      ],
+      "expected": {
+        "chain_prefix": ["meta"],
+        "deictic_kind": "recall"
+      }
+    },
+    {
+      "id": "followup_this_problem",
+      "category": "followup_context",
+      "query": "kannst du dieses Problem beheben",
+      "conversation_state": {
+        "active_topic": "Kontextverlust in Beratungsgespraechen",
+        "active_goal": "Conversation Carryover reparieren",
+        "open_loop": "Timus verliert den Faden bei Follow-ups",
+        "next_expected_step": "Problem analysieren",
+        "turn_type_hint": "followup"
+      },
+      "recent_user_turns": [
+        "du vergisst schnell worum es geht so ist ein beratungs Gespraech nicht moeglich"
+      ],
+      "recent_assistant_turns": [
+        "Ja, das ist ein echtes Problem. Wir muessen den Conversation-State pruefen."
+      ],
+      "expected": {
+        "chain_prefix": ["meta"],
+        "deictic_kind": "self_problem"
+      }
+    },
+    {
+      "id": "followup_excursion_suggestions",
+      "category": "followup_context",
+      "query": "mach jetzt Vorschlaege",
+      "conversation_state": {
+        "active_topic": "Wochenendausflug ab Frankfurt",
+        "active_goal": "Kulturausflug mit Freunden finden",
+        "open_loop": "Nutzer will Stadt/Kultur am Wochenende, raus und etwas erleben",
+        "next_expected_step": "konkrete Vorschlaege nennen",
+        "turn_type_hint": "followup"
+      },
+      "recent_user_turns": [
+        "bin in Frankfurt raus etwas erleben mit Freunden",
+        "einen Ausflug mit Kultur"
+      ],
+      "recent_assistant_turns": [
+        "Was genau sucht ihr - Essen, Trinken, Nachtleben, Kultur, was Aktives?"
+      ],
+      "expected": {
+        "chain_prefix": ["meta"]
+      },
+      "target_forbidden": {
+        "response_modes": ["clarify_before_execute"]
+      }
+    },
+    {
+      "id": "followup_you_know_for_what",
+      "category": "followup_context",
+      "query": "du weisst doch wofuer",
+      "conversation_state": {
+        "active_topic": "Wochenendausflug ab Frankfurt",
+        "active_goal": "Kulturausflug mit Freunden finden",
+        "open_loop": "Nutzer will konkrete Vorschlaege",
+        "next_expected_step": "konkrete Vorschlaege nennen",
+        "turn_type_hint": "followup"
+      },
+      "recent_user_turns": [
+        "mach jetzt Vorschlaege"
+      ],
+      "recent_assistant_turns": [
+        "Wofuer genau moechtest du Vorschlaege?"
+      ],
+      "expected": {
+        "chain_prefix": ["meta"],
+        "deictic_reference": true
+      }
+    },
+    {
+      "id": "advisory_startup_ai_initial",
+      "category": "advisory",
+      "query": "ich will ein Unternehmen gruenden und KI soll eine Rolle spielen wie koennte ich mit meinen Faehigkeiten starten",
+      "expected": {
+        "task_type": "single_lane",
+        "chain": ["meta"],
+        "interaction_mode": "think_partner"
+      }
+    },
+    {
+      "id": "advisory_day_planning",
+      "category": "advisory",
+      "query": "hilf mir meinen tag morgen besser zu planen",
+      "expected": {
+        "task_type": "single_lane",
+        "chain": ["meta"],
+        "interaction_mode": "think_partner"
+      }
+    },
+    {
+      "id": "advisory_business_idea_fit",
+      "category": "advisory",
+      "query": "welche geschaeftsidee passt zu mir wenn ich KI nutzen will",
+      "expected": {
+        "task_type": "single_lane",
+        "chain": ["meta"],
+        "interaction_mode": "think_partner"
+      }
+    },
+    {
+      "id": "advisory_opinion_request",
+      "category": "advisory",
+      "query": "ich brauche deine ehrliche meinung zu dieser entscheidung",
+      "expected": {
+        "task_type": "single_lane",
+        "chain": ["meta"],
+        "interaction_mode": "think_partner"
+      }
+    },
+    {
+      "id": "advisory_letter_help",
+      "category": "advisory",
+      "query": "hilf mir eine kuendigung hoeflich zu formulieren",
+      "expected": {
+        "task_type": "single_lane",
+        "chain": ["meta"],
+        "interaction_mode": "think_partner"
+      }
+    },
+    {
+      "id": "behavior_news_sources_future",
+      "category": "behavior_instruction",
+      "query": "dann mach das in zukunft so dass du auf echtzeit agenturmeldungen zugreifst bei news und aktuellem geschehen",
+      "expected": {
+        "task_type": "single_lane",
+        "response_mode": "acknowledge_and_store",
+        "chain": ["meta"],
+        "reason": "semantic_preference_alignment",
+        "dominant_turn_type": "behavior_instruction"
+      }
+    },
+    {
+      "id": "behavior_short_answers",
+      "category": "behavior_instruction",
+      "query": "speichere dir dass ich kurze antworten bevorzuge",
+      "expected": {
+        "task_type": "single_lane",
+        "response_mode": "acknowledge_and_store",
+        "chain": ["meta"],
+        "dominant_turn_type": "behavior_instruction"
+      },
+      "xfail": "Preference-memory wording coverage is not complete yet."
+    },
+    {
+      "id": "behavior_less_formal",
+      "category": "behavior_instruction",
+      "query": "antworte mir ab jetzt weniger formal",
+      "expected": {
+        "task_type": "single_lane",
+        "response_mode": "acknowledge_and_store",
+        "chain": ["meta"],
+        "dominant_turn_type": "behavior_instruction"
+      },
+      "xfail": "Preference-memory wording coverage is not complete yet."
+    },
+    {
+      "id": "behavior_pdf_local_tools",
+      "category": "behavior_instruction",
+      "query": "wenn ich pdf sage nutze erst lokale tools bevor du mir nur erklaerst wie es geht",
+      "expected": {
+        "task_type": "single_lane",
+        "response_mode": "acknowledge_and_store",
+        "chain": ["meta"],
+        "dominant_turn_type": "behavior_instruction"
+      },
+      "xfail": "Tool-behavior preference wording coverage is not complete yet."
+    },
+    {
+      "id": "behavior_forget_last_preference",
+      "category": "behavior_instruction",
+      "query": "vergiss die letzte praferenz die ich dir gegeben habe",
+      "expected": {
+        "task_type": "single_lane",
+        "response_mode": "acknowledge_and_store",
+        "chain": ["meta"],
+        "dominant_turn_type": "behavior_instruction"
+      },
+      "xfail": "Preference deletion needs a dedicated state-effect path."
+    },
+    {
+      "id": "multi_step_youtube_report",
+      "category": "multi_step",
+      "query": "Oeffne YouTube, hole maximal viel Inhalt aus dem Video und schreibe einen Bericht",
+      "action_count": 3,
+      "expected": {
+        "task_type": "youtube_content_extraction",
+        "response_mode": "execute",
+        "chain": ["meta", "visual", "research", "document"],
+        "recipe_id": "youtube_content_extraction"
+      }
+    },
+    {
+      "id": "multi_step_youtube_light",
+      "category": "multi_step",
+      "query": "Schau mal was es auf YouTube so gibt zu KI-Agenten",
+      "expected": {
+        "task_type": "youtube_light_research",
+        "chain": ["meta", "executor"],
+        "recipe_id": "youtube_light_research"
+      }
+    },
+    {
+      "id": "multi_step_youtube_fact_check",
+      "category": "multi_step",
+      "query": "https://youtu.be/j4jBGHv9Eow?is=7eXEJB7wHGDk0F_f schau mal ob da etwas wahres dran ist",
+      "expected": {
+        "task_type": "youtube_content_extraction",
+        "chain": ["meta", "research"],
+        "recipe_id": "youtube_research_only"
+      }
+    },
+    {
+      "id": "multi_step_crm_comparison_pdf",
+      "category": "multi_step",
+      "query": "recherchiere drei CRM Tools und erstelle daraus eine Vergleichs-PDF",
+      "expected": {
+        "task_type": "simple_live_lookup_document",
+        "response_mode": "execute",
+        "chain_prefix": ["meta", "executor", "document"],
+        "interaction_mode": "assist"
+      },
+      "xfail": "Research-plus-document multi-step routing is not generalized yet."
+    },
+    {
+      "id": "multi_step_culture_daytrip_plan",
+      "category": "multi_step",
+      "query": "suche mir 5 Kulturziele fuer naechstes Wochenende ab Frankfurt und mach daraus einen Tagesplan",
+      "expected": {
+        "task_type": "simple_live_lookup_document",
+        "response_mode": "execute",
+        "chain_prefix": ["meta", "executor", "document"],
+        "interaction_mode": "assist"
+      },
+      "xfail": "Travel/event lookup plus plan generation is not generalized yet."
+    },
+    {
+      "id": "correction_news_not_local",
+      "category": "correction",
+      "query": "# FOLLOW-UP CONTEXT\nlast_agent: meta\nsession_id: canvas_test\nlast_user: wie stehts um die weltlage\npending_followup_prompt: Soll ich aktuelle News oder eine tiefere Analyse priorisieren?\n\n# CURRENT USER QUERY\nnein, ich meinte aktuelle news und nicht wieder lokale nearby treffer",
+      "expected": {
+        "task_type": "single_lane",
+        "response_mode": "correct_previous_path",
+        "chain": ["meta"],
+        "dominant_turn_type": "correction"
+      }
+    },
+    {
+      "id": "correction_make_shorter",
+      "category": "correction",
+      "query": "nein nicht so, mach es kuerzer",
+      "conversation_state": {
+        "active_topic": "Antwortstil fuer Kuendigungsschreiben",
+        "active_goal": "Text kuerzer und direkter formulieren",
+        "open_loop": "Nutzer korrigiert die letzte Formulierung",
+        "next_expected_step": "kurze Version liefern",
+        "turn_type_hint": "followup"
+      },
+      "recent_user_turns": [
+        "hilf mir eine kuendigung hoeflich zu formulieren"
+      ],
+      "recent_assistant_turns": [
+        "Hier ist eine ausfuehrliche Version der Kuendigung."
+      ],
+      "expected": {
+        "task_type": "single_lane",
+        "response_mode": "correct_previous_path",
+        "chain": ["meta"],
+        "dominant_turn_type": "correction"
+      }
+    },
+    {
+      "id": "correction_use_current_sources",
+      "category": "correction",
+      "query": "das war falsch, nimm aktuelle quellen",
+      "conversation_state": {
+        "active_topic": "OpenAI News",
+        "active_goal": "Aktuelle Quellen statt altem Wissen nutzen",
+        "open_loop": "Nutzer korrigiert die Quellenwahl",
+        "next_expected_step": "aktuelle Quellen suchen",
+        "turn_type_hint": "followup"
+      },
+      "expected": {
+        "task_type": "single_lane",
+        "response_mode": "correct_previous_path",
+        "chain": ["meta"],
+        "dominant_turn_type": "correction"
+      }
+    },
+    {
+      "id": "correction_list_only",
+      "category": "correction",
+      "query": "anders: nur eine liste",
+      "conversation_state": {
+        "active_topic": "Ausflugsvorschlaege",
+        "active_goal": "Antwortformat auf Liste umstellen",
+        "open_loop": "Nutzer korrigiert das Antwortformat",
+        "next_expected_step": "Liste liefern",
+        "turn_type_hint": "followup"
+      },
+      "expected": {
+        "task_type": "single_lane",
+        "response_mode": "correct_previous_path",
+        "chain": ["meta"],
+        "dominant_turn_type": "correction"
+      }
+    },
+    {
+      "id": "clarification_what_do_you_mean",
+      "category": "clarification",
+      "query": "was meinst du damit",
+      "expected": {
+        "task_type": "single_lane",
+        "chain": ["meta"],
+        "interaction_mode": "think_partner"
+      }
+    },
+    {
+      "id": "clarification_how_do_you_mean",
+      "category": "clarification",
+      "query": "wie meinst du das",
+      "expected": {
+        "task_type": "single_lane",
+        "chain": ["meta"],
+        "reason": "semantic_clarification_turn"
+      }
+    },
+    {
+      "id": "clarification_explain_simpler",
+      "category": "clarification",
+      "query": "kannst du das einfacher erklaeren",
+      "expected": {
+        "task_type": "single_lane",
+        "chain": ["meta"],
+        "interaction_mode": "think_partner"
+      }
+    },
+    {
+      "id": "clarification_scope_question",
+      "category": "clarification",
+      "query": "welchen teil davon meinst du genau",
+      "expected": {
+        "task_type": "single_lane",
+        "chain": ["meta"],
+        "interaction_mode": "think_partner"
+      }
+    },
+    {
+      "id": "document_pdf_explanation",
+      "category": "document_or_file",
+      "query": "was ist eine pdf datei",
+      "expected": {
+        "task_type": "single_lane",
+        "response_mode": "clarify_before_execute",
+        "chain": ["meta"],
+        "interaction_mode": "think_partner"
+      }
+    },
+    {
+      "id": "document_pdf_summary",
+      "category": "document_or_file",
+      "query": "fasse diese pdf zusammen /home/fatih-ubuntu/Dokumente/beispiel.pdf",
+      "expected": {
+        "task_type": "document_analysis",
+        "response_mode": "execute",
+        "chain_prefix": ["meta", "document"],
+        "interaction_mode": "assist"
+      },
+      "xfail": "Document analysis for local PDFs needs a dedicated fast path."
+    },
+    {
+      "id": "communication_polite_decline",
+      "category": "communication",
+      "query": "schreibe eine freundliche absage fuer einen termin",
+      "expected": {
+        "task_type": "single_lane",
+        "chain": ["meta"],
+        "interaction_mode": "think_partner"
+      }
+    },
+    {
+      "id": "communication_email_draft",
+      "category": "communication",
+      "query": "formuliere eine kurze email an meinen vermieter wegen der heizung",
+      "expected": {
+        "task_type": "single_lane",
+        "chain": ["meta"],
+        "interaction_mode": "think_partner"
+      }
+    },
+    {
+      "id": "communication_send_email",
+      "category": "communication",
+      "query": "sende eine email an test@example.com mit dem betreff Rechnung und dem text ich melde mich morgen",
+      "expected": {
+        "task_type": "email_send",
+        "response_mode": "execute",
+        "chain_prefix": ["meta", "executor"],
+        "interaction_mode": "assist"
+      },
+      "xfail": "Direct communication execution needs explicit email-send routing coverage."
+    },
+    {
+      "id": "communication_translate",
+      "category": "communication",
+      "query": "uebersetze diesen satz ins englische: ich melde mich morgen bei dir",
+      "expected": {
+        "task_type": "single_lane",
+        "chain": ["meta"],
+        "interaction_mode": "think_partner"
+      }
+    }
+  ]
+}
