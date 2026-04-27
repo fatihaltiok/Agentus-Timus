@@ -34,6 +34,12 @@ som_test_*.log
 # Caches
 .pytest_cache/
 .mypy_cache/
+.hypothesis/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
 
 # OS
 .DS_Store
