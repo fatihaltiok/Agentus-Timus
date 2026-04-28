@@ -729,6 +729,45 @@ _SIMPLE_LIVE_LOOKUP_DIRECT_PATTERNS = (
     re.compile(r"\buhrzeit\s+(?:in|auf|am)\b"),
 )
 
+_LIVE_TRAVEL_DISCOVERY_HINTS = (
+    "ausflugsziel",
+    "ausflugsziele",
+    "kulturziel",
+    "kulturziele",
+    "sehenswuerdigkeit",
+    "sehenswürdigkeit",
+    "sehenswuerdigkeiten",
+    "sehenswürdigkeiten",
+    "museum",
+    "museen",
+    "veranstaltung",
+    "veranstaltungen",
+    "event",
+    "events",
+)
+
+_LIVE_TRAVEL_PLAN_OUTPUT_HINTS = (
+    "tagesplan",
+    "wochenendplan",
+    "ausflugsplan",
+    "reiseplan",
+    "mach daraus einen plan",
+    "mache daraus einen plan",
+    "plan daraus",
+)
+
+_LIVE_TRAVEL_LOOKUP_INTENT_HINTS = (
+    "such",
+    "suche",
+    "finde",
+    "recherchiere",
+    "empfiehl",
+    "empfehle",
+    "schlag mir",
+    "vorschlaege",
+    "vorschläge",
+)
+
 _HARD_RESEARCH_HINTS = (
     "tiefenrecherche",
     "tiefen recherche",
@@ -1587,6 +1626,17 @@ def _looks_like_simple_live_lookup_direct_query(text: str) -> bool:
     if _has_any(normalized, _SIMPLE_LIVE_LOOKUP_DIRECT_HINTS):
         return True
     return any(pattern.search(normalized) for pattern in _SIMPLE_LIVE_LOOKUP_DIRECT_PATTERNS)
+
+
+def _looks_like_live_travel_plan_document_request(text: str) -> bool:
+    normalized = " ".join(str(text or "").strip().lower().split())
+    if not normalized:
+        return False
+    return (
+        _has_any(normalized, _LIVE_TRAVEL_LOOKUP_INTENT_HINTS)
+        and _has_any(normalized, _LIVE_TRAVEL_DISCOVERY_HINTS)
+        and _has_any(normalized, _LIVE_TRAVEL_PLAN_OUTPUT_HINTS)
+    )
 
 
 def _looks_like_local_file_transform_request(text: str) -> bool:
@@ -3533,9 +3583,11 @@ def classify_meta_task(
     has_local_search = site_kind == "maps" and (
         _has_any(current_normalized, _LOCAL_SEARCH_HINTS) or is_location_local_query(current_normalized)
     ) and not has_route_request
+    has_live_travel_plan_document = _looks_like_live_travel_plan_document_request(current_normalized)
     has_simple_live_lookup = (
         (
             _looks_like_simple_live_lookup_direct_query(current_normalized)
+            or has_live_travel_plan_document
             or (
                 _has_any(current_normalized, _SIMPLE_LIVE_LOOKUP_FRESHNESS_HINTS)
                 and any(
@@ -3564,7 +3616,7 @@ def classify_meta_task(
         and not has_local_search
         and site_kind not in {"youtube", "booking", "x", "linkedin", "outlook", "github_login"}
     )
-    has_document = _has_any(current_normalized, _DOCUMENT_HINTS)
+    has_document = _has_any(current_normalized, _DOCUMENT_HINTS) or has_live_travel_plan_document
     has_local_file_transform = False
     has_local_file_operation = False
     has_delivery = _has_any(current_normalized, _DELIVERY_HINTS)

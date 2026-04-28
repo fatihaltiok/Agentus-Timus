@@ -291,6 +291,10 @@ def _infer_task_domain(
     if _contains_any(combined, _MIGRATION_WORK_HINTS):
         evidence.append("query_or_anchor:migration_work")
         return "migration_work", evidence, 0.9 if _contains_any(query_text, _MIGRATION_WORK_HINTS) else 0.82
+    normalized_task_type = _clean_text(task_type, limit=64).lower()
+    if normalized_task_type in {"simple_live_lookup", "simple_live_lookup_document"}:
+        evidence.append(f"task_type:{normalized_task_type}")
+        return "general_research", evidence, 0.88
     if _contains_any(query_text, _PLANNING_ADVISORY_HINTS):
         evidence.append("query:planning_advisory")
         return "planning_advisory", evidence, 0.88
@@ -303,11 +307,8 @@ def _infer_task_domain(
             return "travel_advisory", evidence, 0.86
         evidence.append("query_or_anchor:travel_advisory")
         return "travel_advisory", evidence, 0.78
-    normalized_task_type = _clean_text(task_type, limit=64).lower()
     task_type_mapping = {
         "knowledge_research": "general_research",
-        "simple_live_lookup": "general_research",
-        "simple_live_lookup_document": "general_research",
         "communication_task": "communication",
         "document_generation": "document_generation",
         "file_operation": "file_operation",

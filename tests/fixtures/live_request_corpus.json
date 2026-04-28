@@ -523,8 +523,7 @@
         "response_mode": "execute",
         "chain_prefix": ["meta", "executor", "document"],
         "interaction_mode": "assist"
-      },
-      "xfail": "Travel/event lookup plus plan generation is not generalized yet."
+      }
     },
     {
       "id": "correction_news_not_local",

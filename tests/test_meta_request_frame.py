@@ -83,6 +83,25 @@ def test_build_meta_request_frame_recognizes_travel_advisory_for_weekend_trip_qu
     assert "conversation_state" in frame.allowed_context_slots
 
 
+def test_build_meta_request_frame_lets_executable_lookup_task_type_override_plan_wording():
+    frame = build_meta_request_frame(
+        effective_query="suche mir 5 Kulturziele ab Frankfurt und mach daraus einen Tagesplan",
+        dominant_turn_type="new_task",
+        response_mode="execute",
+        answer_shape="action_first",
+        task_type="simple_live_lookup_document",
+        active_topic="",
+        open_goal="",
+        next_step="",
+        recommended_agent_chain=("meta", "executor", "document"),
+        active_plan={},
+    )
+
+    assert frame.frame_kind == "new_task"
+    assert frame.task_domain == "general_research"
+    assert "task_type:simple_live_lookup_document" in frame.evidence
+
+
 def test_build_meta_request_frame_reuses_carried_travel_domain_for_short_followup():
     frame = build_meta_request_frame(
         effective_query="ich mag Staedte und Kultur",

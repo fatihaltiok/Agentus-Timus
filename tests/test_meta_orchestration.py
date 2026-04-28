@@ -325,6 +325,20 @@ def test_classify_meta_task_routes_research_plus_pdf_as_assist_execution():
     assert result["meta_interaction_mode"]["mode_reason"] == "executable_lookup_route:simple_live_lookup_document"
 
 
+def test_classify_meta_task_routes_travel_lookup_plus_day_plan_as_document_execution():
+    result = classify_meta_task(
+        "suche mir 5 Kulturziele fuer naechstes Wochenende ab Frankfurt und mach daraus einen Tagesplan",
+        action_count=0,
+    )
+
+    assert result["task_type"] == "simple_live_lookup_document"
+    assert result["response_mode"] == "execute"
+    assert result["recommended_agent_chain"] == ["meta", "executor", "document"]
+    assert result["recommended_recipe_id"] == "simple_live_lookup_document"
+    assert result["meta_request_frame"]["task_domain"] == "general_research"
+    assert result["meta_interaction_mode"]["mode"] == "assist"
+
+
 def test_classify_meta_task_does_not_route_lookup_substring_false_positives_to_executor():
     queries = [
         "yoga kurs morgen",
