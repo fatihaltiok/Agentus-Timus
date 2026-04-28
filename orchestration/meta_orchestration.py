@@ -810,6 +810,7 @@ _LOCAL_DOCUMENT_ANALYSIS_HINTS = (
 
 _EMAIL_SEND_ACTION_HINTS = (
     "sende",
+    "schick",
     "schicke",
     "versende",
     "send ",
@@ -893,6 +894,7 @@ _DOCUMENT_HINTS = (
     "csv",
     "datei",
     "tabelle",
+    "checkliste",
     "bericht",
     "dokument",
     "exportiere",

@@ -237,10 +237,49 @@ def test_classify_meta_task_routes_explicit_email_send_to_executor():
     assert result["meta_interaction_mode"]["mode"] == "assist"
 
 
+def test_classify_meta_task_routes_schick_email_send_to_executor():
+    result = classify_meta_task(
+        "schick eine e-mail an test@example.com: Betreff Termin, Inhalt ich komme morgen spaeter",
+        action_count=0,
+    )
+
+    assert result["task_type"] == "email_send"
+    assert result["recommended_agent_chain"] == ["meta", "executor"]
+    assert result["recommended_recipe_id"] == "email_send"
+    assert result["response_mode"] == "execute"
+    assert result["meta_request_frame"]["task_domain"] == "communication"
+    assert result["meta_interaction_mode"]["mode"] == "assist"
+
+
 def test_classify_meta_task_does_not_route_email_without_recipient_as_send():
     result = classify_meta_task("sende mir spaeter eine mail mit ideen", action_count=0)
 
     assert result["task_type"] != "email_send"
+
+
+def test_classify_meta_task_routes_conditional_research_preference_to_store():
+    result = classify_meta_task(
+        "wenn du recherchierst nenne mir immer die quellen direkt mit links",
+        action_count=0,
+    )
+
+    assert result["task_type"] == "single_lane"
+    assert result["response_mode"] == "acknowledge_and_store"
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["dominant_turn_type"] == "behavior_instruction"
+    assert result["task_type"] != "knowledge_research"
+
+
+def test_classify_meta_task_routes_research_checklist_to_lookup_document():
+    result = classify_meta_task(
+        "recherchiere aktuelle foerderprogramme fuer gruender in hessen und erstelle eine checkliste",
+        action_count=0,
+    )
+
+    assert result["task_type"] == "simple_live_lookup_document"
+    assert result["response_mode"] == "execute"
+    assert result["recommended_agent_chain"][:3] == ["meta", "executor", "document"]
+    assert result["meta_interaction_mode"]["mode"] == "assist"
 
 
 def test_classify_meta_task_marks_mixed_preference_and_wealth_prompt_for_semantic_review():

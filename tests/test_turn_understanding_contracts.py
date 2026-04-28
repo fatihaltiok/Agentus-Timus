@@ -39,6 +39,14 @@ def _contract_style_preference_route() -> dict[str, object]:
 @deal.post(lambda r: r["dominant_turn_type"] == "behavior_instruction")
 @deal.post(lambda r: r["response_mode"] == "acknowledge_and_store")
 @deal.post(lambda r: r["route_bias"] == "meta_only")
+@deal.post(lambda r: r["update_preferences"] is True)
+def _contract_conditional_research_preference_route() -> dict[str, object]:
+    return _route("wenn du recherchierst nenne mir immer die quellen direkt mit links")
+
+
+@deal.post(lambda r: r["dominant_turn_type"] == "behavior_instruction")
+@deal.post(lambda r: r["response_mode"] == "acknowledge_and_store")
+@deal.post(lambda r: r["route_bias"] == "meta_only")
 @deal.post(lambda r: r["update_preferences"] is False)
 @deal.post(lambda r: r["remove_last_preference"] is True)
 def _contract_preference_delete_route() -> dict[str, object]:
@@ -47,6 +55,10 @@ def _contract_preference_delete_route() -> dict[str, object]:
 
 def test_contract_style_preference_route() -> None:
     assert _contract_style_preference_route()["update_preferences"] is True
+
+
+def test_contract_conditional_research_preference_route() -> None:
+    assert _contract_conditional_research_preference_route()["update_preferences"] is True
 
 
 def test_contract_preference_delete_route() -> None:
@@ -67,6 +79,20 @@ def test_hypothesis_style_preferences_route_to_meta_store(style: str, prefix: st
     assert result["remove_last_preference"] is False
 
 
+@given(
+    topic=st.sampled_from(("coding fragen", "research aufgaben", "recherchen")),
+    ordering=st.sampled_from(("zuerst", "immer")),
+)
+@settings(max_examples=20)
+def test_hypothesis_conditional_work_preferences_route_to_meta_store(topic: str, ordering: str) -> None:
+    result = _route(f"fuer {topic} gib mir {ordering} den kuerzesten brauchbaren weg")
+
+    assert result["dominant_turn_type"] == "behavior_instruction"
+    assert result["response_mode"] == "acknowledge_and_store"
+    assert result["update_preferences"] is True
+    assert result["remove_last_preference"] is False
+
+
 @given(verb=st.sampled_from(("vergiss", "loesche", "lösche")))
 @settings(max_examples=10)
 def test_hypothesis_preference_delete_does_not_append_preference(verb: str) -> None:
@@ -76,4 +102,3 @@ def test_hypothesis_preference_delete_does_not_append_preference(verb: str) -> N
     assert result["response_mode"] == "acknowledge_and_store"
     assert result["update_preferences"] is False
     assert result["remove_last_preference"] is True
-

@@ -510,6 +510,31 @@
       }
     },
     {
+      "id": "behavior_research_sources_with_links",
+      "category": "behavior_instruction",
+      "query": "wenn du recherchierst nenne mir immer die quellen direkt mit links",
+      "expected": {
+        "task_type": "single_lane",
+        "response_mode": "acknowledge_and_store",
+        "chain": ["meta"],
+        "dominant_turn_type": "behavior_instruction"
+      },
+      "target_forbidden": {
+        "task_types": ["knowledge_research", "simple_live_lookup"]
+      }
+    },
+    {
+      "id": "behavior_coding_short_fix_first",
+      "category": "behavior_instruction",
+      "query": "fuer coding fragen gib mir zuerst den kuerzesten funktionierenden fix",
+      "expected": {
+        "task_type": "single_lane",
+        "response_mode": "acknowledge_and_store",
+        "chain": ["meta"],
+        "dominant_turn_type": "behavior_instruction"
+      }
+    },
+    {
       "id": "multi_step_youtube_report",
       "category": "multi_step",
       "query": "Oeffne YouTube, hole maximal viel Inhalt aus dem Video und schreibe einen Bericht",
@@ -561,6 +586,38 @@
         "response_mode": "execute",
         "chain_prefix": ["meta", "executor", "document"],
         "interaction_mode": "assist"
+      }
+    },
+    {
+      "id": "multi_step_handwerker_ai_table",
+      "category": "multi_step",
+      "query": "recherchiere aktuelle KI-tools fuer handwerker und erstelle eine kurze tabelle",
+      "expected": {
+        "task_type": "simple_live_lookup_document",
+        "response_mode": "execute",
+        "chain_prefix": ["meta", "executor", "document"],
+        "interaction_mode": "assist"
+      }
+    },
+    {
+      "id": "multi_step_founder_funding_checklist",
+      "category": "multi_step",
+      "query": "recherchiere aktuelle foerderprogramme fuer gruender in hessen und erstelle eine checkliste",
+      "expected": {
+        "task_type": "simple_live_lookup_document",
+        "response_mode": "execute",
+        "chain_prefix": ["meta", "executor", "document"],
+        "interaction_mode": "assist"
+      }
+    },
+    {
+      "id": "multi_step_website_email_draft",
+      "category": "multi_step",
+      "query": "pruefe diese webseite https://example.com und schreibe mir danach einen kurzen email-entwurf",
+      "expected": {
+        "task_type": "ui_navigation",
+        "response_mode": "execute",
+        "chain_prefix": ["meta", "visual", "communication"]
       }
     },
     {
@@ -697,6 +754,27 @@
       }
     },
     {
+      "id": "document_pdf_analyze_local_path",
+      "category": "document_or_file",
+      "query": "analysiere /home/fatih-ubuntu/Dokumente/beispiel.pdf und fasse die wichtigsten punkte zusammen",
+      "expected": {
+        "task_type": "document_analysis",
+        "response_mode": "execute",
+        "chain_prefix": ["meta", "document"],
+        "interaction_mode": "assist"
+      }
+    },
+    {
+      "id": "document_pdf_quote_key_points",
+      "category": "document_or_file",
+      "query": "lies die pdf /tmp/angebot.pdf und zitiere die wichtigsten stellen",
+      "expected": {
+        "task_type": "document_analysis",
+        "response_mode": "execute",
+        "chain_prefix": ["meta", "document"]
+      }
+    },
+    {
       "id": "communication_polite_decline",
       "category": "communication",
       "query": "schreibe eine freundliche absage fuer einen termin",
@@ -725,6 +803,39 @@
         "response_mode": "execute",
         "chain_prefix": ["meta", "executor"],
         "interaction_mode": "assist"
+      }
+    },
+    {
+      "id": "communication_send_email_schick_colon",
+      "category": "communication",
+      "query": "schick eine e-mail an test@example.com: Betreff Termin, Inhalt ich komme morgen spaeter",
+      "expected": {
+        "task_type": "email_send",
+        "response_mode": "execute",
+        "chain_prefix": ["meta", "executor"],
+        "interaction_mode": "assist"
+      }
+    },
+    {
+      "id": "communication_send_email_followup_summary",
+      "category": "communication",
+      "query": "sende die zusammenfassung per mail an test@example.com",
+      "conversation_state": {
+        "active_topic": "PDF zusammenfassen",
+        "active_goal": "Zusammenfassung der PDF erstellen",
+        "open_loop": "Zusammenfassung liegt vor und soll versendet werden",
+        "next_expected_step": "Zusammenfassung per E-Mail senden",
+        "turn_type_hint": "followup"
+      },
+      "recent_user_turns": [
+        "fasse diese pdf zusammen /tmp/angebot.pdf"
+      ],
+      "expected": {
+        "task_type": "email_send",
+        "response_mode": "execute",
+        "chain_prefix": ["meta", "executor"],
+        "interaction_mode": "assist",
+        "dominant_turn_type": "followup"
       }
     },
     {

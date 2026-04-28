@@ -109,6 +109,8 @@ _STYLE_PREFERENCE_PATTERNS = (
 _CONDITIONAL_TOOL_PREFERENCE_PATTERNS = (
     r"\bwenn\s+ich\b.*\bsage\b.*\b(?:nutze|verwende|nimm|bevorzuge|priorisiere)\b",
     r"\bwenn\s+ich\b.*\b(?:pdf|datei|dokument)\b.*\b(?:nutze|verwende|nimm)\b.*\b(?:lokale?\s+tools?|tools?)\b",
+    r"\bwenn\s+du\b.*\b(?:recherchierst|suchst|antwortest|arbeitest|codest|programmierst)\b.*\b(?:immer|zuerst|direkt|lieber|bitte)\b",
+    r"\bf(?:ue|ü)r\b.*\b(?:fragen|aufgaben|recherchen)\b.*\bgib\b.*\b(?:zuerst|immer)\b",
 )
 
 _PREFERENCE_DELETE_PATTERNS = (
