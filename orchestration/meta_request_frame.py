@@ -233,9 +233,15 @@ def _infer_frame_kind(
     mode = _clean_text(response_mode, limit=64).lower()
     shape = _clean_text(answer_shape, limit=64).lower()
 
-    if shape in {"direct_recommendation", "state_summary", "historical_topic_state", "self_model_status"}:
+    if shape in {
+        "direct_response",
+        "direct_recommendation",
+        "state_summary",
+        "historical_topic_state",
+        "self_model_status",
+    }:
         evidence.append(f"answer_shape:{shape}")
-        return "direct_answer" if shape == "direct_recommendation" else "status_summary", evidence
+        return "direct_answer" if shape in {"direct_response", "direct_recommendation"} else "status_summary", evidence
     if _contains_any(query_text, _DOC_STATUS_HINTS):
         evidence.append("query:docs_status_like")
         return "direct_answer", evidence

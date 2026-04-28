@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import re
 from typing import Any, Mapping, Tuple
 
+from orchestration.direct_response_intent import looks_like_direct_response_instruction
 from orchestration.meta_context_eval import detect_context_misread_risk
 from orchestration.topic_state_history import parse_historical_topic_recall_hint
 
@@ -306,6 +307,25 @@ def resolve_meta_response_policy(policy_input: MetaPolicyInput) -> MetaPolicyDec
     historical_recall = parse_historical_topic_recall_hint(policy_input.effective_query)
     query_has_next_step_summary = _looks_like_next_step_summary(policy_input.effective_query)
     query_has_state_summary = _looks_like_state_summary(policy_input.effective_query)
+
+    if looks_like_direct_response_instruction(policy_input.effective_query):
+        signals.append("direct_response_instruction")
+        return MetaPolicyDecision(
+            response_mode="summarize_state",
+            policy_reason="direct_response_instruction",
+            policy_confidence=0.96,
+            answer_shape="direct_response",
+            should_delegate=False,
+            should_store_preference=False,
+            should_resume_open_loop=False,
+            should_summarize_state=True,
+            self_model_bound_applied=False,
+            policy_signals=tuple(signals),
+            override_applied=True,
+            agent_chain_override=("meta",),
+            task_type_override="single_lane",
+            recipe_enabled=False,
+        )
 
     if frame_execution_mode == "answer_directly" and frame_task_domain == "docs_status":
         signals.extend(["frame_direct_answer", "frame_task_domain:docs_status"])

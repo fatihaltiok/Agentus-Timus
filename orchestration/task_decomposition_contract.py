@@ -6,6 +6,8 @@ import json
 import re
 from typing import Any, Iterable, Mapping
 
+from orchestration.direct_response_intent import looks_like_direct_response_instruction
+
 
 TASK_DECOMPOSITION_SCHEMA_VERSION = 1
 _VALID_INTENT_FAMILIES = {
@@ -548,7 +550,11 @@ def build_task_decomposition(
         "table",
         "document",
     }
-    explicit_shell_execution = _contains_phrase(lowered_query, _EXPLICIT_SHELL_MARKERS)
+    direct_response_instruction = looks_like_direct_response_instruction(query)
+    explicit_shell_execution = (
+        _contains_phrase(lowered_query, _EXPLICIT_SHELL_MARKERS)
+        and not direct_response_instruction
+    )
     has_multistep_signal = (
         _contains_phrase(lowered_query, _MULTISTEP_MARKERS)
         or action_count >= 2
@@ -661,6 +667,7 @@ def build_task_decomposition(
             "capability_count": capability_count,
             "route_to_meta": route_to_meta,
             "explicit_shell_execution": explicit_shell_execution,
+            "direct_response_instruction": direct_response_instruction,
         },
     )
 

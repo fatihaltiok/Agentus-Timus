@@ -25,6 +25,7 @@ from agent.base_agent import BaseAgent
 from agent.prompts import META_SYSTEM_PROMPT
 from orchestration.adaptive_plan_memory import get_adaptive_plan_memory
 from orchestration.autonomy_observation import record_autonomy_observation
+from orchestration.direct_response_intent import extract_requested_direct_response
 from orchestration.meta_orchestration import (
     build_meta_feedback_targets,
     compile_meta_developer_task_payload,
@@ -3743,6 +3744,17 @@ class MetaAgent(BaseAgent):
 
         active_handoff = self._parse_meta_orchestration_handoff(task, require_recipe_stages=False)
         previous_active_handoff = getattr(self, "_active_meta_orchestration_handoff", None)
+        if active_handoff:
+            clarity_payload = active_handoff.get("meta_clarity_contract")
+            clarity = parse_meta_clarity_contract(clarity_payload if isinstance(clarity_payload, dict) else {})
+            if str(clarity.get("request_kind") or "").strip().lower() == "direct_response":
+                direct_response = extract_requested_direct_response(
+                    active_handoff.get("original_user_task")
+                    or active_handoff.get("primary_objective")
+                    or task
+                )
+                if direct_response:
+                    return direct_response
         if active_handoff:
             self._ensure_meta_execution_plan(
                 active_handoff,

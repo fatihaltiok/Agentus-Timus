@@ -193,6 +193,14 @@ def test_quick_intent_keeps_explicit_shell_execution_out_of_planning_meta():
     assert main_dispatcher.quick_intent_check(query) == "shell"
 
 
+def test_quick_intent_routes_exact_direct_response_to_meta_not_shell():
+    import main_dispatcher
+
+    assert main_dispatcher.quick_intent_check("Antworte exakt nur mit CHAT_OK") == "meta"
+    assert main_dispatcher.quick_intent_check("führe aus: antworte exakt nur mit KIMI_CHAT_OK") == "meta"
+    assert main_dispatcher.quick_intent_check("führe aus: systemctl restart timus-mcp") == "shell"
+
+
 def test_build_dispatcher_llm_query_enforces_token_only_contract():
     import main_dispatcher
 

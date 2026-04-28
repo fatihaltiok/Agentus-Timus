@@ -29,6 +29,7 @@ from orchestration.diagnosis_records import (
     compile_developer_task_brief,
     select_lead_diagnosis,
 )
+from orchestration.direct_response_intent import looks_like_direct_response_instruction
 from orchestration.meta_plan_compiler import build_meta_execution_plan
 from orchestration.preference_instruction_memory import select_stored_preference_memory_with_summary
 from orchestration.meta_request_frame import (
@@ -3777,6 +3778,7 @@ def classify_meta_task(
     if has_local_document_analysis:
         has_document = True
     has_local_file_operation = _looks_like_local_file_operation_request(local_file_transform_focus)
+    has_direct_response_instruction = looks_like_direct_response_instruction(effective_query)
     topic_transition = derive_topic_state_transition(
         conversation_state,
         session_id=str((conversation_state or {}).get("session_id") or "default"),
@@ -3794,7 +3796,11 @@ def classify_meta_task(
     task_type = "single_lane"
     reason = "single_lane"
 
-    if has_system:
+    if has_direct_response_instruction:
+        recommended_chain = ["meta"]
+        task_type = "single_lane"
+        reason = "direct_response_instruction"
+    elif has_system:
         required_capabilities.extend(["diagnostics"])
         recommended_chain = ["meta", "system"]
         task_type = "system_diagnosis"
@@ -4029,6 +4035,7 @@ def classify_meta_task(
         or has_local_document_analysis
         or has_email_send
         or has_local_file_operation
+        or has_direct_response_instruction
         or _lookup_first_route
     )
     if low_confidence_controller.get("active"):
@@ -4095,6 +4102,8 @@ def classify_meta_task(
         }
     ):
         kernel_response_mode = "execute"
+    if has_direct_response_instruction and kernel_response_mode != "acknowledge_and_store":
+        kernel_response_mode = "summarize_state"
 
     pre_policy_frame = build_meta_request_frame(
         effective_query=effective_query,

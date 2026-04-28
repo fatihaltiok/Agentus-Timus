@@ -58,6 +58,7 @@ from orchestration.browser_workflow_plan import build_browser_workflow_plan
 from orchestration.llm_budget_guard import evaluate_llm_budget, resolve_soft_budget_model_override
 from orchestration.autonomy_observation import record_autonomy_observation
 from orchestration.orchestration_policy import evaluate_query_orchestration
+from orchestration.direct_response_intent import looks_like_direct_response_instruction
 from orchestration.meta_orchestration import (
     build_meta_feedback_targets,
     looks_like_meta_clarification_turn,
@@ -2372,6 +2373,9 @@ def quick_intent_check(query: str) -> Optional[str]:
     explicit_shell_execution = (
         str(decomposition_metadata.get("explicit_shell_execution") or "").strip().lower() == "yes"
     )
+
+    if looks_like_direct_response_instruction(analysis_query):
+        return "meta"
 
     if any(re.search(pattern, focus_lower) for pattern in _DISPATCHER_META_SELF_MODEL_PATTERNS):
         return "meta"

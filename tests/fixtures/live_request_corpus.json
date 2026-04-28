@@ -103,6 +103,44 @@
       }
     },
     {
+      "id": "direct_answer_exact_output",
+      "category": "direct_answer",
+      "query": "Antworte exakt nur mit CHAT_OK",
+      "expected": {
+        "task_type": "single_lane",
+        "response_mode": "summarize_state",
+        "chain": ["meta"],
+        "task_domain": "topic_advisory",
+        "interaction_mode": "think_partner",
+        "reason": "meta_policy:direct_response_instruction"
+      },
+      "target_forbidden": {
+        "response_modes": ["clarify_before_execute"],
+        "task_types": ["file_operation"],
+        "task_domains": ["setup_build", "skill_creation"],
+        "interaction_modes": ["assist"]
+      }
+    },
+    {
+      "id": "direct_answer_execute_prefix_not_shell",
+      "category": "direct_answer",
+      "query": "führe aus: antworte exakt nur mit KIMI_CHAT_OK",
+      "expected": {
+        "task_type": "single_lane",
+        "response_mode": "summarize_state",
+        "chain": ["meta"],
+        "task_domain": "topic_advisory",
+        "interaction_mode": "think_partner",
+        "reason": "meta_policy:direct_response_instruction"
+      },
+      "target_forbidden": {
+        "response_modes": ["clarify_before_execute"],
+        "task_types": ["file_operation"],
+        "task_domains": ["setup_build", "skill_creation"],
+        "interaction_modes": ["assist"]
+      }
+    },
+    {
       "id": "quick_lookup_science_news",
       "category": "quick_lookup",
       "query": "Was gibt es Neues aus der Wissenschaft?",

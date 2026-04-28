@@ -7,6 +7,7 @@ from typing import Any, Dict, Mapping, Tuple
 
 
 _DIRECT_ANSWER_REQUEST_KINDS = {
+    "direct_response",
     "direct_recommendation",
     "state_summary",
     "historical_recall",
@@ -413,6 +414,27 @@ def build_meta_clarity_contract(
             )
 
     if not interaction_mode_explicit and (
+        answer_shape == "direct_response" or policy_reason == "direct_response_instruction"
+    ):
+        request_kind = "direct_response"
+        answer_obligation = "answer_exactly_as_requested"
+        completion_condition = "requested_direct_response_returned"
+        allowed_context_slots = ("current_query",)
+        forbidden_context_slots = (
+            "assistant_fallback_context",
+            "topic_memory",
+            "preference_memory",
+            "semantic_recall",
+        )
+        allowed_working_memory_sections = ("KURZZEITKONTEXT",)
+        max_related_memories = 0
+        max_recent_events = 0
+        delegation_mode = "direct_only"
+        max_delegate_calls = 0
+        force_answer_after_delegate_budget = True
+        allowed_delegate_agents = ()
+        rationale = "Exaktausgabe-Anfrage braucht keine Tools, keine Recherche und keine Modus-Klaerung."
+    elif not interaction_mode_explicit and (
         answer_shape == "direct_recommendation" or policy_reason == "next_step_summary_request"
     ):
         request_kind = "direct_recommendation"

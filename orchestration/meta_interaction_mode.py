@@ -159,7 +159,7 @@ def build_meta_interaction_mode(
             completion_expectation="concrete_next_action_or_result",
         )
 
-    if answer_shape in {"self_model_status", "state_summary", "direct_recommendation"} or frame_kind in {
+    if answer_shape in {"self_model_status", "state_summary", "direct_response", "direct_recommendation"} or frame_kind in {
         "direct_answer",
         "status_summary",
     }:

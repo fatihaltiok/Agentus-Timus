@@ -339,6 +339,28 @@ def test_classify_meta_task_routes_common_quick_lookups_to_meta_executor():
         assert result["meta_interaction_mode"]["mode"] != "think_partner"
 
 
+def test_classify_meta_task_routes_exact_direct_response_without_clarify_or_shell():
+    result = classify_meta_task("führe aus: antworte exakt nur mit KIMI_CHAT_OK", action_count=0)
+
+    assert result["task_type"] == "single_lane"
+    assert result["response_mode"] == "summarize_state"
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["reason"] == "meta_policy:direct_response_instruction"
+    assert result["meta_request_frame"]["frame_kind"] == "direct_answer"
+    assert result["meta_request_frame"]["execution_mode"] == "answer_directly"
+    assert result["meta_clarity_contract"]["request_kind"] == "direct_response"
+    assert result["meta_clarity_contract"]["answer_obligation"] == "answer_exactly_as_requested"
+    assert result["meta_clarity_contract"]["allowed_delegate_agents"] == []
+
+
+def test_classify_meta_task_keeps_behavior_style_instruction_as_preference():
+    result = classify_meta_task("antworte mir ab jetzt weniger formal", action_count=0)
+
+    assert result["response_mode"] == "acknowledge_and_store"
+    assert result["recommended_agent_chain"] == ["meta"]
+    assert result["meta_clarity_contract"]["request_kind"] == "acknowledgment"
+
+
 def test_classify_meta_task_routes_search_wording_lookup_as_assist_execution():
     result = classify_meta_task("suche aktuelle news zu openai", action_count=0)
 
