@@ -4236,6 +4236,23 @@ def classify_meta_task(
         )
 
     if (
+        meta_interaction_mode.mode == "inspect"
+        and final_response_mode == "execute"
+        and final_task_type in {"simple_live_lookup", "simple_live_lookup_document"}
+        and len(final_chain) >= 2
+        and final_chain[:2] == ["meta", "executor"]
+    ):
+        meta_interaction_mode = MetaInteractionMode(
+            schema_version=1,
+            mode="assist",
+            mode_reason=f"executable_lookup_route:{final_task_type}",
+            explicit_override=False,
+            answer_style="action_or_plan",
+            execution_policy="plan_delegate_or_execute",
+            completion_expectation="concrete_next_action_or_result",
+        )
+
+    if (
         kernel_seed.confidence >= 0.7
         and kernel_seed.interaction_mode != meta_interaction_mode.mode
         and not has_local_file_transform

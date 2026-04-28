@@ -177,8 +177,7 @@
         "response_mode": "execute",
         "chain_prefix": ["meta", "executor"],
         "interaction_mode": "assist"
-      },
-      "xfail": "News lookup routing is not yet broad enough for this wording."
+      }
     },
     {
       "id": "quick_lookup_bitcoin_price",
@@ -513,8 +512,7 @@
         "response_mode": "execute",
         "chain_prefix": ["meta", "executor", "document"],
         "interaction_mode": "assist"
-      },
-      "xfail": "Research-plus-document multi-step routing is not generalized yet."
+      }
     },
     {
       "id": "multi_step_culture_daytrip_plan",

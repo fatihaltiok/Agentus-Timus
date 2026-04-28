@@ -302,6 +302,29 @@ def test_classify_meta_task_routes_common_quick_lookups_to_meta_executor():
         assert result["meta_interaction_mode"]["mode"] != "think_partner"
 
 
+def test_classify_meta_task_routes_search_wording_lookup_as_assist_execution():
+    result = classify_meta_task("suche aktuelle news zu openai", action_count=0)
+
+    assert result["task_type"] == "simple_live_lookup"
+    assert result["response_mode"] == "execute"
+    assert result["recommended_agent_chain"] == ["meta", "executor"]
+    assert result["meta_interaction_mode"]["mode"] == "assist"
+    assert result["meta_interaction_mode"]["mode_reason"] == "executable_lookup_route:simple_live_lookup"
+
+
+def test_classify_meta_task_routes_research_plus_pdf_as_assist_execution():
+    result = classify_meta_task(
+        "recherchiere drei CRM Tools und erstelle daraus eine Vergleichs-PDF",
+        action_count=0,
+    )
+
+    assert result["task_type"] == "simple_live_lookup_document"
+    assert result["response_mode"] == "execute"
+    assert result["recommended_agent_chain"] == ["meta", "executor", "document"]
+    assert result["meta_interaction_mode"]["mode"] == "assist"
+    assert result["meta_interaction_mode"]["mode_reason"] == "executable_lookup_route:simple_live_lookup_document"
+
+
 def test_classify_meta_task_does_not_route_lookup_substring_false_positives_to_executor():
     queries = [
         "yoga kurs morgen",
@@ -744,6 +767,7 @@ def test_classify_meta_task_keeps_source_bound_research_out_of_simple_live_looku
 
     assert result["task_type"] == "knowledge_research"
     assert result["recommended_entry_agent"] == "research"
+    assert result["meta_interaction_mode"]["mode"] == "inspect"
 
 
 def test_classify_meta_task_routes_route_queries_to_meta_executor():
