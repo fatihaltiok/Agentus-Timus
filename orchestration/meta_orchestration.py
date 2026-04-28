@@ -290,6 +290,18 @@ _ORCHESTRATION_RECIPES: Dict[str, Tuple[OrchestrationRecipeStage, ...]] = {
             handoff_fields=("goal", "source_urls", "captured_context", "expected_output"),
         ),
     ),
+    "document_analysis": (
+        OrchestrationRecipeStage(
+            stage_id="document_analysis",
+            agent="document",
+            goal=(
+                "Lies die angegebene lokale Dokumentdatei, extrahiere den relevanten Inhalt "
+                "und liefere die angeforderte Zusammenfassung oder Analyse ohne Web-Recherche."
+            ),
+            expected_output="document_summary, extracted_key_points, source_path",
+            handoff_fields=("goal", "source_path", "expected_output", "query"),
+        ),
+    ),
     "youtube_light_research": (
         OrchestrationRecipeStage(
             stage_id="youtube_search_scan",
@@ -528,6 +540,7 @@ _ORCHESTRATION_RECIPE_AGENT_CHAINS: Dict[str, Tuple[str, ...]] = {
     "simple_live_lookup": ("meta", "executor"),
     "simple_live_lookup_document": ("meta", "executor", "document"),
     "knowledge_research": ("meta", "research"),
+    "document_analysis": ("meta", "document"),
     "youtube_light_research": ("meta", "executor"),
     "location_local_search": ("meta", "executor"),
     "location_route": ("meta", "executor"),
@@ -545,6 +558,7 @@ _ADAPTIVE_PLAN_SAFE_TASK_TYPES = {
     "simple_live_lookup",
     "simple_live_lookup_document",
     "knowledge_research",
+    "document_analysis",
     "youtube_content_extraction",
     "web_content_extraction",
     "location_local_search",
@@ -766,6 +780,17 @@ _LIVE_TRAVEL_LOOKUP_INTENT_HINTS = (
     "schlag mir",
     "vorschlaege",
     "vorschläge",
+)
+
+_LOCAL_DOCUMENT_ANALYSIS_HINTS = (
+    "fasse",
+    "zusammen",
+    "zusammenfassung",
+    "analysiere",
+    "analyse",
+    "lies",
+    "lese",
+    "extrahiere",
 )
 
 _HARD_RESEARCH_HINTS = (
@@ -1300,6 +1325,8 @@ def _resolve_primary_recipe_id(task_type: str, site_kind: str | None = None) -> 
         return "simple_live_lookup_document"
     if task_type == "knowledge_research":
         return "knowledge_research"
+    if task_type == "document_analysis":
+        return "document_analysis"
     if task_type == "youtube_light_research":
         return "youtube_light_research"
     if task_type == "location_local_search":
@@ -1637,6 +1664,14 @@ def _looks_like_live_travel_plan_document_request(text: str) -> bool:
         and _has_any(normalized, _LIVE_TRAVEL_DISCOVERY_HINTS)
         and _has_any(normalized, _LIVE_TRAVEL_PLAN_OUTPUT_HINTS)
     )
+
+
+def _looks_like_local_document_analysis_request(text: str) -> bool:
+    normalized = " ".join(str(text or "").strip().lower().split())
+    if not normalized:
+        return False
+    has_local_pdf_path = bool(re.search(r"(?:^|\s)(?:~|/)[^\s\"']+\.pdf(?:\b|$)", normalized))
+    return has_local_pdf_path and _has_any(normalized, _LOCAL_DOCUMENT_ANALYSIS_HINTS)
 
 
 def _looks_like_local_file_transform_request(text: str) -> bool:
@@ -3618,6 +3653,7 @@ def classify_meta_task(
     )
     has_document = _has_any(current_normalized, _DOCUMENT_HINTS) or has_live_travel_plan_document
     has_local_file_transform = False
+    has_local_document_analysis = False
     has_local_file_operation = False
     has_delivery = _has_any(current_normalized, _DELIVERY_HINTS)
     has_system = _has_any(current_normalized, _SYSTEM_HINTS)
@@ -3699,6 +3735,9 @@ def classify_meta_task(
     has_local_file_transform = _looks_like_local_file_transform_request(local_file_transform_focus)
     if has_local_file_transform:
         has_document = True
+    has_local_document_analysis = _looks_like_local_document_analysis_request(local_file_transform_focus)
+    if has_local_document_analysis:
+        has_document = True
     has_local_file_operation = _looks_like_local_file_operation_request(local_file_transform_focus)
     topic_transition = derive_topic_state_transition(
         conversation_state,
@@ -3730,6 +3769,11 @@ def classify_meta_task(
         recommended_chain = ["meta", "document"]
         task_type = "document_generation"
         reason = "local_file_transform"
+    elif has_local_document_analysis:
+        required_capabilities.extend(["document_analysis", "file_read"])
+        recommended_chain = ["meta", "document"]
+        task_type = "document_analysis"
+        reason = "local_document_analysis"
     elif has_local_file_operation:
         required_capabilities.extend(["terminal_execution", "file_operation"])
         recommended_chain = ["meta", "shell"]
@@ -3920,6 +3964,7 @@ def classify_meta_task(
         "youtube_light_research",
         "location_local_search",
         "knowledge_research",
+        "document_analysis",
         "web_content_extraction",
         "multi_stage_web_task",
         "ui_navigation",
@@ -3937,6 +3982,7 @@ def classify_meta_task(
     _is_protected_route = (
         task_type in _PROTECTED_TASK_TYPES
         or has_local_file_transform
+        or has_local_document_analysis
         or has_local_file_operation
         or _lookup_first_route
     )
@@ -3981,6 +4027,8 @@ def classify_meta_task(
             kernel_response_mode = "clarify_before_execute"
             reason = "gdk:clarify_low_confidence"
     if has_local_file_transform and kernel_response_mode != "acknowledge_and_store":
+        kernel_response_mode = "execute"
+    if has_local_document_analysis and kernel_response_mode != "acknowledge_and_store":
         kernel_response_mode = "execute"
     if has_local_file_operation and kernel_response_mode != "acknowledge_and_store":
         kernel_response_mode = "execute"
@@ -4308,7 +4356,8 @@ def classify_meta_task(
         kernel_seed.confidence >= 0.7
         and kernel_seed.interaction_mode != meta_interaction_mode.mode
         and not has_local_file_transform
-        and final_task_type not in {"file_operation", "simple_live_lookup", "simple_live_lookup_document"}
+        and not has_local_document_analysis
+        and final_task_type not in {"file_operation", "simple_live_lookup", "simple_live_lookup_document", "document_analysis"}
     ):
         if kernel_seed.interaction_mode == "think_partner":
             meta_interaction_mode = MetaInteractionMode(

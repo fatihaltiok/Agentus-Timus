@@ -206,6 +206,22 @@ def test_classify_meta_task_does_not_execute_explanatory_pdf_question():
     assert result["meta_interaction_mode"]["mode"] == "think_partner"
 
 
+def test_classify_meta_task_routes_local_pdf_summary_to_document_analysis():
+    result = classify_meta_task(
+        "fasse diese pdf zusammen /home/fatih-ubuntu/Dokumente/beispiel.pdf",
+        action_count=0,
+    )
+
+    assert result["task_type"] == "document_analysis"
+    assert result["recommended_agent_chain"] == ["meta", "document"]
+    assert result["recommended_recipe_id"] == "document_analysis"
+    assert [stage["stage_id"] for stage in result["recipe_stages"]] == ["document_analysis"]
+    assert result["response_mode"] == "execute"
+    assert "document_analysis" in result["required_capabilities"]
+    assert result["meta_request_frame"]["task_domain"] == "document_generation"
+    assert result["meta_interaction_mode"]["mode"] == "assist"
+
+
 def test_classify_meta_task_marks_mixed_preference_and_wealth_prompt_for_semantic_review():
     result = classify_meta_task(
         "soll ich kaffee oder tee trinken was meinst du und was und wie koenntest du mich reich machen",

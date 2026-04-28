@@ -656,8 +656,7 @@
         "response_mode": "execute",
         "chain_prefix": ["meta", "document"],
         "interaction_mode": "assist"
-      },
-      "xfail": "Document analysis for local PDFs needs a dedicated fast path."
+      }
     },
     {
       "id": "communication_polite_decline",

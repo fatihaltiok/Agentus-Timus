@@ -309,6 +309,7 @@ def _infer_task_domain(
         return "travel_advisory", evidence, 0.78
     task_type_mapping = {
         "knowledge_research": "general_research",
+        "document_analysis": "document_generation",
         "communication_task": "communication",
         "document_generation": "document_generation",
         "file_operation": "file_operation",

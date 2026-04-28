@@ -102,6 +102,24 @@ def test_build_meta_request_frame_lets_executable_lookup_task_type_override_plan
     assert "task_type:simple_live_lookup_document" in frame.evidence
 
 
+def test_build_meta_request_frame_maps_document_analysis_to_document_domain():
+    frame = build_meta_request_frame(
+        effective_query="fasse diese pdf zusammen /home/fatih-ubuntu/Dokumente/beispiel.pdf",
+        dominant_turn_type="new_task",
+        response_mode="execute",
+        answer_shape="action_first",
+        task_type="document_analysis",
+        active_topic="",
+        open_goal="",
+        next_step="",
+        recommended_agent_chain=("meta", "document"),
+        active_plan={},
+    )
+
+    assert frame.task_domain == "document_generation"
+    assert "task_type:document_analysis" in frame.evidence
+
+
 def test_build_meta_request_frame_reuses_carried_travel_domain_for_short_followup():
     frame = build_meta_request_frame(
         effective_query="ich mag Staedte und Kultur",
