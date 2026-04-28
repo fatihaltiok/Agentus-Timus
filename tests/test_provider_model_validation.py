@@ -167,6 +167,34 @@ def test_agent_model_config_accepts_deepseek_v4_pro_for_research(monkeypatch):
     assert provider == ModelProvider.DEEPSEEK
 
 
+def test_agent_model_config_defaults_executor_to_kimi_k26(monkeypatch):
+    fake_client = MultiProviderClient()
+    fake_client._api_keys[ModelProvider.MOONSHOT] = "test-key"
+    fake_client._clients[ModelProvider.MOONSHOT] = _FakeClient(["kimi-k2.6"])
+    monkeypatch.setattr(providers_mod, "_provider_client", fake_client)
+    monkeypatch.delenv("FAST_MODEL", raising=False)
+    monkeypatch.delenv("FAST_MODEL_PROVIDER", raising=False)
+
+    model, provider = AgentModelConfig.get_model_and_provider("executor")
+
+    assert model == "kimi-k2.6"
+    assert provider == ModelProvider.MOONSHOT
+
+
+def test_agent_model_config_accepts_explicit_moonshot_executor(monkeypatch):
+    fake_client = MultiProviderClient()
+    fake_client._api_keys[ModelProvider.MOONSHOT] = "test-key"
+    fake_client._clients[ModelProvider.MOONSHOT] = _FakeClient(["kimi-k2.6"])
+    monkeypatch.setattr(providers_mod, "_provider_client", fake_client)
+    monkeypatch.setenv("FAST_MODEL", "kimi-k2.6")
+    monkeypatch.setenv("FAST_MODEL_PROVIDER", "moonshot")
+
+    model, provider = AgentModelConfig.get_model_and_provider("executor")
+
+    assert model == "kimi-k2.6"
+    assert provider == ModelProvider.MOONSHOT
+
+
 def test_agent_model_config_falls_back_when_research_model_removed(monkeypatch):
     fake_client = MultiProviderClient()
     fake_client._api_keys[ModelProvider.DEEPSEEK] = "test-key"
@@ -199,7 +227,7 @@ def test_agent_model_config_respects_explicit_deep_research_fallback_env(monkeyp
     assert provider == ModelProvider.OPENAI
 
 
-@pytest.mark.parametrize("agent_type", ["executor", "document", "communication"])
+@pytest.mark.parametrize("agent_type", ["document", "communication"])
 def test_agent_model_config_defaults_selected_agents_to_gpt_5_4_mini(monkeypatch, agent_type):
     fake_client = MultiProviderClient()
     fake_client._api_keys[ModelProvider.OPENAI] = "test-key"
@@ -292,7 +320,7 @@ class TestGoogleProviderOpenAICompat:
     def test_google_not_in_else_branch(self):
         """ModelProvider.GOOGLE darf nicht mehr in der else-Branch landen (kein 'nicht unterstuetzt')."""
         openai_compat = {
-            "openai", "zai", "deepseek", "inception", "nvidia", "openrouter", "google"
+            "openai", "zai", "deepseek", "moonshot", "inception", "nvidia", "openrouter", "google"
         }
         assert "google" in openai_compat, "GOOGLE fehlt in openai_compat_set"
         assert "google" != "anthropic", "GOOGLE ist kein Anthropic-Provider"
@@ -310,6 +338,27 @@ class TestGoogleProviderOpenAICompat:
         )
         # Model landet im validated-Cache trotzdem
         assert (ModelProvider.GOOGLE, "gemini-3-flash-preview") in client._validated_models
+
+
+class TestMoonshotProviderOpenAICompat:
+    def test_moonshot_base_url_matches_kimi_openai_compat_endpoint(self):
+        client = MultiProviderClient()
+        assert client.get_base_url(ModelProvider.MOONSHOT) == "https://api.moonshot.ai/v1"
+        assert client.get_openai_compat_base_url(ModelProvider.MOONSHOT) == "https://api.moonshot.ai/v1"
+
+    def test_moonshot_validate_accepts_kimi_k26_from_model_listing(self):
+        client = MultiProviderClient()
+        client._api_keys[ModelProvider.MOONSHOT] = "fake-key"
+        fake = _FakeClient(["kimi-k2.6", "kimi-k2-thinking"])
+        client._clients[ModelProvider.MOONSHOT] = fake
+
+        client.validate_model_or_raise(
+            ModelProvider.MOONSHOT,
+            "kimi-k2.6",
+            agent_type="executor",
+        )
+
+        assert fake.models.calls == 1
 
 
 class TestDashScopeProviderOpenAICompat:

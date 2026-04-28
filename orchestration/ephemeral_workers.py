@@ -49,6 +49,7 @@ _OPENAI_COMPAT_PROVIDERS = {
     ModelProvider.ZAI,
     ModelProvider.DASHSCOPE,
     ModelProvider.DEEPSEEK,
+    ModelProvider.MOONSHOT,
     ModelProvider.INCEPTION,
     ModelProvider.NVIDIA,
     ModelProvider.OPENROUTER,

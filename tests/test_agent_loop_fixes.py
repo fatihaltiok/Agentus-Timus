@@ -23,6 +23,9 @@ def test_max_tokens_deepseek_reasoner():
 def test_max_tokens_deepseek_v4_pro():
     assert BaseAgent._get_max_tokens_for_model("deepseek-v4-pro") == 8000
 
+def test_max_tokens_kimi_k26():
+    assert BaseAgent._get_max_tokens_for_model("kimi-k2.6") == 16000
+
 def test_max_tokens_nemotron():
     assert BaseAgent._get_max_tokens_for_model("nvidia/nemotron-3-nano-30b-a3b") == 4000
 

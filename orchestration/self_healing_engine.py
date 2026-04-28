@@ -1291,6 +1291,7 @@ class SelfHealingEngine:
                 ModelProvider.DASHSCOPE,
                 ModelProvider.DASHSCOPE_NATIVE,
                 ModelProvider.DEEPSEEK,
+                ModelProvider.MOONSHOT,
                 ModelProvider.INCEPTION,
                 ModelProvider.NVIDIA,
                 ModelProvider.OPENROUTER,

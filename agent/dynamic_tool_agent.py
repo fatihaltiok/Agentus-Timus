@@ -98,6 +98,11 @@ class DynamicToolAgent(ABC):
                 api_key=os.getenv("DEEPSEEK_API_KEY"),
                 base_url="https://api.deepseek.com/v1"
             )
+        elif self.provider == "moonshot":
+            self.client = OpenAI(
+                api_key=os.getenv("MOONSHOT_API_KEY"),
+                base_url="https://api.moonshot.ai/v1",
+            )
         elif self.provider == "anthropic":
             from anthropic import Anthropic
             self.client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))

@@ -2993,6 +2993,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             ModelProvider.ZAI,
             ModelProvider.DASHSCOPE,
             ModelProvider.DEEPSEEK,
+            ModelProvider.MOONSHOT,
             ModelProvider.INCEPTION,
             ModelProvider.NVIDIA,
             ModelProvider.OPENROUTER,
@@ -3098,6 +3099,8 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         model_lower = model.lower()
         if any(m in model_lower for m in ["deepseek-reasoner", "deepseek-v4", "deepseek-r1", "qwq", "qvq"]):
             return int(os.getenv("REASONING_MAX_TOKENS", "8000"))
+        if model_lower in {"kimi-k2-thinking", "kimi-k2.6"} or model_lower.startswith("kimi-k2.6"):
+            return int(os.getenv("KIMI_MAX_TOKENS", "16000"))
         if "nemotron" in model_lower:
             return int(os.getenv("NEMOTRON_MAX_TOKENS", "4000"))
         return int(os.getenv("DEFAULT_MAX_TOKENS", "2000"))
@@ -3107,6 +3110,13 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         model_lower = str(model or "").strip().lower()
         return provider == ModelProvider.DEEPSEEK and (
             model_lower == "deepseek-reasoner" or model_lower.startswith("deepseek-v4")
+        )
+
+    @staticmethod
+    def _is_kimi_thinking_model(provider: ModelProvider, model: str) -> bool:
+        model_lower = str(model or "").strip().lower()
+        return provider == ModelProvider.MOONSHOT and (
+            model_lower == "kimi-k2-thinking" or model_lower.startswith("kimi-k2.6")
         )
 
     def _record_llm_usage(
@@ -3178,6 +3188,18 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                     effort = "high"
                 kwargs["reasoning_effort"] = effort
                 kwargs.pop("temperature", None)
+
+        if self._is_kimi_thinking_model(effective_provider, effective_model):
+            thinking_mode = os.getenv("KIMI_THINKING_MODE", "enabled").strip().lower() or "enabled"
+            if thinking_mode not in {"enabled", "disabled"}:
+                thinking_mode = "enabled"
+            # Kimi K2.6 enables thinking by default. Only send the extension
+            # when disabling it; otherwise keep the request closest to the docs.
+            if thinking_mode == "disabled":
+                extra_body = dict(kwargs.get("extra_body") or {})
+                extra_body["thinking"] = {"type": "disabled"}
+                kwargs["extra_body"] = extra_body
+            kwargs.pop("temperature", None)
 
         if "nemotron" in effective_model.lower():
             enable = os.getenv("NEMOTRON_ENABLE_THINKING", "true").lower() == "true"

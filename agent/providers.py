@@ -23,6 +23,7 @@ class ModelProvider(str, Enum):
     DASHSCOPE_NATIVE = "dashscope_native"
     ANTHROPIC = "anthropic"
     DEEPSEEK = "deepseek"
+    MOONSHOT = "moonshot"
     INCEPTION = "inception"
     NVIDIA = "nvidia"
     OPENROUTER = "openrouter"
@@ -46,6 +47,7 @@ class MultiProviderClient:
         ModelProvider.DASHSCOPE_NATIVE: "https://dashscope-intl.aliyuncs.com/api/v1",
         ModelProvider.ANTHROPIC: "https://api.anthropic.com",
         ModelProvider.DEEPSEEK: "https://api.deepseek.com/v1",
+        ModelProvider.MOONSHOT: "https://api.moonshot.ai/v1",
         ModelProvider.INCEPTION: "https://api.inceptionlabs.ai/v1",
         ModelProvider.NVIDIA: "https://integrate.api.nvidia.com/v1",
         ModelProvider.OPENROUTER: "https://openrouter.ai/api/v1",
@@ -59,6 +61,7 @@ class MultiProviderClient:
         ModelProvider.DASHSCOPE_NATIVE: "DASHSCOPE_NATIVE_API_KEY",
         ModelProvider.ANTHROPIC: "ANTHROPIC_API_KEY",
         ModelProvider.DEEPSEEK: "DEEPSEEK_API_KEY",
+        ModelProvider.MOONSHOT: "MOONSHOT_API_KEY",
         ModelProvider.INCEPTION: "INCEPTION_API_KEY",
         ModelProvider.NVIDIA: "NVIDIA_API_KEY",
         ModelProvider.OPENROUTER: "OPENROUTER_API_KEY",
@@ -133,7 +136,7 @@ class MultiProviderClient:
 
         if provider in [
             ModelProvider.OPENAI, ModelProvider.ZAI, ModelProvider.DASHSCOPE, ModelProvider.DEEPSEEK,
-            ModelProvider.INCEPTION, ModelProvider.NVIDIA,
+            ModelProvider.MOONSHOT, ModelProvider.INCEPTION, ModelProvider.NVIDIA,
             ModelProvider.OPENROUTER, ModelProvider.GOOGLE,
         ]:
             client = self._init_openai_compatible(provider)
@@ -151,6 +154,7 @@ class MultiProviderClient:
             ModelProvider.OPENAI,
             ModelProvider.ZAI,
             ModelProvider.DEEPSEEK,
+            ModelProvider.MOONSHOT,
             ModelProvider.INCEPTION,
             ModelProvider.NVIDIA,
             ModelProvider.OPENROUTER,
@@ -251,7 +255,7 @@ class AgentModelConfig:
     """Konfiguration welches Modell/Provider jeder Agent-Typ nutzt."""
 
     AGENT_CONFIGS = {
-        "executor": ("FAST_MODEL", "FAST_MODEL_PROVIDER", "gpt-5.4-mini", ModelProvider.OPENAI),
+        "executor": ("FAST_MODEL", "FAST_MODEL_PROVIDER", "kimi-k2.6", ModelProvider.MOONSHOT),
         "deep_research": ("RESEARCH_MODEL", "RESEARCH_MODEL_PROVIDER", "deepseek/deepseek-v3.2", ModelProvider.OPENROUTER),
         "creative": ("CREATIVE_MODEL", "CREATIVE_MODEL_PROVIDER", "gpt-5.2", ModelProvider.OPENAI),
         "developer": ("CODE_MODEL", "CODE_MODEL_PROVIDER", "mercury-2", ModelProvider.INCEPTION),

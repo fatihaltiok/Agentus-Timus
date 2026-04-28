@@ -33,6 +33,10 @@ def test_contract_openrouter_roundtrips():
     assert normalize_dispatcher_provider_contract("openrouter") == ModelProvider.OPENROUTER.value
 
 
+def test_contract_moonshot_is_supported_natively():
+    assert dispatcher_provider_supports_native_contract(ModelProvider.MOONSHOT.value) is True
+
+
 def test_contract_google_is_supported_natively():
     assert dispatcher_provider_supports_native_contract(ModelProvider.GOOGLE.value) is True
 
@@ -68,6 +72,7 @@ def test_hypothesis_support_contract_returns_bool(provider: str):
     ModelProvider.OPENAI.value,
     ModelProvider.OPENROUTER.value,
     ModelProvider.DEEPSEEK.value,
+    ModelProvider.MOONSHOT.value,
     ModelProvider.INCEPTION.value,
     ModelProvider.NVIDIA.value,
     ModelProvider.DASHSCOPE.value,
