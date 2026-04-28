@@ -1,6 +1,6 @@
 """
 Integrationstest für die Agent-Loop-Fixes:
-- max_tokens erhöht für qwq/deepseek-reasoner
+- max_tokens erhöht für qwq/deepseek-reasoner/deepseek-v4
 - <think> Tags werden gestrippt
 - Volle run()-Schleife verarbeitet Think+Action korrekt (Mock-LLM)
 """
@@ -19,6 +19,9 @@ def test_max_tokens_qwq():
 
 def test_max_tokens_deepseek_reasoner():
     assert BaseAgent._get_max_tokens_for_model("deepseek-reasoner") == 8000
+
+def test_max_tokens_deepseek_v4_pro():
+    assert BaseAgent._get_max_tokens_for_model("deepseek-v4-pro") == 8000
 
 def test_max_tokens_nemotron():
     assert BaseAgent._get_max_tokens_for_model("nvidia/nemotron-3-nano-30b-a3b") == 4000

@@ -105,7 +105,7 @@ def build_deep_research_system_prompt(loop_limits: DeepResearchLoopLimits) -> st
 
 class DeepResearchAgent(BaseAgent):
     """
-    Tiefenrecherche-Agent von Timus (deepseek-reasoner).
+    Tiefenrecherche-Agent von Timus (DeepSeek Thinking Mode).
 
     Führt strukturierte Recherchen mit start_deep_research,
     verify_fact und generate_research_report durch.

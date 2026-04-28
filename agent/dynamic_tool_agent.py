@@ -391,6 +391,6 @@ Sei gründlich und zitiere deine Quellen."""
     def get_capabilities(self) -> List[str]:
         return ["search", "browser", "research"]
     
-    def __init__(self, model: str = "deepseek-reasoner", **kwargs):
+    def __init__(self, model: str = "deepseek-v4-pro", **kwargs):
         super().__init__(model=model, **kwargs)
         self.filter_tools_by_capabilities(self.get_capabilities())

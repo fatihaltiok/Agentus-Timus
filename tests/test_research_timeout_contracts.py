@@ -95,6 +95,37 @@ async def test_sequential_non_research_timeout_stays_error(monkeypatch):
     assert result["metadata"]["timed_out"] is True
 
 
+@pytest.mark.asyncio
+async def test_research_model_configuration_error_is_typed(monkeypatch):
+    from agent.agent_registry import AgentRegistry
+    from agent.providers import ModelConfigurationError
+
+    registry = AgentRegistry()
+    events = []
+
+    async def _fake_tools():
+        return "tools"
+
+    def _broken_factory(tools_description_string: str):
+        del tools_description_string
+        raise ModelConfigurationError("Konfiguriertes Modell 'deepseek-reasoner' existiert nicht")
+
+    monkeypatch.setattr(
+        "agent.agent_registry.record_autonomy_observation",
+        lambda event_type, payload: events.append((event_type, payload)),
+    )
+    registry._get_tools_description = _fake_tools
+    registry.register_spec("research", "research", ["research"], _broken_factory)
+
+    result = await registry.delegate(from_agent="meta", to_agent="research", task="breite recherche")
+
+    assert result["status"] == "error"
+    assert result["metadata"]["error_class"] == "model_configuration"
+    assert "nicht startbar" in result["error"]
+    assert events[0][0] == "agent_model_configuration_failed"
+    assert events[0][1]["retryable"] is False
+
+
 def test_timeout_status_contract():
     assert timeout_status_for_agent("research") == "partial"
     assert timeout_status_for_agent("shell") == "error"
@@ -105,4 +136,3 @@ def test_timeout_status_contract():
 def test_hypothesis_timeout_status_is_role_consistent(agent_name: str):
     expected = "partial" if agent_name == "research" else "error"
     assert timeout_status_for_agent(agent_name) == expected
-

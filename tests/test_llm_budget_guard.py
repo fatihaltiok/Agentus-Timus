@@ -218,6 +218,47 @@ async def test_base_agent_runtime_fallback_switches_provider_on_retryable_error(
 
 
 @pytest.mark.asyncio
+async def test_base_agent_enables_deepseek_v4_thinking_mode(monkeypatch):
+    calls = []
+
+    class _FakeClient:
+        def __init__(self):
+            self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+        def _create(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                usage=SimpleNamespace(prompt_tokens=5, completion_tokens=2, prompt_tokens_details=SimpleNamespace(cached_tokens=0)),
+                choices=[SimpleNamespace(message=SimpleNamespace(content="ok", reasoning_content=""))],
+            )
+
+    class _ProviderClient:
+        def get_client(self, provider):
+            assert provider == ModelProvider.DEEPSEEK
+            return _FakeClient()
+
+    monkeypatch.setenv("DEEPSEEK_REASONING_EFFORT", "max")
+    monkeypatch.setattr(base_agent_mod, "get_improvement_engine", lambda: SimpleNamespace(record_llm_usage=lambda record: None))
+
+    agent = base_agent_mod.BaseAgent.__new__(base_agent_mod.BaseAgent)
+    agent.provider_client = _ProviderClient()
+    agent.provider = base_agent_mod.ModelProvider.DEEPSEEK
+    agent.model = "deepseek-v4-pro"
+    agent.agent_type = "deep_research"
+    agent.conversation_session_id = "sess-deepseek-v4"
+
+    result = await base_agent_mod.BaseAgent._call_openai_compatible(agent, [{"role": "user", "content": "hello"}])
+
+    assert result == "ok"
+    sent = calls[0]
+    assert sent["model"] == "deepseek-v4-pro"
+    assert sent["extra_body"] == {"thinking": {"type": "enabled"}}
+    assert sent["reasoning_effort"] == "max"
+    assert sent["max_tokens"] == 8000
+    assert "temperature" not in sent
+
+
+@pytest.mark.asyncio
 async def test_dispatcher_hard_budget_falls_back_to_meta(monkeypatch):
     monkeypatch.setenv("DISPATCHER_MODEL_PROVIDER", "zai")
     monkeypatch.setenv("DISPATCHER_MODEL", "glm-5")

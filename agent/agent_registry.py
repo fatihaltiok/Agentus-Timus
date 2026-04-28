@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from contextvars import ContextVar
 
 from agent.shared.delegation_handoff import parse_delegation_handoff
+from agent.providers import ModelConfigurationError
 from orchestration.approval_auth_contract import normalize_phase_d_workflow_payload
 from orchestration.llm_budget_guard import cap_parallelism_for_budget
 from orchestration.orchestration_policy import evaluate_parallel_tasks
@@ -1127,6 +1128,56 @@ class AgentRegistry:
                 "artifacts": _res.artifacts,
             }
 
+        except ModelConfigurationError as e:
+            error_text = str(e)
+            error_meta = {
+                "error_class": "model_configuration",
+                "agent": to_agent,
+                "from_agent": from_agent,
+                "session_id": effective_session_id or "",
+                "retryable": False,
+            }
+            log.error("Delegation %s -> %s Modellkonfiguration fehlgeschlagen: %s", from_agent, to_agent, error_text)
+            record_autonomy_observation(
+                "agent_model_configuration_failed",
+                {
+                    **error_meta,
+                    "error": error_text[:500],
+                },
+            )
+            self._log_canvas_delegation(
+                from_agent=from_agent,
+                to_agent=to_agent,
+                session_id=effective_session_id,
+                status="error",
+                task=task,
+                message=f"Agent-Modellkonfiguration fehlgeschlagen: {error_text}",
+                payload={**error_meta, "exception": error_text[:300]},
+            )
+            self._record_routing_outcome(task, to_agent, "error")
+            try:
+                if _delegation_sse_hook is not None:
+                    _delegation_sse_hook(from_agent, to_agent, "error")
+            except Exception:
+                pass
+            bb_key = AgentRegistry._auto_write_to_blackboard(
+                to_agent,
+                task,
+                error_text,
+                "error",
+                session_id=effective_session_id,
+                metadata=error_meta,
+                artifacts=[],
+            )
+            return {
+                "status": "error",
+                "agent": to_agent,
+                "error": f"FEHLER: Agent '{to_agent}' nicht startbar: {error_text}",
+                "quality": 0,
+                "blackboard_key": bb_key,
+                "metadata": error_meta,
+                "artifacts": [],
+            }
         except TimeoutError as e:
             timeout_status = self._timeout_status_for_agent(to_agent)
             timeout_meta = self._build_timeout_metadata(

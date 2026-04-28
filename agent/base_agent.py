@@ -3096,11 +3096,18 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         im Thinking-Prozess abgeschnitten, die Action-JSON erscheint nie.
         """
         model_lower = model.lower()
-        if any(m in model_lower for m in ["deepseek-reasoner", "deepseek-r1", "qwq", "qvq"]):
+        if any(m in model_lower for m in ["deepseek-reasoner", "deepseek-v4", "deepseek-r1", "qwq", "qvq"]):
             return int(os.getenv("REASONING_MAX_TOKENS", "8000"))
         if "nemotron" in model_lower:
             return int(os.getenv("NEMOTRON_MAX_TOKENS", "4000"))
         return int(os.getenv("DEFAULT_MAX_TOKENS", "2000"))
+
+    @staticmethod
+    def _is_direct_deepseek_thinking_model(provider: ModelProvider, model: str) -> bool:
+        model_lower = str(model or "").strip().lower()
+        return provider == ModelProvider.DEEPSEEK and (
+            model_lower == "deepseek-reasoner" or model_lower.startswith("deepseek-v4")
+        )
 
     def _record_llm_usage(
         self,
@@ -3143,7 +3150,7 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
         effective_provider = model_override.provider if model_override else self.provider
         effective_model = model_override.model if model_override else self.model
         client = self.provider_client.get_client(effective_provider)
-        max_tokens = self._get_max_tokens_for_model(self.model)
+        max_tokens = self._get_max_tokens_for_model(effective_model)
         if budget_decision and budget_decision.max_tokens_cap:
             max_tokens = min(max_tokens, max(int(budget_decision.max_tokens_cap), 1))
 
@@ -3158,7 +3165,21 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             if os.getenv("MERCURY_DIFFUSING", "false").lower() == "true":
                 kwargs["extra_body"] = {"diffusing": True}
 
-        if "nemotron" in self.model.lower():
+        if self._is_direct_deepseek_thinking_model(effective_provider, effective_model):
+            thinking_mode = os.getenv("DEEPSEEK_THINKING_MODE", "enabled").strip().lower() or "enabled"
+            if thinking_mode not in {"enabled", "disabled"}:
+                thinking_mode = "enabled"
+            extra_body = dict(kwargs.get("extra_body") or {})
+            extra_body["thinking"] = {"type": thinking_mode}
+            kwargs["extra_body"] = extra_body
+            if thinking_mode == "enabled":
+                effort = os.getenv("DEEPSEEK_REASONING_EFFORT", "high").strip().lower() or "high"
+                if effort not in {"high", "max"}:
+                    effort = "high"
+                kwargs["reasoning_effort"] = effort
+                kwargs.pop("temperature", None)
+
+        if "nemotron" in effective_model.lower():
             enable = os.getenv("NEMOTRON_ENABLE_THINKING", "true").lower() == "true"
             if not enable:
                 kwargs["extra_body"] = {
@@ -3170,11 +3191,11 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
                 kwargs["temperature"] = 1.0
                 kwargs["top_p"] = 1.0
 
-        if "seed-oss" in self.model.lower():
+        if "seed-oss" in effective_model.lower():
             budget = int(os.getenv("META_THINKING_BUDGET", "1000"))
             kwargs["extra_body"] = {"thinking_budget": budget}
 
-        if "glm5" in self.model.lower().replace("-", "").replace("/", ""):
+        if "glm5" in effective_model.lower().replace("-", "").replace("/", ""):
             # NVIDIA NIM: Thinking via chat_template_kwargs steuern
             # OpenRouter: Thinking ist automatisch eingebaut, kein extra_body nötig
             if effective_provider == ModelProvider.NVIDIA:
@@ -3206,14 +3227,14 @@ Antworte NUR mit JSON (keine Markdown, keine Erklaerung):"""
             msg = resp.choices[0].message
             content = msg.content
 
-            # deepseek-reasoner: reasoning_content als Fallback wenn content leer.
+            # DeepSeek thinking models: reasoning_content als Fallback wenn content leer.
             # WICHTIG: Kein "Error:" zurückgeben — das würde den Loop sofort beenden.
             # Stattdessen reasoning_content zurückgeben: der Loop schickt dann einen
             # Format-Korrektur-Prompt und das Modell bekommt eine weitere Chance.
             if (not content or not str(content).strip()) and hasattr(msg, "reasoning_content"):
                 reasoning = getattr(msg, "reasoning_content", "") or ""
                 if reasoning:
-                    log.warning("deepseek-reasoner: content leer — gebe reasoning_content zurück (Loop-Retry)")
+                    log.warning("DeepSeek thinking: content leer — gebe reasoning_content zurück (Loop-Retry)")
                     self._record_llm_usage(
                         latency_ms=round((time.perf_counter() - started) * 1000),
                         success=True,

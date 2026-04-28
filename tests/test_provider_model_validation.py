@@ -153,6 +153,38 @@ def test_agent_model_config_exposes_deep_research_fallback(monkeypatch):
     assert provider == ModelProvider.OPENROUTER
 
 
+def test_agent_model_config_accepts_deepseek_v4_pro_for_research(monkeypatch):
+    fake_client = MultiProviderClient()
+    fake_client._api_keys[ModelProvider.DEEPSEEK] = "test-key"
+    fake_client._clients[ModelProvider.DEEPSEEK] = _FakeClient(["deepseek-v4-flash", "deepseek-v4-pro"])
+    monkeypatch.setattr(providers_mod, "_provider_client", fake_client)
+    monkeypatch.setenv("RESEARCH_MODEL", "deepseek-v4-pro")
+    monkeypatch.setenv("RESEARCH_MODEL_PROVIDER", "deepseek")
+
+    model, provider = AgentModelConfig.get_model_and_provider("deep_research")
+
+    assert model == "deepseek-v4-pro"
+    assert provider == ModelProvider.DEEPSEEK
+
+
+def test_agent_model_config_falls_back_when_research_model_removed(monkeypatch):
+    fake_client = MultiProviderClient()
+    fake_client._api_keys[ModelProvider.DEEPSEEK] = "test-key"
+    fake_client._api_keys[ModelProvider.OPENROUTER] = "test-key"
+    fake_client._clients[ModelProvider.DEEPSEEK] = _FakeClient(["deepseek-v4-flash", "deepseek-v4-pro"])
+    fake_client._clients[ModelProvider.OPENROUTER] = _FakeClient(["deepseek/deepseek-v3.2"])
+    monkeypatch.setattr(providers_mod, "_provider_client", fake_client)
+    monkeypatch.setenv("RESEARCH_MODEL", "deepseek-reasoner")
+    monkeypatch.setenv("RESEARCH_MODEL_PROVIDER", "deepseek")
+    monkeypatch.delenv("RESEARCH_FALLBACK_MODEL", raising=False)
+    monkeypatch.delenv("RESEARCH_FALLBACK_PROVIDER", raising=False)
+
+    model, provider = AgentModelConfig.get_model_and_provider("deep_research")
+
+    assert model == "deepseek/deepseek-v3.2"
+    assert provider == ModelProvider.OPENROUTER
+
+
 def test_agent_model_config_respects_explicit_deep_research_fallback_env(monkeypatch):
     fake_client = MultiProviderClient()
     fake_client._api_keys[ModelProvider.OPENAI] = "test-key"

@@ -299,8 +299,22 @@ class AgentModelConfig:
             fallback_provider=fallback_provider,
         )
 
-        get_provider_client().validate_model_or_raise(provider, model, agent_type=agent_type)
-        return model, provider
+        try:
+            get_provider_client().validate_model_or_raise(provider, model, agent_type=agent_type)
+            return model, provider
+        except ModelConfigurationError as primary_error:
+            fallback = cls.get_fallback_model_and_provider(agent_type)
+            if fallback:
+                fallback_model_name, fallback_provider_name = fallback
+                log.warning(
+                    "Primaeres Modell fuer %s unbrauchbar (%s); nutze Fallback %s/%s",
+                    agent_type,
+                    primary_error,
+                    fallback_provider_name.value,
+                    fallback_model_name,
+                )
+                return fallback_model_name, fallback_provider_name
+            raise
 
     @classmethod
     def get_fallback_model_and_provider(cls, agent_type: str) -> Optional[Tuple[str, ModelProvider]]:
