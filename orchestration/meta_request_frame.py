@@ -310,6 +310,7 @@ def _infer_task_domain(
     task_type_mapping = {
         "knowledge_research": "general_research",
         "document_analysis": "document_generation",
+        "email_send": "communication",
         "communication_task": "communication",
         "document_generation": "document_generation",
         "file_operation": "file_operation",

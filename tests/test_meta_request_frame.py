@@ -120,6 +120,24 @@ def test_build_meta_request_frame_maps_document_analysis_to_document_domain():
     assert "task_type:document_analysis" in frame.evidence
 
 
+def test_build_meta_request_frame_maps_email_send_to_communication_domain():
+    frame = build_meta_request_frame(
+        effective_query="sende eine email an test@example.com mit betreff Rechnung",
+        dominant_turn_type="new_task",
+        response_mode="execute",
+        answer_shape="action_first",
+        task_type="email_send",
+        active_topic="",
+        open_goal="",
+        next_step="",
+        recommended_agent_chain=("meta", "executor"),
+        active_plan={},
+    )
+
+    assert frame.task_domain == "communication"
+    assert "task_type:email_send" in frame.evidence
+
+
 def test_build_meta_request_frame_reuses_carried_travel_domain_for_short_followup():
     frame = build_meta_request_frame(
         effective_query="ich mag Staedte und Kultur",

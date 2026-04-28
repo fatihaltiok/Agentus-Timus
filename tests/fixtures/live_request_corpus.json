@@ -687,8 +687,7 @@
         "response_mode": "execute",
         "chain_prefix": ["meta", "executor"],
         "interaction_mode": "assist"
-      },
-      "xfail": "Direct communication execution needs explicit email-send routing coverage."
+      }
     },
     {
       "id": "communication_translate",

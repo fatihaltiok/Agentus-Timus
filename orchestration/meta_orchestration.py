@@ -302,6 +302,18 @@ _ORCHESTRATION_RECIPES: Dict[str, Tuple[OrchestrationRecipeStage, ...]] = {
             handoff_fields=("goal", "source_path", "expected_output", "query"),
         ),
     ),
+    "email_send": (
+        OrchestrationRecipeStage(
+            stage_id="email_send",
+            agent="executor",
+            goal=(
+                "Bereite den explizit adressierten E-Mail-Versand vor oder fuehre ihn mit dem "
+                "verfuegbaren E-Mail-Tool aus, ohne in freie Beratung oder Recherche abzudriften."
+            ),
+            expected_output="delivery_status, recipient, subject, body",
+            handoff_fields=("goal", "recipient", "subject", "body", "query"),
+        ),
+    ),
     "youtube_light_research": (
         OrchestrationRecipeStage(
             stage_id="youtube_search_scan",
@@ -541,6 +553,7 @@ _ORCHESTRATION_RECIPE_AGENT_CHAINS: Dict[str, Tuple[str, ...]] = {
     "simple_live_lookup_document": ("meta", "executor", "document"),
     "knowledge_research": ("meta", "research"),
     "document_analysis": ("meta", "document"),
+    "email_send": ("meta", "executor"),
     "youtube_light_research": ("meta", "executor"),
     "location_local_search": ("meta", "executor"),
     "location_route": ("meta", "executor"),
@@ -559,6 +572,7 @@ _ADAPTIVE_PLAN_SAFE_TASK_TYPES = {
     "simple_live_lookup_document",
     "knowledge_research",
     "document_analysis",
+    "email_send",
     "youtube_content_extraction",
     "web_content_extraction",
     "location_local_search",
@@ -792,6 +806,15 @@ _LOCAL_DOCUMENT_ANALYSIS_HINTS = (
     "lese",
     "extrahiere",
 )
+
+_EMAIL_SEND_ACTION_HINTS = (
+    "sende",
+    "schicke",
+    "versende",
+    "send ",
+)
+
+_EMAIL_ADDRESS_PATTERN = re.compile(r"\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b")
 
 _HARD_RESEARCH_HINTS = (
     "tiefenrecherche",
@@ -1327,6 +1350,8 @@ def _resolve_primary_recipe_id(task_type: str, site_kind: str | None = None) -> 
         return "knowledge_research"
     if task_type == "document_analysis":
         return "document_analysis"
+    if task_type == "email_send":
+        return "email_send"
     if task_type == "youtube_light_research":
         return "youtube_light_research"
     if task_type == "location_local_search":
@@ -1672,6 +1697,18 @@ def _looks_like_local_document_analysis_request(text: str) -> bool:
         return False
     has_local_pdf_path = bool(re.search(r"(?:^|\s)(?:~|/)[^\s\"']+\.pdf(?:\b|$)", normalized))
     return has_local_pdf_path and _has_any(normalized, _LOCAL_DOCUMENT_ANALYSIS_HINTS)
+
+
+def _looks_like_email_send_request(text: str) -> bool:
+    normalized = " ".join(str(text or "").strip().lower().split())
+    if not normalized:
+        return False
+    has_mail_anchor = any(token in normalized for token in ("email", "e-mail", "mail"))
+    return (
+        has_mail_anchor
+        and _has_any(normalized, _EMAIL_SEND_ACTION_HINTS)
+        and bool(_EMAIL_ADDRESS_PATTERN.search(normalized))
+    )
 
 
 def _looks_like_local_file_transform_request(text: str) -> bool:
@@ -3656,6 +3693,7 @@ def classify_meta_task(
     has_local_document_analysis = False
     has_local_file_operation = False
     has_delivery = _has_any(current_normalized, _DELIVERY_HINTS)
+    has_email_send = _looks_like_email_send_request(current_normalized)
     has_system = _has_any(current_normalized, _SYSTEM_HINTS)
     has_login = any(token in current_normalized for token in ("login", "log in", "sign in", "anmelden", "einloggen"))
     has_multistep_browser = has_browser and (
@@ -3774,6 +3812,11 @@ def classify_meta_task(
         recommended_chain = ["meta", "document"]
         task_type = "document_analysis"
         reason = "local_document_analysis"
+    elif has_email_send:
+        required_capabilities.extend(["email", "message_delivery"])
+        recommended_chain = ["meta", "executor"]
+        task_type = "email_send"
+        reason = "email_send_request"
     elif has_local_file_operation:
         required_capabilities.extend(["terminal_execution", "file_operation"])
         recommended_chain = ["meta", "shell"]
@@ -3965,6 +4008,7 @@ def classify_meta_task(
         "location_local_search",
         "knowledge_research",
         "document_analysis",
+        "email_send",
         "web_content_extraction",
         "multi_stage_web_task",
         "ui_navigation",
@@ -3983,6 +4027,7 @@ def classify_meta_task(
         task_type in _PROTECTED_TASK_TYPES
         or has_local_file_transform
         or has_local_document_analysis
+        or has_email_send
         or has_local_file_operation
         or _lookup_first_route
     )
@@ -4029,6 +4074,8 @@ def classify_meta_task(
     if has_local_file_transform and kernel_response_mode != "acknowledge_and_store":
         kernel_response_mode = "execute"
     if has_local_document_analysis and kernel_response_mode != "acknowledge_and_store":
+        kernel_response_mode = "execute"
+    if has_email_send and kernel_response_mode != "acknowledge_and_store":
         kernel_response_mode = "execute"
     if has_local_file_operation and kernel_response_mode != "acknowledge_and_store":
         kernel_response_mode = "execute"
@@ -4357,7 +4404,9 @@ def classify_meta_task(
         and kernel_seed.interaction_mode != meta_interaction_mode.mode
         and not has_local_file_transform
         and not has_local_document_analysis
-        and final_task_type not in {"file_operation", "simple_live_lookup", "simple_live_lookup_document", "document_analysis"}
+        and not has_email_send
+        and final_task_type
+        not in {"file_operation", "simple_live_lookup", "simple_live_lookup_document", "document_analysis", "email_send"}
     ):
         if kernel_seed.interaction_mode == "think_partner":
             meta_interaction_mode = MetaInteractionMode(

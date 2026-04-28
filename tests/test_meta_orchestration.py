@@ -222,6 +222,27 @@ def test_classify_meta_task_routes_local_pdf_summary_to_document_analysis():
     assert result["meta_interaction_mode"]["mode"] == "assist"
 
 
+def test_classify_meta_task_routes_explicit_email_send_to_executor():
+    result = classify_meta_task(
+        "sende eine email an test@example.com mit dem betreff Rechnung und dem text ich melde mich morgen",
+        action_count=0,
+    )
+
+    assert result["task_type"] == "email_send"
+    assert result["recommended_agent_chain"] == ["meta", "executor"]
+    assert result["recommended_recipe_id"] == "email_send"
+    assert [stage["stage_id"] for stage in result["recipe_stages"]] == ["email_send"]
+    assert result["response_mode"] == "execute"
+    assert result["meta_request_frame"]["task_domain"] == "communication"
+    assert result["meta_interaction_mode"]["mode"] == "assist"
+
+
+def test_classify_meta_task_does_not_route_email_without_recipient_as_send():
+    result = classify_meta_task("sende mir spaeter eine mail mit ideen", action_count=0)
+
+    assert result["task_type"] != "email_send"
+
+
 def test_classify_meta_task_marks_mixed_preference_and_wealth_prompt_for_semantic_review():
     result = classify_meta_task(
         "soll ich kaffee oder tee trinken was meinst du und was und wie koenntest du mich reich machen",
