@@ -189,6 +189,61 @@ def test_deep_research_tool_timeout_finalizes_as_step_blocked(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_direct_research_timeout_step_signal_uses_executor_fallback(monkeypatch):
+    import main_dispatcher
+    from agent.agent_registry import agent_registry
+
+    captured = {}
+
+    async def _fake_fallback(**kwargs):
+        captured.update(kwargs)
+        return {
+            "status": "partial",
+            "result": "Deep Research war nicht rechtzeitig verfuegbar; kompakter Fallback mit Quellen.",
+            "metadata": {"fallback_agent": "executor"},
+        }
+
+    monkeypatch.setattr(agent_registry, "_maybe_run_research_executor_fallback", _fake_fallback)
+
+    runtime_metadata = {}
+    result = await main_dispatcher._maybe_apply_direct_research_timeout_fallback(
+        agent_name="research",
+        final_answer=(
+            "Specialist Step Signal: step_blocked | reason=research_tool_timeout\n\n"
+            "Deep Research wurde nach 120.0s gestoppt."
+        ),
+        original_task="Balkonkraftwerk Regeln 2026",
+        session_id="sess-direct-research-timeout",
+        runtime_metadata=runtime_metadata,
+    )
+
+    assert "kompakter Fallback" in result
+    assert captured["from_agent"] == "direct_chat"
+    assert captured["reason"] == "research_tool_timeout"
+    assert captured["original_task"] == "Balkonkraftwerk Regeln 2026"
+    assert runtime_metadata["research_direct_fallback_used"] is True
+    assert runtime_metadata["research_direct_fallback_agent"] == "executor"
+
+
+@pytest.mark.asyncio
+async def test_direct_research_non_timeout_step_signal_stays_unchanged(monkeypatch):
+    import main_dispatcher
+
+    runtime_metadata = {}
+    answer = "Specialist Step Signal: step_blocked | reason=missing_credentials"
+    result = await main_dispatcher._maybe_apply_direct_research_timeout_fallback(
+        agent_name="research",
+        final_answer=answer,
+        original_task="Balkonkraftwerk Regeln 2026",
+        session_id="sess-direct-research-timeout",
+        runtime_metadata=runtime_metadata,
+    )
+
+    assert result == answer
+    assert runtime_metadata == {}
+
+
+@pytest.mark.asyncio
 async def test_sequential_non_research_timeout_stays_error(monkeypatch):
     from agent.agent_registry import AgentRegistry
 

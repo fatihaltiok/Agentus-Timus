@@ -3339,6 +3339,84 @@ async def get_agent_decision(
         return "meta"
 
 
+def _is_research_timeout_step_signal(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    try:
+        from orchestration.specialist_step_package import parse_specialist_step_signal_response
+
+        parsed = parse_specialist_step_signal_response(text)
+    except Exception:
+        parsed = {}
+    return (
+        str(parsed.get("signal") or "").strip().lower() == "step_blocked"
+        and str(parsed.get("reason") or "").strip().lower() == "research_tool_timeout"
+    )
+
+
+async def _maybe_apply_direct_research_timeout_fallback(
+    *,
+    agent_name: str,
+    final_answer: Any,
+    original_task: str,
+    session_id: str,
+    runtime_metadata: dict,
+) -> Any:
+    if str(agent_name or "").strip().lower() != "research":
+        return final_answer
+    if not _is_research_timeout_step_signal(final_answer):
+        return final_answer
+
+    try:
+        from agent.agent_registry import agent_registry
+
+        fallback = await agent_registry._maybe_run_research_executor_fallback(
+            from_agent="direct_chat",
+            original_task=str(original_task or "").strip(),
+            session_id=session_id,
+            reason="research_tool_timeout",
+            metadata={
+                "direct_chat": True,
+                "specialist_step_signal": "step_blocked",
+                "specialist_step_reason": "research_tool_timeout",
+            },
+            error_text=str(final_answer or ""),
+        )
+    except Exception as exc:
+        runtime_metadata["research_direct_fallback_error"] = str(exc)[:300]
+        record_autonomy_observation(
+            "agent_fallback_failed",
+            {
+                "failed_agent": "research",
+                "fallback_agent": "executor",
+                "fallback_reason": "research_tool_timeout",
+                "session_id": session_id or "",
+                "source": "direct_chat",
+                "error": str(exc)[:500],
+            },
+        )
+        return final_answer
+
+    if not isinstance(fallback, dict):
+        runtime_metadata["research_direct_fallback_used"] = False
+        runtime_metadata["research_direct_fallback_unavailable"] = True
+        return final_answer
+
+    fallback_text = str(fallback.get("result") or "").strip()
+    if not fallback_text:
+        runtime_metadata["research_direct_fallback_used"] = False
+        runtime_metadata["research_direct_fallback_empty"] = True
+        return final_answer
+
+    runtime_metadata["research_direct_fallback_used"] = True
+    runtime_metadata["research_direct_fallback_status"] = str(fallback.get("status") or "")
+    runtime_metadata["research_direct_fallback_agent"] = str(
+        (fallback.get("metadata") or {}).get("fallback_agent") or "executor"
+    )
+    return fallback_text
+
+
 async def run_agent(
     agent_name: str,
     query: str,
@@ -3761,6 +3839,17 @@ Schritte: {steps_executed} ausgeführt{f" von {steps_planned} geplant" if steps_
             log.debug(f"Audit-Step-Hook konnte nicht gesetzt werden: {e}")
 
         final_answer = await agent_instance.run(agent_query)
+        if agent_name == "research":
+            fallback_original_task = str(
+                runtime_metadata.get("research_original_user_query") or query
+            )
+            final_answer = await _maybe_apply_direct_research_timeout_fallback(
+                agent_name=agent_name,
+                final_answer=final_answer,
+                original_task=fallback_original_task,
+                session_id=effective_session_id,
+                runtime_metadata=runtime_metadata,
+            )
         _emit_dispatcher_status(agent_name, "done", "Agent-Run abgeschlossen")
         if hasattr(agent_instance, "get_runtime_telemetry"):
             try:
