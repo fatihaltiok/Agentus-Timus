@@ -222,6 +222,67 @@ def _build_report_artifacts(*paths: Optional[str]) -> List[Dict[str, Any]]:
     return artifacts
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = str(os.getenv(name, str(default))).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _normalize_report_image_policy(policy: Optional[str]) -> str:
+    normalized = str(policy or os.getenv("DEEP_RESEARCH_IMAGE_POLICY", "optional")).strip().lower()
+    if os.getenv("DEEP_RESEARCH_IMAGES_REQUIRED", "false").strip().lower() in {"1", "true", "yes", "on"}:
+        normalized = "required"
+    if normalized in {"off", "disabled", "none", "false", "0"}:
+        return "off"
+    if normalized in {"required", "require", "must"}:
+        return "required"
+    return "optional"
+
+
+def _build_report_image_status(
+    *,
+    images_enabled: bool,
+    image_policy: str,
+    images_count: int,
+    min_images: int,
+    diagnostics: List[dict],
+) -> Dict[str, Any]:
+    if not images_enabled:
+        return {
+            "status": "disabled",
+            "warning": "",
+            "images_required": False,
+            "min_images": max(0, int(min_images)),
+            "diagnostics": diagnostics[:12],
+        }
+
+    required = image_policy == "required"
+    safe_min = max(0, int(min_images))
+    if images_count >= safe_min:
+        return {
+            "status": "ok",
+            "warning": "",
+            "images_required": required,
+            "min_images": safe_min,
+            "diagnostics": diagnostics[:12],
+        }
+
+    warning = (
+        f"Bildhinweis: Es wurden {images_count}/{safe_min} erwartete Abbildungen eingebunden. "
+        "Web-Bildsuche oder Bildgenerierung war nicht erfolgreich; der PDF-Bericht wurde ohne "
+        "ausreichende Abbildungen erstellt."
+    )
+    return {
+        "status": "missing_required" if required else "missing_optional",
+        "warning": warning,
+        "images_required": required,
+        "min_images": safe_min,
+        "diagnostics": diagnostics[:12],
+    }
+
+
 def _normalize_claim_text(text: str) -> str:
     normalized = re.sub(r"\s+", " ", str(text or "").strip().lower())
     normalized = re.sub(r"[\"'`“”‘’]", "", normalized)
@@ -5540,6 +5601,8 @@ async def get_research_status(session_id: str) -> dict:
         P("image_paths", "array", "Optionale Bildpfade fuer den Bericht", required=False),
         P("image_captions", "array", "Optionale Bildunterschriften passend zu image_paths", required=False),
         P("image_sections", "array", "Optionale Abschnittstitel passend zu image_paths", required=False),
+        P("image_policy", "string", "Bildvertrag: optional, required oder off", required=False, default="optional"),
+        P("min_images", "integer", "Mindestanzahl erwarteter Abbildungen bei optional/required", required=False, default=1),
         P("require_pdf", "boolean", "Wenn true, gilt fehlende PDF-Erzeugung als Fehler statt als tolerierter Teil-Erfolg.", required=False, default="true"),
     ],
     capabilities=["research", "deep_research"],
@@ -5554,6 +5617,8 @@ async def generate_research_report(
     image_paths: Optional[List[str]] = None,
     image_captions: Optional[List[str]] = None,
     image_sections: Optional[List[str]] = None,
+    image_policy: str = "optional",
+    min_images: Optional[int] = None,
     require_pdf: bool = True,
 ) -> dict:
     """
@@ -5650,16 +5715,27 @@ async def generate_research_report(
 
     # Bilder sammeln
     images = []
-    if os.getenv("DEEP_RESEARCH_IMAGES_ENABLED", "true").lower() == "true":
+    image_policy_norm = _normalize_report_image_policy(image_policy)
+    min_images_safe = max(0, int(min_images if min_images is not None else _env_int("DEEP_RESEARCH_MIN_IMAGES", 1)))
+    image_diagnostics: List[dict] = []
+    images_enabled = (
+        os.getenv("DEEP_RESEARCH_IMAGES_ENABLED", "true").lower() == "true"
+        and image_policy_norm != "off"
+        and min_images_safe > 0
+    )
+    if images_enabled:
         try:
             from pathlib import Path as _Path
             from tools.deep_research.image_collector import ImageCollector
             sections = re.findall(r"^##\s+(.+)$", narrative_content, re.MULTILINE)
-            images = await ImageCollector().collect_images_for_sections(
+            collector = ImageCollector()
+            images = await collector.collect_images_for_sections(
                 sections[:4], session.query, max_images=4
             )
+            image_diagnostics = list(getattr(collector, "diagnostics", []) or [])
             logger.info(f"🖼️ {len(images)} Bilder gesammelt")
         except Exception as e:
+            image_diagnostics.append({"code": "image_collection_exception", "detail": str(e)[:300]})
             logger.warning(f"Bilder-Sammlung fehlgeschlagen (unkritisch): {e}")
 
     # Externe Bilder (z.B. vom creative-Agent) integrieren
@@ -5672,7 +5748,33 @@ async def generate_research_report(
                 image_sections=image_sections,
             )
         except Exception as e:
+            image_diagnostics.append({"code": "external_image_merge_failed", "detail": str(e)[:300]})
             logger.warning(f"Externe Bildintegration fehlgeschlagen (unkritisch): {e}")
+
+    image_status = _build_report_image_status(
+        images_enabled=images_enabled,
+        image_policy=image_policy_norm,
+        images_count=len(images),
+        min_images=min_images_safe,
+        diagnostics=image_diagnostics,
+    )
+    if image_status.get("warning"):
+        try:
+            from orchestration.autonomy_observation import record_autonomy_observation
+
+            record_autonomy_observation(
+                "deep_research_report_images_missing",
+                {
+                    "session_id": actual_session_id,
+                    "images_in_pdf": len(images),
+                    "min_images": min_images_safe,
+                    "image_policy": image_policy_norm,
+                    "image_status": image_status.get("status"),
+                    "diagnostics": image_diagnostics[:6],
+                },
+            )
+        except Exception:
+            pass
 
     # PDF erstellen
     from pathlib import Path as _Path
@@ -5706,10 +5808,12 @@ async def generate_research_report(
             "artifacts": _build_report_artifacts(filepath, narrative_filepath, pdf_filepath),
             "youtube_videos_analyzed": yt_count,
             "images_in_pdf": len(images),
+            "image_status": image_status,
             "message": (
                 f"Akademischer Bericht erstellt. "
                 f"Lesebericht: {narrative_filepath or 'nicht verfügbar'}. "
                 f"PDF: {pdf_filepath or 'nicht verfügbar'}."
+                + (f" {image_status['warning']}" if image_status.get("warning") else "")
             ),
             "summary": _get_research_metadata_summary(session),
             "version": "8.1"
@@ -5726,6 +5830,7 @@ async def generate_research_report(
             "artifacts": _build_report_artifacts(narrative_filepath, pdf_filepath),
             "youtube_videos_analyzed": yt_count,
             "images_in_pdf": len(images),
+            "image_status": image_status,
             "message": "Bericht erstellt, aber Speichern fehlgeschlagen. Content im Response.",
             "summary": _get_research_metadata_summary(session),
             "version": "8.1"

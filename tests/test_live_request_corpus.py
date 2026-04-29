@@ -29,6 +29,7 @@ MANDATORY_CATEGORIES = {
     "document_or_file",
     "communication",
     "direct_answer",
+    "creative_generation",
 }
 HARD_FORBIDDEN_TASK_DOMAINS = {"skill_creation", "setup_build"}
 HARD_FORBIDDEN_AGENTS = {"skill_creator", "skill-creator"}

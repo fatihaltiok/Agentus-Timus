@@ -24,18 +24,25 @@ def research_fallback_decision_contract(
 
 @deal.post(lambda r: r >= 0.0)
 def research_tool_timeout_contract(raw_value: str) -> float:
-    from agent.agents.research import DeepResearchAgent
-    import os
-
-    previous = os.environ.get("DEEP_RESEARCH_TOOL_TIMEOUT")
-    os.environ["DEEP_RESEARCH_TOOL_TIMEOUT"] = raw_value
     try:
-        return DeepResearchAgent._tool_timeout_seconds()
+        parsed = float(str(raw_value or "").strip())
+    except ValueError:
+        parsed = 2700.0
+    return max(0.0, parsed)
+
+
+def test_research_tool_timeout_contract_matches_agent_examples(monkeypatch) -> None:
+    from agent.agents.research import DeepResearchAgent
+
+    monkeypatch.setenv("DEEP_RESEARCH_START_TIMEOUT", "0.01")
+    assert DeepResearchAgent._tool_timeout_seconds("start_deep_research") == 0.01
+    monkeypatch.setenv("DEEP_RESEARCH_START_TIMEOUT", "-5")
+    assert DeepResearchAgent._tool_timeout_seconds("start_deep_research") == 0.0
+    monkeypatch.setenv("DEEP_RESEARCH_START_TIMEOUT", "invalid")
+    try:
+        assert DeepResearchAgent._tool_timeout_seconds("start_deep_research") == 2700.0
     finally:
-        if previous is None:
-            os.environ.pop("DEEP_RESEARCH_TOOL_TIMEOUT", None)
-        else:
-            os.environ["DEEP_RESEARCH_TOOL_TIMEOUT"] = previous
+        monkeypatch.delenv("DEEP_RESEARCH_START_TIMEOUT", raising=False)
 
 
 def test_research_fallback_decision_contract_examples() -> None:
@@ -53,4 +60,4 @@ def test_research_fallback_decision_contract_examples() -> None:
 def test_research_tool_timeout_contract_examples() -> None:
     assert research_tool_timeout_contract("0.01") == 0.01
     assert research_tool_timeout_contract("-5") == 0.0
-    assert research_tool_timeout_contract("invalid") == 120.0
+    assert research_tool_timeout_contract("invalid") == 2700.0

@@ -108,6 +108,23 @@ class TestResearchTimeoutConfig:
                     f"Agent '{agent_name}' sollte 120s haben, bekam {timeout_used[0]}"
                 )
 
+    def test_creative_timeout_default_300s(self, monkeypatch):
+        """Bildgenerierung darf laenger als der globale Delegations-Default laufen."""
+        from agent.agent_registry import AgentRegistry
+
+        monkeypatch.delenv("CREATIVE_TIMEOUT", raising=False)
+        monkeypatch.delenv("DELEGATION_TIMEOUT", raising=False)
+
+        assert AgentRegistry._select_delegation_timeout("creative", "generate image") == pytest.approx(300.0)
+
+    def test_creative_timeout_env_override(self, monkeypatch):
+        """CREATIVE_TIMEOUT kann fuer langsamere Image-Backends explizit gesetzt werden."""
+        from agent.agent_registry import AgentRegistry
+
+        monkeypatch.setenv("CREATIVE_TIMEOUT", "420")
+
+        assert AgentRegistry._select_delegation_timeout("creative", "generate image") == pytest.approx(420.0)
+
     def test_deep_research_fact_limit_is_bounded(self):
         """_deep_verify_facts hat ein Performance-Limit (nicht alle Fakten verifizieren)."""
         import inspect
@@ -123,8 +140,11 @@ class TestResearchTimeoutConfig:
         env_example = Path(__file__).parent.parent / ".env.example"
         content = env_example.read_text()
         assert "RESEARCH_TIMEOUT" in content
-        assert "DEEP_RESEARCH_TOOL_TIMEOUT" in content
+        assert "DEEP_RESEARCH_START_TIMEOUT" in content
+        assert "DEEP_RESEARCH_REPORT_TIMEOUT" in content
+        assert "DEEP_RESEARCH_QUICK_TOOL_TIMEOUT" in content
         assert "RESEARCH_EXECUTOR_FALLBACK_ENABLED" in content
+        assert "CREATIVE_TIMEOUT" in content
 
     @pytest.mark.asyncio
     async def test_parallel_research_gets_research_timeout(self, monkeypatch):

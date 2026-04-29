@@ -103,6 +103,23 @@
       }
     },
     {
+      "id": "creative_image_woman_denim",
+      "category": "creative_generation",
+      "query": "erstelle mir ein ausdrucksstarkes bild einer frau in einem jeanshemd sie ist ca 40 jahre alt und sehr selbstbewusst und gleichzeitg aber sehr feminin",
+      "expected": {
+        "task_type": "image_generation",
+        "response_mode": "execute",
+        "chain": ["meta", "creative"],
+        "task_domain": "creative_generation",
+        "interaction_mode": "assist",
+        "recipe_id": "image_generation"
+      },
+      "target_forbidden": {
+        "interaction_modes": ["think_partner"],
+        "task_domains": ["topic_advisory", "setup_build", "skill_creation"]
+      }
+    },
+    {
       "id": "direct_answer_exact_output",
       "category": "direct_answer",
       "query": "Antworte exakt nur mit CHAT_OK",

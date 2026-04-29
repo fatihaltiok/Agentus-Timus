@@ -402,6 +402,8 @@ class AgentRegistry:
             return float(os.getenv("EXECUTOR_LOOKUP_TIMEOUT", "60"))
         if agent_name == "research":
             return float(os.getenv("RESEARCH_TIMEOUT", "600"))
+        if agent_name == "creative":
+            return float(os.getenv("CREATIVE_TIMEOUT", "300"))
         return float(os.getenv("DELEGATION_TIMEOUT", "120"))
 
     @classmethod

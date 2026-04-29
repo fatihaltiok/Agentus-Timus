@@ -28,6 +28,15 @@ _RESULTS_DIR = Path(os.getenv("TIMUS_RESULTS_DIR", "/home/fatih-ubuntu/dev/timus
 _DOWNLOAD_TIMEOUT = 10
 _MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB
 _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+_DIRECT_IMAGE_FIELDS = (
+    "image_url",
+    "thumbnail_url",
+    "thumbnail",
+    "original",
+    "original_url",
+    "encoded_url",
+)
+_MAYBE_IMAGE_FIELDS = ("url", "source_url")
 
 
 def _extract_generated_image_path(result: dict) -> Optional[str]:
@@ -65,6 +74,17 @@ class ImageResult:
 class ImageCollector:
     """Sammelt Bilder für die Abschnitte eines Deep-Research-Berichts."""
 
+    def __init__(self) -> None:
+        self.diagnostics: List[dict] = []
+
+    def _diag(self, code: str, detail: str = "", **extra: object) -> None:
+        payload = {
+            "code": str(code or "unknown"),
+            "detail": str(detail or "")[:300],
+            **extra,
+        }
+        self.diagnostics.append(payload)
+
     async def collect_images_for_sections(
         self,
         sections: List[str],
@@ -83,6 +103,10 @@ class ImageCollector:
             Liste von ImageResult-Objekten
         """
         _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        if not sections:
+            self._diag("no_sections", "Keine ##-Abschnitte fuer Bildsammlung gefunden.")
+            logger.info("🖼️ 0 Bilder gesammelt (keine Abschnitte)")
+            return []
 
         async def _safe_collect(section: str) -> Optional[ImageResult]:
             topic = f"{section} {query}".strip()
@@ -105,8 +129,7 @@ class ImageCollector:
     async def _collect_one(self, section_title: str, topic: str) -> Optional[ImageResult]:
         """Versucht Web-Download, dann DALL-E, dann gibt None zurück."""
         # Versuch 1: Web-Bild
-        url = await self._find_web_image(topic)
-        if url:
+        for url in await self._find_web_image_candidates(topic):
             local_path = await self._download_image(url)
             if local_path:
                 return ImageResult(
@@ -128,34 +151,70 @@ class ImageCollector:
 
         return None
 
-    async def _find_web_image(self, topic: str) -> Optional[str]:
-        """Sucht via DataForSEO Google Images nach einem Bild-URL."""
+    @staticmethod
+    def _has_image_extension(url: str) -> bool:
+        ext = Path(str(url or "").split("?")[0]).suffix.lower()
+        return ext in _IMAGE_EXTENSIONS
+
+    @classmethod
+    def _candidate_image_urls(cls, item: dict) -> List[str]:
+        candidates: List[str] = []
+        for field in _DIRECT_IMAGE_FIELDS:
+            value = str(item.get(field) or "").strip()
+            if value and value.startswith(("http://", "https://")):
+                candidates.append(value)
+        for field in _MAYBE_IMAGE_FIELDS:
+            value = str(item.get(field) or "").strip()
+            if value and value.startswith(("http://", "https://")) and cls._has_image_extension(value):
+                candidates.append(value)
+        deduped: List[str] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            deduped.append(candidate)
+        return deduped
+
+    async def _find_web_image_candidates(self, topic: str) -> List[str]:
+        """Sucht Bild-URLs. Direkte Bildfelder dürfen auch ohne Dateiendung durch."""
         try:
             results = await call_tool_internal(
                 "search_images", {"query": topic, "max_results": 8}
             )
+            if isinstance(results, dict) and results.get("error"):
+                self._diag("search_images_error", str(results.get("error") or ""))
+                return []
             if not isinstance(results, list):
-                return None
+                self._diag("search_images_unexpected_shape", type(results).__name__)
+                return []
 
+            candidates: List[str] = []
             for item in results:
-                # DataForSEO gibt bei Images-Suche direkte Bild-URLs zurück
-                # entweder in 'url' oder in zusätzlichen Feldern
-                for field in ("url", "image_url", "encoded_url", "source_url"):
-                    candidate = item.get(field, "")
-                    if not candidate:
-                        continue
-                    ext = Path(candidate.split("?")[0]).suffix.lower()
-                    if ext in _IMAGE_EXTENSIONS:
-                        return candidate
+                if not isinstance(item, dict):
+                    continue
+                candidates.extend(self._candidate_image_urls(item))
+            if not candidates:
+                self._diag("search_images_no_direct_url", topic[:120])
+            return candidates
         except Exception as e:
+            self._diag("search_images_exception", str(e))
             logger.warning(f"Web-Bild-Suche fehlgeschlagen: {e}")
-        return None
+        return []
+
+    async def _find_web_image(self, topic: str) -> Optional[str]:
+        """Sucht via DataForSEO Google Images nach einem Bild-URL."""
+        candidates = await self._find_web_image_candidates(topic)
+        return candidates[0] if candidates else None
 
     async def _download_image(self, url: str) -> Optional[str]:
         """Lädt ein Bild herunter, prüft es mit Pillow und speichert es lokal."""
         def _do_download():
             resp = requests_lib.get(url, timeout=_DOWNLOAD_TIMEOUT, stream=True)
             resp.raise_for_status()
+            content_type = str(resp.headers.get("Content-Type") or "").lower()
+            if content_type and "image/" not in content_type and not self._has_image_extension(url):
+                raise ValueError(f"Keine Bild-Response: {content_type}")
 
             # Größencheck
             content_length = int(resp.headers.get("Content-Length", 0))
@@ -172,6 +231,7 @@ class ImageCollector:
         try:
             data = await asyncio.to_thread(_do_download)
         except Exception as e:
+            self._diag("image_download_failed", str(e), url=url[:180])
             logger.warning(f"Download fehlgeschlagen ({url[:60]}...): {e}")
             return None
 
@@ -191,6 +251,7 @@ class ImageCollector:
             logger.info(f"🖼️ Bild gespeichert: {local_path}")
             return str(local_path)
         except Exception as e:
+            self._diag("image_save_failed", str(e), url=url[:180])
             logger.warning(f"Bild-Speichern fehlgeschlagen: {e}")
             return None
 
@@ -204,10 +265,19 @@ class ImageCollector:
                     "neutraler Hintergrund, infografischer Stil."
                 ),
                 "size": "1536x1024",
-                "quality": "medium",
+                "quality": "high",
             })
 
             if not isinstance(result, dict):
+                self._diag("generate_image_unexpected_shape", type(result).__name__)
+                return None
+            if str(result.get("status") or "").lower() == "error" or result.get("error"):
+                self._diag(
+                    "generate_image_error",
+                    str(result.get("error") or result.get("message") or "unknown image generation error"),
+                    error_code=str(result.get("error_code") or ""),
+                    error_type=str(result.get("error_type") or ""),
+                )
                 return None
 
             generated_path = _extract_generated_image_path(result)
@@ -217,6 +287,7 @@ class ImageCollector:
                     full_path = Path("/home/fatih-ubuntu/dev/timus") / generated_path
                 if full_path.exists():
                     return str(full_path)
+                self._diag("generate_image_path_missing", str(full_path))
 
             # Wenn temporäre URL zurückgegeben
             image_url = result.get("image_url")
@@ -224,5 +295,6 @@ class ImageCollector:
                 return await self._download_image(image_url)
 
         except Exception as e:
+            self._diag("generate_image_exception", str(e))
             logger.warning(f"DALL-E Bild-Generierung fehlgeschlagen: {e}")
         return None

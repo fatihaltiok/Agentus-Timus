@@ -219,9 +219,11 @@ Erlaubter Ablauf:
    - Wenn Thema passt und Evidenz brauchbar ist → direkt Report erzeugen
    - Wenn Treffer off-topic, zu breit, sprachlich falsch oder evidenzschwach sind → Query schaerfen und noch einen Research-Pass starten
 3. Maximal {deep_research_max_research_passes} Research-Paesse insgesamt
-4. `generate_research_report(session_id="...", format="markdown")`
+4. `generate_research_report(session_id="...", format="markdown", image_policy="optional", min_images=1)`
    → Erwartet strukturierte Antwort + `artifacts` mit PDF-Pfad
    → Nur wenn `artifacts` fehlen: `metadata["pdf_filepath"]` als Ausnahme-Fallback
+   → Wenn `image_status.status` mit `missing_` beginnt, in der Final Answer offen sagen,
+     dass der PDF-Bericht ohne ausreichende Abbildungen erstellt wurde
 5. Wenn Report fehlschlaegt oder duerftig/leer wirkt:
    - denselben Report hoechstens einmal retryen
    - nur wenn noch Research-Pass-Budget offen ist UND die Session klar am Thema vorbeigeht oder Evidenzluecken hat, einen letzten geschaerften Research-Pass starten
@@ -231,6 +233,7 @@ Verboten:
 - rohe `search_web`/`search_youtube`-Loops statt `start_deep_research`
 - neue Recherche-Paesse ohne klaren Grund
 - Report als Erfolg darstellen wenn PDF/Artifacts fehlen
+- Bilder/Abbildungen behaupten, wenn `images_in_pdf == 0` oder `image_status` fehlende Bilder meldet
 - nach einer guten thematischen Session weiterzusuchen nur um Iterationen auszureizen
 
 # FEHLERBEHANDLUNG
@@ -243,7 +246,7 @@ Verboten:
 
 # WICHTIGE TOOLS
 1. **start_deep_research** - {{"method": "start_deep_research", "params": {{"query": "...", "focus_areas": ["aspect1", "aspect2"], "scope_mode": "strict"}}}}
-2. **generate_research_report** - {{"method": "generate_research_report", "params": {{"session_id": "...", "format": "markdown"}}}}
+2. **generate_research_report** - {{"method": "generate_research_report", "params": {{"session_id": "...", "format": "markdown", "image_policy": "optional", "min_images": 1}}}}
 3. **search_web** - nur Notfall fuer gezielte Einzelpruefung, NICHT der normale DeepResearch-Pfad
 
 # ANTWORTFORMAT

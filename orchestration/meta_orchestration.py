@@ -192,6 +192,20 @@ _AGENT_PROFILES: Dict[str, AgentCapabilityProfile] = {
         typical_outputs=("pdf", "docx", "xlsx"),
         handoff_fields=("goal", "source_material", "format", "artifacts"),
     ),
+    "creative": AgentCapabilityProfile(
+        agent="creative",
+        capabilities=("image_generation", "creative_generation", "prompt_refinement"),
+        strengths=("direct_image_requests", "visual_style_execution", "creative_artifacts"),
+        typical_outputs=("image_path", "artifact_metadata", "prompt_summary"),
+        handoff_fields=("goal", "prompt", "style_constraints", "expected_output", "query"),
+    ),
+    "developer": AgentCapabilityProfile(
+        agent="developer",
+        capabilities=("code_inspection", "debugging", "implementation_guidance", "test_planning"),
+        strengths=("stacktrace_analysis", "repo_changes", "focused_code_fixes"),
+        typical_outputs=("root_cause", "code_change_plan", "patch_summary"),
+        handoff_fields=("goal", "error_context", "expected_output", "query"),
+    ),
     "communication": AgentCapabilityProfile(
         agent="communication",
         capabilities=("email", "message_drafting", "delivery"),
@@ -313,6 +327,44 @@ _ORCHESTRATION_RECIPES: Dict[str, Tuple[OrchestrationRecipeStage, ...]] = {
             ),
             expected_output="delivery_status, recipient, subject, body",
             handoff_fields=("goal", "recipient", "subject", "body", "query"),
+        ),
+    ),
+    "image_generation": (
+        OrchestrationRecipeStage(
+            stage_id="creative_image_generation",
+            agent="creative",
+            goal=(
+                "Erzeuge fuer die direkte Bildanfrage ein hochwertiges Bildartefakt. "
+                "Nutze die komplette Nutzerbeschreibung als Prompt-Anker und blockiere nicht "
+                "mit Modus- oder Beratungshinweisen, solange die Anfrage eine klare Bildgenerierung ist."
+            ),
+            expected_output="image artifact path, prompt summary, generation status",
+            handoff_fields=("goal", "prompt", "style_constraints", "expected_output", "query"),
+        ),
+    ),
+    "creative_text_optimization": (
+        OrchestrationRecipeStage(
+            stage_id="creative_text_optimization",
+            agent="creative",
+            goal=(
+                "Optimiere den angefragten Prompt oder Kreativtext direkt. "
+                "Liefere eine verbesserte Version und, wenn hilfreich, kurze Hinweise zur Anwendung."
+            ),
+            expected_output="optimized_prompt, concise_usage_notes",
+            handoff_fields=("goal", "prompt", "expected_output", "query"),
+        ),
+    ),
+    "code_troubleshooting": (
+        OrchestrationRecipeStage(
+            stage_id="developer_error_triage",
+            agent="developer",
+            goal=(
+                "Analysiere den uebergebenen Fehler- oder Codekontext und benenne die wahrscheinlich "
+                "noetige Codeaenderung. Keine breite Recherche, wenn der Fehler aus dem lokalen Kontext "
+                "ableitbar ist."
+            ),
+            expected_output="likely_root_cause, code_change_needed, files_or_missing_context",
+            handoff_fields=("goal", "error_context", "expected_output", "query"),
         ),
     ),
     "youtube_light_research": (
@@ -555,6 +607,9 @@ _ORCHESTRATION_RECIPE_AGENT_CHAINS: Dict[str, Tuple[str, ...]] = {
     "knowledge_research": ("meta", "research"),
     "document_analysis": ("meta", "document"),
     "email_send": ("meta", "executor"),
+    "image_generation": ("meta", "creative"),
+    "creative_text_optimization": ("meta", "creative"),
+    "code_troubleshooting": ("meta", "developer"),
     "youtube_light_research": ("meta", "executor"),
     "location_local_search": ("meta", "executor"),
     "location_route": ("meta", "executor"),
@@ -574,6 +629,9 @@ _ADAPTIVE_PLAN_SAFE_TASK_TYPES = {
     "knowledge_research",
     "document_analysis",
     "email_send",
+    "image_generation",
+    "creative_text_optimization",
+    "code_troubleshooting",
     "youtube_content_extraction",
     "web_content_extraction",
     "location_local_search",
@@ -663,6 +721,8 @@ _CLAIM_CHECK_HINTS = (
     "ist das wahr",
     "ob das stimmt",
     "ob es wahr ist",
+    "aussage stimmt",
+    "stimmt diese aussage",
     "wirklich",
     "faktencheck",
     "fact check",
@@ -746,6 +806,17 @@ _SIMPLE_LIVE_LOOKUP_FRESHNESS_HINTS = (
     "current",
     "latest",
     "gerade",
+)
+
+_SIMPLE_LIVE_LOOKUP_FRESHNESS_TOPICS = (
+    "meetup",
+    "meetups",
+    "veranstaltung",
+    "veranstaltungen",
+    "event",
+    "events",
+    "community",
+    "communities",
 )
 
 _SIMPLE_LIVE_LOOKUP_DIRECT_PATTERNS = (
@@ -935,6 +1006,55 @@ _LOCAL_FILE_OPERATION_HINTS = (
     "unzip",
     "verschiebe",
     "verschieben",
+)
+
+_IMAGE_GENERATION_ACTION_HINTS = (
+    "erstelle",
+    "erstell ",
+    "erzeuge",
+    "generiere",
+    "mach ",
+    "mache ",
+    "male",
+    "zeichne",
+    "visualisiere",
+    "create",
+    "generate",
+)
+
+_IMAGE_GENERATION_OBJECT_PATTERNS = (
+    re.compile(r"\b[\wäöüß-]*bild(?:er)?\b"),
+    re.compile(r"\b(?:image|illustration|foto|photo|poster|coverbild|avatar|grafik|skizze|zeichnung|diagramm)\b"),
+    re.compile(r"\b(?:portrait|portraet|porträt)\b"),
+)
+
+_IMAGE_NON_GENERATION_HINTS = (
+    "beschreibe dieses bild",
+    "beschreib dieses bild",
+    "analysiere dieses bild",
+    "analysier dieses bild",
+    "was siehst du",
+    "bildbeschreibung",
+)
+
+_CREATIVE_TEXT_OPTIMIZATION_HINTS = (
+    "optimiere diesen prompt",
+    "verbessere diesen prompt",
+    "ueberarbeite diesen prompt",
+    "überarbeite diesen prompt",
+    "prompt optimieren",
+)
+
+_DEVELOPER_TROUBLESHOOTING_HINTS = (
+    "lies diesen fehler",
+    "lies den fehler",
+    "code geändert werden muss",
+    "code geaendert werden muss",
+    "im code geändert",
+    "im code geaendert",
+    "stack trace",
+    "stacktrace",
+    "debugge",
 )
 
 _LOCAL_FILE_SOURCE_EXTENSIONS = (
@@ -1355,6 +1475,12 @@ def _resolve_primary_recipe_id(task_type: str, site_kind: str | None = None) -> 
         return "document_analysis"
     if task_type == "email_send":
         return "email_send"
+    if task_type == "image_generation":
+        return "image_generation"
+    if task_type == "creative_text_optimization":
+        return "creative_text_optimization"
+    if task_type == "code_troubleshooting":
+        return "code_troubleshooting"
     if task_type == "youtube_light_research":
         return "youtube_light_research"
     if task_type == "location_local_search":
@@ -1755,6 +1881,39 @@ def _looks_like_local_file_operation_request(text: str) -> bool:
         return False
 
     return _has_any(normalized, _LOCAL_FILE_OPERATION_HINTS)
+
+
+def _looks_like_image_generation_request(text: str) -> bool:
+    normalized = " ".join(str(text or "").strip().lower().split())
+    if not normalized:
+        return False
+    if _has_any(normalized, _IMAGE_NON_GENERATION_HINTS):
+        return False
+    has_generation_action = _has_any(normalized, _IMAGE_GENERATION_ACTION_HINTS)
+    if not has_generation_action:
+        return False
+    return any(pattern.search(normalized) for pattern in _IMAGE_GENERATION_OBJECT_PATTERNS)
+
+
+def _looks_like_creative_text_optimization_request(text: str) -> bool:
+    normalized = " ".join(str(text or "").strip().lower().split())
+    if not normalized:
+        return False
+    if not _has_any(normalized, _CREATIVE_TEXT_OPTIMIZATION_HINTS):
+        return False
+    return "prompt" in normalized or "kreativ-agent" in normalized or "creative agent" in normalized
+
+
+def _looks_like_developer_troubleshooting_request(text: str) -> bool:
+    normalized = " ".join(str(text or "").strip().lower().split())
+    if not normalized:
+        return False
+    if _has_any(normalized, _DEVELOPER_TROUBLESHOOTING_HINTS):
+        return True
+    has_error_anchor = any(token in normalized for token in ("fehler", "error", "exception", "traceback"))
+    has_code_anchor = any(token in normalized for token in ("code", "datei", "repo", "repository", "stacktrace"))
+    has_fix_intent = any(token in normalized for token in ("änd", "aend", "fix", "beheb", "debug", "muss"))
+    return has_error_anchor and has_code_anchor and has_fix_intent
 
 
 def looks_like_meta_clarification_turn(text: str) -> bool:
@@ -3682,6 +3841,7 @@ def classify_meta_task(
                         "kino",
                         "film",
                         "filme",
+                        *_SIMPLE_LIVE_LOOKUP_FRESHNESS_TOPICS,
                     )
                 )
             )
@@ -3695,6 +3855,9 @@ def classify_meta_task(
     has_local_file_transform = False
     has_local_document_analysis = False
     has_local_file_operation = False
+    has_image_generation = _looks_like_image_generation_request(current_normalized)
+    has_creative_text_optimization = _looks_like_creative_text_optimization_request(current_normalized)
+    has_developer_troubleshooting = _looks_like_developer_troubleshooting_request(current_normalized)
     has_delivery = _has_any(current_normalized, _DELIVERY_HINTS)
     has_email_send = _looks_like_email_send_request(current_normalized)
     has_system = _has_any(current_normalized, _SYSTEM_HINTS)
@@ -3802,6 +3965,11 @@ def classify_meta_task(
         recommended_chain = ["meta"]
         task_type = "single_lane"
         reason = "direct_response_instruction"
+    elif has_developer_troubleshooting:
+        required_capabilities.extend(["code_inspection", "debugging"])
+        recommended_chain = ["meta", "developer"]
+        task_type = "code_troubleshooting"
+        reason = "developer_troubleshooting"
     elif has_system:
         required_capabilities.extend(["diagnostics"])
         recommended_chain = ["meta", "system"]
@@ -3825,6 +3993,16 @@ def classify_meta_task(
         recommended_chain = ["meta", "executor"]
         task_type = "email_send"
         reason = "email_send_request"
+    elif has_image_generation:
+        required_capabilities.extend(["image_generation", "creative_generation"])
+        recommended_chain = ["meta", "creative"]
+        task_type = "image_generation"
+        reason = "image_generation_request"
+    elif has_creative_text_optimization:
+        required_capabilities.extend(["creative_generation", "prompt_refinement"])
+        recommended_chain = ["meta", "creative"]
+        task_type = "creative_text_optimization"
+        reason = "creative_text_optimization"
     elif has_local_file_operation:
         required_capabilities.extend(["terminal_execution", "file_operation"])
         recommended_chain = ["meta", "shell"]
@@ -3880,6 +4058,11 @@ def classify_meta_task(
             recommended_chain = ["visual"]
             task_type = "ui_navigation"
             reason = "browser_navigation"
+    elif has_claim_check and turn_interpretation.dominant_turn_type not in {"correction", "clarification"}:
+        required_capabilities.extend(["content_extraction", "source_research", "fact_verification"])
+        recommended_chain = ["meta", "research"]
+        task_type = "knowledge_research"
+        reason = "claim_verification"
     elif has_broad_research or has_strict_research:
         required_capabilities.extend(["content_extraction", "source_research"])
         task_type = "knowledge_research"
@@ -4017,6 +4200,9 @@ def classify_meta_task(
         "knowledge_research",
         "document_analysis",
         "email_send",
+        "image_generation",
+        "creative_text_optimization",
+        "code_troubleshooting",
         "web_content_extraction",
         "multi_stage_web_task",
         "ui_navigation",
@@ -4036,6 +4222,9 @@ def classify_meta_task(
         or has_local_file_transform
         or has_local_document_analysis
         or has_email_send
+        or has_image_generation
+        or has_creative_text_optimization
+        or has_developer_troubleshooting
         or has_local_file_operation
         or has_direct_response_instruction
         or _lookup_first_route
@@ -4085,6 +4274,12 @@ def classify_meta_task(
     if has_local_document_analysis and kernel_response_mode != "acknowledge_and_store":
         kernel_response_mode = "execute"
     if has_email_send and kernel_response_mode != "acknowledge_and_store":
+        kernel_response_mode = "execute"
+    if has_image_generation and kernel_response_mode != "acknowledge_and_store":
+        kernel_response_mode = "execute"
+    if has_creative_text_optimization and kernel_response_mode != "acknowledge_and_store":
+        kernel_response_mode = "execute"
+    if has_developer_troubleshooting and kernel_response_mode != "acknowledge_and_store":
         kernel_response_mode = "execute"
     if has_local_file_operation and kernel_response_mode != "acknowledge_and_store":
         kernel_response_mode = "execute"
@@ -4416,8 +4611,20 @@ def classify_meta_task(
         and not has_local_file_transform
         and not has_local_document_analysis
         and not has_email_send
+        and not has_image_generation
+        and not has_creative_text_optimization
+        and not has_developer_troubleshooting
         and final_task_type
-        not in {"file_operation", "simple_live_lookup", "simple_live_lookup_document", "document_analysis", "email_send"}
+        not in {
+            "file_operation",
+            "simple_live_lookup",
+            "simple_live_lookup_document",
+            "document_analysis",
+            "email_send",
+            "image_generation",
+            "creative_text_optimization",
+            "code_troubleshooting",
+        }
     ):
         if kernel_seed.interaction_mode == "think_partner":
             meta_interaction_mode = MetaInteractionMode(

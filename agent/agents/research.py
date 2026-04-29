@@ -270,12 +270,39 @@ class DeepResearchAgent(BaseAgent):
             return 2
 
     @staticmethod
-    def _tool_timeout_seconds() -> float:
-        raw = str(os.getenv("DEEP_RESEARCH_TOOL_TIMEOUT", "120")).strip()
+    def _env_timeout_seconds(name: str, default: float) -> float:
+        raw = str(os.getenv(name, str(default))).strip()
         try:
             return max(0.0, float(raw))
         except ValueError:
-            return 120.0
+            return float(default)
+
+    @classmethod
+    def _tool_timeout_seconds(
+        cls,
+        method: str = "start_deep_research",
+        params: Optional[dict] = None,
+        task_anchor: str = "",
+    ) -> float:
+        """Resolve per-tool timeout.
+
+        Deep Research is intentionally long-running. The compact 120s fallback is
+        for quick/live lookup paths, not for a real `start_deep_research` report
+        run that may need 20-45 minutes.
+        """
+        del params, task_anchor
+        method_name = str(method or "").strip()
+        if method_name == "start_deep_research":
+            return cls._env_timeout_seconds(
+                "DEEP_RESEARCH_START_TIMEOUT",
+                cls._env_timeout_seconds("RESEARCH_TIMEOUT", 2700.0),
+            )
+        if method_name == "generate_research_report":
+            return cls._env_timeout_seconds("DEEP_RESEARCH_REPORT_TIMEOUT", 900.0)
+        return cls._env_timeout_seconds(
+            "DEEP_RESEARCH_QUICK_TOOL_TIMEOUT",
+            cls._env_timeout_seconds("DEEP_RESEARCH_TOOL_TIMEOUT", 120.0),
+        )
 
     @staticmethod
     def _retry_backoff_seconds(attempt: int, base_seconds: float | None = None) -> float:
@@ -365,7 +392,11 @@ class DeepResearchAgent(BaseAgent):
                 }
         try:
             if method in _DEEP_RESEARCH_TOOL_METHODS:
-                timeout_seconds = self._tool_timeout_seconds()
+                timeout_seconds = self._tool_timeout_seconds(
+                    method,
+                    params,
+                    _CURRENT_RESEARCH_TASK.get(""),
+                )
                 if timeout_seconds > 0:
                     result = await asyncio.wait_for(
                         super()._call_tool(method, params),
@@ -376,7 +407,11 @@ class DeepResearchAgent(BaseAgent):
             else:
                 result = await super()._call_tool(method, params)
         except asyncio.TimeoutError:
-            timeout_seconds = self._tool_timeout_seconds()
+            timeout_seconds = self._tool_timeout_seconds(
+                method,
+                params,
+                _CURRENT_RESEARCH_TASK.get(""),
+            )
             query = str((params or {}).get("query") or (params or {}).get("session_id") or "").strip()
             record_autonomy_observation(
                 "research_tool_timeout",

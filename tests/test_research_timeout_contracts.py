@@ -144,7 +144,7 @@ async def test_deep_research_tool_timeout_returns_typed_error(monkeypatch):
         await asyncio.sleep(10)
         return {"status": "success"}
 
-    monkeypatch.setenv("DEEP_RESEARCH_TOOL_TIMEOUT", "0.01")
+    monkeypatch.setenv("DEEP_RESEARCH_START_TIMEOUT", "0.01")
     monkeypatch.setattr(BaseAgent, "_call_tool", _slow_tool)
     monkeypatch.setattr(
         "agent.agents.research.record_autonomy_observation",
@@ -173,7 +173,7 @@ def test_deep_research_tool_timeout_finalizes_as_step_blocked(monkeypatch):
     from agent.agents.research import DeepResearchAgent
     from orchestration.specialist_step_package import parse_specialist_step_signal_response
 
-    monkeypatch.setenv("DEEP_RESEARCH_TOOL_TIMEOUT", "0.01")
+    monkeypatch.setenv("DEEP_RESEARCH_START_TIMEOUT", "0.01")
     agent = DeepResearchAgent.__new__(DeepResearchAgent)
 
     response = DeepResearchAgent._maybe_finalize_after_terminal_tool(
@@ -186,6 +186,34 @@ def test_deep_research_tool_timeout_finalizes_as_step_blocked(monkeypatch):
     assert parsed["signal"] == "step_blocked"
     assert parsed["reason"] == "research_tool_timeout"
     assert "Fallback" in parsed["message"]
+
+
+def test_deep_research_start_timeout_uses_research_runtime(monkeypatch):
+    from agent.agents.research import DeepResearchAgent
+
+    monkeypatch.delenv("DEEP_RESEARCH_START_TIMEOUT", raising=False)
+    monkeypatch.setenv("RESEARCH_TIMEOUT", "2700")
+    monkeypatch.setenv("DEEP_RESEARCH_QUICK_TOOL_TIMEOUT", "120")
+
+    assert DeepResearchAgent._tool_timeout_seconds("start_deep_research") == pytest.approx(2700.0)
+
+
+def test_deep_research_report_timeout_is_separate(monkeypatch):
+    from agent.agents.research import DeepResearchAgent
+
+    monkeypatch.setenv("DEEP_RESEARCH_REPORT_TIMEOUT", "900")
+    monkeypatch.setenv("RESEARCH_TIMEOUT", "2700")
+
+    assert DeepResearchAgent._tool_timeout_seconds("generate_research_report") == pytest.approx(900.0)
+
+
+def test_deep_research_quick_tool_timeout_is_not_report_timeout(monkeypatch):
+    from agent.agents.research import DeepResearchAgent
+
+    monkeypatch.setenv("DEEP_RESEARCH_QUICK_TOOL_TIMEOUT", "120")
+    monkeypatch.setenv("RESEARCH_TIMEOUT", "2700")
+
+    assert DeepResearchAgent._tool_timeout_seconds("verify_fact") == pytest.approx(120.0)
 
 
 @pytest.mark.asyncio

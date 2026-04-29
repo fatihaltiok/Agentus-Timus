@@ -71,7 +71,7 @@ from utils.llm_usage import build_usage_payload
 log = logging.getLogger("TimusAgent-v4.4")
 
 MCP_URL = "http://127.0.0.1:5000"
-IMAGE_MODEL_NAME = os.getenv("IMAGE_GENERATION_MODEL", "gpt-image-1.5-2025-12-16")
+IMAGE_MODEL_NAME = os.getenv("IMAGE_GENERATION_MODEL", "gpt-image-2")
 _RESTART_INTENT_KEYWORDS = (
     "restart",
     "neustart",

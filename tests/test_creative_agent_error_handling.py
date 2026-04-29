@@ -90,3 +90,29 @@ async def test_creative_agent_prefers_artifacts_path_over_saved_as():
 
     assert "erfolgreich generiert" in result.lower()
     assert "/tmp/from-artifacts.png" in result
+
+
+@pytest.mark.asyncio
+async def test_creative_agent_ignores_empty_normalized_error_field():
+    agent = CreativeAgent.__new__(CreativeAgent)
+    agent._handle_file_artifacts = lambda observation: None
+    agent._extract_primary_file_path = lambda observation: ("results/red-square.png", "saved_as")
+
+    async def _fake_prompt(_task: str) -> str:
+        return "simple red square on light background"
+
+    async def _fake_exec(prompt: str, size: str = "1024x1024", quality: str = "high"):
+        return {
+            "status": "success",
+            "saved_as": "results/red-square.png",
+            "message": "ok",
+            "error": "",
+        }
+
+    agent._generate_image_prompt_with_gpt = _fake_prompt
+    agent._execute_with_nemotron = _fake_exec
+
+    result = await CreativeAgent.run(agent, "erstelle ein bild eines roten quadrats")
+
+    assert "erfolgreich generiert" in result.lower()
+    assert "results/red-square.png" in result

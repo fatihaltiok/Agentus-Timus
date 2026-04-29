@@ -79,6 +79,11 @@ _PLANNING_ADVISORY_PATTERNS = (
     "plan meinen tag",
     "plane mir den tag",
     "meinen tag planen",
+    "erstelle mir einen plan",
+    "erstelle einen plan",
+    "mach mir einen plan",
+    "mache mir einen plan",
+    "entwicklungsplan",
     "tagesplan",
     "strukturier meinen tag",
     "plane meine woche",
@@ -126,6 +131,42 @@ _RESEARCH_ADVISORY_PATTERNS = (
     "hilfreich zur seite",
     "hilfreich zur Seite",
 )
+_CREATIVE_GENERATION_PATTERNS = (
+    "erstelle ein bild",
+    "erstelle mir ein bild",
+    "erstelle ein testbild",
+    "erstelle mir ein testbild",
+    "erstelle eine illustration",
+    "erstelle eine skizze",
+    "mach eine skizze",
+    "mach mir eine skizze",
+    "technische skizze",
+    "erstelle eine zeichnung",
+    "mach eine zeichnung",
+    "visualisiere",
+    "optimiere diesen prompt",
+    "prompt für meinen kreativ-agenten",
+    "prompt fuer meinen kreativ-agenten",
+    "erzeuge ein bild",
+    "generiere ein bild",
+    "mach ein bild",
+    "mache ein bild",
+    "male ein bild",
+    "zeichne ein bild",
+    "create image",
+    "generate image",
+)
+_DEVELOPER_WORK_PATTERNS = (
+    "lies diesen fehler",
+    "lies den fehler",
+    "code geändert werden muss",
+    "code geaendert werden muss",
+    "im code geändert",
+    "im code geaendert",
+    "stack trace",
+    "stacktrace",
+    "debugge",
+)
 _FRAME_FIRST_DOMAINS = {
     "docs_status",
     "self_status",
@@ -136,6 +177,8 @@ _FRAME_FIRST_DOMAINS = {
     "travel_advisory",
     "life_advisory",
     "research_advisory",
+    "creative_generation",
+    "developer_work",
     "topic_advisory",
 }
 
@@ -250,6 +293,10 @@ def _detect_objective_domain(text: Any) -> str:
         return "migration_work"
     if any(pattern in lowered for pattern in _RESEARCH_ADVISORY_PATTERNS):
         return "research_advisory"
+    if any(pattern in lowered for pattern in _CREATIVE_GENERATION_PATTERNS):
+        return "creative_generation"
+    if any(pattern in lowered for pattern in _DEVELOPER_WORK_PATTERNS):
+        return "developer_work"
     return ""
 
 
@@ -763,6 +810,55 @@ def build_meta_clarity_contract(
         rationale = (
             "Themenrecherche mit anschliessender Beratung braucht ein gebundenes "
             "Themen-Briefing mit schnellen Quellen statt sofortigem Deep-Research-Drift."
+        )
+    elif not interaction_mode_explicit and objective_domain == "creative_generation":
+        request_kind = "execute_task"
+        answer_obligation = "generate_creative_artifact_or_report_blocker"
+        completion_condition = "creative_artifact_generated_or_blocker_named"
+        allowed_context_slots = (
+            "current_query",
+            "conversation_state",
+            "open_loop",
+            "recent_user_turn",
+            "topic_memory",
+            "preference_memory",
+        )
+        forbidden_context_slots = ("assistant_fallback_context", "semantic_recall")
+        allowed_working_memory_sections = ("KURZZEITKONTEXT", "STABILER_KONTEXT")
+        max_related_memories = 1
+        max_recent_events = 4
+        delegation_mode = "single_creative_handoff"
+        max_delegate_calls = 1
+        allowed_delegate_agents = ("creative",)
+        force_answer_after_delegate_budget = True
+        rationale = (
+            "Direkte Bild- und Kreativauftraege sind ausfuehrbare Artefaktauftraege. "
+            "Sie duerfen nicht als Denkpartner-Dialog blockiert werden, sondern gehen "
+            "gebunden an den Creative-Agenten."
+        )
+    elif not interaction_mode_explicit and objective_domain == "developer_work":
+        request_kind = "execute_task"
+        answer_obligation = "inspect_error_and_name_code_change"
+        completion_condition = "likely_code_change_or_missing_artifact_named"
+        allowed_context_slots = (
+            "current_query",
+            "conversation_state",
+            "open_loop",
+            "recent_user_turn",
+            "topic_memory",
+            "historical_topic_memory",
+        )
+        forbidden_context_slots = ("assistant_fallback_context", "semantic_recall")
+        allowed_working_memory_sections = ("KURZZEITKONTEXT", "LANGZEITKONTEXT")
+        max_related_memories = 2
+        max_recent_events = 6
+        delegation_mode = "single_developer_handoff"
+        max_delegate_calls = 1
+        allowed_delegate_agents = ("developer",)
+        force_answer_after_delegate_budget = True
+        rationale = (
+            "Fehler-, Stacktrace- und Codeaenderungsfragen sollen an den Developer-Agenten "
+            "gehen statt als allgemeine Beratung oder Recherche zu verharren."
         )
 
     if str((goal_spec or {}).get("output_mode") or "").strip().lower() in {"report", "artifact", "table"}:

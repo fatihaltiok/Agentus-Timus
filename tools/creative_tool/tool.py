@@ -43,6 +43,39 @@ def _build_image_artifacts(saved_as: str | None) -> list[dict]:
         "origin": "tool",
     }]
 
+
+def _normalize_image_generation_params(model: str, size: str, quality: str) -> tuple[str, str]:
+    """Normalize image parameters for OpenAI image model families.
+
+    Timus uses `gpt-image-*` in production, but the tool can still be pointed at
+    DALL-E-3. Those families use different quality vocabularies.
+    """
+    model_lower = str(model or "").strip().lower()
+    size_map = {
+        "1792x1024": "1536x1024",
+        "1024x1792": "1024x1536",
+        "1920x1080": "1536x1024",
+    }
+    normalized_size = size_map.get(str(size or "").strip(), str(size or "1024x1024").strip())
+    normalized_quality = str(quality or "high").strip().lower()
+
+    if model_lower.startswith("dall-e-3"):
+        dall_e_quality_map = {
+            "low": "standard",
+            "medium": "standard",
+            "auto": "standard",
+            "high": "hd",
+        }
+        normalized_quality = dall_e_quality_map.get(normalized_quality, normalized_quality)
+    elif model_lower.startswith("gpt-image"):
+        gpt_image_quality_map = {
+            "standard": "medium",
+            "hd": "high",
+        }
+        normalized_quality = gpt_image_quality_map.get(normalized_quality, normalized_quality)
+
+    return normalized_size, normalized_quality
+
 # ==============================================================================
 # KORRIGIERTE `generate_image` FUNKTION
 # ==============================================================================
@@ -61,17 +94,8 @@ async def generate_image(prompt: str, size: str = "1024x1024", quality: str = "h
     """
     Erstellt ein Bild mit DALL-E 3 oder neuer. Der Parameter 'response_format' wird nicht mehr verwendet.
     """
-    # API-Parameter normalisieren auf neue DALL-E-Werte
-    SIZE_MAP = {
-        "1792x1024": "1536x1024",
-        "1024x1792": "1024x1536",
-        "1920x1080": "1536x1024",
-    }
-    QUALITY_MAP = {"standard": "medium", "hd": "high"}
-    size = SIZE_MAP.get(size, size)
-    quality = QUALITY_MAP.get(quality, quality)
-
-    image_model = os.getenv("IMAGE_GENERATION_MODEL", "dall-e-3")
+    image_model = os.getenv("IMAGE_GENERATION_MODEL", "gpt-image-2")
+    size, quality = _normalize_image_generation_params(image_model, size, quality)
     log.info(f"🖼️ Erstelle Bild mit Modell '{image_model}' (Größe: {size}, Qualität: {quality})")
     log.debug(f"   Prompt: '{prompt[:80]}...'")
 

@@ -91,6 +91,11 @@ _PLANNING_ADVISORY_HINTS = (
     "plan meinen tag",
     "plane mir den tag",
     "meinen tag planen",
+    "erstelle mir einen plan",
+    "erstelle einen plan",
+    "mach mir einen plan",
+    "mache mir einen plan",
+    "entwicklungsplan",
     "tagesplan",
     "strukturier meinen tag",
     "plane meine woche",
@@ -143,6 +148,38 @@ _RESEARCH_ADVISORY_HINTS = (
     "hilfreich zur seite",
     "hilfreich zur Seite",
 )
+_CREATIVE_GENERATION_HINTS = (
+    "erstelle ein bild",
+    "erstelle mir ein bild",
+    "erstelle eine illustration",
+    "erstelle eine skizze",
+    "mach eine skizze",
+    "mach mir eine skizze",
+    "technische skizze",
+    "erstelle eine zeichnung",
+    "mach eine zeichnung",
+    "visualisiere",
+    "erzeuge ein bild",
+    "generiere ein bild",
+    "mach ein bild",
+    "mache ein bild",
+    "male ein bild",
+    "zeichne ein bild",
+    "create image",
+    "generate image",
+)
+_DEVELOPER_WORK_HINTS = (
+    "im code geaendert",
+    "im code geändert",
+    "code geändert werden muss",
+    "code geaendert werden muss",
+    "lies diesen fehler",
+    "lies den fehler",
+    "stack trace",
+    "stacktrace",
+    "debugge",
+    "bug fix",
+)
 
 _DOMAIN_HINTS: dict[str, tuple[str, ...]] = {
     "self_status": _SELF_STATUS_HINTS,
@@ -166,6 +203,8 @@ _DOMAIN_HINTS: dict[str, tuple[str, ...]] = {
     ),
     "planning_advisory": _PLANNING_ADVISORY_HINTS,
     "research_advisory": _RESEARCH_ADVISORY_HINTS,
+    "creative_generation": _CREATIVE_GENERATION_HINTS,
+    "developer_work": _DEVELOPER_WORK_HINTS,
     "travel_advisory": _TRAVEL_ADVISORY_HINTS,
     "life_advisory": _LIFE_ADVISORY_HINTS,
     "migration_work": _MIGRATION_WORK_HINTS,
@@ -318,6 +357,9 @@ def _infer_task_domain(
         "document_analysis": "document_generation",
         "email_send": "communication",
         "communication_task": "communication",
+        "image_generation": "creative_generation",
+        "creative_text_optimization": "creative_generation",
+        "code_troubleshooting": "developer_work",
         "document_generation": "document_generation",
         "file_operation": "file_operation",
         "location_local_search": "location_local_search",
@@ -432,6 +474,13 @@ def _frame_memory_rules(
             ("current_query", "conversation_state", "open_loop", "recent_user_turn", "topic_memory", "historical_topic_memory"),
             "build_topic_understanding_and_support_followups",
         )
+    if task_domain == "creative_generation":
+        return (
+            ("creative_generation", "creative_style", "historical_topic"),
+            ("skill_creation", "location_route", "telephony_setup", "setup_build"),
+            ("current_query", "conversation_state", "open_loop", "recent_user_turn", "topic_memory", "preference_memory"),
+            "generate_creative_artifact_or_report_blocker",
+        )
     if task_domain == "setup_build":
         return (
             ("setup_build", "integration", "developer_workflow"),
@@ -538,6 +587,31 @@ def apply_meta_request_frame_routing(
                 capabilities.append(capability)
         normalized_task_type = "single_lane"
         final_reason = "frame:research_advisory"
+    elif task_domain == "creative_generation":
+        if not chain or chain in (["executor"], ["meta"]):
+            chain = ["meta", "creative"]
+        elif chain[0] != "meta":
+            chain = ["meta", *[item for item in chain if item != "meta"]]
+        if "creative" not in chain:
+            chain.append("creative")
+        for capability in ("image_generation", "creative_generation"):
+            if capability not in capabilities:
+                capabilities.append(capability)
+        if normalized_task_type not in {"image_generation", "creative_text_optimization"}:
+            normalized_task_type = "image_generation"
+        final_reason = "frame:creative_generation"
+    elif task_domain == "developer_work":
+        if not chain or chain in (["executor"], ["meta"]):
+            chain = ["meta", "developer"]
+        elif chain[0] != "meta":
+            chain = ["meta", *[item for item in chain if item != "meta"]]
+        if "developer" not in chain:
+            chain.append("developer")
+        for capability in ("code_inspection", "debugging"):
+            if capability not in capabilities:
+                capabilities.append(capability)
+        normalized_task_type = "code_troubleshooting"
+        final_reason = "frame:developer_work"
     elif task_domain == "planning_advisory":
         chain = ["meta"]
         normalized_task_type = "single_lane"

@@ -178,12 +178,13 @@ Gib NUR das Action-JSON zurueck!"""
         status = str(observation.get("status", "") or "").strip().lower()
         error_code = str(observation.get("error_code", "") or "").strip().lower()
 
-        if "error" in observation:
-            return True, str(observation.get("error") or "Unbekannter Fehler"), error_code
+        error_value = observation.get("error")
+        if error_value not in (None, ""):
+            return True, str(error_value), error_code
         if status in {"error", "failed", "failure"}:
             msg = str(
                 observation.get("message")
-                or observation.get("error")
+                or error_value
                 or "Unbekannter Fehler"
             )
             return True, msg, error_code
