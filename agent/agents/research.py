@@ -15,6 +15,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
+import unicodedata
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
@@ -39,6 +42,131 @@ from orchestration.evidence_response_guard import build_evidence_response_guard
 from tools.deep_research.research_contracts import is_german_state_affiliated_url
 
 log = logging.getLogger("DeepResearchAgent")
+
+_CURRENT_RESEARCH_TASK: ContextVar[str] = ContextVar("current_research_task", default="")
+
+_RESEARCH_ALIGNMENT_STOPWORDS = frozenset({
+    "aber",
+    "about",
+    "aktuell",
+    "aktuelle",
+    "aktuellen",
+    "anbieter",
+    "auswahl",
+    "auswahlkriterien",
+    "beispiele",
+    "bitte",
+    "buy",
+    "check",
+    "current",
+    "deutschland",
+    "drei",
+    "eine",
+    "einen",
+    "fuer",
+    "für",
+    "germany",
+    "german",
+    "gib",
+    "internetquellen",
+    "kaufen",
+    "kriterien",
+    "mir",
+    "moechte",
+    "möchte",
+    "nenne",
+    "oder",
+    "product",
+    "products",
+    "pruefe",
+    "prüfe",
+    "quellen",
+    "regeln",
+    "rules",
+    "sources",
+    "und",
+    "wichtige",
+    "with",
+})
+
+_RESEARCH_ALIGNMENT_GENERIC_OVERLAP = frozenset({
+    "2024",
+    "2025",
+    "2026",
+    "aktuell",
+    "anbieter",
+    "deutschland",
+    "germany",
+    "internetquellen",
+    "quellen",
+    "regeln",
+    "rules",
+})
+
+
+def _normalize_alignment_text(text: str) -> str:
+    normalized = unicodedata.normalize("NFKD", str(text or ""))
+    without_marks = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    return without_marks.lower()
+
+
+def _extract_research_alignment_terms(text: str) -> set[str]:
+    normalized = _normalize_alignment_text(text)
+    tokens = re.findall(r"[a-z0-9][a-z0-9\-]{1,}", normalized)
+    terms = {
+        token.strip("-")
+        for token in tokens
+        if token.strip("-")
+        and (
+            len(token.strip("-")) >= 4
+            or token.strip("-") in {"ai", "ki", "pv", "pdf", "odt", "b2b", "b2c"}
+        )
+    }
+    if "germany" in terms or "german" in terms:
+        terms.add("deutschland")
+    if "regulation" in terms or "regulations" in terms:
+        terms.add("regeln")
+    if "criteria" in terms or "criterion" in terms:
+        terms.add("auswahlkriterien")
+    if "provider" in terms or "providers" in terms or "vendor" in terms or "vendors" in terms:
+        terms.add("anbieter")
+    if "source" in terms or "sources" in terms:
+        terms.add("quellen")
+    if "balcony" in terms and ({"solar", "power", "pv", "photovoltaic"} & terms):
+        terms.add("balkonkraftwerk")
+    if {"plug", "solar"} <= terms or {"plug-in", "solar"} <= terms or {"plug", "pv"} <= terms:
+        terms.add("balkonkraftwerk")
+    if "rental" in terms and ({"apartment", "tenant", "tenants"} & terms):
+        terms.add("mietwohnung")
+    if {"labor", "market"} <= terms or {"labour", "market"} <= terms:
+        terms.add("arbeitsmarkt")
+    return terms
+
+
+def research_query_matches_task(task: str, query: str) -> bool:
+    """Return True when a deep-research tool query is anchored in the task."""
+
+    task_terms = _extract_research_alignment_terms(task)
+    query_terms = _extract_research_alignment_terms(query)
+    if not task_terms or not query_terms:
+        return True
+
+    overlap = task_terms & query_terms
+    if len(overlap) >= 2 and not overlap <= _RESEARCH_ALIGNMENT_GENERIC_OVERLAP:
+        return True
+
+    salient_task_terms = {
+        term
+        for term in task_terms
+        if len(term) >= 7 and term not in _RESEARCH_ALIGNMENT_STOPWORDS
+    }
+    if salient_task_terms & query_terms:
+        return True
+
+    if overlap and not overlap <= _RESEARCH_ALIGNMENT_GENERIC_OVERLAP:
+        return True
+
+    return False
 
 
 DEFAULT_DEEP_RESEARCH_MAX_ITERATIONS = 24
@@ -193,6 +321,38 @@ class DeepResearchAgent(BaseAgent):
     async def _call_tool(self, method: str, params: dict) -> dict:
         if method == "generate_research_report" and self.current_session_id:
             params = self._effective_report_params(params, self.current_session_id)
+        if method == "start_deep_research":
+            task_anchor = _CURRENT_RESEARCH_TASK.get("")
+            query = str((params or {}).get("query") or "").strip()
+            if task_anchor and query and not research_query_matches_task(task_anchor, query):
+                message = (
+                    "Research-Query passt nicht zum aktuellen Auftrag. "
+                    "Formuliere start_deep_research neu mit Entitaeten aus dem Nutzerauftrag."
+                )
+                try:
+                    self._emit_live_status(
+                        phase="tool_blocked",
+                        detail="research_query_mismatch",
+                        tool_name=method,
+                    )
+                except Exception:
+                    pass
+                record_autonomy_observation(
+                    "research_query_mismatch_blocked",
+                    {
+                        "agent": "research",
+                        "expected_task_preview": task_anchor[:240],
+                        "tool_query_preview": query[:240],
+                        "blocked_reason": "research_query_mismatch",
+                    },
+                )
+                return {
+                    "error": message,
+                    "blocked_by_policy": True,
+                    "blocked_reason": "research_query_mismatch",
+                    "expected_task": task_anchor[:500],
+                    "tool_query": query[:500],
+                }
         result = await super()._call_tool(method, params)
         if isinstance(result, dict) and "session_id" in result:
             self.current_session_id = result["session_id"]
@@ -262,72 +422,76 @@ class DeepResearchAgent(BaseAgent):
         # Das LLM bekommt original_user_task als primären Task damit es weiß WAS zu recherchieren ist.
         original = (handoff.handoff_data.get("original_user_task") or "") if handoff else ""
         effective_task = original.strip() or (handoff.goal if handoff and handoff.goal else task)
+        research_task_token = _CURRENT_RESEARCH_TASK.set(effective_task)
         context_policy = self._derive_research_context_policy(handoff, specialist_context_payload)
-        if handoff:
-            record_autonomy_observation(
-                "specialist_strategy_selected",
-                {
-                    "agent": "research",
-                    "strategy_mode": self._research_strategy_mode(context_policy),
-                    "response_mode": response_mode,
-                    "task_type": handoff_task_type,
-                    "session_id": str(handoff.handoff_data.get("session_id") or self.current_session_id or ""),
-                },
-            )
-        context = await self._build_research_context(effective_task, policy=context_policy)
-        handoff_context = self._build_delegation_research_context(handoff)
-        strategy_context = self._build_specialist_strategy_context(handoff, specialist_context_payload)
-        evidence_guard = build_evidence_response_guard(task)
-
-        parts = [effective_task]
-        if strategy_context:
-            parts.append(strategy_context)
-        if evidence_guard:
-            parts.append(evidence_guard)
-        if context:
-            parts.append(context)
-        if handoff_context:
-            parts.append(handoff_context)
-        enriched_task = "\n\n".join(part for part in parts if part)
-
-        max_attempts = self._max_retry_attempts()
-        for attempt in range(1, max_attempts + 1):
-            attempt_task = enriched_task
-            if attempt > 1:
-                attempt_task = (
-                    f"{enriched_task}\n\n"
-                    f"{self._retry_hint('transient_failure', attempt, max_attempts)}"
+        try:
+            if handoff:
+                record_autonomy_observation(
+                    "specialist_strategy_selected",
+                    {
+                        "agent": "research",
+                        "strategy_mode": self._research_strategy_mode(context_policy),
+                        "response_mode": response_mode,
+                        "task_type": handoff_task_type,
+                        "session_id": str(handoff.handoff_data.get("session_id") or self.current_session_id or ""),
+                    },
                 )
-            try:
-                result = await super().run(attempt_task)
-            except Exception as exc:
-                if attempt < max_attempts and self._is_retryable_run_exception(exc):
+            context = await self._build_research_context(effective_task, policy=context_policy)
+            handoff_context = self._build_delegation_research_context(handoff)
+            strategy_context = self._build_specialist_strategy_context(handoff, specialist_context_payload)
+            evidence_guard = build_evidence_response_guard(task)
+
+            parts = [effective_task]
+            if strategy_context:
+                parts.append(strategy_context)
+            if evidence_guard:
+                parts.append(evidence_guard)
+            if context:
+                parts.append(context)
+            if handoff_context:
+                parts.append(handoff_context)
+            enriched_task = "\n\n".join(part for part in parts if part)
+
+            max_attempts = self._max_retry_attempts()
+            for attempt in range(1, max_attempts + 1):
+                attempt_task = enriched_task
+                if attempt > 1:
+                    attempt_task = (
+                        f"{enriched_task}\n\n"
+                        f"{self._retry_hint('transient_failure', attempt, max_attempts)}"
+                    )
+                try:
+                    result = await super().run(attempt_task)
+                except Exception as exc:
+                    if attempt < max_attempts and self._is_retryable_run_exception(exc):
+                        delay = self._retry_backoff_seconds(attempt)
+                        log.warning(
+                            "Research-Retry %s/%s nach Exception: %s | backoff=%ss",
+                            attempt,
+                            max_attempts,
+                            exc,
+                            delay,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    raise
+
+                if attempt < max_attempts and self._is_retryable_result_text(result):
                     delay = self._retry_backoff_seconds(attempt)
                     log.warning(
-                        "Research-Retry %s/%s nach Exception: %s | backoff=%ss",
+                        "Research-Retry %s/%s nach retryablem Ergebnis: %s | backoff=%ss",
                         attempt,
                         max_attempts,
-                        exc,
+                        str(result or "")[:160],
                         delay,
                     )
                     await asyncio.sleep(delay)
                     continue
-                raise
+                return result
 
-            if attempt < max_attempts and self._is_retryable_result_text(result):
-                delay = self._retry_backoff_seconds(attempt)
-                log.warning(
-                    "Research-Retry %s/%s nach retryablem Ergebnis: %s | backoff=%ss",
-                    attempt,
-                    max_attempts,
-                    str(result or "")[:160],
-                    delay,
-                )
-                await asyncio.sleep(delay)
-                continue
-            return result
-
-        return ""
+            return ""
+        finally:
+            _CURRENT_RESEARCH_TASK.reset(research_task_token)
 
     def _build_specialist_strategy_context(
         self,
@@ -431,7 +595,10 @@ class DeepResearchAgent(BaseAgent):
         if not policy.get("suppress_curiosity"):
             curiosity = await asyncio.to_thread(self._get_recent_curiosity_topics)
             if curiosity:
-                lines.append(f"Aktuelle Interessensgebiete: {curiosity}")
+                lines.append(
+                    "Aktuelle Interessensgebiete (NUR als Hintergrund nutzen, "
+                    f"niemals als Recherche-Query wenn sie nicht zum Auftrag passen): {curiosity}"
+                )
                 has_content = True
 
         if policy.get("source_first"):

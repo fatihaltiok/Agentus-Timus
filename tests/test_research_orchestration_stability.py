@@ -15,6 +15,12 @@ def _research_agent_cls():
 
 
 @lru_cache(maxsize=1)
+def _research_alignment_helpers():
+    from agent.agents.research import _CURRENT_RESEARCH_TASK, research_query_matches_task
+    return _CURRENT_RESEARCH_TASK, research_query_matches_task
+
+
+@lru_cache(maxsize=1)
 def _youtube_location_code_fn():
     from tools.search_tool.tool import _youtube_location_code
     return _youtube_location_code
@@ -70,6 +76,113 @@ async def test_research_agent_keeps_explicit_session_id(monkeypatch):
     )
 
     assert captured["params"]["session_id"] == "sess-explicit"
+
+
+def test_research_query_alignment_blocks_stale_curiosity_query():
+    _, research_query_matches_task = _research_alignment_helpers()
+
+    task = (
+        "Ich moechte 2026 ein Balkonkraftwerk fuer eine Mietwohnung in Deutschland kaufen. "
+        "Pruefe aktuelle Regeln und nenne Auswahlkriterien sowie Anbieterbeispiele mit Quellen."
+    )
+    stale_query = (
+        "Auswirkungen von Kuenstlicher Intelligenz auf den Arbeitsmarkt in Deutschland "
+        "Prognose Jobverluste neue Jobs Branchen 2026"
+    )
+
+    assert not research_query_matches_task(task, stale_query)
+
+
+def test_research_query_alignment_allows_current_topic_queries():
+    _, research_query_matches_task = _research_alignment_helpers()
+
+    task = (
+        "Ich moechte 2026 ein Balkonkraftwerk fuer eine Mietwohnung in Deutschland kaufen. "
+        "Pruefe aktuelle Regeln und nenne Auswahlkriterien sowie Anbieterbeispiele mit Quellen."
+    )
+
+    assert research_query_matches_task(
+        task,
+        "Balkonkraftwerk Mietwohnung Deutschland Regeln 2026 Anbieter Vergleich Quellen",
+    )
+    assert research_query_matches_task(
+        task,
+        "balcony solar rental apartment Germany 2026 regulations provider comparison sources",
+    )
+
+
+@pytest.mark.asyncio
+async def test_research_agent_blocks_mismatched_start_deep_research_query(monkeypatch):
+    from agent.base_agent import BaseAgent
+    DeepResearchAgent = _research_agent_cls()
+    current_task, _ = _research_alignment_helpers()
+
+    called = {"base": False}
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        called["base"] = True
+        return {"status": "success"}
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = DeepResearchAgent.__new__(DeepResearchAgent)
+    agent.current_session_id = None
+    token = current_task.set(
+        "Ich moechte 2026 ein Balkonkraftwerk fuer eine Mietwohnung in Deutschland kaufen."
+    )
+    try:
+        result = await DeepResearchAgent._call_tool(
+            agent,
+            "start_deep_research",
+            {
+                "query": "Auswirkungen von Kuenstlicher Intelligenz auf den Arbeitsmarkt in Deutschland",
+                "focus_areas": ["Jobverluste"],
+            },
+        )
+    finally:
+        current_task.reset(token)
+
+    assert result["blocked_by_policy"] is True
+    assert result["blocked_reason"] == "research_query_mismatch"
+    assert called["base"] is False
+
+
+@pytest.mark.asyncio
+async def test_research_agent_allows_aligned_start_deep_research_query(monkeypatch):
+    from agent.base_agent import BaseAgent
+    DeepResearchAgent = _research_agent_cls()
+    current_task, _ = _research_alignment_helpers()
+
+    captured = {}
+
+    async def _fake_call_tool(self, method: str, params: dict):
+        captured["method"] = method
+        captured["params"] = dict(params)
+        return {"status": "success", "session_id": "sess-balkon"}
+
+    monkeypatch.setattr(BaseAgent, "_call_tool", _fake_call_tool)
+
+    agent = DeepResearchAgent.__new__(DeepResearchAgent)
+    agent.current_session_id = None
+    token = current_task.set(
+        "Ich moechte 2026 ein Balkonkraftwerk fuer eine Mietwohnung in Deutschland kaufen."
+    )
+    try:
+        result = await DeepResearchAgent._call_tool(
+            agent,
+            "start_deep_research",
+            {
+                "query": "Balkonkraftwerk Mietwohnung Deutschland Regeln 2026 Anbieter Vergleich",
+                "focus_areas": ["Regeln", "Produktauswahl"],
+            },
+        )
+    finally:
+        current_task.reset(token)
+
+    assert result["status"] == "success"
+    assert captured["method"] == "start_deep_research"
+    assert captured["params"]["query"].startswith("Balkonkraftwerk")
+    assert agent.current_session_id == "sess-balkon"
 
 
 @pytest.mark.asyncio
@@ -233,3 +346,14 @@ def test_hypothesis_effective_report_params_preserve_existing_session(current, p
 @settings(deadline=None, max_examples=100)
 def test_hypothesis_youtube_location_code_is_positive(language_code):
     assert _youtube_location_code_fn()(language_code) > 0
+
+
+@given(extra=st.text(max_size=40))
+@settings(deadline=None, max_examples=80)
+def test_hypothesis_research_alignment_accepts_explicit_task_anchor(extra):
+    _, research_query_matches_task = _research_alignment_helpers()
+
+    task = "Pruefe Balkonkraftwerk Regeln fuer Mietwohnung in Deutschland 2026"
+    query = f"{extra} Balkonkraftwerk aktuelle Regeln Deutschland"
+
+    assert research_query_matches_task(task, query)
