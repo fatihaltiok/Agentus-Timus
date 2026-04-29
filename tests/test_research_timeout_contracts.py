@@ -37,6 +37,25 @@ def timeout_metadata_for_agent(
     )
 
 
+@deal.post(lambda r: isinstance(r, bool))
+def should_trigger_research_fallback(
+    agent_name: str,
+    outcome_status: str,
+    timed_out: bool = False,
+    step_signal_reason: str = "",
+    error_text: str = "",
+) -> bool:
+    from agent.agent_registry import AgentRegistry
+
+    return AgentRegistry._should_trigger_research_fallback(
+        agent_name,
+        outcome_status,
+        {"timed_out": timed_out} if timed_out else {},
+        step_signal_reason=step_signal_reason,
+        error_text=error_text,
+    )
+
+
 @pytest.mark.asyncio
 async def test_sequential_research_timeout_returns_partial(monkeypatch):
     from agent.agent_registry import AgentRegistry
@@ -65,6 +84,108 @@ async def test_sequential_research_timeout_returns_partial(monkeypatch):
     assert result["metadata"]["timed_out"] is True
     assert result["metadata"]["timeout_seconds"] == pytest.approx(0.05)
     assert "recovery_hint" in result["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_sequential_research_timeout_uses_executor_fallback(monkeypatch):
+    from agent.agent_registry import AgentRegistry
+
+    registry = AgentRegistry()
+    events = []
+    captured_executor_task = {}
+
+    async def _fake_tools():
+        return "tools"
+
+    class _SlowResearchAgent:
+        conversation_session_id = None
+
+        async def run(self, task: str) -> str:
+            await asyncio.sleep(10)
+            return "never"
+
+    class _FallbackExecutorAgent:
+        conversation_session_id = None
+
+        async def run(self, task: str) -> str:
+            captured_executor_task["task"] = task
+            return "Fallback mit Quellen: Bundesnetzagentur https://www.bundesnetzagentur.de"
+
+    monkeypatch.setenv("RESEARCH_TIMEOUT", "0.05")
+    monkeypatch.setenv("DELEGATION_MAX_RETRIES", "1")
+    monkeypatch.setenv("RESEARCH_EXECUTOR_FALLBACK_ENABLED", "true")
+    monkeypatch.setattr(
+        "agent.agent_registry.record_autonomy_observation",
+        lambda event_type, payload: events.append((event_type, payload)),
+    )
+    registry._get_tools_description = _fake_tools
+    registry.register_spec("research", "research", ["research"], lambda tools_description_string: _SlowResearchAgent())
+    registry.register_spec("executor", "executor", ["execution"], lambda tools_description_string: _FallbackExecutorAgent())
+
+    result = await registry.delegate(from_agent="meta", to_agent="research", task="Balkonkraftwerk Regeln 2026")
+
+    assert result["status"] == "partial"
+    assert "Fallback mit Quellen" in result["result"]
+    assert result["metadata"]["fallback_used"] is True
+    assert result["metadata"]["fallback_agent"] == "executor"
+    assert "avoid_deep_research: yes" in captured_executor_task["task"]
+    assert any(event == "agent_fallback_triggered" for event, _payload in events)
+    assert any(event == "agent_fallback_completed" for event, _payload in events)
+
+
+@pytest.mark.asyncio
+async def test_deep_research_tool_timeout_returns_typed_error(monkeypatch):
+    from agent.agents.research import DeepResearchAgent, _CURRENT_RESEARCH_TASK
+    from agent.base_agent import BaseAgent
+
+    events = []
+
+    async def _slow_tool(self, method: str, params: dict):
+        await asyncio.sleep(10)
+        return {"status": "success"}
+
+    monkeypatch.setenv("DEEP_RESEARCH_TOOL_TIMEOUT", "0.01")
+    monkeypatch.setattr(BaseAgent, "_call_tool", _slow_tool)
+    monkeypatch.setattr(
+        "agent.agents.research.record_autonomy_observation",
+        lambda event_type, payload: events.append((event_type, payload)),
+    )
+
+    agent = DeepResearchAgent.__new__(DeepResearchAgent)
+    agent.current_session_id = None
+    token = _CURRENT_RESEARCH_TASK.set("Balkonkraftwerk Regeln Deutschland 2026")
+    try:
+        result = await DeepResearchAgent._call_tool(
+            agent,
+            "start_deep_research",
+            {"query": "Balkonkraftwerk Regeln Deutschland 2026"},
+        )
+    finally:
+        _CURRENT_RESEARCH_TASK.reset(token)
+
+    assert result["timed_out"] is True
+    assert result["error_class"] == "timeout"
+    assert result["timeout_seconds"] == pytest.approx(0.01)
+    assert events[0][0] == "research_tool_timeout"
+
+
+def test_deep_research_tool_timeout_finalizes_as_step_blocked(monkeypatch):
+    from agent.agents.research import DeepResearchAgent
+    from orchestration.specialist_step_package import parse_specialist_step_signal_response
+
+    monkeypatch.setenv("DEEP_RESEARCH_TOOL_TIMEOUT", "0.01")
+    agent = DeepResearchAgent.__new__(DeepResearchAgent)
+
+    response = DeepResearchAgent._maybe_finalize_after_terminal_tool(
+        agent,
+        "start_deep_research",
+        {"timed_out": True, "timeout_seconds": 0.01},
+    )
+
+    parsed = parse_specialist_step_signal_response(response)
+    assert parsed["signal"] == "step_blocked"
+    assert parsed["reason"] == "research_tool_timeout"
+    assert "Fallback" in parsed["message"]
 
 
 @pytest.mark.asyncio
@@ -129,6 +250,14 @@ async def test_research_model_configuration_error_is_typed(monkeypatch):
 def test_timeout_status_contract():
     assert timeout_status_for_agent("research") == "partial"
     assert timeout_status_for_agent("shell") == "error"
+    assert should_trigger_research_fallback("research", "partial", timed_out=True)
+    assert should_trigger_research_fallback(
+        "research",
+        "partial",
+        step_signal_reason="research_tool_timeout",
+    )
+    assert not should_trigger_research_fallback("shell", "partial", timed_out=True)
+    assert not should_trigger_research_fallback("research", "success", timed_out=True)
 
 
 @given(agent_name=st.sampled_from(["research", "meta", "shell", "document"]))
@@ -136,3 +265,21 @@ def test_timeout_status_contract():
 def test_hypothesis_timeout_status_is_role_consistent(agent_name: str):
     expected = "partial" if agent_name == "research" else "error"
     assert timeout_status_for_agent(agent_name) == expected
+
+
+@given(
+    agent_name=st.sampled_from(["research", "meta", "shell", "document"]),
+    outcome_status=st.sampled_from(["success", "partial", "error"]),
+    timed_out=st.booleans(),
+)
+@settings(deadline=None, max_examples=80)
+def test_hypothesis_research_fallback_only_for_failed_research(
+    agent_name: str,
+    outcome_status: str,
+    timed_out: bool,
+):
+    result = should_trigger_research_fallback(agent_name, outcome_status, timed_out=timed_out)
+    if result:
+        assert agent_name == "research"
+        assert outcome_status in {"partial", "error"}
+        assert timed_out is True

@@ -123,6 +123,8 @@ class TestResearchTimeoutConfig:
         env_example = Path(__file__).parent.parent / ".env.example"
         content = env_example.read_text()
         assert "RESEARCH_TIMEOUT" in content
+        assert "DEEP_RESEARCH_TOOL_TIMEOUT" in content
+        assert "RESEARCH_EXECUTOR_FALLBACK_ENABLED" in content
 
     @pytest.mark.asyncio
     async def test_parallel_research_gets_research_timeout(self, monkeypatch):
@@ -196,20 +198,20 @@ class TestResearchTimeoutConfig:
             # Lean Th.10: research_timeout > delegation_timeout → inverted hier
             assert timeout_used[0] < 600.0, "Nicht-Research sollte weniger als RESEARCH_TIMEOUT bekommen"
 
-    def test_meta_system_prompt_forbids_search_web_fallback(self):
-        """Fix 3: META_SYSTEM_PROMPT enthält ABSOLUTES VERBOT für search_web nach Research-Timeout."""
+    def test_meta_system_prompt_allows_labeled_compact_timeout_fallback(self):
+        """C1/C2: Research-Timeout darf kompakt fallbacken, aber nicht als Deep Research erscheinen."""
         from agent.prompts import META_SYSTEM_PROMPT
         assert "RESEARCH-TIMEOUT-PROTOKOLL" in META_SYSTEM_PROMPT, (
             "META_SYSTEM_PROMPT muss RESEARCH-TIMEOUT-PROTOKOLL enthalten"
         )
-        assert "ABSOLUTES VERBOT" in META_SYSTEM_PROMPT, (
-            "META_SYSTEM_PROMPT muss ABSOLUTES VERBOT für search_web enthalten"
+        assert "kompakten Executor-Fallback" in META_SYSTEM_PROMPT, (
+            "META_SYSTEM_PROMPT muss den C1/C2 Executor-Fallback erlauben"
         )
-        assert "KEIN search_web" in META_SYSTEM_PROMPT, (
-            "META_SYSTEM_PROMPT muss explizit search_web verbieten"
+        assert "Deep Research war nicht rechtzeitig verfuegbar" in META_SYSTEM_PROMPT, (
+            "META_SYSTEM_PROMPT muss Fallback-Antworten klar kennzeichnen"
         )
-        assert "NIEMALS" in META_SYSTEM_PROMPT, (
-            "META_SYSTEM_PROMPT muss NIEMALS-Formulierung enthalten"
+        assert "vollstaendige Deep-Research-Pruefung" in META_SYSTEM_PROMPT, (
+            "META_SYSTEM_PROMPT muss verbieten, Fallback als volle Deep Research auszugeben"
         )
 
     def test_research_timeout_default_is_600_in_source(self):

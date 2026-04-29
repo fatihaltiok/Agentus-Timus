@@ -35,6 +35,7 @@ from orchestration.specialist_context import (
 )
 from orchestration.specialist_step_package import (
     extract_specialist_step_package_from_handoff_data,
+    format_specialist_step_signal_response,
     render_specialist_step_package_block,
 )
 from orchestration.autonomy_observation import record_autonomy_observation
@@ -44,6 +45,7 @@ from tools.deep_research.research_contracts import is_german_state_affiliated_ur
 log = logging.getLogger("DeepResearchAgent")
 
 _CURRENT_RESEARCH_TASK: ContextVar[str] = ContextVar("current_research_task", default="")
+_DEEP_RESEARCH_TOOL_METHODS = frozenset({"start_deep_research", "generate_research_report"})
 
 _RESEARCH_ALIGNMENT_STOPWORDS = frozenset({
     "aber",
@@ -268,6 +270,14 @@ class DeepResearchAgent(BaseAgent):
             return 2
 
     @staticmethod
+    def _tool_timeout_seconds() -> float:
+        raw = str(os.getenv("DEEP_RESEARCH_TOOL_TIMEOUT", "120")).strip()
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            return 120.0
+
+    @staticmethod
     def _retry_backoff_seconds(attempt: int, base_seconds: float | None = None) -> float:
         base = base_seconds
         if base is None:
@@ -353,7 +363,39 @@ class DeepResearchAgent(BaseAgent):
                     "expected_task": task_anchor[:500],
                     "tool_query": query[:500],
                 }
-        result = await super()._call_tool(method, params)
+        try:
+            if method in _DEEP_RESEARCH_TOOL_METHODS:
+                timeout_seconds = self._tool_timeout_seconds()
+                if timeout_seconds > 0:
+                    result = await asyncio.wait_for(
+                        super()._call_tool(method, params),
+                        timeout=timeout_seconds,
+                    )
+                else:
+                    result = await super()._call_tool(method, params)
+            else:
+                result = await super()._call_tool(method, params)
+        except asyncio.TimeoutError:
+            timeout_seconds = self._tool_timeout_seconds()
+            query = str((params or {}).get("query") or (params or {}).get("session_id") or "").strip()
+            record_autonomy_observation(
+                "research_tool_timeout",
+                {
+                    "agent": "research",
+                    "method": method,
+                    "timeout_seconds": timeout_seconds,
+                    "task_preview": _CURRENT_RESEARCH_TASK.get("")[:240],
+                    "query_preview": query[:240],
+                },
+            )
+            return {
+                "status": "error",
+                "error": f"Timeout: Tool '{method}' hat nicht innerhalb von {timeout_seconds}s geantwortet.",
+                "error_class": "timeout",
+                "timed_out": True,
+                "timeout_seconds": timeout_seconds,
+                "method": method,
+            }
         if isinstance(result, dict) and "session_id" in result:
             self.current_session_id = result["session_id"]
         elif isinstance(result, dict):
@@ -361,6 +403,26 @@ class DeepResearchAgent(BaseAgent):
             if isinstance(metadata, dict) and metadata.get("session_id"):
                 self.current_session_id = metadata["session_id"]
         return result
+
+    def _maybe_finalize_after_terminal_tool(self, method: str, obs: object) -> str | None:
+        base_result = super()._maybe_finalize_after_terminal_tool(method, obs)
+        if base_result is not None:
+            return base_result
+        if method not in _DEEP_RESEARCH_TOOL_METHODS or not isinstance(obs, dict):
+            return None
+        timed_out = bool(obs.get("timed_out")) or str(obs.get("error_class") or "").strip().lower() == "timeout"
+        if not timed_out:
+            return None
+        timeout_seconds = obs.get("timeout_seconds") or self._tool_timeout_seconds()
+        message = (
+            f"Deep Research wurde nach {timeout_seconds}s gestoppt. "
+            "Nutze einen kompakteren quellengebundenen Fallback statt weiter zu warten."
+        )
+        return format_specialist_step_signal_response(
+            "step_blocked",
+            reason="research_tool_timeout",
+            message=message,
+        )
 
     # ------------------------------------------------------------------
     # Erweiterter run()-Einstieg: Recherche-Kontext injizieren

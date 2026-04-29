@@ -417,6 +417,37 @@ class AgentRegistry:
         """Research-Timeouts sind partiell, andere Timeouts bleiben Fehler."""
         return "partial" if agent_name == "research" else "error"
 
+    @staticmethod
+    def _research_executor_fallback_enabled() -> bool:
+        value = str(os.getenv("RESEARCH_EXECUTOR_FALLBACK_ENABLED", "true")).strip().lower()
+        return value in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _should_trigger_research_fallback(
+        agent_name: str,
+        outcome_status: str,
+        metadata: Optional[Dict[str, Any]] = None,
+        *,
+        step_signal_reason: str = "",
+        error_text: str = "",
+    ) -> bool:
+        if str(agent_name or "").strip().lower() != "research":
+            return False
+        if str(outcome_status or "").strip().lower() not in {"partial", "error"}:
+            return False
+        meta = dict(metadata or {})
+        if bool(meta.get("fallback_used")):
+            return False
+        reason = str(step_signal_reason or "").strip().lower()
+        error_lower = str(error_text or "").strip().lower()
+        error_class = str(meta.get("error_class") or "").strip().lower()
+        return bool(
+            meta.get("timed_out")
+            or error_class == "timeout"
+            or reason in {"research_tool_timeout", "research_delegation_timeout"}
+            or "timeout" in error_lower
+        )
+
     @classmethod
     def _build_timeout_metadata(
         cls,
@@ -440,6 +471,146 @@ class AgentRegistry:
                 "Recherche enger formulieren und genau einmal erneut delegieren."
             )
         return meta
+
+    @classmethod
+    def _extract_research_fallback_query(cls, task: str) -> str:
+        handoff = parse_delegation_handoff(task)
+        if handoff:
+            for key in ("original_user_task", "query", "target_hint"):
+                value = str(handoff.handoff_data.get(key) or "").strip()
+                if value:
+                    return value[:1000]
+            if handoff.goal:
+                return str(handoff.goal).strip()[:1000]
+        return str(task or "").strip()[:1000]
+
+    @classmethod
+    def _build_research_executor_fallback_task(cls, task: str, *, reason: str) -> str:
+        safe_task = cls._extract_research_fallback_query(task)
+        safe_reason = str(reason or "research_timeout").strip()[:120]
+        return "\n".join(
+            [
+                "# DELEGATION HANDOFF",
+                "target_agent: executor",
+                f"goal: {safe_task}",
+                "expected_output: Kompakte Antwort mit geprueften Internetquellen",
+                "success_signal: Quellengebundener Fallback beantwortet die Nutzerfrage",
+                (
+                    "constraints: nutze_leichte_live_suche_ohne_deep_research, "
+                    "nenne Quellen/URLs, markiere Unsicherheiten, keine langen Reports"
+                ),
+                "handoff_data:",
+                "- task_type: simple_live_lookup",
+                f"- original_user_task: {safe_task}",
+                f"- query: {safe_task}",
+                "- preferred_search_tool: search_web",
+                "- fallback_tools: search_news, fetch_url",
+                "- avoid_deep_research: yes",
+                f"- fallback_reason: {safe_reason}",
+                "- max_results: 5",
+                "",
+                "# TASK",
+                safe_task,
+            ]
+        )
+
+    async def _maybe_run_research_executor_fallback(
+        self,
+        *,
+        from_agent: str,
+        original_task: str,
+        session_id: Optional[str],
+        reason: str,
+        metadata: Optional[Dict[str, Any]] = None,
+        error_text: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        if not self._research_executor_fallback_enabled():
+            return None
+        if "executor" not in self._specs:
+            return None
+        fallback_task = self._build_research_executor_fallback_task(original_task, reason=reason)
+        fallback_meta = dict(metadata or {})
+        record_autonomy_observation(
+            "agent_fallback_triggered",
+            {
+                "from_agent": from_agent,
+                "failed_agent": "research",
+                "fallback_agent": "executor",
+                "fallback_reason": reason,
+                "session_id": session_id or "",
+                "task_preview": self._extract_research_fallback_query(original_task)[:240],
+                "error_preview": str(error_text or "")[:240],
+            },
+        )
+        try:
+            fallback = await self.delegate(
+                from_agent="research",
+                to_agent="executor",
+                task=fallback_task,
+                session_id=session_id,
+            )
+        except Exception as exc:
+            record_autonomy_observation(
+                "agent_fallback_failed",
+                {
+                    "failed_agent": "research",
+                    "fallback_agent": "executor",
+                    "fallback_reason": reason,
+                    "session_id": session_id or "",
+                    "error": str(exc)[:500],
+                },
+            )
+            return None
+
+        fallback_status = str(fallback.get("status") or "").strip().lower()
+        fallback_text = str(fallback.get("result") or fallback.get("error") or "").strip()
+        record_autonomy_observation(
+            "agent_fallback_completed",
+            {
+                "failed_agent": "research",
+                "fallback_agent": "executor",
+                "fallback_reason": reason,
+                "fallback_status": fallback_status,
+                "session_id": session_id or "",
+                "result_preview": fallback_text[:240],
+            },
+        )
+        if fallback_status not in {"success", "partial"} or not fallback_text:
+            return None
+
+        result_text = (
+            "Deep Research war nicht rechtzeitig verfuegbar; ich nutze deshalb einen "
+            "kompakten Quellen-Fallback.\n\n"
+            f"{fallback_text}"
+        )
+        merged_meta = {
+            **fallback_meta,
+            "fallback_used": True,
+            "fallback_agent": "executor",
+            "fallback_reason": reason,
+            "fallback_status": fallback_status,
+            "fallback_original_agent": "research",
+            "fallback_metadata": dict(fallback.get("metadata") or {}),
+        }
+        bb_key = AgentRegistry._auto_write_to_blackboard(
+            "research",
+            original_task,
+            result_text,
+            "partial",
+            session_id=session_id,
+            metadata=merged_meta,
+            artifacts=list(fallback.get("artifacts") or []),
+        )
+        return {
+            "status": "partial",
+            "agent": "research",
+            "result": result_text,
+            "quality": 55,
+            "blackboard_key": bb_key,
+            "metadata": merged_meta,
+            "artifacts": list(fallback.get("artifacts") or []),
+            "note": "Deep Research Timeout: kompakter Executor-Fallback genutzt.",
+        }
 
     @staticmethod
     def _emit_transport_progress(
@@ -945,6 +1116,24 @@ class AgentRegistry:
                     },
                 )
             if outcome_status == "partial":
+                step_reason = str(step_signal.get("reason") or "") if step_signal else ""
+                if self._should_trigger_research_fallback(
+                    to_agent,
+                    outcome_status,
+                    _meta,
+                    step_signal_reason=step_reason,
+                    error_text=outcome_error or result_str,
+                ):
+                    fallback_result = await self._maybe_run_research_executor_fallback(
+                        from_agent=from_agent,
+                        original_task=task,
+                        session_id=effective_session_id,
+                        reason=step_reason or "research_partial_timeout",
+                        metadata=_meta,
+                        error_text=outcome_error or result_str,
+                    )
+                    if fallback_result is not None:
+                        return fallback_result
                 status = "partial"
                 self._log_canvas_delegation(
                     from_agent=from_agent,
@@ -1234,6 +1423,16 @@ class AgentRegistry:
                         "last_progress_stage": str(progress_state.get("stage") or ""),
                     },
                 )
+                fallback_result = await self._maybe_run_research_executor_fallback(
+                    from_agent=from_agent,
+                    original_task=task,
+                    session_id=effective_session_id,
+                    reason="research_delegation_timeout",
+                    metadata=timeout_meta,
+                    error_text=str(e),
+                )
+                if fallback_result is not None:
+                    return fallback_result
                 return {
                     "status": "partial",
                     "agent": to_agent,

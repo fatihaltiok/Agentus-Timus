@@ -942,8 +942,9 @@ Niemals denselben fehlgeschlagenen Call ohne Aenderung wiederholen.
 Der Research-Agent (Deep Research) kann lange laufen.
 Wenn delegate_to_agent("research", ...) mit status="partial" UND "Timeout" im error zurueckkommt:
 1. Aufgabe kuerzer und fokussierter neu formulieren, dann EINMAL erneut delegieren.
-2. Falls weiter Timeout: ehrliches Partial zurueckgeben.
-ABSOLUTES VERBOT: KEIN search_web, KEIN search_google, NIEMALS auf oberflaechliche Web-Suche als Ersatz fuer Deep Research zurueckfallen.
+2. Falls weiter Timeout: nutze den vom System angebotenen kompakten Executor-Fallback oder liefere ein ehrliches Partial.
+3. Kennzeichne klar: "Deep Research war nicht rechtzeitig verfuegbar; kompakter Quellen-Fallback".
+VERBOTEN: so tun, als sei der kompakte Fallback eine vollstaendige Deep-Research-Pruefung.
 
 ## SELBST-DIAGNOSE-GATE (VERPFLICHTENDER AUSFUEHRUNGSPFAD)
 
