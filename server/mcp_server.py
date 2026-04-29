@@ -1349,6 +1349,52 @@ def _record_chat_observation(event_type: str, payload: dict) -> None:
         log.debug("Chat observation logging failed (%s): %s", event_type, exc)
 
 
+def _record_live_drift_observations(
+    *,
+    request_id: str,
+    session_id: str,
+    query: str,
+    reply: str,
+    agent: str,
+    followup_capsule: dict | None,
+    meta_classification: dict | None,
+    pending_followup_prompt: str = "",
+) -> None:
+    """Emit E1 diagnostic drift observations without changing behavior."""
+
+    try:
+        from orchestration.live_drift_detector import detect_live_drifts
+
+        capsule = dict(followup_capsule or {})
+        classification = dict(meta_classification or {})
+        signals = detect_live_drifts(
+            query=query,
+            reply=reply,
+            agent=agent,
+            response_mode=str(classification.get("response_mode") or ""),
+            dominant_turn_type=str(classification.get("dominant_turn_type") or ""),
+            conversation_state=capsule.get("conversation_state") if isinstance(capsule.get("conversation_state"), dict) else {},
+            meta_classification=classification,
+            recent_assistant_turns=capsule.get("recent_assistant_replies") or (),
+            pending_followup_prompt=pending_followup_prompt,
+        )
+        for signal in signals:
+            _record_chat_observation(
+                "live_drift_detected",
+                {
+                    "request_id": request_id,
+                    "session_id": session_id,
+                    "source": "canvas_chat",
+                    "agent": agent,
+                    "query_preview": str(query or "")[:180],
+                    "reply_preview": str(reply or "")[:220],
+                    **signal.to_dict(),
+                },
+            )
+    except Exception as exc:
+        log.debug("Live drift detection failed for session %s: %s", session_id, exc)
+
+
 def _persist_meta_turn_understanding(
     *,
     session_id: str,
@@ -4932,6 +4978,16 @@ async def canvas_chat(request: Request):
                 "dominant_turn_type": str((meta_classification or {}).get("dominant_turn_type") or ""),
                 "response_mode": str((meta_classification or {}).get("response_mode") or ""),
             },
+        )
+        _record_live_drift_observations(
+            request_id=request_id,
+            session_id=session_id,
+            query=query,
+            reply=reply,
+            agent=agent,
+            followup_capsule=followup_capsule,
+            meta_classification=meta_classification,
+            pending_followup_prompt=pending_followup_prompt,
         )
 
         _broadcast_sse({"type": "chat_reply", "request_id": request_id, "agent": agent, "text": reply, "ts": reply_ts})
