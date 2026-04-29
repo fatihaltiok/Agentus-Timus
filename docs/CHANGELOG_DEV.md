@@ -2,6 +2,116 @@
 
 ---
 
+## Fortschritt 2026-04-28 - Ausbaustufe 5 Live-Gates, Provider und Owner-Authority-Vorbereitung
+
+Der heutige Arbeitstag hat Ausbaustufe 5 von reiner Klassifikationshaertung
+weiter in Richtung produktionsnahe Alltagsrobustheit geschoben. Schwerpunkt war:
+einfache Ausfuehrungs- und Antwortauftraege duerfen nicht mehr in
+Modus-Diskussion, Research-Drift oder falsche Spezialrouten fallen.
+
+Geaendert:
+
+- Alltagsexecution und Live-Gates:
+  - ausfuehrbare Lookup-/Recherche-Auftraege laufen jetzt im `assist`-Modus,
+    statt als Denkpartner-Dialog haengen zu bleiben
+  - Reise-/Ausflugsplaene mit Live-Bezug werden auf Ausfuehrung und
+    Dokument-/Plan-Output geroutet
+  - lokale PDF-Zusammenfassungen wie `fasse diese pdf zusammen /pfad/datei.pdf`
+    gehen auf `document_analysis`
+  - explizite E-Mail-Sendeauftraege mit Empfaengeradresse gehen auf
+    `email_send`
+- Owner-Authority-Vorbereitung:
+  - [docs/OWNER_AUTHORITY_CAPABILITY_ARCHITEKTUR_2026-04-28.md](/home/fatih-ubuntu/dev/timus/docs/OWNER_AUTHORITY_CAPABILITY_ARCHITEKTUR_2026-04-28.md)
+    dokumentiert die Zielarchitektur fuer Owner-Identity, Capability-Gates,
+    Risiko-Klassen, Scope-Verfall und Blocked-Intent-Wiederaufnahme
+  - Kernentscheidung:
+    - Timus soll fuer den Owner niedrigere Ausfuehrungshuerden haben
+    - fuer andere Nutzer bleiben hoehere Schutzschwellen aktiv
+    - High-Risk-Faelle wie Self-Modify/Deployment bleiben Sonderpfade mit
+      expliziter Freigabe
+- Provider-/Modellkonfiguration:
+  - DeepSeek Research-Konfiguration auf aktuelle Modellnamen vorbereitet
+  - Provider-Validierung fuer nicht mehr existierende Modelle gehaertet
+  - Moonshot/Kimi als Provider ergaenzt
+  - Executor kann fuer `kimi-k2.6` vorbereitet werden
+  - Budget-/Provider-Tests fuer Kimi und DeepSeek erweitert
+- Direct-Answer/Simple-Execute-Gate:
+  - neue Erkennung fuer exakte Direktantworten:
+    - `Antworte exakt nur mit CHAT_OK`
+    - `fuehre aus: antworte exakt nur mit KIMI_CHAT_OK`
+  - solche Anfragen gehen jetzt auf `meta`, nicht auf `shell`
+  - `meta` gibt den geforderten Inhalt ohne LLM-Umweg direkt zurueck
+  - Clarity-/Frame-/Policy-Pfad kennt dafuer `direct_response`
+  - Live-Test nach Restart:
+    - Anfrage: `fuehre aus: antworte exakt nur mit KIMI_CHAT_OK`
+    - Route: `meta`
+    - Antwort: `KIMI_CHAT_OK`
+    - keine Shell-Fehlroute
+    - keine Clarify-Rueckfrage
+- Live-Korpus-Luecken geschlossen:
+  - Korpus um 9 Gates erweitert:
+    - Behavior-Preferences
+    - lokale PDF-Analyse
+    - E-Mail-Senden
+    - Follow-up-E-Mail nach PDF-Zusammenfassung
+    - komplexere Multi-Step-Aufgaben
+  - neue Preference-Patterns:
+    - `wenn du recherchierst ...`
+    - `fuer coding fragen gib mir zuerst ...`
+  - `schick eine e-mail ...` wird als E-Mail-Sendeauftrag erkannt
+  - `checkliste` zaehlt jetzt als Dokument-Output fuer Recherche+Dokument-Pfade
+
+Wichtige geschlossene Fehlerklassen:
+
+- klare Direktantworten werden nicht mehr als Shell-Ausfuehrung missverstanden
+- Behavior-Preferences driften nicht mehr in Research
+- E-Mail-Sendevarianten mit `schick` werden nicht mehr als Knowledge-Research
+  klassifiziert
+- Recherche + Checkliste landet nicht mehr nur als einfacher Lookup ohne
+  Dokument-Output
+- PDF-Dateipfade werden bei Analyse/Zusammenfassung als lokale
+  Dokumentanalyse behandelt
+
+Verifikation:
+
+- `pytest -q tests/test_direct_response_intent.py ... tests/test_live_request_corpus.py`
+  -> `121 passed`
+- Routing-/Policy-Block -> `49 passed`
+- erweiterter Live-Korpus + gezielte Regressionen -> `142 passed`
+- Live-Korpus mit `--runxfail` -> `133 passed`
+- CrossHair fuer neue Turn-Understanding-Preference-Contracts gruen
+- Python-Syntaxchecks fuer geaenderte Orchestrierungs- und Testdateien gruen
+- Lean Commit-Hook gruen:
+  - `lean/CiSpecs.lean`
+  - Mathlib-Bundle mit 12 Specs
+
+Deployment:
+
+- Commits auf `origin/main`:
+  - `a17fa65` Route executable lookups as assist mode
+  - `42804a5` Route travel lookup plans through execution
+  - `50165c1` Route local PDF summaries to document analysis
+  - `f433921` Route explicit email sends to executor
+  - `d4ba1cd` Document owner authority capability architecture
+  - `f994760` Update DeepSeek research model configuration
+  - `4d6456b` Add Moonshot Kimi executor provider
+  - `c0c5d81` Handle exact direct response requests
+  - `1458b9e` Harden live corpus routing gaps
+- Restart nach Push durchgefuehrt
+- Health nach Restart:
+  - MCP: `healthy`, `ready=true`
+  - Dispatcher: `healthy`, `ready=true`
+- bekannter MCP-Graceful-Shutdown-Timeout trat beim Stoppen wieder auf, aber
+  der neue Prozess startete sauber und war health-ready
+
+Offen danach:
+
+- `E1` Live-Drift-Detector als naechster Slice
+- danach `C1/C2` Agenten-Fallback-Grundlage
+- echte Runtime-/E2E-Gates fuer PDF, E-Mail und Multi-Step bleiben als
+  separater Ausfuehrungsblock offen; der heutige Block schliesst die
+  Klassifikations- und Routing-Gates
+
 ## Fortschritt 2026-04-26 - GDK1 bis GDK3 Runtime-Haertung
 
 Der General Decision Kernel ist aus dem Plan in den Runtime-Pfad gewandert.
