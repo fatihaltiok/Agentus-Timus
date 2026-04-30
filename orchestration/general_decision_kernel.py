@@ -397,7 +397,7 @@ def _build_advisory_constraint_summary(
 def _interaction_mode_for_kernel(turn_kind: str, candidate_domain: str) -> str:
     domain = _clean_text(candidate_domain, limit=64).lower()
     if turn_kind in {"think", "inform", "constraint_update", "clarify"}:
-        return "think_partner"
+        return "assist"
     if turn_kind == "inspect":
         return "inspect"
     if turn_kind == "research":
@@ -409,7 +409,7 @@ def _interaction_mode_for_kernel(turn_kind: str, candidate_domain: str) -> str:
             return "inspect"
         if domain in {"setup_build", "planning_advisory"}:
             return "assist"
-        return "think_partner"
+        return "assist"
     return "assist"
 
 
@@ -667,8 +667,10 @@ def _infer_evidence_requirement(turn_kind: str, task_domain: str) -> str:
 
 def _infer_execution_permission(turn_kind: str, interaction_mode: str, task_domain: str) -> str:
     mode = _clean_text(interaction_mode, limit=32).lower()
-    if turn_kind in {"think", "inform", "constraint_update", "clarify"}:
+    if turn_kind == "clarify":
         return "forbidden"
+    if turn_kind in {"think", "inform", "constraint_update"}:
+        return "allowed" if mode == "assist" else "forbidden"
     if turn_kind == "resume":
         if mode == "think_partner":
             return "forbidden"

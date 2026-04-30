@@ -330,13 +330,19 @@ def _infer_task_domain(
     if _contains_any(query_text, _SKILL_CREATION_HINTS):
         evidence.append("query:skill_creation")
         return "skill_creation", evidence, 0.93
+    normalized_task_type = _clean_text(task_type, limit=64).lower()
+    if normalized_task_type in {"simple_live_lookup", "simple_live_lookup_document"}:
+        evidence.append(f"task_type:{normalized_task_type}")
+        return "general_research", evidence, 0.88
+    if normalized_task_type in {"email_send", "communication_task"}:
+        evidence.append(f"task_type:{normalized_task_type}")
+        return "communication", evidence, 0.9
     if _contains_any(query_text, _LIFE_ADVISORY_HINTS):
         evidence.append("query:life_advisory")
         return "life_advisory", evidence, 0.82
     if _contains_any(combined, _MIGRATION_WORK_HINTS):
         evidence.append("query_or_anchor:migration_work")
         return "migration_work", evidence, 0.9 if _contains_any(query_text, _MIGRATION_WORK_HINTS) else 0.82
-    normalized_task_type = _clean_text(task_type, limit=64).lower()
     if normalized_task_type in {"simple_live_lookup", "simple_live_lookup_document"}:
         evidence.append(f"task_type:{normalized_task_type}")
         return "general_research", evidence, 0.88

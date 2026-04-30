@@ -1,4 +1,4 @@
-"""Interner Interaktionsmodus fuer Meta: denken, pruefen, assistieren."""
+"""Interner Interaktionsmodus fuer Meta: pruefen oder aktiv assistieren."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Dict, Mapping, Tuple
 
 
-_THINK_PARTNER_HINTS = (
+_CONVERSATION_ASSIST_HINTS = (
     "was haeltst du",
     "was hältst du",
     "deine meinung",
@@ -126,15 +126,15 @@ def build_meta_interaction_mode(
     answer_shape = _clean_text(policy.get("answer_shape"), limit=64).lower()
     policy_reason = _clean_text(policy.get("policy_reason"), limit=80).lower()
 
-    if any(hint in query for hint in _THINK_PARTNER_HINTS):
+    if any(hint in query for hint in _CONVERSATION_ASSIST_HINTS):
         return MetaInteractionMode(
             schema_version=1,
-            mode="think_partner",
-            mode_reason="explicit_think_partner_language",
+            mode="assist",
+            mode_reason="explicit_conversation_assist_language",
             explicit_override=True,
-            answer_style="reason_with_user",
-            execution_policy="no_research_no_execution",
-            completion_expectation="insight_or_options_given",
+            answer_style="reason_with_user_with_evidence_when_needed",
+            execution_policy="plan_delegate_or_execute",
+            completion_expectation="useful_answer_or_next_action",
         )
 
     if any(hint in query for hint in _EXPLICIT_INSPECT_HINTS):
@@ -165,11 +165,11 @@ def build_meta_interaction_mode(
     }:
         return MetaInteractionMode(
             schema_version=1,
-            mode="think_partner",
+            mode="assist",
             mode_reason="direct_answer_or_status_frame",
             explicit_override=False,
-            answer_style="reason_with_user",
-            execution_policy="no_research_no_execution",
+            answer_style="direct_answer",
+            execution_policy="answer_or_delegate_when_evidence_needed",
             completion_expectation="direct_answer_given",
         )
 
@@ -187,12 +187,12 @@ def build_meta_interaction_mode(
     if task_domain in {"travel_advisory", "topic_advisory", "life_advisory"}:
         return MetaInteractionMode(
             schema_version=1,
-            mode="think_partner",
+            mode="assist",
             mode_reason=f"task_domain:{task_domain}",
             explicit_override=False,
-            answer_style="reason_with_user",
-            execution_policy="no_research_no_execution",
-            completion_expectation="advisory_answer_or_options_given",
+            answer_style="reason_with_user_with_evidence_when_needed",
+            execution_policy="plan_delegate_or_execute",
+            completion_expectation="advisory_answer_options_or_action",
         )
 
     if task_domain == "setup_build":
@@ -235,11 +235,11 @@ def build_meta_interaction_mode(
     }:
         return MetaInteractionMode(
             schema_version=1,
-            mode="think_partner",
+            mode="assist",
             mode_reason="frame_answer_directly",
             explicit_override=False,
-            answer_style="reason_with_user",
-            execution_policy="no_research_no_execution",
+            answer_style="direct_answer",
+            execution_policy="answer_or_delegate_when_evidence_needed",
             completion_expectation="direct_answer_given",
         )
 

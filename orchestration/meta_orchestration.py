@@ -819,6 +819,63 @@ _SIMPLE_LIVE_LOOKUP_FRESHNESS_TOPICS = (
     "communities",
 )
 
+_PUBLIC_INFORMATION_LOOKUP_CUES = (
+    "aktuell",
+    "aktuelle",
+    "aktuellen",
+    "heute",
+    "morgen",
+    "dieses jahr",
+    "kommende",
+    "anstehende",
+    "neueste",
+    "neuste",
+    "gerade",
+    "stehen an",
+    "steht an",
+    "finden statt",
+    "findet statt",
+    "gibt es",
+)
+
+_PUBLIC_INFORMATION_LOOKUP_TOPICS = (
+    "arbeitsmarkt",
+    "markt",
+    "branche",
+    "gesetz",
+    "gesetze",
+    "regelung",
+    "regelungen",
+    "preise",
+    "preis",
+    "kosten",
+    "messen",
+    "messe",
+    "konferenz",
+    "konferenzen",
+    "kongress",
+    "kongresse",
+    "summit",
+    "expo",
+    "meetup",
+    "meetups",
+    "veranstaltung",
+    "veranstaltungen",
+    "event",
+    "events",
+    "förderung",
+    "foerderung",
+    "anbieter",
+    "produkt",
+    "produkte",
+    "tool",
+    "tools",
+)
+
+_PUBLIC_INFORMATION_LOOKUP_QUESTION_PATTERN = re.compile(
+    r"\b(?:welche|welcher|welches|wann|wo|wer|was\s+gibt(?:'s|\s+es)?|wie\s+(?:ist|steht|sieht|entwickelt|laeuft|läuft|der|die|das))\b"
+)
+
 _SIMPLE_LIVE_LOOKUP_DIRECT_PATTERNS = (
     re.compile(r"\b(?:was|wieviel|wie\s+viel)\s+kostet\b"),
     re.compile(r"\b(?:bitcoin|btc|ethereum|eth)\b.*\b(?:kurs|preis)\b"),
@@ -888,6 +945,23 @@ _EMAIL_SEND_ACTION_HINTS = (
 )
 
 _EMAIL_ADDRESS_PATTERN = re.compile(r"\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b")
+_OWNER_EMAIL_REFERENCE_PATTERN = re.compile(
+    r"\b(?:an\s+)?meine(?:r|m|n)?\s+(?:e[\s-]?(?:mail|meil)|mail)(?:\s+adresse)?\b"
+)
+_EMAIL_CONTENT_REFERENCE_HINTS = (
+    "bericht",
+    "recherche",
+    "report",
+    "pdf",
+    "datei",
+    "dokument",
+    "zusammenfassung",
+    "ergebnis",
+    "es",
+    "das",
+    "ihn",
+    "sie",
+)
 
 _HARD_RESEARCH_HINTS = (
     "tiefenrecherche",
@@ -900,6 +974,14 @@ _HARD_RESEARCH_HINTS = (
     "studien",
     "paper",
     "papers",
+)
+
+_NO_RESEARCH_HINTS = (
+    "ohne recherche",
+    "keine recherche",
+    "nicht recherchieren",
+    "nicht ins internet",
+    "ohne internet",
 )
 
 _YOUTUBE_LIGHT_HINTS = (
@@ -1809,6 +1891,32 @@ def _looks_like_simple_live_lookup_direct_query(text: str) -> bool:
     return any(pattern.search(normalized) for pattern in _SIMPLE_LIVE_LOOKUP_DIRECT_PATTERNS)
 
 
+def _looks_like_public_information_lookup_request(text: str) -> bool:
+    normalized = " ".join(str(text or "").strip().lower().split())
+    if not normalized:
+        return False
+    has_question_shape = bool(_PUBLIC_INFORMATION_LOOKUP_QUESTION_PATTERN.search(normalized))
+    has_public_topic = _has_any(normalized, _PUBLIC_INFORMATION_LOOKUP_TOPICS)
+    if not (has_question_shape and has_public_topic):
+        return False
+    return _has_any(normalized, _PUBLIC_INFORMATION_LOOKUP_CUES) or any(
+        token in normalized
+        for token in (
+            "deutschland",
+            "schweiz",
+            "europa",
+            "usa",
+            "frankfurt",
+            "berlin",
+            "muenchen",
+            "münchen",
+            "hamburg",
+            "koeln",
+            "köln",
+        )
+    )
+
+
 def _looks_like_live_travel_plan_document_request(text: str) -> bool:
     normalized = " ".join(str(text or "").strip().lower().split())
     if not normalized:
@@ -1832,12 +1940,17 @@ def _looks_like_email_send_request(text: str) -> bool:
     normalized = " ".join(str(text or "").strip().lower().split())
     if not normalized:
         return False
-    has_mail_anchor = any(token in normalized for token in ("email", "e-mail", "mail"))
-    return (
-        has_mail_anchor
-        and _has_any(normalized, _EMAIL_SEND_ACTION_HINTS)
-        and bool(_EMAIL_ADDRESS_PATTERN.search(normalized))
+    has_owner_email_reference = bool(_OWNER_EMAIL_REFERENCE_PATTERN.search(normalized))
+    has_mail_anchor = has_owner_email_reference or any(
+        token in normalized for token in ("email", "e-mail", "e meil", "e-meil", "mail")
     )
+    if not has_mail_anchor:
+        return False
+    if _EMAIL_ADDRESS_PATTERN.search(normalized):
+        return _has_any(normalized, _EMAIL_SEND_ACTION_HINTS)
+    if has_owner_email_reference and _has_any(normalized, _EMAIL_CONTENT_REFERENCE_HINTS):
+        return True
+    return False
 
 
 def _looks_like_local_file_transform_request(text: str) -> bool:
@@ -3801,13 +3914,14 @@ def classify_meta_task(
     has_browser = _has_any(current_normalized, _BROWSER_HINTS)
     has_summary_request = ("fasse" in current_normalized and "zusammen" in current_normalized) or "wichtigsten punkte" in current_normalized
     has_extraction = _has_any(current_normalized, _EXTRACTION_HINTS) or has_summary_request
-    has_broad_research = _has_any(current_normalized, _BROAD_RESEARCH_HINTS)
-    has_strict_research = _has_any(current_normalized, _STRICT_RESEARCH_HINTS)
-    has_claim_check = _has_any(current_normalized, _CLAIM_CHECK_HINTS)
+    has_no_research_instruction = _has_any(current_normalized, _NO_RESEARCH_HINTS)
+    has_broad_research = _has_any(current_normalized, _BROAD_RESEARCH_HINTS) and not has_no_research_instruction
+    has_strict_research = _has_any(current_normalized, _STRICT_RESEARCH_HINTS) and not has_no_research_instruction
+    has_claim_check = _has_any(current_normalized, _CLAIM_CHECK_HINTS) and not has_no_research_instruction
     has_legal_policy_research = _has_any(current_normalized, _LEGAL_POLICY_RESEARCH_HINTS)
     if has_claim_check and has_legal_policy_research:
         has_strict_research = True
-    has_hard_research = _has_any(current_normalized, _HARD_RESEARCH_HINTS)
+    has_hard_research = _has_any(current_normalized, _HARD_RESEARCH_HINTS) and not has_no_research_instruction
     has_youtube_light = site_kind == "youtube" and _has_any(current_normalized, _YOUTUBE_LIGHT_HINTS)
     has_direct_youtube_url = site_kind == "youtube" and _has_direct_youtube_url(current_normalized)
     has_youtube_fact_check = site_kind == "youtube" and (
@@ -3821,6 +3935,7 @@ def classify_meta_task(
     has_simple_live_lookup = (
         (
             _looks_like_simple_live_lookup_direct_query(current_normalized)
+            or _looks_like_public_information_lookup_request(current_normalized)
             or has_live_travel_plan_document
             or (
                 _has_any(current_normalized, _SIMPLE_LIVE_LOOKUP_FRESHNESS_HINTS)
@@ -3846,6 +3961,7 @@ def classify_meta_task(
                 )
             )
         )
+        and not has_no_research_instruction
         and not has_hard_research
         and not has_route_request
         and not has_local_search
@@ -4290,7 +4406,6 @@ def classify_meta_task(
         not in {
             "approval_response",
             "auth_response",
-            "followup",
             "handover_resume",
             "correction",
             "clarification",

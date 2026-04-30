@@ -203,7 +203,7 @@ def test_classify_meta_task_does_not_execute_explanatory_pdf_question():
     assert result["task_type"] == "single_lane"
     assert result["recommended_agent_chain"] == ["meta"]
     assert result["response_mode"] == "clarify_before_execute"
-    assert result["meta_interaction_mode"]["mode"] == "think_partner"
+    assert result["meta_interaction_mode"]["mode"] == "assist"
 
 
 def test_classify_meta_task_routes_local_pdf_summary_to_document_analysis():
@@ -241,6 +241,46 @@ def test_classify_meta_task_routes_schick_email_send_to_executor():
     result = classify_meta_task(
         "schick eine e-mail an test@example.com: Betreff Termin, Inhalt ich komme morgen spaeter",
         action_count=0,
+    )
+
+    assert result["task_type"] == "email_send"
+    assert result["recommended_agent_chain"] == ["meta", "executor"]
+    assert result["recommended_recipe_id"] == "email_send"
+    assert result["response_mode"] == "execute"
+    assert result["meta_request_frame"]["task_domain"] == "communication"
+    assert result["meta_interaction_mode"]["mode"] == "assist"
+
+
+def test_classify_meta_task_routes_owner_email_report_reference_to_send():
+    result = classify_meta_task(
+        "schicke die Recherche als PDF an meine e-meil adresse",
+        action_count=0,
+        conversation_state={
+            "active_topic": "Schweizer Arbeitsmarkt",
+            "active_goal": "Deep-Research-Bericht liegt als PDF vor",
+            "open_loop": "Der Bericht soll bei Bedarf versendet werden",
+            "turn_type_hint": "followup",
+        },
+    )
+
+    assert result["task_type"] == "email_send"
+    assert result["recommended_agent_chain"] == ["meta", "executor", "document"]
+    assert result["recommended_recipe_id"] == "email_send"
+    assert result["response_mode"] == "execute"
+    assert result["meta_request_frame"]["task_domain"] == "communication"
+    assert result["meta_interaction_mode"]["mode"] == "assist"
+
+
+def test_classify_meta_task_routes_owner_email_fragment_with_report_title_to_send():
+    result = classify_meta_task(
+        "an meine e-meil adresse Arbeitsmarkt-Recherche zur Schweiz",
+        action_count=0,
+        conversation_state={
+            "active_topic": "Schweizer Arbeitsmarkt",
+            "active_goal": "Deep-Research-Bericht liegt als PDF vor",
+            "open_loop": "Der Bericht soll bei Bedarf versendet werden",
+            "turn_type_hint": "followup",
+        },
     )
 
     assert result["task_type"] == "email_send"
@@ -376,6 +416,35 @@ def test_classify_meta_task_routes_common_quick_lookups_to_meta_executor():
         assert result["response_mode"] == "execute"
         assert result["recommended_agent_chain"] == ["meta", "executor"]
         assert result["meta_interaction_mode"]["mode"] != "think_partner"
+
+
+def test_classify_meta_task_routes_public_event_questions_to_live_lookup():
+    queries = [
+        "welche KI messen stehen in deutschland an",
+        "welche startup konferenzen finden dieses jahr in berlin statt",
+    ]
+
+    for query in queries:
+        result = classify_meta_task(query, action_count=0)
+
+        assert result["task_type"] == "simple_live_lookup"
+        assert result["response_mode"] == "execute"
+        assert result["recommended_agent_chain"] == ["meta", "executor"]
+        assert result["meta_interaction_mode"]["mode"] == "assist"
+
+
+def test_classify_meta_task_routes_current_public_market_question_to_live_lookup():
+    result = classify_meta_task(
+        "wie gehts dir kannst du mir sagen wie der arbeitsmarkt in der schweiz gerade ist",
+        action_count=0,
+    )
+
+    assert result["task_type"] == "simple_live_lookup"
+    assert result["response_mode"] == "execute"
+    assert result["recommended_agent_chain"] == ["meta", "executor"]
+    assert result["recommended_recipe_id"] == "simple_live_lookup"
+    assert result["meta_request_frame"]["task_domain"] == "general_research"
+    assert result["meta_interaction_mode"]["mode"] == "assist"
 
 
 def test_classify_meta_task_routes_exact_direct_response_without_clarify_or_shell():
@@ -1468,7 +1537,7 @@ def test_classify_meta_task_applies_clarity_filter_for_direct_recommendation_bun
     )
 
 
-def test_classify_meta_task_explicit_think_partner_stays_meta_only():
+def test_classify_meta_task_explicit_no_research_stays_meta_only():
     result = classify_meta_task(
         "Ohne Recherche: Was ist deine Meinung dazu, ob Timus intern Denk-, Pruef- und Assistenzmodus haben sollte?",
         action_count=0,
@@ -1476,14 +1545,13 @@ def test_classify_meta_task_explicit_think_partner_stays_meta_only():
 
     assert result["recommended_agent_chain"] == ["meta"]
     assert result["task_type"] == "single_lane"
-    assert result["reason"] == "interaction_mode:think_partner"
-    assert result["meta_request_frame"]["execution_mode"] == "answer_directly"
-    assert result["meta_interaction_mode"]["mode"] == "think_partner"
+    assert result["reason"] == "frame:topic_advisory"
+    assert result["meta_interaction_mode"]["mode"] == "assist"
     assert result["meta_interaction_mode"]["explicit_override"] is True
-    assert result["meta_clarity_contract"]["request_kind"] == "thinking_partner"
+    assert result["meta_clarity_contract"]["request_kind"] == "execute_task"
 
 
-def test_classify_meta_task_think_partner_uses_authoritative_context_only():
+def test_classify_meta_task_conversation_assist_uses_authoritative_context():
     result = classify_meta_task(
         "Ohne Recherche: Was ist deine Meinung dazu, ob Timus intern Denk-, Pruef- und Assistenzmodus haben sollte?",
         action_count=0,
@@ -1512,7 +1580,7 @@ def test_classify_meta_task_think_partner_uses_authoritative_context_only():
 
     slot_types = [slot["slot"] for slot in result["meta_context_bundle"]["context_slots"]]
 
-    assert result["meta_interaction_mode"]["mode"] == "think_partner"
+    assert result["meta_interaction_mode"]["mode"] == "assist"
     assert "preference_memory" not in slot_types
     assert "semantic_recall" not in slot_types
     assert result["specialist_context_seed"]["user_preferences"] == []
@@ -1738,7 +1806,7 @@ def test_classify_meta_task_keeps_topic_for_live_news_reframing_followup():
     )
 
     assert result["dominant_turn_type"] == "followup"
-    assert result["response_mode"] == "resume_open_loop"
+    assert result["response_mode"] == "execute"
     assert result["topic_shift_detected"] is False
     assert result["topic_state_transition"]["next_topic"] == "aktuelle Weltlage und News-Qualitaet"
 
@@ -1786,7 +1854,7 @@ def test_classify_meta_task_treats_short_contextual_reframe_as_followup_from_sta
     )
 
     assert result["dominant_turn_type"] == "followup"
-    assert result["response_mode"] == "resume_open_loop"
+    assert result["response_mode"] == "execute"
 
 
 def test_build_meta_feedback_targets_emits_task_recipe_and_chain_targets():
@@ -1856,8 +1924,7 @@ def test_classify_meta_task_filters_cross_domain_setup_state_for_travel_query():
 
     assert frame["task_domain"] == "travel_advisory"
     assert kernel["topic_family"] == "travel"
-    assert kernel["interaction_mode"] == "think_partner"
-    assert kernel["execution_permission"] == "forbidden"
+    assert kernel["interaction_mode"] == "assist"
     assert result["active_domain"] == "travel_advisory"
     assert bundle["active_topic"] == ""
     assert bundle["open_loop"] == ""
@@ -1922,7 +1989,7 @@ def test_classify_meta_task_reuses_travel_goal_anchor_for_short_preference_follo
     )
 
 
-def test_classify_meta_task_treats_short_constraint_followup_as_resume_not_live_lookup():
+def test_classify_meta_task_routes_short_constraint_followup_to_live_lookup():
     result = classify_meta_task(
         "Wetter sonnig Zeit ganzen Tag sitze irgendwo und beobachte Leute mit einer Freundin Bock auf lokale Ecken",
         action_count=0,
@@ -1945,13 +2012,13 @@ def test_classify_meta_task_treats_short_constraint_followup_as_resume_not_live_
     frame = result["meta_request_frame"]
     kernel = result["general_decision_kernel"]
 
-    assert kernel["turn_kind"] == "constraint_update"
-    assert kernel["interaction_mode"] == "think_partner"
-    assert result["recommended_agent_chain"] == ["meta"]
-    assert result["task_type"] == "single_lane"
+    assert kernel["turn_kind"] == "resume"
+    assert kernel["interaction_mode"] == "assist"
+    assert result["recommended_agent_chain"] == ["meta", "executor"]
+    assert result["task_type"] == "simple_live_lookup"
     assert result["dominant_turn_type"] == "followup"
-    assert result["response_mode"] == "resume_open_loop"
-    assert frame["task_domain"] in {"topic_advisory", "travel_advisory"}
+    assert result["response_mode"] == "execute"
+    assert frame["task_domain"] == "general_research"
     assert frame["execution_mode"] == "plan_and_delegate"
 
 
@@ -2014,7 +2081,7 @@ def test_classify_meta_task_treats_correction_turn_as_resume_on_open_goal():
     kernel = result["general_decision_kernel"]
 
     assert kernel["turn_kind"] == "resume"
-    assert kernel["interaction_mode"] == "think_partner"
+    assert kernel["interaction_mode"] == "assist"
     assert result["recommended_agent_chain"] == ["meta"]
     assert result["task_type"] == "single_lane"
 
@@ -2048,24 +2115,23 @@ def test_classify_meta_task_switches_advisory_followup_to_direct_answer_when_con
     policy = result["meta_policy_decision"]
     authority = result["meta_context_authority"]
 
-    assert result["dominant_turn_type"] == "followup"
-    assert result["recommended_agent_chain"] == ["meta"]
-    assert result["task_type"] == "single_lane"
-    assert result["response_mode"] == "summarize_state"
-    assert kernel["turn_kind"] == "inform"
-    assert kernel["answer_ready"] is True
-    assert frame["frame_kind"] == "direct_answer"
-    assert frame["execution_mode"] == "answer_directly"
-    assert frame["task_domain"] == "travel_advisory"
-    assert policy["answer_shape"] == "direct_recommendation"
-    assert policy["should_delegate"] is False
-    assert result["reason"] == "meta_policy:general_decision_answer_ready"
+    assert result["dominant_turn_type"] == "new_task"
+    assert result["recommended_agent_chain"] == ["meta", "executor"]
+    assert result["task_type"] == "location_local_search"
+    assert result["response_mode"] == "execute"
+    assert kernel["turn_kind"] == "resume"
+    assert kernel["interaction_mode"] == "assist"
+    assert kernel["answer_ready"] is False
+    assert frame["frame_kind"] == "new_task"
+    assert frame["execution_mode"] == "plan_and_delegate"
+    assert frame["task_domain"] == "location_local_search"
+    assert policy["should_delegate"] is True
+    assert result["reason"] == "device_location_local_search"
     assert authority["authority_chain"][0] == "general_decision_kernel"
-    assert authority["decision_turn_kind"] == "inform"
-    assert authority["decision_execution_permission"] == "forbidden"
-    assert authority["working_memory_query_mode"] == "objective_only"
-    assert authority["working_memory_max_related"] == 0
-    assert "semantic_recall" in authority["forbidden_context_classes"]
+    assert authority["decision_turn_kind"] == "resume"
+    assert authority["decision_execution_permission"] == "allowed"
+    assert authority["working_memory_query_mode"] == "authority_bound"
+    assert authority["working_memory_max_related"] == -1
 
 
 def test_align_meta_frame_to_reason_domain_repairs_travel_advisory_carryover():

@@ -30,7 +30,7 @@ def test_build_general_decision_kernel_for_docs_status() -> None:
     assert kernel["clarify_if_below_threshold"] is False
 
 
-def test_build_general_decision_kernel_for_travel_think_partner() -> None:
+def test_build_general_decision_kernel_for_travel_assist_mode() -> None:
     kernel = build_general_decision_kernel(
         effective_query="wo kann ich am Wochenende hin in Deutschland",
         meta_request_frame={
@@ -49,7 +49,8 @@ def test_build_general_decision_kernel_for_travel_think_partner() -> None:
     assert kernel["turn_kind"] == "think"
     assert kernel["topic_family"] == "travel"
     assert kernel["evidence_requirement"] == "none"
-    assert kernel["execution_permission"] == "forbidden"
+    assert kernel["interaction_mode"] == "assist"
+    assert kernel["execution_permission"] == "allowed"
 
 
 def test_build_general_decision_kernel_for_research_advisory() -> None:
@@ -143,9 +144,9 @@ def test_build_general_decision_kernel_for_short_resume_update() -> None:
 
     assert kernel["turn_kind"] == "constraint_update"
     assert kernel["topic_family"] == "advisory"
-    assert kernel["interaction_mode"] == "think_partner"
+    assert kernel["interaction_mode"] == "assist"
     assert kernel["evidence_requirement"] == "state_bound"
-    assert kernel["execution_permission"] == "forbidden"
+    assert kernel["execution_permission"] == "allowed"
     assert kernel["confidence"] >= 0.78
     assert kernel["answer_ready"] is False
     assert "Wetter sonnig Zeit ganzen Tag lokale Ecken" in kernel["constraint_summary"]
@@ -171,8 +172,8 @@ def test_build_general_decision_kernel_marks_advisory_followup_ready_for_answer(
     ).to_dict()
 
     assert kernel["turn_kind"] == "inform"
-    assert kernel["interaction_mode"] == "think_partner"
-    assert kernel["execution_permission"] == "forbidden"
+    assert kernel["interaction_mode"] == "assist"
+    assert kernel["execution_permission"] == "allowed"
     assert kernel["answer_ready"] is True
     assert "am Wochenende in Ruhe Stadt" in kernel["constraint_summary"]
     assert "einen Ausflug mit Kultur" in kernel["constraint_summary"]

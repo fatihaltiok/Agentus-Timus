@@ -128,14 +128,14 @@
         "response_mode": "summarize_state",
         "chain": ["meta"],
         "task_domain": "topic_advisory",
-        "interaction_mode": "think_partner",
+        "interaction_mode": "assist",
         "reason": "meta_policy:direct_response_instruction"
       },
       "target_forbidden": {
         "response_modes": ["clarify_before_execute"],
         "task_types": ["file_operation"],
         "task_domains": ["setup_build", "skill_creation"],
-        "interaction_modes": ["assist"]
+        "interaction_modes": ["think_partner"]
       }
     },
     {
@@ -147,14 +147,14 @@
         "response_mode": "summarize_state",
         "chain": ["meta"],
         "task_domain": "topic_advisory",
-        "interaction_mode": "think_partner",
+        "interaction_mode": "assist",
         "reason": "meta_policy:direct_response_instruction"
       },
       "target_forbidden": {
         "response_modes": ["clarify_before_execute"],
         "task_types": ["file_operation"],
         "task_domains": ["setup_build", "skill_creation"],
-        "interaction_modes": ["assist"]
+        "interaction_modes": ["think_partner"]
       }
     },
     {
@@ -367,7 +367,7 @@
       "expected": {
         "task_type": "single_lane",
         "chain": ["meta"],
-        "interaction_mode": "think_partner"
+        "interaction_mode": "assist"
       }
     },
     {
@@ -377,7 +377,7 @@
       "expected": {
         "task_type": "single_lane",
         "chain": ["meta"],
-        "interaction_mode": "think_partner"
+        "interaction_mode": "assist"
       }
     },
     {
@@ -387,7 +387,7 @@
       "expected": {
         "task_type": "single_lane",
         "chain": ["meta"],
-        "interaction_mode": "think_partner"
+        "interaction_mode": "assist"
       }
     },
     {
@@ -397,7 +397,7 @@
       "expected": {
         "task_type": "single_lane",
         "chain": ["meta"],
-        "interaction_mode": "think_partner"
+        "interaction_mode": "assist"
       }
     },
     {
@@ -407,7 +407,7 @@
       "expected": {
         "task_type": "single_lane",
         "chain": ["meta"],
-        "interaction_mode": "think_partner"
+        "interaction_mode": "assist"
       }
     },
     {
@@ -715,7 +715,7 @@
       "expected": {
         "task_type": "single_lane",
         "chain": ["meta"],
-        "interaction_mode": "think_partner"
+        "interaction_mode": "assist"
       }
     },
     {
@@ -735,7 +735,7 @@
       "expected": {
         "task_type": "single_lane",
         "chain": ["meta"],
-        "interaction_mode": "think_partner"
+        "interaction_mode": "assist"
       }
     },
     {
@@ -745,7 +745,7 @@
       "expected": {
         "task_type": "single_lane",
         "chain": ["meta"],
-        "interaction_mode": "think_partner"
+        "interaction_mode": "assist"
       }
     },
     {
@@ -756,7 +756,7 @@
         "task_type": "single_lane",
         "response_mode": "clarify_before_execute",
         "chain": ["meta"],
-        "interaction_mode": "think_partner"
+        "interaction_mode": "assist"
       }
     },
     {
@@ -798,7 +798,7 @@
       "expected": {
         "task_type": "single_lane",
         "chain": ["meta"],
-        "interaction_mode": "think_partner"
+        "interaction_mode": "assist"
       }
     },
     {
@@ -808,7 +808,7 @@
       "expected": {
         "task_type": "single_lane",
         "chain": ["meta"],
-        "interaction_mode": "think_partner"
+        "interaction_mode": "assist"
       }
     },
     {
@@ -862,7 +862,7 @@
       "expected": {
         "task_type": "single_lane",
         "chain": ["meta"],
-        "interaction_mode": "think_partner"
+        "interaction_mode": "assist"
       }
     }
   ]
